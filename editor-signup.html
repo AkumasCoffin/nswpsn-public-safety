@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Become an Editor | Forcequit NSW PSN</title>
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/editor-signup.html">
+  <meta property="og:title" content="Become a Forcequit Editor">
+  <meta property="og:description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/editor-signup.html">
+  <meta name="twitter:title" content="Become a Forcequit Editor">
+  <meta name="twitter:description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  
+  <!-- Standard Meta -->
+  <meta name="description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
+  <meta name="theme-color" content="#f97316">
+  
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <style>
+    :root {
+      --bg-dark: #020617;
+      --bg-card: #1e293b;
+      --border-subtle: rgba(148, 163, 184, 0.2);
+      --text-primary: #fff;
+      --text-soft: #94a3b8;
+      --accent: #f97316;
+      --success: #22c55e;
+      --danger: #ef4444;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-dark);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      background-image: 
+        radial-gradient(ellipse at top, rgba(249, 115, 22, 0.1) 0%, transparent 50%),
+        radial-gradient(ellipse at bottom right, rgba(34, 197, 94, 0.05) 0%, transparent 50%);
+    }
+    
+    .container {
+      width: 100%;
+      max-width: 480px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    
+    .logo img {
+      height: 48px;
+      width: auto;
+    }
+    
+    .logo-text {
+      font-size: 1.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .logo-text span {
+      color: var(--accent);
+    }
+    
+    .subtitle {
+      color: var(--text-soft);
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+    
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .card-title i {
+      color: var(--accent);
+    }
+    
+    .card-description {
+      color: var(--text-soft);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    
+    .form-label {
+      display: block;
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+    
+    .form-label .required {
+      color: var(--accent);
+    }
+    
+    .form-label .optional {
+      color: #64748b;
+      font-weight: 400;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: rgba(2, 6, 23, 0.5);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
+    }
+    
+    .form-input::placeholder {
+      color: #64748b;
+    }
+    
+    textarea.form-input {
+      min-height: 120px;
+      resize: vertical;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 0.9rem 1.5rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      transition: background 0.2s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    
+    .btn:hover {
+      background: #ea580c;
+    }
+    
+    .btn:active {
+      transform: scale(0.98);
+    }
+    
+    .btn:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    
+    .message {
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      text-align: center;
+      min-height: 1.5em;
+    }
+    
+    .message.error {
+      color: var(--danger);
+    }
+    
+    .message.success {
+      color: var(--success);
+    }
+    
+    .footer-links {
+      margin-top: 1.5rem;
+      text-align: center;
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    
+    .footer-links a {
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: color 0.2s;
+    }
+    
+    .footer-links a:hover {
+      color: var(--accent);
+    }
+    
+    .info-box {
+      background: rgba(249, 115, 22, 0.1);
+      border: 1px solid rgba(249, 115, 22, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-soft);
+    }
+    
+    .info-box i {
+      color: var(--accent);
+      margin-right: 0.5rem;
+    }
+    
+    .success-state {
+      text-align: center;
+      padding: 2rem 0;
+    }
+    
+    .success-state i {
+      font-size: 4rem;
+      color: var(--success);
+      margin-bottom: 1rem;
+    }
+    
+    .success-state h2 {
+      margin-bottom: 0.5rem;
+    }
+    
+    .success-state p {
+      color: var(--text-soft);
+    }
+    
+    @media (max-width: 480px) {
+      body {
+        padding: 1rem;
+      }
+      
+      .card {
+        padding: 1.5rem;
+      }
+      
+      .footer-links {
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <img src="./assets/fqlogo.png" alt="Forcequit Logo">
+        <div class="logo-text">Forcequit <span>Editor</span></div>
+      </div>
+      <p class="subtitle">NSW Public Safety Network</p>
+    </div>
+    
+    <div class="card">
+      <div id="form-container">
+        <a href="login.html" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; transition: color 0.2s;">
+          <i class="fas fa-arrow-left"></i> Back to Login
+        </a>
+        <div class="card-title">
+          <i class="fas fa-user-plus"></i>
+          Request Editor Access
+        </div>
+        <p class="card-description">
+          Join our team of contributors helping map emergency incidents across NSW. 
+          Fill out the form below and we'll review your request.
+        </p>
+        
+        <div class="info-box">
+          <i class="fas fa-info-circle"></i>
+          Editors can add and update incident markers on the live map. 
+          Your request will be reviewed and you'll be contacted via Discord.
+        </div>
+        
+        <form id="signup-form" onsubmit="submitRequest(event); return false;">
+          <!-- Request Type -->
+          <div class="form-group">
+            <label class="form-label">
+              I want to be a... <span class="required">*</span>
+            </label>
+            <div style="display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.25rem;">
+              <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
+                <input type="checkbox" name="request-type" value="editor" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span>📝 Map Editor</span>
+                <span style="color: #64748b; font-size: 0.8rem;">- Add/update incident markers</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
+                <input type="checkbox" name="request-type" value="pager_feeder" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span>📟 Pager Feeder</span>
+                <span style="color: #64748b; font-size: 0.8rem;">- Contribute pager data</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
+                <input type="checkbox" name="request-type" value="radio_feeder" onchange="toggleFeederSetup()" style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span>📻 Radio Feeder</span>
+                <span style="color: #64748b; font-size: 0.8rem;">- Stream radio audio</span>
+              </label>
+            </div>
+          </div>
+          
+          <!-- Feeder Setup (shown when pager or radio feeder selected) -->
+          <div class="form-group" id="feeder-setup-group" style="display: none; background: rgba(249, 115, 22, 0.1); border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 8px; padding: 1rem; margin-top: -0.5rem;">
+            <label class="form-label" style="margin-bottom: 0.5rem;">
+              Do you have an existing setup? <span class="required">*</span>
+            </label>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="radio" name="has-setup" value="yes" onchange="toggleSetupDetails()" style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span>Yes, I already have equipment/setup</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="radio" name="has-setup" value="no" onchange="toggleSetupDetails()" style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span>No, but I'm interested in setting one up</span>
+              </label>
+            </div>
+            <div id="setup-details-group" style="display: none;">
+              <label class="form-label">Tell us about your current setup</label>
+              <textarea id="setup-details" class="form-input" style="min-height: 80px;" placeholder="What equipment do you have? (e.g., SDR type, antenna, frequencies monitored, software used)"></textarea>
+            </div>
+            <div style="margin-top: 0.75rem;">
+              <label class="form-label">Technical Experience <span class="required">*</span></label>
+              <p style="color: #64748b; font-size: 0.8rem; margin-bottom: 0.5rem;">Select all that apply:</p>
+              <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" name="tech-experience" value="linux" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                  <span>🐧 Linux / Command Line</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" name="tech-experience" value="networking" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                  <span>🌐 Networking (ports, firewalls, etc.)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" name="tech-experience" value="docker" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                  <span>🐳 Docker / Containers</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" name="tech-experience" value="raspberry_pi" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                  <span>🥧 Raspberry Pi / SBCs</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" name="tech-experience" value="sdr" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                  <span>📻 SDR / Radio Equipment</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" name="tech-experience" value="programming" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                  <span>💻 Programming / Scripting</span>
+                </label>
+              </div>
+              <div style="margin-top: 1rem;">
+                <label class="form-label">Overall Experience Level <span class="required">*</span></label>
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem;">
+                  <span style="color: #64748b; font-size: 0.8rem;">None</span>
+                  <div id="star-rating" style="display: flex; gap: 0.25rem;">
+                    <span class="star" data-value="1" onclick="setRating(1)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" data-value="2" onclick="setRating(2)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" data-value="3" onclick="setRating(3)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" data-value="4" onclick="setRating(4)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" data-value="5" onclick="setRating(5)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                  </div>
+                  <span style="color: #64748b; font-size: 0.8rem;">Expert</span>
+                  <input type="hidden" id="experience-level" value="">
+                </div>
+                <div id="rating-label" style="color: #94a3b8; font-size: 0.8rem; margin-top: 0.3rem; min-height: 1.2em;"></div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">
+              Email Address <span class="required">*</span>
+            </label>
+            <input type="email" id="email" class="form-input" placeholder="your@email.com" required>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">
+              Discord ID <span class="required">*</span>
+            </label>
+            <input type="text" id="discord" class="form-input" placeholder="username or 123456789012345678" required>
+          </div>
+          
+          <!-- Region -->
+          <div class="form-group">
+            <label class="form-label">
+              Location / Region <span class="required">*</span>
+            </label>
+            <select id="region" class="form-input" required>
+              <option value="">Select your region...</option>
+              <option value="sydney_metro">Sydney Metro</option>
+              <option value="greater_sydney">Greater Sydney (Outer suburbs)</option>
+              <option value="hunter">Hunter Region</option>
+              <option value="central_coast">Central Coast</option>
+              <option value="illawarra">Illawarra / South Coast</option>
+              <option value="blue_mountains">Blue Mountains / Western Sydney</option>
+              <option value="central_west">Central West</option>
+              <option value="new_england">New England / North West</option>
+              <option value="north_coast">North Coast</option>
+              <option value="riverina">Riverina / Murray</option>
+              <option value="south_east">South East / Snowy</option>
+              <option value="far_west">Far West</option>
+              <option value="interstate">Interstate / Other</option>
+            </select>
+          </div>
+          
+          <!-- Background -->
+          <div class="form-group">
+            <label class="form-label">
+              Emergency Services Background <span class="optional">(optional)</span>
+            </label>
+            <select id="background" class="form-input" onchange="toggleBackgroundDetails()">
+              <option value="">Select if applicable...</option>
+              <option value="rfs">RFS (Rural Fire Service)</option>
+              <option value="frnsw">Fire & Rescue NSW</option>
+              <option value="ses">SES (State Emergency Service)</option>
+              <option value="ambulance">NSW Ambulance</option>
+              <option value="police">NSW Police</option>
+              <option value="vra">Volunteer Rescue Association</option>
+              <option value="marine_rescue">Marine Rescue NSW</option>
+              <option value="other_emergency">Other Emergency Services</option>
+              <option value="none">General Interest / None</option>
+            </select>
+          </div>
+          
+          <!-- Background Details (shown when background selected) -->
+          <div class="form-group" id="background-details-group" style="display: none;">
+            <label class="form-label">
+              Tell us more about your experience <span class="required">*</span>
+            </label>
+            <textarea id="background-details" class="form-input" placeholder="Are you currently active or past member? What's your role/experience? How long have you been involved?"></textarea>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">
+              Website / Portfolio <span class="optional">(optional)</span>
+            </label>
+            <input type="url" id="website" class="form-input" placeholder="https://yourwebsite.com">
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">
+              About You <span class="required">*</span>
+            </label>
+            <textarea id="about" class="form-input" placeholder="Tell us about yourself, your experience, and why you want to contribute..." required></textarea>
+          </div>
+          
+          <button type="submit" id="submit-btn" class="btn">
+            <i class="fas fa-paper-plane"></i>
+            Submit Request
+          </button>
+          
+          <div id="message" class="message"></div>
+        </form>
+      </div>
+      
+      <div id="success-container" class="success-state" style="display: none;">
+        <i class="fas fa-check-circle"></i>
+        <h2>Request Submitted!</h2>
+        <p>Thanks for your interest! We'll review your request and contact you via Discord.</p>
+        <div style="margin-top: 1.5rem;">
+          <a href="map.html" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
+            <i class="fas fa-map"></i>
+            View Live Map
+          </a>
+        </div>
+      </div>
+    </div>
+    
+    <div class="footer-links">
+      <a href="map.html">
+        <i class="fas fa-map"></i> Live Map
+      </a>
+      <a href="login.html">
+        <i class="fas fa-sign-in-alt"></i> Login
+      </a>
+      <a href="https://discord.forcequit.xyz" target="_blank">
+        <i class="fab fa-discord"></i> Discord
+      </a>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE_URL = 'https://api.forcequit.xyz';
+    
+    let currentRating = 0;
+    const ratingLabels = {
+      1: '⭐ Beginner - Little to no experience',
+      2: '⭐⭐ Basic - Some familiarity',
+      3: '⭐⭐⭐ Intermediate - Comfortable with basics',
+      4: '⭐⭐⭐⭐ Advanced - Strong skills',
+      5: '⭐⭐⭐⭐⭐ Expert - Very experienced'
+    };
+    
+    function setRating(rating) {
+      currentRating = rating;
+      document.getElementById('experience-level').value = rating;
+      document.getElementById('rating-label').textContent = ratingLabels[rating];
+      
+      // Update star colors
+      document.querySelectorAll('#star-rating .star').forEach((star, index) => {
+        star.style.color = index < rating ? '#f97316' : '#475569';
+      });
+    }
+    
+    function toggleBackgroundDetails() {
+      const background = document.getElementById('background').value;
+      const detailsGroup = document.getElementById('background-details-group');
+      const detailsInput = document.getElementById('background-details');
+      
+      // Show details field for any selection except empty or "none"
+      if (background && background !== 'none') {
+        detailsGroup.style.display = 'block';
+        detailsInput.required = true;
+      } else {
+        detailsGroup.style.display = 'none';
+        detailsInput.required = false;
+        detailsInput.value = '';
+      }
+    }
+    
+    function toggleFeederSetup() {
+      const requestTypes = Array.from(document.querySelectorAll('input[name="request-type"]:checked')).map(cb => cb.value);
+      const feederSetupGroup = document.getElementById('feeder-setup-group');
+      const hasSetupRadios = document.querySelectorAll('input[name="has-setup"]');
+      
+      if (requestTypes.includes('pager_feeder') || requestTypes.includes('radio_feeder')) {
+        feederSetupGroup.style.display = 'block';
+      } else {
+        feederSetupGroup.style.display = 'none';
+        hasSetupRadios.forEach(r => r.checked = false);
+        document.getElementById('setup-details-group').style.display = 'none';
+        document.getElementById('setup-details').value = '';
+        // Clear tech experience checkboxes and star rating
+        document.querySelectorAll('input[name="tech-experience"]').forEach(cb => cb.checked = false);
+        currentRating = 0;
+        document.getElementById('experience-level').value = '';
+        document.getElementById('rating-label').textContent = '';
+        document.querySelectorAll('#star-rating .star').forEach(star => star.style.color = '#475569');
+      }
+    }
+    
+    function toggleSetupDetails() {
+      const hasSetup = document.querySelector('input[name="has-setup"]:checked');
+      const detailsGroup = document.getElementById('setup-details-group');
+      const setupDetailsInput = document.getElementById('setup-details');
+      
+      if (hasSetup && hasSetup.value === 'yes') {
+        detailsGroup.style.display = 'block';
+      }
+    }
+    
+    async function submitRequest(event) {
+      event.preventDefault();
+      
+      const requestTypes = Array.from(document.querySelectorAll('input[name="request-type"]:checked')).map(cb => cb.value);
+      const email = document.getElementById('email').value.trim();
+      const discord = document.getElementById('discord').value.trim();
+      const region = document.getElementById('region').value;
+      const background = document.getElementById('background').value;
+      const backgroundDetails = document.getElementById('background-details').value.trim();
+      const website = document.getElementById('website').value.trim();
+      const about = document.getElementById('about').value.trim();
+      const hasSetupRadio = document.querySelector('input[name="has-setup"]:checked');
+      const hasSetup = hasSetupRadio ? hasSetupRadio.value : null;
+      const setupDetails = document.getElementById('setup-details').value.trim();
+      const techExperienceChecked = Array.from(document.querySelectorAll('input[name="tech-experience"]:checked')).map(cb => cb.value);
+      const experienceLevel = document.getElementById('experience-level').value;
+      const messageEl = document.getElementById('message');
+      const submitBtn = document.getElementById('submit-btn');
+      
+      if (requestTypes.length === 0) {
+        messageEl.textContent = 'Please select at least one request type.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      // If pager or radio feeder is selected, require setup info and tech experience
+      const isFeeder = requestTypes.includes('pager_feeder') || requestTypes.includes('radio_feeder');
+      if (isFeeder && !hasSetup) {
+        messageEl.textContent = 'Please indicate if you have an existing setup.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      // If they have a setup, require details
+      if (hasSetup === 'yes' && !setupDetails) {
+        messageEl.textContent = 'Please describe your existing setup.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      // Require at least one tech experience selection for feeders
+      if (isFeeder && techExperienceChecked.length === 0) {
+        messageEl.textContent = 'Please select at least one technical experience option.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      // Require experience level rating for feeders
+      if (isFeeder && !experienceLevel) {
+        messageEl.textContent = 'Please rate your overall experience level.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      if (!email || !discord || !about) {
+        messageEl.textContent = 'Please fill in all required fields.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      if (!region) {
+        messageEl.textContent = 'Please select your region.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      // If background is selected (not none or empty), require details
+      if (background && background !== 'none' && !backgroundDetails) {
+        messageEl.textContent = 'Please tell us more about your emergency services experience.';
+        messageEl.className = 'message error';
+        return;
+      }
+      
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+      messageEl.textContent = '';
+      
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ 
+            email, 
+            discord_id: discord, 
+            website: website || null,
+            about,
+            request_type: requestTypes,
+            region: region || null,
+            background: background || null,
+            background_details: backgroundDetails || null,
+            has_existing_setup: hasSetup,
+            setup_details: setupDetails || null,
+            tech_experience: techExperienceChecked.length > 0 ? techExperienceChecked : null,
+            experience_level: experienceLevel ? parseInt(experienceLevel) : null
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to submit request');
+        }
+        
+        // Show success state
+        document.getElementById('form-container').style.display = 'none';
+        document.getElementById('success-container').style.display = 'block';
+        
+      } catch (error) {
+        messageEl.textContent = error.message || 'Failed to submit request. Please try again.';
+        messageEl.className = 'message error';
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+      }
+    }
+  </script>
+</body>
+</html>

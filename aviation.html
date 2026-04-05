@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – Aviation & Callsigns</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Aviation callsigns for PolAir, Ambulance helicopters, Westpac Rescue, and Fire Aviation operating in NSW.">
+  <meta name="keywords" content="NSW Aviation, PolAir, Westpac Rescue, Fire Aviation, Helicopter Callsigns, PSN">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/aviation.html">
+  <meta property="og:title" content="NSW PSN – Aviation & Callsigns">
+  <meta property="og:description" content="Aviation callsigns for PolAir, Ambulance helicopters, Westpac Rescue, and Fire Aviation operating in NSW.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/aviation.html">
+  <meta name="twitter:title" content="NSW PSN – Aviation & Callsigns">
+  <meta name="twitter:description" content="Aviation callsigns for PolAir, Ambulance helicopters, Westpac Rescue, and Fire Aviation operating in NSW.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+<script>
+  if ('scrollRestoration' in history) { history.scrollRestoration = 'manual'; }
+</script>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Aviation</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a class="active" href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Aviation & Callsigns</div>
+      <h1>✈ Aviation &amp; Emergency Aircraft</h1>
+      <p>Aircraft registrations and callsigns for NSW Ambulance, Police, Westpac, and other agencies operating in or near NSW.</p>
+    </header>
+
+    <section class="card-grid">
+    
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🔍 Quick Lookup</div>
+        </div>
+        <div class="card-body">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <input type="text" id="aviation-search" placeholder="Search for a Reg, Callsign or Type..." style="flex: 1; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--border-subtle); background: rgba(15, 23, 42, 0.6); color: var(--text-main); font-size: 0.9rem;">
+            <span id="aviation-search-counter" style="color: var(--text-muted); font-size: 0.9rem; white-space: nowrap; min-width: 80px; text-align: right;"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🛩 Air Ambulance NSW – Fixed Wing</div></div>
+        <div class="card-body">
+          <p>NSW Ambulance operates a fleet of fixed-wing aircraft for urgent patient transfers and long-distance retrievals.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Operator / Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-AMR</td><td>AM222</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AMD</td><td>AM231</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AAS</td><td>AM235</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AMR</td><td>AM242</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AMS</td><td>AM266</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AMQ</td><td>AM280</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AMQ</td><td>AM282</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-AAS</td><td>AM288</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-VAD</td><td>AM339</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-VAE</td><td>AM343</td><td>NSW Ambulance</td><td>Fixed-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🚁 NSW Ambulance / Toll HEMS</div></div>
+        <div class="card-body">
+          <p>AW139 helicopters operated by Toll Helicopters on behalf of NSW Ambulance.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Operator / Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-TJE</td><td>RSCU201</td><td>NSWAS TOLL</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-TJF</td><td>RSCU202</td><td>NSWAS TOLL</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-TJG</td><td>RSCU203</td><td>NSWAS TOLL</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-TJI</td><td>RSCU206</td><td>NSWAS TOLL</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-TJJ</td><td>RSCU207</td><td>NSWAS TOLL</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-TJO</td><td>RSCU209</td><td>NSWAS TOLL</td><td>Rotary-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🚁 Westpac Rescue Helicopters</div></div>
+        <div class="card-body">
+          <p>Operated by Westpac on behalf of agencies including NSW Ambulance and Tasmania Police.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Operator / Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-ZXA</td><td>WP1</td><td>Westpac / NSW Ambulance</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-ZXB</td><td>WP2</td><td>Westpac / NSW Ambulance</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-ZXC</td><td>WP3</td><td>Westpac / NSW Ambulance</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-ZXD</td><td>WP4</td><td>Westpac / NSW Ambulance</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-XIB</td><td>WP5</td><td>Westpac / NSW Ambulance</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-RSQ</td><td>POL71</td><td>Westpac / Tasmania Police</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-EMS</td><td>POL72</td><td>Westpac / Tasmania Police</td><td>Rotary-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🏖 Surf Life Saving NSW</div></div>
+        <div class="card-body">
+          <p>Life Saver Rescue Helicopters.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Operator / Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-SRF</td><td>LIFE21</td><td>NSW Ambulance / SLSNSW</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-SQF</td><td>LIFE22</td><td>NSW Ambulance / SLSNSW</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-SHF</td><td>LIFE23</td><td>NSW Ambulance / SLSNSW</td><td>Rotary-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🚔 Police Aviation</div></div>
+        <div class="card-body">
+          <p>Police aviation assets from NSW and Victoria.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-PHB</td><td>POL23</td><td>NSW Police Force</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-DQV</td><td>POL28</td><td>NSW Police Force</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-PVO</td><td>POL30</td><td>Australia Victoria Police</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-PVR</td><td>POL32</td><td>Australia Victoria Police</td><td>Rotary-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🚑 Interstate Ambulance</div></div>
+        <div class="card-body">
+          <p>Ambulance assets from Victoria and South Australia.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-VAS</td><td>RSCU51</td><td>SA Ambulance Service</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-VAE</td><td>AM315</td><td>Ambulance Victoria</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-YXI</td><td>HM2</td><td>Air Ambulance Vic</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-YXG</td><td>HM4</td><td>Air Ambulance Vic</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>VH-YXH</td><td>HM5</td><td>Air Ambulance Vic</td><td>Rotary-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">⚓ Military</div></div>
+        <div class="card-body">
+          <p>Royal Australian Navy assets.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Agency</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>N52-011</td><td>TAIP51</td><td>Royal Australian Navy</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>N48-001</td><td>GLET01</td><td>Royal Australian Navy</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>N48-014</td><td>GLET14</td><td>Royal Australian Navy</td><td>Rotary-Wing Aircraft</td></tr>
+              <tr><td>N48-023</td><td>GLET23</td><td>Royal Australian Navy</td><td>Rotary-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">🌙 Royal Flying Doctor Service</div></div>
+        <div class="card-body">
+          <p>Fixed-wing aircraft used by RFDS sections.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table aircraft-table">
+            <thead><tr><th>Reg</th><th>Callsign</th><th>Section</th><th>Type</th></tr></thead>
+            <tbody>
+              <tr><td>VH-FNH</td><td>FD527</td><td>RFDS - CENTRAL OPERATIONS</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FNH</td><td>FD540</td><td>RFDS - CENTRAL OPERATIONS</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FXN</td><td>FD543</td><td>RFDS - CENTRAL OPERATIONS</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FVB</td><td>FD564</td><td>RFDS - CENTRAL OPERATIONS</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FXN</td><td>FD573</td><td>RFDS - CENTRAL OPERATIONS</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FVA</td><td>FD865</td><td>RFDS - CENTRAL OPERATIONS</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FDZ</td><td>FD458</td><td>RFDS -  (QUEENSLAND SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-8FQ</td><td>FD469</td><td>RFDS -  (QUEENSLAND SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-8FD</td><td>FD471</td><td>RFDS -  (QUEENSLAND SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FDM</td><td>FD478</td><td>RFDS -  (QUEENSLAND SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-VQD</td><td>FD491</td><td>RFDS -  (QUEENSLAND SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-FDL</td><td>FD493</td><td>RFDS -  (QUEENSLAND SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-OWG</td><td>FD604</td><td>RFDS -  (WESTERN OPERATIONS)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-OWV</td><td>FD619</td><td>RFDS -  (WESTERN OPERATIONS)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-OWZ</td><td>FD623</td><td>RFDS -  (WESTERN OPERATIONS)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-NWO</td><td>FD626J</td><td>RFDS -  (WESTERN OPERATIONS)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-KWO</td><td>FD628J</td><td>RFDS -  (WESTERN OPERATIONS)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-JFQ</td><td>FD645</td><td>RFDS -  (WESTERN OPERATIONS)</td><td>Fixed-Wing Aircraft</td></tr>
+              <tr><td>VH-LTQ</td><td>AM793</td><td>RFDS - (SOUTH EASTERN SECTION)</td><td>Fixed-Wing Aircraft</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+      
+    </section>
+
+    <div class="main-footer-note">Aviation reference (unofficial) · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'aviation';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const searchInput = document.getElementById("aviation-search");
+      const counter = document.getElementById("aviation-search-counter");
+      if (!searchInput || !counter) return;
+      searchInput.addEventListener("keyup", (e) => {
+        const term = e.target.value.toLowerCase();
+        const rows = document.querySelectorAll(".table tbody tr");
+        let matchCount = 0;
+        rows.forEach(row => {
+          const text = row.textContent.toLowerCase();
+          row.style.backgroundColor = ""; row.style.transition = "background-color 0.2s ease";
+          if (term.length > 0 && text.includes(term)) {
+            row.style.backgroundColor = "rgba(249, 115, 22, 0.35)";
+            if (matchCount === 0) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            matchCount++;
+          }
+        });
+        counter.textContent = term.length > 0 ? (matchCount === 1 ? "1 match" : `${matchCount} matches`) : "";
+        counter.style.color = matchCount > 0 ? "var(--text-main)" : "#ef4444";
+      });
+    });
+  </script>
+</body>
+</html>

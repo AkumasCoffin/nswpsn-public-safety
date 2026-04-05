@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – Useful Links</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Useful links and resources for NSW emergency services, scanners, and PSN monitoring.">
+  <meta name="keywords" content="NSW PSN, Links, Resources, Emergency Services, Scanner">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/links.html">
+  <meta property="og:title" content="NSW PSN – Useful Links">
+  <meta property="og:description" content="Useful links and resources for NSW emergency services, scanners, and PSN monitoring.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/links.html">
+  <meta name="twitter:title" content="NSW PSN – Useful Links">
+  <meta name="twitter:description" content="Useful links and resources for NSW emergency services, scanners, and PSN monitoring.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+<script>
+  if ('scrollRestoration' in history) { history.scrollRestoration = 'manual'; }
+</script>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Links</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a class="active" href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Useful Links</div>
+      <h1>🔗 Useful Links</h1>
+      <p>Helpful NSW emergency service links, radio monitoring tools and resources.</p>
+    </header>
+
+    <section class="card-grid">
+      <article class="card">
+        <div class="card-header"><div class="card-title">🌧 Bureau of Meteorology</div><div class="card-tag">BOM</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Official warnings for severe weather, flood, marine and fire weather affecting NSW/ACT.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.bom.gov.au/nsw/warnings.shtml" target="_blank">NSW/ACT Warnings Summary</a></li>
+            <li><a href="https://www.bom.gov.au/nsw/" target="_blank">NSW Forecasts &amp; Observations</a></li>
+            <li><a href="https://www.bom.gov.au/australia/warnings" target="_blank">Australia-wide Warnings</a></li>
+            <li><a href="https://www.bom.gov.au/australia/radar" target="_blank">Radar</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🔥 NSW Rural Fire Service</div><div class="card-tag">RFS</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">The lead agency for bush fires in NSW. Access major fire updates, Total Fire Ban status, and maps.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.rfs.nsw.gov.au/" target="_blank">NSW RFS Homepage</a></li>
+            <li><a href="https://www.rfs.nsw.gov.au/fire-information/fdr-and-tobans" target="_blank">Fire Danger Ratings &amp; Bans</a></li>
+            <li><a href="https://www.rfs.nsw.gov.au/fire-information/fires-near-me" target="_blank">Fires Near Me Map</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🚒 Fire and Rescue NSW</div><div class="card-tag">FRNSW</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Urban fire and rescue service protecting NSW cities and towns. Links to station finding and news.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.fire.nsw.gov.au/" target="_blank">FRNSW Homepage</a></li>
+            <li><a href="https://www.fire.nsw.gov.au/page.php?id=9205" target="_blank">Station Finder</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🚑 NSW Ambulance</div><div class="card-tag">ASNSW</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Emergency medical services and aeromedical retrieval. Access news, contact info, and service details.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.ambulance.nsw.gov.au/" target="_blank">NSW Ambulance Homepage</a></li>
+            <li><a href="https://www.ambulance.nsw.gov.au/news" target="_blank">News</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🚔 NSW Police</div><div class="card-tag">POLICE</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">NSW Police Force information, including latest news, crime statistics, and community contact details.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.police.nsw.gov.au/" target="_blank">NSW Police Homepage</a></li>
+            <li><a href="https://www.police.nsw.gov.au/news/news" target="_blank">Latest News</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🟧 NSW State Emergency Service</div><div class="card-tag">SES</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Volunteer agency dedicated to flood, storm, and tsunami response. Check current warnings.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.ses.nsw.gov.au/" target="_blank">SES Homepage</a></li>
+            <li><a href="https://www.ses.nsw.gov.au/during-emergency" target="_blank">Current NSW SES Warnings</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🧰 NSW VRA Rescue</div><div class="card-tag">VRA</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Volunteer Rescue Association providing specialized rescue services in regional and remote NSW locations.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.rescue.org.au/" target="_blank">VRA Rescue Homepage</a></li>
+            <li><a href="https://www.rescue.org.au/#latestNews" target="_blank">Latest News</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🚤 Marine Rescue NSW</div><div class="card-tag">MARINE</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Volunteer marine rescue service providing 24/7 radio monitoring and emergency support on the water.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.marinerescuensw.com.au/" target="_blank">Marine Rescue Homepage</a></li>
+            <li><a href="https://www.marinerescuensw.com.au/plan-log-on" target="_blank">Plan / Log On</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">🚦 Live Traffic NSW</div><div class="card-tag">TRAFFIC</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">Real-time road incident alerts, traffic cameras, and congestion data from Transport for NSW.</p>
+          <ul style="margin-left:1rem; line-height:1.45;">
+            <li><a href="https://www.livetraffic.com/" target="_blank">Live Traffic Homepage</a></li>
+            <li><a href="https://www.livetraffic.com/traffic-cameras" target="_blank">Traffic Cameras</a></li>
+            <li><a href="https://www.livetraffic.com/incident-list" target="_blank">Incident List</a></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header"><div class="card-title">📡 Radio Monitoring Tools</div><div class="card-tag">TOOLS</div></div>
+        <div class="card-body">
+          <p style="margin-bottom:0.8rem;">External resources for radio scanning, including frequency databases, flight tracking, and software.</p>
+          <ul style="margin-left:1.2rem; line-height:1.45;">
+            <li><a href="https://www.broadcastify.com/" target="_blank">Broadcastify</a></li>
+            <li><a href="https://www.radioreference.com/" target="_blank">RadioReference</a></li>
+            <li><a href="https://github.com/DSheirer/sdrtrunk" target="_blank">SDRTrunk</a></li>
+            <li><a href="https://github.com/chuot/rdio-scanner" target="_blank">Rdio Scanner</a></li>
+            <li><a href="https://www.flightradar24.com/" target="_blank">FlightRadar24</a></li>
+            <li><a href="https://web.acma.gov.au/rrl/" target="_blank">ACMA Register Lookup</a></li>
+          </ul>
+        </div>
+      </article>
+    </section>
+
+    <div class="main-footer-note">Useful links · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'links';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+</body>
+</html>

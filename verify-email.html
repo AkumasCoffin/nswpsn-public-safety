@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>Verify Email – NSW PSN</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Verify your email address for your NSW PSN account.">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/verify-email.html">
+  <meta property="og:title" content="Verify Email – Forcequit NSW PSN">
+  <meta property="og:description" content="Verify your email address for your NSW PSN account.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/verify-email.html">
+  <meta name="twitter:title" content="Verify Email – Forcequit NSW PSN">
+  <meta name="twitter:description" content="Verify your email address for your NSW PSN account.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+      background: #020617;
+      background:
+        radial-gradient(circle at top left, #111827 0, #020617 52%),
+        radial-gradient(circle at bottom right, #020617 0, #020617 65%);
+      background-attachment: fixed;
+    }
+    
+    .verify-container {
+      width: 100%;
+      max-width: 420px;
+    }
+    
+    .verify-card {
+      background: #1e293b;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 12px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      padding: 2.5rem;
+      text-align: center;
+    }
+    
+    .verify-title {
+      text-align: center;
+      margin-bottom: 0.5rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    
+    .verify-title span {
+      color: #f97316;
+    }
+    
+    .verify-subtitle {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+    
+    .verify-status {
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    
+    .verify-status.loading {
+      color: #94a3b8;
+      background: rgba(148, 163, 184, 0.1);
+    }
+    
+    .verify-status.error {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    
+    .verify-status.success {
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+    }
+    
+    .verify-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    
+    .verify-icon.success {
+      color: #22c55e;
+    }
+    
+    .verify-icon.error {
+      color: #ef4444;
+    }
+    
+    .verify-icon.loading {
+      color: #94a3b8;
+    }
+    
+    .verify-btn {
+      width: 100%;
+      padding: 0.8rem;
+      background: #f97316;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.9rem;
+      margin-top: 1rem;
+      transition: background 0.2s;
+      text-decoration: none;
+      display: inline-block;
+    }
+    
+    .verify-btn:hover:not(:disabled) {
+      background: #ea580c;
+    }
+    
+    .verify-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .back-link {
+      display: block;
+      text-align: center;
+      margin-top: 1.5rem;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    
+    .back-link:hover {
+      color: #f97316;
+      text-decoration: underline;
+    }
+    
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(148, 163, 184, 0.3);
+      border-radius: 50%;
+      border-top-color: #94a3b8;
+      animation: spin 1s ease-in-out infinite;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="verify-container">
+    <div class="verify-card">
+      <div class="verify-title">Verify <span>Email</span></div>
+      <div class="verify-subtitle">Confirming your email address</div>
+      
+      <div id="status-container">
+        <div id="status-icon" class="verify-icon loading">⏳</div>
+        <div id="status-message" class="verify-status loading">
+          <span class="spinner"></span>Verifying your email address...
+        </div>
+      </div>
+      
+      <a href="login.html" class="back-link">← Back to Login</a>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script>
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // Parse URL hash parameters
+    function parseHashParams() {
+      const hash = window.location.hash.substring(1);
+      const params = {};
+      
+      if (hash) {
+        hash.split('&').forEach(param => {
+          const [key, value] = param.split('=');
+          if (key && value) {
+            params[decodeURIComponent(key)] = decodeURIComponent(value);
+          }
+        });
+      }
+      
+      return params;
+    }
+
+    // Parse URL search parameters
+    function parseSearchParams() {
+      const params = {};
+      const urlParams = new URLSearchParams(window.location.search);
+      for (const [key, value] of urlParams.entries()) {
+        params[key] = value;
+      }
+      return params;
+    }
+
+    // Initialize on page load
+    async function init() {
+      const hashParams = parseHashParams();
+      const searchParams = parseSearchParams();
+      const statusIcon = document.getElementById('status-icon');
+      const statusMessage = document.getElementById('status-message');
+      
+      // Check for errors first
+      if (hashParams.error || searchParams.error) {
+        const error = hashParams.error || searchParams.error;
+        const errorCode = hashParams.error_code || searchParams.error_code;
+        const errorDesc = hashParams.error_description || searchParams.error_description;
+        
+        statusIcon.className = 'verify-icon error';
+        statusIcon.textContent = '❌';
+        statusMessage.className = 'verify-status error';
+        
+        if (errorCode === 'token_expired') {
+          statusMessage.textContent = 'This verification link has expired. Please request a new verification email.';
+        } else if (error === 'access_denied') {
+          statusMessage.textContent = 'Access denied. The verification link may be invalid or expired.';
+        } else {
+          statusMessage.textContent = `Error: ${errorDesc || error}`;
+        }
+        return;
+      }
+      
+      // Check for access token (email verification success)
+      if (hashParams.access_token) {
+        try {
+          // Set the session with the tokens
+          const { data, error } = await sb.auth.setSession({
+            access_token: hashParams.access_token,
+            refresh_token: hashParams.refresh_token
+          });
+          
+          if (error) {
+            throw error;
+          }
+          
+          // Successfully verified
+          statusIcon.className = 'verify-icon success';
+          statusIcon.textContent = '✓';
+          statusMessage.className = 'verify-status success';
+          statusMessage.textContent = 'Email verified successfully! You can now log in to your account.';
+          
+          // Redirect after a short delay
+          setTimeout(() => {
+            window.location.href = 'login.html';
+          }, 3000);
+          
+        } catch (error) {
+          statusIcon.className = 'verify-icon error';
+          statusIcon.textContent = '❌';
+          statusMessage.className = 'verify-status error';
+          statusMessage.textContent = `Error: ${error.message || 'Failed to verify email'}`;
+        }
+        return;
+      }
+      
+      // Check for token in URL (type=signup or type=email)
+      const token = hashParams.token || searchParams.token;
+      const type = hashParams.type || searchParams.type;
+      
+      if (token && (type === 'signup' || type === 'email' || type === 'email_change')) {
+        try {
+          // Verify the email with the token
+          const { data, error } = await sb.auth.verifyOtp({
+            token_hash: token,
+            type: type
+          });
+          
+          if (error) {
+            throw error;
+          }
+          
+          // Successfully verified
+          statusIcon.className = 'verify-icon success';
+          statusIcon.textContent = '✓';
+          statusMessage.className = 'verify-status success';
+          statusMessage.textContent = 'Email verified successfully! You can now log in to your account.';
+          
+          // Redirect after a short delay
+          setTimeout(() => {
+            window.location.href = 'login.html';
+          }, 3000);
+          
+        } catch (error) {
+          statusIcon.className = 'verify-icon error';
+          statusIcon.textContent = '❌';
+          statusMessage.className = 'verify-status error';
+          
+          if (error.message.includes('expired')) {
+            statusMessage.textContent = 'This verification link has expired. Please request a new verification email.';
+          } else {
+            statusMessage.textContent = `Error: ${error.message || 'Failed to verify email'}`;
+          }
+        }
+        return;
+      }
+      
+      // Try to get session - maybe already verified
+      try {
+        const { data: { session }, error } = await sb.auth.getSession();
+        if (session && session.user) {
+          if (session.user.email_confirmed_at) {
+            statusIcon.className = 'verify-icon success';
+            statusIcon.textContent = '✓';
+            statusMessage.className = 'verify-status success';
+            statusMessage.textContent = 'Your email is already verified.';
+            
+            setTimeout(() => {
+              window.location.href = 'login.html';
+            }, 2000);
+            return;
+          }
+        }
+      } catch (error) {
+        // Ignore session check errors
+      }
+      
+      // No valid parameters found
+      statusIcon.className = 'verify-icon error';
+      statusIcon.textContent = '❌';
+      statusMessage.className = 'verify-status error';
+      statusMessage.textContent = 'Invalid verification link. Please check your email and use the link provided, or request a new verification email.';
+    }
+
+    // Initialize on page load
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – Terms &amp; Conditions</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Terms and Conditions for NSW PSN Quick Reference by Forcequit.">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/terms.html">
+  <meta property="og:title" content="NSW PSN – Terms & Conditions">
+  <meta property="og:description" content="Terms and Conditions for NSW PSN Quick Reference by Forcequit.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/terms.html">
+  <meta name="twitter:title" content="NSW PSN – Terms & Conditions">
+  <meta name="twitter:description" content="Terms and Conditions for NSW PSN Quick Reference by Forcequit.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Terms</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a class="active" href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Legal</div>
+      <h1>📜 Terms &amp; Conditions</h1>
+      <p>
+        Last updated: January 2025
+      </p>
+    </header>
+
+    <section class="card-grid">
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">1. Services Covered</div>
+          <div class="card-tag">Scope</div>
+        </div>
+        <div class="card-body">
+          <p>These Terms &amp; Conditions ("Terms") apply to all Forcequit NSW PSN services:</p>
+          <ul>
+            <li><strong>nswpsn.forcequit.xyz</strong> – NSW PSN quick reference, live data dashboard, incident map, and historical logs</li>
+            <li><strong>radio.forcequit.xyz</strong> – Hobby radio streaming and recording service</li>
+            <li><strong>pager.forcequit.xyz</strong> – Pager message feed and monitoring</li>
+            <li><strong>NSW PSN Discord Bot</strong> – Real-time alert notifications for Discord servers</li>
+            <li><strong>Backend APIs</strong> – Data aggregation and delivery services powering the above</li>
+          </ul>
+          <p>
+            All services are operated by Forcequit. By accessing or using any service, you agree to be bound by these Terms.
+            These services are intended for <strong>hobby radio monitoring only</strong> and are <strong>not official</strong>.
+          </p>
+        </div>
+      </article>
+      
+      <article class="card card-wide">
+         <div class="card-header">
+           <div class="card-title">2. Important Disclaimers</div>
+           <div class="card-tag">Warning</div>
+         </div>
+         <div class="card-body">
+           <p style="color: #fca5a5;"><strong>⚠️ These services must NOT be used for:</strong></p>
+           <ul>
+             <li>Emergency response or operational decisions</li>
+             <li>Self-deployment to incidents or emergencies</li>
+             <li>Safety-critical, life-saving, or time-sensitive decisions</li>
+             <li>Interference with emergency services operations</li>
+           </ul>
+           <p><strong>You acknowledge that:</strong></p>
+           <ul>
+             <li>Information may be incomplete, delayed, or inaccurate</li>
+             <li>Audio and data streams may have delays of 30+ seconds or be unavailable</li>
+             <li>Services may be modified, limited, or discontinued at any time without notice</li>
+             <li>Data from external sources (RFS, BOM, Traffic NSW, etc.) is not controlled by Forcequit</li>
+             <li>Incident locations and details are approximations only</li>
+           </ul>
+         </div>
+      </article>
+
+      <article class="card card-wide">
+         <div class="card-header">
+           <div class="card-title">3. Acceptable Use</div>
+           <div class="card-tag">Rules</div>
+         </div>
+         <div class="card-body">
+           <p><strong>You agree that you will NOT:</strong></p>
+           <ul>
+             <li>Use information or audio for operational, emergency, or first-responder purposes</li>
+             <li>Interfere with or attempt to disrupt emergency services communications</li>
+             <li>Scrape, mass-harvest, or bypass rate-limiting or technical protections</li>
+             <li>Harass, stalk, dox, or attempt to identify individuals from audio or data</li>
+             <li>Use services for any illegal, abusive, or malicious purpose</li>
+             <li>Commercialise, restream, rebroadcast, or redistribute content without written consent</li>
+             <li>Share API keys, editor access, or authentication credentials</li>
+             <li>Submit false or misleading incident reports</li>
+             <li>Overwhelm services with excessive requests (rate limits are enforced)</li>
+           </ul>
+           <p><strong>Aggregate statistics</strong> (such as active viewer counts, incident totals) may be displayed publicly.</p>
+         </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">4. Radio &amp; Pager Content</div>
+          <div class="card-tag">Audio</div>
+        </div>
+        <div class="card-body">
+          <p>
+            <strong>radio.forcequit.xyz</strong> and <strong>pager.forcequit.xyz</strong> provide streams of publicly receivable, 
+            non-encrypted radio and pager transmissions received from over-the-air signals.
+          </p>
+          <p><strong>Audio and message recordings:</strong></p>
+          <ul>
+            <li>May be stored for playback, history, debugging, and analysis</li>
+            <li>Have no guaranteed retention period or completeness</li>
+            <li>May contain sensitive content not created or controlled by Forcequit</li>
+            <li>Include metadata such as talkgroup IDs, capcodes, timestamps, and call lengths</li>
+          </ul>
+          <p><strong>You must not:</strong></p>
+          <ul>
+            <li>Use audio to coordinate response or make safety-critical decisions</li>
+            <li>Publish, restream, or embed audio/recordings without explicit permission</li>
+            <li>Use pager data to harass or contact individuals mentioned in messages</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">5. Incident Map &amp; Logs</div>
+          <div class="card-tag">Data</div>
+        </div>
+        <div class="card-body">
+          <p>The <strong>Incident Map</strong> and <strong>Incident Logs</strong> aggregate data from multiple external sources:</p>
+          <ul>
+            <li>NSW Rural Fire Service (RFS) – Bush fire incidents and Fire Danger Ratings</li>
+            <li>Bureau of Meteorology (BOM) – Weather warnings and radar</li>
+            <li>Live Traffic NSW – Traffic incidents, roadwork, floods, fires, major events</li>
+            <li>Waze – Crowdsourced road hazards, police reports, roadwork</li>
+            <li>Endeavour Energy / Ausgrid – Power outages (planned and unplanned)</li>
+            <li>Beachwatch / BeachSafe NSW – Beach conditions and safety</li>
+            <li>Traffic cameras – NSW traffic camera feeds</li>
+            <li>Aviation cameras – Airport webcam feeds</li>
+            <li>Pager messages – Aggregated from pager.forcequit.xyz</li>
+          </ul>
+          <p><strong>Data retention:</strong> Historical incident data is retained for up to <strong>7 days</strong> and then automatically deleted.</p>
+          <p><strong>User-submitted incidents</strong> (via Map Editor) are automatically removed after their configured expiry time (1–48 hours).</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">6. Discord Bot</div>
+          <div class="card-tag">Bot</div>
+        </div>
+        <div class="card-body">
+          <p>The <strong>NSW PSN Discord Bot</strong> provides real-time alert notifications to Discord servers.</p>
+          <p><strong>By adding the bot to your server, you agree that:</strong></p>
+          <ul>
+            <li>Server administrators control which alerts are enabled and where they are posted</li>
+            <li>The bot stores server ID, channel ID, and alert configuration preferences</li>
+            <li>Pager alert subscriptions may include specific capcodes (agency codes)</li>
+            <li>Alert messages link incidents for context (e.g., showing related pager messages)</li>
+            <li>The bot may be removed from servers or discontinued at any time</li>
+          </ul>
+          <p><strong>Bot administrators must not:</strong></p>
+          <ul>
+            <li>Configure alerts in channels accessible to the general public for operational purposes</li>
+            <li>Use alerts to coordinate emergency response or self-deployment</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">7. Third-Party Services</div>
+          <div class="card-tag">External</div>
+        </div>
+        <div class="card-body">
+          <p>These services integrate with third-party providers:</p>
+          <ul>
+            <li><strong>Cloudflare</strong> – CDN, DDoS protection, security filtering</li>
+            <li><strong>Supabase</strong> – User authentication and incident storage (Map Editor)</li>
+            <li><strong>OpenStreetMap / CartoDB</strong> – Map tiles and geocoding</li>
+            <li><strong>Leaflet</strong> – Map rendering library</li>
+            <li><strong>Discord</strong> – Bot platform and API</li>
+          </ul>
+          <p>External links to NSW RFS, NSW Ambulance, Police, BOM, ACMA, and other government services are provided for reference. Forcequit is not responsible for external content or availability.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">8. Intellectual Property &amp; Liability</div>
+          <div class="card-tag">Legal</div>
+        </div>
+        <div class="card-body">
+          <p>
+            Unless stated otherwise, all custom content (text, layout, styling, scripts, design) is owned by Forcequit.
+            You may not copy, mirror, republish, or redistribute any content without written permission.
+          </p>
+          <p><strong>External data</strong> (from RFS, BOM, Traffic NSW, Waze, etc.) remains the property of its respective owners and is displayed under fair use for informational purposes.</p>
+          <p><strong>To the maximum extent permitted by Australian law:</strong></p>
+          <ul>
+            <li>Services are provided "as is" and "as available" without any warranty</li>
+            <li>No guarantee is given regarding accuracy, completeness, uptime, or suitability</li>
+            <li>Forcequit is not liable for any loss, damage, injury, or consequence arising from use of these services</li>
+            <li>Forcequit is not responsible for decisions made based on information from these services</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">9. Termination &amp; Changes</div>
+          <div class="card-tag">Updates</div>
+        </div>
+        <div class="card-body">
+          <p><strong>Termination:</strong> Forcequit reserves the right to:</p>
+          <ul>
+            <li>Block or rate-limit users who violate these Terms</li>
+            <li>Remove Discord bot access from servers misusing the service</li>
+            <li>Revoke API keys used for abusive purposes</li>
+            <li>Discontinue any or all services without notice</li>
+          </ul>
+          <p><strong>Changes:</strong> These Terms may be updated at any time. Continued use after updates indicates acceptance. Significant changes will be announced via Discord.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">10. Contact</div>
+          <div class="card-tag">Contact</div>
+        </div>
+        <div class="card-body">
+          <p>For legal enquiries, takedown requests, content removal, or permission requests:</p>
+          <p style="margin-top: 0.5rem;">
+            <strong>Email:</strong> legal@forcequit.xyz<br>
+            <strong>Discord:</strong> <a href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Support Server</a>
+          </p>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      Legal information · <a href="privacy.html">Privacy Policy</a>
+    </div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'terms';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+</body>
+</html>

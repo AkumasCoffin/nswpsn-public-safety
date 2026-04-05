@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – NSW Ambulance</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="NSW Ambulance clinical codes, category priorities, and radio terminology for PSN monitoring.">
+  <meta name="keywords" content="NSW Ambulance, ASNSW, PSN, Clinical Codes, Priority Codes, Radio, Scanner">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/ambulance.html">
+  <meta property="og:title" content="NSW PSN – NSW Ambulance Reference">
+  <meta property="og:description" content="NSW Ambulance clinical codes, category priorities, and radio terminology for PSN monitoring.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/ambulance.html">
+  <meta name="twitter:title" content="NSW PSN – NSW Ambulance Reference">
+  <meta name="twitter:description" content="NSW Ambulance clinical codes, category priorities, and radio terminology for PSN monitoring.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+<script>
+  if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+  }
+</script>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Ambulance</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a class="active" href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+
+    <header class="main-header">
+      <div class="breadcrumb">NSW Ambulance</div>
+      <h1>🚑 NSW Ambulance</h1>
+      <p>
+        Overview of NSW Ambulance operations, category codes, call codes and radio usage on the NSW Public Safety Network.
+      </p>
+    </header>
+
+    <section class="card-grid">
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🚑 NSW Ambulance – Overview</div>
+          <div class="card-tag">ASNSW</div>
+        </div>
+
+        <div class="card-body">
+          <div class="badge-row">
+            <span class="badge badge-agency">NSW Ambulance</span>
+            <span class="badge badge-parent">NSW Health</span>
+          </div>
+
+          <p>
+            NSW Ambulance provides emergency medical response, aeromedical retrieval, rescue operations and
+            non-emergency transport across more than 800,000 km² of New South Wales. Over 1.2 million incidents
+            are handled yearly.
+          </p>
+
+          <div class="zone-subtitle">Coverage &amp; Reach</div>
+          <ul>
+            <li>Serves 7.9+ million people across metro, regional and remote NSW.</li>
+            <li>250+ ambulance stations and response locations.</li>
+            <li>Road fleet travels ~40–45 million km per year.</li>
+            <li>One of the largest ambulance fleets in the world (around 1,500 vehicles).</li>
+          </ul>
+
+          <div class="zone-subtitle">Operational Divisions</div>
+          <ul>
+            <li><strong>Clinical Operations:</strong> front-line road paramedics and specialist roles.</li>
+            <li><strong>Aeromedical Operations:</strong> helicopters &amp; fixed-wing retrieval teams.</li>
+            <li><strong>Special Operations Team (SOT) / RAA:</strong> remote &amp; complex rescue environments.</li>
+            <li><strong>Critical Care:</strong> CCPs, flight nurses &amp; retrieval doctors.</li>
+          </ul>
+
+          <div class="zone-subtitle">Control Centres</div>
+          <ul>
+            <li>Ambulance Control Centres in Sydney, Newcastle, Wollongong and Dubbo.</li>
+            <li>Aeromedical Control Centre for helicopter and fixed-wing dispatch.</li>
+            <li>CAD / MDT and GPS-based nearest resource assignment.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📟 Category Codes</div>
+          <div class="card-tag">CAT 1–4</div>
+        </div>
+
+        <div class="card-body">
+          <p>NSW Ambulance category codes and whether they usually run lights and sirens.</p>
+
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Lights &amp; Siren</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>CAT 1</td>
+                    <td><span class="pill pill-yes">Yes</span></td>
+                    <td>Patient is not breathing, unconscious, or in a serious time-critical condition.</td>
+                  </tr>
+                  <tr>
+                    <td>CAT 2</td>
+                    <td><span class="pill pill-yes">Yes</span></td>
+                    <td>Patient is conscious and breathing but still serious and requires urgent response.</td>
+                  </tr>
+                  <tr>
+                    <td>CAT 3</td>
+                    <td><span class="pill pill-no">No</span></td>
+                    <td>Moderate condition requiring ambulance response but not lights &amp; sirens.</td>
+                  </tr>
+                  <tr>
+                    <td>CAT 4</td>
+                    <td><span class="pill pill-no">No</span></td>
+                    <td>Minor / low acuity condition.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">📋 Call Codes</div>
+          <div class="card-tag">Zero / Code</div>
+        </div>
+
+        <div class="card-body">
+          <p>Common NSW Ambulance call codes.</p>
+
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Meaning</th>
+                    <th>Confirmed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>Zero 1</td><td>Clear the air – urgent message</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 1</td><td>Officer in trouble / require Police</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 2</td><td>Cardiac arrest</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 3</td><td>Notify hospital – doctor required on arrival</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 4</td><td>Patient deceased / DOA – Police required</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 5</td><td>Arriving at hospital with DOA for certification</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 6</td><td>Departing hospital for morgue</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 7</td><td>Arrived at morgue</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 8</td><td>Patient with terminal condition</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 9</td><td>Person trapped / rescue required</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 10</td><td>Fire Brigade required</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 11</td><td>Live wires down – electrical authority required</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 14</td><td>Ambulance involved in collision</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 17</td><td>Drug overdose</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 20</td><td>Meal break</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Code 23</td><td>Infectious disease</td><td><span class="pill pill-yes">Yes</span></td></tr>
+                  <tr><td>Other codes</td><td>12,13,15,16,18,19,21,22,24,25,26</td><td><span class="pill pill-legacy">Not confirmed</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🎧 Common Radio Phrases</div>
+          <div class="card-tag">Comms</div>
+        </div>
+
+        <div class="card-body">
+          <p>Common terms you will hear on NSW Ambulance talkgroups.</p>
+
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Phrase</th>
+                    <th>Meaning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>“Code 1”</td><td>Urgent response (lights &amp; sirens).</td></tr>
+                  <tr><td>“Code 2”</td><td>Normal traffic response.</td></tr>
+                  <tr><td>“On scene”</td><td>Arrived at patient location.</td></tr>
+                  <tr><td>“Departing scene”</td><td>Leaving scene with/without patient.</td></tr>
+                  <tr><td>“At hospital”</td><td>Arrived at ED / receiving facility.</td></tr>
+                  <tr><td>“Clear of hospital”</td><td>Ready for next task.</td></tr>
+                  <tr><td>“Available radio”</td><td>Back in service and monitoring.</td></tr>
+                  <tr><td>“Unavailable – meal”</td><td>On meal break; not normally available unless escalated.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">📡 Talkgroups &amp; Monitoring Notes</div>
+          <div class="card-tag">NSW PSN</div>
+        </div>
+
+        <div class="card-body">
+          <ul>
+            <li>Each NSW Ambulance region has one or more <strong>primary dispatch</strong> talkgroups.</li>
+            <li><strong>Aeromedical</strong> uses dedicated or shared retrieval channels.</li>
+            <li>Major incidents may link FRNSW, RFS, SES, Police on shared or patched channels.</li>
+            <li>Some talkgroups may be encrypted or carry limited traffic.</li>
+            <li>Traffic volume increases during storms, heatwaves and major events.</li>
+            <li>Do not publish identifiable patient information.</li>
+          </ul>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      NSW Ambulance reference · Forcequit. ·
+      <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
+    </div>
+
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'ambulance';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+</body>
+</html>

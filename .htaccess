@@ -1,0 +1,43 @@
+# Disable directory browsing
+Options -Indexes
+
+# Set default index
+DirectoryIndex index.html
+
+# Block access to sensitive files and directories
+<FilesMatch "\.(env|gitignore|gitattributes|md|py|pyc|db|sqlite|json|sample)$">
+  Require all denied
+</FilesMatch>
+
+# Block dotfiles (.git, .claude, .env, etc.)
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule (^|/)\.(?!well-known/) - [F,L]
+</IfModule>
+
+# Block backend and bot directories entirely
+<IfModule mod_rewrite.c>
+  RewriteRule ^backends/ - [F,L]
+  RewriteRule ^discord-bot/ - [F,L]
+  RewriteRule ^backup/ - [F,L]
+  RewriteRule ^repo_stuff/ - [F,L]
+  RewriteRule ^ref_data/ - [F,L]
+</IfModule>
+
+# Block specific sensitive files
+<FilesMatch "^(config\.js|config\.sample\.js|ecosystem\.config\.js|CLAUDE\.md|README\.md|composer\.json|package\.json)$">
+  Require all denied
+</FilesMatch>
+
+# Allow JS files that the frontend needs
+<FilesMatch "^(auth-common\.js)$">
+  Require all granted
+</FilesMatch>
+
+# Security headers
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set X-XSS-Protection "1; mode=block"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

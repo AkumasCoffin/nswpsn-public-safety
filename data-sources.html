@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – Data Sources</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Data sources and APIs used by NSW PSN for live scanner data, incidents, and emergency services information.">
+  <meta name="keywords" content="NSW PSN, Data Sources, APIs, Emergency Services, Scanner Data">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/data-sources.html">
+  <meta property="og:title" content="NSW PSN – Data Sources">
+  <meta property="og:description" content="Data sources and APIs used by NSW PSN for live scanner data, incidents, and emergency services information.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/data-sources.html">
+  <meta name="twitter:title" content="NSW PSN – Data Sources">
+  <meta name="twitter:description" content="Data sources and APIs used by NSW PSN for live scanner data, incidents, and emergency services information.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+<script>
+  if ('scrollRestoration' in history) { history.scrollRestoration = 'manual'; }
+</script>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Data</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a class="active" href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Data Sources</div>
+      <h1>📊 Data Sources &amp; Suppliers</h1>
+      <p>All external data sources and APIs used to power the live map and incident feeds.</p>
+    </header>
+
+    <section class="card-grid">
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">ℹ️ About Our Data</div>
+          <div class="card-tag">Info</div>
+        </div>
+        <div class="card-body">
+          <p>This site aggregates publicly available data from various NSW government agencies and third-party providers. All data is fetched in near real-time and cached briefly to improve performance. We do not modify or alter the source data beyond formatting for display.</p>
+          <p style="margin-top: 0.8rem;"><strong>Forcequit is not affiliated with any of these data providers.</strong> Data accuracy and availability depends on the source systems.</p>
+          <p style="margin-top: 0.8rem; padding: 0.8rem; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px;">
+            <strong>⚠️ Disclaimer:</strong> This data is provided for informational purposes only. Always verify critical information directly with official sources before making decisions. Data may be delayed, incomplete, or inaccurate. Do not rely solely on this site for emergency situations.
+          </p>
+        </div>
+      </article>
+
+      <!-- ==================== FORCEQUIT FEEDS ==================== -->
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #f97316; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📡</span> Forcequit Live Feeds
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Radio and pager feeds hosted by this project</p>
+      </div>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📻 Radio Feed</div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live NSW Public Safety Network radio scanner feed. Covers emergency services communications across NSW.</p>
+          <p><strong>Data:</strong> Live audio stream, active units, talkgroup activity</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://radio.forcequit.xyz/" target="_blank">radio.forcequit.xyz</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📟 Pager Feed</div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live pager message feed from NSW emergency services including Fire and Rescue NSW, NSW Ambulance, and SES callouts.</p>
+          <p><strong>Data:</strong> Pager messages, incident details, unit dispatches</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://pager.forcequit.xyz/" target="_blank">pager.forcequit.xyz</a></p>
+        </div>
+      </article>
+
+      <!-- ==================== CONTRIBUTORS ==================== -->
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #22c55e; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span>🤝</span> Contributors
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Community partners providing additional data feeds</p>
+      </div>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title" style="display: flex; align-items: center; gap: 0.5rem;">
+            <img src="./assets/psnau-logo.png" alt="PSNAU" style="height: 24px; width: auto; border-radius: 4px;">
+            Public Safety Network AU
+          </div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Alternative NSW Public Safety Network radio scanner feed provided by <a href="https://publicsafetynetwork.com.au/" target="_blank">publicsafetynetwork.com.au</a>.</p>
+          <p><strong>Data:</strong> Live audio stream, scanner coverage</p>
+          <p style="margin-top:0.5rem;"><strong>Feed:</strong> <a href="https://rdio.psnlive.online/" target="_blank">rdio.psnlive.online</a></p>
+        </div>
+      </article>
+
+      <!-- ==================== EXTERNAL DATA FEEDS ==================== -->
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #3b82f6; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📊</span> External Data Feeds
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Third-party APIs and government data sources</p>
+      </div>
+
+      <!-- News RSS Feeds -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">📰 News RSS Feeds</div>
+          <div class="card-tag">News</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Aggregated news from major Australian media outlets covering NSW emergency services, weather events, and local news. Articles are auto-categorised into Emergency, Weather and General categories.</p>
+          <p><strong>Data:</strong> Headlines, descriptions, publication times, source attribution</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:0.8rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">ABC News</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">NSW regional &amp; breaking news</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#3b82f6;">9News</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">National &amp; NSW news</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Sydney Morning Herald</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Breaking news &amp; analysis</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">SBS News</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">National &amp; world news</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#eab308;">News.com.au</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">National news</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#a855f7;">Sydney Sun</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Local Sydney news</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#60a5fa;">NSW Police</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Media releases &amp; crime news</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Fire &amp; Rescue NSW</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Incident media releases</span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Power -->
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">⚡ Ausgrid</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outage statistics and summary data from the Ausgrid network covering Sydney, Central Coast and Hunter regions.</p>
+          <p><strong>Data:</strong> Outage counts (planned/unplanned), affected customers</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.ausgrid.com.au/" target="_blank">ausgrid.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">⚡ Endeavour Energy</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Current power outage locations across the Endeavour Energy network covering Greater Western Sydney, Blue Mountains, Southern Highlands, Illawarra and South Coast.</p>
+          <p><strong>Data:</strong> Outage locations, affected customers, estimated restoration times, crew status</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.endeavourenergy.com.au/" target="_blank">endeavourenergy.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">⚡ Essential Energy</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outage data from the Essential Energy network covering regional and rural NSW — including the North Coast, New England, Central West, Riverina and Far West regions.</p>
+          <p><strong>Data:</strong> Outage locations, affected customers, cause/reason, estimated restoration, outage boundaries (KML polygons)</p>
+          <p style="margin-top:0.5rem;"><strong>Feeds:</strong> Current outages (active planned + unplanned), Future outages (upcoming planned)</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.essentialenergy.com.au/" target="_blank">essentialenergy.com.au</a></p>
+        </div>
+      </article>
+
+      <!-- Traffic -->
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🚗 Live Traffic NSW</div>
+          <div class="card-tag">Traffic</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Traffic incidents, roadwork, flood reports, fire hazards, major events and 800+ traffic camera feeds from Transport for NSW.</p>
+          <p><strong>Data:</strong> Incidents, roadwork, floods, fire closures, major events, camera images</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.livetraffic.com/" target="_blank">livetraffic.com</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">✈️ Airservices Australia</div>
+          <div class="card-tag">Aviation</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Airport weather cameras from 50+ airports across Australia including Sydney, Melbourne, Brisbane, and regional airports. Each location provides up to 4 camera angles (N/E/S/W).</p>
+          <p><strong>Data:</strong> Live weather camera images, compass direction views, timestamps</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://weathercams.airservicesaustralia.com/" target="_blank">weathercams.airservicesaustralia.com</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🔥 Central Watch (WatchTowers)</div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live fire watch tower camera feeds from 16 sites across NSW and the ACT, providing 27 camera angles for early bushfire detection. Images refresh every 30 seconds.</p>
+          <p><strong>Data:</strong> Live camera images (Guard &amp; Sentry), tower locations, elevation data</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://centralwatch.watchtowers.io/" target="_blank">centralwatch.watchtowers.io</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🚨 Waze</div>
+          <div class="card-tag">Traffic</div>
+        </div>
+        <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 2rem;">
+          <p style="margin-bottom:0.6rem; grid-column: 1 / -1;">Community-reported traffic data including hazards, police sightings, accidents, traffic jams, and road closures across NSW.</p>
+          <p><strong>Data:</strong> Traffic hazards, police alerts, accidents, potholes, road closures, traffic jams, roadwork</p>
+          <p><strong>Source:</strong> <a href="https://www.waze.com/live-map" target="_blank">waze.com</a></p>
+        </div>
+      </article>
+
+      <!-- Weather -->
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🌧️ RainViewer</div>
+          <div class="card-tag">Weather</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Weather radar overlay showing precipitation across NSW with past frames and short-term nowcast.</p>
+          <p><strong>Data:</strong> Radar imagery tiles, timestamps</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.rainviewer.com/" target="_blank">rainviewer.com</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🌡️ Open-Meteo</div>
+          <div class="card-tag">Weather</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Current weather conditions for 70+ locations across NSW including Sydney, regional centres and remote areas.</p>
+          <p><strong>Data:</strong> Temperature, humidity, wind speed/direction, precipitation, weather codes</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://open-meteo.com/" target="_blank">open-meteo.com</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">⚠️ Bureau of Meteorology</div>
+          <div class="card-tag">Weather</div>
+        </div>
+        <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 2rem;">
+          <p style="margin-bottom:0.6rem; grid-column: 1 / -1;">Official weather warnings for NSW including severe weather, storm, flood, fire weather and marine warnings.</p>
+          <p><strong>Data:</strong> Land warnings, marine warnings, general alerts, severity levels</p>
+          <p><strong>Source:</strong> <a href="http://www.bom.gov.au/" target="_blank">bom.gov.au</a></p>
+        </div>
+      </article>
+
+      <!-- Emergency -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🔥 NSW Rural Fire Service</div>
+          <div class="card-tag">Emergency</div>
+        </div>
+        <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 2rem;">
+          <p style="margin-bottom:0.6rem; grid-column: 1 / -1;">Major bushfire incidents and current Fire Danger Ratings by district.</p>
+          <p><strong>Data:</strong> Incident locations, alert levels, fire status, FDR ratings, fire bans</p>
+          <p><strong>Source:</strong> <a href="https://www.rfs.nsw.gov.au/" target="_blank">rfs.nsw.gov.au</a></p>
+        </div>
+      </article>
+
+      <!-- Environment -->
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🏖️ NSW Beachwatch</div>
+          <div class="card-tag">Environment</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Beach water quality monitoring program providing swimming suitability ratings for beaches across NSW.</p>
+          <p><strong>Data:</strong> Water quality ratings (Good/Fair/Poor), pollution forecasts, sample dates</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.beachwatch.nsw.gov.au/" target="_blank">beachwatch.nsw.gov.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🏊 BeachSafe (SLSA)</div>
+          <div class="card-tag">Environment</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Surf Life Saving Australia beach safety data including patrol status, surf conditions, and hazard information.</p>
+          <p><strong>Data:</strong> Patrol status, hazards, beach locations, surf conditions</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://beachsafe.org.au/" target="_blank">beachsafe.org.au</a></p>
+        </div>
+      </article>
+
+      <!-- ==================== MAP PROVIDERS ==================== -->
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #a855f7; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span>🗺️</span> Map Providers
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Base map layers and geocoding services</p>
+      </div>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🗺️ OpenStreetMap</div>
+          <div class="card-tag">Maps</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Map tiles and base layer data for all interactive maps on this site, including incident maps and location search.</p>
+          <p><strong>Data:</strong> Map tiles, street data, place names, geocoding (via Nominatim)</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://www.openstreetmap.org/" target="_blank">openstreetmap.org</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🗺️ OpenTopoMap</div>
+          <div class="card-tag">Maps</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Topographic map layer option showing terrain, elevation contours, and geographic features across NSW.</p>
+          <p><strong>Data:</strong> Topographic map tiles, elevation data, terrain features</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://opentopomap.org/" target="_blank">opentopomap.org</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title" style="display: flex; align-items: center; gap: 0.5rem; color: #e11f26;">///what3words</div>
+          <div class="card-tag">Maps</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Location encoding system that divides the world into 3m × 3m squares, each identified by a unique three-word address. Used on the incident map for precise location sharing and coordinate lookup.</p>
+          <p><strong>Data:</strong> Three-word addresses, coordinate conversion (words → GPS &amp; GPS → words)</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://what3words.com/" target="_blank">what3words.com</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🔭 WatchTowers</div>
+          <div class="card-tag">Maps</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Fire watch tower camera platform providing early bushfire detection across NSW and the ACT. Powers the Central Watch camera layer on the incident map.</p>
+          <p><strong>Data:</strong> Tower locations, camera positions, site elevation data</p>
+          <p style="margin-top:0.5rem;"><strong>Source:</strong> <a href="https://watchtowers.io/" target="_blank">watchtowers.io</a></p>
+        </div>
+      </article>
+
+      <!-- ==================== DATA OUTPUTS ==================== -->
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #eab308; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📤</span> Data Outputs
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Services that consume and distribute aggregated data</p>
+      </div>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🤖 Discord Bot</div>
+          <div class="card-tag">Output</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Automated Discord bot providing real-time alerts for RFS fires, BOM warnings, traffic incidents, power outages, and pager messages to Discord servers.</p>
+          <p><strong>Features:</strong> Alert subscriptions, pager filters, role pings, incident linking</p>
+          <p style="margin-top:0.5rem;"><strong>Invite:</strong> Join our <a href="https://discord.forcequit.xyz" target="_blank">Support Discord</a> to add the bot</p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📝 User Incidents</div>
+          <div class="card-tag">Community</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Community-submitted incident reports via the Map Editor. Allows authenticated users to report incidents not captured by official data sources.</p>
+          <p><strong>Data:</strong> User-reported incidents, locations, descriptions, images</p>
+          <p style="margin-top:0.5rem;"><strong>Storage:</strong> <a href="https://supabase.com/" target="_blank">Supabase</a> (auto-removed after 1–48 hours)</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">📡 Update Frequency</div>
+          <div class="card-tag">Technical</div>
+        </div>
+        <div class="card-body">
+          <p>Data is refreshed at different intervals depending on the source and page activity:</p>
+          <p style="margin-top:0.5rem; padding:0.5rem 0.8rem; background:rgba(34, 197, 94, 0.1); border:1px solid rgba(34, 197, 94, 0.3); border-radius:6px; font-size:0.85rem;">
+            <strong>💡 Adaptive Collection:</strong> Data is collected every <strong>1 minute</strong> when a data page is active, or every <strong>2 minutes</strong> when idle (no page open).
+          </p>
+          <p style="margin-top:0.5rem; padding:0.5rem 0.8rem; background:rgba(99, 102, 241, 0.1); border:1px solid rgba(99, 102, 241, 0.3); border-radius:6px; font-size:0.85rem;">
+            <strong>🤖 Discord Bot:</strong> Alerts are polled every <strong>60 seconds</strong>. Pager messages are polled every <strong>30 seconds</strong>.
+          </p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:1rem; margin-top:1rem;">
+            <div>
+              <h4 style="font-size:0.85rem; color:#f97316; margin-bottom:0.5rem;">🔴 Real-time (~30-60 seconds)</h4>
+              <ul style="margin-left:1rem; line-height:1.7; font-size:0.88rem;">
+                <li>Radio Feed (Active Units & Talkgroups)</li>
+                <li>Traffic Incidents, Floods, Fire Hazards</li>
+                <li>Traffic Cameras & Airport Weather Cameras</li>
+                <li>Central Watch Fire Tower Cameras (27 cameras)</li>
+                <li>RFS Major Incidents</li>
+                <li>Waze Hazards, Police & Traffic Jams</li>
+              </ul>
+            </div>
+            <div>
+              <h4 style="font-size:0.85rem; color:#eab308; margin-bottom:0.5rem;">🟡 Frequent (~2-5 minutes)</h4>
+              <ul style="margin-left:1rem; line-height:1.7; font-size:0.88rem;">
+                <li>Ausgrid & Endeavour Energy Outages</li>
+                <li>Roadwork, Major Events</li>
+                <li>BOM Weather Warnings</li>
+                <li>RFS Fire Danger Ratings</li>
+              </ul>
+            </div>
+            <div>
+              <h4 style="font-size:0.85rem; color:#22c55e; margin-bottom:0.5rem;">🟢 Periodic (~5-10 minutes)</h4>
+              <ul style="margin-left:1rem; line-height:1.7; font-size:0.88rem;">
+                <li>News RSS Feeds (ABC, 9News, SMH, etc.)</li>
+                <li>Weather Conditions (Open-Meteo)</li>
+                <li>Weather Radar (RainViewer)</li>
+                <li>Beachwatch Water Quality</li>
+                <li>BeachSafe Patrol Status (SLSA)</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ==================== TECHNICAL INFO ==================== -->
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #94a3b8; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span>⚙️</span> Technical Information
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Update schedules and acknowledgements</p>
+      </div>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🙏 Credits & Acknowledgements</div>
+          <div class="card-tag">Info</div>
+        </div>
+        <div class="card-body">
+          <p>This project would not be possible without the following data providers and infrastructure:</p>
+          <ul style="margin-left:1rem; margin-top:0.8rem; line-height:1.8;">
+            <li><strong>OpenStreetMap Contributors</strong> – Map data and tiles (<a href="https://www.openstreetmap.org/" target="_blank">openstreetmap.org</a>)</li>
+            <li><strong>Airservices Australia</strong> – Airport weather camera feeds (<a href="https://weathercams.airservicesaustralia.com/" target="_blank">weathercams.airservicesaustralia.com</a>)</li>
+            <li><strong>WatchTowers / Central Watch</strong> – Fire watch tower camera feeds (<a href="https://centralwatch.watchtowers.io/" target="_blank">centralwatch.watchtowers.io</a>)</li>
+            <li><strong>what3words</strong> – Three-word address geolocation (<a href="https://what3words.com/" target="_blank">what3words.com</a>)</li>
+            <li><strong>NSW Government Agencies</strong> – Open data APIs and public information feeds</li>
+            <li><strong>Supabase</strong> – User authentication and incident storage (<a href="https://supabase.com/" target="_blank">supabase.com</a>)</li>
+            <li><strong>Cloudflare</strong> – CDN, security and hosting infrastructure (<a href="https://www.cloudflare.com/" target="_blank">cloudflare.com</a>)</li>
+            <li><strong>Community Contributors</strong> – Feedback, testing and suggestions</li>
+          </ul>
+          <p style="margin-top:0.8rem; font-size:0.85rem; color:#94a3b8;">
+            If you would like to contribute data, scanner feeds, or assist with development, please join our <a href="https://discord.forcequit.xyz" target="_blank">Discord server</a>.
+          </p>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">Data sources · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'data-sources';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+</body>
+</html>
+

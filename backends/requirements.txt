@@ -1,0 +1,13 @@
+# Backend API dependencies
+flask>=2.0.0
+flask-cors>=4.0.0
+requests>=2.28.0
+werkzeug>=2.0.0
+python-dotenv>=1.0.0
+cloudscraper>=1.2.71
+curl_cffi>=0.5.0
+psycopg2-binary>=2.9.0
+# Playwright for solving Vercel Security Checkpoint on Central Watch
+# After pip install: run 'playwright install chromium' to download browser
+playwright>=1.40.0
+playwright-stealth>=1.0.6

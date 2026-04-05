@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – NSW Rural Fire Service</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="NSW Rural Fire Service bushfire response, district codes, and appliance categories for PSN monitoring.">
+  <meta name="keywords" content="NSW RFS, Rural Fire Service, Bushfire, District Codes, Appliances, PSN, Scanner">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/rural-fire-service.html">
+  <meta property="og:title" content="NSW PSN – NSW Rural Fire Service Reference">
+  <meta property="og:description" content="NSW Rural Fire Service bushfire response, district codes, and appliance categories for PSN monitoring.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/rural-fire-service.html">
+  <meta name="twitter:title" content="NSW PSN – NSW Rural Fire Service Reference">
+  <meta name="twitter:description" content="NSW Rural Fire Service bushfire response, district codes, and appliance categories for PSN monitoring.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>RFS</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a class="active" href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">NSW Rural Fire Service</div>
+      <h1>🔥 NSW Rural Fire Service</h1>
+      <p>
+        Priority codes, status codes and area commands used by the NSW Rural Fire Service on the NSW Public Safety Network.
+      </p>
+    </header>
+
+    <section class="card-grid">
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🔥 NSW Rural Fire Service – Overview</div>
+          <div class="card-tag">NSW RFS</div>
+        </div>
+        <div class="card-body">
+          <div class="badge-row">
+            <span class="badge badge-agency">NSW Rural Fire Service</span>
+            <span class="badge badge-parent">Volunteer Fire Service</span>
+          </div>
+          <p>
+            The NSW Rural Fire Service (NSW RFS) is the world’s largest volunteer fire service and the lead
+            combat agency for bush and grass fires in New South Wales. It protects communities, property and
+            the environment across around 95% of the state.
+          </p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">⚠ Priority Codes</div>
+          <div class="card-tag">Radio</div>
+        </div>
+        <div class="card-body">
+          <p>RFS radio priority levels used when calling Fire Control.</p>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr><th>Code</th><th>Summary</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><span class="pill pill-red">Emergency</span></td><td>Threat to life / urgent assistance</td></tr>
+                  <tr><td><span class="pill pill-red">Red</span></td><td>Highest priority message</td></tr>
+                  <tr><td><span class="pill pill-blue">Blue</span></td><td>Incident update / SitRep</td></tr>
+                  <tr><td><span class="pill pill-yellow">Yellow</span></td><td>Non-Priority / General Message</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📟 MDT Status Codes</div>
+          <div class="card-tag">Unit Status</div>
+        </div>
+        <div class="card-body">
+          <p>Mobile Data Terminal (MDT) status values.</p>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr><th>Code</th><th>Status</th><th>Detail</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>1</strong></td><td>Responding</td><td>En route to incident</td></tr>
+                  <tr><td><strong>2</strong></td><td>On scene</td><td>Arrived at scene</td></tr>
+                  <tr><td><strong>3</strong></td><td>Available</td><td>On air, ready for tasking</td></tr>
+                  <tr><td><strong>4</strong></td><td>Not available</td><td>Cannot be assigned</td></tr>
+                  <tr><td><strong>5</strong></td><td>At station</td><td>Closed at station</td></tr>
+                  <tr><td><strong>6</strong></td><td>Emergency</td><td>Vehicle in duress</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🔍 Quick Lookup</div>
+          <div class="card-tag">Search</div>
+        </div>
+        <div class="card-body">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <input 
+              type="text" 
+              id="rfs-search" 
+              placeholder="Search for a District, Town or Code..."
+              style="
+                flex: 1;
+                padding: 0.6rem 0.8rem;
+                border-radius: 8px;
+                border: 1px solid var(--border-subtle);
+                background: rgba(15, 23, 42, 0.6);
+                color: var(--text-main);
+                font-size: 0.9rem;
+              "
+            >
+            <span id="rfs-search-counter" style="color: var(--text-muted); font-size: 0.9rem; white-space: nowrap; min-width: 80px; text-align: right;"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">North Eastern Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+            <tr><td>1</td><td>Far North Coast</td><td>Ballina, Byron, Tweed</td><td>FNC A+B</td></tr>
+            <tr><td>2</td><td>Northern Rivers</td><td>Kyogle, Lismore, Richmond, Valley</td><td>NTHRS A+B</td></tr>
+            <tr><td>3</td><td>Clarence Valley</td><td>Clarence Valley</td><td>CLVLY A+B</td></tr>
+            <tr><td>4</td><td>Coffs Coast</td><td>Bellingen, Coffs Harbour</td><td>COFFS A+B</td></tr>
+            <tr><td>6</td><td>Northern Tablelands</td><td>Glen Innes Severn, Inverell, Tenterfield</td><td>NTHTB A+B</td></tr>
+            <tr><td>7</td><td>New England</td><td>Armidale, Uralla, Walcha</td><td>NWENG A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">North Western Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+            <tr><td>8</td><td>Namoi/Gwydir</td><td>Gwydir, Moree Plains, Narrabri</td><td>NAMGW A+B</td></tr>
+            <tr><td>9</td><td>Tamworth</td><td>Tamworth</td><td>TAMWTH A+B</td></tr>
+            <tr><td>10</td><td>Liverpool Range</td><td>Gunnedah, Liverpool Plains, Upper Hunter</td><td>LVPLR A+B</td></tr>
+            <tr><td>11</td><td>Castlereagh</td><td>Gilgandra, Warrumbungle</td><td>CSTLR A+B</td></tr>
+            <tr><td>12</td><td>North West</td><td>Bogan, Coonamble, Walgett, Warren</td><td>NTHWST A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">Hunter Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+            <tr><td>5</td><td>Lower North Coast</td><td>Kempsey, Nambucca</td><td>LNC A+B</td></tr>
+            <tr><td>13</td><td>Mid Coast</td><td>Lord Howe Island, Mid-Coast, Hastings</td><td>MDCST A+B</td></tr>
+            <tr><td>14</td><td>Lower Hunter</td><td>Cessnock, Dungog, Maitland, Port Stephens</td><td>LWHUN A+B</td></tr>
+            <tr><td>15</td><td>Hunter Valley</td><td>Muswellbrook, Singleton</td><td>HUNTV A+B</td></tr>
+            <tr><td>16</td><td>Central Coast</td><td>Central Coast, Lake Macquarie</td><td>CENCO A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">Greater Sydney Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+            <tr><td>17</td><td>Northern Beaches</td><td>Northern Beaches</td><td>NBCHS A+B</td></tr>
+            <tr><td>18</td><td>Hornsby/Ku-ring-gai</td><td>Hornsby, Ku-ring-gai</td><td>HNSBY A+B</td></tr>
+            <tr><td>19</td><td>The Hills</td><td>The Hills</td><td>HILLS A+B</td></tr>
+            <tr><td>20</td><td>Hawkesbury</td><td>Hawkesbury</td><td>HWKSB A+B</td></tr>
+            <tr><td>21</td><td>Cumberland</td><td>Blacktown, Fairfield, Penrith</td><td>CMBLD A+B</td></tr>
+            <tr><td>22</td><td>Blue Mountains</td><td>Blue Mountains</td><td>BLMTN A+B</td></tr>
+            <tr><td>23</td><td>Macarthur</td><td>Camden, Campbelltown, Liverpool</td><td>MCTHR A+B</td></tr>
+            <tr><td>24</td><td>Sutherland</td><td>Sutherland</td><td>SUTHE A+B</td></tr>
+            <tr><td>25</td><td>Illawarra</td><td>Kiama, Shellharbour, Wollongong</td><td>ILLAW A+B</td></tr>
+            <tr><td>26</td><td>Southern Highlands</td><td>Wingecarribee, Wollondilly</td><td>STHHG A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">South Eastern Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+             <tr><td>27</td><td>Shoalhaven</td><td>Shoalhaven</td><td>SHOAL A+B</td></tr>
+             <tr><td>28</td><td>Far South Coast</td><td>Bega Valley, Eurobodalla</td><td>FSC A+B</td></tr>
+             <tr><td>29</td><td>Southern Tablelands</td><td>Goulburn Mulwaree, Upper Lachlan, Yass Valley</td><td>STHTB A+B</td></tr>
+             <tr><td>30</td><td>Lake George</td><td>Queanbeyan-Palerang</td><td>LAKGE A+B</td></tr>
+             <tr><td>31</td><td>Monaro</td><td>Snowy Monaro</td><td>MONARO A+B</td></tr>
+             <tr><td>32</td><td>Riverina Highlands</td><td>Snowy Valleys</td><td>RVHLD A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">South Western Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+            <tr><td>33</td><td>Bland Temora</td><td>Bland, Temora</td><td>BLTEM A+B</td></tr>
+            <tr><td>34</td><td>Riverina</td><td>Coolamon, Junee, Lockhart, Wagga Wagga</td><td>RVRNA A+B</td></tr>
+            <tr><td>35</td><td>Southern Border</td><td>Albury, Berrigan, Federation, Greater Hume</td><td>STHBD A+B</td></tr>
+            <tr><td>36</td><td>MIA</td><td>Carrathool, Griffith, Hay, Leeton, Narrandera</td><td>MIA A+B</td></tr>
+            <tr><td>37</td><td>Mid Murray</td><td>Edward River, Murray River, Murrumbidgee</td><td>MDMRY A+B</td></tr>
+            <tr><td>38</td><td>Lower Western</td><td>Balranald, Wentworth</td><td>LWWST A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div class="card-title">Western Area Command</div><div class="card-tag">Zones</div></div>
+        <div class="card-body">
+          <div class="table-wrapper"><div class="table-scroll"><table class="table rfs-zone-table">
+            <thead><tr><th>Zone ID</th><th>Zone</th><th>Districts</th><th>Channel</th></tr></thead>
+            <tbody>
+            <tr><td>39</td><td>Cudgegong</td><td>Cudgegong</td><td>CDGNG A+B</td></tr>
+            <tr><td>40</td><td>Chifley Lithgow</td><td>Bathurst, Lithgow, Oberon</td><td>CHIFLITH A+B</td></tr>
+            <tr><td>41</td><td>Orana</td><td>Dubbo, Narromine</td><td>ORANA A+B</td></tr>
+            <tr><td>42</td><td>Canobolas</td><td>Blayney, Cabonne, Cowra, Orange</td><td>CANOB A+B</td></tr>
+            <tr><td>43</td><td>South West Slopes</td><td>Cootamundra-Gundagai, Hilltops</td><td>SWS A+B</td></tr>
+            <tr><td>44</td><td>Mid Lachlan Valley</td><td>Forbes, Lachlan, Parkes, Weddin</td><td>MDLCH A+B</td></tr>
+            <tr><td>45</td><td>Far West</td><td>Bourke, Brewarrina, Central Darling, Cobar, Unincorporated</td><td>FARWST A+B</td></tr>
+            </tbody>
+          </table></div></div>
+        </div>
+      </article>
+
+      <article class="card" style="grid-column: 1 / -1;">
+        <div class="card-header">
+          <div class="card-title">🚛 Appliance Categories</div>
+          <div class="card-tag">Fleet</div>
+        </div>
+        <div class="card-body">
+          <p>NSW RFS appliance categories (CAT types) commonly heard on radio and seen in CAD / logs.</p>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr><th>Category</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Category 1</td><td>Heavy Tanker (3000L+) 4x4</td></tr>
+                  <tr><td>Category 2</td><td>Medium Tanker (1600-3000L) 4x4</td></tr>
+                  <tr><td>Category 3</td><td>4x2 crew / single cab (3000 – 4000 litre) tanker.</td></tr>
+                  <tr><td>Category 4</td><td>4x2 crew / single cab (1600 – 3000 litre) tanker.</td></tr>
+                  <tr><td>Category 5</td><td>4x4 or 6x6 crew / single cab (over 4000 litre) tanker.</td></tr>
+                  <tr><td>Category 6</td><td>4x2 crew / single cab (over 4000 litre) tanker.</td></tr>
+                  <tr><td>Category 7</td><td>Light Tanker (800-1600L) 4x4</td></tr>
+                  <tr><td>Category 8</td><td>4x2 crew / single cab (800 – 1600 litre) tanker.</td></tr>
+                  <tr><td>Category 9</td><td>Striker / Ute ( &lt; 800L) 4x4</td></tr>
+                  <tr><td>Category 10</td><td>Urban Pumper</td></tr>
+                  <tr><td>Category 11</td><td>Urban Pumper</td></tr>
+                  <tr><td>Category 12</td><td>Personnel carrier / transport, 4x4.</td></tr>
+                  <tr><td>Category 13</td><td>Bulk water carrier.</td></tr>
+                  <tr><td>Category 15</td><td>Fire boats.</td></tr>
+                  <tr><td>Category 16</td><td>FCO vehicle / group vehicle.</td></tr>
+                  <tr><td>Category 17</td><td>General cargo / Prime movers.</td></tr>
+                  <tr><td>Category 18</td><td>Catering vehicles.</td></tr>
+                  <tr><td>Category 19</td><td>Communication vehicles.</td></tr>
+                  <tr><td>Category 20</td><td>Other appliances / rescue.</td></tr>
+                  <tr><td>Category 21</td><td>Light rescue.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      NSW Rural Fire Service details are provided as an informal monitoring reference only. ·
+      <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
+    </div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'rfs';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const searchInput = document.getElementById("rfs-search");
+      const counter = document.getElementById("rfs-search-counter");
+      if (!searchInput || !counter) return;
+
+      searchInput.addEventListener("keyup", (e) => {
+        const term = e.target.value.toLowerCase();
+        const rows = document.querySelectorAll(".table tbody tr");
+        let matchCount = 0;
+
+        rows.forEach(row => {
+          const text = row.textContent.toLowerCase();
+          row.style.backgroundColor = "";
+          row.style.transition = "background-color 0.2s ease";
+
+          if (term.length > 0 && text.includes(term)) {
+            row.style.backgroundColor = "rgba(249, 115, 22, 0.35)"; 
+            if (matchCount === 0) {
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            matchCount++;
+          }
+        });
+
+        if (term.length > 0) {
+          counter.textContent = matchCount === 1 ? "1 match" : `${matchCount} matches`;
+          counter.style.color = matchCount > 0 ? "var(--text-main)" : "#ef4444"; 
+        } else {
+          counter.textContent = ""; 
+        }
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login | Forcequit NSW PSN</title>
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/login.html">
+  <meta property="og:title" content="Login – Forcequit NSW PSN">
+  <meta property="og:description" content="Sign in to your NSW PSN Map Editor account.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/login.html">
+  <meta name="twitter:title" content="Login – Forcequit NSW PSN">
+  <meta name="twitter:description" content="Sign in to your NSW PSN Map Editor account.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  
+  <!-- Standard Meta -->
+  <meta name="description" content="Sign in to your NSW PSN Map Editor account.">
+  <meta name="theme-color" content="#f97316">
+  
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <style>
+    :root {
+      --bg-dark: #020617;
+      --bg-card: #1e293b;
+      --border-subtle: rgba(148, 163, 184, 0.2);
+      --text-primary: #fff;
+      --text-soft: #94a3b8;
+      --accent: #f97316;
+      --success: #22c55e;
+      --danger: #ef4444;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-dark);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      background-image: 
+        radial-gradient(ellipse at top, rgba(249, 115, 22, 0.1) 0%, transparent 50%),
+        radial-gradient(ellipse at bottom right, rgba(34, 197, 94, 0.05) 0%, transparent 50%);
+    }
+    
+    .container {
+      width: 100%;
+      max-width: 420px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    
+    .logo img {
+      height: 48px;
+      width: auto;
+    }
+    
+    .logo-text {
+      font-size: 1.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .logo-text span {
+      color: var(--accent);
+    }
+    
+    .subtitle {
+      color: var(--text-soft);
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+    
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+    
+    .card-description {
+      color: var(--text-soft);
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+      text-align: center;
+    }
+    
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    
+    .form-label {
+      display: block;
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: rgba(2, 6, 23, 0.5);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
+    }
+    
+    .form-input::placeholder {
+      color: #64748b;
+    }
+    
+    .btn {
+      width: 100%;
+      padding: 0.9rem 1.5rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      transition: background 0.2s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-family: inherit;
+    }
+    
+    .btn:hover {
+      background: #ea580c;
+    }
+    
+    .btn:active {
+      transform: scale(0.98);
+    }
+    
+    .btn:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+    
+    .btn-outline:hover {
+      background: rgba(249, 115, 22, 0.1);
+    }
+    
+    .message {
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      text-align: center;
+      min-height: 1.5em;
+    }
+    
+    .message.error {
+      color: var(--danger);
+    }
+    
+    .message.success {
+      color: var(--success);
+    }
+    
+    .forgot-link {
+      display: block;
+      text-align: center;
+      margin-top: 1rem;
+      color: var(--text-soft);
+      font-size: 0.85rem;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    
+    .forgot-link:hover {
+      color: var(--accent);
+    }
+    
+    .divider {
+      border-top: 1px solid var(--border-subtle);
+      margin: 1.5rem 0;
+      padding-top: 1.5rem;
+      text-align: center;
+    }
+    
+    .divider-text {
+      color: var(--text-soft);
+      font-size: 0.85rem;
+      margin-bottom: 0.75rem;
+    }
+    
+    .footer-links {
+      margin-top: 1.5rem;
+      text-align: center;
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    
+    .footer-links a {
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: color 0.2s;
+    }
+    
+    .footer-links a:hover {
+      color: var(--accent);
+    }
+    
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      transition: color 0.2s;
+    }
+    
+    .back-link:hover {
+      color: var(--accent);
+    }
+    
+    /* Password Reset View */
+    .view {
+      display: none;
+    }
+    
+    .view.active {
+      display: block;
+    }
+    
+    .info-box {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-soft);
+      text-align: center;
+    }
+    
+    .info-box i {
+      color: var(--success);
+      margin-right: 0.5rem;
+    }
+    
+    @media (max-width: 480px) {
+      body {
+        padding: 1rem;
+      }
+      
+      .card {
+        padding: 1.5rem;
+      }
+      
+      .footer-links {
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <img src="./assets/fqlogo.png" alt="Forcequit Logo">
+        <div class="logo-text">Forcequit <span>NSW PSN</span></div>
+      </div>
+      <p class="subtitle">Map Editor Login</p>
+    </div>
+    
+    <div class="card">
+      <!-- Login View -->
+      <div id="login-view" class="view active">
+        <div class="card-title">Welcome Back</div>
+        <p class="card-description">Sign in to access the Map Editor</p>
+        
+        <form id="login-form" onsubmit="handleLogin(event); return false;">
+          <div class="form-group">
+            <label class="form-label">Email Address</label>
+            <input type="email" id="login-email" class="form-input" placeholder="your@email.com" required autofocus>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" id="login-password" class="form-input" placeholder="••••••••" required>
+          </div>
+          
+          <button type="submit" id="login-btn" class="btn">
+            <i class="fas fa-sign-in-alt"></i>
+            Sign In
+          </button>
+          
+          <div id="login-message" class="message"></div>
+          
+          <a href="#" onclick="showView('reset'); return false;" class="forgot-link">
+            Forgot your password?
+          </a>
+        </form>
+        
+        <div class="divider">
+          <p class="divider-text">Don't have an account?</p>
+          <a href="editor-signup.html" class="btn btn-outline">
+            <i class="fas fa-user-plus"></i>
+            Request Access
+          </a>
+        </div>
+      </div>
+      
+      <!-- Password Reset View -->
+      <div id="reset-view" class="view">
+        <a href="#" onclick="showView('login'); return false;" class="back-link">
+          <i class="fas fa-arrow-left"></i> Back to Login
+        </a>
+        
+        <div class="card-title">Reset Password</div>
+        <p class="card-description">Enter your email and we'll send you a reset link</p>
+        
+        <form id="reset-form" onsubmit="handlePasswordReset(event); return false;">
+          <div class="form-group">
+            <label class="form-label">Email Address</label>
+            <input type="email" id="reset-email" class="form-input" placeholder="your@email.com" required>
+          </div>
+          
+          <button type="submit" id="reset-btn" class="btn">
+            <i class="fas fa-paper-plane"></i>
+            Send Reset Link
+          </button>
+          
+          <div id="reset-message" class="message"></div>
+        </form>
+      </div>
+      
+      <!-- Reset Success View -->
+      <div id="reset-success-view" class="view">
+        <div class="info-box">
+          <i class="fas fa-check-circle"></i>
+          Check your email!
+        </div>
+        
+        <div class="card-title">Reset Link Sent</div>
+        <p class="card-description">
+          We've sent a password reset link to your email address. Click the link in the email to create a new password.
+        </p>
+        
+        <p style="color: var(--text-soft); font-size: 0.85rem; margin: 1.5rem 0; text-align: center;">
+          Didn't receive the email? Check your spam folder or try again.
+        </p>
+        
+        <button onclick="showView('reset')" class="btn btn-outline" style="margin-bottom: 0.75rem;">
+          <i class="fas fa-redo"></i>
+          Try Again
+        </button>
+        
+        <button onclick="showView('login')" class="btn">
+          <i class="fas fa-arrow-left"></i>
+          Back to Login
+        </button>
+      </div>
+    </div>
+    
+    <div class="footer-links">
+      <a href="map.html">
+        <i class="fas fa-map"></i> Live Map
+      </a>
+      <a href="https://discord.forcequit.xyz" target="_blank">
+        <i class="fab fa-discord"></i> Discord
+      </a>
+      <a href="privacy.html">
+        <i class="fas fa-shield-alt"></i> Privacy
+      </a>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script>
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    
+    // Check if user is already logged in
+    async function checkSession() {
+      const { data } = await sb.auth.getSession();
+      if (data.session) {
+        // Check if there's a redirect URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const redirect = urlParams.get('redirect');
+        window.location.href = redirect || 'map-editor.html';
+      }
+    }
+    
+    checkSession();
+    
+    function showView(viewName) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById(`${viewName}-view`).classList.add('active');
+      
+      // Clear messages
+      document.querySelectorAll('.message').forEach(m => m.textContent = '');
+      
+      // Focus first input
+      const firstInput = document.querySelector(`#${viewName}-view input`);
+      if (firstInput) firstInput.focus();
+    }
+    
+    async function handleLogin(event) {
+      event.preventDefault();
+      
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      const messageEl = document.getElementById('login-message');
+      const submitBtn = document.getElementById('login-btn');
+      
+      if (!email || !password) {
+        messageEl.className = 'message error';
+        messageEl.textContent = 'Please enter email and password.';
+        return;
+      }
+      
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing in...';
+      messageEl.textContent = '';
+      
+      try {
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        
+        if (error) {
+          messageEl.className = 'message error';
+          messageEl.textContent = error.message;
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Sign In';
+          return;
+        }
+        
+        // Check if user needs to change password on first login
+        if (data?.user?.user_metadata?.force_password_change) {
+          window.location.href = 'change-password.html';
+          return;
+        }
+        
+        // Success - redirect
+        messageEl.className = 'message success';
+        messageEl.textContent = 'Success! Redirecting...';
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const redirect = urlParams.get('redirect');
+        window.location.href = redirect || 'map-editor.html';
+        
+      } catch (err) {
+        messageEl.className = 'message error';
+        messageEl.textContent = 'An error occurred. Please try again.';
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Sign In';
+      }
+    }
+    
+    async function handlePasswordReset(event) {
+      event.preventDefault();
+      
+      const email = document.getElementById('reset-email').value.trim();
+      const messageEl = document.getElementById('reset-message');
+      const submitBtn = document.getElementById('reset-btn');
+      
+      if (!email) {
+        messageEl.className = 'message error';
+        messageEl.textContent = 'Please enter your email address.';
+        return;
+      }
+      
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+      messageEl.textContent = '';
+      
+      try {
+        const { error } = await sb.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin + '/reset-password.html'
+        });
+        
+        if (error) {
+          messageEl.className = 'message error';
+          messageEl.textContent = error.message;
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Reset Link';
+          return;
+        }
+        
+        // Show success view
+        showView('reset-success');
+        
+      } catch (err) {
+        messageEl.className = 'message error';
+        messageEl.textContent = 'An error occurred. Please try again.';
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Reset Link';
+      }
+    }
+    
+    // Handle Enter key in password field
+    document.getElementById('login-password').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('login-form').dispatchEvent(new Event('submit'));
+      }
+    });
+  </script>
+</body>
+</html>

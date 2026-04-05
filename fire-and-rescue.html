@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – Fire and Rescue NSW</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Fire and Rescue NSW priority codes, appliances, and zones for urban fire response on the PSN.">
+  <meta name="keywords" content="FRNSW, Fire and Rescue NSW, Priority Codes, Appliances, PSN, Scanner">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/fire-and-rescue.html">
+  <meta property="og:title" content="NSW PSN – Fire and Rescue NSW Reference">
+  <meta property="og:description" content="Fire and Rescue NSW priority codes, appliances, and zones for urban fire response on the PSN.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/fire-and-rescue.html">
+  <meta name="twitter:title" content="NSW PSN – Fire and Rescue NSW Reference">
+  <meta name="twitter:description" content="Fire and Rescue NSW priority codes, appliances, and zones for urban fire response on the PSN.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+<script>
+  if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+  }
+</script>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>FRNSW</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a class="active" href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Fire and Rescue NSW</div>
+      <h1>🚒 Fire and Rescue NSW</h1>
+      <p>
+        Priority codes, status codes, regional zones and appliance prefixes used by Fire and Rescue NSW
+        on the NSW Public Safety Network.
+      </p>
+    </header>
+
+    <section class="card-grid">
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🚒 Fire and Rescue NSW – Overview</div>
+          <div class="card-tag">Agency</div>
+        </div>
+        <div class="card-body">
+          <div class="badge-row">
+            <span class="badge badge-agency">Fire and Rescue NSW</span>
+            <span class="badge badge-parent">State Fire &amp; Rescue</span>
+          </div>
+          <p>
+            Fire and Rescue NSW (FRNSW) is the primary fire and emergency service for urban areas in New South Wales,
+            responsible for protecting life, property and the environment in cities, larger towns and key industrial areas.
+          </p>
+          <div class="zone-subtitle">At a Glance</div>
+          <ul>
+            <li>Established in 1884 (formerly NSW Fire Brigades).</li>
+            <li>Operates approximately 335 fire stations across NSW.</li>
+            <li>Responds to more than 130,000 incidents each year.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">⚠ Priority Codes</div>
+          <div class="card-tag">Radio</div>
+        </div>
+        <div class="card-body">
+          <p>Quick reference for Fire and Rescue NSW radio priorities.</p>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Priority</th>
+                    <th>Summary</th>
+                    <th>Typical Use</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span class="pill pill-red">Red</span></td>
+                    <td>Highest priority / urgent assistance</td>
+                    <td>Serious incidents, persons trapped, major fire escalation, firefighter in danger.</td>
+                  </tr>
+                  <tr>
+                    <td><span class="pill pill-white">White</span></td>
+                    <td>Unreported incident discovered</td>
+                    <td>Crew finds a job while driving — medical, accident, or fire not yet reported.</td>
+                  </tr>
+                  <tr>
+                    <td><span class="pill pill-blue">Blue</span></td>
+                    <td>Active incident update</td>
+                    <td>Tactical updates, fire conditions, strategy changes, resource changes.</td>
+                  </tr>
+                  <tr>
+                    <td><span class="pill pill-green">Green</span></td>
+                    <td>Incident complete</td>
+                    <td>Final summary of actions taken and outcome.</td>
+                  </tr>
+                  <tr>
+                    <td><span class="pill pill-yellow">Yellow</span></td>
+                    <td>Low-priority / logistical</td>
+                    <td>Routine, non-incident traffic (station moves, returning to area, etc.).</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📟 Status Codes</div>
+          <div class="card-tag">Unit Status</div>
+        </div>
+        <div class="card-body">
+          <p>Status codes as used by appliances when reporting to FireCom.</p>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Meaning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>1</strong></td><td>Responding to incident</td></tr>
+                  <tr><td><strong>2</strong></td><td>Stand-down / cancelled</td></tr>
+                  <tr><td><strong>3</strong></td><td>On-scene / arrived at incident</td></tr>
+                  <tr><td><strong>4</strong></td><td>Available for calls</td></tr>
+                  <tr><td><strong>5</strong></td><td>Back at station</td></tr>
+                  <tr><td><strong>6</strong></td><td>Entering RFS area of responsibility</td></tr>
+                  <tr><td><strong>7</strong></td><td>Appliance off-line (contamination, mechanical issue, etc.)</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🔍 Quick Lookup</div>
+          <div class="card-tag">Search</div>
+        </div>
+        <div class="card-body">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <input 
+              type="text" 
+              id="frnsw-search" 
+              placeholder="Search for a Station, Zone, or Appliance..."
+              style="
+                flex: 1;
+                padding: 0.6rem 0.8rem;
+                border-radius: 8px;
+                border: 1px solid var(--border-subtle);
+                background: rgba(15, 23, 42, 0.6);
+                color: var(--text-main);
+                font-size: 0.9rem;
+              "
+            >
+            <span id="frnsw-search-counter" style="color: var(--text-muted); font-size: 0.9rem; white-space: nowrap; min-width: 80px; text-align: right;"></span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🧭 Regional Zones</div>
+          <div class="card-tag">Zones</div>
+        </div>
+        <div class="card-body">
+          <p>Fire and Rescue NSW Regional zones grouped by direction.</p>
+
+          <div class="zone-subtitle">Regional North</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>RN1</strong></td>
+                    <td>Regional North Zone 1</td>
+                    <td>Bellingen, Bowraville, Coffs Harbour, Dorrigo, Forster, Gloucester, Kempsey, Laurieton, Macksville, Nambucca Heads, Port Macquarie, Sawtell, South West Rocks, Taree, Tea Gardens, Urunga, Wauchope, Wingham, Woolgoolga</td>
+                  </tr>
+                  <tr>
+                    <td><strong>RN2</strong></td>
+                    <td>Regional North Zone 2</td>
+                    <td>Alstonville, Ballina, Bangalow, Brunswick Heads, Byron Bay, Casino, Coraki, Evans Head, Goonellabah, Grafton, Kingscliff, Kyogle, Lismore, Maclean, Mullumbimby, Murwillumbah, South Grafton, Tweed Heads, Banora Point, Yamba</td>
+                  </tr>
+                  <tr>
+                    <td><strong>RN3</strong></td>
+                    <td>Regional North Zone 3</td>
+                    <td>Armidale, Barraba, Bingara, Boggabri, Coonabarabran, Glen Innes, Gunnedah, Guyra, Inverell, Manilla, Moree, Narrabri, Quirindi, Tamworth, Tenterfield, Uralla, Walcha, Warialda, Wee Waa, Werris Creek</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Regional South</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>RS1</strong></td>
+                    <td>Regional South Zone 1</td>
+                    <td>Batemans Bay, Bega, Berry, Bombala, Braidwood, Cooma, Eden, Jindabyne, Merimbula, Moruya, Narooma, Nowra, Perisher Valley, Queanbeyan, Thredbo, Ulladulla, Shoalhaven</td>
+                  </tr>
+                  <tr>
+                    <td><strong>RS2</strong></td>
+                    <td>Regional South Zone 2</td>
+                    <td>Batlow, Boorowa, Bowral, Bundanoon, Cootamundra, Cowra, Crookwell, Goulburn, Grenfell, Gundagai, Harden, Mittagong, Moss Vale, Tumut, Yass, Young</td>
+                  </tr>
+                  <tr>
+                    <td><strong>RS3</strong></td>
+                    <td>Regional South Zone 3</td>
+                    <td>Albury Central, Albury Civic, North Albury, Culcairn, Deniliquin, Finley, Henty, Holbrook, Jerilderie, Lockhart, Moama, Mulwala, Tocumwal, Tumbarumba, Turvey Park, Wagga Wagga</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Regional West</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>RW1</strong></td>
+                    <td>Regional West Zone 1</td>
+                    <td>Bourke, Brewarrina, Cobar, Coolah, Coonamble, Gilgandra, Lightning Ridge, Narromine, Nyngan, Parkes, Peak Hill, Trangie, Walgett, Warren, Wellington</td>
+                  </tr>
+                  <tr>
+                    <td><strong>RW2</strong></td>
+                    <td>Regional West Zone 2</td>
+                    <td>Aberdeen, Bathurst, Blayney, Canowindra, Denman, Gulgong, Kandos, Kelso, Merriwa, Molong, Mudgee, Murrurundi, Muswellbrook, Oberon, Orange, Scone, Singleton</td>
+                  </tr>
+                  <tr>
+                    <td><strong>RW3</strong></td>
+                    <td>Regional West Zone 3</td>
+                    <td>Balranald, Broken Hill, Broken Hill South, Condobolin, Coolamon, Griffith, Hay, Hillston, Junee, Lake Cargelligo, Leeton, Narrandera, Temora, Wentworth, West Wyalong, Yenda</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🏙 Metropolitan Zones</div>
+          <div class="card-tag">Zones</div>
+        </div>
+        <div class="card-body">
+          <p>Fire and Rescue NSW Metropolitan zones grouped by direction.</p>
+
+          <div class="zone-subtitle">Metropolitan North</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>MN1</strong></td>
+                    <td>Metropolitan North Zone 1</td>
+                    <td>Belmont, Cardiff, Carrington, Charlestown, Jesmond, Lambton, Mayfield West, Merewether, Minmi, Morisset, Newcastle, Redhead, Salamander Bay, Stockton, Swansea, Tarro, Teralba, Tingira Heights, Toronto, Wallsend, Wangi Wangi, Holmesville</td>
+                  </tr>
+                  <tr>
+                    <td><strong>MN2</strong></td>
+                    <td>Metropolitan North Zone 2</td>
+                    <td>Bateau Bay, Berkeley Vale, Budgewoi, Doyalson, Gosford, Hamlyn Terrace, Kariong, Ourimbah, Saratoga, Terrigal, The Entrance, Toukley, Umina, Wyoming, Wyong, Kincumber</td>
+                  </tr>
+                  <tr>
+                    <td><strong>MN3</strong></td>
+                    <td>Metropolitan North Zone 3</td>
+                    <td>Abermain, Bellbird, Branxton / Greta, Cessnock, Dungog, East Maitland, Kearsley, Kurri Kurri, Maitland, Morpeth, Paxton, Raymond Terrace, Rutherford, Salamander Bay, Singleton, Heddon Greta</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Metropolitan South</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>MS1</strong></td>
+                    <td>Metropolitan South Zone 1</td>
+                    <td>Albion Park, Balgownie, Bulli, Coledale, Dapto, Helensburgh, Kiama, Shellharbour, Thirroul, Unanderra, Warrawong, Wollongong</td>
+                  </tr>
+                  <tr>
+                    <td><strong>MS2</strong></td>
+                    <td>Metropolitan South Zone 2</td>
+                    <td>Arncliffe, Botany, Bundeena, Cronulla, Engadine, Hurstville, Kogarah, Maroubra, Mascot, Matraville, Menai, Miranda, Mortdale, Randwick, Riverwood, Sutherland, Port Botany / Kurnell</td>
+                  </tr>
+                  <tr>
+                    <td><strong>MS3</strong></td>
+                    <td>Metropolitan South Zone 3</td>
+                    <td>Busby, Camden, Campbelltown, Horningsea Park, Ingleburn, Liverpool, Macquarie Fields, Narellan, Picton, Rosemeadow, St Andrews, Oran Park, Narellan Vale</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Metropolitan East</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>ME1</strong></td>
+                    <td>Metropolitan East Zone 1</td>
+                    <td>Alexandria, Bondi, City of Sydney, Darlington, Glebe, Pyrmont, Redfern, MLC Centre (City of Sydney East), Woollahra, City of Sydney East</td>
+                  </tr>
+                  <tr>
+                    <td><strong>ME2</strong></td>
+                    <td>Metropolitan East Zone 2</td>
+                    <td>Avalon Beach, Beecroft, Berowra, Crows Nest, Dee Why, Forestville, Gordon, Hornsby, Lane Cove, Manly, Mona Vale, Mosman, Narrabeen, Neutral Bay</td>
+                  </tr>
+                  <tr>
+                    <td><strong>ME3</strong></td>
+                    <td>Metropolitan East Zone 3</td>
+                    <td>Ashfield, Balmain, Bankstown, Burwood, Campsie, Chester Hill, Concord, Drummoyne, Lakemba, Leichhardt, Marrickville, Newtown, Revesby, Rhodes area</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Metropolitan West</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-zone-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Zone</th>
+                    <th>Stations / Localities</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>MW1</strong></td>
+                    <td>Metropolitan West Zone 1</td>
+                    <td>Blacktown, Castle Hill, Cranebrook / Ropes Crossing, Huntingwood, Mount Druitt, Penrith, Regentville, Riverstone</td>
+                  </tr>
+                  <tr>
+                    <td><strong>MW2</strong></td>
+                    <td>Metropolitan West Zone 2</td>
+                    <td>Bonnyrigg Heights, Cabramatta, Eastwood, Fairfield, Wentworthville, Silverwater, Smithfield, Rydalmere</td>
+                  </tr>
+                  <tr>
+                    <td><strong>MW3</strong></td>
+                    <td>Metropolitan West Zone 3</td>
+                    <td>Blackheath, Glenbrook, Katoomba, Lawson, Mount Victoria, Richmond, Springwood, Wallerawang, Wentworth Falls, Windsor</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">🚛 Appliance Prefixes</div>
+          <div class="card-tag">Fleet</div>
+        </div>
+        <div class="card-body">
+          <p>Common Fire and Rescue NSW appliance prefixes, grouped by type.</p>
+
+          <div class="zone-subtitle">Pumpers</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-prefix-table">
+                <thead>
+                  <tr><th>Prefix</th><th>Meaning</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>P</strong></td><td>Pumper</td><td>Standard urban pumper</td></tr>
+                  <tr><td><strong>HP</strong></td><td>Heavy Pumper</td><td>High-capacity pumper</td></tr>
+                  <tr><td><strong>RP</strong></td><td>Rescue Pumper</td><td>Pumper with road-crash rescue capability</td></tr>
+                  <tr><td><strong>LP</strong></td><td>Light Pumper</td><td>Smaller pumper, often village / metro</td></tr>
+                  <tr><td><strong>CP</strong></td><td>CAFS Pumper</td><td>Pumper fitted with Compressed Air Foam System</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Tankers</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-prefix-table">
+                <thead>
+                  <tr><th>Prefix</th><th>Meaning</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>T</strong></td><td>Tanker</td><td>Rural / village water carrier</td></tr>
+                  <tr><td><strong>VT</strong></td><td>Village Tanker</td><td>Smaller village-class tanker</td></tr>
+                  <tr><td><strong>CT</strong></td><td>CAFS Tanker</td><td>Tanker with Compressed Air Foam System</td></tr>
+                  <tr><td><strong>HT</strong></td><td>Hazmat Tanker</td><td>Tanker configured for hazardous materials</td></tr>
+                  <tr><td><strong>RT</strong></td><td>Rescue Tanker</td><td>Tanker with rescue tools and equipment</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Rescue</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-prefix-table">
+                <thead>
+                  <tr><th>Prefix</th><th>Meaning</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>R</strong></td><td>Rescue</td><td>Primary rescue appliance</td></tr>
+                  <tr><td><strong>SR</strong></td><td>Secondary Rescue</td><td>Support / secondary rescue appliance</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Specialist &amp; Support</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-prefix-table">
+                <thead>
+                  <tr><th>Prefix</th><th>Meaning</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>HA</strong></td><td>Aerial Appliance</td><td>Ladder / platform appliances</td></tr>
+                  <tr><td><strong>BA</strong></td><td>Breathing Apparatus</td><td>BA support and logistics</td></tr>
+                  <tr><td><strong>H</strong></td><td>Hazmat</td><td>Dedicated hazardous materials appliance</td></tr>
+                  <tr><td><strong>U</strong></td><td>Utility</td><td>Support / crew transport</td></tr>
+                  <tr><td><strong>BUS</strong></td><td>Rehab / Personnel Carrier</td><td>Moving crews, rehab at major incidents</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="zone-subtitle">Command &amp; IMT</div>
+          <div class="table-wrapper">
+            <div class="table-scroll">
+              <table class="table frnsw-prefix-table">
+                <thead>
+                  <tr><th>Prefix</th><th>Meaning</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>CO</strong></td><td>Command</td><td>Zone / area command vehicles</td></tr>
+                  <tr><td><strong>CU</strong></td><td>Communications Unit</td><td>Communications support for incidents</td></tr>
+                  <tr><td><strong>IMT</strong></td><td>Incident Management Team</td><td>IMT command / control platforms</td></tr>
+                  <tr><td><strong>LP</strong></td><td>Ladder Platform</td><td>&nbsp;</td></tr>
+                  <tr><td><strong>AP</strong></td><td>Aerial Pumper</td><td>&nbsp;</td></tr>
+                  <tr><td><strong>CAP</strong></td><td>CAFS Aerial Pumper</td><td>&nbsp;</td></tr>
+                  <tr><td><strong>HP</strong></td><td>Hydraulic Platform</td><td>&nbsp;</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      Fire and Rescue NSW details are provided as an informal monitoring reference only. ·
+      <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
+    </div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'frnsw';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const searchInput = document.getElementById("frnsw-search");
+      const counter = document.getElementById("frnsw-search-counter");
+      if (!searchInput || !counter) return;
+
+      searchInput.addEventListener("keyup", (e) => {
+        const term = e.target.value.toLowerCase();
+        const rows = document.querySelectorAll(".table tbody tr");
+        let matchCount = 0;
+
+        rows.forEach(row => {
+          const text = row.textContent.toLowerCase();
+          row.style.backgroundColor = "";
+          row.style.transition = "background-color 0.2s ease";
+
+          if (term.length > 0 && text.includes(term)) {
+            row.style.backgroundColor = "rgba(249, 115, 22, 0.35)"; 
+            if (matchCount === 0) {
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            matchCount++;
+          }
+        });
+
+        if (term.length > 0) {
+          counter.textContent = matchCount === 1 ? "1 match" : `${matchCount} matches`;
+          counter.style.color = matchCount > 0 ? "var(--text-main)" : "#ef4444"; 
+        } else {
+          counter.textContent = ""; 
+        }
+      });
+    });
+  </script>
+</body>
+</html>

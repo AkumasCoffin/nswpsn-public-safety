@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – Home</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="A streamlined reference for Fire & Rescue NSW, NSW Rural Fire Service, NSW Ambulance, and aviation units operating within the NSW PSN.">
+  <meta name="keywords" content="NSW PSN, GRN, NSW Ambulance, Fire and Rescue NSW, RFS, Scanner, Radio, Frequencies">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/">
+  <meta property="og:title" content="NSW PSN Quick Reference">
+  <meta property="og:description" content="Quick reference handbook for NSW Public Safety Network monitoring, incident map, and live scanner data">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/">
+  <meta name="twitter:title" content="NSW PSN Quick Reference">
+  <meta name="twitter:description" content="Live scanner data, unit status codes, and radio reference for NSW Emergency Services.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+
+  
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>NSW PSN</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a class="active" href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Overview</div>
+      <h1>NSW Public Safety Network</h1>
+      <p>
+        A streamlined reference for Fire &amp; Rescue NSW, NSW Rural Fire Service, NSW Ambulance,
+        and aviation units operating within the NSW PSN.
+      </p>
+    </header>
+
+    <section class="card-grid">
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">📡 Live Scanner Data</div>
+          <div class="card-tag card-tag-live">Active</div>
+        </div>
+        <div class="card-body">
+          <p>
+            View real-time active units, talkgroups, RFS major incidents, Fire Danger Ratings, power outages, traffic incidents, weather warnings, and beach conditions.
+          </p>
+          <a class="card-link" href="live.html">Go to Live Data Dashboard →</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">🗺️ Incident Map</div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p>Interactive map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.</p>
+          <a class="card-link" href="map.html">Open Map →</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">📋 Incident Logs</div>
+          <div class="card-tag">History</div>
+        </div>
+        <div class="card-body">
+          <p>Search and filter historical incident data with linked pager messages and incident updates.</p>
+          <a class="card-link" href="logs.html">View Logs →</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">Fire and Rescue NSW</div>
+          <div class="card-tag">FRNSW</div>
+        </div>
+        <div class="card-body">
+          <p>Priority codes, appliances, and zones for urban fire response.</p>
+          <a class="card-link" href="fire-and-rescue.html">View Reference →</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">NSW Rural Fire Service</div>
+          <div class="card-tag">RFS</div>
+        </div>
+        <div class="card-body">
+          <p>Bushfire response, district codes, and appliance categories.</p>
+          <a class="card-link" href="rural-fire-service.html">View Reference →</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">NSW Ambulance</div>
+          <div class="card-tag">ASNSW</div>
+        </div>
+        <div class="card-body">
+          <p>Clinical codes, category priorities, and radio terminology.</p>
+          <a class="card-link" href="ambulance.html">View Reference →</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title">Aviation</div>
+          <div class="card-tag">Air</div>
+        </div>
+        <div class="card-body">
+          <p>Callsigns for PolAir, Ambulance, Westpac, and Fire Aviation.</p>
+          <a class="card-link" href="aviation.html">View Reference →</a>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      NSW PSN reference (unofficial) · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
+    </div>
+  </main>
+
+  <script src="auth-common.js"></script>
+  <script>
+    // ======== SUPABASE AUTH CALLBACK HANDLER ========
+    // Check for Supabase auth tokens in URL and redirect to appropriate page
+    (function() {
+      // Parse both hash and search parameters (Supabase may use either)
+      const hash = window.location.hash.substring(1);
+      const search = window.location.search.substring(1);
+      
+      const params = {};
+      
+      // Parse hash parameters
+      if (hash) {
+        hash.split('&').forEach(param => {
+          const [key, value] = param.split('=');
+          if (key && value) {
+            params[decodeURIComponent(key)] = decodeURIComponent(value);
+          }
+        });
+      }
+      
+      // Parse search parameters (override hash if present)
+      if (search) {
+        search.split('&').forEach(param => {
+          const [key, value] = param.split('=');
+          if (key && value) {
+            params[decodeURIComponent(key)] = decodeURIComponent(value);
+          }
+        });
+      }
+      
+      // If no auth-related parameters, exit
+      if (!params.type && !params.access_token && !params.token && !params.error) {
+        return;
+      }
+      
+      // Check for email verification first (type=signup or type=email)
+      if (params.type === 'signup' || params.type === 'email' || params.type === 'email_change') {
+        // Redirect to email verification page, preserving all URL parameters
+        const redirectUrl = 'verify-email.html' + (window.location.hash || window.location.search);
+        window.location.href = redirectUrl;
+        return;
+      }
+      
+      // Check for password reset (type=recovery)
+      if (params.type === 'recovery') {
+        // Redirect to password reset page, preserving all URL parameters
+        const redirectUrl = 'reset-password.html' + (window.location.hash || window.location.search);
+        window.location.href = redirectUrl;
+        return;
+      }
+      
+      // If we have an access_token but no type, check for errors first
+      if (params.error) {
+        if (params.error_code === 'otp_expired' || params.error_description?.includes('expired') || params.error_description?.includes('invalid')) {
+          // Likely a password reset that expired or is invalid
+          const redirectUrl = 'reset-password.html' + (window.location.hash || window.location.search);
+          window.location.href = redirectUrl;
+          return;
+        }
+      }
+      
+      // If we have access_token but no type specified, default to password reset
+      // (password resets are more common than email verifications for existing users)
+      if (params.access_token && !params.type) {
+        const redirectUrl = 'reset-password.html' + (window.location.hash || window.location.search);
+        window.location.href = redirectUrl;
+        return;
+      }
+      
+      // If we have a token parameter but no type, it might be in the URL from email
+      // Check if we came from Supabase auth endpoint
+      if (params.token && document.referrer.includes('supabase.co/auth')) {
+        // Default to password reset for recovery tokens
+        const redirectUrl = 'reset-password.html' + (window.location.hash || window.location.search);
+        window.location.href = redirectUrl;
+        return;
+      }
+    })();
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    // Shared session ID across all pages - uses localStorage to persist
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'index';
+    const IS_DATA_PAGE = false;  // This is an info page, not a data page
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {
+        console.warn('Heartbeat failed:', e);
+      }
+    }
+
+    // Send immediate heartbeat on page load
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    }
+
+    startHeartbeat();
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopHeartbeat();
+      } else {
+        sendHeartbeat('ping');
+        startHeartbeat();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – Privacy Policy</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  
+  <meta name="description" content="Privacy Policy for NSW PSN Quick Reference by Forcequit.">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/privacy.html">
+  <meta property="og:title" content="NSW PSN – Privacy Policy">
+  <meta property="og:description" content="Privacy Policy for NSW PSN Quick Reference by Forcequit.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/privacy.html">
+  <meta name="twitter:title" content="NSW PSN – Privacy Policy">
+  <meta name="twitter:description" content="Privacy Policy for NSW PSN Quick Reference by Forcequit.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Privacy</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
+      <a href="ambulance.html">NSW Ambulance</a>
+      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a class="active" href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
+        Add Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">Legal</div>
+      <h1>🔒 Privacy Policy</h1>
+      <p>
+        Last updated: January 2025
+      </p>
+    </header>
+
+    <section class="card-grid">
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">1. Overview</div>
+          <div class="card-tag">Scope</div>
+        </div>
+        <div class="card-body">
+          <p>This Privacy Policy applies to all Forcequit NSW PSN services:</p>
+          <ul>
+            <li><strong>nswpsn.forcequit.xyz</strong> – Reference site, live data, incident map, and logs</li>
+            <li><strong>radio.forcequit.xyz</strong> – Radio streaming service</li>
+            <li><strong>pager.forcequit.xyz</strong> – Pager message feed</li>
+            <li><strong>NSW PSN Discord Bot</strong> – Alert notifications</li>
+            <li><strong>Backend APIs</strong> – Data aggregation and delivery services</li>
+          </ul>
+          <p>
+            We collect only the minimum data necessary to operate, secure, and improve these services.
+            <strong>We do not sell, rent, or trade your personal data.</strong>
+          </p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">2. Data We Collect</div>
+          <div class="card-tag">Collection</div>
+        </div>
+        <div class="card-body">
+          <p><strong>2.1 Server Logs (All Services)</strong></p>
+          <p>Standard server logs may record:</p>
+          <ul>
+            <li>IP address and approximate geolocation (country/region)</li>
+            <li>Browser user-agent and device type</li>
+            <li>Pages visited and API endpoints accessed</li>
+            <li>Date, time, and duration of access</li>
+            <li>Error logs and security flags</li>
+          </ul>
+
+          <p style="margin-top: 1rem;"><strong>2.2 Session Tracking (nswpsn.forcequit.xyz)</strong></p>
+          <p>The NSW PSN site uses a heartbeat system to track active sessions:</p>
+          <ul>
+            <li>A randomly generated <strong>session ID</strong> stored in your browser's localStorage</li>
+            <li>Which page you are viewing (map, live data, logs, reference pages)</li>
+            <li>Whether the page is actively fetching data</li>
+            <li>IP address for rate limiting</li>
+          </ul>
+          <p>Session data is not linked to personal identity and expires after 5 minutes of inactivity.</p>
+
+          <p style="margin-top: 1rem;"><strong>2.3 Browser Storage (nswpsn.forcequit.xyz)</strong></p>
+          <p>Your browser's localStorage may store:</p>
+          <ul>
+            <li>Session ID for heartbeat tracking</li>
+            <li>Map layer preferences (dark mode, map type)</li>
+            <li>List of viewed incident IDs (for "already viewed" indicators)</li>
+            <li>Filter preferences (quick filters, search history)</li>
+          </ul>
+          <p>sessionStorage may temporarily store:</p>
+          <ul>
+            <li>Viewed incident tracking (cleared when tab closes)</li>
+            <li>Cached API responses for performance</li>
+          </ul>
+
+          <p style="margin-top: 1rem;"><strong>2.4 Radio &amp; Pager Data</strong></p>
+          <p>The radio and pager services may collect:</p>
+          <ul>
+            <li>Listener connection events (IP address, timestamps)</li>
+            <li>Call metadata (talkgroup IDs, capcodes, timestamps, duration)</li>
+            <li>Audio recordings of publicly receivable, non-encrypted transmissions</li>
+            <li>Pager messages including coordinates, agency codes, and message content</li>
+          </ul>
+
+          <p style="margin-top: 1rem;"><strong>2.5 Map Editor &amp; User Incidents</strong></p>
+          <p>If you use the Map Editor to submit incidents:</p>
+          <ul>
+            <li>Email address (for authentication via Supabase)</li>
+            <li>Incident details you submit (title, location, description, coordinates)</li>
+            <li>Incident updates and status changes</li>
+          </ul>
+
+          <p style="margin-top: 1rem;"><strong>2.6 Discord Bot</strong></p>
+          <p>The Discord bot stores:</p>
+          <ul>
+            <li><strong>Server ID</strong> and <strong>Channel ID</strong> for configured alert channels</li>
+            <li>Alert type subscriptions (RFS, BOM, Traffic, Pager, etc.)</li>
+            <li>Pager capcode filters (if configured)</li>
+            <li>Role IDs for mention notifications</li>
+            <li>Message URLs for incident linking</li>
+          </ul>
+          <p>The bot does <strong>not</strong> store individual user data, message content, or personal information.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">3. Third-Party Services</div>
+          <div class="card-tag">External</div>
+        </div>
+        <div class="card-body">
+          <p><strong>3.1 Cloudflare</strong></p>
+          <p>All traffic is routed through Cloudflare for security and performance. Cloudflare may process:</p>
+          <ul>
+            <li>IP addresses and geolocation data</li>
+            <li>TLS fingerprints and connection metadata</li>
+            <li>Bot detection and security scores</li>
+          </ul>
+          <p>See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">Cloudflare's Privacy Policy</a>.</p>
+
+          <p style="margin-top: 1rem;"><strong>3.2 Supabase</strong></p>
+          <p>User authentication and incident storage uses Supabase:</p>
+          <ul>
+            <li>Email addresses for Map Editor authentication</li>
+            <li>User-submitted incident data</li>
+          </ul>
+          <p>See <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">Supabase's Privacy Policy</a>.</p>
+
+          <p style="margin-top: 1rem;"><strong>3.3 External Data Sources</strong></p>
+          <p>Incident data is aggregated from government and third-party sources:</p>
+          <ul>
+            <li>NSW Rural Fire Service (RFS) – Bush fire incidents and Fire Danger Ratings</li>
+            <li>Bureau of Meteorology (BOM) – Weather warnings and radar</li>
+            <li>Live Traffic NSW / Transport for NSW – Incidents, roadwork, floods, fires, major events</li>
+            <li>Waze – Crowdsourced road hazards, police reports, roadwork</li>
+            <li>Endeavour Energy / Ausgrid – Power outages (planned and unplanned)</li>
+            <li>Beachwatch / BeachSafe NSW – Beach conditions and safety</li>
+            <li>Traffic cameras – NSW traffic camera feeds</li>
+            <li>Aviation cameras – Airport webcam feeds</li>
+            <li>News RSS feeds – Emergency-related news from NSW sources</li>
+          </ul>
+          <p>This data is cached temporarily (up to 7 days) and is not modified.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">4. Cookies &amp; Tracking</div>
+          <div class="card-tag">Cookies</div>
+        </div>
+        <div class="card-body">
+          <p><strong>We use:</strong></p>
+          <ul>
+            <li>Essential cookies for session management</li>
+            <li>Cloudflare security cookies (bot detection, DDoS protection)</li>
+            <li>localStorage for user preferences and session IDs</li>
+          </ul>
+          <p><strong>We do NOT use:</strong></p>
+          <ul>
+            <li>Advertising or marketing cookies</li>
+            <li>Third-party analytics (Google Analytics, Facebook Pixel, etc.)</li>
+            <li>Cross-site behavioural tracking</li>
+            <li>Fingerprinting for identification</li>
+          </ul>
+          <p>You can clear localStorage at any time via your browser's developer tools to reset all stored preferences.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">5. How We Use Data</div>
+          <div class="card-tag">Purpose</div>
+        </div>
+        <div class="card-body">
+          <p>Collected data is used only for:</p>
+          <ul>
+            <li>Operating and delivering the services</li>
+            <li>Displaying aggregate statistics (e.g., "X viewers", "Y incidents")</li>
+            <li>Optimising data refresh intervals based on active usage</li>
+            <li>Rate limiting to prevent abuse</li>
+            <li>Security monitoring and incident investigation</li>
+            <li>Debugging technical issues</li>
+            <li>Improving service reliability</li>
+          </ul>
+          <p><strong>We do not:</strong></p>
+          <ul>
+            <li>Use data for advertising or profiling</li>
+            <li>Sell or share data with data brokers</li>
+            <li>Build personal profiles of users</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">6. Data Retention</div>
+          <div class="card-tag">Retention</div>
+        </div>
+        <div class="card-body">
+          <table class="table" style="margin-top: 0.5rem;">
+            <thead>
+              <tr><th>Data Type</th><th>Retention Period</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Server logs</td><td>7–30 days</td></tr>
+              <tr><td>Session/heartbeat data</td><td>5 minutes after inactivity</td></tr>
+              <tr><td>Rate limit records</td><td>1–2 minutes</td></tr>
+              <tr><td>Incident history (API)</td><td>7 days</td></tr>
+              <tr><td>Pager messages</td><td>7 days</td></tr>
+              <tr><td>Radio recordings</td><td>Variable (rotated periodically)</td></tr>
+              <tr><td>Discord bot config</td><td>Until removed by admin or bot leaves server</td></tr>
+              <tr><td>User-submitted incidents</td><td>Auto-removed after 1–48 hours (configurable)</td></tr>
+              <tr><td>Security logs</td><td>Retained longer if needed for investigation</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">7. Data Sharing</div>
+          <div class="card-tag">Sharing</div>
+        </div>
+        <div class="card-body">
+          <p><strong>We do not share personal data except:</strong></p>
+          <ul>
+            <li>When required by Australian law or legal process</li>
+            <li>When responding to valid law enforcement requests</li>
+            <li>When necessary to investigate abuse or security threats</li>
+            <li>With service providers (Cloudflare, Supabase) as necessary to operate</li>
+          </ul>
+          <p><strong>Aggregate, anonymised statistics</strong> (viewer counts, incident totals) may be displayed publicly.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">8. Your Rights</div>
+          <div class="card-tag">Rights</div>
+        </div>
+        <div class="card-body">
+          <p>You may request:</p>
+          <ul>
+            <li><strong>Access</strong> – Information about what data we hold related to your IP or account</li>
+            <li><strong>Deletion</strong> – Removal of log entries or account data (where technically feasible)</li>
+            <li><strong>Correction</strong> – Updates to user-submitted incident data</li>
+            <li><strong>Export</strong> – A copy of your data in a standard format</li>
+          </ul>
+          <p>Requests may be refused if:</p>
+          <ul>
+            <li>Data is needed for security or legal purposes</li>
+            <li>The request is excessive, repetitive, or unfounded</li>
+            <li>We cannot verify your identity</li>
+          </ul>
+          <p style="margin-top: 0.5rem;">To make a request, email: <strong>legal@forcequit.xyz</strong></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">9. Security</div>
+          <div class="card-tag">Security</div>
+        </div>
+        <div class="card-body">
+          <p>We implement reasonable security measures including:</p>
+          <ul>
+            <li>Cloudflare WAF and DDoS protection</li>
+            <li>HTTPS encryption for all traffic</li>
+            <li>Rate limiting and abuse detection</li>
+            <li>Server hardening and access controls</li>
+            <li>Regular security monitoring</li>
+          </ul>
+          <p>No system is perfectly secure. We cannot guarantee absolute security but take reasonable precautions.</p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">10. Changes &amp; Contact</div>
+          <div class="card-tag">Updates</div>
+        </div>
+        <div class="card-body">
+          <p>This Privacy Policy may be updated periodically. Continued use of our services indicates acceptance of updates. Significant changes will be announced via Discord.</p>
+          <p style="margin-top: 0.5rem;">For privacy enquiries or data requests:</p>
+          <p>
+            <strong>Email:</strong> legal@forcequit.xyz<br>
+            <strong>Discord:</strong> <a href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Support Server</a>
+          </p>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      Privacy information · <a href="terms.html">Terms &amp; Conditions</a>
+    </div>
+  </main>
+  
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'privacy';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+</body>
+</html>
