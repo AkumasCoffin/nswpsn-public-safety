@@ -3231,12 +3231,16 @@ function initPagerHoursFromStorage() {
 
 
     async function loadAllData() {
-      const nowISO = new Date().toISOString();
-      const { data: userIncidents } = await sb
-        .from('incidents')
-        .select('*')
-        .gt('expires_at', nowISO)
-        .eq('is_rfs_stub', false); 
+      let userIncidents = [];
+      try {
+        const incRes = await apiFetch(`${PROXY_BASE}/api/incidents?active=true`);
+        if (incRes.ok) {
+          const allInc = await incRes.json();
+          userIncidents = allInc.filter(i => !i.is_rfs_stub);
+        }
+      } catch (e) {
+        console.warn('Failed to load user incidents:', e);
+      }
       
       let rfsItems = [];
       try {
@@ -4787,26 +4791,24 @@ function initPagerHoursFromStorage() {
 
       content.innerHTML = '<p style="color:var(--text-soft); text-align:center; margin-top:2rem;">Loading details and log...</p>';
 
-      // Load any user incident updates (same table used for RFS log)
+      // Load any user incident updates via API
       let updatesHtml = '';
       try {
         if (data.id) {
-          let { data: updates, error: logError } = await sb
-            .from('incident_updates')
-            .select('*')
-            .eq('incident_id', data.id)
-            .order('created_at', { ascending: false });
-
-          if (logError) {
-            updatesHtml = `<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs: ${logError.message}</div>`;
-          } else if (updates && updates.length > 0) {
-            updatesHtml = `<div class="update-timeline">` + updates.map(u => `
-              <div class="update-item">
-                <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
-                <div class="update-msg markdown-body">${marked.parse(u.message)}</div>
-              </div>`).join('') + `</div>`;
+          const updatesRes = await apiFetch(`${PROXY_BASE}/api/incidents/${data.id}/updates`);
+          if (!updatesRes.ok) {
+            updatesHtml = `<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs.</div>`;
           } else {
-            updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
+            const updates = await updatesRes.json();
+            if (updates && updates.length > 0) {
+              updatesHtml = `<div class="update-timeline">` + updates.map(u => `
+                <div class="update-item">
+                  <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
+                  <div class="update-msg markdown-body">${marked.parse(u.message)}</div>
+                </div>`).join('') + `</div>`;
+            } else {
+              updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
+            }
           }
         } else {
           updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
@@ -4864,24 +4866,26 @@ function initPagerHoursFromStorage() {
 
       content.innerHTML = '<p style="color:var(--text-soft); text-align:center; margin-top:2rem;">Loading details and log...</p>';
 
-      let { data: updates, error: logError } = await sb
-        .from('incident_updates')
-        .select('*')
-        .eq('incident_id', item.id)
-        .order('created_at', { ascending: false });
-
       let updatesHtml;
-      if (logError) {
-        updatesHtml = `<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs: ${logError.message}</div>`;
-      } else if (updates && updates.length > 0) {
-        updates = updates.map(u => ({...u, isNew: u.id === item.latestUpdateId}));
-        updatesHtml = `<div class="update-timeline">` + updates.map(u => `
-          <div class="update-item">
-            <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
-            <div class="update-msg markdown-body">${marked.parse(u.message)}</div>
-          </div>`).join('') + `</div>`;
-      } else {
-        updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
+      try {
+        const updatesRes = await apiFetch(`${PROXY_BASE}/api/incidents/${item.id}/updates`);
+        if (!updatesRes.ok) {
+          updatesHtml = `<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs.</div>`;
+        } else {
+          let updates = await updatesRes.json();
+          if (updates && updates.length > 0) {
+            updates = updates.map(u => ({...u, isNew: u.id === item.latestUpdateId}));
+            updatesHtml = `<div class="update-timeline">` + updates.map(u => `
+              <div class="update-item">
+                <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
+                <div class="update-msg markdown-body">${marked.parse(u.message)}</div>
+              </div>`).join('') + `</div>`;
+          } else {
+            updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
+          }
+        }
+      } catch (e) {
+        updatesHtml = '<div style="color:#ef4444; font-size:0.85rem; margin-top:1rem; font-style:italic;">Error loading user logs.</div>';
       }
 
       let badgeClass = "pill-white";
@@ -4971,17 +4975,9 @@ function initPagerHoursFromStorage() {
     }
 
     function setupRealtimeSubscription() {
-      sb
-        .channel('incidents-updates')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents' }, handleRealtimeEvent)
-        .subscribe();
-      
-      sb
-        .channel('log-updates')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'incident_updates' }, handleRealtimeEvent)
-        .subscribe();
-      
-      console.log("Supabase Realtime Subscriptions started.");
+      // Incidents and incident_updates are in external Postgres now,
+      // so we rely on the periodic data refresh interval instead.
+      console.log("Data refresh via polling (tables moved from Supabase to Postgres).");
     }
     
     const searchInput = document.getElementById('address-search');
