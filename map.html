@@ -2039,6 +2039,7 @@
     }
 
     function setMapType(type) {
+      if (typeof umami !== 'undefined') umami.track('map-type-change', { type: type });
       map.removeLayer(darkBase); map.removeLayer(satBase); map.removeLayer(topoBase);
       document.querySelectorAll('.map-type-btn').forEach(btn => btn.classList.remove('active'));
       const mapDiv = document.getElementById('map');
@@ -2823,7 +2824,8 @@
     }
 
     function toggleMapLayer(target) {
-      const layerMap = { 
+      if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: target });
+      const layerMap = {
         user: userLayer, 
         rfs: rfsLayer, 
         pager: pagerLayer,
@@ -5003,6 +5005,7 @@ function initPagerHoursFromStorage() {
     async function performAddressSearch() {
       const query = searchInput.value.trim();
       if (query.length <= 1) return;
+      if (typeof umami !== 'undefined') umami.track('map-address-search');
       
       resultsBox.innerHTML = '<div style="padding:0.8rem; color:var(--text-soft);">Searching...</div>';
       resultsBox.style.display = 'block';
@@ -5444,7 +5447,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('outages-panel');
       const btn = document.getElementById('btn-outages');
       const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'outages' }); }
       if (isOpen) {
         panel.classList.remove('open');
         btn.classList.remove('active');
@@ -5485,7 +5488,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('hazards-panel');
       const btn = document.getElementById('btn-hazards');
       const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'hazards' }); }
       if (isOpen) {
         panel.classList.remove('open');
         btn.classList.remove('active');
@@ -5504,7 +5507,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('police-panel');
       const btn = document.getElementById('btn-police');
       const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'police' }); }
       if (isOpen) {
         panel.classList.remove('open');
         btn.classList.remove('active');
@@ -5523,7 +5526,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('cameras-panel');
       const btn = document.getElementById('btn-cameras');
       const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'cameras' }); }
       if (isOpen) {
         panel.classList.remove('open');
         btn.classList.remove('active');
@@ -5557,7 +5560,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('pager-panel');
       const btn = document.getElementById('btn-pager');
       const isLayerOn = map.hasLayer(pagerLayer);
-      if (!isLayerOn) showFiltersSidebarToast();
+      if (!isLayerOn) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'pager' }); }
       if (isLayerOn) {
         // Turn off pager layer and close panel
         panel.classList.remove('open');
@@ -5580,7 +5583,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('beaches-panel');
       const btn = document.getElementById('btn-beachwatch');
       const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'beaches' }); }
       if (isOpen) {
         panel.classList.remove('open');
         btn.classList.remove('active');
@@ -7808,7 +7811,7 @@ function initPagerHoursFromStorage() {
       const panel = document.getElementById('weather-panel');
       const btn = document.getElementById('btn-weather');
       const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'weather' }); }
       if (isOpen) {
         // Closing panel - turn off all weather layers
         document.getElementById('chk-radar').checked = false;
@@ -7917,6 +7920,7 @@ function initPagerHoursFromStorage() {
       if (radarLiveMode) {
         stopLiveMode();
       } else {
+        if (typeof umami !== 'undefined') umami.track('map-live-mode-on');
         startLiveMode();
       }
     }
@@ -8510,5 +8514,6 @@ function initPagerHoursFromStorage() {
       startDataRefresh();
     })();
   </script>
+  <script src="analytics.js"></script>
 </body>
 </html>

@@ -2482,6 +2482,7 @@
     
     // Scroll to section when stat card is clicked
     function scrollToSection(sectionId) {
+      if (typeof umami !== 'undefined') umami.track('live-stat-card-click', { section: sectionId });
       const element = document.getElementById(sectionId);
       if (element) {
         element.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2664,6 +2665,7 @@
     // Open map at specific coordinates with optional layer activation
     function openMapAt(lat, lng, label, layer) {
       if (!lat || !lng) return;
+      if (typeof umami !== 'undefined') umami.track('live-open-on-map', { layer: layer || 'default' });
       // Open in new tab with coordinates - using map.html with coordinates and layer
       let url = `map.html?lat=${lat}&lng=${lng}&zoom=15&label=${encodeURIComponent(label || '')}`;
       if (layer) url += `&layer=${layer}`;
@@ -3048,6 +3050,7 @@
     
     // Filter news by category
     function filterNews(category) {
+      if (typeof umami !== 'undefined') umami.track('live-news-filter', { category: category });
       currentNewsFilter = category;
       newsShowAll = false; // Reset to collapsed when changing filter
       
@@ -3081,6 +3084,7 @@
     
     // Time period selector
     function setTimePeriod(period) {
+      if (typeof umami !== 'undefined') umami.track('live-time-period', { period: period });
       currentPeriod = period;
       document.querySelectorAll('.time-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.period === period);
@@ -5536,6 +5540,7 @@
         });
     }
   </script>
+  <script src="analytics.js"></script>
 </body>
 </html>
 </html>

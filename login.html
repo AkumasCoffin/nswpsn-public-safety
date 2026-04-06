@@ -366,7 +366,7 @@
         
         <div class="divider">
           <p class="divider-text">Don't have an account?</p>
-          <a href="editor-signup.html" class="btn btn-outline">
+          <a href="editor-signup.html" class="btn btn-outline" data-umami-event="request-access-click">
             <i class="fas fa-user-plus"></i>
             Request Access
           </a>
@@ -490,6 +490,7 @@
         const { data, error } = await sb.auth.signInWithPassword({ email, password });
         
         if (error) {
+          if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'page' });
           messageEl.className = 'message error';
           messageEl.textContent = error.message;
           submitBtn.disabled = false;
@@ -504,6 +505,7 @@
         }
         
         // Success - redirect
+        if (typeof umami !== 'undefined') umami.track('login-success', { method: 'page' });
         messageEl.className = 'message success';
         messageEl.textContent = 'Success! Redirecting...';
         
@@ -550,6 +552,7 @@
         }
         
         // Show success view
+        if (typeof umami !== 'undefined') umami.track('password-reset-request', { method: 'page' });
         showView('reset-success');
         
       } catch (err) {

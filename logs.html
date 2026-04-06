@@ -1316,6 +1316,7 @@
     }
     
     function selectProvider(value, text, icon, color, skipTrigger = false) {
+      if (value && typeof umami !== 'undefined') umami.track('logs-filter-provider', { provider: value });
       // Update hidden input
       document.getElementById('filter-provider').value = value;
       
@@ -1382,6 +1383,7 @@
     }
     
     function selectType(value, text, icon, color, skipTrigger = false) {
+      if (value && typeof umami !== 'undefined') umami.track('logs-filter-type', { type: value });
       // Update hidden input
       document.getElementById('filter-source').value = value;
       
@@ -2144,6 +2146,7 @@
     // === SEARCH ===
     async function performSearch(page = 1) {
       if (isLoading) return;
+      if (typeof umami !== 'undefined') umami.track('logs-search', { page: page });
       isLoading = true;
       
       currentPage = page;
@@ -2631,6 +2634,7 @@
     function selectIncident(idx) {
       const item = currentPageResults[idx];
       if (!item) return;
+      if (typeof umami !== 'undefined') umami.track('logs-incident-select', { source: item.source || '' });
       
       selectedIncident = item;
       
@@ -3269,6 +3273,7 @@
     
     // === QUICK FILTERS ===
     async function setQuickFilter(hours) {
+      if (typeof umami !== 'undefined') umami.track('logs-quick-filter', { hours: hours });
       currentQuickFilter = hours;
       
       // Clear date inputs
@@ -3343,6 +3348,7 @@
     
     // === SHARE & EXPORT ===
     function shareSearch() {
+      if (typeof umami !== 'undefined') umami.track('logs-share');
       const params = new URLSearchParams();
       
       const provider = document.getElementById('filter-provider').value;
@@ -3369,6 +3375,7 @@
     }
     
     function exportJSON() {
+      if (typeof umami !== 'undefined') umami.track('logs-export-json');
       if (currentPageResults.length === 0) {
         alert('No results to export');
         return;
@@ -4264,5 +4271,6 @@
     window.addEventListener('scroll', updateMapPanelHeight, { passive: true });
     window.addEventListener('resize', updateMapPanelHeight, { passive: true });
   </script>
+  <script src="analytics.js"></script>
 </body>
 </html>

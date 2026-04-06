@@ -2,7 +2,10 @@
 // Include this script on any page that needs authentication
 // Requires: Supabase client script loaded before this
 
-// SUPABASE_URL, SUPABASE_KEY, and API_BASE_URL are provided by config.js (loaded before this script)
+// Config fallbacks — config.js may or may not be loaded before this script
+if (typeof SUPABASE_URL === 'undefined') var SUPABASE_URL = 'https://wwcickcmezfrcqyclcuo.supabase.co';
+if (typeof SUPABASE_KEY === 'undefined') var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3Y2lja2NtZXpmcmNxeWNsY3VvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ0ODI3NDIsImV4cCI6MjA4MDA1ODc0Mn0.xP9I9vAbBB-1afCpnOAwLJeoKTF2Dmewwv-aCKVXKrQ';
+if (typeof API_BASE_URL === 'undefined') var API_BASE_URL = 'https://api.forcequit.xyz';
 
 // Initialize Supabase client (only if not already initialized)
 // Use window.sb if it exists (for pages that have their own client), otherwise create one
@@ -158,10 +161,11 @@ async function doLogin() {
   const { data, error } = await sb.auth.signInWithPassword({ email, password });
   
   if (error) {
+    if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'modal' });
     if (errorDiv) errorDiv.textContent = error.message;
     return;
   }
-  
+
   // Check if user needs to change password on first login
   if (data?.user?.user_metadata?.force_password_change) {
     closeLoginModal();
@@ -169,11 +173,13 @@ async function doLogin() {
     return;
   }
   
+  if (typeof umami !== 'undefined') umami.track('login-success', { method: 'modal' });
   closeLoginModal();
   checkAuthState();
 }
 
 async function doLogout() {
+  if (typeof umami !== 'undefined') umami.track('logout');
   await sb.auth.signOut();
   checkAuthState();
 }
@@ -332,6 +338,7 @@ async function handlePasswordResetRequest(event) {
       messageEl.style.color = '#ef4444';
       messageEl.textContent = error.message;
     } else {
+      if (typeof umami !== 'undefined') umami.track('password-reset-request', { method: 'modal' });
       messageEl.style.color = '#22c55e';
       messageEl.textContent = 'Reset link sent! Check your email inbox.';
       emailInput.value = '';

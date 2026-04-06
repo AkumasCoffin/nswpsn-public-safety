@@ -711,6 +711,7 @@
         }
         
         // Show success state
+        if (typeof umami !== 'undefined') umami.track('editor-signup-submit', { types: requestTypes.join(','), region: region });
         document.getElementById('form-container').style.display = 'none';
         document.getElementById('success-container').style.display = 'block';
         

@@ -25,12 +25,12 @@ DirectoryIndex index.html
 </IfModule>
 
 # Block specific sensitive files
-<FilesMatch "^(config\.js|config\.sample\.js|ecosystem\.config\.js|CLAUDE\.md|README\.md|composer\.json|package\.json)$">
+<FilesMatch "^(config\.sample\.js|ecosystem\.config\.js|CLAUDE\.md|README\.md|composer\.json|package\.json)$">
   Require all denied
 </FilesMatch>
 
 # Allow JS files that the frontend needs
-<FilesMatch "^(auth-common\.js)$">
+<FilesMatch "^(auth-common\.js|config\.js|analytics\.js)$">
   Require all granted
 </FilesMatch>
 

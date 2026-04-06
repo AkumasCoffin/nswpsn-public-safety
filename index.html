@@ -117,7 +117,7 @@
           <p>
             View real-time active units, talkgroups, RFS major incidents, Fire Danger Ratings, power outages, traffic incidents, weather warnings, and beach conditions.
           </p>
-          <a class="card-link" href="live.html">Go to Live Data Dashboard →</a>
+          <a class="card-link" href="live.html" data-umami-event="home-card-click" data-umami-event-card="Live Data">Go to Live Data Dashboard →</a>
         </div>
       </article>
 
@@ -128,7 +128,7 @@
         </div>
         <div class="card-body">
           <p>Interactive map showing RFS fires, traffic incidents, power outages, pager hits, and more across NSW.</p>
-          <a class="card-link" href="map.html">Open Map →</a>
+          <a class="card-link" href="map.html" data-umami-event="home-card-click" data-umami-event-card="Incident Map">Open Map →</a>
         </div>
       </article>
 
@@ -139,7 +139,7 @@
         </div>
         <div class="card-body">
           <p>Search and filter historical incident data with linked pager messages and incident updates.</p>
-          <a class="card-link" href="logs.html">View Logs →</a>
+          <a class="card-link" href="logs.html" data-umami-event="home-card-click" data-umami-event-card="Incident Logs">View Logs →</a>
         </div>
       </article>
 
@@ -150,7 +150,7 @@
         </div>
         <div class="card-body">
           <p>Priority codes, appliances, and zones for urban fire response.</p>
-          <a class="card-link" href="fire-and-rescue.html">View Reference →</a>
+          <a class="card-link" href="fire-and-rescue.html" data-umami-event="home-card-click" data-umami-event-card="FRNSW">View Reference →</a>
         </div>
       </article>
 
@@ -161,7 +161,7 @@
         </div>
         <div class="card-body">
           <p>Bushfire response, district codes, and appliance categories.</p>
-          <a class="card-link" href="rural-fire-service.html">View Reference →</a>
+          <a class="card-link" href="rural-fire-service.html" data-umami-event="home-card-click" data-umami-event-card="RFS">View Reference →</a>
         </div>
       </article>
 
@@ -172,7 +172,7 @@
         </div>
         <div class="card-body">
           <p>Clinical codes, category priorities, and radio terminology.</p>
-          <a class="card-link" href="ambulance.html">View Reference →</a>
+          <a class="card-link" href="ambulance.html" data-umami-event="home-card-click" data-umami-event-card="Ambulance">View Reference →</a>
         </div>
       </article>
 
@@ -183,7 +183,7 @@
         </div>
         <div class="card-body">
           <p>Callsigns for PolAir, Ambulance, Westpac, and Fire Aviation.</p>
-          <a class="card-link" href="aviation.html">View Reference →</a>
+          <a class="card-link" href="aviation.html" data-umami-event="home-card-click" data-umami-event-card="Aviation">View Reference →</a>
         </div>
       </article>
 
@@ -195,6 +195,7 @@
   </main>
 
   <script src="auth-common.js"></script>
+  <script src="analytics.js"></script>
   <script>
     // ======== SUPABASE AUTH CALLBACK HANDLER ========
     // Check for Supabase auth tokens in URL and redirect to appropriate page
