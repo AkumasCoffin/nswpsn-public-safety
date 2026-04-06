@@ -3,6 +3,10 @@
 // Requires: umami script loaded via <script defer> in <head>
 
 (function () {
+  // Prevent double-execution (e.g. from Cloudflare Rocket Loader)
+  if (window.__analyticsLoaded) return;
+  window.__analyticsLoaded = true;
+
   function track(name, data) {
     if (typeof umami !== 'undefined') {
       umami.track(name, data);
