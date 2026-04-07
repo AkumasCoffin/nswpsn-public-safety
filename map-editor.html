@@ -6587,6 +6587,32 @@ async function loadPagerData() {
         html += `</div>`;
       }
 
+      // === GENERAL HAZARD RATING (detail only, beachsafe) ===
+      const hazardRating = detail ? detail.hazard : 0;
+      if (filterBeachsafe && hazardRating && hazardRating > 0) {
+        let hColor = '#22c55e';
+        if (hazardRating >= 8) hColor = '#ef4444';
+        else if (hazardRating >= 6) hColor = '#f97316';
+        else if (hazardRating >= 4) hColor = '#f59e0b';
+        else if (hazardRating >= 2) hColor = '#eab308';
+
+        let barHtml = '';
+        for (let i = 1; i <= 10; i++) {
+          const filled = i <= hazardRating;
+          const segColor = filled ? hColor : 'rgba(255,255,255,0.08)';
+          barHtml += `<div style="flex:1; height:6px; border-radius:2px; background:${segColor};"></div>`;
+        }
+
+        html += `<div style="padding:6px 8px; background:rgba(239,68,68,0.06); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#fca5a5; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-solid fa-triangle-exclamation"></i> GENERAL HAZARD RATING</div>`;
+        html += `<div style="display:flex; align-items:center; gap:8px;">`;
+        html += `<span style="color:${hColor}; font-weight:700; font-size:16px;">${hazardRating}</span>`;
+        html += `<span style="color:${hColor}; font-size:11px; font-weight:600;">/10</span>`;
+        html += `<div style="flex:1; display:flex; gap:2px;">${barHtml}</div>`;
+        html += `</div>`;
+        html += `</div>`;
+      }
+
       // === HAZARDS (beachsafe) ===
       if (filterBeachsafe && beach.hazards && beach.hazards.length > 0) {
         html += `<div style="padding:6px 8px; background:rgba(239,68,68,0.06); border-radius:6px; margin-bottom:8px;">`;
