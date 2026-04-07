@@ -2046,6 +2046,7 @@ PREWARM_CONFIG = [
     ('ausgrid_stats', 180),
     ('beachwatch', 300),
     ('beachsafe', 300),
+    ('beachsafe_details', 600),
     ('weather_current', 300),
     ('bom_warnings', 300),
     # Central Watch removed from prewarm - rate limited too aggressively, fetched separately
@@ -2589,21 +2590,129 @@ def _prewarm_fetch_beachsafe():
                 beaches = data.get('beaches', [])
                 normalized = []
                 for b in beaches:
+                    beach_url = b.get('url', '')
+                    beach_slug = beach_url.rstrip('/').split('/')[-1] if beach_url else ''
+                    patrol_today = b.get('is_patrolled_today', {})
+                    if not isinstance(patrol_today, dict):
+                        patrol_today = {}
                     normalized.append({
                         'id': b.get('id'),
                         'name': b.get('title', 'Unknown Beach'),
                         'lat': float(b.get('latitude', 0)) if b.get('latitude') else None,
                         'lng': float(b.get('longitude', 0)) if b.get('longitude') else None,
-                        'url': b.get('url', ''),
+                        'url': beach_url,
+                        'slug': beach_slug,
                         'patrolled': b.get('status', '').lower() == 'patrolled',
                         'status': b.get('status', 'Unknown'),
-                        'isPatrolledToday': b.get('is_patrolled_today', {}).get('flag', False) if isinstance(b.get('is_patrolled_today'), dict) else False
+                        'hasToilet': bool(b.get('has_toilet')),
+                        'hasParking': bool(b.get('has_parking')),
+                        'dogsAllowed': bool(b.get('has_dogs_allowed')),
+                        'image': b.get('image', ''),
+                        'weather': b.get('weather', {}),
+                        'hazards': b.get('hazards') or [],
+                        'isPatrolledToday': patrol_today.get('flag', False),
+                        'patrolStart': patrol_today.get('start', ''),
+                        'patrolEnd': patrol_today.get('end', ''),
+                        'patrol': b.get('patrol', 0),
                     })
                 return normalized
             return data if isinstance(data, list) else []
     except Exception as e:
         Log.prewarm(f"Beachsafe error: {e}")
     return []
+
+
+def _prewarm_fetch_beachsafe_details():
+    """Fetch detailed data for all beaches from BeachSafe individual beach endpoints.
+    Returns a dict keyed by slug with detail data for each beach."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Get the beachsafe list from cache to know which slugs to fetch
+    cached_list, _, _ = cache_get('beachsafe')
+    if not cached_list or not isinstance(cached_list, list):
+        Log.prewarm("BeachSafe details: no beach list in cache, skipping")
+        return {}
+
+    # Extract slugs
+    slugs = []
+    for b in cached_list:
+        slug = b.get('slug', '')
+        if slug:
+            slugs.append(slug)
+
+    if not slugs:
+        return {}
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://beachsafe.org.au/'
+    }
+
+    all_details = {}
+
+    def fetch_one(slug):
+        # Check if we already have a fresh cached version
+        cached, age, expired = cache_get(f'beachsafe_detail_{slug}')
+        if cached and not expired:
+            return slug, cached
+
+        try:
+            url = f'https://beachsafe.org.au/api/v4/beach/{slug}'
+            r = requests.get(url, timeout=10, headers=headers)
+            if r.status_code == 200:
+                data = r.json()
+                beach = data.get('beach', {})
+
+                attendances = beach.get('attendances', {})
+                latest_attendance = None
+                if attendances:
+                    last_key = list(attendances.keys())[-1] if attendances else None
+                    if last_key:
+                        entries = attendances[last_key]
+                        if entries:
+                            latest_attendance = {'date': last_key, 'entries': entries}
+
+                patrol_today = beach.get('is_patrolled_today', {})
+                if not isinstance(patrol_today, dict):
+                    patrol_today = {}
+
+                result = {
+                    'weather': beach.get('weather', {}),
+                    'currentTide': beach.get('currentTide'),
+                    'currentUV': beach.get('currentUV'),
+                    'latestAttendance': latest_attendance,
+                    'todays_marine_warnings': beach.get('todays_marine_warnings', []),
+                    'patrol': beach.get('patrol', 0),
+                    'patrolStart': patrol_today.get('start', ''),
+                    'patrolEnd': patrol_today.get('end', ''),
+                    'isPatrolledToday': patrol_today.get('flag', False),
+                    'status': beach.get('status', 'Unknown'),
+                    'hazard': beach.get('hazard', 0),
+                }
+                # Cache individual detail
+                cache_set(f'beachsafe_detail_{slug}', result, 600)
+                return slug, result
+        except Exception:
+            pass
+        return slug, None
+
+    # Fetch in parallel with limited workers to avoid hammering the API
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(fetch_one, slug): slug for slug in slugs}
+        for f in as_completed(futures):
+            try:
+                slug, result = f.result()
+                if result:
+                    all_details[slug] = result
+            except Exception:
+                pass
+            # Small delay between completions to be respectful
+            time.sleep(0.05)
+
+    if DEV_MODE:
+        Log.prewarm(f"BeachSafe details: fetched {len(all_details)}/{len(slugs)} beaches")
+    return all_details
 
 
 def _prewarm_fetch_weather():
@@ -3124,6 +3233,7 @@ def prewarm_single(cache_key, ttl):
         'essential_energy_future': 'Essential Future',
         'beachwatch': 'Beachwatch',
         'beachsafe': 'Beachsafe',
+        'beachsafe_details': 'BeachSafe Details',
         'weather_current': 'Weather',
         'bom_warnings': 'BOM Warnings',
         'pager': 'Pager',
@@ -3179,6 +3289,8 @@ def prewarm_single(cache_key, ttl):
             data = _prewarm_fetch_beachwatch()
         elif cache_key == 'beachsafe':
             data = _prewarm_fetch_beachsafe()
+        elif cache_key == 'beachsafe_details':
+            data = _prewarm_fetch_beachsafe_details()
         elif cache_key == 'weather_current':
             data = _prewarm_fetch_weather()
         elif cache_key == 'bom_warnings':
@@ -4008,12 +4120,21 @@ def beachsafe():
                 # Normalize field names for frontend compatibility
                 normalized = []
                 for b in beaches:
+                        # Extract slug from URL for detail lookups (e.g. /nsw/waverley/bondi-beach -> bondi-beach)
+                    beach_url = b.get('url', '')
+                    beach_slug = beach_url.rstrip('/').split('/')[-1] if beach_url else ''
+
+                    patrol_today = b.get('is_patrolled_today', {})
+                    if not isinstance(patrol_today, dict):
+                        patrol_today = {}
+
                     normalized.append({
                         'id': b.get('id'),
                         'name': b.get('title', 'Unknown Beach'),
                         'lat': float(b.get('latitude', 0)) if b.get('latitude') else None,
                         'lng': float(b.get('longitude', 0)) if b.get('longitude') else None,
-                        'url': b.get('url', ''),
+                        'url': beach_url,
+                        'slug': beach_slug,
                         'patrolled': b.get('status', '').lower() == 'patrolled',
                         'status': b.get('status', 'Unknown'),
                         'hasToilet': bool(b.get('has_toilet')),
@@ -4022,7 +4143,10 @@ def beachsafe():
                         'image': b.get('image', ''),
                         'weather': b.get('weather', {}),
                         'hazards': b.get('hazards') or [],
-                        'isPatrolledToday': b.get('is_patrolled_today', {}).get('flag', False) if isinstance(b.get('is_patrolled_today'), dict) else False
+                        'isPatrolledToday': patrol_today.get('flag', False),
+                        'patrolStart': patrol_today.get('start', ''),
+                        'patrolEnd': patrol_today.get('end', ''),
+                        'patrol': b.get('patrol', 0),
                     })
                 cache_set('beachsafe', normalized, CACHE_TTL_BEACH)
                 return jsonify(normalized)
@@ -4033,6 +4157,86 @@ def beachsafe():
         Log.error(f"BeachSafe error: {e}")
     
     return jsonify([])
+
+
+@app.route('/api/beachsafe/beach/<slug>')
+@require_api_key
+def beachsafe_beach_detail(slug):
+    """Fetch detailed beach data from BeachSafe for a specific beach"""
+    # Sanitize slug
+    slug = slug.strip().lower().replace(' ', '-')
+    if not slug or len(slug) > 100:
+        return jsonify({'error': 'Invalid slug'}), 400
+
+    cache_key = f'beachsafe_detail_{slug}'
+    cached_data, age, expired = cache_get(cache_key)
+    if cached_data is not None and not expired:
+        return jsonify(cached_data)
+
+    try:
+        url = f'https://beachsafe.org.au/api/v4/beach/{slug}'
+        r = requests.get(
+            url,
+            timeout=10,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Referer': 'https://beachsafe.org.au/'
+            }
+        )
+        if r.status_code == 200:
+            data = r.json()
+            beach = data.get('beach', {})
+
+            # Extract latest attendance (most recent day)
+            attendances = beach.get('attendances', {})
+            latest_attendance = None
+            if attendances:
+                last_key = list(attendances.keys())[-1] if attendances else None
+                if last_key:
+                    entries = attendances[last_key]
+                    if entries:
+                        latest_attendance = {
+                            'date': last_key,
+                            'entries': entries
+                        }
+
+            patrol_today = beach.get('is_patrolled_today', {})
+            if not isinstance(patrol_today, dict):
+                patrol_today = {}
+
+            result = {
+                'weather': beach.get('weather', {}),
+                'currentTide': beach.get('currentTide'),
+                'currentUV': beach.get('currentUV'),
+                'latestAttendance': latest_attendance,
+                'todays_marine_warnings': beach.get('todays_marine_warnings', []),
+                'patrol': beach.get('patrol', 0),
+                'patrolStart': patrol_today.get('start', ''),
+                'patrolEnd': patrol_today.get('end', ''),
+                'isPatrolledToday': patrol_today.get('flag', False),
+                'status': beach.get('status', 'Unknown'),
+                'hazard': beach.get('hazard', 0),
+            }
+            cache_set(cache_key, result, 300)  # 5 min cache
+            return jsonify(result)
+    except Exception as e:
+        Log.error(f"BeachSafe detail error for {slug}: {e}")
+
+    # Return stale cache if available
+    if cached_data is not None:
+        return jsonify(cached_data)
+    return jsonify({})
+
+
+@app.route('/api/beachsafe/details')
+@require_api_key
+def beachsafe_all_details():
+    """Return all pre-fetched beach detail data as a dict keyed by slug"""
+    cached_data, age, expired = cache_get('beachsafe_details')
+    if cached_data is not None:
+        return jsonify(cached_data)
+    return jsonify({})
 
 
 # ============== NEWS RSS FEEDS ==============

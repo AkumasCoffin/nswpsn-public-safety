@@ -118,6 +118,33 @@
     .map-dark-mode .leaflet-popup,
     .map-dark-mode .leaflet-tooltip { filter: none !important; }
     
+    /* Beach detail popup styling */
+    .beach-detail-popup .leaflet-popup-content-wrapper {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(148, 163, 184, 0.25) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+      color: #e2e8f0 !important;
+    }
+    .beach-detail-popup .leaflet-popup-content {
+      margin: 10px 12px !important;
+      max-height: 420px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148,163,184,0.3) transparent;
+    }
+    .beach-detail-popup .leaflet-popup-tip {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(148, 163, 184, 0.25) !important;
+    }
+    .beach-detail-popup .leaflet-popup-close-button {
+      color: #94a3b8 !important;
+      font-size: 18px !important;
+    }
+    .beach-detail-popup .leaflet-popup-close-button:hover {
+      color: #fff !important;
+    }
+
     /* Pager / Incident Overview Tooltip – balanced width */
     .leaflet-tooltip {
       white-space: normal !important;
@@ -4196,18 +4223,21 @@ async function loadPagerData() {
     function renderBeachMarkers() {
       const showBeachwatch = document.getElementById('chk-beachwatch')?.checked ?? true;
       const showBeachsafe = document.getElementById('chk-beachsafe')?.checked ?? true;
-      
+
       beachLayer.clearLayers();
-      
+
+      if (!showBeachwatch && !showBeachsafe) return;
+
       _allMergedBeaches.forEach(beach => {
-        if (!showBeachwatch && !showBeachsafe) return;
-        if (beach.hasBeachwatch && !beach.hasBeachSafe && !showBeachwatch) return;
-        if (!beach.hasBeachwatch && beach.hasBeachSafe && !showBeachsafe) return;
-        if (beach.hasBeachwatch && beach.hasBeachSafe) {
-          if (!showBeachwatch && !showBeachsafe) return;
-        }
-        
-        createBeachMarker(beach);
+        const slug = beach.beachsafeSlug || deriveBeachSlug(beach.name);
+        const hasDetail = slug && _beachDetailCache[slug];
+        const hasAnyBeachsafe = beach.hasBeachSafe || hasDetail;
+
+        // Skip if the beach only has data from a disabled source
+        if (beach.hasBeachwatch && !hasAnyBeachsafe && !showBeachwatch) return;
+        if (!beach.hasBeachwatch && hasAnyBeachsafe && !showBeachsafe) return;
+
+        createBeachMarker(beach, showBeachwatch, showBeachsafe);
       });
     }
     
@@ -6316,9 +6346,20 @@ async function loadPagerData() {
 
     // ==================== BEACHES LAYER (Beachwatch + BeachSafe merged) ====================
     
-    function createBeachMarker(beach) {
+    // Cache for beach detail data fetched on click
+    const _beachDetailCache = {};
+    const _beachDetailFailed = new Set();
+    let _beachDetailsLoaded = false;
+
+    function deriveBeachSlug(name) {
+      return (name || '').toLowerCase().trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-');
+    }
+
+    function createBeachMarker(beach, showBeachwatch = true, showBeachsafe = true) {
       let iconColor = '#6b7280', iconHtml = '<i class="fa-solid fa-umbrella-beach"></i>';
-      
+
       if (beach.hasBeachwatch && beach.quality) {
         const q = beach.quality.toLowerCase();
         if (q === 'good') { iconColor = '#22c55e'; iconHtml = '<i class="fa-solid fa-person-swimming"></i>'; }
@@ -6332,73 +6373,248 @@ async function loadPagerData() {
           iconHtml = '<i class="fa-solid fa-water"></i>';
         } else { iconHtml = '<i class="fa-solid fa-water"></i>'; }
       }
-      
+
+      // Skip beachwatch-only pins that have no meaningful data
+      if (beach.hasBeachwatch && !beach.hasBeachSafe) {
+        const q = (beach.quality || '').toLowerCase();
+        if (!q || q === 'unknown') {
+          if (!beach.pollutionForecast && !beach.rating && !beach.lastSample) {
+            return;
+          }
+        }
+      }
+
       const icon = L.divIcon({
         className: 'custom-pin beach-merged-pin',
         html: `<div style="background:linear-gradient(135deg,${iconColor},${iconColor}cc);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px ${iconColor}80;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;">${iconHtml}</div>`,
         iconSize: [28, 28],
         iconAnchor: [14, 14]
       });
-      
+
       const marker = L.marker([beach.lat, beach.lon], { icon }).addTo(beachLayer);
-      
-      let tooltip = `<div style="max-width:300px;">`;
-      tooltip += `<strong style="font-size:14px;"><i class="fa-solid fa-umbrella-beach"></i> ${escapeHtml(beach.name)}</strong>`;
-      const sources = [];
-      if (beach.hasBeachwatch) sources.push('Beachwatch');
-      if (beach.hasBeachSafe) sources.push('BeachSafe');
-      tooltip += `<div style="font-size:9px;color:#94a3b8;margin-bottom:6px;">Sources: ${sources.join(' + ')}</div>`;
-      
-      if (beach.hasBeachwatch) {
-        const q = (beach.quality || 'Unknown').toLowerCase();
+
+      // Use pre-fetched detail data if available, otherwise show basic tooltip
+      const slug = beach.beachsafeSlug || deriveBeachSlug(beach.name);
+      const cachedDetail = slug ? _beachDetailCache[slug] : null;
+
+      marker.bindTooltip(buildBeachTooltipContent(beach, cachedDetail, showBeachwatch, showBeachsafe), {
+        direction: 'top', offset: [0, -16], opacity: 0.95
+      });
+
+      // Fallback: if detail wasn't pre-fetched, lazy-load on first hover
+      if (slug && !cachedDetail) {
+        let detailLoaded = false;
+        marker.on('mouseover', () => {
+          if (detailLoaded || _beachDetailFailed.has(slug)) return;
+          if (_beachDetailCache[slug]) {
+            marker.setTooltipContent(buildBeachTooltipContent(beach, _beachDetailCache[slug], showBeachwatch, showBeachsafe));
+            detailLoaded = true;
+            return;
+          }
+          apiFetch(`${PROXY_BASE}/api/beachsafe/beach/${slug}`).then(r => r.json()).then(detail => {
+            if (detail && Object.keys(detail).length > 0 && (detail.weather || detail.currentTide || detail.currentUV)) {
+              _beachDetailCache[slug] = detail;
+              marker.setTooltipContent(buildBeachTooltipContent(beach, detail, showBeachwatch, showBeachsafe));
+              detailLoaded = true;
+            } else {
+              _beachDetailFailed.add(slug);
+            }
+          }).catch(() => { _beachDetailFailed.add(slug); });
+        });
+      }
+    }
+
+    function buildBeachTooltipContent(beach, detail, filterBeachwatch = true, filterBeachsafe = true) {
+      // Determine which data sources are active AND enabled by filters
+      const hasBeachwatch = filterBeachwatch && beach.hasBeachwatch && (beach.quality || beach.pollutionForecast);
+      const hasBeachsafe = filterBeachsafe && (beach.hasBeachSafe || !!detail);
+
+      let html = `<div style="max-width:360px; font-family: system-ui, sans-serif; color:#e2e8f0;">`;
+
+      // Header — name + source pills
+      html += `<div style="font-size:15px; font-weight:700; color:#22c55e; margin-bottom:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">`;
+      html += `<i class="fa-solid fa-umbrella-beach"></i> ${escapeHtml(beach.name)}`;
+      if (hasBeachwatch) {
+        html += ` <span style="background:#06b6d4; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:700;">Beachwatch</span>`;
+      }
+      if (hasBeachsafe) {
+        html += ` <span style="background:#3b82f6; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:700;">BeachSafe</span>`;
+      }
+      html += `</div>`;
+
+      // Status + patrol summary line (beachsafe data)
+      const status = detail ? detail.status : (beach.beachStatus || '');
+      const isPatrolled = detail ? detail.isPatrolledToday : beach.patrolled;
+      const pStart = detail ? detail.patrolStart : (beach.patrolStart || '');
+      const pEnd = detail ? detail.patrolEnd : (beach.patrolEnd || '');
+      if (filterBeachsafe && (status || isPatrolled)) {
+        html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap;">`;
+        if (status && status.toLowerCase() !== 'unknown') {
+          const statusColor = status.toLowerCase() === 'open' ? '#22c55e' : status.toLowerCase() === 'closed' ? '#ef4444' : '#f59e0b';
+          html += `<span style="background:${statusColor}22; color:${statusColor}; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:700;">${escapeHtml(status)}</span>`;
+        }
+        if (isPatrolled) {
+          html += `<span style="color:#22c55e; font-size:11px; font-weight:600;"><i class="fa-solid fa-flag"></i> Patrolled${pStart && pEnd ? ` ${pStart}–${pEnd}` : ''}</span>`;
+        }
+        html += `</div>`;
+      }
+
+      // === WATER QUALITY (Beachwatch only — pollution info) ===
+      if (hasBeachwatch) {
+        const q = (beach.quality || '').toLowerCase();
         let qColor = '#6b7280', qEmoji = '⚪';
         if (q === 'good') { qColor = '#22c55e'; qEmoji = '🟢'; }
         else if (q === 'fair') { qColor = '#f59e0b'; qEmoji = '🟡'; }
         else if (q === 'poor' || q === 'bad') { qColor = '#ef4444'; qEmoji = '🔴'; }
-        
-        tooltip += `<div style="padding:4px 6px;background:rgba(34,197,94,0.1);border-radius:4px;margin-bottom:4px;border-left:3px solid ${qColor};">`;
-        tooltip += `<div style="color:#67e8f9;font-size:9px;font-weight:600;">💧 WATER QUALITY</div>`;
-        tooltip += `<div>${qEmoji} <span style="color:${qColor};font-weight:600;">${escapeHtml(beach.quality || 'Unknown')}</span></div>`;
+
+        html += `<div style="padding:6px 8px; background:rgba(103,232,249,0.08); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#67e8f9; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;">💧 WATER QUALITY</div>`;
+        if (q && q !== 'unknown') {
+          html += `<span style="font-size:13px;">${qEmoji}</span> <span style="color:${qColor}; font-weight:600; font-size:12px;">${escapeHtml(beach.quality)}</span>`;
+        }
         if (beach.pollutionForecast) {
-          let pColor = beach.pollutionForecast.toLowerCase() === 'unlikely' ? '#22c55e' : beach.pollutionForecast.toLowerCase() === 'possible' ? '#f59e0b' : '#6b7280';
-          tooltip += `<div style="font-size:10px;"><i class="fa-solid fa-cloud-rain"></i> <span style="color:${pColor}">${escapeHtml(beach.pollutionForecast)}</span></div>`;
+          let pColor = '#6b7280';
+          if (beach.pollutionForecast.toLowerCase() === 'unlikely') pColor = '#22c55e';
+          else if (beach.pollutionForecast.toLowerCase() === 'possible') pColor = '#f59e0b';
+          else if (beach.pollutionForecast.toLowerCase() === 'likely') pColor = '#ef4444';
+          html += `${q && q !== 'unknown' ? '<br>' : ''}<span style="color:#7dd3fc; font-size:11px;">🌧️ Pollution:</span> <span style="color:${pColor}; font-weight:600; font-size:11px;">${escapeHtml(beach.pollutionForecast)}</span>`;
         }
-        if (beach.rating) tooltip += `<div style="color:#fbbf24;font-size:10px;">${'★'.repeat(beach.rating)}${'☆'.repeat(5-beach.rating)}</div>`;
         if (beach.lastSample) {
-          try { tooltip += `<div style="font-size:9px;color:#94a3b8;">📅 ${new Date(beach.lastSample).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>`; } catch(e){}
+          try {
+            const sampleDate = new Date(beach.lastSample).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+            html += `<br><span style="color:#94a3b8; font-size:10px;">📅 Sampled: ${sampleDate}</span>`;
+          } catch(e) {}
         }
-        tooltip += `</div>`;
+        html += `</div>`;
       }
-      
-      if (beach.hasBeachSafe) {
-        const patrolColor = beach.patrolled ? '#22c55e' : '#f59e0b';
-        tooltip += `<div style="padding:4px 6px;background:rgba(249,168,212,0.1);border-radius:4px;margin-bottom:4px;border-left:3px solid ${patrolColor};">`;
-        tooltip += `<div style="color:#f9a8d4;font-size:9px;font-weight:600;"><i class="fa-solid fa-water"></i> SURF CONDITIONS</div>`;
-        tooltip += `<div>${beach.patrolled ? '<i class="fa-solid fa-flag"></i>' : '<i class="fa-solid fa-triangle-exclamation"></i>'} <span style="color:${patrolColor};font-weight:600;">${beach.patrolled ? 'Patrolled' : 'Unpatrolled'}</span></div>`;
-        
-        const w = beach.weather || {};
-        if (w.air_temp || w.water_temperatures || w.swell) {
-          tooltip += `<div style="font-size:10px;">`;
-          if (w.air_temp) tooltip += `<i class="fa-solid fa-temperature-half"></i>${w.air_temp}°C `;
-          if (w.water_temperatures) tooltip += `<i class="fa-solid fa-water"></i>${w.water_temperatures}°C `;
-          if (w.swell) tooltip += `<i class="fa-solid fa-water"></i>${w.swell}m`;
-          tooltip += `</div>`;
+
+      // === WEATHER (BeachSafe only) ===
+      const w = filterBeachsafe ? (detail ? detail.weather : (beach.hasBeachSafe ? (beach.weather || {}) : null)) : null;
+      if (w && (w.air_temp || w.water_temperatures || w.swell || w.wind_spd_kmh || w.precis)) {
+        html += `<div style="padding:6px 8px; background:rgba(251,191,36,0.08); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#fcd34d; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-solid fa-cloud-sun"></i> WEATHER</div>`;
+        if (w.precis) {
+          html += `<div style="color:#e2e8f0; font-size:11px; margin-bottom:4px;">${escapeHtml(w.precis)}</div>`;
         }
-        
-        if (beach.hazards && beach.hazards.length > 0) {
-          tooltip += `<div style="font-size:9px;color:#fca5a5;"><i class="fa-solid fa-triangle-exclamation"></i> ${beach.hazards.slice(0,2).map(h=>escapeHtml(h.name||h.type||'')).join(', ')}</div>`;
+        html += `<div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:4px;">`;
+        if (w.air_temp) {
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;">`;
+          html += `<span style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-temperature-half"></i> Air ${w.air_temp}°C</span></div>`;
         }
-        
-        const amen = [];
-        if (beach.amenities.parking) amen.push('🅿️');
-        if (beach.amenities.toilet) amen.push('🚻');
-        if (beach.amenities.dogs) amen.push('🐕');
-        if (amen.length) tooltip += `<div style="font-size:9px;color:#a5f3fc;">${amen.join(' ')}</div>`;
-        tooltip += `</div>`;
+        if (w.water_temperatures) {
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;">`;
+          html += `<span style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-water"></i> Water ${w.water_temperatures}°C</span></div>`;
+        }
+        if (w.swell) {
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;">`;
+          html += `<span style="color:#e2e8f0; font-size:11px;">🌊 Swell ${w.swell}m</span></div>`;
+        }
+        if (w.wind_dir && w.wind_spd_kmh) {
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;">`;
+          html += `<span style="color:#e2e8f0; font-size:11px;">💨 ${w.wind_dir} ${w.wind_spd_kmh}km/h</span></div>`;
+        }
+        if (w.air_temperature_maximum && w.air_temperature_minimum) {
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center; grid-column: span 2;">`;
+          html += `<span style="color:#e2e8f0; font-size:11px;">📊 Min ${w.air_temperature_minimum}°C / Max ${w.air_temperature_maximum}°C</span></div>`;
+        }
+        html += `</div></div>`;
       }
-      
-      tooltip += `</div>`;
-      marker.bindTooltip(tooltip, { direction: 'top', offset: [0, -16], opacity: 0.95 });
+
+      // === TIDE (detail only, beachsafe) ===
+      if (filterBeachsafe && detail && detail.currentTide) {
+        const tide = detail.currentTide;
+        const tideIcon = tide.state === 'high' ? '🔺' : '🔻';
+        html += `<div style="padding:6px 8px; background:rgba(34,211,238,0.08); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#22d3ee; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;">🌊 TIDE</div>`;
+        html += `<span style="color:#e2e8f0; font-size:12px;">${tideIcon} ${escapeHtml((tide.state || '').charAt(0).toUpperCase() + (tide.state || '').slice(1))} tide — ${tide.height}m</span>`;
+        if (tide.date_time_local) {
+          try {
+            const tideTime = new Date(tide.date_time_local.replace(' ', 'T')).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+            html += ` <span style="color:#94a3b8; font-size:10px;">at ${tideTime}</span>`;
+          } catch(e) {}
+        }
+        html += `</div>`;
+      }
+
+      // === UV INDEX (detail only, beachsafe) ===
+      if (filterBeachsafe && detail && detail.currentUV) {
+        const uv = detail.currentUV;
+        let uvColor = '#22c55e';
+        if (uv.index >= 11) uvColor = '#7c3aed';
+        else if (uv.index >= 8) uvColor = '#ef4444';
+        else if (uv.index >= 6) uvColor = '#f97316';
+        else if (uv.index >= 3) uvColor = '#f59e0b';
+
+        html += `<div style="padding:6px 8px; background:rgba(251,146,60,0.08); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#fb923c; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;">☀️ UV INDEX</div>`;
+        html += `<span style="color:${uvColor}; font-weight:700; font-size:14px;">${uv.index}</span>`;
+        html += ` <span style="color:${uvColor}; font-weight:600; font-size:11px;">${escapeHtml(uv.status || '')}</span>`;
+        if (uv.description) {
+          html += `<div style="color:#94a3b8; font-size:10px; margin-top:2px;">${escapeHtml(uv.description)}</div>`;
+        }
+        html += `</div>`;
+      }
+
+      // === ATTENDANCE (detail only, beachsafe) ===
+      if (filterBeachsafe && detail && detail.latestAttendance) {
+        const att = detail.latestAttendance;
+        html += `<div style="padding:6px 8px; background:rgba(168,85,247,0.08); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#c084fc; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;">👥 ATTENDANCE <span style="color:#94a3b8; font-weight:400;">(${escapeHtml(att.date)})</span></div>`;
+        const latest = att.entries[att.entries.length - 1];
+        if (latest) {
+          html += `<div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:4px;">`;
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;"><span style="color:#e2e8f0; font-size:11px;">🏊 ${latest.swimmers} swimming</span></div>`;
+          html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;"><span style="color:#e2e8f0; font-size:11px;">🏖️ ${latest.people_on_beach} on beach</span></div>`;
+          if (latest.swimmers_outside_flags && parseInt(latest.swimmers_outside_flags) > 0) {
+            html += `<div style="background:rgba(239,68,68,0.1); padding:3px 6px; border-radius:4px; text-align:center;"><span style="color:#fca5a5; font-size:11px;">⚠️ ${latest.swimmers_outside_flags} outside flags</span></div>`;
+          }
+          if (latest.crafts && parseInt(latest.crafts) > 0) {
+            html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;"><span style="color:#e2e8f0; font-size:11px;">🚤 ${latest.crafts} crafts</span></div>`;
+          }
+          html += `</div>`;
+        }
+        html += `</div>`;
+      }
+
+      // === MARINE WARNINGS (detail only, beachsafe) ===
+      if (filterBeachsafe && detail && detail.todays_marine_warnings && detail.todays_marine_warnings.length > 0) {
+        html += `<div style="padding:6px 8px; background:rgba(239,68,68,0.1); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#fca5a5; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;">⚠️ MARINE WARNINGS</div>`;
+        detail.todays_marine_warnings.forEach(mw => {
+          const wText = typeof mw === 'string' ? mw : (mw.title || mw.description || JSON.stringify(mw));
+          html += `<div style="color:#fca5a5; font-size:11px;">• ${escapeHtml(wText)}</div>`;
+        });
+        html += `</div>`;
+      }
+
+      // === HAZARDS (beachsafe) ===
+      if (filterBeachsafe && beach.hazards && beach.hazards.length > 0) {
+        html += `<div style="padding:6px 8px; background:rgba(239,68,68,0.06); border-radius:6px; margin-bottom:8px;">`;
+        html += `<div style="color:#fca5a5; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-solid fa-triangle-exclamation"></i> HAZARDS</div>`;
+        html += `<div style="color:#e2e8f0; font-size:11px;">`;
+        html += beach.hazards.slice(0, 4).map(h => escapeHtml(h.name || h.type || 'Unknown')).join(', ');
+        if (beach.hazards.length > 4) html += ` +${beach.hazards.length - 4} more`;
+        html += `</div></div>`;
+      }
+
+      // === AMENITIES (beachsafe) ===
+      if (filterBeachsafe && beach.amenities) {
+        const amenities = [];
+        if (beach.amenities.parking) amenities.push('🅿️ Parking');
+        if (beach.amenities.toilet) amenities.push('🚻 Toilets');
+        if (beach.amenities.dogs) amenities.push('🐕 Dogs allowed');
+        if (amenities.length > 0) {
+          html += `<div style="color:#94a3b8; font-size:10px; margin-top:2px;">${amenities.join(' · ')}</div>`;
+        }
+      }
+
+      // Loading indicator (only when beachsafe filter is on)
+      if (filterBeachsafe && !detail && !_beachDetailFailed.has(beach.beachsafeSlug || deriveBeachSlug(beach.name))) {
+        html += `<div style="color:#64748b; font-size:10px; margin-top:6px; text-align:center;"><i class="fa-solid fa-spinner fa-spin"></i> Loading detailed data...</div>`;
+      }
+
+      html += `</div>`;
+      return html;
     }
     
     // Calculate distance between two GPS coordinates in meters (Haversine formula)
@@ -6517,7 +6733,13 @@ async function loadPagerData() {
         
         if (existing) {
           existing.hasBeachSafe = true;
+          existing.beachsafeName = bs.name;
+          existing.beachsafeSlug = bs.slug || '';
           existing.patrolled = bs.patrolled || bs.isPatrolledToday || false;
+          existing.patrolStart = bs.patrolStart || '';
+          existing.patrolEnd = bs.patrolEnd || '';
+          existing.patrolLevel = bs.patrol || 0;
+          existing.beachStatus = bs.status || '';
           existing.hazards = bs.hazards || [];
           existing.weather = bs.weather || {};
           existing.amenities = { parking: bs.hasParking || false, toilet: bs.hasToilet || false, dogs: bs.dogsAllowed || false };
@@ -6531,7 +6753,12 @@ async function loadPagerData() {
             lastSample: '',
             hasBeachwatch: false,
             hasBeachSafe: true,
+            beachsafeSlug: bs.slug || '',
             patrolled: bs.patrolled || bs.isPatrolledToday || false,
+            patrolStart: bs.patrolStart || '',
+            patrolEnd: bs.patrolEnd || '',
+            patrolLevel: bs.patrol || 0,
+            beachStatus: bs.status || '',
             hazards: bs.hazards || [],
             weather: bs.weather || {},
             amenities: { parking: bs.hasParking || false, toilet: bs.hasToilet || false, dogs: bs.dogsAllowed || false }
@@ -6542,8 +6769,20 @@ async function loadPagerData() {
       // Store merged beach data for filtering and re-render
       _allMergedBeaches = mergedBeaches;
       renderBeachMarkers();
-      
+
       console.log(`Loaded ${mergedBeaches.length} merged beaches (${mergedBeaches.filter(b => b.hasBeachwatch && b.hasBeachSafe).length} with both sources)`);
+
+      // Fetch all beach details in bulk (pre-warmed by backend)
+      if (!_beachDetailsLoaded) {
+        apiFetch(`${PROXY_BASE}/api/beachsafe/details`).then(r => r.json()).then(allDetails => {
+          if (allDetails && typeof allDetails === 'object') {
+            Object.assign(_beachDetailCache, allDetails);
+            _beachDetailsLoaded = true;
+            renderBeachMarkers();
+            console.log(`Loaded ${Object.keys(allDetails).length} beach details (bulk)`);
+          }
+        }).catch(() => {});
+      }
     }
 
     // ==================== WEATHER PANEL ====================

@@ -141,8 +141,8 @@
       display: none;
     }
     
-    /* Beach grid uses 12 items initially */
-    #beach-list.collapsed .list-item:nth-child(n+13) {
+    /* Beach grid uses 10 items initially */
+    #beach-list.collapsed .list-item:nth-child(n+11) {
       display: none;
     }
     
@@ -2758,15 +2758,19 @@
       apiDataCache.beachsafe = null;
       apiDataCache.endeavour = null;
       apiDataCache.essential = null;
-      
-      // Load stats first (this makes the API calls)
+
+      // Load stats first (this makes the API calls) — stats update is safe, no layout shift
       await loadAllStats();
-      
-      // Then load the detail cards (they'll use cached data where possible)
-      loadLatestPower();
-      loadLatestTraffic();
-      loadLatestBOM();
-      loadLatestBeaches();
+
+      // Only refresh detail cards if user is near the top of the page
+      // When scrolled down, the innerHTML replacement causes jarring layout shifts
+      const scrolledDown = window.scrollY > 400;
+      if (!scrolledDown) {
+        loadLatestPower();
+        loadLatestTraffic();
+        loadLatestBOM();
+        loadLatestBeaches();
+      }
     }
     
     // Start periodic data refresh and heartbeat
@@ -4952,6 +4956,8 @@
             // Merge BeachSafe data into existing beach
             existing.hasBeachSafe = true;
             existing.patrolled = bs.patrolled || bs.isPatrolledToday || false;
+            existing.patrolStart = bs.patrolStart || '';
+            existing.patrolEnd = bs.patrolEnd || '';
             existing.hazards = bs.hazards || [];
             existing.weather = bs.weather || {};
             existing.amenities = {
@@ -4973,6 +4979,8 @@
               hasBeachwatch: false,
               hasBeachSafe: true,
               patrolled: bs.patrolled || bs.isPatrolledToday || false,
+              patrolStart: bs.patrolStart || '',
+              patrolEnd: bs.patrolEnd || '',
               hazards: bs.hazards || [],
               weather: bs.weather || {},
               amenities: {
@@ -4998,7 +5006,7 @@
         const patrolledCount = beaches.filter(b => b.patrolled).length;
         const withHazards = beaches.filter(b => b.hazards && b.hazards.length > 0).length;
         const withGPS = beaches.filter(b => b.lat && b.lng).length;
-        const showCount = 12; // Show 12 initially (grid of 4x3 on desktop)
+        const showCount = 10; // Show 10 initially
         
         container.innerHTML = `
           <div class="tt-summary">
@@ -5010,60 +5018,43 @@
             ${withHazards > 0 ? `<span style="color: #f472b6;"><strong><i class="fas fa-bolt"></i> Hazards:</strong> ${withHazards}</span>` : ''}
             ${withGPS > 0 ? `<span style="color: #60a5fa;"><i class="fas fa-map-marker-alt"></i> Click to view on map</span>` : ''}
           </div>
-          <div class="collapsible-list ${beaches.length > showCount ? 'collapsed' : ''}" id="beach-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
+          <div class="collapsible-list ${beaches.length > showCount ? 'collapsed' : ''}" id="beach-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 0.5rem;">
             ${beaches.map((b, idx) => {
               const accentClass = b.priority === 1 ? 'tt-accent-red tt-danger-bg' : b.priority === 2 ? 'tt-accent-amber' : b.patrolled ? 'tt-accent-orange' : 'tt-accent-green';
               const forecast = b.pollutionForecast || '';
-              const forecastIcon = forecast.toLowerCase().includes('unlikely') ? '<i class="fas fa-check" style="color:#22c55e;"></i>' : 
+              const forecastIcon = forecast.toLowerCase().includes('unlikely') ? '<i class="fas fa-check" style="color:#22c55e;"></i>' :
                                   forecast.toLowerCase().includes('possible') ? '<i class="fas fa-exclamation-triangle" style="color:#f59e0b;"></i>' : '';
-              const sampleDate = b.lastSample ? new Date(b.lastSample).toLocaleDateString() : '';
               const hasGPS = b.lat && b.lng;
-              
-              // Build hazard badges
-              const hazardBadges = (b.hazards || []).slice(0, 3).map(h => {
-                const name = h.name || h.title || h;
-                const rating = h.rating || '';
-                const color = rating === 'high' || rating === 'extreme' ? '#ef4444' : 
-                              rating === 'moderate' ? '#f59e0b' : '#94a3b8';
-                return `<span style="color: ${color}; font-size: 0.6rem;"><i class="fas fa-bolt"></i> ${typeof name === 'string' ? name : ''}</span>`;
-              }).join(' ');
               
               // Weather info
               const weather = b.weather || {};
-              const temp = weather.temperature || weather.temp;
-              const windSpeed = weather.windSpeed || weather.wind_speed;
-              const weatherInfo = temp ? `<i class="fas fa-thermometer-half"></i> ${Math.round(temp)}°` : '';
-              const windInfo = windSpeed ? `<i class="fas fa-wind"></i> ${Math.round(windSpeed)}km/h` : '';
-              
-              // Amenities
-              const amenityIcons = [];
-              if (b.amenities?.parking) amenityIcons.push('<i class="fas fa-parking"></i>');
-              if (b.amenities?.toilet) amenityIcons.push('<i class="fas fa-restroom"></i>');
-              if (b.amenities?.dogs) amenityIcons.push('<i class="fas fa-dog"></i>');
-              
+              const temp = weather.air_temp || weather.temperature || weather.temp;
+              const waterTemp = weather.water_temperatures;
+              const windSpeed = weather.wind_spd_kmh || weather.windSpeed || weather.wind_speed;
+              const windDir = weather.wind_dir || '';
+              const swell = weather.swell;
+
+              // Build labelled meta items
+              const metaItems = [];
+              if (temp) metaItems.push(`<span style="color:#93c5fd;">Air: ${Math.round(parseFloat(temp))}°C</span>`);
+              if (waterTemp) metaItems.push(`<span style="color:#22d3ee;">Water: ${Math.round(parseFloat(waterTemp))}°C</span>`);
+              if (swell) metaItems.push(`<span style="color:#7dd3fc;">Swell: ${swell}m</span>`);
+              if (windSpeed) metaItems.push(`<span style="color:#a5b4fc;">Wind: ${windDir ? windDir + ' ' : ''}${Math.round(parseFloat(windSpeed))}km/h</span>`);
+              if (b.patrolled && b.patrolStart) metaItems.push(`<span style="color:#f97316;">Patrol: ${b.patrolStart}–${b.patrolEnd}</span>`);
+              if (forecast) metaItems.push(`<span>Pollution: ${forecastIcon} ${forecast}</span>`);
+
               return `
-                <div class="tt-item tt-beach list-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}" 
+                <div class="tt-item tt-beach list-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}"
                      ${hasGPS ? `onclick="openMapAt(${b.lat}, ${b.lng}, '${encodeURIComponent(b.name)}', 'beachwatch')"` : ''}>
                   <div class="tt-beach-row">
                     <div class="tt-title tt-title-compact"><i class="fas fa-umbrella-beach" style="color:#06b6d4;"></i> ${b.name}</div>
                     ${hasGPS ? '<span class="map-view-btn compact"><i class="fas fa-map-marker-alt"></i></span>' : ''}
                     <div class="tt-beach-badges">
-                      ${b.patrolled ? '<span class="pill pill-sub pill-orange"><i class="fas fa-flag"></i> PATROLLED</span>' : ''}
+                      ${b.patrolled ? '<span class="pill pill-sub pill-orange"><i class="fas fa-flag"></i> Patrolled</span>' : ''}
                       ${b.quality ? `<span class="pill pill-sub ${b.qualityClass}">${b.quality}</span>` : ''}
                     </div>
                   </div>
-                  <div class="tt-meta">
-                    ${forecast ? `<span>${forecastIcon} ${forecast}</span>` : ''}
-                    ${sampleDate ? `<span><i class="fas fa-calendar-alt"></i> ${sampleDate}</span>` : ''}
-                    ${weatherInfo ? `<span style="color:#93c5fd;">${weatherInfo}</span>` : ''}
-                    ${windInfo ? `<span style="color:#a5f3fc;">${windInfo}</span>` : ''}
-                  </div>
-                  ${hazardBadges || amenityIcons.length > 0 ? `
-                  <div class="tt-beach-extra">
-                    ${hazardBadges}
-                    ${amenityIcons.length > 0 ? `<span style="color:#64748b;">${amenityIcons.join(' ')}</span>` : ''}
-                  </div>
-                  ` : ''}
+                  ${metaItems.length > 0 ? `<div class="tt-meta">${metaItems.join('')}</div>` : ''}
                 </div>
               `;
             }).join('')}
