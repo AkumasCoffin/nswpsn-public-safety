@@ -1629,6 +1629,8 @@ def cleanup_loop():
     cleanup_counter = 0
     while _cleanup_running:
         cleanup_old_data()
+        cleanup_stale_sessions()
+        _cleanup_centralwatch_image_cache()
         cleanup_counter += 1
         # Clean up rate limit data every 5 cycles
         if cleanup_counter % 5 == 0:
@@ -6921,6 +6923,24 @@ _centralwatch_image_fetch_lock = threading.Lock()
 # _centralwatch_image_refreshing removed — batch worker is sole fetcher now
 _last_timestamp_refresh_attempt = 0
 _TIMESTAMP_REFRESH_COOLDOWN = 120  # Try to refresh timestamps every 2 minutes (session-based)
+
+
+def _cleanup_centralwatch_image_cache():
+    """Remove stale images from CW cache — images older than 5 minutes
+    and images for cameras no longer in the active camera list."""
+    now = time.time()
+    max_age = 300  # 5 minutes
+    active_ids = {cam.get('id') for cam in _centralwatch_static_data if cam.get('id')}
+
+    stale = [cid for cid, entry in _centralwatch_image_cache.items()
+             if (now - entry.get('timestamp', 0)) > max_age or (active_ids and cid not in active_ids)]
+
+    for cid in stale:
+        del _centralwatch_image_cache[cid]
+
+    if stale and DEV_MODE:
+        Log.cleanup(f"CW image cache: evicted {len(stale)} stale images, {len(_centralwatch_image_cache)} remaining")
+
 
 def _refresh_centralwatch_timestamps(force=False):
     """Fetch the camera list from API to get the latest image timestamps.
