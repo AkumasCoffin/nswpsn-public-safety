@@ -7979,6 +7979,10 @@ def _waze_browser_worker():
                 break
             regions, result_q = task
             try:
+                # Shuffle region order so Datadome 403s rotate instead of always blocking the last regions
+                import random
+                regions = list(regions)
+                random.shuffle(regions)
                 result = []
                 for i, region in enumerate(regions):
                     if i > 0:
@@ -8187,10 +8191,13 @@ def fetch_waze_region(region):
         Log.error(f"Waze fetch error for {region['name']}: {e}")
     return {'alerts': [], 'jams': []}, 0
 
+_waze_consecutive_failures = 0
+_WAZE_MAX_CONSECUTIVE_FAILURES = 5  # Restart browser after this many consecutive all-403 fetches
+
 def fetch_waze_data():
     """Fetch Waze alerts and jams for all NSW regions.
     Uses browser worker (Playwright) when ready, falls back to curl_cffi/requests."""
-    global _waze_cache
+    global _waze_cache, _waze_consecutive_failures
 
     now = time.time()
     if now - _waze_cache['timestamp'] < WAZE_CACHE_TTL and _waze_cache['alerts']:
@@ -8222,10 +8229,30 @@ def fetch_waze_data():
                                 all_jams[uuid] = jam
                 if all_alerts or all_jams:
                     Log.info(f"Waze: Browser fetch OK ({len(all_alerts)} alerts, {len(all_jams)} jams)")
+                    _waze_consecutive_failures = 0
                 else:
+                    _waze_consecutive_failures += 1
                     first = next((r for r in results if r), None)
                     sample = f"ok={first.get('ok')}, status={first.get('status')}" if first else "no results"
-                    Log.warn(f"Waze: Browser fetch returned no data ({sample})")
+                    Log.warn(f"Waze: Browser fetch returned no data ({sample}) [{_waze_consecutive_failures}/{_WAZE_MAX_CONSECUTIVE_FAILURES}]")
+                    # Restart browser if consistently blocked by WAF
+                    if _waze_consecutive_failures >= _WAZE_MAX_CONSECUTIVE_FAILURES:
+                        Log.warn(f"Waze: {_waze_consecutive_failures} consecutive failures — restarting browser worker")
+                        _waze_consecutive_failures = 0
+                        # Signal the worker to stop and restart
+                        _waze_request_queue.put(None)  # Sentinel to stop worker
+                        # Wait for worker to die
+                        if _waze_browser_worker_thread:
+                            _waze_browser_worker_thread.join(timeout=10)
+                        time.sleep(2)
+                        _start_waze_browser_worker()
+                        # Wait for new browser to become ready
+                        for _ in range(120):
+                            if _waze_browser_ready:
+                                break
+                            time.sleep(0.5)
+                        if _waze_browser_ready:
+                            Log.info("Waze: Browser worker restarted successfully")
             else:
                 Log.warn("Waze: Browser fetch timed out or returned None")
         else:
@@ -11508,14 +11535,11 @@ def initialize():
 
 
 if __name__ == '__main__':
-    # In debug mode, Flask uses a reloader that spawns a child process
-    # Only initialize in the reloader child process (indicated by WERKZEUG_RUN_MAIN)
-    use_debug = DEV_MODE  # Flask debug mode matches our dev mode
-    
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not use_debug:
-        initialize()
-    
-    app.run(host=args.host, port=args.port, debug=use_debug)
+    # DEV_MODE controls verbose logging, NOT Flask's debug mode.
+    # Flask debug mode enables the Werkzeug debugger (security risk, stores tracebacks
+    # in memory) and the reloader (interferes with PM2). Never use in production.
+    initialize()
+    app.run(host=args.host, port=args.port, debug=False)
 else:
     # When imported by WSGI server (gunicorn, etc.)
     initialize()
