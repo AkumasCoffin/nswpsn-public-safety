@@ -362,6 +362,26 @@ class Database:
         conn.commit()
         conn.close()
     
+    def filter_unseen_alerts(self, alerts: List[tuple]) -> List[tuple]:
+        """Given a list of (alert_type, alert_id) tuples, return only those not yet seen.
+        Uses a single DB query instead of one per alert."""
+        if not alerts:
+            return []
+        conn = self._connect()
+        c = conn.cursor()
+        if USE_POSTGRES:
+            # Build a VALUES list for a single query
+            values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in alerts)
+            c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
+        else:
+            placeholders = ','.join(['(?,?)'] * len(alerts))
+            flat = [v for pair in alerts for v in pair]
+            c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
+        seen = {(row[0] if isinstance(row, tuple) else row['alert_type'],
+                 row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall()}
+        conn.close()
+        return [(at, ai) for at, ai in alerts if (at, ai) not in seen]
+
     def mark_alerts_seen_batch(self, alerts: List[tuple]):
         if not alerts:
             return

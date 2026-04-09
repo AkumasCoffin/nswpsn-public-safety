@@ -256,9 +256,10 @@ class AlertPoller:
                 # On first poll, mark all Waze items as seen without alerting (bootstrap)
                 if self._first_poll:
                     logger.info(f"  → {alert_type}: Bootstrapping {original_count} items (marking as seen, no alerts)")
-                    # Use batch operation to avoid blocking the event loop with 1000+ individual commits
+                    # Use batch operation in executor to avoid blocking the event loop
                     batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-                    self.db.mark_alerts_seen_batch(batch)
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                     items = []  # Don't alert on any
                 else:
                     items = self._filter_recent_waze(items, max_age_minutes=15, max_items=5)
@@ -266,16 +267,20 @@ class AlertPoller:
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
             
-            new_count = 0
-            for item in items:
-                alert_id = self._get_alert_id(alert_type, item)
-                
-                if not self.db.is_alert_seen(alert_type, alert_id):
-                    # Mark as seen IMMEDIATELY to prevent duplicates on next poll cycle
-                    # (poll runs every 60s, queue processing can take longer)
-                    self.db.mark_alert_seen(alert_type, alert_id)
-                    
-                    # Use actual source timestamp for proper ordering
+            # Build candidate list and check all at once (single DB query instead of N)
+            candidates = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
+            item_by_id = {self._get_alert_id(alert_type, item): item for item in items}
+
+            # Run synchronous DB calls in executor to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
+
+            if unseen:
+                # Mark all unseen as seen in one batch commit
+                await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, unseen)
+
+                for _, alert_id in unseen:
+                    item = item_by_id[alert_id]
                     source_ts = self._get_alert_timestamp(alert_type, item)
                     alert = {
                         'type': alert_type,
@@ -284,10 +289,9 @@ class AlertPoller:
                         'timestamp': source_ts.isoformat()
                     }
                     new_alerts.append(alert)
-                    new_count += 1
                     logger.info(f"New alert: {alert_type} - {alert_id}")
-            
-            if new_count == 0:
+
+            if not unseen:
                 logger.debug(f"  → No new {alert_type} alerts")
         
         # Check user incidents from Supabase
