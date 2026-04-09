@@ -36,7 +36,7 @@ from datetime import datetime, timedelta, timezone
 # Load environment variables from .env file FIRST (from script dir so PM2/cwd-independent)
 from dotenv import load_dotenv
 _script_dir = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(_script_dir, '.env'))
+load_dotenv(os.path.join(_script_dir, '.env'), override=True)
 
 from db import get_conn, get_conn_dict
 
@@ -1623,6 +1623,24 @@ def graceful_shutdown(signum, frame):
     # are blocked on locks or HTTP requests
     os._exit(0)
 
+def _cleanup_expired_cache():
+    """Remove expired entries from the global cache dict to prevent unbounded growth"""
+    now = time.time()
+    expired = [k for k, v in cache.items() if now - v['time'] >= v.get('ttl', CACHE_TTL)]
+    for k in expired:
+        del cache[k]
+    if expired and DEV_MODE:
+        Log.cleanup(f"Cache cleanup: evicted {len(expired)} expired entries, {len(cache)} remaining")
+
+def _cleanup_role_cache():
+    """Remove expired entries from _role_cache to prevent unbounded growth"""
+    now = time.time()
+    expired = [k for k, v in _role_cache.items() if now - v['ts'] >= _role_cache_ttl]
+    for k in expired:
+        del _role_cache[k]
+    if expired and DEV_MODE:
+        Log.cleanup(f"Role cache cleanup: evicted {len(expired)} expired entries, {len(_role_cache)} remaining")
+
 def cleanup_loop():
     """Background loop that periodically cleans up old data"""
     global _cleanup_running
@@ -1631,10 +1649,12 @@ def cleanup_loop():
         cleanup_old_data()
         cleanup_stale_sessions()
         _cleanup_centralwatch_image_cache()
+        _cleanup_expired_cache()
         cleanup_counter += 1
         # Clean up rate limit data every 5 cycles
         if cleanup_counter % 5 == 0:
             _cleanup_rate_limits()
+            _cleanup_role_cache()
         # Use short sleeps to allow faster shutdown
         if _shutdown_event.wait(timeout=DATA_CLEANUP_INTERVAL):
             break  # Shutdown signal received
@@ -3511,7 +3531,7 @@ def cached(ttl=CACHE_TTL):
             if key in cache and now - cache[key]['time'] < ttl:
                 return cache[key]['data']
             result = func(*args, **kwargs)
-            cache[key] = {'data': result, 'time': now}
+            cache[key] = {'data': result, 'time': now, 'ttl': ttl}
             return result
         return wrapper
     return decorator
@@ -6199,7 +6219,15 @@ def _cw_browser_worker():
         pw = sync_playwright().start()
         browser = pw.chromium.launch(
             headless=True,
-            args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-cache',
+                '--disk-cache-size=0',
+                '--disable-background-networking',
+                '--disable-backing-store-limit',
+                '--aggressive-cache-discard',
+            ]
         )
         context = browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -6233,6 +6261,12 @@ def _cw_browser_worker():
         Log.error(f"Central Watch: Failed to start browser: {e}")
         # Clean up on failure
         try:
+            if page: page.close()
+        except Exception: pass
+        try:
+            if context: context.close()
+        except Exception: pass
+        try:
             if browser: browser.close()
         except Exception: pass
         try:
@@ -6250,15 +6284,17 @@ def _cw_browser_worker():
     
     # === Main request processing loop ===
     last_challenge_refresh = time.time()
-    
+    last_memory_cleanup = time.time()
+
     while True:
         try:
             # Wait for a request (with timeout so we can do periodic maintenance)
             try:
                 task = _cw_request_queue.get(timeout=30)
             except _queue_mod.Empty:
+                now = time.time()
                 # Periodic: re-solve Vercel challenge every 15 min to keep cookies fresh
-                if time.time() - last_challenge_refresh >= 900:
+                if now - last_challenge_refresh >= 900:
                     try:
                         page.goto('https://centralwatch.watchtowers.io/au', timeout=45000)
                         page.wait_for_function(
@@ -6270,6 +6306,15 @@ def _cw_browser_worker():
                         Log.info("Central Watch: Browser session refreshed")
                     except Exception as e:
                         Log.warn(f"Central Watch: Browser session refresh failed: {e}")
+                # Periodic: clear browser memory caches every 5 min
+                if now - last_memory_cleanup >= 300:
+                    try:
+                        cdp = context.new_cdp_session(page)
+                        cdp.send('Network.clearBrowserCache')
+                        cdp.detach()
+                        last_memory_cleanup = now
+                    except Exception:
+                        pass
                 continue
             
             if task is None:
@@ -6313,15 +6358,12 @@ def _cw_browser_worker():
                             if (!resp.ok) return { ok: false, status: resp.status };
                             const blob = await resp.blob();
                             if (!blob.type.startsWith('image/')) return { ok: false, status: resp.status, type: blob.type };
-                            const reader = new FileReader();
-                            return new Promise(resolve => {
-                                reader.onloadend = () => resolve({
-                                    ok: true, status: resp.status,
-                                    contentType: blob.type, size: blob.size,
-                                    data: reader.result
-                                });
-                                reader.readAsDataURL(blob);
-                            });
+                            const buf = await blob.arrayBuffer();
+                            const bytes = new Uint8Array(buf);
+                            let binary = '';
+                            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                            const dataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
+                            return { ok: true, status: resp.status, contentType: blob.type, size: blob.size, data: dataUrl };
                         } catch (e) {
                             clearTimeout(timer);
                             return { ok: false, error: e.toString() };
@@ -6359,15 +6401,13 @@ def _cw_browser_worker():
                                 }
                                 const blob = await resp.blob();
                                 if (!blob.type.startsWith('image/')) return { id, ok: false, type: blob.type };
-                                const reader = new FileReader();
-                                return new Promise(resolve => {
-                                    reader.onloadend = () => resolve({
-                                        id, ok: true,
-                                        contentType: blob.type, size: blob.size,
-                                        data: reader.result
-                                    });
-                                    reader.readAsDataURL(blob);
-                                });
+                                // Use arrayBuffer instead of FileReader to avoid leaking reader objects
+                                const buf = await blob.arrayBuffer();
+                                const bytes = new Uint8Array(buf);
+                                let binary = '';
+                                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                                const dataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
+                                return { id, ok: true, contentType: blob.type, size: blob.size, data: dataUrl };
                             } catch (e) {
                                 clearTimeout(timer);
                                 return { id, ok: false, error: e.toString() };
@@ -6391,19 +6431,25 @@ def _cw_browser_worker():
                         const results = await Promise.allSettled(imageList.map(([id, url]) => {
                             return new Promise((resolve) => {
                                 const timer = setTimeout(() => {
+                                    img.src = '';
                                     resolve({ id, ok: false, error: 'timeout' });
                                 }, TIMEOUT);
-                                
+
                                 const img = new Image();
-                                
+
                                 img.onload = () => {
                                     clearTimeout(timer);
                                     try {
                                         const c = document.createElement('canvas');
                                         c.width = img.naturalWidth;
                                         c.height = img.naturalHeight;
-                                        c.getContext('2d').drawImage(img, 0, 0);
+                                        const ctx = c.getContext('2d');
+                                        ctx.drawImage(img, 0, 0);
                                         const dataUrl = c.toDataURL('image/jpeg', 0.92);
+                                        // Release DOM resources
+                                        img.src = '';
+                                        c.width = 0;
+                                        c.height = 0;
                                         resolve({
                                             id, ok: true,
                                             contentType: 'image/jpeg',
@@ -6411,15 +6457,17 @@ def _cw_browser_worker():
                                             data: dataUrl
                                         });
                                     } catch (e) {
+                                        img.src = '';
                                         resolve({ id, ok: false, error: 'canvas: ' + e.toString() });
                                     }
                                 };
-                                
+
                                 img.onerror = () => {
                                     clearTimeout(timer);
+                                    img.src = '';
                                     resolve({ id, ok: false, error: 'img_load_failed' });
                                 };
-                                
+
                                 img.src = url;
                             });
                         }));
@@ -6443,6 +6491,12 @@ def _cw_browser_worker():
     _centralwatch_browser_ready = False
     if DEV_MODE:
         Log.info("Central Watch: Browser worker shutting down...")
+    try:
+        if page: page.close()
+    except Exception: pass
+    try:
+        if context: context.close()
+    except Exception: pass
     try:
         if browser: browser.close()
     except Exception: pass
@@ -6560,6 +6614,11 @@ def _reset_centralwatch_session():
     """Reset the requests session (fallback)"""
     global _centralwatch_session
     with _centralwatch_session_lock:
+        if _centralwatch_session is not None:
+            try:
+                _centralwatch_session.close()
+            except Exception:
+                pass
         _centralwatch_session = None
 
 def _centralwatch_api_fetch(timeout=20):
@@ -7678,6 +7737,9 @@ def _waze_browser_worker():
             '--disable-infobars',
             '--window-size=1920,1080',
             '--ozone-platform=x11',  # Force X11 backend (needed for Xvfb on modern Chrome)
+            '--disable-cache',
+            '--disk-cache-size=0',
+            '--aggressive-cache-discard',
         ]
 
         # Clean browser profile on each start (stale Datadome cookies cause instant 403)
@@ -7823,6 +7885,9 @@ def _waze_browser_worker():
                 if 'waze.com' in url and '/api/' in url:
                     endpoint = url.split('?')[0].split('/api/')[-1]
                     _api_status.append(f"{response.status}:{endpoint}")
+                    # Prevent unbounded growth — keep only recent entries
+                    if len(_api_status) > 200:
+                        del _api_status[:100]
                 if '/georss' in url:
                     if response.status == 200:
                         body = response.json()
@@ -7887,6 +7952,9 @@ def _waze_browser_worker():
     except Exception as e:
         Log.error(f"Waze browser worker failed: {e}")
         try:
+            if page: page.close()
+        except Exception: pass
+        try:
             if context: context.close()
         except Exception: pass
         try:
@@ -7903,6 +7971,9 @@ def _waze_browser_worker():
 
     while True:
         try:
+            # Clear accumulated georss responses from background page polling
+            with _georss_lock:
+                _georss_responses.clear()
             task = _waze_request_queue.get(timeout=60)
             if task is None:
                 break
@@ -7956,12 +8027,22 @@ def _waze_browser_worker():
                 Log.warn(f"Waze browser fetch error: {e}")
                 result_q.put([])
         except _queue_mod.Empty:
+            # Clear browser cache on idle to prevent Chromium memory growth
+            try:
+                cdp = context.new_cdp_session(page)
+                cdp.send('Network.clearBrowserCache')
+                cdp.detach()
+            except Exception:
+                pass
             continue
         except Exception as e:
             if not _shutdown_event.is_set():
                 Log.warn(f"Waze worker: {e}")
 
     _waze_browser_ready = False
+    try:
+        if page: page.close()
+    except Exception: pass
     try:
         if context: context.close()
     except Exception: pass
