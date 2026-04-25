@@ -24,18 +24,35 @@ class AlertPoller:
         self.api_key = api_key
         self.db = database
         
-        # API endpoints mapping
+        # API endpoints mapping.
+        # NOTE: Some canonical alert_types share a single backend fetch and are
+        # split out by `_extract_items` / dispatcher inspection:
+        #   - 'bom_land' uses /api/bom/warnings (the warnings response is split
+        #     into bom_land / bom_marine by category at extraction time).
+        #   - 'endeavour_planned' uses /api/endeavour/planned (current outages
+        #     come back as 'endeavour_current').
+        #   - 'essential_planned'/'essential_future' point at the Essential
+        #     Energy backend endpoints (wired so they're ready when the proxy
+        #     exposes them; safe to call before the routes exist — _fetch
+        #     returns None on non-200).
+        #   - 'waze_jam' shares the hazards feed (waze backend returns hazards
+        #     and jams together; we route per-feature in _extract_items).
         self.endpoints = {
             'rfs': '/api/rfs/incidents',
-            'bom': '/api/bom/warnings',
-            'traffic_incidents': '/api/traffic/incidents',
+            'bom_land': '/api/bom/warnings',
+            'bom_marine': '/api/bom/warnings',
+            'traffic_incident': '/api/traffic/incidents',
             'traffic_roadwork': '/api/traffic/roadwork',
             'traffic_flood': '/api/traffic/flood',
             'traffic_fire': '/api/traffic/fire',
-            'traffic_major': '/api/traffic/majorevent',
-            'power_endeavour': '/api/endeavour/current',
-            'power_ausgrid': '/api/ausgrid/outages',
-            'waze_hazards': '/api/waze/hazards',
+            'traffic_majorevent': '/api/traffic/majorevent',
+            'endeavour_current': '/api/endeavour/current',
+            'endeavour_planned': '/api/endeavour/planned',
+            'ausgrid': '/api/ausgrid/outages',
+            'essential_planned': '/api/essential/planned',
+            'essential_future': '/api/essential/future',
+            'waze_hazard': '/api/waze/hazards',
+            'waze_jam': '/api/waze/hazards',
             'waze_police': '/api/waze/police',
             'waze_roadwork': '/api/waze/roadwork',
         }
@@ -78,26 +95,28 @@ class AlertPoller:
             guid = props.get('guid', '') or props.get('link', '') or props.get('title', '')
             return f"rfs_{guid}_{props.get('status', '')}"
         
-        elif alert_type == 'bom':
-            # Use title + issued date
-            return f"bom_{item.get('title', '')}_{item.get('issued', '')}"
-        
+        elif alert_type.startswith('bom_'):
+            # Use title + issued date (shared shape between bom_land/bom_marine)
+            return f"{alert_type}_{item.get('title', '')}_{item.get('issued', '')}"
+
         elif alert_type.startswith('traffic_'):
             # Use the ID from properties
             props = item.get('properties', {})
             return str(props.get('id', '')) or hashlib.md5(str(item).encode()).hexdigest()[:16]
-        
-        elif alert_type == 'power_endeavour':
-            # Use incident ID + suburb + streets to make unique 
-            # (same incident can have multiple street entries per suburb)
+
+        elif alert_type.startswith('endeavour_'):
+            # Use incident ID + suburb + streets to make unique
+            # (same incident can have multiple street entries per suburb).
+            # Same key shape for endeavour_current and endeavour_planned.
             incident_id = str(item.get('id', '')) or str(item.get('incidentId', ''))
             suburb = item.get('suburb', '') or item.get('location', '')
             streets = item.get('streets', '') or item.get('streetName', '')
             # Create hash of streets to keep ID shorter
             street_hash = hashlib.md5(str(streets).encode()).hexdigest()[:8] if streets else ''
-            return f"endeavour_{incident_id}_{suburb}_{street_hash}" if suburb else f"endeavour_{incident_id}"
-        
-        elif alert_type == 'power_ausgrid':
+            prefix = alert_type  # endeavour_current / endeavour_planned
+            return f"{prefix}_{incident_id}_{suburb}_{street_hash}" if suburb else f"{prefix}_{incident_id}"
+
+        elif alert_type == 'ausgrid':
             # Ausgrid outages - use OutageId or combine Suburb+StreetName
             outage_id = item.get('OutageId') or item.get('outageId', '')
             if outage_id:
@@ -105,14 +124,26 @@ class AlertPoller:
             suburb = item.get('Suburb', '') or item.get('suburb', '')
             street = item.get('StreetName', '') or item.get('streetName', '')
             return f"ausgrid_{suburb}_{street}" if suburb else hashlib.md5(str(item).encode()).hexdigest()[:16]
-        
+
+        elif alert_type.startswith('essential_'):
+            # Essential Energy outages — best-effort key off id-ish fields
+            outage_id = (item.get('id') or item.get('outageId')
+                         or item.get('OutageId') or item.get('reference'))
+            if outage_id:
+                return f"{alert_type}_{outage_id}"
+            suburb = item.get('suburb') or item.get('Suburb') or ''
+            street = item.get('street') or item.get('streetName') or item.get('StreetName') or ''
+            if suburb or street:
+                return f"{alert_type}_{suburb}_{street}"
+            return hashlib.md5(str(item).encode()).hexdigest()[:16]
+
         elif alert_type.startswith('waze_'):
             # Waze alerts - use UUID from properties
             props = item.get('properties', {})
             waze_id = props.get('id', '')
             return f"{alert_type}_{waze_id}" if waze_id else hashlib.md5(str(item).encode()).hexdigest()[:16]
-        
-        elif alert_type == 'user_incidents':
+
+        elif alert_type == 'user_incident':
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
             incident_id = item.get('id', '')
             logs = item.get('logs', [])
@@ -146,8 +177,8 @@ class AlertPoller:
                 if ts:
                     return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
 
-            elif alert_type == 'bom':
-                # BOM uses pubDate (RFC 2822 format)
+            elif alert_type.startswith('bom_'):
+                # BOM uses pubDate (RFC 2822 format) — same for land + marine
                 pub_date = item.get('pubDate', '')
                 if pub_date:
                     from email.utils import parsedate_to_datetime
@@ -170,19 +201,30 @@ class AlertPoller:
                 if ts:
                     return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
 
-            elif alert_type == 'power_endeavour':
+            elif alert_type.startswith('endeavour_'):
                 # Endeavour uses estimatedRestoreTime or just current time
                 restore_time = item.get('estimatedRestoreTime', '')
                 if restore_time:
                     return _aware(datetime.fromisoformat(restore_time.replace('Z', '+00:00')))
 
-            elif alert_type == 'power_ausgrid':
+            elif alert_type == 'ausgrid':
                 # Ausgrid uses StartTime (ISO format)
                 start_time = item.get('StartTime') or item.get('startTime', '')
                 if start_time:
                     return _aware(datetime.fromisoformat(start_time.replace('Z', '+00:00')))
 
-            elif alert_type == 'user_incidents':
+            elif alert_type.startswith('essential_'):
+                # Essential Energy — try common ISO fields
+                ts = (item.get('startTime') or item.get('StartTime')
+                      or item.get('start_time') or item.get('plannedStart')
+                      or item.get('scheduledStart') or '')
+                if ts:
+                    try:
+                        return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
+                    except Exception:
+                        pass
+
+            elif alert_type == 'user_incident':
                 # User incidents use created_at (ISO format)
                 ts = item.get('created_at', '')
                 if ts:
@@ -358,7 +400,7 @@ class AlertPoller:
 
         # Check if anyone is subscribed to user_incidents
         presets = await loop.run_in_executor(
-            None, self.db.get_presets_for_alert_type, 'user_incidents'
+            None, self.db.get_presets_for_alert_type, 'user_incident'
         )
         if not presets:
             return new_alerts
@@ -372,21 +414,21 @@ class AlertPoller:
             if not self._is_incident_ready(incident):
                 continue
 
-            alert_id = self._get_alert_id('user_incidents', incident)
+            alert_id = self._get_alert_id('user_incident', incident)
 
             seen = await loop.run_in_executor(
-                None, self.db.is_alert_seen, 'user_incidents', alert_id
+                None, self.db.is_alert_seen, 'user_incident', alert_id
             )
             if not seen:
                 # Mark as seen IMMEDIATELY to prevent duplicates on next poll cycle
                 await loop.run_in_executor(
-                    None, self.db.mark_alert_seen, 'user_incidents', alert_id
+                    None, self.db.mark_alert_seen, 'user_incident', alert_id
                 )
 
                 # Use actual source timestamp for proper ordering
-                source_ts = self._get_alert_timestamp('user_incidents', incident)
+                source_ts = self._get_alert_timestamp('user_incident', incident)
                 alert = {
-                    'type': 'user_incidents',
+                    'type': 'user_incident',
                     'id': alert_id,
                     'data': incident,
                     'timestamp': source_ts.isoformat()
@@ -534,38 +576,91 @@ class AlertPoller:
             return []
     
     def _extract_items(self, alert_type: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Extract individual items from API response"""
+        """Extract individual items from API response.
+
+        Some endpoints return a mixed feed that the dispatcher splits across
+        canonical alert_types — handled inline here by inspecting each item:
+          - bom_land vs bom_marine: single /api/bom/warnings response, split
+            on `category` ('land' | 'marine').
+          - waze_hazard vs waze_jam: single /api/waze/hazards response, split
+            on the `wazeType` / `displayType` of each feature ('JAM' → jam,
+            anything else → hazard).
+        """
         if alert_type == 'rfs':
             # GeoJSON format
             return data.get('features', [])
-        
-        elif alert_type == 'bom':
-            # BOM warnings format
-            return data.get('warnings', [])
-        
+
+        elif alert_type == 'bom_land':
+            # Single BOM endpoint returns both land + marine; route per-item.
+            warnings = data.get('warnings', []) or []
+            return [w for w in warnings
+                    if str(w.get('category', '')).lower() != 'marine']
+
+        elif alert_type == 'bom_marine':
+            warnings = data.get('warnings', []) or []
+            return [w for w in warnings
+                    if str(w.get('category', '')).lower() == 'marine']
+
         elif alert_type.startswith('traffic_'):
             # GeoJSON format
             return data.get('features', [])
-        
-        elif alert_type == 'power_endeavour':
-            # Endeavour format - array of outages
+
+        elif alert_type.startswith('endeavour_'):
+            # Endeavour format - array of outages (current + planned share shape)
             return data if isinstance(data, list) else []
-        
-        elif alert_type == 'power_ausgrid':
+
+        elif alert_type == 'ausgrid':
             # Ausgrid format - {'Markers': [...], 'Polygons': [...]}
             if isinstance(data, list):
                 return data
             # API returns PascalCase 'Markers' key
             return data.get('Markers', []) or data.get('markers', []) or []
-        
+
+        elif alert_type.startswith('essential_'):
+            # Essential Energy — accept either bare list or dict with common keys
+            if isinstance(data, list):
+                return data
+            for key in ('outages', 'Outages', 'results', 'data',
+                        'plannedOutages', 'futureOutages'):
+                v = data.get(key) if isinstance(data, dict) else None
+                if isinstance(v, list):
+                    return v
+            return []
+
+        elif alert_type == 'waze_hazard':
+            # Hazards feed mixes hazards + jams; jams handled separately below.
+            features = data.get('features', []) or []
+            out = []
+            for f in features:
+                props = f.get('properties') or {}
+                wtype = (props.get('wazeType')
+                         or props.get('displayType')
+                         or props.get('type') or '').upper()
+                if 'JAM' in wtype:
+                    continue
+                out.append(f)
+            return out
+
+        elif alert_type == 'waze_jam':
+            features = data.get('features', []) or []
+            out = []
+            for f in features:
+                props = f.get('properties') or {}
+                wtype = (props.get('wazeType')
+                         or props.get('displayType')
+                         or props.get('type') or '').upper()
+                if 'JAM' in wtype:
+                    out.append(f)
+            return out
+
         elif alert_type.startswith('waze_'):
-            # Waze alerts - GeoJSON format
+            # Waze police / roadwork - GeoJSON format
             return data.get('features', [])
-        
-        elif alert_type == 'user_incidents':
+
+        elif alert_type == 'user_incident':
             # User incidents from Supabase - already a list
             return data if isinstance(data, list) else []
-        
+
         return []
     
     async def check_pager(self) -> List[Dict[str, Any]]:

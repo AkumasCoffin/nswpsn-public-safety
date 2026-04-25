@@ -57,21 +57,27 @@ def is_bot_owner(user_id: int) -> bool:
     except ValueError:
         return False
 
-# Alert types available
+# Alert types available (canonical, singular, provider-prefixed where it
+# helps — kept in sync with the dashboard PROVIDERS list and data_history).
 ALERT_TYPES = {
     'rfs': 'RFS Major Incidents',
-    'bom': 'BOM Warnings',
-    'traffic_incidents': 'Traffic Incidents',
+    'bom_land': 'BOM Land Warnings',
+    'bom_marine': 'BOM Marine Warnings',
+    'traffic_incident': 'Traffic Incidents',
     'traffic_roadwork': 'Traffic Roadwork',
     'traffic_flood': 'Flood Hazards',
     'traffic_fire': 'Traffic Fires',
-    'traffic_major': 'Major Events',
-    'power_endeavour': 'Endeavour Outages',
-    'power_ausgrid': 'Ausgrid Outages',
-    'waze_hazards': 'Waze Hazards',
+    'traffic_majorevent': 'Major Events',
+    'endeavour_current': 'Endeavour Current Outages',
+    'endeavour_planned': 'Endeavour Planned Outages',
+    'ausgrid': 'Ausgrid Outages',
+    'essential_planned': 'Essential Energy Planned Outages',
+    'essential_future': 'Essential Energy Future Outages',
+    'waze_hazard': 'Waze Hazards',
+    'waze_jam': 'Waze Traffic Jams',
     'waze_police': 'Waze Police',
     'waze_roadwork': 'Waze Roadwork',
-    'user_incidents': 'User Incidents',
+    'user_incident': 'User Incidents',
     'radio_summary': 'Radio Summary',
 }
 
@@ -91,7 +97,7 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 #   {
 #     "keywords_include": ["fire", ...],   # any-of, case-insensitive substring
 #     "keywords_exclude": ["drill", ...],  # none-of
-#     "severity_min": {"rfs": "watch_and_act", "bom": "major", ...}
+#     "severity_min": {"rfs": "watch_and_act", "bom_land": "major", ...}
 #         # Dict keyed by alert_type → token. Legacy: a single string applied
 #         # generically (whichever per-type scale matches) is still accepted.
 #     "geofilter": { "type": "bbox" | "ring" | "polygon", ... }
@@ -112,8 +118,10 @@ _SEVERITY_SCALES = {
     # BOM real-world values are severe/warning/watch/advice/info but the
     # dashboard contract uses minor/moderate/major. We accept BOTH on input
     # via _SEVERITY_BOM_MAP and normalise to the canonical scale below.
-    'bom': ['minor', 'moderate', 'major'],
-    'traffic_major': ['minor', 'moderate', 'major'],
+    # Both bom_land and bom_marine share the same per-type scale.
+    'bom_land': ['minor', 'moderate', 'major'],
+    'bom_marine': ['minor', 'moderate', 'major'],
+    'traffic_majorevent': ['minor', 'moderate', 'major'],
 }
 
 # RFS alertLevel raw → snake_case. Anything not matching is treated as "no
@@ -153,7 +161,7 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
             if s:
                 bits.append(s)
 
-    if alert_type == 'rfs' or alert_type == 'user_incidents':
+    if alert_type == 'rfs' or alert_type == 'user_incident':
         props = alert_data.get('properties') if alert_type == 'rfs' else None
         # RFS: properties.{title,description,location,councilArea,fireType,status}
         if isinstance(props, dict):
@@ -163,7 +171,7 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
         else:
             for k in ('title', 'description', 'location'):
                 _push(alert_data.get(k))
-    elif alert_type == 'bom':
+    elif alert_type and alert_type.startswith('bom_'):
         for k in ('title', 'description', 'area', 'category', 'severity'):
             _push(alert_data.get(k))
     elif alert_type and alert_type.startswith('traffic_'):
@@ -177,7 +185,9 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
         for k in ('title', 'displayType', 'wazeSubtype', 'street',
                   'city', 'location'):
             _push(props.get(k))
-    elif alert_type and alert_type.startswith('power_'):
+    elif alert_type and (alert_type.startswith('endeavour_')
+                         or alert_type == 'ausgrid'
+                         or alert_type.startswith('essential_')):
         for k in ('suburb', 'Suburb', 'streets', 'cause', 'status',
                   'outageType'):
             _push(alert_data.get(k))
@@ -215,7 +225,7 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
         return (None, None)
 
     # User incidents store lat/lng at top level.
-    if alert_type == 'user_incidents':
+    if alert_type == 'user_incident':
         try:
             lat = alert_data.get('lat')
             lng = alert_data.get('lng')
@@ -225,8 +235,11 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
             pass
         return (None, None)
 
-    # Power outages use latitude/longitude (Endeavour) or Latitude/Longitude (Ausgrid).
-    if (alert_type or '').startswith('power_'):
+    # Power outages use latitude/longitude (Endeavour/Essential) or
+    # Latitude/Longitude (Ausgrid).
+    if ((alert_type or '').startswith('endeavour_')
+            or alert_type == 'ausgrid'
+            or (alert_type or '').startswith('essential_')):
         lat = alert_data.get('latitude') or alert_data.get('Latitude')
         lng = alert_data.get('longitude') or alert_data.get('Longitude')
         try:
@@ -260,15 +273,15 @@ def _alert_severity_token(alert_type: str, alert_data: dict):
         props = alert_data.get('properties') or {}
         raw = (props.get('alertLevel') or '').strip().lower()
         return _SEVERITY_RFS_MAP.get(raw)
-    if alert_type == 'bom':
+    if alert_type and alert_type.startswith('bom_'):
         raw = str(alert_data.get('severity') or '').strip().lower()
         return _SEVERITY_BOM_MAP.get(raw)
-    if alert_type == 'traffic_major':
+    if alert_type == 'traffic_majorevent':
         # No native severity field on Live Traffic — inspect props.severity if
         # ever present. Returning None means the floor filter passes through.
         props = alert_data.get('properties') or {}
         raw = str(props.get('severity') or '').strip().lower()
-        return raw if raw in _SEVERITY_SCALES['traffic_major'] else None
+        return raw if raw in _SEVERITY_SCALES['traffic_majorevent'] else None
     return None
 
 
@@ -977,7 +990,7 @@ class NSWPSNBot(commands.Bot):
         sent = 0
         errors = []
         if atype == 'all':
-            types_to_fetch = list(self.poller.endpoints.keys()) + ['pager', 'user_incidents', 'radio_summary']
+            types_to_fetch = list(self.poller.endpoints.keys()) + ['pager', 'user_incident', 'radio_summary']
         else:
             types_to_fetch = [atype]
 
@@ -1015,10 +1028,10 @@ class NSWPSNBot(commands.Bot):
                             await asyncio.sleep(0.5)
                     if not messages:
                         errors.append(f"{t}: no messages available")
-                elif t == 'user_incidents':
+                elif t == 'user_incident':
                     incidents = await self.poller._fetch_user_incidents()
                     for inc in incidents[:3]:
-                        alert = {'type': 'user_incidents', 'data': inc}
+                        alert = {'type': 'user_incident', 'data': inc}
                         embed = self.embed_builder.build_alert_embed(alert)
                         await channel.send(embed=embed)
                         sent += 1
@@ -1097,7 +1110,7 @@ class NSWPSNBot(commands.Bot):
 
     @staticmethod
     def _alert_incident_keys(alert_type: str, alert_data: dict):
-        """Return (incident_guid, incident_status) for RFS / user_incidents
+        """Return (incident_guid, incident_status) for RFS / user_incident
         alerts, else (None, None). Centralises the two shapes so the batched
         dispatcher doesn't duplicate the logic."""
         if alert_type == 'rfs':
@@ -1106,7 +1119,7 @@ class NSWPSNBot(commands.Bot):
                 props.get('guid') or props.get('link') or props.get('title'),
                 props.get('status'),
             )
-        if alert_type == 'user_incidents':
+        if alert_type == 'user_incident':
             data = alert_data or {}
             return (f"user_{data.get('id', '')}", data.get('status', 'Active'))
         return (None, None)
@@ -1208,7 +1221,7 @@ class NSWPSNBot(commands.Bot):
                     continue
                 fires.append((preset['id'], alert_type))
 
-                # Previous-message lookup for incident tracking (RFS / user_incidents)
+                # Previous-message lookup for incident tracking (RFS / user_incident)
                 previous_message = None
                 if incident_guid:
                     previous_message = await loop.run_in_executor(
@@ -3274,10 +3287,12 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
              "Remove the pager subscription from a channel."),
         ],
         "footer": (
-            "Alert types: rfs · bom · traffic_incidents · traffic_roadwork · "
-            "traffic_flood · traffic_fire · traffic_major · power_endeavour · "
-            "power_ausgrid · waze_hazards · waze_police · waze_roadwork · "
-            "user_incidents · radio_summary"
+            "Alert types: rfs · bom_land · bom_marine · traffic_incident · "
+            "traffic_roadwork · traffic_flood · traffic_fire · "
+            "traffic_majorevent · endeavour_current · endeavour_planned · "
+            "ausgrid · essential_planned · essential_future · "
+            "waze_hazard · waze_jam · waze_police · waze_roadwork · "
+            "user_incident · radio_summary"
         ),
     },
 }
