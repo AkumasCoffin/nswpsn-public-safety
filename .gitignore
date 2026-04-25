@@ -15,15 +15,13 @@ build/
 # Node
 node_modules/
 
-# IDE / Editor
+# IDE / Editor / tooling state
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
-
-# Claude Code
-.claude/
 
 # Per-deployment frontend config — each environment maintains its own.
 # Values inside are public-by-design (anon key + public API tag); ignored
