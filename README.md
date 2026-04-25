@@ -42,7 +42,7 @@ Real-time NSW emergency services monitoring platform — aggregates government A
 | Endeavour Energy | Current & planned power outages |
 | Ausgrid | Power outages (with per-outage detail enrichment) |
 | Essential Energy | Current, planned & future outages |
-| Pagermon | Pager messages (community-hosted) |
+| Pagermon | Pager messages (self-hosted) |
 | rdio-scanner | Radio transcripts → hourly LLM summaries |
 | Community Editors | Manually added incidents and map data |
 
