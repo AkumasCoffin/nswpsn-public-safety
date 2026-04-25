@@ -11006,18 +11006,23 @@ def data_history_incident(source, source_id):
         conn = get_conn()
         try:
             c = conn.cursor()
+            # Cap so a hot incident with thousands of snapshots can't OOM the
+            # response. 5000 is well above any real history (RFS leaders top
+            # out around ~1500 snapshots).
             c.execute('''
                 SELECT id, fetched_at, source_timestamp, source_timestamp_unix,
                        latitude, longitude, location_text, title, category, subcategory,
                        status, severity, data, is_active, is_live, last_seen
-                FROM data_history 
+                FROM data_history
                 WHERE source = %s AND source_id = %s
                 ORDER BY fetched_at ASC
+                LIMIT 5000
             ''', (source, source_id))
-            
+
             rows = c.fetchall()
         finally:
-            conn.close()
+            try: conn.close()
+            except Exception: pass
         
         history = []
         for row in rows:
@@ -11071,30 +11076,33 @@ def cleanup_duplicate_history():
         total_before = 0
         total_unique = 0
         total_deleted = 0
-        
+
         with _db_lock_history_waze:
             conn = get_conn()
-            c = conn.cursor()
-            
-            c.execute('SELECT COUNT(*) FROM data_history')
-            total_before = c.fetchone()[0]
-            
-            c.execute('SELECT COUNT(DISTINCT source || COALESCE(source_id, \'\')) FROM data_history')
-            total_unique = c.fetchone()[0]
-            
-            c.execute('''
-                DELETE FROM data_history 
-                WHERE id NOT IN (
-                    SELECT MIN(id) 
-                    FROM data_history 
-                    GROUP BY source, source_id, data_hash
-                )
-            ''')
-            total_deleted = c.rowcount
-            
-            conn.commit()
-            conn.close()
-        
+            try:
+                c = conn.cursor()
+
+                c.execute('SELECT COUNT(*) FROM data_history')
+                total_before = c.fetchone()[0]
+
+                c.execute('SELECT COUNT(DISTINCT source || COALESCE(source_id, \'\')) FROM data_history')
+                total_unique = c.fetchone()[0]
+
+                c.execute('''
+                    DELETE FROM data_history
+                    WHERE id NOT IN (
+                        SELECT MIN(id)
+                        FROM data_history
+                        GROUP BY source, source_id, data_hash
+                    )
+                ''')
+                total_deleted = c.rowcount
+
+                conn.commit()
+            finally:
+                try: conn.close()
+                except Exception: pass
+
         count_after = total_before - total_deleted
         Log.info(f"Cleanup: deleted {total_deleted} duplicate rows ({total_before} -> {count_after})")
         
@@ -11125,39 +11133,46 @@ def db_stats():
         live_count = 0
         history_db_stats = {}
         
+        conn = None
         try:
             conn = get_conn()
             c = conn.cursor()
-            
-            c.execute('SELECT COUNT(*) FROM data_history')
-            db_rows = c.fetchone()[0]
+
+            # Combine all 4 small COUNTs into a single round-trip — fewer
+            # statement overheads on a hot dashboard panel.
+            c.execute('''
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(DISTINCT source || COALESCE(source_id, '')) AS unique_n,
+                    COUNT(*) FILTER (WHERE is_live = 1) AS live_n,
+                    pg_total_relation_size('data_history') AS size_bytes
+                FROM data_history
+            ''')
+            row = c.fetchone()
+            db_rows = row[0] or 0
             total_rows = db_rows
-            
-            c.execute('SELECT COUNT(DISTINCT source || COALESCE(source_id, \'\')) FROM data_history')
-            db_unique = c.fetchone()[0]
+            db_unique = row[1] or 0
             unique_incidents = db_unique
-            
+            db_live = row[2] or 0
+            live_count = db_live
+            db_size = row[3] or 0
+
             c.execute('SELECT source, COUNT(*) FROM data_history GROUP BY source')
             for r in c.fetchall():
                 by_source[r[0]] = by_source.get(r[0], 0) + r[1]
-            
-            c.execute('SELECT COUNT(*) FROM data_history WHERE is_live = 1')
-            db_live = c.fetchone()[0]
-            live_count = db_live
-            
-            c.execute("SELECT pg_total_relation_size('data_history')")
-            db_size = c.fetchone()[0]
-            
+
             history_db_stats['data_history'] = {
                 'rows': db_rows,
                 'unique_incidents': db_unique,
                 'live_count': db_live,
                 'size_mb': round(db_size / (1024 * 1024), 2)
             }
-            
-            conn.close()
         except Exception as e:
             history_db_stats['data_history'] = {'error': str(e)}
+        finally:
+            if conn is not None:
+                try: conn.close()
+                except Exception: pass
         
         stats['data_history'] = {
             'total_rows': total_rows,
@@ -11168,6 +11183,7 @@ def db_stats():
         }
         
         # api_data_cache stats (from cache.db)
+        conn = None
         try:
             conn = get_conn()
             c = conn.cursor()
@@ -11175,22 +11191,29 @@ def db_stats():
             stats['api_data_cache'] = {'total_rows': c.fetchone()[0]}
             c.execute('SELECT endpoint, ttl, fetch_time_ms FROM api_data_cache ORDER BY endpoint')
             stats['api_data_cache']['endpoints'] = [
-                {'endpoint': r[0], 'ttl': r[1], 'fetch_ms': r[2]} 
+                {'endpoint': r[0], 'ttl': r[1], 'fetch_ms': r[2]}
                 for r in c.fetchall()
             ]
-            conn.close()
         except Exception as e:
             stats['api_data_cache'] = {'error': str(e)}
-        
+        finally:
+            if conn is not None:
+                try: conn.close()
+                except Exception: pass
+
         # stats_snapshots stats (from stats.db)
+        conn = None
         try:
             conn = get_conn()
             c = conn.cursor()
             c.execute('SELECT COUNT(*) FROM stats_snapshots')
             stats['stats_snapshots'] = {'total_rows': c.fetchone()[0]}
-            conn.close()
         except Exception as e:
             stats['stats_snapshots'] = {'error': str(e)}
+        finally:
+            if conn is not None:
+                try: conn.close()
+                except Exception: pass
         
         return jsonify(stats)
     except Exception as e:
@@ -11207,26 +11230,30 @@ def vacuum_db():
         total_saved = 0
         
         conn = get_conn()
-        cur = conn.cursor()
-        for table in tables:
-            try:
-                cur.execute("SELECT pg_total_relation_size(%s)", (table,))
-                size_before = cur.fetchone()[0] / (1024 * 1024)
-                cur.execute(f'VACUUM "{table}"')
-                conn.commit()
-                cur.execute("SELECT pg_total_relation_size(%s)", (table,))
-                size_after = cur.fetchone()[0] / (1024 * 1024)
-                saved = size_before - size_after
-                total_saved += saved
-                results[table] = {
-                    'size_before_mb': round(size_before, 2),
-                    'size_after_mb': round(size_after, 2),
-                    'saved_mb': round(saved, 2)
-                }
-            except Exception as e:
-                results[table] = {'error': str(e)}
-        cur.close()
-        conn.close()
+        try:
+            # VACUUM cannot run inside a transaction block — use autocommit.
+            conn.autocommit = True
+            cur = conn.cursor()
+            for table in tables:
+                try:
+                    cur.execute("SELECT pg_total_relation_size(%s)", (table,))
+                    size_before = cur.fetchone()[0] / (1024 * 1024)
+                    cur.execute(f'VACUUM "{table}"')
+                    cur.execute("SELECT pg_total_relation_size(%s)", (table,))
+                    size_after = cur.fetchone()[0] / (1024 * 1024)
+                    saved = size_before - size_after
+                    total_saved += saved
+                    results[table] = {
+                        'size_before_mb': round(size_before, 2),
+                        'size_after_mb': round(size_after, 2),
+                        'saved_mb': round(saved, 2)
+                    }
+                except Exception as e:
+                    results[table] = {'error': str(e)}
+            cur.close()
+        finally:
+            try: conn.close()
+            except Exception: pass
         
         Log.info(f"VACUUM complete: saved {total_saved:.2f}MB total")
         
@@ -11554,15 +11581,13 @@ def approve_editor_request(request_id):
             # Get the request
             c.execute('SELECT * FROM editor_requests WHERE id = %s', (request_id,))
             req = c.fetchone()
-            
+
             if not req:
-                conn.close()
                 return jsonify({'error': 'Request not found'}), 404
-            
+
             if req['status'] != 'pending':
-                conn.close()
                 return jsonify({'error': f'Request is already {req["status"]}'}), 400
-            
+
             temp_password = None
             supabase_account_created = False
             supabase_error = None
@@ -11691,19 +11716,17 @@ def reject_editor_request(request_id):
             # Get the request
             c.execute('SELECT * FROM editor_requests WHERE id = %s', (request_id,))
             req = c.fetchone()
-            
+
             if not req:
-                conn.close()
                 return jsonify({'error': 'Request not found'}), 404
-            
+
             if req['status'] != 'pending':
-                conn.close()
                 return jsonify({'error': f'Request is already {req["status"]}'}), 400
-            
+
             # Update request status
             reviewed_at = int(time.time())
             c.execute('''
-                UPDATE editor_requests 
+                UPDATE editor_requests
                 SET status = 'rejected', reviewed_at = %s, notes = %s
                 WHERE id = %s
             ''', (reviewed_at, reason or 'Rejected', request_id))
