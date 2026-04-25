@@ -2044,6 +2044,45 @@
             }
           }
 
+          // Pager — re-enable layer + open the pager panel for context.
+          if (layer === 'pager') {
+            const panel = document.getElementById('pager-panel');
+            const btn = document.getElementById('btn-pager');
+            if (!map.hasLayer(pagerLayer)) {
+              map.addLayer(pagerLayer);
+              btn.classList.add('active');
+            }
+            if (panel && !panel.classList.contains('open')) {
+              panel.classList.add('open');
+              updateFilterPanelPositions();
+              updateSettingsBackdrop();
+            }
+          }
+
+          // User-submitted incidents — on by default, confirm enabled.
+          if (layer === 'user') {
+            if (!map.hasLayer(userLayer)) {
+              map.addLayer(userLayer);
+              document.getElementById('btn-user').classList.add('active');
+            }
+          }
+
+          // Weather (radar / temperature stations) — open panel + load data.
+          if (layer === 'weather') {
+            const panel = document.getElementById('weather-panel');
+            const btn = document.getElementById('btn-weather');
+            if (!map.hasLayer(weatherLayer)) {
+              map.addLayer(weatherLayer);
+              if (btn) btn.classList.add('active');
+            }
+            if (weatherLayer.getLayers().length === 0) loadWeatherData();
+            if (panel && !panel.classList.contains('open')) {
+              panel.classList.add('open');
+              updateFilterPanelPositions();
+              updateSettingsBackdrop();
+            }
+          }
+
           const layerConfig = layerMap[layer];
           if (layerConfig) {
             // Add layer to map if not already added
