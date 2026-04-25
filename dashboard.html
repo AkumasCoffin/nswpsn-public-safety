@@ -2350,7 +2350,7 @@ function renderRolesCard(preset) {
 }
 
 // ============================================================================
-// Filters (per-preset keyword / severity floor / bbox).
+// Filters (per-preset keyword / severity floor / geofilter shape).
 // Persisted on PATCH /presets/<id> as `filters` JSONB. Empty/missing means
 // "no filter" — every alert that passes the mute gate is delivered.
 // ============================================================================
@@ -2365,11 +2365,20 @@ const _DASH_FILTER_SEVERITY_TYPES = new Set(['rfs', 'bom', 'traffic_major']);
 
 function presetFilters(preset) {
   const f = (preset && preset.filters) || {};
+  // Geofilter: prefer the new `geofilter` key. Legacy presets stored a
+  // top-level `bbox` — treat that as type:'bbox' so old configs keep working
+  // until they're re-saved via the dashboard.
+  let gf = null;
+  if (f.geofilter && typeof f.geofilter === 'object' && f.geofilter.type) {
+    gf = f.geofilter;
+  } else if (f.bbox && typeof f.bbox === 'object' && typeof f.bbox.lat_min === 'number') {
+    gf = { type: 'bbox', ...f.bbox };
+  }
   return {
     keywords_include: Array.isArray(f.keywords_include) ? f.keywords_include : [],
     keywords_exclude: Array.isArray(f.keywords_exclude) ? f.keywords_exclude : [],
     severity_min: typeof f.severity_min === 'string' ? f.severity_min : '',
-    bbox: (f.bbox && typeof f.bbox === 'object') ? f.bbox : null,
+    geofilter: gf,
   };
 }
 
@@ -2379,80 +2388,214 @@ function filtersSummary(preset) {
   const kw = f.keywords_include.length + f.keywords_exclude.length;
   if (kw) bits.push(`${kw} keyword${kw === 1 ? '' : 's'}`);
   if (f.severity_min) bits.push(`severity ≥ ${f.severity_min.replace(/_/g, ' ')}`);
-  if (f.bbox) bits.push('geofilter');
+  if (f.geofilter) {
+    const t = f.geofilter.type;
+    bits.push(t === 'ring' ? 'circle' : (t === 'polygon' ? 'polygon' : 'square'));
+  }
   return bits.length ? `Filters: ${bits.join(', ')}` : 'Filters: off';
 }
 
-/* Interactive bbox picker — Leaflet map with click-and-drag rectangle.
-   Returns { dom, get(), set(bbox) }. Two draw modes:
-   - "Draw box" button: cursor becomes crosshair, click-and-drag creates a box.
-   - "Use map view" button: snaps the bbox to the current map viewport.
+/* Interactive geofilter picker — Leaflet map with three shape modes.
+   Returns { dom, get(), set(geofilter), invalidate() }.
+   Modes:
+   - bbox    — click+drag to draw a rectangle (or "Use map view" to snap to viewport).
+   - ring    — click center, drag to set radius, release to commit.
+   - polygon — click to add vertices (3+); "Finish" commits.
 */
-function makeBboxMap(preset, initialBbox) {
+function makeGeofilterMap(preset, initialGeofilter) {
   const mapId = 'bbox-map-' + preset.id + '-' + Math.random().toString(36).slice(2, 7);
-  const hint = el('div', { class: 'bbox-map-hint' },
-    'Click "Draw box", then click-and-drag to define an area.');
+  const hint = el('div', { class: 'bbox-map-hint' }, '');
   const mapDiv = el('div', { class: 'bbox-map', id: mapId }, [hint]);
   const coords = el('div', { class: 'bbox-coords' });
 
-  const drawBtn   = el('button', { class: 'btn btn-ghost btn-sm' },
-    [el('i', { class: 'fa-solid fa-vector-square' }), ' Draw box']);
-  const useViewBtn = el('button', { class: 'btn btn-ghost btn-sm' },
-    [el('i', { class: 'fa-solid fa-expand' }), ' Use map view']);
-  const clearBtn  = el('button', { class: 'btn btn-ghost btn-sm' },
-    [el('i', { class: 'fa-solid fa-eraser' }), ' Clear']);
-  const actions = el('div', { class: 'bbox-map-actions' }, [drawBtn, useViewBtn, clearBtn]);
+  const modeSelect = el('select', { class: 'form-select', style: 'max-width:170px;flex:0 0 auto;' });
+  for (const [v, label] of [
+    ['bbox',    'Square (bbox)'],
+    ['ring',    'Circle / radius'],
+    ['polygon', 'Polygon'],
+  ]) modeSelect.appendChild(el('option', { value: v }, label));
 
+  const drawBtn    = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-vector-square' }), ' Draw']);
+  const useViewBtn = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-expand' }), ' Use view']);
+  const finishBtn  = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-check' }), ' Finish']);
+  const clearBtn   = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-eraser' }), ' Clear']);
+  const actions = el('div', { class: 'bbox-map-actions' }, [
+    modeSelect, drawBtn, useViewBtn, finishBtn, clearBtn,
+  ]);
   const wrap = el('div', {}, [mapDiv, coords, actions]);
 
+  // ---- State ----
   let map = null;
-  let rect = null;
+  let layer = null;             // committed shape (rect / circle / polygon)
+  let previewLayer = null;      // live drawing preview
+  let polyMarkers = [];         // vertex markers during polygon edit
   let drawMode = false;
-  let startLatLng = null;
-  let current = (initialBbox && typeof initialBbox.lat_min === 'number') ? { ...initialBbox } : null;
+  let startLatLng = null;       // drag start (bbox + ring)
+  let polyPoints = [];          // working vertex list (polygon)
+  let mode = 'bbox';
+  let current = null;           // canonical geofilter object or null
+
+  // Initial value — accept either new geofilter shape or legacy bbox.
+  if (initialGeofilter && typeof initialGeofilter === 'object') {
+    if (initialGeofilter.type) {
+      current = JSON.parse(JSON.stringify(initialGeofilter));
+      mode = current.type;
+    } else if (typeof initialGeofilter.lat_min === 'number') {
+      current = { type: 'bbox', ...initialGeofilter };
+      mode = 'bbox';
+    }
+  }
+  modeSelect.value = mode;
+
+  // ---- Rendering ----
+  function clearPreview() {
+    if (previewLayer && map) { map.removeLayer(previewLayer); }
+    previewLayer = null;
+  }
+  function clearPolyMarkers() {
+    if (map) for (const m of polyMarkers) map.removeLayer(m);
+    polyMarkers = [];
+  }
+  function clearLayer() {
+    if (layer && map) { map.removeLayer(layer); layer = null; }
+  }
+  const SHAPE_STYLE = { color: '#f97316', weight: 2, fillOpacity: 0.15 };
+
+  function renderShape() {
+    if (!map) return;
+    clearLayer();
+    if (!current) return;
+    if (current.type === 'bbox') {
+      layer = L.rectangle(
+        [[current.lat_min, current.lng_min], [current.lat_max, current.lng_max]],
+        SHAPE_STYLE).addTo(map);
+    } else if (current.type === 'ring') {
+      layer = L.circle([current.lat, current.lng],
+        { ...SHAPE_STYLE, radius: current.radius_m }).addTo(map);
+    } else if (current.type === 'polygon') {
+      layer = L.polygon(current.points.map(p => [p[0], p[1]]),
+        SHAPE_STYLE).addTo(map);
+    }
+  }
+
+  function fmtCoord(n) { return Number(n).toFixed(4); }
+  function fmtRadius(m) {
+    return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
+  }
 
   function renderCoords() {
     coords.innerHTML = '';
-    if (current) {
+    if (!current) {
+      coords.appendChild(el('span', { class: 'none' },
+        'No geofilter — alerts from anywhere will pass.'));
+      return;
+    }
+    if (current.type === 'bbox') {
       coords.appendChild(document.createTextNode(
-        `bbox: ${current.lat_min.toFixed(4)}, ${current.lng_min.toFixed(4)}  →  ${current.lat_max.toFixed(4)}, ${current.lng_max.toFixed(4)}`
-      ));
+        `bbox: ${fmtCoord(current.lat_min)}, ${fmtCoord(current.lng_min)}  →  ${fmtCoord(current.lat_max)}, ${fmtCoord(current.lng_max)}`));
+    } else if (current.type === 'ring') {
+      coords.appendChild(document.createTextNode(
+        `circle: center ${fmtCoord(current.lat)}, ${fmtCoord(current.lng)} · radius ${fmtRadius(current.radius_m)}`));
+    } else if (current.type === 'polygon') {
+      coords.appendChild(document.createTextNode(
+        `polygon: ${current.points.length} vertices`));
+    }
+  }
+
+  // ---- Hint text per mode ----
+  const HINTS = {
+    bbox:    'Click "Draw", then click-and-drag to define a rectangle.',
+    ring:    'Click "Draw", then click the center and drag outward to set radius.',
+    polygon: 'Click "Draw", then click on the map to add vertices. "Finish" commits.',
+  };
+  function refreshHint() {
+    if (drawMode) {
+      hint.textContent = (mode === 'bbox')    ? 'Click and drag to draw the rectangle.'
+                       : (mode === 'ring')    ? 'Click the center and drag outward.'
+                       :                       'Click to add vertices. "Finish" when done.';
     } else {
-      coords.appendChild(el('span', { class: 'none' }, 'No geofilter — alerts from anywhere will pass.'));
+      hint.textContent = HINTS[mode] || '';
     }
+    hint.classList.toggle('hidden', !!current && !drawMode);
   }
 
-  function renderRect() {
-    if (!map) return;
-    if (rect) { map.removeLayer(rect); rect = null; }
-    if (current) {
-      rect = L.rectangle(
-        [[current.lat_min, current.lng_min], [current.lat_max, current.lng_max]],
-        { color: '#f97316', weight: 2, fillOpacity: 0.15 }
-      ).addTo(map);
-    }
+  function refreshActionVisibility() {
+    drawBtn.style.display    = (mode === 'polygon' && drawMode) ? 'none' : '';
+    useViewBtn.style.display = (mode === 'bbox') ? '' : 'none';
+    finishBtn.style.display  = (mode === 'polygon' && drawMode) ? '' : 'none';
   }
 
+  // ---- Draw mode ----
   function enterDrawMode() {
     if (!map || drawMode) return;
     drawMode = true;
     mapDiv.classList.add('drawing');
-    hint.textContent = 'Click and drag to draw the area.';
-    hint.classList.remove('hidden');
     map.dragging.disable();
     drawBtn.disabled = true;
+    if (mode === 'polygon') {
+      polyPoints = [];
+      clearPolyMarkers();
+      clearPreview();
+    }
+    refreshHint();
+    refreshActionVisibility();
   }
-
   function exitDrawMode() {
     drawMode = false;
     startLatLng = null;
     mapDiv.classList.remove('drawing');
-    hint.classList.add('hidden');
     if (map) map.dragging.enable();
     drawBtn.disabled = false;
+    clearPreview();
+    refreshHint();
+    refreshActionVisibility();
   }
 
-  // Defer init until Leaflet is loaded AND the container is in the DOM.
+  // ---- Mode switch ----
+  modeSelect.onchange = () => {
+    const newMode = modeSelect.value;
+    if (newMode === mode) return;
+    mode = newMode;
+    // Switching modes drops any in-progress draw and any committed shape of
+    // the wrong type. Existing shape of the same type stays.
+    if (drawMode) exitDrawMode();
+    if (current && current.type !== mode) {
+      current = null;
+      clearLayer();
+    }
+    clearPolyMarkers();
+    polyPoints = [];
+    refreshHint();
+    refreshActionVisibility();
+    renderCoords();
+  };
+
+  // ---- Polygon helpers ----
+  function commitPolygon() {
+    if (polyPoints.length < 3) {
+      alert('Polygon needs at least 3 vertices.');
+      return;
+    }
+    current = { type: 'polygon', points: polyPoints.map(p => [p.lat, p.lng]) };
+    polyPoints = [];
+    clearPolyMarkers();
+    exitDrawMode();
+    renderShape();
+    renderCoords();
+  }
+  function redrawPolyPreview() {
+    clearPreview();
+    if (polyPoints.length >= 2 && map) {
+      previewLayer = L.polyline(polyPoints.map(p => [p.lat, p.lng]),
+        { color: '#f97316', weight: 2, dashArray: '4 4' }).addTo(map);
+    }
+  }
+
+  // ---- Init ----
   function init(retries = 50) {
     if (typeof L === 'undefined' || !document.body.contains(mapDiv)) {
       if (retries > 0) setTimeout(() => init(retries - 1), 60);
@@ -2466,75 +2609,116 @@ function makeBboxMap(preset, initialBbox) {
     L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map);
 
     if (current) {
-      map.fitBounds([
-        [current.lat_min, current.lng_min], [current.lat_max, current.lng_max],
-      ], { padding: [20, 20], maxZoom: 11 });
-      renderRect();
-      hint.classList.add('hidden');
+      renderShape();
+      try {
+        if (current.type === 'bbox') {
+          map.fitBounds([
+            [current.lat_min, current.lng_min], [current.lat_max, current.lng_max],
+          ], { padding: [20, 20], maxZoom: 11 });
+        } else if (current.type === 'ring' && layer) {
+          map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 12 });
+        } else if (current.type === 'polygon' && layer) {
+          map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 11 });
+        }
+      } catch (e) { map.setView([-33.87, 151.21], 6); }
     } else {
-      // Default: NSW (Sydney-centred, shows most of the state at zoom 6).
       map.setView([-33.87, 151.21], 6);
     }
     renderCoords();
+    refreshHint();
+    refreshActionVisibility();
 
     map.on('mousedown', (e) => {
       if (!drawMode) return;
-      startLatLng = e.latlng;
-      if (rect) { map.removeLayer(rect); rect = null; }
+      if (mode === 'bbox' || mode === 'ring') {
+        startLatLng = e.latlng;
+        clearPreview();
+      }
     });
     map.on('mousemove', (e) => {
       if (!drawMode || !startLatLng) return;
-      if (rect) map.removeLayer(rect);
-      rect = L.rectangle([startLatLng, e.latlng],
-        { color: '#f97316', weight: 2, fillOpacity: 0.15 }).addTo(map);
+      clearPreview();
+      if (mode === 'bbox') {
+        previewLayer = L.rectangle([startLatLng, e.latlng], SHAPE_STYLE).addTo(map);
+      } else if (mode === 'ring') {
+        const r = startLatLng.distanceTo(e.latlng);
+        previewLayer = L.circle(startLatLng, { ...SHAPE_STYLE, radius: r }).addTo(map);
+      }
     });
     map.on('mouseup', (e) => {
       if (!drawMode) return;
-      if (!startLatLng) { exitDrawMode(); return; }
-      const end = e.latlng;
-      const lat_min = Math.min(startLatLng.lat, end.lat);
-      const lat_max = Math.max(startLatLng.lat, end.lat);
-      const lng_min = Math.min(startLatLng.lng, end.lng);
-      const lng_max = Math.max(startLatLng.lng, end.lng);
-      if (Math.abs(lat_max - lat_min) < 1e-5 || Math.abs(lng_max - lng_min) < 1e-5) {
-        // Stray click — ignore.
-        if (rect) { map.removeLayer(rect); rect = null; }
-        renderRect();
+      if (mode === 'bbox') {
+        if (!startLatLng) { exitDrawMode(); return; }
+        const end = e.latlng;
+        const lat_min = Math.min(startLatLng.lat, end.lat);
+        const lat_max = Math.max(startLatLng.lat, end.lat);
+        const lng_min = Math.min(startLatLng.lng, end.lng);
+        const lng_max = Math.max(startLatLng.lng, end.lng);
+        clearPreview();
+        if (Math.abs(lat_max - lat_min) < 1e-5 || Math.abs(lng_max - lng_min) < 1e-5) {
+          exitDrawMode(); return;
+        }
+        current = { type: 'bbox', lat_min, lat_max, lng_min, lng_max };
         exitDrawMode();
-        return;
+        renderShape();
+        renderCoords();
+      } else if (mode === 'ring') {
+        if (!startLatLng) { exitDrawMode(); return; }
+        const r = startLatLng.distanceTo(e.latlng);
+        clearPreview();
+        if (r < 50) {  // <50m is almost always a stray click
+          exitDrawMode(); return;
+        }
+        current = { type: 'ring', lat: startLatLng.lat, lng: startLatLng.lng, radius_m: r };
+        exitDrawMode();
+        renderShape();
+        renderCoords();
       }
-      current = { lat_min, lat_max, lng_min, lng_max };
-      exitDrawMode();
-      renderCoords();
+    });
+    // Polygon: click to add vertex.
+    map.on('click', (e) => {
+      if (!drawMode || mode !== 'polygon') return;
+      polyPoints.push(e.latlng);
+      const m = L.circleMarker(e.latlng, { radius: 4, color: '#f97316', fillOpacity: 1 }).addTo(map);
+      polyMarkers.push(m);
+      redrawPolyPreview();
     });
 
-    // Force a recompute once the container settles (Leaflet needs this when
-    // the map starts in a collapsed parent).
     setTimeout(() => { if (map) map.invalidateSize(); }, 120);
   }
   init();
 
-  drawBtn.onclick = (e) => { e.preventDefault(); enterDrawMode(); };
+  // ---- Buttons ----
+  drawBtn.onclick = (e) => {
+    e.preventDefault();
+    // Starting a new draw drops the existing shape of any type.
+    if (current) { current = null; clearLayer(); renderCoords(); }
+    enterDrawMode();
+  };
   useViewBtn.onclick = (e) => {
     e.preventDefault();
-    if (!map) return;
+    if (!map || mode !== 'bbox') return;
     const b = map.getBounds();
     current = {
+      type: 'bbox',
       lat_min: b.getSouth(), lat_max: b.getNorth(),
       lng_min: b.getWest(),  lng_max: b.getEast(),
     };
-    renderRect();
+    renderShape();
     renderCoords();
   };
+  finishBtn.onclick = (e) => { e.preventDefault(); commitPolygon(); };
   clearBtn.onclick = (e) => {
     e.preventDefault();
     current = null;
-    if (rect && map) { map.removeLayer(rect); rect = null; }
+    polyPoints = [];
+    clearLayer();
+    clearPreview();
+    clearPolyMarkers();
+    if (drawMode) exitDrawMode();
     renderCoords();
   };
 
-  // Self-heal: if the container's size ever changes (parent un-hides, window
-  // resizes, sidebar toggles), re-run invalidateSize so Leaflet re-tiles.
   if (typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => {
       if (!map) return;
@@ -2547,15 +2731,26 @@ function makeBboxMap(preset, initialBbox) {
 
   return {
     dom: wrap,
-    get: () => current ? { ...current } : null,
-    set: (bb) => {
-      current = (bb && typeof bb.lat_min === 'number') ? { ...bb } : null;
-      renderRect();
+    get: () => current ? JSON.parse(JSON.stringify(current)) : null,
+    set: (gf) => {
+      if (gf && typeof gf === 'object' && gf.type) {
+        current = JSON.parse(JSON.stringify(gf));
+        mode = current.type;
+        modeSelect.value = mode;
+      } else if (gf && typeof gf === 'object' && typeof gf.lat_min === 'number') {
+        current = { type: 'bbox', ...gf };
+        mode = 'bbox';
+        modeSelect.value = mode;
+      } else {
+        current = null;
+      }
+      polyPoints = [];
+      clearPolyMarkers();
+      renderShape();
       renderCoords();
-      if (map && current) {
-        map.fitBounds([
-          [current.lat_min, current.lng_min], [current.lat_max, current.lng_max],
-        ], { padding: [20, 20], maxZoom: 11 });
+      refreshActionVisibility();
+      if (map && current && layer) {
+        try { map.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 12 }); } catch (e) {}
       }
     },
     invalidate: () => { if (map) map.invalidateSize(); },
@@ -2570,7 +2765,7 @@ function renderFiltersCard(preset) {
 
   // Header row: summary + toggle button.
   const editorId = 'filters-editor-' + preset.id;
-  let expanded = !!(f.keywords_include.length || f.keywords_exclude.length || f.severity_min || f.bbox);
+  let expanded = !!(f.keywords_include.length || f.keywords_exclude.length || f.severity_min || f.geofilter);
 
   const summarySpan = el('span', { class: 'filters-summary' }, filtersSummary(preset));
   const toggleBtn = el('button', {
@@ -2582,8 +2777,8 @@ function renderFiltersCard(preset) {
       toggleBtn.textContent = expanded ? 'Hide' : 'Edit';
       // Leaflet can't size itself while display:none — force a re-tile as
       // soon as the container becomes visible.
-      if (expanded && bboxMap && bboxMap.invalidate) {
-        setTimeout(() => bboxMap.invalidate(), 30);
+      if (expanded && geofilterMap && geofilterMap.invalidate) {
+        setTimeout(() => geofilterMap.invalidate(), 30);
       }
     },
   }, expanded ? 'Hide' : 'Edit');
@@ -2591,7 +2786,7 @@ function renderFiltersCard(preset) {
   card.appendChild(el('div', { class: 'card-row' }, [
     el('span', { class: 'label' }, [
       el('span', {}, 'Filters'),
-      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, or a bbox.'),
+      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, or a region.'),
     ]),
     el('div', { style: 'display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap' }, [summarySpan, toggleBtn]),
   ]));
@@ -2649,11 +2844,11 @@ function renderFiltersCard(preset) {
   }
   body.appendChild(sevWrap);
 
-  // ---- bbox (interactive map) ----
-  const bboxMap = makeBboxMap(preset, f.bbox);
+  // ---- geofilter (interactive map) ----
+  const geofilterMap = makeGeofilterMap(preset, f.geofilter);
   body.appendChild(el('div', {}, [
-    el('label', { class: 'field-label' }, 'Geographic bbox (only fires for alerts with lat/lng inside)'),
-    bboxMap.dom,
+    el('label', { class: 'field-label' }, 'Geographic filter (only fires for alerts with lat/lng inside the chosen shape)'),
+    geofilterMap.dom,
   ]));
 
   // ---- Action row ----
@@ -2662,12 +2857,12 @@ function renderFiltersCard(preset) {
     const inc = parseList(incTa.value);
     const exc = parseList(excTa.value);
     const sev = sevSelect.disabled ? '' : (sevSelect.value || '');
-    const bb = bboxMap.get();
+    const gf = geofilterMap.get();
     const out = {};
     if (inc.length) out.keywords_include = inc;
     if (exc.length) out.keywords_exclude = exc;
     if (sev) out.severity_min = sev;
-    if (bb) out.bbox = bb;
+    if (gf) out.geofilter = gf;
     return out;
   };
 
@@ -2694,7 +2889,7 @@ function renderFiltersCard(preset) {
     onclick: async () => {
       incTa.value = ''; excTa.value = '';
       if (!sevSelect.disabled) sevSelect.value = '';
-      bboxMap.set(null);
+      geofilterMap.set(null);
       await patchPreset(preset.id, { filters: {} });
     },
   }, [el('i', { class: 'fa-solid fa-rotate-left' }), ' Reset filters']);

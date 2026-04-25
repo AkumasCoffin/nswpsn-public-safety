@@ -8,6 +8,7 @@ import os
 import asyncio
 import functools
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -84,14 +85,19 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 
 
 # ============================================================================
-# Per-preset alert filters (keywords / severity floor / geo bbox).
+# Per-preset alert filters (keywords / severity floor / geofilter).
 # Evaluated in the dispatchers after resolve_preset_effective_state passes —
 # preset.filters JSONB shape:
 #   {
 #     "keywords_include": ["fire", ...],   # any-of, case-insensitive substring
 #     "keywords_exclude": ["drill", ...],  # none-of
 #     "severity_min": "watch",              # per alert_type scale; see _SEVERITY_SCALES
-#     "bbox": {"lat_min", "lng_min", "lat_max", "lng_max"}
+#     "geofilter": { "type": "bbox" | "ring" | "polygon", ... }
+#         bbox:    {"lat_min", "lng_min", "lat_max", "lng_max"}
+#         ring:    {"lat", "lng", "radius_m"}
+#         polygon: {"points": [[lat, lng], ...]}   # 3+ points
+#     # Legacy: a top-level "bbox" without a geofilter wrapper is still
+#     # accepted on read (older presets) and treated as type=bbox.
 #   }
 # Each key is optional; an empty/missing filters dict means "no filter".
 # ============================================================================
@@ -280,6 +286,51 @@ def alert_passes_severity(alert_type: str, alert_data: dict, severity_min) -> bo
     return scale.index(actual) >= scale.index(floor)
 
 
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance between two lat/lng points, in metres."""
+    R = 6371008.8  # mean Earth radius
+    p1 = math.radians(lat1); p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1); dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def _point_in_polygon(lat: float, lng: float, points: list) -> bool:
+    """Ray-casting test. `points` is a list of [lat, lng] pairs."""
+    n = len(points)
+    if n < 3:
+        return False
+    inside = False
+    j = n - 1
+    for i in range(n):
+        try:
+            yi, xi = float(points[i][0]), float(points[i][1])
+            yj, xj = float(points[j][0]), float(points[j][1])
+        except (TypeError, ValueError, IndexError):
+            return False
+        denom = (yj - yi) or 1e-12
+        if ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / denom + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _geofilter_contains(gf: dict, lat: float, lng: float) -> bool:
+    """True if (lat,lng) is inside the geofilter shape. False on malformed gf."""
+    try:
+        t = gf.get('type')
+        if t == 'bbox':
+            return (float(gf['lat_min']) <= lat <= float(gf['lat_max'])
+                    and float(gf['lng_min']) <= lng <= float(gf['lng_max']))
+        if t == 'ring':
+            return _haversine_m(lat, lng, float(gf['lat']), float(gf['lng'])) <= float(gf['radius_m'])
+        if t == 'polygon':
+            return _point_in_polygon(lat, lng, gf.get('points') or [])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return False
+
+
 def preset_alert_matches(preset: dict, alert_type: str, alert_data: dict) -> bool:
     """Return True if the alert passes this preset's filters (or no filters set)."""
     f = preset.get('filters') if isinstance(preset, dict) else None
@@ -300,16 +351,16 @@ def preset_alert_matches(preset: dict, alert_type: str, alert_data: dict) -> boo
     if not alert_passes_severity(alert_type, alert_data, f.get('severity_min')):
         return False
 
-    bbox = f.get('bbox')
-    if bbox and isinstance(bbox, dict):
+    gf = f.get('geofilter')
+    # Legacy: a top-level `bbox` without a geofilter wrapper is treated as
+    # type=bbox so older presets keep working.
+    if not gf and isinstance(f.get('bbox'), dict):
+        gf = {'type': 'bbox', **f['bbox']}
+    if isinstance(gf, dict):
         lat, lng = _alert_lat_lng(alert_type, alert_data)
         if lat is None or lng is None:
             return False
-        try:
-            if not (float(bbox['lat_min']) <= lat <= float(bbox['lat_max'])
-                    and float(bbox['lng_min']) <= lng <= float(bbox['lng_max'])):
-                return False
-        except (KeyError, TypeError, ValueError):
+        if not _geofilter_contains(gf, lat, lng):
             return False
 
     return True
