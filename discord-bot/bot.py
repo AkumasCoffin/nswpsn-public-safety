@@ -91,7 +91,9 @@ WEBSITE_URL = "https://nswpsn.forcequit.xyz/"
 #   {
 #     "keywords_include": ["fire", ...],   # any-of, case-insensitive substring
 #     "keywords_exclude": ["drill", ...],  # none-of
-#     "severity_min": "watch",              # per alert_type scale; see _SEVERITY_SCALES
+#     "severity_min": {"rfs": "watch_and_act", "bom": "major", ...}
+#         # Dict keyed by alert_type → token. Legacy: a single string applied
+#         # generically (whichever per-type scale matches) is still accepted.
 #     "geofilter": { "type": "bbox" | "ring" | "polygon", ... }
 #         bbox:    {"lat_min", "lng_min", "lat_max", "lng_max"}
 #         ring:    {"lat", "lng", "radius_m"}
@@ -271,13 +273,25 @@ def _alert_severity_token(alert_type: str, alert_data: dict):
 
 
 def alert_passes_severity(alert_type: str, alert_data: dict, severity_min) -> bool:
-    """True if the alert meets the severity floor for its type (or filter N/A)."""
+    """True if the alert meets the severity floor for its type (or filter N/A).
+
+    severity_min may be:
+      - dict keyed by alert_type → token (new shape)
+      - str — legacy single-token form, applied if it appears in the type's scale
+      - falsy → no filter
+    """
     if not severity_min:
         return True
     scale = _SEVERITY_SCALES.get(alert_type)
     if not scale:
         return True  # no scale known for this type — don't filter
-    floor = str(severity_min).strip().lower()
+    if isinstance(severity_min, dict):
+        floor_token = severity_min.get(alert_type)
+    else:
+        floor_token = severity_min
+    if not floor_token:
+        return True  # no per-type floor configured for this alert_type
+    floor = str(floor_token).strip().lower()
     if floor not in scale:
         return True  # unknown floor for this scale — don't filter
     actual = _alert_severity_token(alert_type, alert_data)

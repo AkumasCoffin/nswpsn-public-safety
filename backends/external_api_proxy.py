@@ -15019,14 +15019,17 @@ def _dash_parse_alert_types(value):
     return out
 
 
-# Whitelist of severity floor tokens accepted on preset.filters.severity_min.
-# Spans both the RFS scale (advice/watch_and_act/emergency) and the BOM /
-# traffic_major scale (minor/moderate/major). Validation is a flat membership
-# check — the bot picks the right scale per alert_type at evaluation time.
-_DASH_FILTER_SEVERITIES = {
-    'advice', 'watch_and_act', 'emergency',
-    'minor', 'moderate', 'major',
+# Per-alert-type severity scales. filters.severity_min is now a dict keyed
+# by alert_type → token; older presets stored a single string applied
+# generically and that legacy shape is still accepted on input.
+_DASH_SEVERITY_SCALES = {
+    'rfs':           {'advice', 'watch_and_act', 'emergency'},
+    'bom':           {'minor', 'moderate', 'major'},
+    'traffic_major': {'minor', 'moderate', 'major'},
 }
+# Flat union of every token in any per-type scale — used to validate the
+# legacy string form, which doesn't carry type context.
+_DASH_FILTER_SEVERITIES = set().union(*_DASH_SEVERITY_SCALES.values())
 _DASH_FILTER_KNOWN_KEYS = {
     'keywords_include', 'keywords_exclude', 'severity_min', 'geofilter', 'bbox',
 }
@@ -15144,12 +15147,33 @@ def _dash_validate_filters(v):
 
     if 'severity_min' in v and v['severity_min'] is not None:
         sev = v['severity_min']
-        if not isinstance(sev, str):
-            raise ValueError('severity_min must be a string.')
-        sev = sev.strip().lower()
-        if sev not in _DASH_FILTER_SEVERITIES:
-            raise ValueError(f'severity_min must be one of {sorted(_DASH_FILTER_SEVERITIES)}.')
-        out['severity_min'] = sev
+        if isinstance(sev, str):
+            # Legacy single-token form. Stored as-is; the bot fans it out per
+            # alert_type at evaluation time. New writes use the dict form.
+            s = sev.strip().lower()
+            if s and s not in _DASH_FILTER_SEVERITIES:
+                raise ValueError(f'severity_min must be one of {sorted(_DASH_FILTER_SEVERITIES)}.')
+            if s:
+                out['severity_min'] = s
+        elif isinstance(sev, dict):
+            unknown = set(sev.keys()) - set(_DASH_SEVERITY_SCALES)
+            if unknown:
+                raise ValueError(f'severity_min: unknown alert types {sorted(unknown)}.')
+            normalised = {}
+            for at, val in sev.items():
+                if val is None or val == '':
+                    continue
+                if not isinstance(val, str):
+                    raise ValueError(f'severity_min[{at}] must be a string.')
+                vv = val.strip().lower()
+                if vv not in _DASH_SEVERITY_SCALES[at]:
+                    raise ValueError(
+                        f'severity_min[{at}] must be one of {sorted(_DASH_SEVERITY_SCALES[at])}.')
+                normalised[at] = vv
+            if normalised:
+                out['severity_min'] = normalised
+        else:
+            raise ValueError('severity_min must be a string or object.')
 
     if 'geofilter' in v and v['geofilter'] is not None:
         out['geofilter'] = _dash_validate_geofilter(v['geofilter'])
