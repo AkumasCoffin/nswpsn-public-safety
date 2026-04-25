@@ -524,6 +524,7 @@
     }
     .bbox-map-hint.hidden { display: none; }
     .bbox-map.drawing .leaflet-container { cursor: crosshair; }
+    .bbox-map.panning .leaflet-container { cursor: grab; }
     .bbox-coords {
       font-size: 0.7rem;
       color: var(--text-muted);
@@ -2438,6 +2439,7 @@ function makeGeofilterMap(preset, initialGeofilter) {
   let polyPoints = [];          // working vertex list (polygon)
   let mode = 'bbox';
   let current = null;           // canonical geofilter object or null
+  let ctrlPanActive = false;    // hold Ctrl in draw mode → temporarily pan instead of draw
 
   // Initial value — accept either new geofilter shape or legacy bbox.
   if (initialGeofilter && typeof initialGeofilter === 'object') {
@@ -2514,9 +2516,14 @@ function makeGeofilterMap(preset, initialGeofilter) {
   };
   function refreshHint() {
     if (drawMode) {
-      hint.textContent = (mode === 'bbox')    ? 'Click and drag to draw the rectangle.'
-                       : (mode === 'ring')    ? 'Click the center and drag outward.'
-                       :                       'Click to add vertices. "Finish" when done.';
+      if (ctrlPanActive) {
+        hint.textContent = 'Pan mode (Ctrl) — release Ctrl to resume drawing.';
+      } else {
+        const base = (mode === 'bbox')    ? 'Click and drag to draw the rectangle.'
+                   : (mode === 'ring')    ? 'Click the center and drag outward.'
+                   :                       'Click to add vertices. "Finish" when done.';
+        hint.textContent = base + ' (Hold Ctrl to pan)';
+      }
     } else {
       hint.textContent = HINTS[mode] || '';
     }
@@ -2548,11 +2555,30 @@ function makeGeofilterMap(preset, initialGeofilter) {
     drawMode = false;
     startLatLng = null;
     mapDiv.classList.remove('drawing');
+    mapDiv.classList.remove('panning');
+    ctrlPanActive = false;
     if (map) map.dragging.enable();
     drawBtn.disabled = false;
     clearPreview();
     refreshHint();
     refreshActionVisibility();
+  }
+  // Hold Ctrl (or Cmd on macOS) while in draw mode to temporarily pan the
+  // map without leaving the chosen shape mode. Releasing Ctrl re-enters draw.
+  function setCtrlPan(on) {
+    if (!map || !drawMode) return;
+    if (on === ctrlPanActive) return;
+    ctrlPanActive = on;
+    if (on) {
+      map.dragging.enable();
+      mapDiv.classList.remove('drawing');
+      mapDiv.classList.add('panning');
+    } else {
+      map.dragging.disable();
+      mapDiv.classList.remove('panning');
+      mapDiv.classList.add('drawing');
+    }
+    refreshHint();
   }
 
   // ---- Mode switch ----
@@ -2628,8 +2654,15 @@ function makeGeofilterMap(preset, initialGeofilter) {
     refreshHint();
     refreshActionVisibility();
 
+    // Helper — true if this Leaflet event was fired with Ctrl/Cmd held.
+    const evtCtrl = (e) => {
+      const oe = e && e.originalEvent;
+      return !!(oe && (oe.ctrlKey || oe.metaKey));
+    };
+
     map.on('mousedown', (e) => {
       if (!drawMode) return;
+      if (ctrlPanActive || evtCtrl(e)) return;  // Ctrl held → let Leaflet pan
       if (mode === 'bbox' || mode === 'ring') {
         startLatLng = e.latlng;
         clearPreview();
@@ -2675,14 +2708,28 @@ function makeGeofilterMap(preset, initialGeofilter) {
         renderCoords();
       }
     });
-    // Polygon: click to add vertex.
+    // Polygon: click to add vertex (skip if panning via Ctrl).
     map.on('click', (e) => {
       if (!drawMode || mode !== 'polygon') return;
+      if (ctrlPanActive || evtCtrl(e)) return;
       polyPoints.push(e.latlng);
       const m = L.circleMarker(e.latlng, { radius: 4, color: '#f97316', fillOpacity: 1 }).addTo(map);
       polyMarkers.push(m);
       redrawPolyPreview();
     });
+
+    // Window-level Ctrl listeners — toggling pan-during-draw. We bind once at
+    // init and gate on drawMode inside setCtrlPan so we don't have to attach
+    // and detach on every enter/exit.
+    const onKey = (e) => {
+      const ctrl = !!(e.ctrlKey || e.metaKey);
+      setCtrlPan(ctrl && drawMode);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    // Reset on blur — if the user alt-tabs while holding Ctrl, the keyup
+    // event won't fire and the map would be stuck in pan mode.
+    window.addEventListener('blur', () => setCtrlPan(false));
 
     setTimeout(() => { if (map) map.invalidateSize(); }, 120);
   }
