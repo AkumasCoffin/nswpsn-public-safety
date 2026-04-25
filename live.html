@@ -1763,6 +1763,7 @@
       <div class="data-source"><span class="data-source-dot" id="dot-endeavour"></span> Endeavour</div>
       <div class="data-source"><span class="data-source-dot" id="dot-essential"></span> Essential</div>
       <div class="data-source"><span class="data-source-dot" id="dot-traffic"></span> Live Traffic</div>
+      <div class="data-source"><span class="data-source-dot" id="dot-waze"></span> Waze</div>
       <div class="data-source"><span class="data-source-dot" id="dot-rfs"></span> RFS</div>
       <div class="data-source"><span class="data-source-dot" id="dot-bom"></span> BOM</div>
       <div class="data-source"><span class="data-source-dot" id="dot-beachwatch"></span> Beachwatch</div>
@@ -1852,6 +1853,36 @@
         <div class="stat-label">Beaches Monitored</div>
         <div class="stat-change neutral" id="stat-beaches-detail">Beachwatch + BeachSafe</div>
       </div>
+    </section>
+
+    <!-- Radio Scanner Summary (above the charts, below the totals) -->
+    <div class="section-divider">
+      <div class="section-title"><i class="fas fa-robot"></i> Radio Scanner Summary</div>
+      <div class="section-desc">AI-generated hourly summary of emergency radio transcripts via Gemini.</div>
+    </div>
+
+    <section class="card-grid">
+      <article class="card card-wide" id="rdio-summary-card">
+        <div class="card-header">
+          <div class="card-title"><i class="fas fa-satellite-dish"></i> <span id="rdio-hourly-title">Latest Hourly Summary</span></div>
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+            <div class="card-tag card-tag-live">Live</div>
+            <div class="card-tag" style="background:rgba(168,85,247,0.15); color:#a855f7;">Gemini</div>
+            <div class="card-tag" id="rdio-hourly-slot" style="background:rgba(148,163,184,0.18); color:#cbd5e1; display:none;"></div>
+          </div>
+        </div>
+        <div class="card-body">
+          <p style="font-size: 0.78rem; color: #64748b; margin-bottom: 0.5rem;" id="rdio-hourly-meta">
+            Awaiting hourly summary…
+          </p>
+          <div id="rdio-hourly-summary" style="white-space: pre-wrap; font-size: 0.9rem; color: #e2e8f0; line-height: 1.55;">
+            Loading…
+          </div>
+          <div style="margin-top: 0.6rem;">
+            <a href="logs.html#summaries" style="font-size: 0.78rem; color: #a855f7; text-decoration: none;"><i class="fas fa-list"></i> View all hourly summaries</a>
+          </div>
+        </div>
+      </article>
     </section>
 
     <!-- Charts Grid -->
@@ -2749,6 +2780,272 @@
     }
     
     // Load all main data sources (with deduplication)
+    // Render a structured summary (from details.structured) into a container.
+    // Falls back to plain text if no structured data.
+    const INCIDENT_ICON = {
+      structure_fire: 'fa-house-fire', bush_fire: 'fa-fire', grass_fire: 'fa-fire',
+      hazmat: 'fa-biohazard', mvc: 'fa-car-burst', medical: 'fa-truck-medical',
+      cardiac_arrest: 'fa-heart-pulse', overdose: 'fa-pills', rescue: 'fa-helmet-safety',
+      storm_damage: 'fa-cloud-showers-heavy', tree_down: 'fa-tree', flood: 'fa-water',
+      alarm: 'fa-bell', afa: 'fa-bell', welfare_check: 'fa-hand-holding-heart',
+      mental_health: 'fa-brain', admin: 'fa-clipboard-list', deceased: 'fa-cross',
+      unknown: 'fa-circle-question', other: 'fa-circle-info',
+    };
+
+    const ACTIVITY_COLORS = { quiet: '#64748b', low: '#22c55e', moderate: '#eab308', high: '#f97316', critical: '#ef4444' };
+    const SEV_COLORS = { emergency: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e' };
+    const STATUS_LABEL = { active: 'Active', on_scene: 'On scene', transporting: 'Transporting', resolved: 'Resolved', unknown: '' };
+    const ACRONYMS = new Set(['MVC','MVA','AFA','RFS','SES','FRNSW','NSWA','NSWPF','BA','DOA','CPR','MDT']);
+    const titleFromType = (t) => String(t || 'unknown').split('_').map(w =>
+      ACRONYMS.has(w.toUpperCase()) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))
+    ).join(' ');
+    const escHTML = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    function renderRdioIncident(inc) {
+      const sev = inc.severity || 'low';
+      const sevColor = SEV_COLORS[sev] || '#64748b';
+      const iconClass = INCIDENT_ICON[inc.incident_type] || INCIDENT_ICON.other;
+      // Title: prefer new-schema free-form `type`, fallback to legacy derived title.
+      const titleText = (typeof inc.type === 'string' && inc.type.trim())
+        ? inc.type
+        : titleFromType(inc.incident_type);
+      // Locations: new schema uses locations[]; legacy uses single location object.
+      let locText = '';
+      if (Array.isArray(inc.locations) && inc.locations.length) {
+        locText = inc.locations.filter(l => l).join(' · ');
+      } else if (inc.location && (inc.location.raw || inc.location.region)) {
+        locText = inc.location.raw || inc.location.region;
+      }
+      const agencies = Array.isArray(inc.agencies) ? inc.agencies.filter(a => a && a !== 'NSWPF').join(' · ') : '';
+      const codes = Array.isArray(inc.codes) && inc.codes.length ? inc.codes.map(c => escHTML(c)).join(' · ') : '';
+      // Status: new schema is a pre-formatted string; legacy used status_at_hour_end key.
+      let status = '';
+      if (typeof inc.status === 'string' && inc.status.trim()) {
+        status = inc.status;
+      } else if (inc.status_at_hour_end) {
+        status = STATUS_LABEL[inc.status_at_hour_end] || '';
+      }
+      const people = inc.people_count > 0 ? `${inc.people_count} pax` : '';
+      const vehicles = Array.isArray(inc.vehicles) && inc.vehicles.length ? inc.vehicles.map(v => escHTML(v)).join(', ') : '';
+      const unitList = Array.isArray(inc.units) && inc.units.length
+        ? inc.units.map(u => escHTML(typeof u === 'string' ? u : (u.id || '?'))).join(', ')
+        : '';
+      // Window: new schema is window.{start,end}; legacy used first_heard/last_heard.
+      const winStart = (inc.window && inc.window.start) || inc.first_heard || '';
+      const winEnd = (inc.window && inc.window.end) || inc.last_heard || '';
+      const timeRange = winStart || winEnd
+        ? `${escHTML(winStart || '')}${winEnd && winEnd !== winStart ? '–' + escHTML(winEnd) : ''}`
+        : '';
+
+      // Build with explicit string concatenation — NO template-literal whitespace.
+      let html = '<div style="background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.18);border-left:3px solid ' + sevColor + ';border-radius:5px;padding:0.45rem 0.6rem;margin-bottom:0.35rem;line-height:1.3;font-size:0.8rem;">';
+      // Header line: icon + title + agencies + codes + status pill + time range
+      html += '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;">';
+      html += '<i class="fas ' + iconClass + '" style="color:' + sevColor + ';font-size:0.85rem;"></i>';
+      html += '<span style="color:#e2e8f0;font-weight:600;">' + escHTML(titleText) + '</span>';
+      if (agencies) html += '<span style="color:#94a3b8;font-size:0.7rem;">' + escHTML(agencies) + '</span>';
+      if (codes) html += '<span style="color:#94a3b8;font-size:0.7rem;">· ' + codes + '</span>';
+      if (status) html += '<span style="background:rgba(148,163,184,0.18);color:#cbd5e1;font-size:0.65rem;padding:0.05rem 0.4rem;border-radius:3px;text-transform:uppercase;letter-spacing:0.3px;">' + escHTML(status) + '</span>';
+      if (timeRange) html += '<span style="color:#64748b;font-size:0.7rem;font-variant-numeric:tabular-nums;margin-left:auto;">' + timeRange + '</span>';
+      html += '</div>';
+      // Location row
+      if (locText) html += '<div style="color:#94a3b8;font-size:0.72rem;margin-top:0.15rem;"><i class="fas fa-location-dot" style="color:#64748b;margin-right:0.3rem;"></i>' + escHTML(locText) + '</div>';
+      // Summary
+      html += '<div style="color:#e2e8f0;margin-top:0.18rem;">' + escHTML(inc.summary || '') + '</div>';
+      // Meta line: units · vehicles · people
+      const metaBits = [];
+      if (unitList) metaBits.push('<span><span style="color:#64748b;">Units:</span> ' + unitList + '</span>');
+      if (vehicles) metaBits.push('<span><span style="color:#64748b;">Vehicles:</span> ' + vehicles + '</span>');
+      if (people) metaBits.push('<span><i class="fas fa-user" style="color:#64748b;font-size:0.65rem;margin-right:0.25rem;"></i>' + people + '</span>');
+      if (metaBits.length) html += '<div style="color:#94a3b8;font-size:0.7rem;margin-top:0.2rem;display:flex;flex-wrap:wrap;gap:0.6rem;">' + metaBits.join('') + '</div>';
+
+      // Helper: build a compact call-link pill
+      const makePill = (cid) => (
+        '<a href="https://radio.forcequit.xyz/?call=' + encodeURIComponent(cid) +
+        '" target="_blank" rel="noopener" title="Listen to call #' + cid + '" ' +
+        'style="display:inline-block;background:rgba(59,130,246,0.15);color:#60a5fa;' +
+        'padding:0.02rem 0.3rem;border-radius:3px;font-size:0.6rem;text-decoration:none;' +
+        'font-variant-numeric:tabular-nums;margin-right:0.3rem;vertical-align:baseline;">' +
+        '<i class="fas fa-headphones" style="margin-right:0.15rem;font-size:0.55rem;"></i>#' + cid + '</a>'
+      );
+
+      const usedCallIds = new Set();
+
+      // New schema: transcripts[] — one row per transmission. No fanout.
+      // Layout: [time] [pill] [text]. Text is rendered verbatim (escaped).
+      if (Array.isArray(inc.transcripts) && inc.transcripts.length) {
+        html += '<div style="margin-top:0.25rem;padding-left:0.5rem;border-left:2px solid ' + sevColor + '55;font-size:0.7rem;color:#cbd5e1;">';
+        inc.transcripts.forEach(t => {
+          if (!t) return;
+          const cid = Number.isFinite(+t.call_id) ? +t.call_id : null;
+          if (cid !== null) usedCallIds.add(cid);
+          const timeHtml = '<span style="color:#64748b;font-variant-numeric:tabular-nums;flex-shrink:0;min-width:4.5em;">' +
+                           escHTML(t.time || '—') + '</span>';
+          const pillHtml = cid !== null ? '<span style="flex-shrink:0;">' + makePill(cid) + '</span>' : '';
+          const textHtml = '<span>' + escHTML(t.text || '') + '</span>';
+          html += '<div style="display:flex;align-items:baseline;gap:0.35rem;">' +
+                  timeHtml + pillHtml + textHtml + '</div>';
+        });
+        if (inc.transcripts_truncated) {
+          const shown = inc.transcripts.length;
+          const totalTxt = Number.isFinite(+inc.transcripts_total)
+            ? ' of ' + (+inc.transcripts_total)
+            : '';
+          html += '<div style="color:#64748b;font-style:italic;margin-top:0.2rem;font-size:0.65rem;">' +
+                  'Showing top ' + shown + totalTxt + ' transcripts</div>';
+        }
+        html += '</div>';
+      } else if (Array.isArray(inc.timeline) && inc.timeline.length) {
+        // Legacy path: timeline[] with call_ids fanout. Kept for rollout window.
+        const incidentCallIds = Array.isArray(inc.call_ids)
+          ? inc.call_ids.map(id => +id).filter(id => Number.isFinite(id))
+          : [];
+        html += '<div style="margin-top:0.25rem;padding-left:0.5rem;border-left:2px solid ' + sevColor + '55;font-size:0.7rem;color:#cbd5e1;">';
+        inc.timeline.forEach((t, i) => {
+          let cids = [];
+          if (t && Array.isArray(t.call_ids) && t.call_ids.length) {
+            cids = t.call_ids.map(id => +id).filter(id => Number.isFinite(id));
+          } else if (t && Number.isFinite(+t.call_id)) {
+            cids = [+t.call_id];
+          } else if (i < incidentCallIds.length) {
+            cids = [incidentCallIds[i]];
+          }
+          cids.forEach(c => usedCallIds.add(c));
+          const timeHtml = '<span style="color:#64748b;font-variant-numeric:tabular-nums;flex-shrink:0;min-width:4.5em;">' +
+                           escHTML(t.time || '—') + '</span>';
+          const eventHtml = '<span>' + escHTML(t.event || '') + '</span>';
+          if (cids.length === 0) {
+            html += '<div style="display:flex;align-items:baseline;gap:0.35rem;">' +
+                    timeHtml + eventHtml + '</div>';
+          } else {
+            cids.forEach(c => {
+              html += '<div style="display:flex;align-items:baseline;gap:0.35rem;">' +
+                      timeHtml +
+                      '<span style="flex-shrink:0;">' + makePill(c) + '</span>' +
+                      eventHtml + '</div>';
+            });
+          }
+        });
+        html += '</div>';
+      }
+
+      // Remaining call_ids (legacy only — new schema doesn't emit incident.call_ids).
+      if (Array.isArray(inc.call_ids) && inc.call_ids.length) {
+        const remaining = inc.call_ids
+          .map(id => +id)
+          .filter(id => Number.isFinite(id) && !usedCallIds.has(id));
+        if (remaining.length) {
+          const chips = remaining.map(makePill).join(' ');
+          html += '<div style="margin-top:0.25rem;display:flex;flex-wrap:wrap;gap:0.25rem;">' + chips + '</div>';
+        }
+      }
+      // Notes
+      if (inc.notes) html += '<div style="color:#64748b;font-size:0.66rem;font-style:italic;margin-top:0.2rem;">' + escHTML(inc.notes) + '</div>';
+      html += '</div>';
+      return html;
+    }
+
+    function renderRdioSummary(container, row) {
+      if (!row) { container.textContent = ''; return; }
+      // psycopg2 can return JSONB as a plain string depending on type registration.
+      // Coerce to object before reading .structured.
+      let details = row.details;
+      if (typeof details === 'string') {
+        try { details = JSON.parse(details); } catch { details = {}; }
+      }
+      const structured = details && details.structured;
+      if (!structured) {
+        container.innerHTML = '<div style="white-space:pre-wrap;font-size:0.85rem;line-height:1.35;">' + escHTML(row.summary || '(empty)') + '</div>';
+        return;
+      }
+
+      const activity = structured.activity_level || 'unknown';
+      const activityColor = ACTIVITY_COLORS[activity] || '#64748b';
+
+      let html = '<div style="line-height:1.35;font-size:0.82rem;">';
+      // Header — activity + counts on one line
+      html += '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.72rem;color:#94a3b8;margin-bottom:0.4rem;">';
+      html += '<span style="background:' + activityColor + '22;color:' + activityColor + ';padding:0.1rem 0.5rem;border-radius:3px;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.4px;">' + escHTML(activity) + '</span>';
+      html += '<span>' + (structured.incident_count || 0) + ' incidents · ' + (structured.transcript_count || 0) + ' tx · ' + (structured.filtered_count || 0) + ' filtered</span>';
+      html += '</div>';
+      // Overview
+      if (structured.overview) {
+        html += '<div style="color:#e2e8f0;margin-bottom:0.4rem;font-size:0.86rem;">' + escHTML(structured.overview) + '</div>';
+      }
+      // Notable
+      if (Array.isArray(structured.notable) && structured.notable.length) {
+        html += '<div style="display:flex;gap:0.4rem;align-items:flex-start;margin-bottom:0.45rem;font-size:0.74rem;">';
+        html += '<span style="color:#ef4444;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;flex-shrink:0;"><i class="fas fa-triangle-exclamation"></i> Notable</span>';
+        html += '<span style="color:#cbd5e1;">' + structured.notable.map(n => escHTML(n)).join(' · ') + '</span>';
+        html += '</div>';
+      }
+
+      // Incidents — capped scroll so the overview stays visible
+      const incidents = Array.isArray(structured.incidents) ? structured.incidents : [];
+      if (incidents.length) {
+        html += '<div style="max-height:55vh;overflow-y:auto;padding-right:0.25rem;">';
+        for (const inc of incidents) html += renderRdioIncident(inc);
+        html += '</div>';
+      } else if (structured.quiet_hour) {
+        html += '<div style="color:#64748b;font-style:italic;font-size:0.85rem;">Quiet hour — no operational transmissions after filtering noise.</div>';
+      }
+      html += '</div>';
+
+      container.innerHTML = html;
+    }
+
+    async function loadRdioSummaries() {
+      try {
+        const res = await apiFetch(`${API_BASE}/api/summaries/latest`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+
+        const hourlyEl = document.getElementById('rdio-hourly-summary');
+        const hourlyMeta = document.getElementById('rdio-hourly-meta');
+        const hourlySlot = document.getElementById('rdio-hourly-slot');
+        const hourlyTitle = document.getElementById('rdio-hourly-title');
+        if (data.hourly) {
+          renderRdioSummary(hourlyEl, data.hourly);
+          // For ad-hoc summaries, period_start == period_end (generation time).
+          // Use the actual transcript range from details.transcripts_* if available.
+          let d = data.hourly.details;
+          if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = {}; } }
+          const isAdhoc = data.hourly.type === 'adhoc';
+          const rawStart = (isAdhoc && d && d.transcripts_start) ? d.transcripts_start : data.hourly.period_start;
+          const rawEnd = (isAdhoc && d && d.transcripts_end) ? d.transcripts_end : data.hourly.period_end;
+          const ps = rawStart ? new Date(rawStart) : null;
+          const pe = rawEnd ? new Date(rawEnd) : null;
+          const agoRef = data.hourly.created_at ? new Date(data.hourly.created_at) : pe;
+          const ago = agoRef ? Math.max(0, Math.round((Date.now() - agoRef.getTime()) / 60000)) : '?';
+          const timeRange = ps && pe
+            ? `${ps.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–${pe.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+            : '';
+          hourlyMeta.textContent = `${timeRange} · ${data.hourly.call_count} calls · ${ago} min ago`;
+          if (data.hourly.type === 'adhoc') {
+            hourlyTitle.textContent = 'Latest Ad-hoc Summary';
+            hourlySlot.textContent = 'Ad-hoc';
+            hourlySlot.style.display = '';
+          } else {
+            hourlyTitle.textContent = 'Latest Hourly Summary';
+            if (data.hourly.hour_slot) {
+              hourlySlot.textContent = `Hour ${String(data.hourly.hour_slot).padStart(2, '0')}`;
+              hourlySlot.style.display = '';
+            } else {
+              hourlySlot.style.display = 'none';
+            }
+          }
+        } else {
+          hourlyEl.innerHTML = '<div style="color:#94a3b8;">No hourly summary yet. The next one runs at the top of the hour.</div>';
+          hourlyMeta.textContent = '';
+        }
+
+      } catch (e) {
+        const hourlyEl = document.getElementById('rdio-hourly-summary');
+        if (hourlyEl) hourlyEl.textContent = `Error loading summary: ${e.message}`;
+      }
+    }
+
     async function refreshAllData() {
       // Reset cache for fresh data
       apiDataCache.timestamp = Date.now();
@@ -3078,12 +3375,32 @@
       loadRfsMajorIncidents();
       loadRfsFireDangerToban();
       loadNewsFeed();
+      loadRdioSummaries();
 
       // Start periodic data collection
       startDataCollection();
-      
+
       // News refresh on slower interval (5 minutes)
       setInterval(loadNewsFeed, NEWS_REFRESH);
+      // Summaries only change at the top of the hour — the backend embargoes
+      // a prefetched summary until :59:50, so we schedule one refresh right
+      // at the top of each hour (plus a tiny buffer) and keep a 5-min
+      // fallback poll in case the user's clock drifts or an ad-hoc lands.
+      setInterval(loadRdioSummaries, 5 * 60 * 1000);
+      function scheduleTopOfHourRefresh() {
+        const now = new Date();
+        const next = new Date(now);
+        // :00:05 of the next hour — the backend releases the new hourly at
+        // :59:30, so by :00:05 the row has been visible for ~35 seconds and
+        // the fetch lands immediately.
+        next.setHours(now.getHours() + 1, 0, 5, 0);
+        const delay = Math.max(1000, next - now);
+        setTimeout(() => {
+          loadRdioSummaries();
+          scheduleTopOfHourRefresh();
+        }, delay);
+      }
+      scheduleTopOfHourRefresh();
     });
     
     // Time period selector
@@ -3929,6 +4246,14 @@
           results.environment.patrolled = beaches.filter(b => b.patrolled || b.isPatrolledToday).length;
           setDotStatus('dot-beachsafe', true);
         }).catch(() => setDotStatus('dot-beachsafe', false)),
+
+        // Waze — userscript ingest. Green dot means the backend is serving
+        // data (userscript forwarding is healthy); grey means it's cold or
+        // the scraper browser has stalled.
+        apiFetch(`${API_BASE}/api/waze/hazards`).then(r => r.json()).then(d => {
+          const haveData = (d.features && d.features.length > 0) || (d.jams && d.jams.length > 0);
+          setDotStatus('dot-waze', haveData);
+        }).catch(() => setDotStatus('dot-waze', false)),
       ];
       
       await Promise.allSettled(fetches);

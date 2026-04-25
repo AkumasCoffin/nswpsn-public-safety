@@ -892,6 +892,45 @@
       <p id="page-description">Search historical incident data stored for up to <span id="retention-days">31</span> days. Filter by source, type, date, and location.</p>
     </header>
 
+    <!-- Radio Scanner Summaries -->
+    <details id="summaries" class="filter-bar" style="padding: 0.75rem 1rem; display: block;">
+      <summary style="cursor: pointer; font-weight: 600; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-robot" style="color:#a855f7;"></i>
+        Radio Scanner Summaries
+        <span style="font-size: 0.75rem; color: #64748b; font-weight: 400;">— Groq-generated hourly &amp; daily digests</span>
+      </summary>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; align-items: flex-end;">
+        <div class="filter-group">
+          <label class="filter-label">Type</label>
+          <select id="summary-type" class="filter-select">
+            <option value="">Any</option>
+            <option value="hourly" selected>Hourly</option>
+            <option value="adhoc">Ad-hoc (manual)</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Date</label>
+          <input type="date" id="summary-date" class="filter-input">
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Hour (01–24)</label>
+          <input type="number" id="summary-hour" class="filter-input" min="1" max="24" placeholder="any">
+        </div>
+        <div class="action-buttons">
+          <button class="action-btn primary" onclick="searchSummaries(1)"><i class="fas fa-search"></i> Search</button>
+          <button class="action-btn secondary" onclick="clearSummaryFilters()"><i class="fas fa-times"></i> Clear</button>
+        </div>
+      </div>
+      <div id="summaries-results" style="margin-top: 0.9rem;">
+        <div style="font-size: 0.8rem; color: #64748b;">Click Search to load summaries.</div>
+      </div>
+      <div id="summaries-pagination" style="margin-top: 0.6rem; display: none; gap: 0.5rem; align-items: center; font-size: 0.8rem;">
+        <button class="action-btn secondary" onclick="summariesGoPage(summariesPage - 1)"><i class="fas fa-angle-left"></i></button>
+        <span id="summaries-page-info" style="color:#94a3b8;"></span>
+        <button class="action-btn secondary" onclick="summariesGoPage(summariesPage + 1)"><i class="fas fa-angle-right"></i></button>
+      </div>
+    </details>
+
     <!-- Filter Bar -->
     <div class="filter-bar">
       <div class="filter-group">
@@ -1062,8 +1101,8 @@
       </div>
       <div class="pagination-info">
         <select class="page-size-select" id="page-size-select" onchange="changePageSize(this.value)" title="Results per page">
-          <option value="25">25 per page</option>
-          <option value="50" selected>50 per page</option>
+          <option value="20" selected>20 per page</option>
+          <option value="50">50 per page</option>
           <option value="100">100 per page</option>
         </select>
       </div>
@@ -1074,7 +1113,7 @@
     // === CONFIG ===
     const API_BASE = 'https://api.forcequit.xyz';
     let API_KEY = '';
-    let pageSize = 50; // configurable
+    let pageSize = 20; // configurable — keep low so each list query is cheap
     const LOGS_PAGE_ID = 'logs_' + Math.random().toString(36).substr(2, 9);
     const LOGS_PAGE_TYPE = 'logs';
     const LOGS_IS_DATA_PAGE = 1;
@@ -2008,6 +2047,13 @@
           'Hazard Weather Hail': { icon: 'cloud-meatball', color: '#93c5fd', group: 'Weather' },
           'Road Closed Event': { icon: 'road-barrier', color: '#8b5cf6', group: 'Other' },
           'Hazard On Road Lane Closed': { icon: 'road-barrier', color: '#f97316', group: 'Other' },
+          // Waze Jams - severity levels (subcategory on waze_jam rows)
+          'Free Flow': { icon: 'car-side', color: '#22c55e', group: 'Jam Severity' },
+          'Light Traffic': { icon: 'car-side', color: '#eab308', group: 'Jam Severity' },
+          'Moderate Traffic': { icon: 'car-side', color: '#f97316', group: 'Jam Severity' },
+          'Heavy Traffic': { icon: 'car-side', color: '#ef4444', group: 'Jam Severity' },
+          'Standstill': { icon: 'car-side', color: '#dc2626', group: 'Jam Severity' },
+          'Blocked': { icon: 'car-side', color: '#991b1b', group: 'Jam Severity' },
         };
         
         // Add "All Categories" option first
@@ -2158,6 +2204,9 @@
       params.set('offset', offset);
       params.set('order', 'desc');
       params.set('unique', '1');
+      // full=1 pulls the JSONB `data` column so list rows can render per-source
+      // detail badges (pager message, waze street/city, endeavour suburb, etc.)
+      params.set('full', '1');
       
       // Get filter values - source can come from type dropdown or be derived from provider
       let source = document.getElementById('filter-source').value;
@@ -2269,7 +2318,7 @@
     }
     
     function changePageSize(newSize) {
-      pageSize = parseInt(newSize, 10) || 50;
+      pageSize = parseInt(newSize, 10) || 20;
       currentPage = 1;
       performSearch(1);
     }
@@ -2516,6 +2565,26 @@
           if (delay > 0) details.push(`<span style="color:#f87171;"><i class="fas fa-clock"></i> ${Math.round(delay / 60)}min delay</span>`);
           if (thumbsUp > 0) details.push(`<span style="color:#22c55e;"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
           if (details.length) extraDetails = details.join(' · ');
+        } else if (item.source === 'waze_jam') {
+          const street = data.street || '';
+          const city = data.city || '';
+          const delayMins = data.delayMins || (data.delay ? Math.round(data.delay / 60) : 0);
+          const lengthKm = data.lengthKm || (data.length ? +(data.length / 1000).toFixed(2) : 0);
+          const severity = data.severity || item.subcategory || '';
+          const sev = severity.toLowerCase();
+          let badgeColor = '#dc2626';
+          if (sev.includes('blocked')) badgeColor = '#991b1b';
+          else if (sev.includes('standstill')) badgeColor = '#dc2626';
+          else if (sev.includes('heavy')) badgeColor = '#ef4444';
+          else if (sev.includes('moderate')) badgeColor = '#f97316';
+          else if (sev.includes('light')) badgeColor = '#eab308';
+          if (severity) extraInfo += `<span class="meta-badge" style="background:${badgeColor};"><i class="fas fa-car-side" style="margin-right:4px;"></i>${escapeHtml(severity)}</span>`;
+          let details = [];
+          if (street) details.push(`<span style="color:#fca5a5;"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
+          if (city) details.push(`<span style="color:#94a3b8;"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
+          if (lengthKm > 0) details.push(`<span style="color:#fecaca;"><i class="fas fa-ruler-horizontal"></i> ${lengthKm} km</span>`);
+          if (delayMins > 0) details.push(`<span style="color:#f87171;"><i class="fas fa-clock"></i> ${delayMins}min delay</span>`);
+          if (details.length) extraDetails = details.join(' · ');
         } else if (item.source.includes('endeavour')) {
           const suburb = data.suburb || '';
           const postcode = data.postcode || '';
@@ -2752,7 +2821,7 @@
       
       try {
         // Fetch all snapshots for this incident (not unique - get full history)
-        const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc`;
+        const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1`;
         console.log('History URL:', url);
         const res = await fetch(url);
         const data = await res.json();
@@ -2953,7 +3022,7 @@
               }
               
               // ~20m radius, search all pagers (no unique=1 to include ended ones)
-              const proximityUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100`;
+              const proximityUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&full=1`;
               const proxRes = await fetch(proximityUrl);
               const proxData = await proxRes.json();
               
@@ -3012,7 +3081,7 @@
               }
               
               // Search nearby (~20m radius), no unique=1 to include ended incidents
-              const incUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100`;
+              const incUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&full=1`;
               const incRes = await fetch(incUrl);
               const incData = await incRes.json();
               
@@ -3132,7 +3201,7 @@
           }
           
           // ~20m radius, search all pagers (no unique=1 to include ended ones)
-          const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100`;
+          const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&full=1`;
           const res = await fetch(url);
           const data = await res.json();
           
@@ -3411,6 +3480,7 @@
         'waze_hazard': 'Waze Hazards',
         'waze_police': 'Waze Police',
         'waze_roadwork': 'Waze Roadwork',
+        'waze_jam': 'Waze Jams',
         'pager': 'Pager',
         'endeavour_current': 'Endeavour',
         'endeavour_planned': 'Endeavour',
@@ -3467,6 +3537,7 @@
         'waze_hazard': { primary: '#eab308', secondary: '#facc15' },
         'waze_police': { primary: '#3b82f6', secondary: '#60a5fa' },
         'waze_roadwork': { primary: '#f97316', secondary: '#fb923c' },
+        'waze_jam': { primary: '#dc2626', secondary: '#f87171' },
         'endeavour_current': { primary: '#ca8a04', secondary: '#facc15' },
         'endeavour_planned': { primary: '#ca8a04', secondary: '#facc15' },
         'essential_current': { primary: '#0891b2', secondary: '#06b6d4' },
@@ -3589,6 +3660,10 @@
           catValue = ''; // Skip redundant "HAZARD" category
           typeLabel = 'Hazard Type';
           typeValue = item.subcategory ? formatSubcategory(item.subcategory) : '';
+        } else if (source === 'waze_jam') {
+          catValue = ''; // category is "JAM", subcategory holds severity like "Heavy Traffic"
+          typeLabel = 'Severity';
+          typeValue = item.subcategory || '';
         } else if (source.includes('endeavour')) {
           catLabel = 'Outage Type';
           typeLabel = 'Status';
@@ -3726,6 +3801,7 @@
         let wazeColor = '#eab308'; // Default yellow
         if (source === 'waze_police') wazeColor = '#3b82f6';
         else if (source === 'waze_roadwork') wazeColor = '#f97316';
+        else if (source === 'waze_jam') wazeColor = '#dc2626';
         
         const extraFields = [];
         if (data.street) extraFields.push(['Street', data.street]);
@@ -3869,6 +3945,16 @@
         if (sub.includes('HIDING')) return '<i class="fas fa-user-secret" style="color:#6366f1"></i>';
         if (sub.includes('CAMERA')) return '<i class="fas fa-camera" style="color:#8b5cf6"></i>';
       }
+
+      // For waze_jam, colour by severity (subcategory holds "Heavy Traffic" etc.)
+      if (source === 'waze_jam' && subcategory) {
+        const sub = subcategory.toLowerCase();
+        if (sub.includes('blocked')) return '<i class="fas fa-car-side" style="color:#991b1b"></i>';
+        if (sub.includes('standstill')) return '<i class="fas fa-car-side" style="color:#dc2626"></i>';
+        if (sub.includes('heavy')) return '<i class="fas fa-car-side" style="color:#ef4444"></i>';
+        if (sub.includes('moderate')) return '<i class="fas fa-car-side" style="color:#f97316"></i>';
+        if (sub.includes('light')) return '<i class="fas fa-car-side" style="color:#eab308"></i>';
+      }
       
       const icons = {
         'rfs': '<i class="fas fa-fire" style="color:#ef4444"></i>',
@@ -3880,6 +3966,7 @@
         'waze_hazard': '<i class="fas fa-triangle-exclamation" style="color:#eab308"></i>',
         'waze_police': '<i class="fas fa-shield-halved" style="color:#3b82f6"></i>',
         'waze_roadwork': '<i class="fas fa-person-digging" style="color:#f97316"></i>',
+        'waze_jam': '<i class="fas fa-car-side" style="color:#dc2626"></i>',
         'pager': '<i class="fas fa-pager" style="color:#22c55e"></i>',
         'endeavour_current': '<i class="fas fa-bolt" style="color:#ef4444"></i>',
         'endeavour_planned': '<i class="fas fa-calendar-check" style="color:#22c55e"></i>',
@@ -4215,13 +4302,330 @@
       }
     }
     
+    // === RADIO SCANNER SUMMARIES ===
+    let summariesPage = 1;
+    let summariesLimit = 20;
+    let summariesTotal = 0;
+    let summariesLastParams = {};
+
+    function clearSummaryFilters() {
+      document.getElementById('summary-type').value = 'hourly';
+      document.getElementById('summary-date').value = '';
+      document.getElementById('summary-hour').value = '';
+      document.getElementById('summaries-results').innerHTML =
+        '<div style="font-size: 0.8rem; color: #64748b;">Click Search to load summaries.</div>';
+      document.getElementById('summaries-pagination').style.display = 'none';
+    }
+
+    function buildSummaryParams() {
+      const type = document.getElementById('summary-type').value;
+      const date = document.getElementById('summary-date').value;
+      const hourVal = document.getElementById('summary-hour').value;
+      const params = {};
+      if (type) params.type = type;
+      if (date) params.date = date;
+      if (hourVal) {
+        const h = parseInt(hourVal, 10);
+        if (!isNaN(h) && h >= 1 && h <= 24) params.hour = h;
+      }
+      return params;
+    }
+
+    async function searchSummaries(page = 1) {
+      summariesLastParams = buildSummaryParams();
+      summariesPage = page;
+      const p = { ...summariesLastParams, limit: summariesLimit, offset: (page - 1) * summariesLimit };
+      const qs = new URLSearchParams(p).toString();
+      const container = document.getElementById('summaries-results');
+      container.innerHTML = '<div style="font-size: 0.8rem; color: #94a3b8;">Loading…</div>';
+      try {
+        const res = await apiFetch(`${API_BASE}/api/summaries?${qs}`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+        summariesTotal = data.total || 0;
+        renderSummaries(data.results || []);
+      } catch (e) {
+        container.innerHTML = `<div style="color:#ef4444;">Error: ${e.message}</div>`;
+      }
+    }
+
+    function summariesGoPage(newPage) {
+      const maxPage = Math.max(1, Math.ceil(summariesTotal / summariesLimit));
+      if (newPage < 1 || newPage > maxPage) return;
+      searchSummaries(newPage);
+    }
+
+    function renderSummaries(results) {
+      const container = document.getElementById('summaries-results');
+      const pager = document.getElementById('summaries-pagination');
+
+      if (!results.length) {
+        container.innerHTML = '<div style="font-size: 0.85rem; color: #94a3b8;">No summaries match.</div>';
+        pager.style.display = 'none';
+        return;
+      }
+
+      const esc = (s) => String(s || '').replace(/[&<>"']/g, c =>
+        ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+      const activityColors = {
+        quiet: '#64748b', low: '#22c55e', moderate: '#eab308',
+        high: '#f97316', critical: '#ef4444',
+      };
+      const sevColors = {
+        emergency: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e',
+      };
+      const incidentIcon = {
+        structure_fire: 'fa-house-fire', bush_fire: 'fa-fire', grass_fire: 'fa-fire',
+        hazmat: 'fa-biohazard', mvc: 'fa-car-burst', medical: 'fa-truck-medical',
+        cardiac_arrest: 'fa-heart-pulse', overdose: 'fa-pills', rescue: 'fa-helmet-safety',
+        storm_damage: 'fa-cloud-showers-heavy', tree_down: 'fa-tree', flood: 'fa-water',
+        alarm: 'fa-bell', afa: 'fa-bell', welfare_check: 'fa-hand-holding-heart',
+        mental_health: 'fa-brain', admin: 'fa-clipboard-list', deceased: 'fa-cross',
+        unknown: 'fa-circle-question', other: 'fa-circle-info',
+      };
+      const ACRONYMS = new Set(['MVC','MVA','AFA','RFS','SES','FRNSW','NSWA','NSWPF','BA','DOA','CPR','MDT']);
+      const titleFromType = (t) => String(t || 'unknown').split('_').map(w =>
+        ACRONYMS.has(w.toUpperCase()) ? w.toUpperCase() : (w.charAt(0).toUpperCase() + w.slice(1))
+      ).join(' ');
+
+      const STATUS_LABEL = { active: 'Active', on_scene: 'On scene', transporting: 'Transporting', resolved: 'Resolved', unknown: '' };
+
+      const renderIncidentCard = (inc) => {
+        const sev = inc.severity || 'low';
+        const sevColor = sevColors[sev] || '#64748b';
+        const iconClass = incidentIcon[inc.incident_type] || incidentIcon.other;
+        // Title: prefer new-schema free-form `type`, fallback to legacy derived title.
+        const titleText = (typeof inc.type === 'string' && inc.type.trim())
+          ? inc.type
+          : titleFromType(inc.incident_type);
+        // Locations: new schema uses locations[]; legacy uses single location object.
+        let locText = '';
+        if (Array.isArray(inc.locations) && inc.locations.length) {
+          locText = inc.locations.filter(l => l).join(' · ');
+        } else if (inc.location && (inc.location.raw || inc.location.region)) {
+          locText = inc.location.raw || inc.location.region;
+        }
+        const agencies = Array.isArray(inc.agencies) ? inc.agencies.filter(a => a && a !== 'NSWPF').join(' · ') : '';
+        const codes = Array.isArray(inc.codes) && inc.codes.length ? inc.codes.map(c => esc(c)).join(' · ') : '';
+        // Status: new schema is a pre-formatted string; legacy used status_at_hour_end key.
+        let status = '';
+        if (typeof inc.status === 'string' && inc.status.trim()) {
+          status = inc.status;
+        } else if (inc.status_at_hour_end) {
+          status = STATUS_LABEL[inc.status_at_hour_end] || '';
+        }
+        const people = inc.people_count > 0 ? `${inc.people_count} pax` : '';
+        const vehicles = Array.isArray(inc.vehicles) && inc.vehicles.length ? inc.vehicles.map(v => esc(v)).join(', ') : '';
+        const unitList = Array.isArray(inc.units) && inc.units.length
+          ? inc.units.map(u => esc(typeof u === 'string' ? u : (u.id || '?'))).join(', ')
+          : '';
+        // Window: new schema is window.{start,end}; legacy used first_heard/last_heard.
+        const winStart = (inc.window && inc.window.start) || inc.first_heard || '';
+        const winEnd = (inc.window && inc.window.end) || inc.last_heard || '';
+        const timeRange = winStart || winEnd
+          ? `${esc(winStart || '')}${winEnd && winEnd !== winStart ? '–' + esc(winEnd) : ''}`
+          : '';
+
+        let h = '<div style="background:rgba(15,23,42,0.5);border:1px solid rgba(148,163,184,0.18);border-left:3px solid ' + sevColor + ';border-radius:5px;padding:0.4rem 0.55rem;margin-bottom:0.3rem;line-height:1.3;font-size:0.78rem;">';
+        h += '<div style="display:flex;flex-wrap:wrap;gap:0.35rem;align-items:center;">';
+        h += '<i class="fas ' + iconClass + '" style="color:' + sevColor + ';font-size:0.82rem;"></i>';
+        h += '<span style="color:#e2e8f0;font-weight:600;">' + esc(titleText) + '</span>';
+        if (agencies) h += '<span style="color:#94a3b8;font-size:0.68rem;">' + esc(agencies) + '</span>';
+        if (codes) h += '<span style="color:#94a3b8;font-size:0.68rem;">· ' + codes + '</span>';
+        if (status) h += '<span style="background:rgba(148,163,184,0.18);color:#cbd5e1;font-size:0.62rem;padding:0.05rem 0.4rem;border-radius:3px;text-transform:uppercase;letter-spacing:0.3px;">' + esc(status) + '</span>';
+        if (timeRange) h += '<span style="color:#64748b;font-size:0.66rem;font-variant-numeric:tabular-nums;margin-left:auto;">' + timeRange + '</span>';
+        h += '</div>';
+        if (locText) h += '<div style="color:#94a3b8;font-size:0.7rem;margin-top:0.12rem;"><i class="fas fa-location-dot" style="color:#64748b;margin-right:0.3rem;"></i>' + esc(locText) + '</div>';
+        h += '<div style="color:#e2e8f0;margin-top:0.15rem;">' + esc(inc.summary || '') + '</div>';
+        const meta = [];
+        if (unitList) meta.push('<span><span style="color:#64748b;">Units:</span> ' + unitList + '</span>');
+        if (vehicles) meta.push('<span><span style="color:#64748b;">Vehicles:</span> ' + vehicles + '</span>');
+        if (people) meta.push('<span><i class="fas fa-user" style="color:#64748b;font-size:0.62rem;margin-right:0.25rem;"></i>' + people + '</span>');
+        if (meta.length) h += '<div style="color:#94a3b8;font-size:0.68rem;margin-top:0.18rem;display:flex;flex-wrap:wrap;gap:0.55rem;">' + meta.join('') + '</div>';
+
+        const makePill = (cid) => (
+          '<a href="https://radio.forcequit.xyz/?call=' + encodeURIComponent(cid) +
+          '" target="_blank" rel="noopener" title="Listen to call #' + cid + '" ' +
+          'style="display:inline-block;background:rgba(59,130,246,0.15);color:#60a5fa;' +
+          'padding:0.02rem 0.3rem;border-radius:3px;font-size:0.58rem;text-decoration:none;' +
+          'font-variant-numeric:tabular-nums;margin-right:0.3rem;vertical-align:baseline;">' +
+          '<i class="fas fa-headphones" style="margin-right:0.15rem;font-size:0.52rem;"></i>#' + cid + '</a>'
+        );
+        const usedCallIds = new Set();
+
+        // New schema: transcripts[] — one row per transmission. No fanout.
+        // Layout: [time] [pill] [text]. Text rendered verbatim (escaped).
+        if (Array.isArray(inc.transcripts) && inc.transcripts.length) {
+          h += '<div style="margin-top:0.2rem;padding-left:0.5rem;border-left:2px solid ' + sevColor + '55;font-size:0.68rem;color:#cbd5e1;">';
+          inc.transcripts.forEach(t => {
+            if (!t) return;
+            const cid = Number.isFinite(+t.call_id) ? +t.call_id : null;
+            if (cid !== null) usedCallIds.add(cid);
+            const timeHtml = '<span style="color:#64748b;font-variant-numeric:tabular-nums;flex-shrink:0;min-width:4.5em;">' +
+                             esc(t.time || '—') + '</span>';
+            const pillHtml = cid !== null ? '<span style="flex-shrink:0;">' + makePill(cid) + '</span>' : '';
+            const textHtml = '<span>' + esc(t.text || '') + '</span>';
+            h += '<div style="display:flex;align-items:baseline;gap:0.35rem;">' +
+                 timeHtml + pillHtml + textHtml + '</div>';
+          });
+          if (inc.transcripts_truncated) {
+            const shown = inc.transcripts.length;
+            const totalTxt = Number.isFinite(+inc.transcripts_total)
+              ? ' of ' + (+inc.transcripts_total)
+              : '';
+            h += '<div style="color:#64748b;font-style:italic;margin-top:0.2rem;font-size:0.64rem;">' +
+                 'Showing top ' + shown + totalTxt + ' transcripts</div>';
+          }
+          h += '</div>';
+        } else if (Array.isArray(inc.timeline) && inc.timeline.length) {
+          // Legacy path: timeline[] with call_ids fanout. Kept for rollout window.
+          const incidentCallIds = Array.isArray(inc.call_ids)
+            ? inc.call_ids.map(id => +id).filter(id => Number.isFinite(id))
+            : [];
+          h += '<div style="margin-top:0.2rem;padding-left:0.5rem;border-left:2px solid ' + sevColor + '55;font-size:0.68rem;color:#cbd5e1;">';
+          inc.timeline.forEach((t, i) => {
+            let cids = [];
+            if (t && Array.isArray(t.call_ids) && t.call_ids.length) {
+              cids = t.call_ids.map(id => +id).filter(id => Number.isFinite(id));
+            } else if (t && Number.isFinite(+t.call_id)) {
+              cids = [+t.call_id];
+            } else if (i < incidentCallIds.length) {
+              cids = [incidentCallIds[i]];
+            }
+            cids.forEach(c => usedCallIds.add(c));
+            const timeHtml = '<span style="color:#64748b;font-variant-numeric:tabular-nums;flex-shrink:0;min-width:4.5em;">' +
+                             esc(t.time || '—') + '</span>';
+            const eventHtml = '<span>' + esc(t.event || '') + '</span>';
+            if (cids.length === 0) {
+              h += '<div style="display:flex;align-items:baseline;gap:0.35rem;">' +
+                   timeHtml + eventHtml + '</div>';
+            } else {
+              cids.forEach(c => {
+                h += '<div style="display:flex;align-items:baseline;gap:0.35rem;">' +
+                     timeHtml +
+                     '<span style="flex-shrink:0;">' + makePill(c) + '</span>' +
+                     eventHtml + '</div>';
+              });
+            }
+          });
+          h += '</div>';
+        }
+
+        if (Array.isArray(inc.call_ids) && inc.call_ids.length) {
+          const remaining = inc.call_ids
+            .map(id => +id)
+            .filter(id => Number.isFinite(id) && !usedCallIds.has(id));
+          if (remaining.length) {
+            const chips = remaining.map(makePill).join(' ');
+            h += '<div style="margin-top:0.2rem;display:flex;flex-wrap:wrap;gap:0.22rem;">' + chips + '</div>';
+          }
+        }
+
+        if (inc.notes) h += '<div style="color:#64748b;font-size:0.64rem;font-style:italic;margin-top:0.15rem;">' + esc(inc.notes) + '</div>';
+        h += '</div>';
+        return h;
+      };
+
+      const renderStructured = (structured) => {
+        if (!structured) return '';
+        const activity = structured.activity_level || 'unknown';
+        const activityColor = activityColors[activity] || '#64748b';
+
+        let h = '<div style="line-height:1.3;font-size:0.8rem;">';
+        h += '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.7rem;color:#94a3b8;margin:0.25rem 0 0.35rem;">';
+        h += '<span style="background:' + activityColor + '22;color:' + activityColor + ';padding:0.08rem 0.45rem;border-radius:3px;font-size:0.64rem;text-transform:uppercase;letter-spacing:0.4px;">' + esc(activity) + '</span>';
+        h += '<span>' + (structured.incident_count || 0) + ' incidents · ' + (structured.transcript_count || 0) + ' tx · ' + (structured.filtered_count || 0) + ' filtered</span>';
+        h += '</div>';
+        if (structured.overview) {
+          h += '<div style="color:#e2e8f0;margin-bottom:0.4rem;font-size:0.83rem;">' + esc(structured.overview) + '</div>';
+        }
+        if (Array.isArray(structured.notable) && structured.notable.length) {
+          h += '<div style="display:flex;gap:0.4rem;align-items:flex-start;margin-bottom:0.4rem;font-size:0.72rem;">';
+          h += '<span style="color:#ef4444;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;flex-shrink:0;"><i class="fas fa-triangle-exclamation"></i> Notable</span>';
+          h += '<span style="color:#cbd5e1;">' + structured.notable.map(n => esc(n)).join(' · ') + '</span>';
+          h += '</div>';
+        }
+        const incidents = Array.isArray(structured.incidents) ? structured.incidents : [];
+        if (incidents.length) {
+          for (const inc of incidents) h += renderIncidentCard(inc);
+        } else if (structured.quiet_hour) {
+          h += '<div style="color:#64748b;font-style:italic;font-size:0.83rem;">Quiet hour — no operational transmissions after filtering noise.</div>';
+        }
+        h += '</div>';
+        return h;
+      };
+
+      const html = results.map(r => {
+        const ps = r.period_start ? new Date(r.period_start) : null;
+        const pe = r.period_end ? new Date(r.period_end) : null;
+        const timeLabel = ps && pe
+          ? `${ps.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })} → ${pe.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          : (r.day_date || '');
+        const typeBadge = r.type === 'adhoc'
+          ? '<span style="background:rgba(34,197,94,0.15); color:#22c55e; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;">Ad-hoc</span>'
+          : '<span style="background:rgba(168,85,247,0.15); color:#a855f7; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;">Hourly</span>';
+        const hourBadge = r.hour_slot
+          ? `<span style="background:rgba(148,163,184,0.15); color:#cbd5e1; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem;">Hour ${String(r.hour_slot).padStart(2, '0')}</span>`
+          : '';
+
+        let details = r.details;
+        if (typeof details === 'string') {
+          try { details = JSON.parse(details); } catch { details = {}; }
+        }
+        const structured = details && details.structured;
+        const body = structured
+          ? renderStructured(structured)
+          : `<div style="white-space: pre-wrap; font-size: 0.86rem; color: #e2e8f0; line-height: 1.5;">${esc(r.summary)}</div>`;
+
+        return `
+          <div style="background: rgba(15,23,42,0.6); border: 1px solid rgba(148,163,184,0.2); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.6rem;">
+            <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-bottom:0.5rem; font-size:0.78rem; color:#94a3b8;">
+              ${typeBadge}
+              ${hourBadge}
+              <span>${esc(timeLabel)}</span>
+              <span style="margin-left:auto;">${r.call_count} calls</span>
+            </div>
+            ${body}
+          </div>
+        `;
+      }).join('');
+      container.innerHTML = html;
+
+      const maxPage = Math.max(1, Math.ceil(summariesTotal / summariesLimit));
+      if (summariesTotal > summariesLimit) {
+        pager.style.display = 'flex';
+        document.getElementById('summaries-page-info').textContent =
+          `Page ${summariesPage} of ${maxPage} (${summariesTotal} total)`;
+      } else {
+        pager.style.display = 'none';
+      }
+    }
+
+    // Auto-search when URL has #summaries so live.html's link lands pre-filtered
+    window.addEventListener('hashchange', () => {
+      if (location.hash === '#summaries') searchSummaries(1);
+    });
+
     // === INITIALIZATION ===
     async function init() {
       await loadApiConfig();
-      await loadFilters();
-      await applyUrlParams();
       updateViewedCount();
-      await performSearch(1);
+      // Common fast path: no URL filter params → loadFilters doesn't gate the
+      // initial search, so run both API calls in parallel. With URL params
+      // (deep link), applyUrlParams needs providersData from loadFilters first.
+      const urlParams = new URLSearchParams(window.location.search);
+      const hasDeepLink = urlParams.has('provider') || urlParams.has('source');
+      if (hasDeepLink) {
+        await loadFilters();
+        await applyUrlParams();
+        await performSearch(1);
+      } else {
+        await Promise.all([
+          loadFilters(),
+          performSearch(1),
+        ]);
+      }
       
       sendHeartbeat('open');
       setInterval(() => sendHeartbeat('ping'), 60000);
@@ -4243,6 +4647,13 @@
       document.getElementById('filter-search').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') performSearch(1);
       });
+
+      // If user deep-linked with #summaries, expand and load the panel
+      if (location.hash === '#summaries') {
+        const det = document.getElementById('summaries');
+        if (det) det.open = true;
+        searchSummaries(1);
+      }
     }
     
     window.addEventListener('beforeunload', () => sendHeartbeat('close'));

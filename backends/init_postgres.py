@@ -129,9 +129,40 @@ def main():
             'CREATE INDEX IF NOT EXISTS idx_data_provider ON data_history(source_provider)',
             'CREATE INDEX IF NOT EXISTS idx_data_provider_type ON data_history(source_provider, source_type)',
             'CREATE INDEX IF NOT EXISTS idx_data_provider_latest ON data_history(source_provider, is_latest)',
+            # Partial indexes — the logs.html page always queries with
+            # `unique=1` (is_latest=1), so the planner needs a small, unambiguous
+            # index for that subset. Non-partial idx_data_latest has ~5% selectivity
+            # and the planner sometimes picks fetched_at range scans instead.
+            'CREATE INDEX IF NOT EXISTS idx_data_latest_only_fetched ON data_history(fetched_at DESC) WHERE is_latest = 1',
+            'CREATE INDEX IF NOT EXISTS idx_data_latest_only_source ON data_history(source, fetched_at DESC) WHERE is_latest = 1',
         ]:
             cur.execute(idx)
         print("✓ data_history")
+
+        # data_history_filter_cache — pre-computed filter dropdown options.
+        # Rebuilt periodically (~every 5 min) from is_latest=1 rows so the
+        # logs.html filters load instantly instead of triggering a full
+        # GROUPING SETS scan of data_history every time.
+        #
+        # Schema: one row per (dimension, source-scope, value) — `kind` is
+        # which dropdown ('source', 'category', 'subcategory', 'status',
+        # 'severity'), `source` is the parent source for source-scoped
+        # dimensions (NULL for kind='source').
+        # Note: `source` is TEXT NOT NULL with '' used instead of NULL for
+        # kind='source' rows (the top-level list), so the composite PK works.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS data_history_filter_cache (
+                kind TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                value TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (kind, source, value)
+            )
+        ''')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind ON data_history_filter_cache(kind)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind_source ON data_history_filter_cache(kind, source)')
+        print("✓ data_history_filter_cache")
 
         # incidents (user-submitted emergency incidents)
         cur.execute('''
@@ -185,6 +216,37 @@ def main():
         cur.execute('CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role)')
         print("✓ user_roles")
+
+        # rdio_summaries (LLM-generated summaries of rdio-scanner transcripts)
+        # hour_slot: 1-24 convention (1 = 00:00-01:00 local, 24 = 23:00-24:00 local)
+        # day_date: YYYY-MM-DD for the local day (NULL for hourly unless you want to index)
+        # release_at: hold a prefetched summary until this time (NULL = available immediately)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS rdio_summaries (
+                id SERIAL PRIMARY KEY,
+                summary_type TEXT NOT NULL,
+                period_start TIMESTAMPTZ NOT NULL,
+                period_end TIMESTAMPTZ NOT NULL,
+                day_date DATE NOT NULL,
+                hour_slot INTEGER,
+                summary TEXT NOT NULL,
+                call_count INTEGER NOT NULL DEFAULT 0,
+                transcript_chars INTEGER NOT NULL DEFAULT 0,
+                model TEXT,
+                details JSONB DEFAULT '{}'::jsonb,
+                release_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(summary_type, period_start)
+            )
+        ''')
+        # Add column on existing deployments
+        cur.execute('ALTER TABLE rdio_summaries ADD COLUMN IF NOT EXISTS release_at TIMESTAMPTZ')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_rdio_summaries_type ON rdio_summaries(summary_type)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_rdio_summaries_day ON rdio_summaries(day_date)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_rdio_summaries_day_hour ON rdio_summaries(day_date, hour_slot)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_rdio_summaries_period ON rdio_summaries(period_start DESC)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_rdio_summaries_release ON rdio_summaries(release_at)')
+        print("✓ rdio_summaries")
 
         conn.commit()
         print("\nDatabase initialized successfully.")

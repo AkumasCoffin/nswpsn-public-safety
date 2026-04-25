@@ -124,25 +124,35 @@ class AlertPoller:
     
     def _get_alert_timestamp(self, alert_type: str, item: Dict[str, Any]) -> datetime:
         """Extract the source timestamp from an alert item for sorting.
-        
-        Returns a datetime object for consistent sorting across alert types.
-        Falls back to current time if no timestamp found.
+
+        Always returns a tz-AWARE datetime so mixed-source batches sort cleanly
+        (a single naive value mixed with aware ones causes
+        `can't compare offset-naive and offset-aware datetimes`).
+        Naive parses are normalised to UTC; falls back to current UTC time
+        if no timestamp is found.
         """
+        def _aware(dt):
+            if dt is None:
+                return None
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+
         try:
             if alert_type == 'rfs':
                 # RFS uses updatedISO (ISO format with timezone)
                 props = item.get('properties', {})
                 ts = props.get('updatedISO') or props.get('updated') or ''
                 if ts:
-                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            
+                    return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+
             elif alert_type == 'bom':
                 # BOM uses pubDate (RFC 2822 format)
                 pub_date = item.get('pubDate', '')
                 if pub_date:
                     from email.utils import parsedate_to_datetime
-                    return parsedate_to_datetime(pub_date)
-            
+                    return _aware(parsedate_to_datetime(pub_date))
+
             elif alert_type.startswith('traffic_'):
                 # Traffic uses Created (Unix timestamp in milliseconds)
                 created = item.get('Created')
@@ -152,35 +162,40 @@ class AlertPoller:
                         if created > 1e12:
                             return datetime.fromtimestamp(created / 1000, tz=timezone.utc)
                         return datetime.fromtimestamp(created, tz=timezone.utc)
-            
+
             elif alert_type.startswith('waze_'):
                 # Waze uses properties.created (ISO format)
                 props = item.get('properties', {})
                 ts = props.get('created', '')
                 if ts:
-                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            
+                    return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+
             elif alert_type == 'power_endeavour':
                 # Endeavour uses estimatedRestoreTime or just current time
                 restore_time = item.get('estimatedRestoreTime', '')
                 if restore_time:
-                    return datetime.fromisoformat(restore_time.replace('Z', '+00:00'))
-            
+                    return _aware(datetime.fromisoformat(restore_time.replace('Z', '+00:00')))
+
             elif alert_type == 'power_ausgrid':
                 # Ausgrid uses StartTime (ISO format)
                 start_time = item.get('StartTime') or item.get('startTime', '')
                 if start_time:
-                    return datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-            
+                    return _aware(datetime.fromisoformat(start_time.replace('Z', '+00:00')))
+
             elif alert_type == 'user_incidents':
                 # User incidents use created_at (ISO format)
                 ts = item.get('created_at', '')
                 if ts:
-                    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-        
+                    return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+
+            elif alert_type == 'radio_summary':
+                ts = item.get('created_at') or item.get('period_start', '')
+                if ts:
+                    return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+
         except (ValueError, TypeError, KeyError) as e:
             logger.debug(f"Could not parse timestamp for {alert_type}: {e}")
-        
+
         # Fallback to current time
         return datetime.now(timezone.utc)
     
@@ -233,23 +248,29 @@ class AlertPoller:
     async def check_alerts(self) -> List[Dict[str, Any]]:
         """Check all alert types for new alerts"""
         new_alerts = []
-        
+
+        # Single event-loop handle reused for all run_in_executor calls below,
+        # so every sync DB call is offloaded off the gateway heartbeat path.
+        loop = asyncio.get_event_loop()
+
         for alert_type, endpoint in self.endpoints.items():
             # Check if anyone is subscribed to this alert type
-            configs = self.db.get_configs_for_alert_type(alert_type)
-            if not configs:
+            presets = await loop.run_in_executor(
+                None, self.db.get_presets_for_alert_type, alert_type
+            )
+            if not presets:
                 logger.debug(f"Skipping {alert_type} - no subscribers")
                 continue  # Skip if no one is subscribed
-            
-            logger.debug(f"Checking {alert_type} ({len(configs)} subscribers)...")
+
+            logger.debug(f"Checking {alert_type} ({len(presets)} subscribers)...")
             data = await self._fetch(endpoint)
             if not data:
                 logger.debug(f"  → No data returned for {alert_type}")
                 continue
-            
+
             items = self._extract_items(alert_type, data)
             original_count = len(items)
-            
+
             # Filter Waze items to only very recent ones (prevents flooding)
             # Waze has thousands of reports - only alert on last 15 min, max 5 per cycle
             if alert_type.startswith('waze_'):
@@ -258,7 +279,6 @@ class AlertPoller:
                     logger.info(f"  → {alert_type}: Bootstrapping {original_count} items (marking as seen, no alerts)")
                     # Use batch operation in executor to avoid blocking the event loop
                     batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-                    loop = asyncio.get_event_loop()
                     await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                     items = []  # Don't alert on any
                 else:
@@ -266,13 +286,12 @@ class AlertPoller:
                     logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} recent (last 15min, max 5)")
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
-            
+
             # Build candidate list and check all at once (single DB query instead of N)
             candidates = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
             item_by_id = {self._get_alert_id(alert_type, item): item for item in items}
 
             # Run synchronous DB calls in executor to avoid blocking the event loop
-            loop = asyncio.get_event_loop()
             unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
 
             if unseen:
@@ -299,6 +318,23 @@ class AlertPoller:
         if user_incident_alerts:
             logger.info(f"Found {len(user_incident_alerts)} new user incidents")
         new_alerts.extend(user_incident_alerts)
+
+        # Check for new rdio-scanner hourly summaries
+        radio_summary_alerts = await self._check_radio_summary()
+        if radio_summary_alerts:
+            logger.info(f"Found {len(radio_summary_alerts)} new radio summaries")
+        new_alerts.extend(radio_summary_alerts)
+
+        # R2 fix: mark radio_summary alerts as seen only AFTER they have been
+        # appended to new_alerts. This mirrors the filter_unseen / mark_seen
+        # batching used above and narrows the window in which a crash could
+        # lose a summary (previously mark-seen happened inside
+        # _check_radio_summary before the alert was even returned).
+        if radio_summary_alerts:
+            for rs_alert in radio_summary_alerts:
+                await loop.run_in_executor(
+                    None, self.db.mark_alert_seen, 'radio_summary', rs_alert['id']
+                )
         
         # Mark first poll as complete
         if self._first_poll:
@@ -315,27 +351,38 @@ class AlertPoller:
     async def _check_user_incidents(self) -> List[Dict[str, Any]]:
         """Check for new user-submitted incidents from Supabase"""
         new_alerts = []
-        
+
+        # Run synchronous DB calls in executor to avoid blocking the Discord
+        # gateway heartbeat under Postgres latency (mirrors _check_radio_summary).
+        loop = asyncio.get_event_loop()
+
         # Check if anyone is subscribed to user_incidents
-        configs = self.db.get_configs_for_alert_type('user_incidents')
-        if not configs:
+        presets = await loop.run_in_executor(
+            None, self.db.get_presets_for_alert_type, 'user_incidents'
+        )
+        if not presets:
             return new_alerts
-        
+
         # Fetch user incidents from backend API
         incidents = await self._fetch_user_incidents()
-        
+
         for incident in incidents:
             # Skip incidents that don't have minimum required data
             # (prevents posting when marker just created but not filled in)
             if not self._is_incident_ready(incident):
                 continue
-            
+
             alert_id = self._get_alert_id('user_incidents', incident)
-            
-            if not self.db.is_alert_seen('user_incidents', alert_id):
+
+            seen = await loop.run_in_executor(
+                None, self.db.is_alert_seen, 'user_incidents', alert_id
+            )
+            if not seen:
                 # Mark as seen IMMEDIATELY to prevent duplicates on next poll cycle
-                self.db.mark_alert_seen('user_incidents', alert_id)
-                
+                await loop.run_in_executor(
+                    None, self.db.mark_alert_seen, 'user_incidents', alert_id
+                )
+
                 # Use actual source timestamp for proper ordering
                 source_ts = self._get_alert_timestamp('user_incidents', incident)
                 alert = {
@@ -346,9 +393,62 @@ class AlertPoller:
                 }
                 new_alerts.append(alert)
                 logger.info(f"New user incident: {incident.get('title', 'Unknown')}")
-        
+
         return new_alerts
-    
+
+    async def _check_radio_summary(self) -> List[Dict[str, Any]]:
+        """Poll /api/summaries/latest and emit an alert when a new summary id
+        appears. The backend releases scheduled hourly rows just before the
+        top-of-hour (release_at ~= hour-top - 30s) so this naturally fires
+        within one poll tick of a new summary going live.
+
+        NOTE: This function DOES NOT call mark_alert_seen. The mark-seen is
+        deferred to check_alerts() after the alert is appended to new_alerts,
+        so a crash between the is_alert_seen check and returning here does not
+        permanently lose the summary. The is_alert_seen guard stays to avoid
+        re-emitting within a single poll; the mark commits only once the
+        alert has been handed back to the caller.
+        """
+        # Skip the heavy bits if nobody's subscribed
+        loop = asyncio.get_event_loop()
+        presets = await loop.run_in_executor(
+            None, self.db.get_presets_for_alert_type, 'radio_summary'
+        )
+        if not presets:
+            return []
+
+        payload = await self._fetch('/api/summaries/latest')
+        if not payload:
+            return []
+
+        row = payload.get('hourly')
+        if not row or not row.get('id'):
+            return []
+
+        alert_id = f"radio_summary_{row['id']}"
+        seen = await loop.run_in_executor(
+            None, self.db.is_alert_seen, 'radio_summary', alert_id
+        )
+        if seen:
+            return []
+
+        # Prefer created_at for chronological ordering alongside other alerts
+        created_at = row.get('created_at')
+        try:
+            source_ts = (
+                datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                if created_at else datetime.now(timezone.utc)
+            )
+        except Exception:
+            source_ts = datetime.now(timezone.utc)
+
+        return [{
+            'type': 'radio_summary',
+            'id': alert_id,
+            'data': row,
+            'timestamp': source_ts.isoformat(),
+        }]
+
     def _is_incident_ready(self, incident: Dict[str, Any]) -> bool:
         """Check if incident has minimum required data to be posted.
         
@@ -471,42 +571,48 @@ class AlertPoller:
     async def check_pager(self) -> List[Dict[str, Any]]:
         """Check for new pager messages from API"""
         new_messages = []
-        
+
+        # Run sync DB calls in the default executor so a slow Postgres
+        # commit can't block the gateway heartbeat.
+        loop = asyncio.get_event_loop()
+
         # Check if anyone has pager subscriptions
-        configs = self.db.get_pager_configs()
-        if not configs:
+        presets = await loop.run_in_executor(None, self.db.get_presets_for_pager)
+        if not presets:
             logger.debug("Skipping pager - no subscribers")
             return new_messages
-        
-        logger.debug(f"Checking pager ({len(configs)} subscribers)...")
-        
+
+        logger.debug(f"Checking pager ({len(presets)} subscribers)...")
+
         # Fetch recent pager messages from API
         messages = await self._fetch_pager_from_api()
         logger.debug(f"  → Fetched {len(messages)} pager messages from API")
-        
+
         for msg in messages:
             # Use pager_msg_id as unique identifier
             pager_msg_id = str(msg.get('pager_msg_id', ''))
             if not pager_msg_id:
                 continue
-            
+
             msg_hash = f"pager_{pager_msg_id}"
-            
-            if not self.db.is_pager_seen(msg_hash):
+
+            seen = await loop.run_in_executor(None, self.db.is_pager_seen, msg_hash)
+            if not seen:
                 # Parse and format the message
                 # Returns None for test messages that should be filtered
                 parsed = self._format_api_pager(msg)
                 if parsed:
                     # Mark as seen IMMEDIATELY to prevent duplicates on next poll cycle
                     # (poll runs every 30s, queue processing can take longer due to rate limits)
-                    self.db.mark_pager_seen(msg_hash)
+                    await loop.run_in_executor(None, self.db.mark_pager_seen, msg_hash)
+                    parsed['_msg_hash'] = msg_hash
                     new_messages.append(parsed)
                     logger.info(f"New pager message: {parsed.get('capcode', 'UNKNOWN')} - {parsed.get('incident_id', '')} - {parsed.get('type', '')}")
                 else:
                     # Mark filtered/test messages as seen immediately (they won't be sent)
-                    self.db.mark_pager_seen(msg_hash)
+                    await loop.run_in_executor(None, self.db.mark_pager_seen, msg_hash)
                     logger.debug(f"Filtered pager message (test/invalid): {pager_msg_id}")
-        
+
         return new_messages
     
     async def _fetch_pager_from_api(self) -> List[Dict[str, Any]]:
