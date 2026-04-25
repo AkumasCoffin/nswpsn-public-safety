@@ -8,7 +8,7 @@ import os
 import asyncio
 import functools
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
