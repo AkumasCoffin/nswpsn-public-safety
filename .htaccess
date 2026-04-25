@@ -9,7 +9,7 @@ DirectoryIndex index.html
   Require all denied
 </FilesMatch>
 
-# Block dotfiles (.git, .claude, .env, etc.)
+# Block dotfiles (.git, .env, etc.)
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteRule (^|/)\.(?!well-known/) - [F,L]
@@ -25,7 +25,7 @@ DirectoryIndex index.html
 </IfModule>
 
 # Block specific sensitive files
-<FilesMatch "^(config\.sample\.js|ecosystem\.config\.js|CLAUDE\.md|README\.md|composer\.json|package\.json)$">
+<FilesMatch "^(config\.sample\.js|ecosystem\.config\.js|README\.md|composer\.json|package\.json)$">
   Require all denied
 </FilesMatch>
 
