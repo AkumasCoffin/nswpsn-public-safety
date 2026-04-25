@@ -845,14 +845,14 @@ class EmbedBuilder:
             if len(coords) >= 2:
                 lon, lat = coords[0], coords[1]
                 layer_map = {
-                    'waze_hazards': 'waze-hazards',
-                    'waze_police': 'waze-police',
-                    'waze_roadwork': 'waze-roadwork',
+                    'waze_hazards':  'hazards',
+                    'waze_police':   'police',
+                    'waze_roadwork': 'roadwork',
                 }
-                layer = layer_map.get(alert_type, 'incidents')
+                layer = layer_map.get(alert_type, 'hazards')
                 map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
                 embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-        
+
         embed.set_footer(text="Waze Community Reports")
         return embed
     
@@ -1137,7 +1137,7 @@ class EmbedBuilder:
         
         # Map link
         if lat and lng:
-            map_url = build_map_url(lat, lng, label=title, layer="incidents")
+            map_url = build_map_url(lat, lng, label=title, layer="user")
             footer_parts.append(f"[🗺️ View on Map]({map_url})")
         
         if footer_parts:
@@ -1699,7 +1699,7 @@ class EmbedBuilder:
 
     _MD_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
 
-    def _append_container_footer(self, container, footer_bits):
+    def _append_container_footer(self, container, footer_bits, source=None):
         """Emit the footer for a V2 Container.
 
         Components V2 TextDisplay DOES NOT render `[label](url)` markdown as
@@ -1707,7 +1707,13 @@ class EmbedBuilder:
         real clickable affordances we extract any `[label](url)` bits from
         the footer and emit them as **Link Buttons** in an ActionRow below
         the subtle-text line instead.
+
+        `source` (optional) is the human-readable data-source label, e.g.
+        "NSW RFS" or "Bureau of Meteorology". Prepended to the subtle
+        footer line so every alert advertises where it came from.
         """
+        if source:
+            footer_bits = [f"📡 {source}", *(footer_bits or [])]
         if not footer_bits:
             return
         subtle_parts = []
@@ -2467,7 +2473,7 @@ class EmbedBuilder:
                 f"[📜 Previous ({prev_status})]({previous_message['message_url']})"
             )
 
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="NSW RFS")
         return container
 
     # ---- BOM ---------------------------------------------------
@@ -2528,7 +2534,7 @@ class EmbedBuilder:
             footer_bits.append(f"expires {expiry}")
         if is_valid_value(link):
             footer_bits.append(f"[BOM]({link})")
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="Bureau of Meteorology")
         return container
 
     # ---- Traffic -----------------------------------------------
@@ -2613,7 +2619,7 @@ class EmbedBuilder:
                 map_url = build_map_url(lat, lon, label=title, layer="incidents")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="Live Traffic NSW")
         return container
 
     # ---- Waze --------------------------------------------------
@@ -2684,15 +2690,15 @@ class EmbedBuilder:
             if len(coords) >= 2:
                 lon, lat = coords[0], coords[1]
                 layer_map = {
-                    'waze_hazards': 'waze-hazards',
-                    'waze_police': 'waze-police',
-                    'waze_roadwork': 'waze-roadwork',
+                    'waze_hazards':  'hazards',
+                    'waze_police':   'police',
+                    'waze_roadwork': 'roadwork',
                 }
-                layer = layer_map.get(alert_type, 'incidents')
+                layer = layer_map.get(alert_type, 'hazards')
                 map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="Waze")
         return container
 
     # ---- Power (dispatcher) ------------------------------------
@@ -2753,7 +2759,7 @@ class EmbedBuilder:
         if lat and lon:
             map_url = build_map_url(lat, lon, label=f"{outage_type} Outage - {suburb}", layer="outages")
             footer_bits.append(f"[🗺️ Map]({map_url})")
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="Endeavour Energy")
         return container
 
     def build_ausgrid_container(self, data: Dict[str, Any]):
@@ -2811,7 +2817,7 @@ class EmbedBuilder:
         if lat and lon:
             map_url = build_map_url(lat, lon, label=f"{type_text} Outage - {suburb}", layer="outages")
             footer_bits.append(f"[🗺️ Map]({map_url})")
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="Ausgrid")
         return container
 
     # ---- User incidents ----------------------------------------
@@ -2929,14 +2935,14 @@ class EmbedBuilder:
         if dt_created:
             footer_bits.append(f"🕐 <t:{int(dt_created.timestamp())}:R>")
         if lat and lng:
-            map_url = build_map_url(lat, lng, label=title, layer="incidents")
+            map_url = build_map_url(lat, lng, label=title, layer="user")
             footer_bits.append(f"[🗺️ Map]({map_url})")
         if previous_message and previous_message.get('message_url'):
             prev_status = previous_message.get('status', 'initial')
             footer_bits.append(
                 f"[📜 Previous ({prev_status})]({previous_message['message_url']})"
             )
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="User-submitted (NSW PSN)")
         return container
 
     # ---- Pager -------------------------------------------------
@@ -3021,7 +3027,7 @@ class EmbedBuilder:
                 label = f"{msg_type} - {incident_id}" if msg_type and incident_id else (msg_type or incident_id or capcode)
                 map_url = build_map_url(lat, lon, label=label, layer="pager")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
-        self._append_container_footer(container, footer_bits)
+        self._append_container_footer(container, footer_bits, source="Pagermon (community-hosted)")
         return container
 
     # ---- Generic fallback --------------------------------------
