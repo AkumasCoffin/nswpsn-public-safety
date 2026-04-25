@@ -2356,13 +2356,31 @@ function renderRolesCard(preset) {
 // "no filter" — every alert that passes the mute gate is delivered.
 // ============================================================================
 
-const _DASH_FILTER_SEVERITIES = ['advice', 'watch_and_act', 'emergency', 'minor', 'moderate', 'major'];
-const _DASH_FILTER_SEVERITY_LABELS = {
-  advice: 'Advice (RFS)', watch_and_act: 'Watch & Act (RFS)', emergency: 'Emergency (RFS)',
-  minor: 'Minor', moderate: 'Moderate', major: 'Major',
+// Per-alert-type severity scales. The dashboard renders one dropdown per
+// severity-aware alert type so users can set independent floors for each.
+const _DASH_SEVERITY_PER_TYPE = {
+  rfs: [
+    { value: 'advice',        label: 'Advice' },
+    { value: 'watch_and_act', label: 'Watch & Act' },
+    { value: 'emergency',     label: 'Emergency' },
+  ],
+  bom: [
+    { value: 'minor',    label: 'Minor' },
+    { value: 'moderate', label: 'Moderate' },
+    { value: 'major',    label: 'Major' },
+  ],
+  traffic_major: [
+    { value: 'minor',    label: 'Minor' },
+    { value: 'moderate', label: 'Moderate' },
+    { value: 'major',    label: 'Major' },
+  ],
 };
-// Alert types whose severity_min has any effect. Other types ignore the floor.
-const _DASH_FILTER_SEVERITY_TYPES = new Set(['rfs', 'bom', 'traffic_major']);
+const _DASH_SEVERITY_TYPE_LABELS = {
+  rfs:           'RFS (bushfires)',
+  bom:           'BOM (weather)',
+  traffic_major: 'Traffic (major incidents)',
+};
+const _DASH_FILTER_SEVERITY_TYPES = new Set(Object.keys(_DASH_SEVERITY_PER_TYPE));
 
 function presetFilters(preset) {
   const f = (preset && preset.filters) || {};
@@ -2375,10 +2393,26 @@ function presetFilters(preset) {
   } else if (f.bbox && typeof f.bbox === 'object' && typeof f.bbox.lat_min === 'number') {
     gf = { type: 'bbox', ...f.bbox };
   }
+  // Severity: prefer per-type dict. Legacy single string is fanned out to
+  // whichever per-type scales contain that token, so legacy presets render
+  // identical floors across the affected dropdowns.
+  let sev = {};
+  const rawSev = f.severity_min;
+  if (typeof rawSev === 'string' && rawSev) {
+    for (const at of Object.keys(_DASH_SEVERITY_PER_TYPE)) {
+      if (_DASH_SEVERITY_PER_TYPE[at].some(o => o.value === rawSev)) {
+        sev[at] = rawSev;
+      }
+    }
+  } else if (rawSev && typeof rawSev === 'object') {
+    for (const [at, v] of Object.entries(rawSev)) {
+      if (typeof v === 'string' && v) sev[at] = v;
+    }
+  }
   return {
     keywords_include: Array.isArray(f.keywords_include) ? f.keywords_include : [],
     keywords_exclude: Array.isArray(f.keywords_exclude) ? f.keywords_exclude : [],
-    severity_min: typeof f.severity_min === 'string' ? f.severity_min : '',
+    severity_min: sev,
     geofilter: gf,
   };
 }
@@ -2388,7 +2422,8 @@ function filtersSummary(preset) {
   const bits = [];
   const kw = f.keywords_include.length + f.keywords_exclude.length;
   if (kw) bits.push(`${kw} keyword${kw === 1 ? '' : 's'}`);
-  if (f.severity_min) bits.push(`severity ≥ ${f.severity_min.replace(/_/g, ' ')}`);
+  const nSev = Object.keys(f.severity_min).length;
+  if (nSev) bits.push(`severity (${nSev} source${nSev === 1 ? '' : 's'})`);
   if (f.geofilter) {
     const t = f.geofilter.type;
     bits.push(t === 'ring' ? 'circle' : (t === 'polygon' ? 'polygon' : 'square'));
@@ -2812,7 +2847,8 @@ function renderFiltersCard(preset) {
 
   // Header row: summary + toggle button.
   const editorId = 'filters-editor-' + preset.id;
-  let expanded = !!(f.keywords_include.length || f.keywords_exclude.length || f.severity_min || f.geofilter);
+  let expanded = !!(f.keywords_include.length || f.keywords_exclude.length
+                    || Object.keys(f.severity_min).length || f.geofilter);
 
   const summarySpan = el('span', { class: 'filters-summary' }, filtersSummary(preset));
   const toggleBtn = el('button', {
@@ -2866,29 +2902,42 @@ function renderFiltersCard(preset) {
     excTa,
   ]));
 
-  // ---- Severity floor ----
-  const sevSelect = el('select', {
-    class: 'form-select',
-    id: 'filters-sev-' + preset.id,
-  });
-  sevSelect.appendChild(el('option', { value: '' }, '(no severity floor)'));
-  for (const s of _DASH_FILTER_SEVERITIES) {
-    const opt = el('option', { value: s }, _DASH_FILTER_SEVERITY_LABELS[s] || s);
-    if (s === f.severity_min) opt.selected = true;
-    sevSelect.appendChild(opt);
+  // ---- Severity floors (one per severity-aware alert type) ----
+  const presetTypes = new Set(preset.alert_types || []);
+  const sevSelects = {};   // alert_type -> <select> element
+  const sevWrap = el('div', {});
+  sevWrap.appendChild(el('label', { class: 'field-label' }, 'Severity floors (per source)'));
+  for (const at of Object.keys(_DASH_SEVERITY_PER_TYPE)) {
+    const enabled = presetTypes.has(at);
+    const sel = el('select', {
+      class: 'form-select',
+      id: `filters-sev-${at}-${preset.id}`,
+    });
+    sel.appendChild(el('option', { value: '' }, '(no floor)'));
+    for (const opt of _DASH_SEVERITY_PER_TYPE[at]) {
+      const o = el('option', { value: opt.value }, opt.label);
+      if (f.severity_min[at] === opt.value) o.selected = true;
+      sel.appendChild(o);
+    }
+    if (!enabled) {
+      sel.disabled = true;
+      sel.style.opacity = '0.55';
+    }
+    sevSelects[at] = sel;
+    const labelStyle = 'min-width:160px;font-size:0.8rem;'
+      + (enabled ? '' : 'color:var(--text-soft);');
+    const row = el('div', {
+      style: 'display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;flex-wrap:wrap;',
+    }, [
+      el('span', { style: labelStyle }, _DASH_SEVERITY_TYPE_LABELS[at]),
+      sel,
+    ]);
+    sevWrap.appendChild(row);
   }
-  const sevWrap = el('div', {}, [
-    el('label', { class: 'field-label', for: sevSelect.id }, 'Severity floor'),
-    sevSelect,
-    el('div', { style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.25rem' },
-       hasSeverityType
-         ? 'Applies to RFS / BOM / traffic_major; other types ignore.'
-         : 'No severity-aware alert types selected — floor is inactive until you add RFS, BOM, or traffic_major.'),
-  ]);
-  if (!hasSeverityType) {
-    sevSelect.disabled = true;
-    sevSelect.style.opacity = '0.55';
-  }
+  sevWrap.appendChild(el('div', { style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.35rem' },
+    hasSeverityType
+      ? 'Each floor is independent — RFS at "Watch & Act" lets advice through for BOM if BOM is set lower.'
+      : 'Add RFS, BOM, or traffic_major to this preset to use severity floors. Greyed-out rows are inactive.'));
   body.appendChild(sevWrap);
 
   // ---- geofilter (interactive map) ----
@@ -2903,12 +2952,15 @@ function renderFiltersCard(preset) {
     const parseList = (s) => (s || '').split(',').map(x => x.trim()).filter(Boolean);
     const inc = parseList(incTa.value);
     const exc = parseList(excTa.value);
-    const sev = sevSelect.disabled ? '' : (sevSelect.value || '');
+    const sev = {};
+    for (const [at, sel] of Object.entries(sevSelects)) {
+      if (!sel.disabled && sel.value) sev[at] = sel.value;
+    }
     const gf = geofilterMap.get();
     const out = {};
     if (inc.length) out.keywords_include = inc;
     if (exc.length) out.keywords_exclude = exc;
-    if (sev) out.severity_min = sev;
+    if (Object.keys(sev).length) out.severity_min = sev;
     if (gf) out.geofilter = gf;
     return out;
   };
@@ -2935,7 +2987,9 @@ function renderFiltersCard(preset) {
     class: 'btn btn-ghost btn-sm',
     onclick: async () => {
       incTa.value = ''; excTa.value = '';
-      if (!sevSelect.disabled) sevSelect.value = '';
+      for (const sel of Object.values(sevSelects)) {
+        if (!sel.disabled) sel.value = '';
+      }
       geofilterMap.set(null);
       await patchPreset(preset.id, { filters: {} });
     },
