@@ -25,7 +25,10 @@ node_modules/
 # Claude Code
 .claude/
 
-# Frontend config (contains Supabase keys)
+# Per-deployment frontend config — each environment maintains its own.
+# Values inside are public-by-design (anon key + public API tag); ignored
+# only so deployments don't clobber each other. Template lives in
+# config.sample.js.
 config.js
 
 # OS
@@ -40,13 +43,16 @@ npm-debug.log*
 # Database (uncomment if you don't want to track)
 *.db
 
-# Environment variables
+# Environment variables — both backend and bot keep their own .env locally.
 .env
 .env.local
 .env.*.local
 
-
-ref_data/
-
+# Stale snapshot folder — kept locally for reference, not shipped.
 backup/
-repo_stuff/
+
+# Internal docs (Waze userscript source, summary-flow notes, etc.) — local-only.
+docs/
+
+# Radio unit reference data (local operator data, not for the public repo).
+backends/reference/

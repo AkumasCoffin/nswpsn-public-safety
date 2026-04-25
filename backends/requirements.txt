@@ -10,4 +10,3 @@ psycopg2-binary>=2.9.0
 # Playwright for solving Vercel Security Checkpoint on Central Watch
 # After pip install: run 'playwright install chromium' to download browser
 playwright>=1.40.0
-playwright-stealth>=1.0.6

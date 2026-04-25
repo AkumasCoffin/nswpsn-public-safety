@@ -22,7 +22,7 @@ import time
 import json
 import base64
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
 import threading
 import signal
 import os
@@ -81,14 +81,31 @@ if not DEV_MODE:
     click.echo = echo
     click.secho = secho
 
-# Configure CORS to allow all origins explicitly
+# Configure CORS to allow all origins for public endpoints, but enable
+# credentialed cross-origin for the dashboard (which lives on nswpsn.*
+# while the API lives on api.*). `Access-Control-Allow-Origin: *` and
+# credentialed cookies are incompatible per spec, so dashboard paths need
+# an explicit origin list and `supports_credentials=True`.
 CORS(app, resources={
+    r"/api/dashboard/*": {
+        "origins": [
+            "https://nswpsn.forcequit.xyz",
+            "https://www.nswpsn.forcequit.xyz",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ],
+        "methods": ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Accept", "Authorization"],
+        "supports_credentials": True,
+        # Propagate our Set-Cookie on redirects / AJAX
+        "expose_headers": ["Content-Type"],
+    },
     r"/*": {
         "origins": "*",
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Accept", "Authorization"],
-        "supports_credentials": False
-    }
+        "supports_credentials": False,
+    },
 })
 
 
@@ -248,20 +265,243 @@ def _cleanup_rate_limits():
     """Remove stale rate limit entries (called periodically)"""
     now = time.time()
     stale_threshold = RATE_LIMIT_WINDOW * 2
-    
+
     with _rate_limit_lock:
-        stale_ips = [ip for ip, data in _rate_limit_data.items() 
+        stale_ips = [ip for ip, data in _rate_limit_data.items()
                      if now - data['window_start'] > stale_threshold]
         for ip in stale_ips:
             del _rate_limit_data[ip]
 
 
+# ============== UPSTREAM SOURCE-HEALTH REGISTRY ==============
+# In-memory only; survives via pm2 lifetime. After restart, sources show
+# 'unknown' until the next successful poll. Powers the admin dashboard's
+# "data sources" panel via /api/dashboard/admin/sources.
+_SOURCE_HEALTH = {}   # name -> {last_success, last_error, last_error_msg, consec_fails, total_success, total_fail}
+_SOURCE_HEALTH_LOCK = threading.Lock()
+
+_SOURCE_THRESHOLDS = {
+    'rfs':               {'soft': 300,  'hard': 900,  'label': 'RFS incidents'},
+    'bom':               {'soft': 300,  'hard': 900,  'label': 'BOM warnings'},
+    'traffic_incidents': {'soft': 300,  'hard': 900,  'label': 'LiveTraffic — incidents'},
+    'traffic_roadwork':  {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — roadwork'},
+    'traffic_flood':     {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — flood'},
+    'traffic_fire':      {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — fire'},
+    'traffic_major':     {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — major events'},
+    'power_endeavour':   {'soft': 600,  'hard': 1800, 'label': 'Endeavour outages'},
+    'power_ausgrid':     {'soft': 600,  'hard': 1800, 'label': 'Ausgrid outages'},
+    'waze':              {'soft': 300,  'hard': 900,  'label': 'Waze'},
+    'pager':             {'soft': 300,  'hard': 900,  'label': 'Pagermon'},
+    # rdio summary scheduler runs once per hour. Soft threshold sits just
+    # past the cycle (65 min) so a healthy hourly cadence doesn't read
+    # "degraded"; hard threshold flags 3+ missed cycles (3.5h).
+    'rdio':              {'soft': 3900, 'hard': 12600, 'label': 'rdio-scanner'},
+}
+
+
+_SOURCE_HEALTH_DIRTY = set()  # names whose row needs flushing to Postgres
+_SOURCE_HEALTH_LOADED = False
+
+
+def _source_health_load_from_db():
+    """Restore _SOURCE_HEALTH from Postgres at startup. Best-effort —
+    silently no-ops if BOT_DATA_DATABASE_URL isn't configured."""
+    global _SOURCE_HEALTH_LOADED
+    if _SOURCE_HEALTH_LOADED:
+        return
+    conn = _bot_db_conn() if 'bot_db_conn' in globals() or '_bot_db_conn' in globals() else None
+    # _bot_db_conn is defined later in the file — guard against import-time
+    # ordering by lazy resolution at the call site.
+    try:
+        conn = _bot_db_conn()
+    except Exception:
+        conn = None
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS source_health ('
+                    'name TEXT PRIMARY KEY, last_success BIGINT, last_error BIGINT, '
+                    'last_error_msg TEXT, consec_fails INTEGER NOT NULL DEFAULT 0, '
+                    'total_success BIGINT NOT NULL DEFAULT 0, '
+                    'total_fail BIGINT NOT NULL DEFAULT 0, '
+                    'updated_at TIMESTAMPTZ NOT NULL DEFAULT now())')
+        cur.execute('SELECT name, last_success, last_error, last_error_msg, '
+                    'consec_fails, total_success, total_fail FROM source_health')
+        with _SOURCE_HEALTH_LOCK:
+            for r in cur.fetchall():
+                _SOURCE_HEALTH[r['name']] = {
+                    'last_success': r['last_success'],
+                    'last_error': r['last_error'],
+                    'last_error_msg': r['last_error_msg'],
+                    'consec_fails': int(r['consec_fails'] or 0),
+                    'total_success': int(r['total_success'] or 0),
+                    'total_fail': int(r['total_fail'] or 0),
+                }
+        conn.commit()
+        _SOURCE_HEALTH_LOADED = True
+        Log.startup(f"source_health: restored {len(_SOURCE_HEALTH)} source(s) from DB")
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        Log.warn(f"source_health load failed: {e}")
+    finally:
+        conn.close()
+
+
+def _source_health_flush():
+    """Push every dirty source row to Postgres. Called by a 60s background
+    thread so the hot path (source_ok/source_error) stays in-memory."""
+    with _SOURCE_HEALTH_LOCK:
+        if not _SOURCE_HEALTH_DIRTY:
+            return
+        names = list(_SOURCE_HEALTH_DIRTY)
+        rows = [(n, dict(_SOURCE_HEALTH.get(n) or {})) for n in names]
+        _SOURCE_HEALTH_DIRTY.clear()
+    try:
+        conn = _bot_db_conn()
+    except Exception:
+        conn = None
+    if conn is None:
+        # Re-mark as dirty so we'll retry next tick — DB might come back.
+        with _SOURCE_HEALTH_LOCK:
+            _SOURCE_HEALTH_DIRTY.update(names)
+        return
+    try:
+        cur = conn.cursor()
+        for name, s in rows:
+            cur.execute(
+                'INSERT INTO source_health (name, last_success, last_error, '
+                'last_error_msg, consec_fails, total_success, total_fail, updated_at) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, now()) '
+                'ON CONFLICT (name) DO UPDATE SET '
+                '  last_success = EXCLUDED.last_success, '
+                '  last_error = EXCLUDED.last_error, '
+                '  last_error_msg = EXCLUDED.last_error_msg, '
+                '  consec_fails = EXCLUDED.consec_fails, '
+                '  total_success = EXCLUDED.total_success, '
+                '  total_fail = EXCLUDED.total_fail, '
+                '  updated_at = now()',
+                (name, s.get('last_success'), s.get('last_error'),
+                 s.get('last_error_msg'),
+                 int(s.get('consec_fails') or 0),
+                 int(s.get('total_success') or 0),
+                 int(s.get('total_fail') or 0)),
+            )
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        with _SOURCE_HEALTH_LOCK:
+            _SOURCE_HEALTH_DIRTY.update(names)
+        Log.warn(f"source_health flush failed: {e}")
+    finally:
+        conn.close()
+
+
+def _source_health_clear_all():
+    """Wipe both the in-memory dict and the DB row, for the admin Clear button."""
+    with _SOURCE_HEALTH_LOCK:
+        _SOURCE_HEALTH.clear()
+        _SOURCE_HEALTH_DIRTY.clear()
+    try:
+        conn = _bot_db_conn()
+    except Exception:
+        conn = None
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM source_health')
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        Log.warn(f"source_health clear failed: {e}")
+    finally:
+        conn.close()
+
+
+def _source_health_flusher_loop():
+    """Background thread: flush dirty rows every 60s + try the initial load."""
+    # Lazy-load on first tick (avoids module-import ordering issues).
+    while True:
+        try:
+            _source_health_load_from_db()
+            _source_health_flush()
+        except Exception as e:
+            Log.warn(f"source_health flusher error: {e}")
+        time.sleep(60)
+
+
+def source_ok(name):
+    """Record a successful upstream fetch. Hot-path-safe (no logging)."""
+    now = int(time.time())
+    with _SOURCE_HEALTH_LOCK:
+        s = _SOURCE_HEALTH.setdefault(name, {
+            'last_success': None, 'last_error': None, 'last_error_msg': None,
+            'consec_fails': 0, 'total_success': 0, 'total_fail': 0,
+        })
+        s['last_success'] = now
+        s['consec_fails'] = 0
+        s['total_success'] = (s.get('total_success') or 0) + 1
+        _SOURCE_HEALTH_DIRTY.add(name)
+
+
+def source_error(name, msg, exc=None):
+    """Record a failed upstream fetch. Hot-path-safe (no logging)."""
+    now = int(time.time())
+    with _SOURCE_HEALTH_LOCK:
+        s = _SOURCE_HEALTH.setdefault(name, {
+            'last_success': None, 'last_error': None, 'last_error_msg': None,
+            'consec_fails': 0, 'total_success': 0, 'total_fail': 0,
+        })
+        s['last_error'] = now
+        s['last_error_msg'] = str(msg)[:200]
+        s['consec_fails'] = (s.get('consec_fails') or 0) + 1
+        s['total_fail'] = (s.get('total_fail') or 0) + 1
+        _SOURCE_HEALTH_DIRTY.add(name)
+
+
 # Ensure CORS headers are always set (backup in case reverse proxy interferes)
+#
+# Dashboard endpoints need a SPECIFIC origin (not *) so the browser will send
+# the cross-site session cookie. `Access-Control-Allow-Origin: *` and
+# credentialed requests are mutually exclusive per the CORS spec — so we
+# whitelist the dashboard's origin(s) and echo them back for matching requests.
+_DASHBOARD_ALLOWED_ORIGINS = {
+    'https://nswpsn.forcequit.xyz',
+    'https://www.nswpsn.forcequit.xyz',
+    # Local dev; harmless to leave in production since nothing real listens
+    # here — the session cookie is domain-scoped to forcequit.xyz.
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+}
+
+
 @app.after_request
 def add_cors_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    path = request.path or ''
+    origin = request.headers.get('Origin', '')
+    if path.startswith('/api/dashboard/') and origin in _DASHBOARD_ALLOWED_ORIGINS:
+        # Credentialed cross-origin: must echo the specific origin + allow creds.
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Vary'] = 'Origin'
+    else:
+        response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, Authorization'
+    # Cap preflight cache so an old "no PATCH" response doesn't linger in the
+    # browser. 60s is short enough to recover from a config change quickly,
+    # long enough to avoid hammering the OPTIONS path.
+    response.headers['Access-Control-Max-Age'] = '60'
     # Add rate limit headers
     if hasattr(request, '_rate_limit_remaining'):
         response.headers['X-RateLimit-Remaining'] = str(request._rate_limit_remaining)
@@ -299,7 +539,9 @@ def get_request_source():
 
 def get_session_for_ip(ip):
     """Find session ID for a given IP address"""
-    for page_id, session in active_page_sessions.items():
+    with _page_sessions_lock:
+        snap = list(active_page_sessions.items())
+    for page_id, session in snap:
         if session.get('ip') == ip:
             # Show last 6 chars of session ID (more unique than first 8)
             short_id = page_id[-6:] if len(page_id) > 6 else page_id
@@ -349,8 +591,20 @@ def check_rate_limit():
         return None
     
     # Skip rate limiting for these endpoints
-    skip_rate_limit = {'/api/heartbeat', '/api/health', '/api/config', '/api/cache/status', '/api/cache/stats'}
+    skip_rate_limit = {
+        '/api/heartbeat', '/api/health', '/api/config',
+        '/api/cache/status', '/api/cache/stats',
+        # Summary endpoints are cheap DB reads polled by every open live.html
+        # tab — don't let them eat the user's 100/min budget.
+        '/api/summaries/latest', '/api/summaries',
+    }
     if path in skip_rate_limit:
+        return None
+
+    # Dashboard endpoints: users may toggle several channels in quick
+    # succession and the 100/min budget is for public API consumers, not
+    # authenticated dashboard sessions.
+    if path.startswith('/api/dashboard/'):
         return None
     
     # Check rate limit
@@ -430,6 +684,7 @@ DB_PATH_HISTORY_WEATHER = 'weather'
 
 SOURCE_TO_DB = {
     'waze_hazard': DB_PATH_HISTORY_WAZE, 'waze_police': DB_PATH_HISTORY_WAZE, 'waze_roadwork': DB_PATH_HISTORY_WAZE,
+    'waze_jam': DB_PATH_HISTORY_WAZE,
     'traffic_incident': DB_PATH_HISTORY_TRAFFIC, 'traffic_roadwork': DB_PATH_HISTORY_TRAFFIC,
     'traffic_flood': DB_PATH_HISTORY_TRAFFIC, 'traffic_fire': DB_PATH_HISTORY_TRAFFIC,
     'traffic_majorevent': DB_PATH_HISTORY_TRAFFIC, 'livetraffic': DB_PATH_HISTORY_TRAFFIC,
@@ -547,6 +802,7 @@ def _fetch_endeavour_all_outages():
     # Step 1: Fetch aggregated outage areas (one record per incident)
     areas = _fetch_endeavour_supabase('/rpc/get_outage_areas_fast', method='POST', body={})
     if not areas or not isinstance(areas, list):
+        source_error('power_endeavour', 'No data from get_outage_areas_fast')
         Log.prewarm("Endeavour: No data from get_outage_areas_fast")
         return {'current': [], 'current_maintenance': [], 'future_maintenance': []}
     
@@ -658,6 +914,7 @@ def _fetch_endeavour_all_outages():
         else:
             current_outages.append(outage)
     
+    source_ok('power_endeavour')
     return {'current': current_outages, 'current_maintenance': current_maintenance, 'future_maintenance': future_maintenance}
 
 # Data retention settings (how long to keep historical data)
@@ -720,6 +977,7 @@ SOURCE_HIERARCHY = {
     'waze_hazard': {'provider': 'Waze', 'type': 'Hazards'},
     'waze_police': {'provider': 'Waze', 'type': 'Police'},
     'waze_roadwork': {'provider': 'Waze', 'type': 'Roadwork'},
+    'waze_jam': {'provider': 'Waze', 'type': 'Traffic Jams'},
     # LiveTraffic NSW (Transport for NSW)
     'traffic_incident': {'provider': 'LiveTraffic NSW', 'type': 'Incidents'},
     'traffic_roadwork': {'provider': 'LiveTraffic NSW', 'type': 'Roadwork'},
@@ -780,7 +1038,12 @@ def get_source_hierarchy(source):
 
 # Track active page sessions with unique IDs and timestamps
 # Format: {page_id: {'last_seen': timestamp, 'user_agent': str, 'ip': str, 'page_type': str, 'is_data_page': bool}}
+# Guarded by _page_sessions_lock (RLock so cleanup can be called from within
+# other locked sections). Every iteration, addition, update, or deletion must
+# hold the lock — Python's GIL makes single dict ops atomic but raises
+# RuntimeError if the dict is mutated during iteration on another thread.
 active_page_sessions = {}
+_page_sessions_lock = threading.RLock()
 PAGE_SESSION_TIMEOUT = 120  # Remove sessions inactive for 2 minutes
 
 def init_archive_db():
@@ -796,10 +1059,96 @@ def init_archive_db():
         raise
     Log.startup("Database connected (PostgreSQL)")
 
-    # Run one-time migrations
-    migrate_endeavour_categories()
-    migrate_bom_sources()
-    migrate_bom_subcategories()
+    # Cheap idempotent schema additions that should block startup — these
+    # let `rdio_summaries` gain the `release_at` column on existing deployments
+    # without requiring the user to re-run init_postgres.py.
+    try:
+        _c = get_conn()
+        try:
+            _cur = _c.cursor()
+            _cur.execute('ALTER TABLE rdio_summaries ADD COLUMN IF NOT EXISTS release_at TIMESTAMPTZ')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_rdio_summaries_release ON rdio_summaries(release_at)')
+            # Filter-dropdown cache — small, rebuilt periodically from is_latest=1.
+            _cur.execute('''
+                CREATE TABLE IF NOT EXISTS data_history_filter_cache (
+                    kind TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT '',
+                    value TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (kind, source, value)
+                )
+            ''')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind ON data_history_filter_cache(kind)')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind_source ON data_history_filter_cache(kind, source)')
+            _c.commit()
+            _cur.close()
+        finally:
+            _c.close()
+    except Exception as e:
+        Log.error(f"rdio_summaries schema migration warning: {e}")
+
+    # One-time data migrations run in a background thread — they UPDATE
+    # data_history which can be a large scan and shouldn't block startup.
+    def _run_migrations():
+        try:
+            migrate_endeavour_categories()
+            migrate_bom_sources()
+            migrate_bom_subcategories()
+        except Exception as e:
+            Log.error(f"Background migrations error: {e}")
+    threading.Thread(target=_run_migrations, daemon=True, name='data-migrations').start()
+
+    # Add partial indexes on data_history for the common list-page path
+    # (is_latest=1). Uses CONCURRENTLY so it doesn't block writes on existing
+    # large tables. Runs in a background thread because CONCURRENTLY must be
+    # outside a transaction and can take minutes on a big table.
+    def _ensure_partial_indexes():
+        try:
+            import psycopg2
+            dsn = os.environ.get('DATABASE_URL', '')
+            if not dsn:
+                return
+            conn = psycopg2.connect(dsn)
+            try:
+                conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+                cur = conn.cursor()
+                built_any = False
+                for sql in (
+                    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_only_fetched ON data_history(fetched_at DESC) WHERE is_latest = 1',
+                    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_only_source ON data_history(source, fetched_at DESC) WHERE is_latest = 1',
+                ):
+                    idx_name = sql.split()[4]
+                    try:
+                        Log.startup(f"Building partial index {idx_name} CONCURRENTLY (may take minutes)...")
+                        cur.execute(sql)
+                        Log.startup(f"✓ Partial index {idx_name} ready")
+                        built_any = True
+                    except Exception as e:
+                        Log.error(f"Partial index create warn ({idx_name}): {e}")
+                # ANALYZE so the planner picks up the new partial indexes.
+                # Without this, pg_stat sees zero rows under the new index
+                # and the planner may keep picking seqscan or a worse index.
+                if built_any:
+                    try:
+                        Log.startup("Running ANALYZE data_history to refresh planner stats...")
+                        cur.execute('ANALYZE data_history')
+                        Log.startup("✓ ANALYZE complete")
+                    except Exception as e:
+                        Log.error(f"ANALYZE data_history failed: {e}")
+                cur.close()
+            finally:
+                conn.close()
+        except Exception as e:
+            Log.error(f"Partial index migration error: {e}")
+    threading.Thread(target=_ensure_partial_indexes, daemon=True, name='partial-index-migration').start()
+
+    # Filter cache refresh scheduler — keeps /api/data/history/filters fast.
+    threading.Thread(
+        target=_filter_cache_scheduler,
+        daemon=True,
+        name='filter-cache-scheduler',
+    ).start()
 
 
 # ==================== PERSISTENT DATA CACHE ====================
@@ -807,6 +1156,7 @@ def init_archive_db():
 
 def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
     """Store data in persistent PostgreSQL cache"""
+    conn = None
     try:
         with _db_lock_cache:
             conn = get_conn()
@@ -817,24 +1167,26 @@ def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
                 ON CONFLICT (endpoint) DO UPDATE SET data = EXCLUDED.data, timestamp = EXCLUDED.timestamp, ttl = EXCLUDED.ttl, fetch_time_ms = EXCLUDED.fetch_time_ms
             ''', (endpoint, json.dumps(data), int(time.time()), ttl, fetch_time_ms))
             conn.commit()
-            conn.close()
         return True
     except Exception as e:
         Log.cache(f"Set error for {endpoint}: {e}")
         return False
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 def cache_get(endpoint):
     """
     Get data from persistent cache.
     Returns: (data, age_seconds, is_expired)
     """
+    conn = None
     try:
         conn = get_conn()
         c = conn.cursor()
         c.execute('SELECT data, timestamp, ttl FROM api_data_cache WHERE endpoint = %s', (endpoint,))
         row = c.fetchone()
-        conn.close()
-        
         if row:
             data_str, timestamp, ttl = row
             age = int(time.time()) - timestamp
@@ -844,27 +1196,36 @@ def cache_get(endpoint):
     except Exception as e:
         Log.cache(f"Get error for {endpoint}: {e}")
         return None, 0, True
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 def cache_get_any(endpoint):
     """
     Get data from cache even if expired.
     Returns: (data, age_seconds) or (None, 0)
     """
+    conn = None
     try:
         conn = get_conn()
         c = conn.cursor()
         c.execute('SELECT data, timestamp FROM api_data_cache WHERE endpoint = %s', (endpoint,))
         row = c.fetchone()
-        conn.close()
         if row:
             return json.loads(row[0]), int(time.time()) - row[1]
         return None, 0
     except Exception as e:
         Log.cache(f"Get any error for {endpoint}: {e}")
         return None, 0
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 def cache_stats():
     """Get cache statistics for debug endpoint"""
+    conn = None
     try:
         conn = get_conn()
         c = conn.cursor()
@@ -875,8 +1236,6 @@ def cache_stats():
             ORDER BY endpoint
         ''')
         rows = c.fetchall()
-        conn.close()
-        
         now = int(time.time())
         return [{
             'endpoint': row[0],
@@ -887,6 +1246,10 @@ def cache_stats():
         } for row in rows]
     except Exception as e:
         return [{'error': str(e)}]
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 
 # ==================== HISTORICAL DATA STORAGE ====================
@@ -1059,6 +1422,7 @@ def store_incidents_batch(incidents, source_type=None):
         'waze_hazard': 'Waze Hazards',
         'waze_police': 'Waze Police',
         'waze_roadwork': 'Waze Roadwork',
+        'waze_jam': 'Waze Jams',
         'endeavour_current': 'Endeavour',
         'endeavour_planned': 'Endeavour Planned',
         'ausgrid': 'Ausgrid',
@@ -1232,7 +1596,17 @@ def _store_incidents_batch_inner(incidents, source_type=None):
                 
                 # Mark incidents NO LONGER in API response as is_live = 0
                 # Only do this if we have a source_type and received at least some data
-                if source_type and all_source_ids_in_batch:
+                #
+                # Waze sources are exempt: with userscript ingest the prewarm batch
+                # only reflects regions scraped in the last few minutes (a full
+                # 129-region rotation takes ~11 min), so running the diff here
+                # would flip every non-recently-visited incident to is_live=0 on
+                # every cycle. Instead, cleanup_old_data() expires Waze records
+                # by `last_seen` age (1h).
+                waze_sources = {'waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam'}
+                if source_type in waze_sources:
+                    pass
+                elif source_type and all_source_ids_in_batch:
                     # Get all source_ids we know about for this source_type that are still marked as live
                     c.execute('''
                         SELECT DISTINCT source_id FROM data_history 
@@ -1294,14 +1668,30 @@ def cleanup_old_data():
             
             # Mark pager hits as ended if older than 1 hour
             c.execute('''
-                UPDATE data_history 
-                SET is_live = 0 
-                WHERE source = 'pager' AND is_live = 1 
+                UPDATE data_history
+                SET is_live = 0
+                WHERE source = 'pager' AND is_live = 1
                 AND COALESCE(source_timestamp_unix, fetched_at) < %s
             ''', (pager_cutoff,))
             pager_ended = c.rowcount
             if pager_ended > 0:
                 Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
+
+            # Waze failover: mark as ended if last_seen older than 1 hour.
+            # Per-batch diffing is disabled for Waze (incomplete rotations would
+            # flip everything off), so this is the only path that clears stale
+            # Waze records from the live set.
+            waze_cutoff = int(time.time()) - 3600
+            c.execute('''
+                UPDATE data_history
+                SET is_live = 0
+                WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
+                AND is_live = 1
+                AND COALESCE(last_seen, fetched_at) < %s
+            ''', (waze_cutoff,))
+            waze_ended = c.rowcount
+            if waze_ended > 0:
+                Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
             
             # Delete old data_history entries
             c.execute('DELETE FROM data_history WHERE fetched_at < %s', (cutoff,))
@@ -1527,19 +1917,20 @@ def get_data_history_stats():
         
         # Aggregate from all history databases
         for db_path in ALL_HISTORY_DBS:
+            conn = None
             try:
                 conn = get_conn()
                 c = conn.cursor()
-                
+
                 # Total records
                 c.execute('SELECT COUNT(*) FROM data_history')
                 total += c.fetchone()[0]
-                
+
                 # Records by source
                 c.execute('SELECT source, COUNT(*) FROM data_history GROUP BY source')
                 for row in c.fetchall():
                     by_source[row[0]] = by_source.get(row[0], 0) + row[1]
-                
+
                 # Date range
                 c.execute('SELECT MIN(fetched_at), MAX(fetched_at) FROM data_history')
                 db_min, db_max = c.fetchone()
@@ -1547,18 +1938,20 @@ def get_data_history_stats():
                     min_ts = db_min
                 if db_max and (max_ts is None or db_max > max_ts):
                     max_ts = db_max
-                
+
                 # Records in last 24 hours
                 c.execute('SELECT COUNT(*) FROM data_history WHERE fetched_at > %s', (day_ago,))
                 last_24h += c.fetchone()[0]
-                
+
                 # Estimate size
                 c.execute("SELECT pg_total_relation_size('data_history')")
                 db_size += c.fetchone()[0]
-                
-                conn.close()
             except Exception as e:
                 Log.error(f"Stats error for {os.path.basename(db_path)}: {e}")
+            finally:
+                if conn is not None:
+                    try: conn.close()
+                    except Exception: pass
         
         # Sort by_source by count descending
         by_source = dict(sorted(by_source.items(), key=lambda x: x[1], reverse=True))
@@ -1603,15 +1996,8 @@ def graceful_shutdown(signum, frame):
         _stop_cw_browser_worker()
     except Exception:
         pass
-    
-    # Shut down Waze browser worker if running
-    try:
-        global _waze_browser_ready
-        _waze_browser_ready = False
-        _waze_request_queue.put(None)
-    except Exception:
-        pass
-    
+
+    # (Waze browser worker removed - userscript ingest replaces it)
     # (Endeavour browser worker removed - now uses Supabase API directly)
     
     # Give threads a moment to exit their loops
@@ -1671,31 +2057,35 @@ def start_cleanup_thread():
 
 def archive_current_stats():
     """Fetch current stats and archive them to the database"""
+    conn = None
     try:
         # Get aggregated stats (reuse the stats_summary logic)
         stats = collect_stats_for_archive()
         timestamp = int(time.time() * 1000)  # JS-compatible timestamp
-        
+
         with _db_lock_stats:
             conn = get_conn()
             c = conn.cursor()
-            
+
             # Insert or replace stats snapshot
             c.execute('''
                 INSERT INTO stats_snapshots (timestamp, data)
                 VALUES (%s, %s)
                 ON CONFLICT (timestamp) DO UPDATE SET data = EXCLUDED.data
             ''', (timestamp, json.dumps(stats)))
-            
+
             conn.commit()
-            conn.close()
-        
+
         if DEV_MODE:
             Log.data(f"Archived stats snapshot")
         return True
     except Exception as e:
         Log.error(f"Archive error: {e}")
         return False
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 def collect_stats_for_archive():
     """Collect all stats for archival (matches frontend statsHistory structure)"""
@@ -1888,34 +2278,37 @@ def collect_stats_for_archive():
 
 def cleanup_stale_sessions():
     """Remove page sessions that haven't sent a heartbeat recently"""
-    global active_page_sessions
     now = time.time()
-    stale_sessions = [
-        (page_id, session) for page_id, session in active_page_sessions.items()
-        if now - session['last_seen'] > PAGE_SESSION_TIMEOUT
-    ]
-    for page_id, session in stale_sessions:
-        short_id = page_id[-6:] if len(page_id) > 6 else page_id
-        del active_page_sessions[page_id]
-        Log.cleanup(f"Session expired: ...{short_id}")
-    
-    # Log summary if sessions were cleaned in production
-    if stale_sessions and not DEV_MODE:
+    with _page_sessions_lock:
+        stale_sessions = [
+            (page_id, session) for page_id, session in active_page_sessions.items()
+            if now - session['last_seen'] > PAGE_SESSION_TIMEOUT
+        ]
+        for page_id, _ in stale_sessions:
+            active_page_sessions.pop(page_id, None)
         total = len(active_page_sessions)
         data = sum(1 for s in active_page_sessions.values() if s.get('is_data_page', False))
+
+    # Log outside the lock to minimise hold time
+    for page_id, _ in stale_sessions:
+        short_id = page_id[-6:] if len(page_id) > 6 else page_id
+        Log.cleanup(f"Session expired: ...{short_id}")
+    if stale_sessions and not DEV_MODE:
         Log.cleanup(f"{len(stale_sessions)} session(s) expired (viewers: {total}, data: {data})")
-    
+
     return len(stale_sessions)
 
 def get_active_page_count():
     """Get count of all active page sessions after cleaning stale sessions"""
     cleanup_stale_sessions()
-    return len(active_page_sessions)
+    with _page_sessions_lock:
+        return len(active_page_sessions)
 
 def get_data_page_count():
     """Get count of active DATA pages (pages that fetch live data)"""
     cleanup_stale_sessions()
-    return sum(1 for s in active_page_sessions.values() if s.get('is_data_page', False))
+    with _page_sessions_lock:
+        return sum(1 for s in active_page_sessions.values() if s.get('is_data_page', False))
 
 # Track last known mode for immediate mode change logging
 _last_mode = None
@@ -2014,9 +2407,9 @@ def start_archive_thread():
     global archive_thread, archive_running
     if archive_thread is None or not archive_thread.is_alive():
         archive_running = True
-        # Archive immediately on startup
-        archive_current_stats()
-        # Start background loop
+        # Kick off the loop — it runs archive_current_stats() on its first iteration
+        # (last_collect_time starts at 0). Doing it inline here blocks startup for
+        # ~30s on external HTTP, so keep it async.
         archive_thread = threading.Thread(target=archive_loop, daemon=True)
         archive_thread.start()
         Log.startup("Archive thread started")
@@ -2075,12 +2468,85 @@ PREWARM_CONFIG = [
 ]
 
 
+# -----------------------------------------------------------------------------
+# Prewarm persistent-failure backoff
+# -----------------------------------------------------------------------------
+# After PREWARM_BACKOFF_THRESHOLD consecutive failures of the same cache key
+# (exception or None return), park it for progressively longer intervals so we
+# stop spamming a broken upstream every cycle. e.g. NSW Police RSS 403s every
+# minute; backoff parks it after 3 fails for 5min→15min→30min→1h→1h...
+PREWARM_BACKOFF_THRESHOLD = 3
+PREWARM_BACKOFF_STEPS = [300, 900, 1800, 3600]  # 5m, 15m, 30m, 1h (then plateau)
+
+_prewarm_fail_counts = {}       # cache_key -> int (consecutive fails)
+_prewarm_backoff_until = {}     # cache_key -> unix ts (resume fetches after)
+_prewarm_backoff_lock = threading.Lock()
+
+
+def _format_cycle_summary(outcomes, stats, elapsed_ms, initial=False):
+    """Single-line summary for a full or partial prewarm cycle."""
+    label = "Initial fetch" if initial else "Cycle"
+    parts = [f"{label}: {outcomes.get('success', 0)}✓"]
+    if outcomes.get('failed', 0):
+        parts.append(f"{outcomes['failed']}✗")
+    if outcomes.get('skipped', 0):
+        parts.append(f"{outcomes['skipped']}↩")
+    change_bits = []
+    if stats.get('new', 0):
+        change_bits.append(f"+{stats['new']}")
+    if stats.get('changed', 0):
+        change_bits.append(f"Δ{stats['changed']}")
+    if stats.get('ended', 0):
+        change_bits.append(f"✗{stats['ended']}")
+    tail = f" ({' '.join(change_bits)})" if change_bits else ""
+    return f"{' '.join(parts)}{tail} [{elapsed_ms}ms]"
+
+
+def _prewarm_in_backoff(cache_key):
+    """Return seconds remaining if cache_key is parked, else 0."""
+    with _prewarm_backoff_lock:
+        until = _prewarm_backoff_until.get(cache_key, 0.0)
+    remaining = until - time.time()
+    return remaining if remaining > 0 else 0
+
+
+def _prewarm_record_success(cache_key, name):
+    """Clear fail state. If we were parked, log the recovery."""
+    with _prewarm_backoff_lock:
+        had_fails = _prewarm_fail_counts.get(cache_key, 0) > 0
+        was_parked = _prewarm_backoff_until.get(cache_key, 0.0) > 0
+        _prewarm_fail_counts.pop(cache_key, None)
+        _prewarm_backoff_until.pop(cache_key, None)
+    if had_fails and was_parked:
+        Log.prewarm(f"{name}: ✓ recovered")
+
+
+def _prewarm_record_failure(cache_key, name, reason):
+    """Increment fail counter; apply exponential backoff once past threshold."""
+    with _prewarm_backoff_lock:
+        n = _prewarm_fail_counts.get(cache_key, 0) + 1
+        _prewarm_fail_counts[cache_key] = n
+        entered_backoff_for = 0
+        if n >= PREWARM_BACKOFF_THRESHOLD:
+            step_idx = min(n - PREWARM_BACKOFF_THRESHOLD, len(PREWARM_BACKOFF_STEPS) - 1)
+            entered_backoff_for = PREWARM_BACKOFF_STEPS[step_idx]
+            _prewarm_backoff_until[cache_key] = time.time() + entered_backoff_for
+    if entered_backoff_for:
+        mins = entered_backoff_for // 60
+        Log.prewarm(f"{name}: ✗ {reason} — backoff {mins}m (fail #{n})")
+    elif DEV_MODE:
+        Log.prewarm(f"{name}: ✗ {reason} ({n}/{PREWARM_BACKOFF_THRESHOLD})")
+
+
+
 def _prewarm_fetch_rfs():
     """Fetch and parse RFS incidents for cache"""
     features = []
     try:
         r = requests.get('https://www.rfs.nsw.gov.au/feeds/majorIncidents.xml',
                         timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code != 200:
+            source_error('rfs', f'HTTP {r.status_code}')
         if r.status_code == 200:
             import xml.etree.ElementTree as ET
             root = ET.fromstring(r.content)
@@ -2130,7 +2596,9 @@ def _prewarm_fetch_rfs():
                             })
                     except (KeyError, TypeError, ValueError) as e:
                         pass
+            source_ok('rfs')
     except Exception as e:
+        source_error('rfs', e)
         Log.prewarm(f"RFS error: {e}")
     return {'type': 'FeatureCollection', 'features': features, 'count': len(features)}
 
@@ -2144,7 +2612,14 @@ def _prewarm_fetch_traffic(hazard_type):
         'fire': 'https://www.livetraffic.com/traffic/hazards/fire.json',
         'majorevent': 'https://www.livetraffic.com/traffic/hazards/majorevent.json',
     }
-    
+    # Map hazard_type → registry name for source-health tracking
+    _src_name_map = {
+        'incidents': 'traffic_incidents', 'roadwork': 'traffic_roadwork',
+        'flood': 'traffic_flood', 'fire': 'traffic_fire',
+        'majorevent': 'traffic_major',
+    }
+    src_name = _src_name_map.get(hazard_type)
+
     features = []
     try:
         r = requests.get(url_map[hazard_type], timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
@@ -2158,7 +2633,14 @@ def _prewarm_fetch_traffic(hazard_type):
                 feature = parse_traffic_item(item, hazard_type.title())
                 if feature:
                     features.append(feature)
+            if src_name:
+                source_ok(src_name)
+        else:
+            if src_name:
+                source_error(src_name, f'HTTP {r.status_code}')
     except Exception as e:
+        if src_name:
+            source_error(src_name, e)
         Log.prewarm(f"Traffic {hazard_type} error: {e}")
     return {'type': 'FeatureCollection', 'features': features, 'count': len(features)}
 
@@ -2298,37 +2780,72 @@ def _prewarm_fetch_centralwatch_cameras():
     return cameras
 
 
+def _classify_waze_alert(alert):
+    """Decide whether an alert is police / roadwork / neither.
+
+    Roadwork on Waze's live map comes through several shapes, not just
+    type=CONSTRUCTION. The filter has to check type, subtype, reportDescription,
+    and provider together, otherwise most roadwork gets miscategorised as a
+    generic hazard.
+
+    Returns one of: 'police', 'roadwork', None.
+    """
+    alert_type = (alert.get('type') or '').upper()
+    subtype_upper = (alert.get('subtype') or '').upper()
+    desc_upper = (alert.get('reportDescription') or '').upper()
+    provider_upper = (alert.get('provider') or '').upper()
+
+    if alert_type == 'POLICE' or 'POLICE' in subtype_upper:
+        return 'police'
+
+    # type-level roadwork
+    if alert_type == 'CONSTRUCTION':
+        return 'roadwork'
+    # subtype-level: HAZARD_ON_ROAD_CONSTRUCTION, ROAD_CLOSED_CONSTRUCTION, etc.
+    if 'CONSTRUCTION' in subtype_upper:
+        return 'roadwork'
+    # Lane closures are almost always roadwork in practice
+    if subtype_upper == 'HAZARD_ON_ROAD_LANE_CLOSED':
+        return 'roadwork'
+    # Government/LGA roadwork feeds: Waze surfaces scheduled closures via
+    # providers named "NSW Australia_Waze Planned" and similar.
+    if 'WAZE PLANNED' in provider_upper:
+        return 'roadwork'
+    # reportDescription text clues (LGA partners, EE Feed workers, etc.)
+    if 'ROADWORK' in desc_upper or 'ROAD WORK' in desc_upper:
+        return 'roadwork'
+    if 'WORK CREW' in desc_upper:
+        return 'roadwork'
+
+    return None
+
+
 def _prewarm_fetch_waze(category):
     """Fetch and parse Waze data for cache"""
     # Use existing fetch_waze_data which handles all regions
     alerts, jams = fetch_waze_data()
     features = []
     jam_features = []
-    
+
     for alert in alerts:
-        alert_type = alert.get('type', '').upper()
-        subtype = alert.get('subtype', '') or ''
-        subtype_upper = subtype.upper()
-        
+        alert_type = (alert.get('type') or '').upper()
+        classification = _classify_waze_alert(alert)
+
         # Filter based on category
         if category == 'hazards':
-            is_police = (alert_type == 'POLICE' or 'POLICE' in subtype_upper)
-            is_roadwork = (alert_type == 'CONSTRUCTION' or 'CONSTRUCTION' in subtype_upper)
-            if is_police or is_roadwork:
+            if classification in ('police', 'roadwork'):
                 continue
             if alert_type in {'HAZARD', 'ACCIDENT', 'JAM', 'ROAD_CLOSED'}:
                 feature = parse_waze_alert(alert, 'Hazard')
                 if feature:
                     features.append(feature)
         elif category == 'police':
-            is_police = (alert_type == 'POLICE' or 'POLICE' in subtype_upper)
-            if is_police:
+            if classification == 'police':
                 feature = parse_waze_alert(alert, 'Police')
                 if feature:
                     features.append(feature)
         elif category == 'roadwork':
-            is_roadwork = (alert_type == 'CONSTRUCTION' or 'CONSTRUCTION' in subtype_upper)
-            if is_roadwork:
+            if classification == 'roadwork':
                 feature = parse_waze_alert(alert, 'Roadwork')
                 if feature:
                     features.append(feature)
@@ -2392,17 +2909,244 @@ def _prewarm_fetch_endeavour(outage_type):
         return []
 
 
-def _prewarm_fetch_ausgrid(data_type):
-    """Fetch and parse Ausgrid data for cache"""
-    url_map = {
-        'outages': 'https://www.ausgrid.com.au/webapi/OutageMapData/GetCurrentUnplannedOutageMarkersAndPolygons',
-        'stats': 'https://www.ausgrid.com.au/webapi/outagemapdata/GetCurrentOutageStats',
-    }
+# Ausgrid network bounding box — covers Sydney + Central Coast + Hunter
+# Valley (their full distribution territory). The outage-map endpoint now
+# *requires* bbox + zoom params; without them upstream returns HTTP 500.
+# Slight buffer on each edge so border outages don't get cut off.
+_AUSGRID_BBOX = {
+    'bottomleft.lat': '-34.55',
+    'bottomleft.lng': '150.20',
+    'topright.lat':   '-32.20',
+    'topright.lng':   '152.80',
+    'zoom':           '9',
+}
+
+
+# Per-outage detail cache. Outages persist for hours and their static fields
+# (Streets, Cause, JobId) don't change once the outage is logged. Caching
+# avoids 1 extra request per outage per prewarm cycle.
+#
+# Bounded eviction: WebIds churn over months as old outages are replaced by
+# new ones. Without an upper bound this dict grows monotonically. The lock
+# protects concurrent reads/writes — the prewarm thread writes while a
+# request thread might call _normalise_ausgrid_outage on the live-fallback
+# path.
+_AUSGRID_DETAIL_CACHE = {}                # (web_id, display_type) -> (ts, detail_dict)
+_AUSGRID_DETAIL_TTL = 300                 # 5 min freshness
+_AUSGRID_DETAIL_CACHE_MAX = 500           # ~1 KB per row × 500 = ~500 KB worst case
+_AUSGRID_DETAIL_CACHE_LOCK = threading.Lock()
+
+
+def _ausgrid_detail_cache_evict_locked():
+    """Trim the cache when it exceeds the size cap. Drops expired rows first;
+    if still over the cap, drops the oldest entries by timestamp. Caller must
+    hold _AUSGRID_DETAIL_CACHE_LOCK."""
+    if len(_AUSGRID_DETAIL_CACHE) <= _AUSGRID_DETAIL_CACHE_MAX:
+        return
+    now = time.time()
+    expired = [k for k, (ts, _) in _AUSGRID_DETAIL_CACHE.items()
+               if (now - ts) >= _AUSGRID_DETAIL_TTL]
+    for k in expired:
+        _AUSGRID_DETAIL_CACHE.pop(k, None)
+    if len(_AUSGRID_DETAIL_CACHE) <= _AUSGRID_DETAIL_CACHE_MAX:
+        return
+    # Still oversize — drop the oldest entries until we're at 80% capacity.
+    target = int(_AUSGRID_DETAIL_CACHE_MAX * 0.8)
+    by_age = sorted(_AUSGRID_DETAIL_CACHE.items(), key=lambda kv: kv[1][0])
+    for k, _ in by_age[: max(0, len(_AUSGRID_DETAIL_CACHE) - target)]:
+        _AUSGRID_DETAIL_CACHE.pop(k, None)
+
+
+def _fetch_ausgrid_outage_detail(web_id, display_type, headers):
+    """Fetch one outage's detail record (Streets, Reason, JobId, EndDateTime
+    text Status) via GetOutage. Cached for 5 min. Returns None on failure."""
+    if web_id is None:
+        return None
+    dt = (display_type or 'R').upper()
+    key = (str(web_id), dt)
+    now = time.time()
+    with _AUSGRID_DETAIL_CACHE_LOCK:
+        cached = _AUSGRID_DETAIL_CACHE.get(key)
+        if cached and (now - cached[0]) < _AUSGRID_DETAIL_TTL:
+            return cached[1]
     try:
-        r = requests.get(url_map[data_type], timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+        r = requests.get(
+            'https://www.ausgrid.com.au/webapi/OutageMapData/GetOutage',
+            timeout=10, headers=headers,
+            params={'OutageDisplayType': dt, 'WebId': str(web_id)},
+        )
         if r.status_code == 200:
-            return r.json()
+            detail = r.json()
+            if isinstance(detail, dict):
+                with _AUSGRID_DETAIL_CACHE_LOCK:
+                    _AUSGRID_DETAIL_CACHE[key] = (time.time(), detail)
+                    _ausgrid_detail_cache_evict_locked()
+                return detail
+    except Exception:
+        # Soft-fail — the marker payload alone still gives us the alert.
+        pass
+    return None
+
+
+def _normalise_ausgrid_outage(item, detail=None):
+    """Translate one outage from Ausgrid's new payload shape into the field
+    names the bot's poller + embed builder expect. If `detail` is supplied
+    (from GetOutage), its richer fields override the marker payload —
+    Streets in particular is only available from the detail endpoint."""
+    if not isinstance(item, dict):
+        return None
+    loc = item.get('MarkerLocation') or {}
+    lat = loc.get('lat') if isinstance(loc, dict) else None
+    lng = loc.get('lng') if isinstance(loc, dict) else None
+    # OutageDisplayType: 'R' = reactive/unplanned, 'P' = planned.
+    display = (item.get('OutageDisplayType') or '').upper()
+    outage_type = 'Planned' if display == 'P' else 'Unplanned'
+
+    # Detail can override several fields. Marker payload always wins on the
+    # geo/lat/lng (those don't appear in detail) and on the numeric Status
+    # (marker has 0/1/2; detail returns a free-text "Proceeding as scheduled").
+    d = detail if isinstance(detail, dict) else {}
+    cause_text = d.get('Cause') or item.get('Cause') or ''
+    reason_text = d.get('Reason') or ''
+    detail_text = d.get('Detail') or ''
+    streets = d.get('Streets') or ''
+    end_time = d.get('EndDateTime') or item.get('EstRestTime') or ''
+    start_time = d.get('StartDateTime') or item.get('StartDateTime') or ''
+    text_status = d.get('Status') if isinstance(d.get('Status'), str) else ''
+    job_id = d.get('JobId') or ''
+
+    raw_cust = d.get('Customers')
+    if raw_cust is None:
+        raw_cust = item.get('Customers')
+    if raw_cust is None:
+        raw_cust = item.get('CustomersAffectedText')
+    try:
+        customers = int(str(raw_cust).strip()) if raw_cust not in (None, '') else 0
+    except (TypeError, ValueError):
+        customers = 0
+
+    return {
+        'OutageId': item.get('WebId'),
+        'outageId': item.get('WebId'),
+        'JobId': job_id,
+        'Suburb': item.get('Area') or '',
+        'suburb': item.get('Area') or '',
+        'StreetName': streets,
+        'streetName': streets,
+        'Streets': streets,
+        'streets': streets,
+        'Postcode': '',
+        'postcode': '',
+        'CustomersAffected': customers,
+        'customersAffected': customers,
+        'OutageType': outage_type,
+        'outageType': outage_type,
+        'Cause': cause_text,
+        'cause': cause_text,
+        'Reason': reason_text,
+        'Detail': detail_text,
+        'StatusText': text_status,
+        'StartTime': start_time,
+        'startTime': start_time,
+        'EstRestoration': end_time,
+        'estRestoration': end_time,
+        'EndDateTime': end_time,
+        'endDateTime': end_time,
+        'Latitude': lat,
+        'latitude': lat,
+        'Longitude': lng,
+        'longitude': lng,
+        'Status': item.get('Status'),
+        'Classification': item.get('Classification'),
+        'Polygons': item.get('Polygons') or [],
+    }
+
+
+def _prewarm_fetch_ausgrid(data_type):
+    """Fetch and parse Ausgrid data for cache.
+
+    Ausgrid reworked their outage map API: the markers endpoint now requires
+    a bbox + zoom query string covering the area you want, and returns a
+    flat array of outages (rather than the old `{Markers, Polygons}` wrapper).
+    We normalise the response into the legacy shape so the bot's poller and
+    embed builder keep working without changes.
+    """
+    base = 'https://www.ausgrid.com.au/webapi/OutageMapData/GetCurrentUnplannedOutageMarkersAndPolygons'
+    stats_url = 'https://www.ausgrid.com.au/webapi/outagemapdata/GetCurrentOutageStats'
+    # Only the outages endpoint feeds alerts; stats is cosmetic. Tracking
+    # both under one source name made outages look degraded whenever the
+    # stats endpoint flickered.
+    track_health = (data_type == 'outages')
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-AU,en;q=0.9',
+        'Referer': 'https://www.ausgrid.com.au/Outages/View-current-outages',
+        'Origin': 'https://www.ausgrid.com.au',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
+    }
+    if data_type == 'outages':
+        url = base
+        params = _AUSGRID_BBOX
+    else:
+        url = stats_url
+        params = None
+
+    try:
+        r = requests.get(url, timeout=15, headers=headers, params=params)
+        if r.status_code == 200:
+            try:
+                payload = r.json()
+                if track_health:
+                    source_ok('power_ausgrid')
+                # New schema: flat array of outages. Normalise to the legacy
+                # `{Markers, Polygons}` wrapper so existing consumers don't
+                # need to change. Stats response is left untouched.
+                if data_type == 'outages':
+                    if isinstance(payload, list):
+                        markers = []
+                        polygons = []
+                        for item in payload:
+                            # Enrich each outage with its detail record (Streets,
+                            # Reason, JobId, etc). Cached for 5 min so the prewarm
+                            # cycle doesn't re-fetch the same outage every tick.
+                            detail = _fetch_ausgrid_outage_detail(
+                                item.get('WebId'),
+                                item.get('OutageDisplayType'),
+                                headers,
+                            )
+                            normalised = _normalise_ausgrid_outage(item, detail=detail)
+                            if normalised is None:
+                                continue
+                            markers.append(normalised)
+                            polys = item.get('Polygons') or []
+                            if isinstance(polys, list):
+                                polygons.extend(polys)
+                        return {'Markers': markers, 'Polygons': polygons}
+                    # Already in old shape (e.g. cached response or hand-rolled).
+                    if isinstance(payload, dict) and 'Markers' in payload:
+                        return payload
+                    return {'Markers': [], 'Polygons': []}
+                return payload
+            except Exception as parse_err:
+                if track_health:
+                    source_error('power_ausgrid', f'parse: {parse_err}')
+                Log.prewarm(f"Ausgrid {data_type} parse failed: {parse_err}; "
+                            f"first 200 bytes: {(r.text or '')[:200]!r}")
+                raise
+        # Non-200 path — surface the body so we can see *why* upstream rejected.
+        body_preview = (r.text or '')[:200]
+        if track_health:
+            source_error('power_ausgrid', f'HTTP {r.status_code}: {body_preview[:80]}')
+        Log.prewarm(f"Ausgrid {data_type} HTTP {r.status_code}; body: {body_preview!r}")
     except Exception as e:
+        if track_health:
+            source_error('power_ausgrid', e)
         Log.prewarm(f"Ausgrid {data_type} error: {e}")
     return {'Markers': [], 'Polygons': []} if data_type == 'outages' else {}
 
@@ -2873,13 +3617,15 @@ def _prewarm_fetch_pager():
         
         resp = requests.get(url, headers=headers, timeout=15)
         if not resp.ok:
+            source_error('pager', f'HTTP {resp.status_code}')
             Log.error(f"Pagermon API error: {resp.status_code}")
             if DEV_MODE:
                 Log.error(f"Pagermon response: {resp.text[:200]}")
             return {'messages': [], 'count': 0}
-        
+
         data = resp.json()
         messages = data.get('messages', [])
+        source_ok('pager')
         
         # Filter messages that have valid coordinates
         # Group by incident_id to share coords within incidents
@@ -2960,8 +3706,9 @@ def _prewarm_fetch_pager():
                 })
         
         return {'messages': result_messages, 'count': len(result_messages)}
-    
+
     except Exception as e:
+        source_error('pager', e)
         Log.error(f"Pagermon fetch error: {e}")
         return {'messages': [], 'count': 0}
 
@@ -3067,7 +3814,46 @@ def _extract_history_records(cache_key, data):
                 'is_active': 0 if props.get('ended') else 1,
                 'data': props  # Full properties as JSON
             })
-    
+
+        # Waze jams live on the hazards FeatureCollection as a sibling 'jams' array.
+        # Archive them as a separate source so they show up in history/stats.
+        if cache_key == 'waze_hazards':
+            for j in data.get('jams', []) or []:
+                jprops = j.get('properties', {}) or {}
+                jcoords = j.get('geometry', {}).get('coordinates', []) or []
+                # Jam geometries are LineStrings — pick the midpoint for indexing
+                if jcoords and isinstance(jcoords[0], list):
+                    mid = jcoords[len(jcoords) // 2]
+                    jlon = mid[0] if len(mid) > 0 else None
+                    jlat = mid[1] if len(mid) > 1 else None
+                else:
+                    jlat = jlon = None
+                jtitle = jprops.get('title')
+                jsource_ts = jprops.get('created') or jprops.get('pubDate')
+                # Waze gives jams numeric ids/uuids. source_id column is TEXT
+                # and Postgres won't coerce int → text in a WHERE IN tuple, so
+                # stringify.
+                jnative = jprops.get('id') or jprops.get('uuid')
+                jsource_id = str(jnative) if jnative else _generate_stable_id('waze_jam', jlat, jlon, jtitle, jsource_ts)
+                jprovider, jsource_type = get_source_hierarchy('waze_jam')
+                records.append({
+                    'source': 'waze_jam',
+                    'source_id': jsource_id,
+                    'source_provider': jprovider,
+                    'source_type': jsource_type,
+                    'lat': jlat,
+                    'lon': jlon,
+                    'location_text': jprops.get('location') or jprops.get('street'),
+                    'title': jtitle,
+                    'category': jprops.get('wazeType') or 'JAM',
+                    'subcategory': jprops.get('severity'),
+                    'status': None,
+                    'severity': jprops.get('level'),
+                    'source_timestamp': jsource_ts,
+                    'is_active': 1,
+                    'data': jprops
+                })
+
     # Handle power outage data (Endeavour, Ausgrid)
     elif cache_key in ('endeavour_current', 'endeavour_maintenance', 'endeavour_future', 'ausgrid_outages', 'essential_energy', 'essential_energy_future'):
         outages = []
@@ -3265,12 +4051,12 @@ def prewarm_single(cache_key, ttl):
     name = PREWARM_NAMES.get(cache_key, cache_key)
     start_time = time.time()
     data = None
-    
+
+    # Skip parked endpoints silently — the failure that parked them already logged.
+    if _prewarm_in_backoff(cache_key) > 0:
+        return 'skipped', 0, {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+
     try:
-        # Individual fetch logging only in dev mode
-        if DEV_MODE:
-            Log.prewarm(f"{name} fetching...")
-        
         if cache_key == 'rfs_incidents':
             data = _prewarm_fetch_rfs()
         elif cache_key == 'traffic_incidents':
@@ -3323,15 +4109,19 @@ def prewarm_single(cache_key, ttl):
             data = _prewarm_fetch_centralwatch_cameras()
         
         if data is not None:
-            # Don't cache empty Waze results — browser worker may not be ready yet
-            if cache_key.startswith('waze_') and isinstance(data, dict) and len(data.get('features', [])) == 0:
-                fetch_time_ms = int((time.time() - start_time) * 1000)
-                # Still log but don't cache, so next request triggers a fresh fetch
-            else:
-                fetch_time_ms = int((time.time() - start_time) * 1000)
+            # Don't cache empty Waze results — browser worker may not be ready yet.
+            # Treat as transient "empty success" so we don't trigger backoff when
+            # fetch_waze_data's own cooldown is doing its job.
+            fetch_time_ms = int((time.time() - start_time) * 1000)
+            is_empty_waze = (
+                cache_key.startswith('waze_')
+                and isinstance(data, dict)
+                and len(data.get('features', [])) == 0
+            )
+            if not is_empty_waze:
                 cache_set(cache_key, data, ttl, fetch_time_ms)
-            
-            # Count items in data for logging
+
+            # Count items
             item_count = 0
             if isinstance(data, dict):
                 if 'features' in data:
@@ -3344,30 +4134,52 @@ def prewarm_single(cache_key, ttl):
                     item_count = data.get('count', 0)
             elif isinstance(data, list):
                 item_count = len(data)
-            
-            # Store in historical data table and get stats
+
+            # Archive history
             history_records = _extract_history_records(cache_key, data)
             stats = {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
             if history_records:
-                stats = store_incidents_batch(history_records)
-            
-            # Log per-source archive stats (always in prod when we have history; verbose in dev)
-            has_stats = stats['new'] > 0 or stats['unchanged'] > 0 or stats['changed'] > 0 or stats['ended'] > 0
-            if history_records and has_stats:
-                ended_str = f", Ended: {stats['ended']}" if stats['ended'] > 0 else ""
-                Log.prewarm(f"{name}: New: {stats['new']}, Old: {stats['unchanged']}, Upd: {stats['changed']}{ended_str} [{fetch_time_ms}ms]")
-            elif DEV_MODE:
-                Log.prewarm(f"{name}: {item_count} items [{fetch_time_ms}ms]")
-            
-            # Return stats for aggregation
-            return True, fetch_time_ms, stats
+                # store_incidents_batch derives source_type from the first record for
+                # its "no longer live" detection, so batches that mix sources lose
+                # gone-tracking for every source but the first. The only mixed case
+                # today is waze_hazards (hazards + jams), so split it.
+                by_source = {}
+                for r in history_records:
+                    by_source.setdefault(r.get('source'), []).append(r)
+                if len(by_source) > 1:
+                    agg = {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+                    for src, recs in by_source.items():
+                        s = store_incidents_batch(recs, source_type=src)
+                        for k in agg:
+                            agg[k] += s.get(k, 0)
+                    stats = agg
+                else:
+                    stats = store_incidents_batch(history_records)
+
+            _prewarm_record_success(cache_key, name)
+
+            # Log only when there's real change. Dev mode gets an extra
+            # zero-activity line per source to confirm the loop is alive, but
+            # only when the fetch took long enough to care about (>1s).
+            has_real_change = stats['new'] > 0 or stats['changed'] > 0 or stats['ended'] > 0
+            if has_real_change:
+                ended_str = f" ✗{stats['ended']}" if stats['ended'] > 0 else ""
+                Log.prewarm(f"{name}: +{stats['new']} Δ{stats['changed']}{ended_str} (≡{stats['unchanged']}) [{fetch_time_ms}ms]")
+            elif DEV_MODE and fetch_time_ms > 1000:
+                Log.prewarm(f"{name}: ≡{item_count} [{fetch_time_ms}ms]")
+
+            return 'success', fetch_time_ms, stats
+
+        # data is None (fetcher chose not to return data) — counts as a failure
+        _prewarm_record_failure(cache_key, name, "no data")
     except Exception as e:
-        if DEV_MODE:
-            Log.prewarm(f"❌ {name} failed: {e}")
-        else:
-            Log.error(f"{name} fetch failed: {e}")
-    
-    return False, 0, {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+        # Keep the raw reason short and grep-friendly
+        reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        if len(reason) > 100:
+            reason = reason[:100] + '…'
+        _prewarm_record_failure(cache_key, name, reason)
+
+    return 'failed', 0, {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
 
 
 def prewarm_loop():
@@ -3379,42 +4191,39 @@ def prewarm_loop():
     """
     global _prewarm_running
     last_fetch = {key: 0 for key, _ in PREWARM_CONFIG}
-    last_mode_log = 0
-    
+
     Log.startup("Cache pre-warming started")
-    
+
     # Initial prewarm of all endpoints (parallel)
     from concurrent.futures import ThreadPoolExecutor
     initial_start = time.time()
-    
-    if DEV_MODE:
-        Log.prewarm("Fetching all sources...")
-    
-    # Aggregate stats
+
+    # Aggregate stats + outcome counts
     total_stats = {'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
-    
+    outcomes = {'success': 0, 'skipped': 0, 'failed': 0}
+
     with ThreadPoolExecutor(max_workers=6) as executor:
         futures = []
         for cache_key, ttl in PREWARM_CONFIG:
             futures.append(executor.submit(prewarm_single, cache_key, ttl))
         for f in futures:
             try:
-                success, fetch_ms, stats = f.result()
+                status, fetch_ms, stats = f.result()
+                outcomes[status] = outcomes.get(status, 0) + 1
                 total_stats['new'] += stats.get('new', 0)
                 total_stats['changed'] += stats.get('changed', 0)
                 total_stats['unchanged'] += stats.get('unchanged', 0)
                 total_stats['ended'] += stats.get('ended', 0)
             except Exception:
                 pass
-    
+
     # Mark all as fetched
     now = time.time()
     for cache_key, _ in PREWARM_CONFIG:
         last_fetch[cache_key] = now
-    
+
     elapsed_ms = int((time.time() - initial_start) * 1000)
-    ended_str = f", Ended: {total_stats['ended']}" if total_stats['ended'] > 0 else ""
-    Log.prewarm(f"Fetch complete: New: {total_stats['new']}, Old: {total_stats['unchanged']}, Upd: {total_stats['changed']}{ended_str} [{elapsed_ms}ms]")
+    Log.prewarm(_format_cycle_summary(outcomes, total_stats, elapsed_ms, initial=True))
     
     # Start Central Watch browser worker thread for Vercel bypass
     _start_cw_browser_worker()
@@ -3436,19 +4245,18 @@ def prewarm_loop():
     # Continuous refresh loop (CW images handled by _continuous_cw_image_worker thread)
     last_cw_data_refresh = time.time()
     last_cw_cookie_refresh = time.time()  # Vercel cookies refresh tracker
+    last_active = None  # Track mode changes (None forces first log)
     while _prewarm_running:
         now = time.time()
-        
+
         # Determine refresh interval based on whether any DATA page is open
         active = is_page_active()
         refresh_interval = PREWARM_ACTIVE_INTERVAL if active else PREWARM_IDLE_INTERVAL
-        
-        # Log mode changes (but not too often)
-        if now - last_mode_log > 60:
-            mode_str = "ACTIVE (1 min)" if active else "IDLE (2 min)"
-            if DEV_MODE:
-                Log.prewarm(f"Mode: {mode_str}")
-            last_mode_log = now
+
+        # Log only on mode transitions, not every cycle.
+        if active != last_active and last_active is not None:
+            Log.prewarm(f"Mode → {'ACTIVE (1m)' if active else 'IDLE (2m)'}")
+        last_active = active
         
         # Check each endpoint - refresh all at the same interval
         needs_refresh = []
@@ -3459,32 +4267,31 @@ def prewarm_loop():
         # Refresh all stale endpoints in parallel
         if needs_refresh:
             refresh_start = time.time()
-            
-            if DEV_MODE:
-                Log.prewarm("Fetching all sources...")
-            
-            # Aggregate stats
+
             cycle_stats = {'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
-            
+            outcomes = {'success': 0, 'skipped': 0, 'failed': 0}
+
             with ThreadPoolExecutor(max_workers=6) as executor:
                 futures = {executor.submit(prewarm_single, key, ttl): key for key, ttl in needs_refresh}
                 for f in futures:
                     try:
-                        success, fetch_ms, stats = f.result()
+                        status, fetch_ms, stats = f.result()
                         last_fetch[futures[f]] = now
+                        outcomes[status] = outcomes.get(status, 0) + 1
                         cycle_stats['new'] += stats.get('new', 0)
                         cycle_stats['changed'] += stats.get('changed', 0)
                         cycle_stats['unchanged'] += stats.get('unchanged', 0)
                         cycle_stats['ended'] += stats.get('ended', 0)
                     except Exception:
                         pass
-            
-            if not DEV_MODE:
-                elapsed_ms = int((time.time() - refresh_start) * 1000)
-                ended_str = f", Ended: {cycle_stats['ended']}" if cycle_stats['ended'] > 0 else ""
-                Log.prewarm(f"Fetch complete: New: {cycle_stats['new']}, Old: {cycle_stats['unchanged']}, Upd: {cycle_stats['changed']}{ended_str} [{elapsed_ms}ms]")
-            else:
-                Log.prewarm(f"Refreshed {len(needs_refresh)} endpoints")
+
+            elapsed_ms = int((time.time() - refresh_start) * 1000)
+            # In prod: only log when there's meaningful change or a failure.
+            # In dev: always log the cycle for rhythm, but keep it compact.
+            has_change = cycle_stats['new'] > 0 or cycle_stats['changed'] > 0 or cycle_stats['ended'] > 0
+            has_failure = outcomes.get('failed', 0) > 0
+            if DEV_MODE or has_change or has_failure:
+                Log.prewarm(_format_cycle_summary(outcomes, cycle_stats, elapsed_ms))
         
         # Restart Central Watch browser worker if it died
         if _playwright_available and now - last_cw_cookie_refresh >= 1800:
@@ -3542,9 +4349,18 @@ def cached(ttl=CACHE_TTL):
 API_KEY = os.environ.get('NSWPSN_API_KEY', '')
 
 # Public endpoints that don't require auth (health checks, etc)
-PUBLIC_ENDPOINTS = {'/api/health', '/', '/api/config', '/api/heartbeat', '/api/debug/sessions', '/api/debug/heartbeat-test', '/api/editor-requests'}
+# /api/debug/sessions and /api/debug/heartbeat-test used to be here — removed
+# because they leak client IPs and user-agents. They now require NSWPSN_API_KEY.
+PUBLIC_ENDPOINTS = {'/api/health', '/', '/api/config', '/api/heartbeat', '/api/editor-requests',
+                    # /api/waze/ingest has its own auth (X-Ingest-Key matched against WAZE_INGEST_KEY);
+                    # adding to public here means NSWPSN_API_KEY isn't required, so a userscript in
+                    # a random user's browser can POST without knowing the full backend API key.
+                    '/api/waze/ingest'}
 # Endpoints that start with these prefixes are public (for dynamic routes like /api/check-editor/<user_id>)
-PUBLIC_ENDPOINT_PREFIXES = ['/api/check-editor/', '/api/centralwatch/image/', '/api/centralwatch/cameras']
+PUBLIC_ENDPOINT_PREFIXES = ['/api/check-editor/', '/api/centralwatch/image/', '/api/centralwatch/cameras',
+                            # Dashboard endpoints use Discord OAuth2 session cookie auth
+                            # instead of the NSWPSN_API_KEY header. See DASHBOARD section.
+                            '/api/dashboard/']
 
 def require_api_key(func):
     """Decorator to require API key authentication"""
@@ -3636,15 +4452,13 @@ def ausgrid_outages():
     if cached_data is not None:
         return jsonify(cached_data)
     
-    # Fallback to live fetch if cache empty
+    # Fallback to live fetch if cache empty. Reuse the prewarm helper so the
+    # bbox/zoom params, browser-style headers, and response normalisation
+    # stay consistent with the prewarm path.
     try:
-        r = requests.get(
-            'https://www.ausgrid.com.au/webapi/OutageMapData/GetCurrentUnplannedOutageMarkersAndPolygons',
-            timeout=15,
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        data = r.json()
-        cache_set('ausgrid_outages', data, CACHE_TTL_AUSGRID)
+        data = _prewarm_fetch_ausgrid('outages')
+        if data and (data.get('Markers') or data.get('Polygons')):
+            cache_set('ausgrid_outages', data, CACHE_TTL_AUSGRID)
         return jsonify(data)
     except Exception as e:
         return jsonify({'error': str(e), 'Markers': [], 'Polygons': []}), 200
@@ -3976,10 +4790,12 @@ def _fetch_all_bom_warnings():
             timeout=15,
             headers={'User-Agent': 'Mozilla/5.0'}
         )
+        if r.status_code != 200:
+            source_error('bom', f'HTTP {r.status_code}')
         if r.status_code == 200:
             import xml.etree.ElementTree as ET
             root = ET.fromstring(r.content)
-            
+
             # Try <warning> elements first
             for warning in root.findall('.//warning'):
                 title = warning.findtext('title', warning.findtext('headline', ''))
@@ -4034,9 +4850,11 @@ def _fetch_all_bom_warnings():
                         'expiry': '',
                         'source': 'bom'
                     })
+            source_ok('bom')
     except Exception as e:
+        source_error('bom', e)
         Log.error(f"BOM warnings fetch error: {e}")
-    
+
     return warnings
 
 
@@ -4421,20 +5239,55 @@ def _detect_category(title, description):
     return 'general'
 
 
+_rss_feed_backoff = {}        # url -> (backoff_until_ts, last_status)
+_rss_feed_fail_counts = {}    # url -> consecutive fail count
+_rss_feed_backoff_lock = threading.Lock()
+_RSS_BACKOFF_THRESHOLD = 2
+_RSS_BACKOFF_STEPS = [600, 1800, 3600, 14400]  # 10m, 30m, 1h, 4h
+
 def _parse_rss_feed(url, source_name, source_icon):
-    """Parse an RSS feed and return normalized items with auto-detected categories"""
+    """Parse an RSS feed and return normalized items with auto-detected categories.
+    Persistent HTTP failures (e.g. 403/404) are parked with exponential backoff
+    so a permanently-broken feed (NSW Police 403, F&RNSW 404) doesn't fire every
+    time /api/news/rss is called."""
     import xml.etree.ElementTree as ET
-    
+
     items = []
+    # Backoff gate: skip the fetch entirely if this URL is parked.
+    now = time.time()
+    with _rss_feed_backoff_lock:
+        until, _ = _rss_feed_backoff.get(url, (0, 0))
+    if until > now:
+        return items
+
     try:
         r = requests.get(url, timeout=10, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/rss+xml, application/xml, text/xml, */*'
         })
-        
+
         if r.status_code != 200:
-            Log.warn(f"RSS feed {source_name} returned status {r.status_code}")
+            with _rss_feed_backoff_lock:
+                n = _rss_feed_fail_counts.get(url, 0) + 1
+                _rss_feed_fail_counts[url] = n
+                parked_for = 0
+                if n >= _RSS_BACKOFF_THRESHOLD:
+                    step = min(n - _RSS_BACKOFF_THRESHOLD, len(_RSS_BACKOFF_STEPS) - 1)
+                    parked_for = _RSS_BACKOFF_STEPS[step]
+                    _rss_feed_backoff[url] = (time.time() + parked_for, r.status_code)
+            if parked_for:
+                mins = parked_for // 60
+                Log.warn(f"RSS feed {source_name} {r.status_code} — backoff {mins}m (fail #{n})")
+            else:
+                Log.warn(f"RSS feed {source_name} returned status {r.status_code} ({n}/{_RSS_BACKOFF_THRESHOLD})")
             return items
+
+        # Success — clear any failure state
+        with _rss_feed_backoff_lock:
+            had_fails = _rss_feed_fail_counts.pop(url, 0) > 0
+            was_parked = _rss_feed_backoff.pop(url, None) is not None
+        if had_fails and was_parked:
+            Log.info(f"RSS feed {source_name}: ✓ recovered")
         
         # Parse XML
         root = ET.fromstring(r.content)
@@ -4699,24 +5552,23 @@ def stats_history():
 @app.route('/api/stats/archive/status')
 def archive_status():
     """Get archival system status (stats.db)"""
+    conn = None
     try:
         conn = get_conn()
         c = conn.cursor()
-        
+
         # Get total records
         c.execute('SELECT COUNT(*) FROM stats_snapshots')
         total_records = c.fetchone()[0]
-        
+
         # Get oldest and newest timestamps
         c.execute('SELECT MIN(timestamp), MAX(timestamp) FROM stats_snapshots')
         oldest, newest = c.fetchone()
-        
+
         # Get records in last hour
         hour_ago = int((time.time() - 3600) * 1000)
         c.execute('SELECT COUNT(*) FROM stats_snapshots WHERE timestamp >= %s', (hour_ago,))
         last_hour = c.fetchone()[0]
-        
-        conn.close()
         
         # Add collection mode info
         mode = 'active' if is_page_active() else 'idle'
@@ -4739,6 +5591,10 @@ def archive_status():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 200
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 
 @app.route('/api/stats/archive/trigger')
@@ -4782,71 +5638,73 @@ def page_heartbeat():
     
     if action == 'open':
         if page_id:
-            is_new = page_id not in active_page_sessions
-            old_page_type = active_page_sessions.get(page_id, {}).get('page_type', None)
-            was_data_page = active_page_sessions.get(page_id, {}).get('is_data_page', False)
-            
-            active_page_sessions[page_id] = {
-                'last_seen': time.time(),
-                'user_agent': user_agent,
-                'ip': client_ip,
-                'page_type': page_type,
-                'is_data_page': is_data_page,
-                'opened_at': active_page_sessions.get(page_id, {}).get('opened_at', time.time())
-            }
-            total_count = len(active_page_sessions)
-            data_count = get_data_page_count()
-            
-            if is_new:
-                # New viewer - always log
-                Log.viewer(f"👤 Joined: ...{short_id} on {page_type} (viewers: {total_count}, data: {data_count})")
-            elif old_page_type != page_type:
-                # Navigation - always log page changes
-                Log.viewer(f"📄 ...{short_id}: {old_page_type} → {page_type} (viewers: {total_count}, data: {data_count})")
-            
-            # Check for mode change (idle <-> active)
-            _check_mode_change()
-        else:
-            Log.api(f"Page opened (no page_id) from {client_ip}")
-    
-    elif action == 'close':
-        if page_id and page_id in active_page_sessions:
-            # Only process close if it's from the CURRENT page
-            # (ignore stale close signals from pages user navigated away from)
-            session_current_page = active_page_sessions[page_id].get('page_type', 'unknown')
-            if session_current_page == page_type:
-                # User is actually leaving this page
-                del active_page_sessions[page_id]
-                total_count = len(active_page_sessions)
-                data_count = get_data_page_count()
-                Log.viewer(f"👋 Left: ...{short_id} (viewers: {total_count}, data: {data_count})")
-                # Check for mode change (idle <-> active)
-                _check_mode_change()
-            else:
-                # Stale close from old page after navigation - ignore
-                Log.api(f"Ignoring stale close from {page_type} (session on {session_current_page})")
-        elif not page_id:
-            Log.api(f"Page close signal (no page_id) from {client_ip}")
-    
-    else:
-        # Regular heartbeat ping - update session timestamp
-        if page_id:
-            if page_id in active_page_sessions:
-                active_page_sessions[page_id]['last_seen'] = time.time()
-            else:
-                # New session via ping - register it
+            with _page_sessions_lock:
+                existing = active_page_sessions.get(page_id, {})
+                is_new = not existing
+                old_page_type = existing.get('page_type')
                 active_page_sessions[page_id] = {
                     'last_seen': time.time(),
                     'user_agent': user_agent,
                     'ip': client_ip,
                     'page_type': page_type,
                     'is_data_page': is_data_page,
-                    'opened_at': time.time()
+                    'opened_at': existing.get('opened_at', time.time())
                 }
-    
-    # Stale session cleanup is now logged individually in cleanup_stale_sessions()
-    
-    total_count = len(active_page_sessions)
+                total_count = len(active_page_sessions)
+            data_count = get_data_page_count()
+
+            if is_new:
+                Log.viewer(f"👤 Joined: ...{short_id} on {page_type} (viewers: {total_count}, data: {data_count})")
+            elif old_page_type != page_type:
+                Log.viewer(f"📄 ...{short_id}: {old_page_type} → {page_type} (viewers: {total_count}, data: {data_count})")
+
+            _check_mode_change()
+        else:
+            Log.api(f"Page opened (no page_id) from {client_ip}")
+
+    elif action == 'close':
+        if page_id:
+            with _page_sessions_lock:
+                session_entry = active_page_sessions.get(page_id)
+                if session_entry is None:
+                    session_current_page = None
+                    removed = False
+                else:
+                    session_current_page = session_entry.get('page_type', 'unknown')
+                    if session_current_page == page_type:
+                        del active_page_sessions[page_id]
+                        removed = True
+                        total_count = len(active_page_sessions)
+                    else:
+                        removed = False
+            if removed:
+                data_count = get_data_page_count()
+                Log.viewer(f"👋 Left: ...{short_id} (viewers: {total_count}, data: {data_count})")
+                _check_mode_change()
+            elif session_current_page is not None:
+                Log.api(f"Ignoring stale close from {page_type} (session on {session_current_page})")
+        else:
+            Log.api(f"Page close signal (no page_id) from {client_ip}")
+
+    else:
+        # Regular heartbeat ping - update session timestamp
+        if page_id:
+            with _page_sessions_lock:
+                existing = active_page_sessions.get(page_id)
+                if existing is not None:
+                    existing['last_seen'] = time.time()
+                else:
+                    active_page_sessions[page_id] = {
+                        'last_seen': time.time(),
+                        'user_agent': user_agent,
+                        'ip': client_ip,
+                        'page_type': page_type,
+                        'is_data_page': is_data_page,
+                        'opened_at': time.time()
+                    }
+
+    with _page_sessions_lock:
+        total_count = len(active_page_sessions)
     data_count = get_data_page_count()
     current_interval = get_current_interval()
     mode = "active" if is_page_active() else "idle"
@@ -4870,6 +5728,8 @@ def collection_status():
     """Get current data collection status and mode"""
     total_count = get_active_page_count()
     data_count = get_data_page_count()
+    with _page_sessions_lock:
+        sessions_snap = list(active_page_sessions.items())
     return jsonify({
         'mode': 'active' if is_page_active() else 'idle',
         'interval_seconds': get_current_interval(),
@@ -4883,7 +5743,7 @@ def collection_status():
                 'ip': session['ip'],
                 'age_seconds': int(time.time() - session.get('opened_at', session['last_seen']))
             }
-            for pid, session in active_page_sessions.items()
+            for pid, session in sessions_snap
         ],
         'last_heartbeat': datetime.fromtimestamp(last_heartbeat).isoformat() if last_heartbeat > 0 else None,
         'idle_interval': IDLE_INTERVAL,
@@ -6174,29 +7034,14 @@ try:
 except ImportError:
     pass
 
-# playwright-stealth patches all Datadome/bot detection vectors
-_stealth_available = False
-_stealth_v2 = False  # Granitosaurus/playwright-stealth v2.x
-try:
-    from playwright_stealth import Stealth
-    _stealth_obj = Stealth()
-    _stealth_available = True
-    _stealth_v2 = True
-except ImportError:
-    try:
-        from playwright_stealth import stealth_sync
-        _stealth_available = True
-    except ImportError:
-        pass
-
 # Fallback: requests session for when playwright is not available
 _centralwatch_session = None
 _centralwatch_session_lock = threading.Lock()
 
-# API endpoints to try (in order). The /api/v1/public/ endpoint is what the
-# actual Central Watch website uses and may have higher/different rate limits.
+# API endpoint for Central Watch camera list.
+# Note: /api/v1/public/cameras was removed upstream and now always 404s — every
+# attempt counts toward the upstream rate limit, so we no longer try it.
 _CENTRALWATCH_API_ENDPOINTS = [
-    'https://centralwatch.watchtowers.io/api/v1/public/cameras',
     'https://centralwatch.watchtowers.io/au/api/cameras',
 ]
 
@@ -6975,6 +7820,11 @@ def centralwatch_cameras():
 # In-memory cache for Central Watch camera images
 # Structure: { camera_id: { 'data': bytes, 'content_type': str, 'timestamp': float } }
 _centralwatch_image_cache = {}
+# Guards concurrent iteration/mutation of _centralwatch_image_cache and
+# _centralwatch_camera_timestamps. Individual .get()/dict[x]=v ops are atomic
+# under GIL, but iteration (cleanup loop) is not — must hold this lock for
+# iteration + snapshot.
+_centralwatch_dicts_lock = threading.Lock()
 # On-demand stale TTL removed — batch worker is sole fetcher, proxy is cache-only
 _CENTRALWATCH_IMAGE_MAX_AGE = 120   # 2 minutes - max age before forced refresh on next request
 _CENTRALWATCH_PREFETCH_STALE_TTL = 120  # 2 minutes - balance freshness vs rate limits (CW updates ~1/min)
@@ -6991,14 +7841,15 @@ def _cleanup_centralwatch_image_cache():
     max_age = 300  # 5 minutes
     active_ids = {cam.get('id') for cam in _centralwatch_static_data if cam.get('id')}
 
-    stale = [cid for cid, entry in _centralwatch_image_cache.items()
-             if (now - entry.get('timestamp', 0)) > max_age or (active_ids and cid not in active_ids)]
-
-    for cid in stale:
-        del _centralwatch_image_cache[cid]
+    with _centralwatch_dicts_lock:
+        stale = [cid for cid, entry in _centralwatch_image_cache.items()
+                 if (now - entry.get('timestamp', 0)) > max_age or (active_ids and cid not in active_ids)]
+        for cid in stale:
+            _centralwatch_image_cache.pop(cid, None)
+        remaining = len(_centralwatch_image_cache)
 
     if stale and DEV_MODE:
-        Log.cleanup(f"CW image cache: evicted {len(stale)} stale images, {len(_centralwatch_image_cache)} remaining")
+        Log.cleanup(f"CW image cache: evicted {len(stale)} stale images, {remaining} remaining")
 
 
 def _refresh_centralwatch_timestamps(force=False):
@@ -7617,705 +8468,125 @@ WAZE_POLICE_SUBTYPES = {
     'POLICE_WITH_MOBILE_CAMERA': True,  # Mobile speed camera
 }
 
-# NSW regions for Waze requests - split into smaller areas to get more data
-# Waze API limits to ~200 alerts per request, so we split NSW into multiple regions
+# NSW regions for Waze requests. Waze's georss API caps at ~200 alerts/bbox
+# so dense areas need tighter boxes; rural NSW gets consolidated into one wide
+# box because alert density is ~0. Reduced from 16 → 6 regions to cut proxy
+# bandwidth by ~60% (each region = one full page reload in interception mode).
 NSW_REGIONS = [
-    # Sydney CBD & Inner suburbs (highest density)
-    {'name': 'Sydney CBD', 'top': -33.75, 'bottom': -34.05, 'left': 151.0, 'right': 151.35},
-    
-    # Sydney - Eastern suburbs & North Shore
-    {'name': 'Sydney East', 'top': -33.65, 'bottom': -34.0, 'left': 151.15, 'right': 151.55},
-    
-    # Sydney - Western suburbs
-    {'name': 'Sydney West', 'top': -33.65, 'bottom': -34.1, 'left': 150.7, 'right': 151.1},
-    
-    # Sydney - South West
-    {'name': 'Sydney South West', 'top': -33.85, 'bottom': -34.25, 'left': 150.6, 'right': 151.1},
-    
-    # Central Coast
-    {'name': 'Central Coast', 'top': -33.15, 'bottom': -33.65, 'left': 151.1, 'right': 151.7},
-    
-    # Newcastle / Hunter
-    {'name': 'Newcastle Hunter', 'top': -32.6, 'bottom': -33.2, 'left': 151.3, 'right': 152.0},
-    
-    # Wollongong / Illawarra
-    {'name': 'Wollongong', 'top': -34.15, 'bottom': -34.75, 'left': 150.65, 'right': 151.15},
-    
-    # Shoalhaven / Jervis Bay (Nowra, Berry, Jervis Bay to Sussex Inlet)
-    {'name': 'Shoalhaven', 'top': -34.65, 'bottom': -35.4, 'left': 150.15, 'right': 150.95},
-    
-    # Blue Mountains / Penrith
-    {'name': 'Blue Mountains', 'top': -33.45, 'bottom': -33.95, 'left': 150.2, 'right': 150.85},
-    
-    # Northern NSW Coast (Port Macquarie to Tweed)
-    {'name': 'Northern Coast', 'top': -28.15, 'bottom': -31.5, 'left': 151.5, 'right': 153.65},
-    
-    # Northern NSW Inland (Tamworth, Armidale)
-    {'name': 'Northern Inland', 'top': -28.15, 'bottom': -32.0, 'left': 149.5, 'right': 152.0},
-    
-    # Southern NSW / ACT / Canberra region
-    {'name': 'Southern ACT', 'top': -34.5, 'bottom': -36.3, 'left': 148.5, 'right': 150.5},
-    
-    # South Coast (Batemans Bay to Eden) - Eden is around -37.07
-    {'name': 'South Coast', 'top': -35.3, 'bottom': -37.1, 'left': 149.5, 'right': 150.35},
-    
-    # Western NSW (Dubbo, Orange, Bathurst)
-    {'name': 'Central West', 'top': -31.5, 'bottom': -34.5, 'left': 147.5, 'right': 150.5},
-    
-    # Far Western NSW (Broken Hill area)
-    {'name': 'Far West', 'top': -28.15, 'bottom': -34.0, 'left': 140.99, 'right': 148.0},
-    
-    # Riverina / Murray region - Murray River is the NSW/VIC border (~-36.0)
-    {'name': 'Riverina', 'top': -34.0, 'bottom': -36.1, 'left': 143.5, 'right': 148.5},
+    # Sydney metro (highest alert density — keep tight)
+    {'name': 'Sydney Metro', 'top': -33.65, 'bottom': -34.25, 'left': 150.6, 'right': 151.55},
+
+    # Central Coast + Newcastle + Hunter
+    {'name': 'Hunter', 'top': -32.4, 'bottom': -33.65, 'left': 150.8, 'right': 152.2},
+
+    # Illawarra + Shoalhaven (Wollongong south to Jervis Bay)
+    {'name': 'Illawarra', 'top': -34.15, 'bottom': -35.4, 'left': 150.15, 'right': 151.15},
+
+    # Blue Mountains + Central West (Katoomba to Dubbo/Orange/Bathurst)
+    {'name': 'Central West', 'top': -31.5, 'bottom': -34.1, 'left': 147.5, 'right': 150.85},
+
+    # Northern NSW (coast + inland: Port Macquarie, Tamworth, Armidale, Tweed)
+    {'name': 'Northern NSW', 'top': -28.15, 'bottom': -32.0, 'left': 149.5, 'right': 153.65},
+
+    # Southern NSW + ACT + South Coast (Canberra region to Eden, plus Riverina)
+    {'name': 'Southern NSW', 'top': -34.0, 'bottom': -37.1, 'left': 143.5, 'right': 150.5},
 ]
 
-# Proxy for Waze requests (bypass datacenter IP blocks)
-# Single proxy:  WAZE_PROXY_URL=http://host:port
-# Proxy list:    WAZE_PROXY_LIST=host1:port,host2:port,host3:port  (rotates per-request)
-# Protocol:      WAZE_PROXY_PROTO=http (default: http, also supports socks5)
-_waze_proxy_single = os.environ.get('WAZE_PROXY_URL', '').strip() or None
-_waze_proxy_list_raw = os.environ.get('WAZE_PROXY_LIST', '').strip()
-_waze_proxy_proto = os.environ.get('WAZE_PROXY_PROTO', 'http').strip()
-_waze_proxy_pool = []
-if _waze_proxy_list_raw:
-    for p in _waze_proxy_list_raw.split(','):
-        p = p.strip()
-        if p:
-            # Add protocol if not present
-            if '://' not in p:
-                p = f"{_waze_proxy_proto}://{p}"
-            _waze_proxy_pool.append(p)
-    import random
-    random.shuffle(_waze_proxy_pool)
-    Log.info(f"Waze: Loaded {len(_waze_proxy_pool)} proxies (rotating)")
-elif _waze_proxy_single:
-    _waze_proxy_pool = [_waze_proxy_single]
-    Log.info(f"Waze: Using proxy {_waze_proxy_single.split('@')[-1] if '@' in _waze_proxy_single else _waze_proxy_single}")
-
-_waze_proxy_index = 0
-_waze_proxy_lock = threading.Lock()
-
-def _get_waze_proxy():
-    """Get next proxy URL from pool (round-robin). Returns None if no proxies configured."""
-    global _waze_proxy_index
-    if not _waze_proxy_pool:
-        return None
-    with _waze_proxy_lock:
-        proxy = _waze_proxy_pool[_waze_proxy_index % len(_waze_proxy_pool)]
-        _waze_proxy_index += 1
-    return proxy
-
-# Legacy compat
-WAZE_PROXY_URL = _waze_proxy_single
-
-# Cache for Waze data (shared across all endpoints)
+# --- Userscript ingest mode --------------------------------------------------
+# When a Tampermonkey userscript running in a real browser POSTs scraped
+# georss data to /api/waze/ingest, we serve that data instead of trying the
+# blocked direct fetch. Setup: see docs/waze-userscript.md
+WAZE_INGEST_ENABLED = os.environ.get('WAZE_INGEST_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+WAZE_INGEST_KEY = os.environ.get('WAZE_INGEST_KEY', '').strip()
+# Cached ingest per-bbox is evicted after this many seconds. The full userscript
+# rotation is ~5s × ~129 regions ≈ 11 min, so a 5-min window would prune most
+# of NSW from the snapshot at any given moment. 20 min is ~2× the rotation so
+# every snapshot holds a complete picture even if the browser falls behind
+# slightly. Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
+WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 1200))
+# Alert if no ingest POST has arrived in this many seconds (0 = disabled).
+WAZE_INGEST_STALE_SECS = int(os.environ.get('WAZE_INGEST_STALE_SECS', '600'))
+# Optional Discord webhook — fired once when staleness first crosses threshold.
+WAZE_STALE_WEBHOOK = os.environ.get('WAZE_STALE_WEBHOOK', '').strip()
+# keyed by (top,bottom,left,right) rounded tuple → {'alerts':[...], 'jams':[...], 'users':[...], 'ts': float}
+_waze_ingest_cache = {}
+_waze_ingest_lock = threading.Lock()
+# Tracks wall-clock of the most recent ingest POST (any bbox). Used by the
+# staleness watcher thread so we don't have to walk _waze_ingest_cache on every
+# tick. 0.0 means "never".
+_waze_last_ingest_at = 0.0
+# Latches so the watcher only logs/pings once per stale→healthy cycle.
+_waze_stale_alerted = False
+# Mirror of the most recent ingest snapshot — read by /api/waze/metrics so it
+# can report freshness alongside the rolling block-rate window.
 _waze_cache = {'alerts': [], 'jams': [], 'timestamp': 0}
-WAZE_CACHE_TTL = 120  # Cache Waze data for 2 minutes
 
-# Waze browser worker - bypasses 403 when Waze blocks server IPs
-_waze_request_queue = _queue_mod.Queue()
-_waze_browser_worker_thread = None
-_waze_browser_ready = False
-_waze_fetch_lock = threading.Lock()  # Serialize fetches to avoid rate limiting from parallel prewarm
-
-def _waze_browser_worker():
-    """Dedicated thread that uses Playwright to fetch Waze data.
-    Uses playwright-stealth to bypass Datadome WAF detection, and a persistent
-    browser profile so cookies/Datadome tokens survive across restarts.
-    Strategy: non-headless Chrome (off-screen) with stealth patches."""
-    global _waze_browser_ready
-    pw = None
-    browser = None
-    page = None
-    try:
-        pw = sync_playwright().start()
-
-        launch_args = [
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-infobars',
-            '--window-size=1920,1080',
-            '--ozone-platform=x11',  # Force X11 backend (needed for Xvfb on modern Chrome)
-            '--disable-cache',
-            '--disk-cache-size=0',
-            '--aggressive-cache-discard',
-        ]
-
-        # Clean browser profile on each start (stale Datadome cookies cause instant 403)
-        _waze_user_data_dir = os.path.join(_script_dir, 'data', '.waze-browser-profile')
-        import shutil
-        if os.path.exists(_waze_user_data_dir):
-            try:
-                shutil.rmtree(_waze_user_data_dir)
-            except Exception:
-                pass
-        os.makedirs(_waze_user_data_dir, exist_ok=True)
-
-        browser = None
-        context = None
-        channel_used = None
-
-        # Start virtual display for non-headless Chrome (required on headless Linux)
-        _xvfb_proc = None
-        _xvfb_display = None
-        if os.name != 'nt':
-            existing_display = os.environ.get('DISPLAY', '')
-            if DEV_MODE:
-                Log.info(f"Waze: Current DISPLAY={existing_display or '(not set)'}")
-            try:
-                import subprocess
-                # Kill any leftover Xvfb from previous runs
-                subprocess.run(['pkill', '-f', 'Xvfb :9[0-9]'], capture_output=True)
-                subprocess.run(['pkill', '-f', 'Xvfb :10[0-9]'], capture_output=True)
-                time.sleep(0.3)
-                for disp_num in range(99, 110):
-                    _xvfb_proc = subprocess.Popen(
-                        ['Xvfb', f':{disp_num}', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    time.sleep(0.5)
-                    if _xvfb_proc.poll() is None:  # Still running = success
-                        _xvfb_display = f':{disp_num}'
-                        os.environ['DISPLAY'] = _xvfb_display
-                        Log.info(f"Waze: Started Xvfb on {_xvfb_display}")
-                        break
-                    _xvfb_proc = None
-                if not _xvfb_display:
-                    Log.warn("Waze: Could not start Xvfb, falling back to headless")
-            except FileNotFoundError:
-                Log.warn("Waze: Xvfb not installed (apt install xvfb), falling back to headless")
-            except Exception as e:
-                Log.warn(f"Waze: Xvfb failed ({e}), falling back to headless")
-
-        # Build env dict with DISPLAY for Xvfb
-        _browser_env = dict(os.environ)
-        if _xvfb_display:
-            _browser_env['DISPLAY'] = _xvfb_display
-
-        # Strategy 1: Non-headless system Chrome with persistent context (best for WAF bypass)
-        # Non-headless avoids all headless detection; requires X server or Xvfb
-        if _xvfb_display or os.environ.get('DISPLAY') or os.name == 'nt':
-            for channel in ['chrome', 'msedge', None]:
-                try:
-                    context = pw.chromium.launch_persistent_context(
-                        _waze_user_data_dir,
-                        channel=channel,
-                        headless=False,
-                        args=launch_args + ['--window-position=-32000,-32000'],
-                        viewport={'width': 1920, 'height': 1080},
-                        locale='en-AU',
-                        timezone_id='Australia/Sydney',
-                        extra_http_headers={'Accept-Language': 'en-AU,en;q=0.9'},
-                        env=_browser_env,
-                    )
-                    channel_used = channel or 'chromium-visible'
-                    break
-                except Exception as e:
-                    label = channel or 'chromium-visible'
-                    if DEV_MODE:
-                        Log.info(f"Waze: {label} non-headless failed, trying next...")
-
-        # Strategy 2: Headless with stealth (less reliable but works on headless servers)
-        if not context:
-            for channel in ['chrome', 'msedge', None]:
-                try:
-                    context = pw.chromium.launch_persistent_context(
-                        _waze_user_data_dir,
-                        channel=channel,
-                        headless=True,
-                        args=launch_args,
-                        viewport={'width': 1920, 'height': 1080},
-                        locale='en-AU',
-                        timezone_id='Australia/Sydney',
-                        extra_http_headers={'Accept-Language': 'en-AU,en;q=0.9'},
-                    )
-                    channel_used = f'{channel or "chromium"}-headless'
-                    break
-                except Exception:
-                    pass
-
-        if not context:
-            Log.error("Waze: No browser could be launched")
-            _waze_browser_ready = False
-            return
-
-        stealth_label = ' +stealth' if _stealth_available else ''
-        Log.info(f"Waze: Browser started ({channel_used}{stealth_label})")
-
-        # Apply playwright-stealth BEFORE creating page (v2 applies to context)
-        if _stealth_available:
-            try:
-                if _stealth_v2:
-                    _stealth_obj.apply_stealth_sync(context)
-                else:
-                    pass  # v1 applies to page, done after new_page() below
-            except Exception as e:
-                Log.warn(f"Waze: stealth failed ({e})")
-
-        page = context.new_page()
-
-        # v1 stealth applies to page
-        if _stealth_available and not _stealth_v2:
-            try:
-                stealth_sync(page)
-            except Exception as e:
-                Log.warn(f"Waze: stealth v1 failed ({e})")
-
-        if not _stealth_available:
-            # Fallback: basic stealth (less effective against Datadome)
-            Log.warn("Waze: playwright-stealth not installed, using basic patches (pip install playwright-stealth)")
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                Object.defineProperty(navigator, 'languages', {get: () => ['en-AU', 'en']});
-                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}};
-                Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 0});
-            """)
-
-        _georss_responses = []
-        _georss_lock = threading.Lock()
-        _api_status = []
-        _georss_403_body = [None]
-
-        def _on_response(response):
-            """Capture georss responses and log API call status codes."""
-            try:
-                url = response.url
-                if 'waze.com' in url and '/api/' in url:
-                    endpoint = url.split('?')[0].split('/api/')[-1]
-                    _api_status.append(f"{response.status}:{endpoint}")
-                    # Prevent unbounded growth — keep only recent entries
-                    if len(_api_status) > 200:
-                        del _api_status[:100]
-                if '/georss' in url:
-                    if response.status == 200:
-                        body = response.json()
-                        with _georss_lock:
-                            _georss_responses.append(body)
-                    elif response.status == 403 and _georss_403_body[0] is None:
-                        try:
-                            _georss_403_body[0] = response.text()[:500]
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        page.on('response', _on_response)
-
-        # Clear stale cookies/session to avoid Datadome blocking from previous runs
-        context.clear_cookies()
-
-        page.goto('https://www.waze.com/live-map', timeout=45000, wait_until='domcontentloaded')
-        # Wait for georss API call (don't use networkidle — Waze never stops polling)
-        page.wait_for_timeout(8000)
-
-        import random
-        for _ in range(5):
-            page.mouse.move(random.randint(300, 900), random.randint(200, 700))
-            page.wait_for_timeout(random.randint(200, 600))
-        page.mouse.click(600, 400)
-        page.wait_for_timeout(3000)
-
-        if DEV_MODE:
-            cookies = context.cookies()
-            cookie_names = [c['name'] for c in cookies if 'waze' in c.get('domain', '')]
-            Log.info(f"Waze: Cookies: {cookie_names}")
-            if _api_status:
-                Log.info(f"Waze: API calls during load: {_api_status[:15]}")
-            if _georss_403_body[0]:
-                body_preview = _georss_403_body[0][:200].replace('\n', ' ')
-                Log.info(f"Waze: 403 response body: {body_preview}")
-
-        use_interception = False
-        use_evaluate = False
-
-        # Test page.evaluate() — much faster than navigation+interception
-        test = _waze_page_fetch(page, NSW_REGIONS[0])
-        if test and (test.get('alerts') or test.get('jams')):
-            use_evaluate = True
-            Log.info(f"Waze: Ready — direct fetch ({len(test.get('alerts',[]))} alerts, {len(test.get('jams',[]))} jams from test region)")
-        else:
-            # Check if interception worked during page load
-            with _georss_lock:
-                initial_count = len(_georss_responses)
-            if initial_count > 0:
-                use_interception = True
-                Log.info("Waze: Ready — using navigation interception (direct fetch blocked)")
-            else:
-                Log.warn(f"Waze: WAF still blocking — all methods failed")
-                if not _stealth_available:
-                    Log.warn("Waze: Try: pip install playwright-stealth")
-                elif 'headless' in (channel_used or ''):
-                    Log.warn("Waze: Try non-headless: apt install xvfb")
-        _waze_browser_ready = True
-    except Exception as e:
-        Log.error(f"Waze browser worker failed: {e}")
-        try:
-            if page: page.close()
-        except Exception: pass
-        try:
-            if context: context.close()
-        except Exception: pass
-        try:
-            if browser: browser.close()
-        except Exception: pass
-        try:
-            if pw: pw.stop()
-        except Exception: pass
-        if _xvfb_proc:
-            try: _xvfb_proc.terminate()
-            except Exception: pass
-        _waze_browser_ready = False
-        return
-
-    while True:
-        try:
-            # Clear accumulated georss responses from background page polling
-            with _georss_lock:
-                _georss_responses.clear()
-            task = _waze_request_queue.get(timeout=60)
-            if task is None:
-                break
-            regions, result_q = task
-            try:
-                # Shuffle region order so Datadome 403s rotate instead of always blocking the last regions
-                import random
-                regions = list(regions)
-                random.shuffle(regions)
-                result = []
-                for i, region in enumerate(regions):
-                    if i > 0:
-                        page.wait_for_timeout(1500)
-                    data = None
-
-                    if use_interception:
-                        try:
-                            with _georss_lock:
-                                _georss_responses.clear()
-                            lat = (region['top'] + region['bottom']) / 2
-                            lon = (region['left'] + region['right']) / 2
-                            span = abs(region['top'] - region['bottom'])
-                            zoom = 10 if span > 2 else (11 if span > 1 else 12)
-                            page.goto(
-                                f"https://www.waze.com/live-map?lat={lat}&lon={lon}&zoom={zoom}",
-                                timeout=20000, wait_until='domcontentloaded'
-                            )
-                            # Wait for georss API response (don't use networkidle — Waze never stops polling)
-                            for _ in range(20):  # Wait up to 10s in 0.5s increments
-                                page.wait_for_timeout(500)
-                                with _georss_lock:
-                                    if _georss_responses:
-                                        break
-                            with _georss_lock:
-                                captured = list(_georss_responses)
-                            if captured:
-                                data = {'alerts': [], 'jams': []}
-                                for resp in captured:
-                                    data['alerts'].extend(resp.get('alerts', []))
-                                    data['jams'].extend(resp.get('jams', []))
-                        except Exception as e:
-                            if DEV_MODE:
-                                Log.warn(f"Waze nav error [{region['name']}]: {e}")
-
-                    if not data or (not data.get('alerts') and not data.get('jams')):
-                        # Always try page.evaluate as fallback — faster than navigation
-                        data = _waze_page_fetch(page, region)
-
-                    if data and (data.get('alerts') or data.get('jams')):
-                        result.append({'ok': True, 'data': data})
-                    else:
-                        result.append({'ok': False, 'status': 0})
-                result_q.put(result)
-            except Exception as e:
-                Log.warn(f"Waze browser fetch error: {e}")
-                result_q.put([])
-        except _queue_mod.Empty:
-            # Clear browser cache on idle to prevent Chromium memory growth
-            try:
-                cdp = context.new_cdp_session(page)
-                cdp.send('Network.clearBrowserCache')
-                cdp.detach()
-            except Exception:
-                pass
-            continue
-        except Exception as e:
-            if not _shutdown_event.is_set():
-                Log.warn(f"Waze worker: {e}")
-
-    _waze_browser_ready = False
-    try:
-        if page: page.close()
-    except Exception: pass
-    try:
-        if context: context.close()
-    except Exception: pass
-    try:
-        if browser: browser.close()
-    except Exception: pass
-    try:
-        if pw: pw.stop()
-    except Exception: pass
-    if _xvfb_proc:
-        try: _xvfb_proc.terminate()
-        except Exception: pass
+# Rolling block-rate monitor. Each fetch appends (timestamp_unix, outcome)
+# where outcome is 'success' | 'block' | 'error'. Entries older than
+# _WAZE_METRICS_WINDOW seconds are pruned on access. If the current block
+# rate exceeds _WAZE_BLOCK_RATE_LIMIT, new fetches are gated — we serve
+# stale cache (if any) instead of hammering upstream.
+from collections import deque as _waze_deque
+_WAZE_METRICS_WINDOW = 1800  # 30-minute rolling window
+_WAZE_METRICS_MAX = 500       # hard cap on stored outcomes
+_WAZE_BLOCK_RATE_LIMIT = 2.0  # percent — if >= this, gate new fetches
+_WAZE_METRICS_MIN_SAMPLES = 20  # need at least this many samples before gating
+_waze_metrics = _waze_deque(maxlen=_WAZE_METRICS_MAX)
+_waze_metrics_lock = threading.Lock()
 
 
-def _waze_page_fetch(page, region):
-    """Use page.evaluate() to call fetch() from within the Waze page context.
-    The request inherits the page's cookies, origin, and TLS session."""
-    try:
-        js_code = """
-            async ({top, bottom, left, right}) => {
-                const url = new URL('https://www.waze.com/live-map/api/georss');
-                url.searchParams.set('top', top);
-                url.searchParams.set('bottom', bottom);
-                url.searchParams.set('left', left);
-                url.searchParams.set('right', right);
-                url.searchParams.set('env', 'row');
-                url.searchParams.set('types', 'alerts,traffic');
-                const resp = await fetch(url.toString(), {
-                    credentials: 'include',
-                    headers: {
-                        'Accept': 'application/json, text/plain, */*',
-                        'Referer': 'https://www.waze.com/live-map',
-                    }
-                });
-                if (!resp.ok) return {_error: resp.status};
-                return await resp.json();
-            }
-        """
-        data = page.evaluate(js_code, {
-            'top': region['top'],
-            'bottom': region['bottom'],
-            'left': region['left'],
-            'right': region['right'],
-        })
-        if isinstance(data, dict) and '_error' in data:
-            if DEV_MODE:
-                Log.warn(f"Waze: page.evaluate [{region['name']}]: HTTP {data['_error']}")
-            return {'alerts': [], 'jams': []}
-        return data if isinstance(data, dict) else {'alerts': [], 'jams': []}
-    except Exception as e:
-        if DEV_MODE:
-            Log.warn(f"Waze: page.evaluate error [{region['name']}]: {e}")
-        return {'alerts': [], 'jams': []}
+def _waze_metrics_record(outcome: str):
+    """Append an outcome ('success' | 'block' | 'error') to the rolling window."""
+    with _waze_metrics_lock:
+        _waze_metrics.append((time.time(), outcome))
 
-def _start_waze_browser_worker():
-    global _waze_browser_worker_thread
-    if not _playwright_available:
-        return
-    if _waze_browser_worker_thread and _waze_browser_worker_thread.is_alive():
-        return
-    _waze_browser_worker_thread = threading.Thread(target=_waze_browser_worker, daemon=True, name='waze-browser')
-    _waze_browser_worker_thread.start()
 
-def _waze_browser_fetch_regions(regions):
-    """Fetch Waze data for multiple regions by navigating the map. Returns list of result dicts."""
-    if not _waze_browser_ready:
-        return None
-    result_q = _queue_mod.Queue()
-    _waze_request_queue.put((regions, result_q))
-    try:
-        timeout = 30 + len(regions) * 8
-        results = result_q.get(timeout=timeout)
-        return results
-    except _queue_mod.Empty:
-        Log.warn("Waze browser fetch timed out")
-        return None
+def _waze_metrics_snapshot(window_seconds: int = _WAZE_METRICS_WINDOW):
+    """Return a dict summarising the current rolling window."""
+    cutoff = time.time() - window_seconds
+    with _waze_metrics_lock:
+        # Prune old entries from the left
+        while _waze_metrics and _waze_metrics[0][0] < cutoff:
+            _waze_metrics.popleft()
+        total = len(_waze_metrics)
+        success = sum(1 for _, o in _waze_metrics if o == 'success')
+        block = sum(1 for _, o in _waze_metrics if o == 'block')
+        error = sum(1 for _, o in _waze_metrics if o == 'error')
+        last_success = max((ts for ts, o in _waze_metrics if o == 'success'), default=0)
+        last_block = max((ts for ts, o in _waze_metrics if o == 'block'), default=0)
+    rate = (block / total * 100.0) if total else 0.0
+    return {
+        'total': total,
+        'success': success,
+        'block': block,
+        'error': error,
+        'block_rate_percent': round(rate, 2),
+        'window_seconds': window_seconds,
+        'last_success_at': last_success or None,
+        'last_block_at': last_block or None,
+        'gate_threshold_percent': _WAZE_BLOCK_RATE_LIMIT,
+        'gate_active': (total >= _WAZE_METRICS_MIN_SAMPLES and rate >= _WAZE_BLOCK_RATE_LIMIT),
+    }
 
-def _fetch_waze_region_curl_cffi(region):
-    """Fetch Waze via curl_cffi (TLS fingerprint spoofing) - bypasses datacenter blocking."""
-    if not CURL_CFFI_AVAILABLE or not curl_requests:
-        return {'alerts': [], 'jams': []}, 0
-    try:
-        url = 'https://www.waze.com/live-map/api/georss'
-        params = {
-            'top': region['top'], 'bottom': region['bottom'],
-            'left': region['left'], 'right': region['right'],
-            'env': 'row', 'types': 'alerts,traffic'
-        }
-        proxy = _get_waze_proxy()
-        kwargs = {
-            'params': params, 'timeout': 15,
-            'impersonate': 'chrome',
-            'headers': {'Accept': 'application/json', 'Accept-Language': 'en-AU,en;q=0.9', 'Referer': 'https://www.waze.com/live-map'}
-        }
-        if proxy:
-            kwargs['proxy'] = proxy
-        r = curl_requests.get(url, **kwargs)
-        if r.status_code == 200:
-            data = r.json()
-            return data, 200
-        if DEV_MODE:
-            Log.warn(f"Waze curl_cffi [{region['name']}]: HTTP {r.status_code}")
-        return {'alerts': [], 'jams': []}, r.status_code
-    except Exception as e:
-        if DEV_MODE:
-            Log.warn(f"Waze curl_cffi [{region['name']}]: {e}")
-        return {'alerts': [], 'jams': []}, 0
-
-def fetch_waze_region(region):
-    """Fetch Waze data for a single region. Returns (data_dict, status_code)."""
-    try:
-        url = 'https://www.waze.com/live-map/api/georss'
-        params = {
-            'top': region['top'],
-            'bottom': region['bottom'],
-            'left': region['left'],
-            'right': region['right'],
-            'env': 'row',
-            'types': 'alerts,traffic'
-        }
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Accept-Language': 'en-AU,en;q=0.9',
-            'Referer': 'https://www.waze.com/live-map'
-        }
-        proxy = _get_waze_proxy()
-        proxies = {'https': proxy, 'http': proxy} if proxy else None
-        r = requests.get(url, params=params, timeout=15, headers=headers, proxies=proxies)
-        if r.status_code == 200:
-            data = r.json()
-            alerts = data.get('alerts', [])
-            jams = data.get('jams', [])
-            if not alerts and not jams and len(NSW_REGIONS) > 0 and region['name'] == NSW_REGIONS[0]['name']:
-                top_keys = list(data.keys())[:10] if isinstance(data, dict) else []
-                Log.warn(f"Waze [{region['name']}]: 0 alerts, 0 jams. Response keys: {top_keys}")
-            return data, 200
-        return {'alerts': [], 'jams': []}, r.status_code
-    except requests.exceptions.Timeout:
-        Log.warn(f"Waze [{region['name']}]: Request timeout")
-    except Exception as e:
-        Log.error(f"Waze fetch error for {region['name']}: {e}")
-    return {'alerts': [], 'jams': []}, 0
-
-_waze_consecutive_failures = 0
-_WAZE_MAX_CONSECUTIVE_FAILURES = 5  # Restart browser after this many consecutive all-403 fetches
 
 def fetch_waze_data():
-    """Fetch Waze alerts and jams for all NSW regions.
-    Uses browser worker (Playwright) when ready, falls back to curl_cffi/requests."""
-    global _waze_cache, _waze_consecutive_failures
+    """Fetch Waze alerts and jams for all NSW regions from the userscript ingest cache.
 
-    now = time.time()
-    if now - _waze_cache['timestamp'] < WAZE_CACHE_TTL and _waze_cache['alerts']:
-        return _waze_cache['alerts'], _waze_cache['jams']
+    Waze data is now exclusively delivered by a Violentmonkey userscript that
+    POSTs georss payloads to /api/waze/ingest. If WAZE_INGEST_ENABLED is false,
+    Waze is treated as disabled and we return empty lists.
+    Result is shared across waze_hazards/waze_police/waze_roadwork callers."""
+    global _waze_cache
 
-    with _waze_fetch_lock:
-        # Re-check: another thread may have populated cache while we waited for lock
-        now2 = time.time()
-        if now2 - _waze_cache['timestamp'] < WAZE_CACHE_TTL and _waze_cache['alerts']:
-            return _waze_cache['alerts'], _waze_cache['jams']
+    if not WAZE_INGEST_ENABLED:
+        return [], []
 
-        all_alerts = {}
-        all_jams = {}
-
-        # Strategy 1: Use browser worker if ready (bypasses Datadome WAF)
-        if _waze_browser_ready:
-            results = _waze_browser_fetch_regions(NSW_REGIONS)
-            if results:
-                for r in results:
-                    if r and r.get('ok') and r.get('data'):
-                        data = r['data']
-                        for alert in data.get('alerts', []):
-                            uuid = alert.get('uuid')
-                            if uuid and uuid not in all_alerts:
-                                all_alerts[uuid] = alert
-                        for jam in data.get('jams', []):
-                            uuid = jam.get('uuid')
-                            if uuid and uuid not in all_jams:
-                                all_jams[uuid] = jam
-                if all_alerts or all_jams:
-                    Log.info(f"Waze: Browser fetch OK ({len(all_alerts)} alerts, {len(all_jams)} jams)")
-                    _waze_consecutive_failures = 0
-                else:
-                    _waze_consecutive_failures += 1
-                    first = next((r for r in results if r), None)
-                    sample = f"ok={first.get('ok')}, status={first.get('status')}" if first else "no results"
-                    Log.warn(f"Waze: Browser fetch returned no data ({sample}) [{_waze_consecutive_failures}/{_WAZE_MAX_CONSECUTIVE_FAILURES}]")
-                    # Restart browser if consistently blocked by WAF
-                    if _waze_consecutive_failures >= _WAZE_MAX_CONSECUTIVE_FAILURES:
-                        Log.warn(f"Waze: {_waze_consecutive_failures} consecutive failures — restarting browser worker")
-                        _waze_consecutive_failures = 0
-                        # Signal the worker to stop and restart
-                        _waze_request_queue.put(None)  # Sentinel to stop worker
-                        # Wait for worker to die
-                        if _waze_browser_worker_thread:
-                            _waze_browser_worker_thread.join(timeout=10)
-                        time.sleep(2)
-                        _start_waze_browser_worker()
-                        # Wait for new browser to become ready
-                        for _ in range(120):
-                            if _waze_browser_ready:
-                                break
-                            time.sleep(0.5)
-                        if _waze_browser_ready:
-                            Log.info("Waze: Browser worker restarted successfully")
-            else:
-                Log.warn("Waze: Browser fetch timed out or returned None")
-        else:
-            # Strategy 2: Try curl_cffi (only when browser not yet ready, e.g. during startup)
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            got_blocked = False
-
-            if CURL_CFFI_AVAILABLE:
-                with ThreadPoolExecutor(max_workers=8) as executor:
-                    future_to_region = {executor.submit(_fetch_waze_region_curl_cffi, region): region for region in NSW_REGIONS}
-                    for future in as_completed(future_to_region):
-                        try:
-                            data, status = future.result()
-                            if status == 403:
-                                got_blocked = True
-                            if status == 200:
-                                for alert in data.get('alerts', []):
-                                    uuid = alert.get('uuid')
-                                    if uuid and uuid not in all_alerts:
-                                        all_alerts[uuid] = alert
-                                for jam in data.get('jams', []):
-                                    uuid = jam.get('uuid')
-                                    if uuid and uuid not in all_jams:
-                                        all_jams[uuid] = jam
-                        except Exception as e:
-                            Log.error(f"Waze curl_cffi region error: {e}")
-                if all_alerts or all_jams:
-                    Log.info(f"Waze: curl_cffi OK ({len(all_alerts)} alerts, {len(all_jams)} jams)")
-
-            # Start browser worker if we got blocked (it will be ready for next fetch)
-            if not all_alerts and not all_jams:
-                if _playwright_available:
-                    Log.info("Waze: Starting browser worker...")
-                    _start_waze_browser_worker()
-                    # Wait for browser to become ready
-                    for _ in range(120):
-                        if _waze_browser_ready:
-                            break
-                        time.sleep(0.5)
-                    # Try browser now if it's ready
-                    if _waze_browser_ready:
-                        results = _waze_browser_fetch_regions(NSW_REGIONS)
-                        if results:
-                            for r in results:
-                                if r and r.get('ok') and r.get('data'):
-                                    data = r['data']
-                                    for alert in data.get('alerts', []):
-                                        uuid = alert.get('uuid')
-                                        if uuid and uuid not in all_alerts:
-                                            all_alerts[uuid] = alert
-                                    for jam in data.get('jams', []):
-                                        uuid = jam.get('uuid')
-                                        if uuid and uuid not in all_jams:
-                                            all_jams[uuid] = jam
-                            if all_alerts or all_jams:
-                                Log.info(f"Waze: Browser fetch OK ({len(all_alerts)} alerts, {len(all_jams)} jams)")
-                else:
-                    Log.warn("Waze: No data fetched. Install playwright for browser bypass: pip install playwright && python -m playwright install chromium")
-
-        alerts_list = list(all_alerts.values())
-        jams_list = list(all_jams.values())
-        _waze_cache = {'alerts': alerts_list, 'jams': jams_list, 'timestamp': now2}
-        return alerts_list, jams_list
+    alerts, jams = _waze_ingest_snapshot()
+    # Cache for the metrics endpoint so it can report freshness.
+    _waze_cache = {'alerts': alerts, 'jams': jams, 'timestamp': time.time()}
+    if alerts or jams:
+        source_ok('waze')
+    return alerts, jams
 
 
 def fetch_waze_alerts():
@@ -8456,6 +8727,270 @@ def parse_waze_jam(jam):
             'source': 'waze'
         }
     }
+
+
+# Reconcile queue — one worker thread pulls bbox-diff tasks off this and
+# processes them one at a time. Ingest endpoints enqueue and return immediately;
+# if the queue fills up, new tasks get dropped (the 1-hour last_seen sweep is
+# the fallback). This stops the userscript's 5s cadence from stacking up on the
+# waze DB lock and starving the pool.
+import queue as _queue_module
+_waze_reconcile_queue = _queue_module.Queue(maxsize=32)
+_waze_reconcile_thread_started = False
+_waze_reconcile_thread_lock = threading.Lock()
+
+
+def _waze_reconcile_worker():
+    while not _shutdown_event.is_set():
+        try:
+            task = _waze_reconcile_queue.get(timeout=1)
+        except Exception:
+            continue
+        if task is None:
+            continue
+        try:
+            _waze_reconcile_bbox_sync(*task)
+        except Exception as e:
+            Log.error(f"Waze reconcile worker error: {e}")
+        finally:
+            try:
+                _waze_reconcile_queue.task_done()
+            except Exception:
+                pass
+
+
+def _ensure_reconcile_worker():
+    global _waze_reconcile_thread_started
+    with _waze_reconcile_thread_lock:
+        if _waze_reconcile_thread_started:
+            return
+        _waze_reconcile_thread_started = True
+        threading.Thread(
+            target=_waze_reconcile_worker,
+            daemon=True,
+            name='waze-reconcile-worker',
+        ).start()
+
+
+def _waze_reconcile_bbox(bbox_raw, alerts, jams):
+    """Enqueue a per-region 'gone' reconcile. Non-blocking; drops on backlog."""
+    _ensure_reconcile_worker()
+    # Extract just the fields the sync worker needs — don't hold references
+    # to the full payload alerts[] on the queue.
+    current_ids = set()
+    for a in alerts or []:
+        uid = a.get('uuid') or a.get('id')
+        if uid is not None:
+            current_ids.add(str(uid))
+    for j in jams or []:
+        uid = j.get('uuid') or j.get('id')
+        if uid is not None:
+            current_ids.add(str(uid))
+    try:
+        _waze_reconcile_queue.put_nowait((dict(bbox_raw), current_ids))
+    except _queue_module.Full:
+        # Backlog. Drop. Falls back to 1-hour last_seen sweep.
+        if DEV_MODE:
+            Log.warn("Waze reconcile queue full — dropping task (fallback: 1h sweep)")
+
+
+def _waze_reconcile_bbox_sync(bbox_raw, current_ids):
+    """Immediate per-region 'gone' detection.
+
+    When the userscript POSTs an ingest for a bbox, any Waze record in
+    data_history whose lat/lon falls inside that bbox AND whose source_id
+    isn't in this payload is considered cleared — we flip is_live=0 right
+    away. The 1-hour last_seen sweep in cleanup_old_data() is the fallback
+    for regions that stop being visited entirely (userscript crash).
+    """
+    try:
+        top = float(bbox_raw.get('top', 0))
+        bottom = float(bbox_raw.get('bottom', 0))
+        left = float(bbox_raw.get('left', 0))
+        right = float(bbox_raw.get('right', 0))
+    except (TypeError, ValueError):
+        return 0
+    lat_hi = max(top, bottom)
+    lat_lo = min(top, bottom)
+    lon_hi = max(left, right)
+    lon_lo = min(left, right)
+    if lat_hi == lat_lo or lon_hi == lon_lo:
+        return 0
+
+    waze_sources = ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
+    n_gone = 0
+    try:
+        with _db_lock_history_waze:
+            conn = get_conn()
+            try:
+                c = conn.cursor()
+                # Cap this query so a bad plan can't starve the pool.
+                c.execute("SET LOCAL statement_timeout = '15s'")
+                c.execute('''
+                    SELECT source, source_id FROM data_history
+                    WHERE source IN %s
+                    AND is_live = 1
+                    AND source_id IS NOT NULL
+                    AND latitude BETWEEN %s AND %s
+                    AND longitude BETWEEN %s AND %s
+                ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
+                rows = c.fetchall()
+                by_source = {}
+                for src, sid in rows:
+                    if sid not in current_ids:
+                        by_source.setdefault(src, []).append(sid)
+                for src, sids in by_source.items():
+                    placeholders = ','.join(['%s'] * len(sids))
+                    c.execute(
+                        f'UPDATE data_history SET is_live = 0 WHERE source = %s AND source_id IN ({placeholders})',
+                        [src] + sids,
+                    )
+                    n_gone += len(sids)
+                if n_gone:
+                    conn.commit()
+            finally:
+                conn.close()
+    except Exception as e:
+        Log.error(f"Waze bbox reconcile DB error: {e}")
+        return 0
+    if n_gone and DEV_MODE:
+        breakdown = ', '.join(f'{k}:{len(v)}' for k, v in by_source.items() if v)
+        Log.live(f"Waze ✗ bbox reconcile — {n_gone} gone ({breakdown})")
+    return n_gone
+
+
+def _waze_ingest_snapshot():
+    """Collect all fresh ingested georss data into a single alerts+jams+users set,
+    deduplicated by UUID. Returns (alerts_list, jams_list) like fetch_waze_data."""
+    now = time.time()
+    all_alerts = {}
+    all_jams = {}
+    with _waze_ingest_lock:
+        # Prune stale entries
+        for key in list(_waze_ingest_cache.keys()):
+            if now - _waze_ingest_cache[key].get('ts', 0) > WAZE_INGEST_MAX_AGE:
+                del _waze_ingest_cache[key]
+        # Merge all remaining by UUID
+        for entry in _waze_ingest_cache.values():
+            for a in entry.get('alerts', []) or []:
+                uuid = a.get('uuid') or a.get('id')
+                if uuid and uuid not in all_alerts:
+                    all_alerts[uuid] = a
+            for j in entry.get('jams', []) or []:
+                uuid = j.get('uuid') or j.get('id')
+                if uuid and uuid not in all_jams:
+                    all_jams[uuid] = j
+    return list(all_alerts.values()), list(all_jams.values())
+
+
+@app.route('/api/waze/ingest', methods=['POST'])
+def waze_ingest():
+    """Accept scraped georss data from a Tampermonkey userscript running in a
+    real browser. Auth via X-Ingest-Key header matched against WAZE_INGEST_KEY.
+    Payload shape mirrors Waze's native /api/georss response plus a bbox:
+      { "bbox": {"top":..,"bottom":..,"left":..,"right":..},
+        "alerts": [...], "jams": [...], "users": [...] }
+    """
+    if not WAZE_INGEST_ENABLED:
+        return jsonify({'error': 'ingest disabled'}), 403
+    supplied = request.headers.get('X-Ingest-Key', '')
+    if not WAZE_INGEST_KEY or supplied != WAZE_INGEST_KEY:
+        return jsonify({'error': 'unauthorized'}), 401
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        return jsonify({'error': 'bad json'}), 400
+
+    bbox = payload.get('bbox') or {}
+    try:
+        key = (
+            round(float(bbox.get('top', 0)), 3),
+            round(float(bbox.get('bottom', 0)), 3),
+            round(float(bbox.get('left', 0)), 3),
+            round(float(bbox.get('right', 0)), 3),
+        )
+    except (TypeError, ValueError):
+        return jsonify({'error': 'bad bbox'}), 400
+
+    alerts = payload.get('alerts') or []
+    jams = payload.get('jams') or []
+    users = payload.get('users') or []
+
+    global _waze_last_ingest_at, _waze_stale_alerted
+    now_ts = time.time()
+    with _waze_ingest_lock:
+        _waze_ingest_cache[key] = {
+            'alerts': alerts,
+            'jams': jams,
+            'users': users,
+            'ts': now_ts,
+        }
+        n_regions = len(_waze_ingest_cache)
+        _waze_last_ingest_at = now_ts
+        if _waze_stale_alerted:
+            _waze_stale_alerted = False
+            Log.info("Waze ✓ Ingest resumed — clearing stale flag")
+
+    if DEV_MODE:
+        Log.info(f"Waze ▶ Ingest bbox={key} alerts={len(alerts)} jams={len(jams)} (regions cached: {n_regions})")
+
+    # Per-region 'gone' reconcile: any archived Waze record inside this bbox
+    # whose uuid isn't in the payload is cleared immediately. Failures here
+    # must not break ingest, so swallow exceptions.
+    try:
+        _waze_reconcile_bbox(bbox, alerts, jams)
+    except Exception as e:
+        Log.error(f"Waze bbox reconcile failed: {e}")
+
+    return jsonify({'ok': True, 'alerts': len(alerts), 'jams': len(jams), 'regions_cached': n_regions})
+
+
+def _waze_staleness_watcher():
+    """Background loop that fires a warning (and optional Discord ping) when
+    the userscript stops delivering ingest POSTs for longer than
+    WAZE_INGEST_STALE_SECS. One alert per stale→healthy cycle."""
+    global _waze_stale_alerted
+    # Give the browser a chance to boot and deliver its first POST before we
+    # start counting. Matches the practical cold-start of Firefox + Waze.
+    startup_grace = 120
+    check_interval = 60
+    started_at = time.time()
+    time.sleep(startup_grace)
+    while not _shutdown_event.is_set():
+        try:
+            last = _waze_last_ingest_at
+            now = time.time()
+            if last == 0.0:
+                # No ingest yet. Count staleness from the grace-period end so we
+                # don't alert on a backend that just started.
+                age = now - (started_at + startup_grace)
+            else:
+                age = now - last
+            if age > WAZE_INGEST_STALE_SECS and not _waze_stale_alerted:
+                _waze_stale_alerted = True
+                mins = int(age // 60)
+                msg = (
+                    f"Waze ingest stale: no POST in {mins}m. "
+                    "Check the scraper browser (Firefox + Tampermonkey)."
+                )
+                Log.warn(f"⚠ {msg}")
+                if WAZE_STALE_WEBHOOK:
+                    try:
+                        requests.post(
+                            WAZE_STALE_WEBHOOK,
+                            json={'content': f'⚠️ NSWPSN: {msg}'},
+                            headers={'Content-Type': 'application/json'},
+                            timeout=10,
+                        )
+                    except Exception as e:
+                        Log.error(f"Waze staleness webhook failed: {e}")
+        except Exception as e:
+            Log.error(f"Waze staleness watcher error: {e}")
+        # Sleep in 5s slices so shutdown is responsive
+        for _ in range(check_interval // 5):
+            if _shutdown_event.is_set():
+                return
+            time.sleep(5)
 
 
 @app.route('/api/waze/alerts')
@@ -8678,6 +9213,26 @@ def waze_raw():
     return jsonify({'alerts': alerts, 'count': len(alerts)})
 
 
+@app.route('/api/waze/metrics')
+def waze_metrics():
+    """Return the Waze fetch block-rate snapshot.
+
+    The backend counts every userscript ingest attempt in a 30-minute rolling
+    window and classifies it as `success`, `block`, or `error`. `gate_active`
+    means the block rate has crossed the 2% threshold.
+    """
+    snap = _waze_metrics_snapshot()
+    # Also expose cache freshness so operators can see whether the cache is
+    # keeping the public endpoints healthy.
+    cache_age = int(time.time() - _waze_cache['timestamp']) if _waze_cache['timestamp'] else None
+    return jsonify({
+        **snap,
+        'cache_alert_count': len(_waze_cache['alerts']),
+        'cache_jam_count': len(_waze_cache['jams']),
+        'cache_age_seconds': cache_age,
+    })
+
+
 @app.route('/api/waze/debug')
 def waze_debug():
     """Debug Waze API - bypass cache, fetch one region, return raw response structure.
@@ -8695,23 +9250,17 @@ def waze_debug():
             'Accept': 'application/json',
             'Referer': 'https://www.waze.com/live-map'
         }
-        # Try curl_cffi first (with proxy if configured), then plain requests
+        # Direct upstream fetch is expected to fail (Cloud Armor + reCAPTCHA);
+        # this endpoint only exists to confirm what Waze returns when poked.
         method_used = 'requests'
-        proxy = _get_waze_proxy()
-        proxies = {'https': proxy, 'http': proxy} if proxy else None
         if CURL_CFFI_AVAILABLE and curl_requests:
             try:
-                kwargs = {'params': params, 'timeout': 15, 'impersonate': 'chrome', 'headers': headers}
-                if proxy:
-                    kwargs['proxy'] = proxy
-                r = curl_requests.get(url, **kwargs)
-                method_used = 'curl_cffi' + (f' +proxy({proxy.split("//")[-1]})' if proxy else '')
+                r = curl_requests.get(url, params=params, timeout=15, impersonate='chrome', headers=headers)
+                method_used = 'curl_cffi'
             except Exception:
-                r = requests.get(url, params=params, timeout=15, headers=headers, proxies=proxies)
-                method_used = 'requests' + (' +proxy' if proxy else '')
+                r = requests.get(url, params=params, timeout=15, headers=headers)
         else:
-            r = requests.get(url, params=params, timeout=15, headers=headers, proxies=proxies)
-            method_used = 'requests' + (' +proxy' if proxy else '')
+            r = requests.get(url, params=params, timeout=15, headers=headers)
         content_type = r.headers.get('Content-Type', '')
         is_json = 'json' in content_type.lower()
         data = None
@@ -8728,8 +9277,6 @@ def waze_debug():
             'status_code': r.status_code,
             'content_type': content_type,
             'method': method_used,
-            'proxy_configured': len(_waze_proxy_pool) > 0,
-            'proxy_count': len(_waze_proxy_pool),
             'region': region['name'],
             'response_keys': list(data.keys()) if isinstance(data, dict) else None,
             'alerts_count': len(data.get('alerts', [])) if data else 0,
@@ -9364,13 +9911,15 @@ def debug_ratelimit():
 
 @app.route('/api/debug/sessions')
 def debug_sessions():
-    """Debug endpoint to view active page sessions"""
+    """Debug endpoint to view active page sessions (requires API key)."""
     active_count = get_active_page_count()  # This also cleans stale sessions
     data_count = get_data_page_count()
-    
+
     sessions_detail = []
     now = time.time()
-    for page_id, session in active_page_sessions.items():
+    with _page_sessions_lock:
+        snap = list(active_page_sessions.items())
+    for page_id, session in snap:
         sessions_detail.append({
             'page_id': page_id,
             'page_type': session.get('page_type', 'unknown'),
@@ -9471,9 +10020,9 @@ def debug_traffic_raw():
                 'has_features': 'features' in data if isinstance(data, dict) else False,
                 'sample_incidents': sample
             })
-        return jsonify({'error': f'Status {r.status_code}'})
+        return jsonify({'error': f'Status {r.status_code}'}), 502
     except Exception as e:
-        return jsonify({'error': str(e)})
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/cache/status')
@@ -9603,6 +10152,9 @@ def data_history():
         limit = min(request.args.get('limit', 100, type=int), 1000)
         offset = request.args.get('offset', 0, type=int)
         active_only = request.args.get('active_only') == '1'
+        # Include the full `data` JSONB blob only when asked. Skipping it cuts
+        # the payload dramatically for list pages that just show title + source.
+        include_data = request.args.get('full') == '1'
         search = request.args.get('search')
         title_search = request.args.get('title')
         location_search = request.args.get('location')
@@ -9747,59 +10299,62 @@ def data_history():
         live_count = 0
         ended_count = 0
         all_rows = []
-        
+
         for db_path in dbs_to_query:
             try:
                 conn = get_conn()
                 try:
                     c = conn.cursor()
-                    
-                    # Get total count for this DB
-                    c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
-                    db_total = c.fetchone()[0]
-                    total += db_total
-                    
-                    # Get live/ended counts (skip if filtering already)
-                    if live_only:
-                        live_count += db_total
-                    elif historical_only:
-                        ended_count += db_total
+                    # Cap this session so a bad plan fails fast (25s) instead of
+                    # timing out Cloudflare (100s). Applies to THIS session only.
+                    c.execute("SET LOCAL statement_timeout = '25s'")
+                    if live_only or historical_only:
+                        # Filter is already on is_live, so total IS live or ended
+                        c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+                        db_total = c.fetchone()[0]
+                        total += db_total
+                        if live_only:
+                            live_count += db_total
+                        else:
+                            ended_count += db_total
                     else:
+                        # Single pass: total + live + ended via FILTER
                         c.execute(f'''
-                            SELECT 
-                                SUM(CASE 
-                                    WHEN source = 'pager' THEN 
-                                        CASE WHEN COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff} THEN 1 ELSE 0 END
-                                    ELSE 
-                                        CASE WHEN is_live = 1 THEN 1 ELSE 0 END
-                                END) as live_count,
-                                SUM(CASE 
-                                    WHEN source = 'pager' THEN 
-                                        CASE WHEN COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff} THEN 1 ELSE 0 END
-                                    ELSE 
-                                        CASE WHEN is_live = 0 OR is_live IS NULL THEN 1 ELSE 0 END
-                                END) as ended_count
+                            SELECT
+                                COUNT(*) AS total,
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                                    OR (source != 'pager' AND is_live = 1)
+                                ) AS live_count,
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                                ) AS ended_count
                             FROM data_history
                             WHERE {actual_where}
                         ''', params)
-                        le = c.fetchone()
-                        live_count += le[0] or 0
-                        ended_count += le[1] or 0
+                        row = c.fetchone()
+                        total += row[0] or 0
+                        live_count += row[1] or 0
+                        ended_count += row[2] or 0
                 finally:
                     conn.close()
             except Exception as e:
                 Log.error(f"Count error: {e}")
         
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
+        # `data` is the heaviest column — pull it only if ?full=1.
+        data_col = 'data' if include_data else "''::text AS data"
         if len(dbs_to_query) == 1:
             # Single DB - simple query with proper pagination
             conn = get_conn()
             try:
                 c = conn.cursor()
+                c.execute("SET LOCAL statement_timeout = '25s'")
                 c.execute(f'''
                     SELECT id, source, source_id, fetched_at, source_timestamp, source_timestamp_unix,
                            latitude, longitude, location_text, title, category, subcategory,
-                           status, severity, data, is_active, is_live, last_seen
+                           status, severity, {data_col}, is_active, is_live, last_seen
                     FROM data_history
                     WHERE {actual_where}
                     ORDER BY fetched_at {order_dir}
@@ -9820,7 +10375,7 @@ def data_history():
                         c.execute(f'''
                             SELECT id, source, source_id, fetched_at, source_timestamp, source_timestamp_unix,
                                    latitude, longitude, location_text, title, category, subcategory,
-                                   status, severity, data, is_active, is_live, last_seen
+                                   status, severity, {data_col}, is_active, is_live, last_seen
                             FROM data_history
                             WHERE {actual_where}
                             ORDER BY fetched_at {order_dir}
@@ -9831,7 +10386,7 @@ def data_history():
                         conn.close()
                 except Exception as e:
                     Log.error(f"Query error: {e}")
-            
+
             # Sort merged results and apply pagination
             reverse = (order_dir == 'DESC')
             all_rows.sort(key=lambda r: r[3] or 0, reverse=reverse)
@@ -9855,7 +10410,8 @@ def data_history():
                 'subcategory': row[11],
                 'status': row[12],
                 'severity': row[13],
-                'data': json.loads(row[14]) if row[14] else {},
+                # `data` is empty when ?full=1 wasn't passed (list view).
+                'data': (json.loads(row[14]) if row[14] else {}) if include_data else {},
                 'is_active': row[15] == 1,
                 'is_live': row[16] == 1 if row[16] is not None else True,
                 'last_seen': row[17],
@@ -9918,6 +10474,7 @@ def data_history_sources():
         source_data = {}  # source -> {count, oldest, newest}
         
         for db_path in ALL_HISTORY_DBS:
+            conn = None
             try:
                 conn = get_conn()
                 c = conn.cursor()
@@ -9937,9 +10494,12 @@ def data_history_sources():
                         source_data[source_name]['oldest'] = row[2]
                     if row[3] and (source_data[source_name]['newest'] is None or row[3] > source_data[source_name]['newest']):
                         source_data[source_name]['newest'] = row[3]
-                conn.close()
             except Exception as e:
                 Log.error(f"Sources error: {e}")
+            finally:
+                if conn is not None:
+                    try: conn.close()
+                    except Exception: pass
         
         # Sort by count descending
         sources = []
@@ -10060,33 +10620,290 @@ def pager_hits():
         return jsonify({'error': str(e)}), 500
 
 
+# =========================================================================
+# Filter-cache refresh: rebuild data_history_filter_cache from is_latest=1
+# rows so /api/data/history/filters never has to GROUPING-SETS data_history.
+# Refresh runs on a 5-min timer in a background thread. Idempotent + atomic.
+# =========================================================================
+
+FILTER_CACHE_REFRESH_INTERVAL = int(os.environ.get('FILTER_CACHE_REFRESH_INTERVAL', 300))
+
+
+def _refresh_filter_cache():
+    """Rebuild data_history_filter_cache from is_latest=1 rows.
+
+    Does 5 small GROUP BY queries (one per dimension), collects results,
+    and atomically swaps the cache contents in a single transaction. The
+    whole thing is usually <1s because is_latest=1 is a tiny fraction of
+    data_history.
+    """
+    try:
+        deprecated = list(DEPRECATED_SOURCES) or ['__nothing__']
+        dep_ph = ','.join(['%s'] * len(deprecated))
+
+        rows_to_insert = []  # (kind, source, value, count)
+
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute("SET LOCAL statement_timeout = '60s'")
+
+            # Sources (no source scope — top-level list)
+            c.execute(f'''
+                SELECT source, COUNT(*) FROM data_history
+                WHERE is_latest = 1 AND source NOT IN ({dep_ph})
+                GROUP BY source
+            ''', deprecated)
+            for src, cnt in c.fetchall():
+                if src:
+                    rows_to_insert.append(('source', '', src, int(cnt)))
+
+            # Each dimension, scoped by source
+            for kind in ('category', 'subcategory', 'status', 'severity'):
+                c.execute(f'''
+                    SELECT source, {kind}, COUNT(*) FROM data_history
+                    WHERE is_latest = 1
+                      AND source NOT IN ({dep_ph})
+                      AND {kind} IS NOT NULL
+                      AND {kind} <> ''
+                    GROUP BY source, {kind}
+                ''', deprecated)
+                for src, val, cnt in c.fetchall():
+                    if not (src and val):
+                        continue
+                    val_s = str(val).strip()
+                    if not val_s:
+                        continue
+                    # Pager stores its capcode in subcategory — pure-numeric
+                    # strings like "1160008", "0781008" aren't useful as dropdown
+                    # filter options and flood the list with noise. Skip them.
+                    if kind == 'subcategory' and val_s.isdigit():
+                        continue
+                    rows_to_insert.append((kind, src, val_s, int(cnt)))
+
+            # Atomic swap. DELETE + insert everything inside one transaction —
+            # on any error we roll back and keep the old cache.
+            c.execute('DELETE FROM data_history_filter_cache')
+            if rows_to_insert:
+                args_str = b','.join(
+                    c.mogrify('(%s,%s,%s,%s,now())', row) for row in rows_to_insert
+                ).decode('utf-8')
+                c.execute(
+                    'INSERT INTO data_history_filter_cache (kind, source, value, count, updated_at) VALUES '
+                    + args_str
+                )
+            conn.commit()
+            if DEV_MODE:
+                Log.cleanup(f"Filter cache refreshed — {len(rows_to_insert)} rows")
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.error(f"Filter cache refresh error: {e}")
+
+
+def _filter_cache_scheduler():
+    """Background loop that refreshes the filter cache every N seconds."""
+    # Let the DB settle after startup, then do the first refresh.
+    time.sleep(30)
+    while not _shutdown_event.is_set():
+        try:
+            _refresh_filter_cache()
+        except Exception as e:
+            Log.error(f"Filter cache scheduler error: {e}")
+        if _shutdown_event.wait(timeout=FILTER_CACHE_REFRESH_INTERVAL):
+            return
+
+
+def _filter_cache_has_data():
+    """Returns True if the cache has any rows — so we can serve from it."""
+    try:
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT 1 FROM data_history_filter_cache LIMIT 1')
+            return c.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _filters_from_cache(source_filter, hours):
+    """Serve /api/data/history/filters from the filter cache table.
+    `hours` is accepted for API compatibility but not applied — the cache
+    already represents current-state (is_latest=1) options.
+    """
+    try:
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute("SET LOCAL statement_timeout = '10s'")
+
+            # Sources (unfiltered — the cache stores one row per source)
+            c.execute("SELECT value, count FROM data_history_filter_cache WHERE kind = 'source' ORDER BY count DESC")
+            sources_data = {v: cnt for v, cnt in c.fetchall()}
+
+            # Per-dimension: when source_filter set, only that source; otherwise sum across sources
+            def dim(kind):
+                if source_filter:
+                    c.execute(
+                        'SELECT value, count FROM data_history_filter_cache WHERE kind = %s AND source = %s',
+                        (kind, source_filter),
+                    )
+                    return {v: cnt for v, cnt in c.fetchall()}
+                else:
+                    c.execute(
+                        'SELECT value, SUM(count) FROM data_history_filter_cache WHERE kind = %s GROUP BY value',
+                        (kind,),
+                    )
+                    return {v: int(cnt) for v, cnt in c.fetchall()}
+
+            categories_data = dim('category')
+            subcategories_data = dim('subcategory')
+            statuses_data = dim('status')
+            severities_data = dim('severity')
+
+            # Date range is still cheap: idx_data_fetched supports MIN/MAX in O(log n).
+            c.execute('SET LOCAL statement_timeout = \'5s\'')
+            c.execute('SELECT MIN(fetched_at), MAX(fetched_at) FROM data_history')
+            min_ts, max_ts = c.fetchone() or (None, None)
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.error(f"Filter cache read error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify(_build_filters_response(
+        sources_data, categories_data, subcategories_data, statuses_data, severities_data,
+        min_ts, max_ts, source_filter, hours,
+    ))
+
+
+def _merge_case_insensitive(d):
+    """Merge a {value: count} dict so case-only duplicates collapse.
+
+    `active` and `Active` come from different sources but mean the same
+    filter; same with `Hazard`/`HAZARD`. We keep the most-common casing
+    as the displayed label and sum the counts.
+    """
+    totals = {}        # lowercase -> summed count
+    variants = {}      # lowercase -> {original_case: seen_count}
+    for k, v in d.items():
+        lk = k.lower()
+        totals[lk] = totals.get(lk, 0) + v
+        variants.setdefault(lk, {})[k] = variants.get(lk, {}).get(k, 0) + v
+    merged = {}
+    for lk, total in totals.items():
+        # Prefer the casing with the highest count (so "Hazard" wins over
+        # "HAZARD" when Waze dominates). Ties: lexicographic.
+        best_case = max(variants[lk].items(), key=lambda x: (x[1], x[0]))[0]
+        merged[best_case] = total
+    return merged
+
+
+def _build_filters_response(sources_data, categories_data, subcategories_data,
+                            statuses_data, severities_data,
+                            min_ts, max_ts, source_filter, hours):
+    """Shared response formatter — used by both the cache path and the
+    live-scan fallback so the wire format stays identical."""
+    # Case-insensitive dedup on user-facing dropdowns. Sources stay as-is
+    # since they're machine identifiers (`waze_hazard` vs `WAZE_HAZARD` would
+    # be different records, not casing of the same one).
+    categories_data = _merge_case_insensitive(categories_data)
+    subcategories_data = _merge_case_insensitive(subcategories_data)
+    statuses_data = _merge_case_insensitive(statuses_data)
+    severities_data = _merge_case_insensitive(severities_data)
+
+    sources = [{'value': k, 'count': v} for k, v in sorted(sources_data.items(), key=lambda x: x[1], reverse=True)]
+    categories = [{'value': k, 'count': v} for k, v in sorted(categories_data.items(), key=lambda x: x[1], reverse=True)]
+    subcategories = [{'value': k, 'count': v} for k, v in sorted(subcategories_data.items(), key=lambda x: x[1], reverse=True)][:100]
+    statuses = [{'value': k, 'count': v} for k, v in sorted(statuses_data.items(), key=lambda x: x[1], reverse=True)]
+    severities = [{'value': k, 'count': v} for k, v in sorted(severities_data.items(), key=lambda x: x[1], reverse=True)]
+
+    providers_data = {}
+    for source_name, count in sources_data.items():
+        provider, source_type = get_source_hierarchy(source_name)
+        if provider not in providers_data:
+            providers_data[provider] = {'count': 0, 'types': {}}
+        providers_data[provider]['count'] += count
+        if source_type not in providers_data[provider]['types']:
+            providers_data[provider]['types'][source_type] = {'count': 0, 'source': source_name}
+        providers_data[provider]['types'][source_type]['count'] += count
+
+    providers = []
+    for provider_name, pdata in sorted(providers_data.items(), key=lambda x: x[1]['count'], reverse=True):
+        provider_info = SOURCE_PROVIDERS.get(provider_name, {})
+        types_list = [
+            {'name': type_name, 'source': tdata['source'], 'count': tdata['count']}
+            for type_name, tdata in sorted(pdata['types'].items(), key=lambda x: x[1]['count'], reverse=True)
+        ]
+        providers.append({
+            'name': provider_name,
+            'icon': provider_info.get('icon', '📊'),
+            'color': provider_info.get('color', '#64748b'),
+            'count': pdata['count'],
+            'types': types_list,
+        })
+
+    return {
+        'sources': sources,
+        'providers': providers,
+        'categories': categories,
+        'subcategories': subcategories,
+        'statuses': statuses,
+        'severities': severities,
+        'date_range': {
+            'oldest': datetime.fromtimestamp(min_ts).isoformat() if min_ts else None,
+            'newest': datetime.fromtimestamp(max_ts).isoformat() if max_ts else None,
+            'oldest_unix': min_ts,
+            'newest_unix': max_ts,
+        },
+        'filtered_by_source': source_filter,
+        'filtered_by_hours': hours,
+    }
+
+
 @app.route('/api/data/history/filters')
 def data_history_filters():
     """
     Get all available filter values for the history search UI.
-    
+
+    Default path reads from data_history_filter_cache (refreshed every
+    5 min from is_latest=1 rows). That keeps this endpoint under 100ms
+    even on a busy DB. Pass ?fresh=1 to bypass the cache and scan
+    data_history directly (slower, but respects `hours` exactly).
+
     Query parameters:
         source: Optional - filter categories/subcategories/statuses by source
-                e.g., ?source=waze_police will show only subcategories that exist for waze_police
-        hours: Optional - only count records within the last N hours (matches search default)
-    
-    Returns:
-        sources: All data sources with record counts
-        categories: All categories (optionally filtered by source)
-        subcategories: All subcategories (optionally filtered by source)
-        statuses: All statuses (optionally filtered by source)
-        severities: All severities (optionally filtered by source)
-        date_range: Oldest and newest record timestamps
-    
+        hours: Optional - only count records within the last N hours
+                          (ignored when reading from cache — cache is
+                          always current-state is_latest=1)
+        fresh: If '1', bypass cache and GROUPING SETS data_history.
+        all_history: Legacy - same effect as fresh=1 + full-history scope.
+
     Examples:
         /api/data/history/filters
         /api/data/history/filters?source=waze_police
-        /api/data/history/filters?source=rfs&hours=24
+        /api/data/history/filters?fresh=1&hours=24
     """
     try:
         source_filter = request.args.get('source')
         hours = request.args.get('hours', type=int)
-        
+        # Fast path: read from cache unless explicitly told to scan live.
+        use_cache = (
+            request.args.get('fresh') != '1'
+            and request.args.get('all_history') != '1'
+            and _filter_cache_has_data()
+        )
+        if use_cache:
+            return _filters_from_cache(source_filter, hours)
+
+        # Fallback: scan data_history directly.
+        # Scope to is_latest=1 by default. The list view always uses unique=1
+        # so any filter option that only exists on historical (non-latest) rows
+        # would never match a visible record anyway.
+        scope_latest = request.args.get('all_history') != '1'
+
         # Determine which databases to query
         dbs_to_query = get_history_dbs_for_sources([source_filter] if source_filter else None)
         
@@ -10111,7 +10928,8 @@ def data_history_filters():
             try:
                 conn = get_conn()
                 c = conn.cursor()
-                
+                c.execute("SET LOCAL statement_timeout = '25s'")
+
                 # Build base conditions for filtered queries
                 conditions = []
                 params = list(time_params)
@@ -10121,57 +10939,44 @@ def data_history_filters():
                 if source_filter:
                     conditions.append("source = %s")
                     params.append(source_filter)
-                
+                if scope_latest:
+                    conditions.append("is_latest = 1")
+
                 base_where = " AND ".join(conditions) if conditions else "1=1"
                 
-                # Get sources (skip deprecated)
+                # Single-pass: compute all 5 dimensions at once via GROUPING SETS.
+                # GROUPING(col) = 0 means we are grouping by that column on this row.
                 c.execute(f'''
-                    SELECT source, COUNT(*) FROM data_history 
+                    SELECT
+                        source, category, subcategory, status, severity,
+                        GROUPING(source)      AS g_src,
+                        GROUPING(category)    AS g_cat,
+                        GROUPING(subcategory) AS g_sub,
+                        GROUPING(status)      AS g_stat,
+                        GROUPING(severity)    AS g_sev,
+                        COUNT(*) AS cnt
+                    FROM data_history
                     WHERE {base_where}
-                    GROUP BY source
+                    GROUP BY GROUPING SETS ((source), (category), (subcategory), (status), (severity))
                 ''', params)
-                for r in c.fetchall():
-                    if r[0] in DEPRECATED_SOURCES:
-                        continue
-                    sources_data[r[0]] = sources_data.get(r[0], 0) + r[1]
-                
-                # Get categories
-                c.execute(f'''
-                    SELECT category, COUNT(*) FROM data_history 
-                    WHERE {base_where} AND category IS NOT NULL AND category != ''
-                    GROUP BY category
-                ''', params)
-                for r in c.fetchall():
-                    categories_data[r[0]] = categories_data.get(r[0], 0) + r[1]
-                
-                # Get subcategories
-                c.execute(f'''
-                    SELECT subcategory, COUNT(*) FROM data_history 
-                    WHERE {base_where} AND subcategory IS NOT NULL AND subcategory != ''
-                    GROUP BY subcategory
-                ''', params)
-                for r in c.fetchall():
-                    subcategories_data[r[0]] = subcategories_data.get(r[0], 0) + r[1]
-                
-                # Get statuses
-                c.execute(f'''
-                    SELECT status, COUNT(*) FROM data_history 
-                    WHERE {base_where} AND status IS NOT NULL AND status != ''
-                    GROUP BY status
-                ''', params)
-                for r in c.fetchall():
-                    statuses_data[r[0]] = statuses_data.get(r[0], 0) + r[1]
-                
-                # Get severities
-                c.execute(f'''
-                    SELECT severity, COUNT(*) FROM data_history 
-                    WHERE {base_where} AND severity IS NOT NULL AND severity != ''
-                    GROUP BY severity
-                ''', params)
-                for r in c.fetchall():
-                    severities_data[r[0]] = severities_data.get(r[0], 0) + r[1]
-                
-                # Get date range
+                for src, cat, sub, stat, sev, g_src, g_cat, g_sub, g_stat, g_sev, cnt in c.fetchall():
+                    if g_src == 0:
+                        if src and src not in DEPRECATED_SOURCES:
+                            sources_data[src] = sources_data.get(src, 0) + cnt
+                    elif g_cat == 0:
+                        if cat:
+                            categories_data[cat] = categories_data.get(cat, 0) + cnt
+                    elif g_sub == 0:
+                        if sub:
+                            subcategories_data[sub] = subcategories_data.get(sub, 0) + cnt
+                    elif g_stat == 0:
+                        if stat:
+                            statuses_data[stat] = statuses_data.get(stat, 0) + cnt
+                    elif g_sev == 0:
+                        if sev:
+                            severities_data[sev] = severities_data.get(sev, 0) + cnt
+
+                # Date range — uses idx_data_fetched (B-tree), so MIN/MAX is O(log n)
                 c.execute('SELECT MIN(fetched_at), MAX(fetched_at) FROM data_history')
                 db_min, db_max = c.fetchone()
                 if db_min and (min_ts is None or db_min < min_ts):
@@ -10183,60 +10988,10 @@ def data_history_filters():
             except Exception as e:
                 Log.error(f"Filters error: {e}")
         
-        # Convert to sorted lists
-        sources = [{'value': k, 'count': v} for k, v in sorted(sources_data.items(), key=lambda x: x[1], reverse=True)]
-        categories = [{'value': k, 'count': v} for k, v in sorted(categories_data.items(), key=lambda x: x[1], reverse=True)]
-        subcategories = [{'value': k, 'count': v} for k, v in sorted(subcategories_data.items(), key=lambda x: x[1], reverse=True)][:100]
-        statuses = [{'value': k, 'count': v} for k, v in sorted(statuses_data.items(), key=lambda x: x[1], reverse=True)]
-        severities = [{'value': k, 'count': v} for k, v in sorted(severities_data.items(), key=lambda x: x[1], reverse=True)]
-        
-        # Build hierarchical structure for UI
-        providers_data = {}
-        for source_name, count in sources_data.items():
-            provider, source_type = get_source_hierarchy(source_name)
-            if provider not in providers_data:
-                providers_data[provider] = {'count': 0, 'types': {}}
-            providers_data[provider]['count'] += count
-            if source_type not in providers_data[provider]['types']:
-                providers_data[provider]['types'][source_type] = {'count': 0, 'source': source_name}
-            providers_data[provider]['types'][source_type]['count'] += count
-        
-        # Convert to list format
-        providers = []
-        for provider_name, pdata in sorted(providers_data.items(), key=lambda x: x[1]['count'], reverse=True):
-            provider_info = SOURCE_PROVIDERS.get(provider_name, {})
-            types_list = [
-                {
-                    'name': type_name,
-                    'source': tdata['source'],
-                    'count': tdata['count']
-                }
-                for type_name, tdata in sorted(pdata['types'].items(), key=lambda x: x[1]['count'], reverse=True)
-            ]
-            providers.append({
-                'name': provider_name,
-                'icon': provider_info.get('icon', '📊'),
-                'color': provider_info.get('color', '#64748b'),
-                'count': pdata['count'],
-                'types': types_list
-            })
-        
-        return jsonify({
-            'sources': sources,
-            'providers': providers,  # NEW: Hierarchical structure
-            'categories': categories,
-            'subcategories': subcategories,
-            'statuses': statuses,
-            'severities': severities,
-            'date_range': {
-                'oldest': datetime.fromtimestamp(min_ts).isoformat() if min_ts else None,
-                'newest': datetime.fromtimestamp(max_ts).isoformat() if max_ts else None,
-                'oldest_unix': min_ts,
-                'newest_unix': max_ts
-            },
-            'filtered_by_source': source_filter,
-            'filtered_by_hours': hours
-        })
+        return jsonify(_build_filters_response(
+            sources_data, categories_data, subcategories_data, statuses_data, severities_data,
+            min_ts, max_ts, source_filter, hours,
+        ))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -11485,6 +12240,4190 @@ def delete_incident_update(update_id):
         return jsonify({'error': 'Failed to delete incident update'}), 500
 
 
+# ============== RDIO-SCANNER SUMMARIES ==============
+# Hourly Gemini summaries of rdio-scanner transcripts.
+#
+# Data flow:
+#   rdio-scanner Postgres (RDIO_DATABASE_URL) --> fetch transcripts in the last hour
+#   --> group by system/talkgroup LABELS (no numeric IDs leak to the model)
+#   --> Gemini chat completions (OpenAI-compatible) --> store into rdio_summaries.
+#
+# Hour slot convention: 1..24 (1 = 00:00-01:00 local, 24 = 23:00-24:00 local).
+# Scheduler: top of hour + 2min for the just-finished clock hour.
+# Ad-hoc summaries can be triggered manually via /api/summaries/trigger.
+
+from psycopg2 import pool as _pg_pool
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+except ImportError:
+    _ZoneInfo = None
+
+_RDIO_POOL = None
+_RDIO_POOL_LOCK = threading.Lock()
+_RDIO_LABELS = {'systems': {}, 'talkgroups': {}, 'fetched_at': 0.0}
+_RDIO_LABELS_LOCK = threading.Lock()
+_RDIO_LABELS_TTL = 300  # seconds
+
+# Google Gemini via its OpenAI-compatible endpoint.
+_LLM_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+_LLM_DEFAULT_MODEL = 'gemini-2.5-flash'
+_SUMMARY_TZ_NAME = os.environ.get('SUMMARY_TZ', 'Australia/Sydney')
+# Gemini 2.5 Flash has a 1M-token context. Budget for up to ~5000 calls/hour
+# comfortably: ~800k chars (~200k tokens) leaves plenty of room for the ~10KB
+# system prompt and 16k-token output budget, well under 1M.
+_SUMMARY_MAX_PROMPT_CHARS = 800_000
+_PROMPTS_DIR = os.path.join(_script_dir, 'prompts')
+_REFERENCE_DIR = os.path.join(_script_dir, 'reference')
+
+# Radio-ID → human-readable label lookup. Populated from CSVs in reference/
+# at startup; used to annotate transcript lines before sending to Gemini so
+# the model doesn't have to guess what a numeric RID means.
+_RDIO_UNIT_LABELS = {}
+
+
+def _load_rdio_unit_labels():
+    """Load RID → label mappings from reference CSVs.
+
+    Two files, merged (later files win on duplicate RIDs):
+      reference/rdio_units.csv       — rdioScannerUnits export (has header)
+      reference/unit_callsigns.csv   — supplemental callsign list (no header)
+
+    Format for both: first col = numeric radio id, second col = label.
+    """
+    import csv as _csv
+    global _RDIO_UNIT_LABELS
+    labels = {}
+    for fname in ('rdio_units.csv', 'unit_callsigns.csv'):
+        path = os.path.join(_REFERENCE_DIR, fname)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8', newline='') as f:
+                reader = _csv.reader(f)
+                for i, row in enumerate(reader):
+                    if not row:
+                        continue
+                    first_cell = row[0].strip().strip('"')
+                    # Skip header row if the id column isn't numeric
+                    if i == 0 and not first_cell.isdigit():
+                        continue
+                    if not first_cell.isdigit():
+                        continue
+                    try:
+                        rid = int(first_cell)
+                    except ValueError:
+                        continue
+                    label = row[1].strip().strip('"') if len(row) > 1 else ''
+                    if label:
+                        labels[rid] = label
+        except Exception as e:
+            Log.error(f"Unit label load error ({fname}): {e}")
+    _RDIO_UNIT_LABELS = labels
+    if labels:
+        Log.startup(f"Loaded {len(labels)} radio unit labels")
+
+
+_load_rdio_unit_labels()
+
+_HOURLY_PROMPT_FALLBACK = (
+    "You are an emergency-services dispatch analyst. You are given transcripts of "
+    "public-safety radio calls, grouped by agency (system) and talkgroup label. "
+    "Write a concise, factual summary of the last hour of activity. Rules: "
+    "1) Never invent details. 2) Do not include numeric IDs. "
+    "3) Organise by agency/talkgroup. 4) Highlight notable incidents. "
+    "5) Keep it under ~300 words, bullet points preferred."
+)
+_rdio_summary_thread = None
+
+
+def _rdio_log(msg):
+    Log.info(f"[rdio-summary] {msg}")
+
+
+def _rdio_is_configured():
+    return bool(os.environ.get('RDIO_DATABASE_URL'))
+
+
+def _rdio_get_pool():
+    global _RDIO_POOL
+    if _RDIO_POOL is not None:
+        return _RDIO_POOL
+    url = os.environ.get('RDIO_DATABASE_URL')
+    if not url:
+        return None
+    with _RDIO_POOL_LOCK:
+        if _RDIO_POOL is None:
+            _RDIO_POOL = _pg_pool.ThreadedConnectionPool(1, 5, url)
+    return _RDIO_POOL
+
+
+class _RdioConn:
+    """Context manager: lease a connection from the rdio-scanner pool."""
+    def __enter__(self):
+        pool = _rdio_get_pool()
+        if pool is None:
+            raise RuntimeError("RDIO_DATABASE_URL not configured")
+        self.pool = pool
+        self.conn = pool.getconn()
+        self.conn.autocommit = True
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.pool.putconn(self.conn)
+        except Exception:
+            pass
+
+
+def _rdio_fetch_calls_between(start_utc, end_utc, min_transcript_len=2):
+    """Return calls with transcripts in [start_utc, end_utc).
+
+    rdio-scanner's `dateTime` column is a naive `timestamp` holding UTC values.
+    To avoid session-timezone pitfalls, we strip tz-info from our aware bounds
+    before comparing (both sides end up as naive UTC).
+    """
+    # Aware UTC → naive UTC so Postgres compares like-for-like against a naive col
+    start_naive = start_utc.astimezone(timezone.utc).replace(tzinfo=None) if start_utc.tzinfo else start_utc
+    end_naive = end_utc.astimezone(timezone.utc).replace(tzinfo=None) if end_utc.tzinfo else end_utc
+    try:
+        with _RdioConn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cur.execute(
+                    '''
+                    SELECT "id" AS call_id, "dateTime" AS date_time, "system", "talkgroup", "transcript",
+                           "source", "sources"
+                    FROM "rdioScannerCalls"
+                    WHERE "dateTime" >= %s AND "dateTime" < %s
+                      AND "transcript" IS NOT NULL
+                      AND length(btrim("transcript")) >= %s
+                    ORDER BY "dateTime" ASC
+                    ''',
+                    (start_naive, end_naive, min_transcript_len),
+                )
+                rows = cur.fetchall()
+                source_ok('rdio')
+                return rows
+            finally:
+                cur.close()
+    except Exception as e:
+        source_error('rdio', e)
+        raise
+
+
+def _rdio_refresh_labels_locked():
+    """(holding _RDIO_LABELS_LOCK) refresh the system/talkgroup label cache.
+    Uses the v6+ rdio-scanner schema where talkgroups live in their own table.
+    """
+    systems = {}
+    talkgroups = {}
+    with _RdioConn() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute('SELECT "id", "label" FROM "rdioScannerSystems"')
+            for sys_id, sys_label in cur.fetchall():
+                systems[int(sys_id)] = sys_label or f"System {sys_id}"
+
+            cur.execute(
+                'SELECT "systemId", "id", "label", "name" FROM "rdioScannerTalkgroups"'
+            )
+            for sys_id, tg_id, label, name in cur.fetchall():
+                if sys_id is None or tg_id is None:
+                    continue
+                talkgroups[(int(sys_id), int(tg_id))] = {
+                    'label': label or '',
+                    'name': name or '',
+                }
+        finally:
+            cur.close()
+    _RDIO_LABELS['systems'] = systems
+    _RDIO_LABELS['talkgroups'] = talkgroups
+    _RDIO_LABELS['fetched_at'] = time.time()
+
+
+def _rdio_resolve_labels(system_id, talkgroup_id):
+    """Return (system_label, talkgroup_display) — NO numeric IDs in the output."""
+    with _RDIO_LABELS_LOCK:
+        if (time.time() - _RDIO_LABELS['fetched_at']) > _RDIO_LABELS_TTL:
+            _rdio_refresh_labels_locked()
+        systems = _RDIO_LABELS['systems']
+        talkgroups = _RDIO_LABELS['talkgroups']
+    sys_label = systems.get(int(system_id)) if system_id is not None else None
+    tg = talkgroups.get((int(system_id), int(talkgroup_id))) if system_id is not None and talkgroup_id is not None else None
+    tg_display = (tg.get('name') or tg.get('label')) if tg else None
+    return sys_label, tg_display
+
+
+def _summary_local_tz():
+    if _ZoneInfo is None:
+        return timezone.utc
+    try:
+        return _ZoneInfo(_SUMMARY_TZ_NAME)
+    except Exception:
+        return timezone.utc
+
+
+def _load_rdio_prompt(kind, fallback):
+    """Read prompts/rdio_<kind>.txt on every call so edits hot-apply.
+    Overridable via env RDIO_PROMPT_HOURLY.
+    """
+    path = os.environ.get(f'RDIO_PROMPT_{kind.upper()}') or os.path.join(_PROMPTS_DIR, f'rdio_{kind}.txt')
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            text = f.read().strip()
+            if text:
+                return text
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        _rdio_log(f"prompt load error ({path}): {e}")
+    return fallback
+
+
+def _extract_radio_id(row):
+    """Return the primary radio (unit) ID for a call, or None."""
+    src = row.get('source')
+    if src:
+        try:
+            return int(src)
+        except (TypeError, ValueError):
+            pass
+    # Fall back to the first id in the `sources` JSON array.
+    raw = row.get('sources')
+    if raw:
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(data, list) and data:
+                for item in data:
+                    if isinstance(item, dict):
+                        sid = item.get('src') or item.get('source')
+                        if sid:
+                            try:
+                                return int(sid)
+                            except (TypeError, ValueError):
+                                continue
+        except Exception:
+            pass
+    return None
+
+
+_DEDUP_TEXT_RE = re.compile(r'[^a-z0-9 ]+')
+
+
+def _normalize_transcript(text):
+    """Lowercase, strip punctuation, collapse whitespace.
+
+    Used to compare transcripts for pre-LLM dedup. Different Whisper passes
+    of the same audio often differ only in punctuation/capitalisation.
+    """
+    s = (text or '').lower()
+    s = _DEDUP_TEXT_RE.sub(' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def _dedupe_calls(calls, window_seconds=180):
+    """Drop near-duplicate transmissions before sending to the LLM.
+
+    A row is considered a duplicate when ANOTHER row in the same batch has:
+      - same talkgroup, AND
+      - same radio ID (source RID) when both are present, AND
+      - the shorter row's normalized transcript is equal to OR a prefix of the
+        longer row's normalized transcript, AND
+      - the time gap between them is ≤ `window_seconds` (default 3 min).
+
+    The longer/more-informative row wins. Returns calls in original order.
+    """
+    kept = []  # list of (row, ts, text_norm, rid, talkgroup)
+    skipped_ids = set()
+    for row in calls:
+        text_norm = _normalize_transcript(row.get('transcript'))
+        if not text_norm:
+            kept.append((row, None, '', None, None))
+            continue
+        dt = row.get('date_time')
+        ts = dt.timestamp() if (dt and hasattr(dt, 'timestamp')) else None
+        rid = _extract_radio_id(row)
+        tg = row.get('talkgroup')
+
+        replaced = False
+        for idx, (k_row, k_ts, k_text, k_rid, k_tg) in enumerate(kept):
+            if not k_text:
+                continue
+            if k_tg != tg:
+                continue
+            # If both sides have RIDs, they must match. If either is missing,
+            # still allow dedup on same talkgroup + same text.
+            if rid is not None and k_rid is not None and rid != k_rid:
+                continue
+            if ts is not None and k_ts is not None and abs(ts - k_ts) > window_seconds:
+                continue
+            # Text match: equal OR one is a prefix of the other
+            a, b = k_text, text_norm
+            short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+            if long_.startswith(short):
+                # This row and the kept row are dupes; keep the longer one.
+                if len(text_norm) > len(k_text):
+                    # Replace kept entry with this richer one; note old id
+                    old_cid = k_row.get('call_id')
+                    if old_cid is not None:
+                        skipped_ids.add(int(old_cid) if old_cid is not None else None)
+                    kept[idx] = (row, ts, text_norm, rid, tg)
+                else:
+                    cid = row.get('call_id')
+                    if cid is not None:
+                        skipped_ids.add(int(cid))
+                replaced = True
+                break
+        if not replaced:
+            kept.append((row, ts, text_norm, rid, tg))
+
+    if skipped_ids:
+        _rdio_log(f"pre-LLM dedup: dropped {len(skipped_ids)} near-duplicate call(s)")
+    return [k[0] for k in kept]
+
+
+def _format_rdio_prompt(calls, period_label):
+    """Build the user message and return (prompt_text, total_transcript_chars).
+    Each line carries `[time #<call_id> RID:<radio_id>]` so the LLM can
+    reference specific audio recordings and link transmissions from the same
+    radio across the period.
+    """
+    groups = {}
+    total_chars = 0
+    local_tz = _summary_local_tz()
+    for row in calls:
+        text = (row.get('transcript') or '').strip()
+        if not text:
+            continue
+        sys_label, tg_display = _rdio_resolve_labels(row.get('system'), row.get('talkgroup'))
+        sys_label = sys_label or 'Unknown System'
+        tg_display = tg_display or 'Unknown Talkgroup'
+        radio_id = _extract_radio_id(row)
+        call_id = row.get('call_id')
+        groups.setdefault((sys_label, tg_display), []).append(
+            (row['date_time'], text, radio_id, call_id)
+        )
+        total_chars += len(text)
+
+    lines = [f"Period: {period_label}", ""]
+    for (sys_label, tg_display), items in sorted(groups.items()):
+        lines.append(f"=== {sys_label} — {tg_display} ({len(items)} transmissions) ===")
+        for dt, text, radio_id, call_id in items:
+            try:
+                # rdio-scanner stores UTC in a naive timestamp; tag as UTC
+                # before converting, else Python assumes system-local.
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                t = dt.astimezone(local_tz).strftime('%H:%M:%S')
+            except Exception:
+                t = str(dt)
+            cid_tag = f" #{call_id}" if call_id else ""
+            if radio_id:
+                lbl = _RDIO_UNIT_LABELS.get(radio_id)
+                rid_tag = f" {lbl} (RID:{radio_id})" if lbl else f" RID:{radio_id}"
+            else:
+                rid_tag = ""
+            lines.append(f"[{t}{cid_tag}{rid_tag}] {text}")
+        lines.append("")
+
+    prompt = "\n".join(lines)
+    if len(prompt) > _SUMMARY_MAX_PROMPT_CHARS:
+        prompt = prompt[:_SUMMARY_MAX_PROMPT_CHARS] + "\n\n[... truncated ...]"
+    return prompt, total_chars
+
+
+def _call_llm(system_prompt, user_prompt, model, json_mode=True, max_tokens=60000):
+    api_key = os.environ.get('GEMINI_API_KEY')
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    payload = {
+        'model': model,
+        'temperature': 0.2,
+        'max_tokens': max_tokens,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ],
+    }
+    if json_mode:
+        payload['response_format'] = {'type': 'json_object'}
+
+    # Retry on transient errors:
+    #   429 = per-minute rate limit
+    #   503 = model overloaded (Google side)
+    #   500/502/504 = transient server error
+    #   ReadTimeout / ConnectTimeout = network hiccup or slow model
+    transient = {429, 500, 502, 503, 504}
+    max_attempts = 4
+    last_resp = None
+    last_err = None
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.post(
+                _LLM_URL,
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json=payload,
+                # Large prompts through 2.5-flash-lite can take several minutes.
+                timeout=(30, 600),  # (connect, read)
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_err = e
+            if attempt < max_attempts - 1:
+                wait = min(60, 10 * (2 ** attempt))  # 10, 20, 40, 60
+                _rdio_log(f"Gemini network error (attempt {attempt + 1}/{max_attempts}): {e}; retrying in {wait:.0f}s")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Gemini network error after {max_attempts} attempts: {e}")
+
+        last_resp = resp
+        if resp.ok:
+            data = resp.json()
+            try:
+                choice = data['choices'][0]
+                finish = choice.get('finish_reason') or choice.get('native_finish_reason') or ''
+                if finish and finish not in ('stop', 'STOP'):
+                    _rdio_log(f"LLM finish_reason={finish} (output may be truncated)")
+            except Exception:
+                pass
+            return data['choices'][0]['message']['content'].strip()
+        if resp.status_code in transient and attempt < max_attempts - 1:
+            # Honour Retry-After if Gemini sent one; otherwise exponential backoff
+            try:
+                wait = float(resp.headers.get('Retry-After', '0'))
+            except ValueError:
+                wait = 0
+            if wait <= 0:
+                wait = min(60, 5 * (2 ** attempt))  # 5, 10, 20, 40
+            _rdio_log(f"Gemini {resp.status_code} (attempt {attempt + 1}/{max_attempts}), waiting {wait:.0f}s")
+            time.sleep(wait)
+            continue
+        # Non-transient error or out of retries
+        body = resp.text[:1000] if resp.text else ''
+        raise RuntimeError(f"Gemini HTTP {resp.status_code}: {body}")
+    body = last_resp.text[:1000] if last_resp is not None and last_resp.text else ''
+    raise RuntimeError(f"Gemini still {last_resp.status_code if last_resp else 'unreachable'} after {max_attempts} attempts: {body}")
+
+
+_NATO_ALPHABET = {
+    'alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf',
+    'hotel', 'india', 'juliet', 'juliett', 'kilo', 'lima', 'mike', 'november',
+    'oscar', 'papa', 'quebec', 'romeo', 'sierra', 'tango', 'uniform',
+    'victor', 'whiskey', 'whisky', 'xray', 'x-ray', 'yankee', 'zulu',
+}
+
+
+_NSWPF_PATTERNS = re.compile(
+    r'\b(nswpf|nsw\s*police|police\s*(?:officer|car|patrol|unit|vehicle)s?|'
+    r'vkg|vka|highway\s*patrol|traffic\s*&?\s*highway|pursuit|'
+    r'pol(?:air|police)|constable|sergeant|detective)\b',
+    re.IGNORECASE,
+)
+
+
+def _validate_structured_against_transcripts(structured, calls):
+    """Strip hallucinated content from the model output (new transcripts[] schema).
+
+    Schema per incident (see prompts/rdio_hourly.txt):
+      {title, type, status, severity, summary, locations[], agencies[],
+       codes[], units[], window{start,end}, transcripts[], transcripts_truncated}
+    where transcripts[] = [{time, call_id: int, text: str}, ...].
+
+    This validator:
+      - Ignores legacy `timeline[]` if present (logs a warning).
+      - Drops transcripts[] entries whose call_id isn't in the hour's real calls.
+      - Strips NSWPF-themed content from summary/title/transcripts[].text,
+        and drops whole incidents that are exclusively NSWPF-themed.
+      - Merges duplicate incidents via transcripts[].call_id overlap (>=50% or subset).
+      - Hard-drops NATO-alphabet-only entries in units[] (Whisper hallucinations).
+      - Drops units[] entries not mentioned in any transcripts[].text OR the
+        bracketed unit labels from the raw call list (_RDIO_UNIT_LABELS).
+      - Does NOT truncate transcripts[] — the LLM manages that itself and sets
+        transcripts_truncated.
+    """
+    if not isinstance(structured, dict):
+        return structured
+    incidents = structured.get('incidents')
+    if not isinstance(incidents, list):
+        return structured
+
+    # Build the set of genuine call_ids for this hour so we can reject any
+    # transcripts[] row that references a fabricated id. The SQL query
+    # aliases "id" AS call_id, so each row dict uses the 'call_id' key;
+    # fall back to 'id' in case callers pass a differently-shaped list.
+    known_call_ids = set()
+    for c in calls:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get('call_id')
+        if cid is None:
+            cid = c.get('id')
+        if cid is None:
+            continue
+        try:
+            known_call_ids.add(int(cid))
+        except (TypeError, ValueError):
+            continue
+
+    # Labels from rdio-scanner's units DB — authoritative for unit mentions
+    # (the DB form often differs from the spoken/Whispered form).
+    known_labels = {lbl.lower() for lbl in _RDIO_UNIT_LABELS.values() if lbl}
+
+    digit_words = {
+        '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+        '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
+    }
+
+    def _is_nato_only(uid: str) -> bool:
+        tokens = (uid or '').strip().lower().split()
+        if not tokens or len(tokens) > 2:
+            return False
+        if tokens[0] not in _NATO_ALPHABET:
+            return False
+        if len(tokens) == 1:
+            return True
+        return tokens[1].replace('-', '').isdigit()
+
+    def _mentioned(uid: str, corpus: str, corpus_nosep: str) -> bool:
+        u = (uid or '').strip().lower()
+        if not u:
+            return False
+        if u in known_labels:
+            return True
+        if u in corpus:
+            return True
+        if u.replace('-', '').replace(' ', '') in corpus_nosep:
+            return True
+        if u.isdigit():
+            spelled = ' '.join(digit_words[d] for d in u)
+            if spelled in corpus:
+                return True
+        return False
+
+    def _is_nswpf_text(s: str) -> bool:
+        if not s or not isinstance(s, str):
+            return False
+        return bool(_NSWPF_PATTERNS.search(s))
+
+    dropped_units = 0
+    dropped_nato = 0
+    dropped_nswpf = 0
+    dropped_bad_cids = 0
+    dropped_nswpf_incidents = 0
+    legacy_timeline_seen = 0
+    ALLOWED_AGENCIES = {'FRNSW', 'NSWA', 'RFS', 'SES'}
+
+    incidents_in = [i for i in incidents if isinstance(i, dict)]
+
+    # Pass 1: normalise per-incident — drop legacy timeline[], validate
+    # transcripts[].call_id against the real hour, strip NSWPF content.
+    normalised = []
+    for inc in incidents_in:
+        if 'timeline' in inc and 'transcripts' not in inc:
+            # Mixed-schema fallback: the model is still emitting old shape.
+            # We don't try to translate — just warn and drop the timeline; the
+            # incident may still be usable via its other fields.
+            legacy_timeline_seen += 1
+            inc.pop('timeline', None)
+        elif 'timeline' in inc:
+            legacy_timeline_seen += 1
+            inc.pop('timeline', None)
+
+        # Validate + clean transcripts[]
+        raw_trs = inc.get('transcripts')
+        cleaned_trs = []
+        if isinstance(raw_trs, list):
+            for t in raw_trs:
+                if not isinstance(t, dict):
+                    dropped_bad_cids += 1
+                    continue
+                cid_raw = t.get('call_id')
+                try:
+                    cid = int(cid_raw) if cid_raw is not None else None
+                except (TypeError, ValueError):
+                    cid = None
+                if cid is None or cid not in known_call_ids:
+                    # Per spec: log each drop at debug, not warn. We don't
+                    # have a debug-level logger here; fold into the summary
+                    # rollup line emitted at the end of the function.
+                    dropped_bad_cids += 1
+                    continue
+                t['call_id'] = cid
+                # NSWPF strip on transcript text
+                text = t.get('text')
+                if isinstance(text, str) and _is_nswpf_text(text):
+                    # Drop NSWPF-only transmissions from transcripts[]
+                    dropped_nswpf += 1
+                    continue
+                cleaned_trs.append(t)
+        inc['transcripts'] = cleaned_trs
+
+        # NSWPF strip on summary/title
+        summary_txt = inc.get('summary') or ''
+        title_txt = inc.get('title') or ''
+        if _is_nswpf_text(summary_txt):
+            dropped_nswpf += 1
+            inc['summary'] = _NSWPF_PATTERNS.sub('[redacted]', summary_txt)
+        if _is_nswpf_text(title_txt):
+            dropped_nswpf += 1
+            inc['title'] = _NSWPF_PATTERNS.sub('[redacted]', title_txt)
+
+        # Filter agencies to allowed set
+        agencies = inc.get('agencies')
+        if isinstance(agencies, list):
+            filtered = [a for a in agencies if a in ALLOWED_AGENCIES]
+            if len(filtered) != len(agencies):
+                dropped_nswpf += (len(agencies) - len(filtered))
+            inc['agencies'] = filtered
+
+        # Whole-incident NSWPF drop: if after cleaning there are no transcripts
+        # AND the surface fields are police-themed, drop the whole incident.
+        surface_blob = ' '.join(str(inc.get(k) or '') for k in ('title', 'summary', 'type'))
+        has_non_nswpf_transcript = any(
+            isinstance(t, dict) and isinstance(t.get('text'), str) and not _is_nswpf_text(t['text'])
+            for t in inc.get('transcripts') or []
+        )
+        if not has_non_nswpf_transcript and _is_nswpf_text(surface_blob):
+            dropped_nswpf_incidents += 1
+            continue
+
+        normalised.append(inc)
+
+    if legacy_timeline_seen:
+        _rdio_log(f"validator warning: legacy timeline[] present in {legacy_timeline_seen} incident(s); ignored")
+
+    # Pass 2: deduplicate incidents by transcripts[].call_id overlap.
+    def _ids_of(inc):
+        got = set()
+        for t in inc.get('transcripts') or []:
+            if not isinstance(t, dict):
+                continue
+            cid = t.get('call_id')
+            if cid is None:
+                continue
+            try:
+                got.add(int(cid))
+            except (TypeError, ValueError):
+                continue
+        return got
+
+    def _richness(inc):
+        score = len((inc.get('summary') or ''))
+        score += len(inc.get('transcripts') or []) * 50
+        score += len(inc.get('units') or []) * 20
+        return score
+
+    id_sets = [_ids_of(i) for i in normalised]
+    keep_idx = set(range(len(normalised)))
+    dropped_dupes = 0
+    for i in range(len(normalised)):
+        if i not in keep_idx:
+            continue
+        for j in range(i + 1, len(normalised)):
+            if j not in keep_idx:
+                continue
+            a, b = id_sets[i], id_sets[j]
+            if not a or not b:
+                continue
+            smaller = min(len(a), len(b))
+            overlap = len(a & b)
+            if (overlap == smaller) or (overlap / smaller >= 0.5):
+                loser = j if _richness(normalised[i]) >= _richness(normalised[j]) else i
+                keep_idx.discard(loser)
+                dropped_dupes += 1
+                if loser == i:
+                    break
+
+    deduped = [normalised[k] for k in sorted(keep_idx)]
+
+    # Pass 3: clean units[]. In the new schema units[] is a list of strings
+    # (e.g. "HP 77"), but be lenient and accept legacy dicts too.
+    for inc in deduped:
+        # Build corpus from this incident's transcripts[].text
+        trs = inc.get('transcripts') or []
+        corpus_parts = []
+        for t in trs:
+            if isinstance(t, dict) and isinstance(t.get('text'), str):
+                corpus_parts.append(t['text'].lower())
+        corpus = ' '.join(corpus_parts)
+        corpus_nosep = corpus.replace('-', '').replace(' ', '').replace('.', '')
+
+        units = inc.get('units')
+        if not isinstance(units, list):
+            continue
+        kept = []
+        for u in units:
+            if isinstance(u, str):
+                uid = u
+                carrier = u
+            elif isinstance(u, dict):
+                if u.get('agency') == 'NSWPF':
+                    dropped_nswpf += 1
+                    continue
+                uid = u.get('id') or ''
+                carrier = u
+            else:
+                dropped_units += 1
+                continue
+            if not uid:
+                dropped_units += 1
+                continue
+            if _is_nato_only(uid):
+                dropped_nato += 1
+                continue
+            if _mentioned(uid, corpus, corpus_nosep):
+                kept.append(carrier)
+            else:
+                dropped_units += 1
+        inc['units'] = kept
+
+    # Also clean agency_stats of any NSWPF key (top-level, not per-incident)
+    stats = structured.get('agency_stats')
+    if isinstance(stats, dict) and 'NSWPF' in stats:
+        stats.pop('NSWPF', None)
+        dropped_nswpf += 1
+
+    structured['incidents'] = deduped
+
+    if dropped_bad_cids:
+        # Per spec: log individual drops at debug. We don't have a debug level
+        # logger here; emit a single rollup line instead so the console isn't
+        # spammed for every hallucinated id.
+        _rdio_log(f"validator dropped {dropped_bad_cids} transcripts[] row(s) with unknown call_id")
+
+    bits = []
+    if dropped_units:
+        bits.append(f"{dropped_units} unit(s) not in transcripts")
+    if dropped_nato:
+        bits.append(f"{dropped_nato} NATO-alphabet hallucination(s)")
+    if dropped_nswpf:
+        bits.append(f"{dropped_nswpf} NSWPF ref(s)")
+    if dropped_nswpf_incidents:
+        bits.append(f"{dropped_nswpf_incidents} NSWPF-only incident(s)")
+    if dropped_dupes:
+        bits.append(f"{dropped_dupes} duplicate incident(s)")
+    if bits:
+        _rdio_log("validator dropped " + ", ".join(bits))
+
+    structured['incident_count'] = len(deduped)
+    return structured
+
+
+import re as _summary_re
+
+
+def _salvage_truncated_incidents(text):
+    """If the LLM output was truncated mid-object inside `incidents[]`, walk
+    the brace structure to find the last COMPLETE incident and synthesise a
+    closing `]}`. Returns a repaired JSON string, or None if we can't salvage.
+    """
+    idx = text.find('"incidents"')
+    if idx < 0:
+        return None
+    arr_start = text.find('[', idx)
+    if arr_start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    last_complete_end = -1  # index (exclusive) after the last complete top-level {...}
+
+    i = arr_start + 1
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if escape:
+            escape = False
+        elif c == '\\':
+            escape = True
+        elif c == '"':
+            in_string = not in_string
+        elif not in_string:
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    last_complete_end = i + 1
+            elif c == ']' and depth == 0:
+                # Array closed naturally — caller's whole-text parse should
+                # have succeeded. Nothing to salvage here.
+                return None
+        i += 1
+
+    if last_complete_end < 0:
+        return None  # no complete incident at all
+    # Close the incidents array + outer object.
+    return text[:last_complete_end] + ']}'
+
+
+def _scrub_llm_typos(text):
+    """Clean up common JSON typos Gemini occasionally emits, like a stray
+    double opening quote before a field name (`""foo":` -> `"foo":`)."""
+    # Collapse 2+ opening quotes before a field-name-like token
+    return _summary_re.sub(r'"{2,}([A-Za-z_][\w]*)"\s*:', r'"\1":', text)
+
+
+def _parse_summary_output(text):
+    """Robustly extract a JSON object from an LLM response.
+
+    Handles markdown code fences, BOMs, stray Gemini typos, and truncated
+    outputs (by salvaging the last complete incident). Returns
+    (overview_text, structured_dict_or_None). Logs a diagnostic line on
+    total failure.
+    """
+    if not text:
+        return '', None
+
+    def _finish(data):
+        if not isinstance(data, dict):
+            return None
+        overview = data.get('overview') or ''
+        if not overview and data.get('quiet_hour'):
+            overview = 'Quiet hour — no significant incidents detected.'
+        return overview, data
+
+    # Strip BOM + whitespace
+    cleaned = text.lstrip('﻿').strip()
+
+    # Strip markdown code fences
+    if cleaned.startswith('```'):
+        cleaned = cleaned.split('\n', 1)[-1] if '\n' in cleaned else cleaned[3:]
+        if cleaned.endswith('```'):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+    if cleaned.lower().startswith('json\n'):
+        cleaned = cleaned[5:].strip()
+
+    attempts = [('raw', cleaned)]
+
+    # Attempt: extract the span between first { and last }
+    first = cleaned.find('{')
+    last = cleaned.rfind('}')
+    if first >= 0 and last > first:
+        attempts.append(('braces', cleaned[first:last + 1]))
+
+    # Attempt: after scrubbing typos like `""foo":`
+    scrubbed = _scrub_llm_typos(cleaned)
+    if scrubbed != cleaned:
+        attempts.append(('scrubbed', scrubbed))
+
+    # Attempt: salvage truncated incidents[]
+    salvaged = _salvage_truncated_incidents(scrubbed)
+    if salvaged:
+        attempts.append(('salvaged', salvaged))
+
+    errors = []
+    for label, candidate in attempts:
+        try:
+            result = _finish(json.loads(candidate))
+            if result is not None:
+                if label != 'raw':
+                    _rdio_log(f"summary recovered via '{label}'")
+                return result
+            errors.append(f"{label}=not a dict")
+        except Exception as e:
+            errors.append(f"{label}={str(e)[:150]}")
+
+    _rdio_log(
+        f"summary parse failed; attempts={len(attempts)}; "
+        f"errors={' | '.join(errors)}; len={len(text)}; "
+        f"head={text[:120].replace(chr(10), ' ')!r}; "
+        f"tail={text[-120:].replace(chr(10), ' ')!r}"
+    )
+    return text, None
+
+
+def _save_rdio_summary(summary_type, period_start, period_end, day_date, hour_slot,
+                      summary, call_count, transcript_chars, model, details,
+                      release_at=None):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            INSERT INTO rdio_summaries
+                (summary_type, period_start, period_end, day_date, hour_slot,
+                 summary, call_count, transcript_chars, model, details, release_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (summary_type, period_start) DO UPDATE SET
+                period_end = EXCLUDED.period_end,
+                day_date = EXCLUDED.day_date,
+                hour_slot = EXCLUDED.hour_slot,
+                summary = EXCLUDED.summary,
+                call_count = EXCLUDED.call_count,
+                transcript_chars = EXCLUDED.transcript_chars,
+                model = EXCLUDED.model,
+                details = EXCLUDED.details,
+                release_at = EXCLUDED.release_at,
+                created_at = now()
+            ''',
+            (summary_type, period_start, period_end, day_date, hour_slot,
+             summary, call_count, transcript_chars, model, json.dumps(details),
+             release_at),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+
+def generate_rdio_hourly_summary(hour_start_local, force=False, release_at=None):
+    """Summarise the hour [hour_start_local, +1h). Returns dict or None if skipped.
+
+    release_at: optional tz-aware UTC datetime. If set, the saved row won't be
+    served by /api/summaries/latest until that time. Used by the scheduler so
+    a prefetched summary (generated at :55) becomes visible at :59:50.
+    """
+    model = os.environ.get('LLM_MODEL', _LLM_DEFAULT_MODEL)
+    local_tz = _summary_local_tz()
+    hour_start_local = hour_start_local.astimezone(local_tz).replace(minute=0, second=0, microsecond=0)
+    hour_end_local = hour_start_local + timedelta(hours=1)
+    hour_slot = hour_end_local.hour if hour_end_local.hour != 0 else 24
+
+    start_utc = hour_start_local.astimezone(timezone.utc)
+    end_utc = hour_end_local.astimezone(timezone.utc)
+
+    calls = _rdio_fetch_calls_between(start_utc, end_utc)
+    calls = _dedupe_calls(calls)
+    # Skip only when called manually with no data AND no release gate.
+    # Scheduled runs (release_at set) must ALWAYS save something so that
+    # /api/summaries/latest reflects the current hour — even if the upstream
+    # pipe went quiet and there were zero transcripts.
+    if not calls and not force and release_at is None:
+        _rdio_log(f"hourly {hour_start_local.isoformat()}: no transcripts, skipping")
+        return None
+
+    period_label = (
+        f"{hour_start_local.strftime('%Y-%m-%d %H:%M %Z')} "
+        f"to {hour_end_local.strftime('%H:%M %Z')}"
+    )
+    prompt, total_chars = _format_rdio_prompt(calls, period_label)
+    if not calls:
+        summary_text = "No radio traffic with transcripts was recorded during this hour."
+        structured = None
+    else:
+        raw = _call_llm(
+            _load_rdio_prompt('hourly', _HOURLY_PROMPT_FALLBACK),
+            prompt,
+            model,
+        )
+        summary_text, structured = _parse_summary_output(raw)
+        structured = _validate_structured_against_transcripts(structured, calls)
+
+    details = {'period_label': period_label, 'tz': _SUMMARY_TZ_NAME}
+    if structured is not None:
+        details['structured'] = structured
+    _save_rdio_summary(
+        'hourly', start_utc, end_utc, hour_start_local.date(), hour_slot,
+        summary_text, len(calls), total_chars, model, details,
+        release_at=release_at,
+    )
+    rel_str = f", releases at {release_at.isoformat()}" if release_at else ""
+    _rdio_log(f"hourly {hour_start_local.isoformat()} saved ({len(calls)} calls, {total_chars} chars{rel_str})")
+    return {'hour_slot': hour_slot, 'call_count': len(calls)}
+
+
+def generate_rdio_recent_summary(n=500, force=False):
+    """
+    One-off: summarise the most recent N transcripts regardless of clock hour.
+    Saves as summary_type='adhoc' with period_start=now so it never collides
+    with scheduled hourly rows. Uses the hourly prompt.
+    """
+    n = max(1, min(int(n), 5000))
+    model = os.environ.get('LLM_MODEL', _LLM_DEFAULT_MODEL)
+    local_tz = _summary_local_tz()
+
+    with _RdioConn() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                '''
+                SELECT "id" AS call_id, "dateTime" AS date_time, "system", "talkgroup", "transcript",
+                       "source", "sources"
+                FROM "rdioScannerCalls"
+                WHERE "transcript" IS NOT NULL
+                  AND length(btrim("transcript")) >= 2
+                ORDER BY "dateTime" DESC
+                LIMIT %s
+                ''',
+                (n,),
+            )
+            calls = list(reversed(cur.fetchall()))
+        finally:
+            cur.close()
+
+    calls = _dedupe_calls(calls)
+
+    if not calls and not force:
+        _rdio_log(f"recent N={n}: no transcripts, skipping")
+        return None
+
+    # rdio-scanner `dateTime` is naive UTC — tag before converting.
+    def _as_utc(d):
+        return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d.astimezone(timezone.utc)
+    start_utc = _as_utc(calls[0]['date_time']) if calls else datetime.now(timezone.utc)
+    end_utc = _as_utc(calls[-1]['date_time']) if calls else datetime.now(timezone.utc)
+    start_local = start_utc.astimezone(local_tz)
+    end_local = end_utc.astimezone(local_tz)
+    period_label = (
+        f"Last {len(calls)} transcripts "
+        f"({start_local.strftime('%Y-%m-%d %H:%M %Z')} → {end_local.strftime('%H:%M %Z')})"
+    )
+    prompt, total_chars = _format_rdio_prompt(calls, period_label)
+    try:
+        raw = _call_llm(
+            _load_rdio_prompt('hourly', _HOURLY_PROMPT_FALLBACK),
+            prompt,
+            model,
+        )
+        summary_text, structured = _parse_summary_output(raw)
+        structured = _validate_structured_against_transcripts(structured, calls)
+    except Exception as e:
+        _rdio_log(f"recent llm error: {e}")
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+    details = {
+        'tz': _SUMMARY_TZ_NAME,
+        'source': 'last_n',
+        'n': len(calls),
+        'requested_n': n,
+        'period_label': period_label,
+        'transcripts_start': start_utc.isoformat(),
+        'transcripts_end': end_utc.isoformat(),
+    }
+    if structured is not None:
+        details['structured'] = structured
+    _save_rdio_summary(
+        'adhoc', now_utc, now_utc,
+        start_local.date(), None,
+        summary_text, len(calls), total_chars, model, details,
+    )
+    _rdio_log(f"recent saved (N={len(calls)}, {total_chars} chars)")
+    return {
+        'call_count': len(calls),
+        'requested_n': n,
+        'transcript_chars': total_chars,
+        'transcripts_start': start_utc.isoformat(),
+        'transcripts_end': end_utc.isoformat(),
+        'summary': summary_text,
+        'structured': structured,
+    }
+
+
+def _rdio_summary_catchup():
+    """On startup: fill missing hourly summaries.
+
+    - Always try the previous hour (release immediately if missing).
+    - If we're already past :55 of the current hour, also try the current
+      hour (with the same release_at timing the scheduler would have used).
+    """
+    local_tz = _summary_local_tz()
+    now_local = datetime.now(local_tz)
+    prev_hour_start = (now_local - timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+    def _row_exists(hour_start_local):
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM rdio_summaries WHERE summary_type = 'hourly' AND period_start = %s",
+                (hour_start_local.astimezone(timezone.utc),),
+            )
+            return cur.fetchone() is not None
+        finally:
+            cur.close()
+            conn.close()
+
+    try:
+        if not _row_exists(prev_hour_start):
+            # force=True so empty hours write the preset stub instead of silently
+            # skipping — the UI card should never be missing a completed hour.
+            # Catch-up rows land with no release_at so they're live immediately.
+            generate_rdio_hourly_summary(prev_hour_start, force=True)
+    except Exception as e:
+        _rdio_log(f"catch-up prev-hour error: {e}")
+
+    # If we've restarted inside the prefetch window (HH:55+), also kick off the
+    # current hour's summary so it still lands in time for the top-of-hour
+    # release. Mirrors the scheduler's release_at gating.
+    if now_local.minute >= 55:
+        current_hour_start = now_local.replace(minute=0, second=0, microsecond=0)
+        next_hour_top = current_hour_start + timedelta(hours=1)
+        release_at = next_hour_top.astimezone(timezone.utc)
+        try:
+            if not _row_exists(current_hour_start):
+                generate_rdio_hourly_summary(
+                    current_hour_start, force=True, release_at=release_at,
+                )
+        except Exception as e:
+            _rdio_log(f"catch-up current-hour error: {e}")
+
+
+def _rdio_summary_loop():
+    _rdio_log("scheduler thread started")
+    _rdio_summary_catchup()
+    local_tz = _summary_local_tz()
+    while not _shutdown_event.is_set():
+        # Prefetch pattern:
+        #   • Fire at HH:55 of the in-progress hour [HH, HH+1).
+        #   • Send to Gemini immediately — typically returns by HH:57.
+        #   • Save with release_at = HH+1:00 so /api/summaries/latest keeps
+        #     serving the previous summary until the hour flips, then pivots
+        #     to the new one the instant the clock hits the top.
+        # force=True still applies so empty hours get a preset stub.
+        now_local = datetime.now(local_tz)
+        fire_at = now_local.replace(minute=55, second=0, microsecond=0)
+        if fire_at <= now_local:
+            fire_at += timedelta(hours=1)
+        wait_secs = max(5, (fire_at - now_local).total_seconds())
+        if _shutdown_event.wait(timeout=wait_secs):
+            break
+
+        # fire_at is HH:55 in local time. The hour we're summarising is
+        # [HH, HH+1) and will finish at next_hour_top.
+        hour_start_local = fire_at.replace(minute=0, second=0, microsecond=0)
+        next_hour_top = hour_start_local + timedelta(hours=1)
+        release_at = next_hour_top.astimezone(timezone.utc)
+
+        start_wall = time.time()
+        try:
+            generate_rdio_hourly_summary(
+                hour_start_local, force=True, release_at=release_at,
+            )
+        except Exception as e:
+            _rdio_log(f"hourly job error: {e}")
+        else:
+            elapsed = time.time() - start_wall
+            budget_left = (release_at - datetime.now(timezone.utc)).total_seconds()
+            _rdio_log(
+                f"hourly {hour_start_local.strftime('%H:%M')}–"
+                f"{next_hour_top.strftime('%H:%M')} done in {elapsed:.1f}s "
+                f"(releases in {budget_left:.0f}s)"
+            )
+            if budget_left < 0:
+                _rdio_log(
+                    f"WARNING: hourly finished {-budget_left:.0f}s past "
+                    f"release_at — summary live immediately"
+                )
+
+
+def start_rdio_summary_thread():
+    """Start the background scheduler. No-op if DB/API key missing."""
+    global _rdio_summary_thread
+    if _rdio_summary_thread and _rdio_summary_thread.is_alive():
+        return
+    if not _rdio_is_configured():
+        _rdio_log("RDIO_DATABASE_URL not set — summary scheduler disabled")
+        return
+    if not os.environ.get('GEMINI_API_KEY'):
+        _rdio_log("GEMINI_API_KEY not set — summary scheduler disabled")
+        return
+    _rdio_summary_thread = threading.Thread(
+        target=_rdio_summary_loop, daemon=True, name='rdio-summary')
+    _rdio_summary_thread.start()
+    Log.startup("rdio-scanner summary scheduler started")
+
+
+def _row_to_summary(row):
+    """Map a rdio_summaries row (dict) to API shape."""
+    release_at = row.get('release_at') if hasattr(row, 'get') else row['release_at'] if 'release_at' in row else None
+    return {
+        'id': row['id'],
+        'type': row['summary_type'],
+        'period_start': row['period_start'].isoformat() if row['period_start'] else None,
+        'period_end': row['period_end'].isoformat() if row['period_end'] else None,
+        'day_date': row['day_date'].isoformat() if row['day_date'] else None,
+        'hour_slot': row['hour_slot'],
+        'summary': row['summary'],
+        'call_count': row['call_count'],
+        'transcript_chars': row['transcript_chars'],
+        'model': row['model'],
+        'details': row['details'] or {},
+        'release_at': release_at.isoformat() if release_at else None,
+        'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+    }
+
+
+@app.route('/api/summaries/latest')
+def summaries_latest():
+    """Return the most recent hourly-or-adhoc summary.
+
+    The `hourly` field returns whichever is more recent: the last scheduled
+    hourly run or a manual ad-hoc trigger.
+    """
+    try:
+        conn = get_conn_dict()
+        try:
+            cur = conn.cursor()
+            # Order by created_at DESC, not period_start: an ad-hoc row has
+            # period_start = now() (the trigger time), which would otherwise
+            # always beat a scheduled hourly with period_start = hour-top.
+            # "Latest" should mean "most recently generated".
+            try:
+                cur.execute(
+                    "SELECT * FROM rdio_summaries "
+                    "WHERE summary_type IN ('hourly', 'adhoc') "
+                    "  AND (release_at IS NULL OR release_at <= now()) "
+                    "ORDER BY created_at DESC LIMIT 1"
+                )
+            except psycopg2.errors.UndefinedColumn:
+                # release_at column doesn't exist yet — fall back and let the
+                # startup migration fix it on the next restart.
+                conn.rollback()
+                Log.warn("rdio_summaries.release_at missing; serving unfiltered 'latest'")
+                cur.execute(
+                    "SELECT * FROM rdio_summaries "
+                    "WHERE summary_type IN ('hourly', 'adhoc') "
+                    "ORDER BY created_at DESC LIMIT 1"
+                )
+            hourly = cur.fetchone()
+            cur.close()
+        finally:
+            conn.close()
+        return jsonify({
+            'hourly': _row_to_summary(hourly) if hourly else None,
+        })
+    except Exception as e:
+        Log.error(f"/api/summaries/latest error: {type(e).__name__}: {e}")
+        return jsonify({'error': f"{type(e).__name__}: {e}"}), 500
+
+
+@app.route('/api/summaries')
+def summaries_search():
+    """
+    Search summaries by date and hour.
+
+    Query params:
+        type      optional - 'hourly' | 'adhoc' (default: any)
+        date      optional - YYYY-MM-DD (filters day_date)
+        hour      optional - 1..24 hour slot (implies type=hourly)
+        date_from optional - YYYY-MM-DD (inclusive)
+        date_to   optional - YYYY-MM-DD (inclusive)
+        limit     optional - default 50, max 500
+        offset    optional - default 0
+    """
+    try:
+        stype = request.args.get('type')
+        date = request.args.get('date')
+        hour = request.args.get('hour', type=int)
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        limit = min(max(request.args.get('limit', default=50, type=int), 1), 500)
+        offset = max(request.args.get('offset', default=0, type=int), 0)
+
+        clauses = []
+        params = []
+        if hour is not None:
+            if hour < 1 or hour > 24:
+                return jsonify({'error': 'hour must be 1..24'}), 400
+            clauses.append("hour_slot = %s")
+            params.append(hour)
+            if stype is None:
+                stype = 'hourly'
+        if stype:
+            if stype not in ('hourly', 'adhoc'):
+                return jsonify({'error': "type must be 'hourly' or 'adhoc'"}), 400
+            clauses.append("summary_type = %s")
+            params.append(stype)
+        if date:
+            clauses.append("day_date = %s")
+            params.append(date)
+        if date_from:
+            clauses.append("day_date >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("day_date <= %s")
+            params.append(date_to)
+
+        # Hide embargoed rows (prefetched summaries not yet released).
+        clauses.append("(release_at IS NULL OR release_at <= now())")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            f"SELECT * FROM rdio_summaries {where} "
+            f"ORDER BY period_start DESC LIMIT %s OFFSET %s"
+        )
+        params.extend([limit, offset])
+
+        count_sql = f"SELECT COUNT(*) AS n FROM rdio_summaries {where}"
+        count_params = params[:-2]
+
+        conn = get_conn_dict()
+        try:
+            cur = conn.cursor()
+            cur.execute(count_sql, count_params)
+            total = cur.fetchone()['n']
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            cur.close()
+        finally:
+            conn.close()
+
+        return jsonify({
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'results': [_row_to_summary(r) for r in rows],
+        })
+    except Exception as e:
+        Log.error(f"/api/summaries error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rdio/transcripts/search')
+def rdio_transcripts_search():
+    """Full-text search over rdio-scanner call transcripts.
+
+    Query params:
+        q           keyword(s) to ILIKE against transcript text (optional if call_id given)
+        call_id     fetch a specific call by its rdio-scanner ID (optional)
+        system      numeric system id filter (optional)
+        talkgroup   numeric talkgroup id filter (optional)
+        date        YYYY-MM-DD (local day, uses SUMMARY_TZ) — shortcut for date_from/date_to
+        date_from   YYYY-MM-DD (inclusive, UTC)
+        date_to     YYYY-MM-DD (inclusive, UTC)
+        time_from   HH:MM local — narrows date/date_from..date_to to after this time of day
+        time_to     HH:MM local — narrows to before this time of day
+        limit       default 20, max 200
+        offset      pagination offset, default 0
+        order       'asc' | 'desc' (default 'desc' = newest first)
+
+    Returns:
+        { total, limit, offset, results: [ {id, datetime, system, system_label,
+          talkgroup, talkgroup_label, transcript, radio_id, radio_label,
+          call_url} ] }
+    """
+    if not _rdio_is_configured():
+        return jsonify({'error': 'RDIO_DATABASE_URL not configured'}), 503
+    try:
+        q = (request.args.get('q') or '').strip()
+        call_id = request.args.get('call_id', type=int)
+        if not q and not call_id:
+            return jsonify({'error': 'q (keyword) or call_id is required'}), 400
+
+        system_id = request.args.get('system', type=int)
+        talkgroup_id = request.args.get('talkgroup', type=int)
+        date = request.args.get('date')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        time_from = request.args.get('time_from')
+        time_to = request.args.get('time_to')
+        limit = min(max(request.args.get('limit', default=20, type=int), 1), 200)
+        offset = max(request.args.get('offset', default=0, type=int), 0)
+        order = 'ASC' if (request.args.get('order', 'desc').lower() == 'asc') else 'DESC'
+
+        local_tz = _summary_local_tz()
+
+        def _local_date_to_utc_bounds(date_str, start_of_day=True):
+            """Convert YYYY-MM-DD in local tz to a naive UTC datetime."""
+            try:
+                d = datetime.strptime(date_str, '%Y-%m-%d')
+            except (TypeError, ValueError):
+                return None
+            if start_of_day:
+                dt = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=local_tz)
+            else:
+                dt = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=local_tz)
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+        # Build WHERE clause
+        clauses = []
+        params = []
+        if call_id is not None:
+            clauses.append('"id" = %s')
+            params.append(call_id)
+        else:
+            clauses.append('"transcript" IS NOT NULL')
+            # Comma-separated `q` becomes an OR of ILIKE patterns — "fire,crash,
+            # police" matches any transcript mentioning any of the three. Single
+            # terms still work (no commas → one ILIKE). Empty/short fragments
+            # (len < 2) are dropped so a stray trailing comma doesn't blow up.
+            terms = [t.strip() for t in q.split(',')]
+            terms = [t for t in terms if len(t) >= 2]
+            if not terms:
+                return jsonify({'error': 'q must contain at least one term of 2+ chars'}), 400
+            if len(terms) == 1:
+                clauses.append('"transcript" ILIKE %s')
+                params.append(f'%{terms[0]}%')
+            else:
+                ilike_parts = ['"transcript" ILIKE %s'] * len(terms)
+                clauses.append('(' + ' OR '.join(ilike_parts) + ')')
+                params.extend(f'%{t}%' for t in terms)
+
+        if system_id is not None:
+            clauses.append('"system" = %s')
+            params.append(system_id)
+        if talkgroup_id is not None:
+            clauses.append('"talkgroup" = %s')
+            params.append(talkgroup_id)
+
+        # `date` is a convenience shortcut when both from+to would equal
+        if date and not date_from and not date_to:
+            date_from = date
+            date_to = date
+
+        if date_from:
+            dt = _local_date_to_utc_bounds(date_from, start_of_day=True)
+            if dt is None:
+                return jsonify({'error': 'date_from must be YYYY-MM-DD'}), 400
+            clauses.append('"dateTime" >= %s')
+            params.append(dt)
+        if date_to:
+            dt = _local_date_to_utc_bounds(date_to, start_of_day=False)
+            if dt is None:
+                return jsonify({'error': 'date_to must be YYYY-MM-DD'}), 400
+            clauses.append('"dateTime" <= %s')
+            params.append(dt)
+
+        # Narrow by local time-of-day (applied to each matching day)
+        def _parse_hm(s):
+            try:
+                h, m = s.split(':')
+                h, m = int(h), int(m)
+                if 0 <= h < 24 and 0 <= m < 60:
+                    return h, m
+            except Exception:
+                pass
+            return None
+        if time_from:
+            hm = _parse_hm(time_from)
+            if hm is None:
+                return jsonify({'error': 'time_from must be HH:MM'}), 400
+            clauses.append(
+                "EXTRACT(HOUR FROM \"dateTime\" AT TIME ZONE 'UTC' AT TIME ZONE %s) * 60 "
+                "+ EXTRACT(MINUTE FROM \"dateTime\" AT TIME ZONE 'UTC' AT TIME ZONE %s) >= %s"
+            )
+            params.extend([_SUMMARY_TZ_NAME, _SUMMARY_TZ_NAME, hm[0] * 60 + hm[1]])
+        if time_to:
+            hm = _parse_hm(time_to)
+            if hm is None:
+                return jsonify({'error': 'time_to must be HH:MM'}), 400
+            clauses.append(
+                "EXTRACT(HOUR FROM \"dateTime\" AT TIME ZONE 'UTC' AT TIME ZONE %s) * 60 "
+                "+ EXTRACT(MINUTE FROM \"dateTime\" AT TIME ZONE 'UTC' AT TIME ZONE %s) <= %s"
+            )
+            params.extend([_SUMMARY_TZ_NAME, _SUMMARY_TZ_NAME, hm[0] * 60 + hm[1]])
+
+        where = 'WHERE ' + ' AND '.join(clauses)
+
+        with _RdioConn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cur.execute(f'SELECT COUNT(*) AS n FROM "rdioScannerCalls" {where}', params)
+                total = cur.fetchone()['n']
+                cur.execute(
+                    f'SELECT "id", "dateTime" AS date_time, "system", "talkgroup", '
+                    f'"transcript", "source", "sources" FROM "rdioScannerCalls" '
+                    f'{where} ORDER BY "dateTime" {order} LIMIT %s OFFSET %s',
+                    params + [limit, offset],
+                )
+                rows = cur.fetchall()
+            finally:
+                cur.close()
+
+        results = []
+        for row in rows:
+            sys_label, tg_label = _rdio_resolve_labels(row['system'], row['talkgroup'])
+            rid = _extract_radio_id(row)
+            dt = row['date_time']
+            if dt is not None and dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            results.append({
+                'id': row['id'],
+                'datetime': dt.isoformat() if dt else None,
+                'system': row['system'],
+                'system_label': sys_label,
+                'talkgroup': row['talkgroup'],
+                'talkgroup_label': tg_label,
+                'transcript': row['transcript'],
+                'radio_id': rid,
+                'radio_label': _RDIO_UNIT_LABELS.get(rid) if rid else None,
+                'call_url': f'https://radio.forcequit.xyz/?call={row["id"]}',
+            })
+        return jsonify({
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'query': q,
+            'call_id': call_id,
+            'results': results,
+        })
+    except Exception as e:
+        Log.error(f"/api/rdio/transcripts/search error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rdio/calls/<int:call_id>')
+def rdio_call_detail(call_id):
+    """Return one rdio-scanner call with resolved labels."""
+    if not _rdio_is_configured():
+        return jsonify({'error': 'RDIO_DATABASE_URL not configured'}), 503
+    try:
+        with _RdioConn() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cur.execute(
+                    'SELECT "id", "dateTime" AS date_time, "system", "talkgroup", '
+                    '"transcript", "source", "sources" FROM "rdioScannerCalls" '
+                    'WHERE "id" = %s',
+                    (call_id,),
+                )
+                row = cur.fetchone()
+            finally:
+                cur.close()
+        if not row:
+            return jsonify({'error': 'call not found'}), 404
+        sys_label, tg_label = _rdio_resolve_labels(row['system'], row['talkgroup'])
+        rid = _extract_radio_id(row)
+        dt = row['date_time']
+        if dt is not None and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return jsonify({
+            'id': row['id'],
+            'datetime': dt.isoformat() if dt else None,
+            'system': row['system'],
+            'system_label': sys_label,
+            'talkgroup': row['talkgroup'],
+            'talkgroup_label': tg_label,
+            'transcript': row['transcript'],
+            'radio_id': rid,
+            'radio_label': _RDIO_UNIT_LABELS.get(rid) if rid else None,
+            'call_url': f'https://radio.forcequit.xyz/?call={row["id"]}',
+        })
+    except Exception as e:
+        Log.error(f"/api/rdio/calls/{call_id} error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/summaries/trigger', methods=['POST', 'GET'])
+def summaries_trigger():
+    """Manually trigger a summary generation.
+    Body (JSON) or query params:
+        type: 'hourly' | 'recent'
+        hour_start: ISO8601 local time for hourly (optional, default previous hour)
+        last_n: N most recent transcripts for 'recent' (optional, default 500, max 5000)
+    """
+    try:
+        local_tz = _summary_local_tz()
+        body = request.get_json(silent=True) or {}
+        # Allow GET + query params too for easy curl/browser triggering
+        args = request.args
+        def p(key, default=None):
+            return body.get(key, args.get(key, default))
+
+        stype = p('type', 'hourly')
+        if stype == 'hourly':
+            hs = p('hour_start')
+            if hs:
+                hour_start = datetime.fromisoformat(hs)
+                if hour_start.tzinfo is None:
+                    hour_start = hour_start.replace(tzinfo=local_tz)
+            else:
+                hour_start = (datetime.now(local_tz) - timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            result = generate_rdio_hourly_summary(hour_start, force=True)
+        elif stype == 'recent':
+            try:
+                n = int(p('last_n', 500))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'last_n must be an integer'}), 400
+            if n < 1 or n > 5000:
+                return jsonify({'error': 'last_n must be between 1 and 5000'}), 400
+            # dry_run=1 returns the formatted prompt WITHOUT calling the LLM
+            dry_run = str(p('dry_run', '') or '').lower() in ('1', 'true', 'yes')
+            # sync=1 forces synchronous execution (small N only). By default
+            # recent triggers run in a background thread so Cloudflare's 100s
+            # edge timeout doesn't kill long Gemini calls.
+            sync = str(p('sync', '') or '').lower() in ('1', 'true', 'yes')
+            if not dry_run and not sync:
+                def _run_recent_bg(_n):
+                    try:
+                        generate_rdio_recent_summary(_n, force=True)
+                    except Exception as e:
+                        _rdio_log(f"background recent error: {e}")
+                threading.Thread(
+                    target=_run_recent_bg, args=(n,), daemon=True,
+                    name=f'rdio-recent-{n}',
+                ).start()
+                return jsonify({
+                    'ok': True,
+                    'queued': True,
+                    'requested_n': n,
+                    'message': (
+                        'Summary is running in the background. '
+                        'Poll /api/summaries/latest to see it when ready '
+                        '(typically 30–120s for large N).'
+                    ),
+                })
+            if dry_run:
+                with _RdioConn() as conn:
+                    cur = conn.cursor(cursor_factory=RealDictCursor)
+                    try:
+                        cur.execute(
+                            '''
+                            SELECT "dateTime" AS date_time, "system", "talkgroup", "transcript"
+                            FROM "rdioScannerCalls"
+                            WHERE "transcript" IS NOT NULL
+                              AND length(btrim("transcript")) >= 2
+                            ORDER BY "dateTime" DESC
+                            LIMIT %s
+                            ''',
+                            (n,),
+                        )
+                        calls = list(reversed(cur.fetchall()))
+                    finally:
+                        cur.close()
+                calls = _dedupe_calls(calls)
+                formatted, total_chars = _format_rdio_prompt(
+                    calls,
+                    f"Last {len(calls)} transcripts (dry run)",
+                )
+                return jsonify({
+                    'ok': True,
+                    'dry_run': True,
+                    'call_count': len(calls),
+                    'transcript_chars': total_chars,
+                    'user_prompt': formatted,
+                    'system_prompt': _load_rdio_prompt('hourly', _HOURLY_PROMPT_FALLBACK),
+                })
+            result = generate_rdio_recent_summary(n, force=True)
+        else:
+            return jsonify({'error': "type must be 'hourly' or 'recent'"}), 400
+        return jsonify({'ok': True, 'result': result})
+    except Exception as e:
+        Log.error(f"/api/summaries/trigger error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== DASHBOARD ====================
+# Discord-OAuth-authenticated config dashboard for the NSW PSN Discord bot.
+#
+# Reads/writes the bot's Postgres DB (alert_presets + *_mute_state) via a
+# separate connection pool (BOT_DATA_DATABASE_URL). Discord OAuth2 is used
+# to identify the user and enumerate their guilds; Manage-Channels permission
+# on the guild + bot-presence in that guild are both required for any guild
+# scoped endpoint. Session state is a signed cookie — no server-side store.
+#
+# ---------------------------------------------------------------------------
+# API CONTRACT
+# ---------------------------------------------------------------------------
+#
+# Base:     /api/dashboard
+# Auth:     Session cookie `nswpsn_dash_sess` (HttpOnly, SameSite=Lax, Secure)
+# Errors:   JSON body `{"error": "<code>", "message": "<human>"}`
+#           Codes: dashboard_disabled, missing_session_secret, invalid_session,
+#                  session_expired, forbidden, bot_not_in_guild, guild_not_found,
+#                  channel_not_found, bad_request, discord_error, rate_limited,
+#                  upstream_error, db_error
+#
+# OAuth flow
+#   GET  /api/dashboard/auth/login[?next=/path]
+#        -> 302 redirect to Discord authorize URL (sets `nswpsn_dash_oauth` state cookie)
+#   GET  /api/dashboard/auth/callback?code=...&state=...
+#        -> exchanges code, writes `nswpsn_dash_sess`, 302 to {PUBLIC_BASE_URL}/dashboard
+#           (or ?next=/path if preserved via state)
+#   POST /api/dashboard/auth/logout
+#        -> 204, clears session cookie
+#
+# Identity
+#   GET  /api/dashboard/me  (auth required)
+#        -> 200 {
+#             "user":  {"id": str, "username": str, "avatar_url": str|null},
+#             "guilds": [
+#               {"id": str, "name": str, "icon_url": str|null,
+#                "has_bot": bool, "manage_channels": bool}
+#             ]
+#           }
+#
+# Guild data (auth + MANAGE_CHANNELS + bot-in-guild required)
+#   GET  /api/dashboard/guilds/<guild_id>/channels
+#        -> 200 [{"id": str, "name": str, "position": int, "parent_id": str|null}]
+#   GET  /api/dashboard/guilds/<guild_id>/roles
+#        -> 200 [{"id": str, "name": str, "color": int, "position": int}]
+#   GET    /api/dashboard/guilds/<guild_id>/presets   -> 200 {"presets": [Preset,...]}
+#   POST   /api/dashboard/guilds/<guild_id>/presets   -> 201 {"preset": Preset}
+#   PATCH  /api/dashboard/guilds/<guild_id>/presets/<preset_id>  -> 200 {"preset": Preset}
+#   DELETE /api/dashboard/guilds/<guild_id>/presets/<preset_id>  -> 200 {"ok": true}
+#   PUT    /api/dashboard/guilds/<guild_id>/presets/<preset_id>/type-overrides/<alert_type>
+#          Body: {"enabled"?: bool, "enabled_ping"?: bool}  -> 200 {"preset": Preset}
+#   DELETE /api/dashboard/guilds/<guild_id>/presets/<preset_id>/type-overrides/<alert_type>
+#          -> 200 {"preset": Preset}
+#   GET    /api/dashboard/guilds/<guild_id>/mute-state
+#          -> 200 {"guild": {enabled, enabled_ping}, "channels": [{channel_id, enabled, enabled_ping},...]}
+#   PUT    /api/dashboard/guilds/<guild_id>/mute-state/guild
+#          Body: {"enabled"?: bool, "enabled_ping"?: bool}  -> 200 {"guild": {...}}
+#   DELETE /api/dashboard/guilds/<guild_id>/mute-state/guild  -> 200 {"ok": true}
+#   PUT    /api/dashboard/guilds/<guild_id>/mute-state/channels/<channel_id>
+#          Body: {"enabled"?: bool, "enabled_ping"?: bool}  -> 200 {"channel": {...}}
+#   DELETE /api/dashboard/guilds/<guild_id>/mute-state/channels/<channel_id> -> 200 {"ok": true}
+#
+# Preset shape:
+#   {"id": int, "channel_id": str, "name": str, "alert_types": [str,...],
+#    "pager_enabled": bool, "pager_capcodes": str|null, "role_ids": [str,...],
+#    "enabled": bool, "enabled_ping": bool,
+#    "type_overrides": {"<alert_type>": {"enabled": bool, "enabled_ping": bool}, ...},
+#    "created_at": ISO, "updated_at": ISO}
+#
+# Session cookie
+#   Name:    nswpsn_dash_sess
+#   Value:   base64url(json_payload) + "." + base64url(hmac_sha256_sig)
+#   Payload: {"uid": str, "username": str, "avatar": str|null,
+#             "guilds": [{"id": str, "name": str, "icon": str|null,
+#                         "permissions": str}],
+#             "gfresh": int, "exp": int, "iat": int}
+#   Signed with DASHBOARD_SESSION_SECRET, 24h expiry.
+#   Guild list refreshed on /me when older than 10 minutes.
+
+_BOT_DB_POOL = None
+_BOT_DB_POOL_LOCK = threading.Lock()
+
+_DISCORD_API_BASE = 'https://discord.com/api/v10'
+_DASH_SESSION_COOKIE = 'nswpsn_dash_sess'
+_DASH_OAUTH_COOKIE = 'nswpsn_dash_oauth'
+_DASH_SESSION_TTL = 24 * 60 * 60          # 24 hours
+_DASH_OAUTH_STATE_TTL = 10 * 60           # 10 minutes
+_DASH_GUILD_REFRESH_INTERVAL = 10 * 60    # 10 minutes
+_DISCORD_CHANNEL_CACHE_TTL = 60           # seconds
+_DISCORD_ROLE_CACHE_TTL = 60              # seconds
+
+_MANAGE_CHANNELS = 0x10
+_ADMINISTRATOR = 0x8
+
+def _dash_admin_ids():
+    """Dashboard super-admin Discord user IDs, from DASHBOARD_ADMIN_IDS env
+    (comma-separated). Re-read every call so edits to .env take effect on
+    pm2 reload without a code redeploy."""
+    raw = os.environ.get('DASHBOARD_ADMIN_IDS', '') or ''
+    return {p.strip() for p in raw.split(',') if p.strip()}
+
+def _dash_is_admin(session):
+    uid = str(session.get('uid') or '')
+    return bool(uid) and uid in _dash_admin_ids()
+
+# Mirror of discord-bot/bot.py ALERT_TYPES — duplicated here because the
+# dashboard must work without importing bot.py (different process).
+_DASH_ALERT_TYPES = [
+    'rfs', 'bom', 'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
+    'traffic_fire', 'traffic_major', 'power_endeavour', 'power_ausgrid',
+    'waze_hazards', 'waze_police', 'waze_roadwork', 'user_incidents',
+    'radio_summary',
+]
+
+# Per-guild in-memory caches for Discord REST lookups.
+_dash_discord_cache = {}  # {(kind, guild_id): (ts, data)}
+_dash_discord_cache_lock = threading.Lock()
+
+
+def _dash_err(code, message, status):
+    """Consistent JSON error body."""
+    return jsonify({'error': code, 'message': message}), status
+
+
+def _dash_b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+
+
+def _dash_b64url_decode(s):
+    pad = '=' * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
+
+def _dash_get_session_secret():
+    """Fetch DASHBOARD_SESSION_SECRET — first-access fatal, not startup fatal."""
+    secret = os.environ.get('DASHBOARD_SESSION_SECRET')
+    if not secret:
+        return None
+    return secret.encode('utf-8') if isinstance(secret, str) else secret
+
+
+def _dash_sign(payload_bytes, secret):
+    import hmac as _hmac
+    return _hmac.new(secret, payload_bytes, hashlib.sha256).digest()
+
+
+def _dash_make_cookie(payload, secret):
+    """Sign+encode a JSON payload → `<b64_payload>.<b64_sig>`."""
+    import hmac as _hmac  # noqa: F401 (use stdlib; keeps `hmac` import local)
+    raw = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
+    p = _dash_b64url(raw)
+    sig = _dash_sign(raw, secret)
+    s = _dash_b64url(sig)
+    return f"{p}.{s}"
+
+
+def _dash_parse_cookie(cookie_value, secret):
+    """Returns the payload dict or None on bad signature / malformed."""
+    import hmac as _hmac
+    if not cookie_value or '.' not in cookie_value:
+        return None
+    try:
+        p_b64, s_b64 = cookie_value.split('.', 1)
+        raw = _dash_b64url_decode(p_b64)
+        sig = _dash_b64url_decode(s_b64)
+    except Exception:
+        return None
+    expected = _dash_sign(raw, secret)
+    if not _hmac.compare_digest(expected, sig):
+        return None
+    try:
+        return json.loads(raw.decode('utf-8'))
+    except Exception:
+        return None
+
+
+def _dash_is_https():
+    """Whether to set Secure on cookies. Honours X-Forwarded-Proto (nginx)."""
+    xf = request.headers.get('X-Forwarded-Proto', '').lower()
+    if xf:
+        return xf == 'https'
+    return request.is_secure
+
+
+# Cross-subdomain cookie: the dashboard UI is served from nswpsn.forcequit.xyz
+# but the Flask backend (and OAuth callback) live at api.forcequit.xyz. To
+# share the session cookie between both, scope it to the parent domain.
+# Override via DASHBOARD_COOKIE_DOMAIN if running somewhere else.
+_DASH_COOKIE_DOMAIN = (
+    os.environ.get('DASHBOARD_COOKIE_DOMAIN', '.forcequit.xyz') or None
+)
+
+
+def _dash_set_cookie(response, name, value, max_age, secure=None):
+    if secure is None:
+        secure = _dash_is_https()
+    # SameSite must be 'None' for credentialed cross-site requests. Browsers
+    # require Secure=True when SameSite=None, which is fine over HTTPS.
+    samesite = 'None' if secure else 'Lax'
+    response.set_cookie(
+        name, value,
+        max_age=max_age,
+        httponly=True,
+        samesite=samesite,
+        secure=secure,
+        path='/',
+        domain=_DASH_COOKIE_DOMAIN,
+    )
+
+
+def _dash_clear_cookie(response, name):
+    secure = _dash_is_https()
+    samesite = 'None' if secure else 'Lax'
+    response.set_cookie(
+        name, '', max_age=0, httponly=True,
+        samesite=samesite, secure=secure, path='/',
+        domain=_DASH_COOKIE_DOMAIN,
+    )
+
+
+# Server-side session store. We keep it small and in-process because:
+#   • The cookie-side payload was blowing past the 4096-byte browser limit
+#     once a user's guild list showed up in it — browsers silently drop
+#     cookies that big, which manifested as a permanent 401 loop.
+#   • A single-process Flask app behind Cloudflare is the deployment, so
+#     in-memory is fine. Sessions don't survive restarts — users just
+#     re-login, which is an acceptable UX trade for a management page.
+_DASH_SESSIONS = {}  # sid -> session dict
+_DASH_SESSIONS_DB_READY = False
+
+
+def _dash_sessions_db_ensure():
+    """Create the dash_sessions table (if missing) and hydrate the in-memory
+    dict from any rows that survived a restart. Runs at most once per process;
+    subsequent put/drop just write through without re-reading the table."""
+    global _DASH_SESSIONS_DB_READY
+    if _DASH_SESSIONS_DB_READY:
+        return
+    conn = _bot_db_conn()
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS dash_sessions (
+                sid TEXT PRIMARY KEY,
+                data JSONB NOT NULL,
+                exp INTEGER NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        ''')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_dash_sessions_exp ON dash_sessions(exp)')
+        now = int(time.time())
+        cur.execute('DELETE FROM dash_sessions WHERE exp < %s', (now,))
+        cur.execute('SELECT sid, data FROM dash_sessions')
+        loaded = 0
+        for row in cur.fetchall():
+            sid = row['sid']
+            if sid not in _DASH_SESSIONS:
+                _DASH_SESSIONS[sid] = row['data']
+                loaded += 1
+        conn.commit()
+        _DASH_SESSIONS_DB_READY = True
+        if loaded:
+            Log.startup(f"dashboard: restored {loaded} session(s) from DB")
+    except Exception as e:
+        Log.warn(f"dashboard session DB init failed: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _dash_session_persist(sid, data):
+    """Write through to Postgres. Silent no-op if BOT_DATA_DATABASE_URL is
+    unset or the write fails — in-memory dict is still authoritative."""
+    conn = _bot_db_conn()
+    if conn is None:
+        return
+    try:
+        # Drop runtime-only keys (those prefixed with _) before persisting —
+        # e.g. _sid is added by _dash_load_session and has no DB meaning.
+        persisted = {k: v for k, v in data.items() if not k.startswith('_')}
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO dash_sessions (sid, data, exp) VALUES (%s, %s::jsonb, %s) '
+            'ON CONFLICT (sid) DO UPDATE SET data = EXCLUDED.data, '
+            'exp = EXCLUDED.exp, updated_at = now()',
+            (sid, json.dumps(persisted), int(persisted.get('exp', 0) or 0)),
+        )
+        conn.commit()
+    except Exception as e:
+        Log.warn(f"dashboard session persist failed: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _dash_session_delete_db(sid):
+    conn = _bot_db_conn()
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dash_sessions WHERE sid = %s', (sid,))
+        conn.commit()
+    except Exception as e:
+        Log.warn(f"dashboard session delete failed: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _dash_session_put(sid, data):
+    _dash_sessions_db_ensure()
+    _DASH_SESSIONS[sid] = data
+    _dash_session_persist(sid, data)
+    # Opportunistic GC when the store grows — drop anything already expired.
+    if len(_DASH_SESSIONS) > 512:
+        now = int(time.time())
+        stale = [k for k, v in _DASH_SESSIONS.items() if v.get('exp', 0) < now]
+        for k in stale:
+            _DASH_SESSIONS.pop(k, None)
+            _dash_session_delete_db(k)
+
+
+def _dash_session_get(sid):
+    _dash_sessions_db_ensure()
+    sess = _DASH_SESSIONS.get(sid)
+    if not sess:
+        return None
+    if sess.get('exp', 0) < int(time.time()):
+        _DASH_SESSIONS.pop(sid, None)
+        _dash_session_delete_db(sid)
+        return None
+    return sess
+
+
+def _dash_session_drop(sid):
+    _DASH_SESSIONS.pop(sid, None)
+    _dash_session_delete_db(sid)
+
+
+def _dash_load_session():
+    """Return the server-side session dict for the current request, or None.
+
+    Cookie now only carries a signed {sid, exp} payload — heavy data (guild
+    list, access_token, cached fresh-at timestamps) lives in _DASH_SESSIONS
+    keyed by that sid.
+    """
+    secret = _dash_get_session_secret()
+    if not secret:
+        return None
+    cookie_val = request.cookies.get(_DASH_SESSION_COOKIE)
+    payload = _dash_parse_cookie(cookie_val, secret)
+    if not payload:
+        return None
+    exp = payload.get('exp', 0)
+    if not isinstance(exp, (int, float)) or exp < time.time():
+        return None
+    sid = payload.get('sid')
+    if not sid:
+        # Legacy cookie payload (pre-server-side session) — treat as invalid so
+        # the user is forced through a fresh OAuth round-trip. Backwards-compat
+        # for cookies baked before this refactor.
+        return None
+    session = _dash_session_get(sid)
+    if not session:
+        return None
+    # Expose sid on the session dict so downstream code can rotate/drop it.
+    session['_sid'] = sid
+    return session
+
+
+def _dash_require_session():
+    """Decorator to guard session-only routes."""
+    def deco(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not _dash_enabled():
+                return _dash_err('dashboard_disabled',
+                                 'Dashboard is not configured on this server.', 503)
+            if not _dash_get_session_secret():
+                return _dash_err('missing_session_secret',
+                                 'DASHBOARD_SESSION_SECRET is not configured.', 503)
+            session = _dash_load_session()
+            if not session:
+                return _dash_err('invalid_session',
+                                 'Sign in via /api/dashboard/auth/login.', 401)
+            request._dash_session = session
+            return func(*args, **kwargs)
+        return wrapper
+    return deco
+
+
+def _dash_enabled():
+    return bool(os.environ.get('BOT_DATA_DATABASE_URL'))
+
+
+def _bot_db_conn():
+    """Return a _PooledConn-style wrapper around a conn from the bot pool.
+
+    Lazily creates a ThreadedConnectionPool(1, 10) on first call. Returns
+    None when BOT_DATA_DATABASE_URL is unset (caller converts to 503).
+    """
+    global _BOT_DB_POOL
+    url = os.environ.get('BOT_DATA_DATABASE_URL')
+    if not url:
+        return None
+    if _BOT_DB_POOL is None:
+        with _BOT_DB_POOL_LOCK:
+            if _BOT_DB_POOL is None:
+                from psycopg2 import pool as _pg_pool
+                _BOT_DB_POOL = _pg_pool.ThreadedConnectionPool(1, 10, url)
+
+    conn = _BOT_DB_POOL.getconn()
+    conn.autocommit = False
+    conn.cursor_factory = RealDictCursor
+
+    # Minimal wrapper matching db.py's _PooledConn pattern: .close() returns
+    # the conn to the pool instead of really closing it.
+    class _BotPooledConn:
+        __slots__ = ('_conn', '_closed')
+        def __init__(self, c):
+            object.__setattr__(self, '_conn', c)
+            object.__setattr__(self, '_closed', False)
+        def close(self):
+            if self._closed:
+                return
+            object.__setattr__(self, '_closed', True)
+            try:
+                _BOT_DB_POOL.putconn(self._conn)
+            except Exception:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+        def __setattr__(self, name, value):
+            if name in _BotPooledConn.__slots__:
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._conn, name, value)
+        def __enter__(self):
+            return self
+        def __exit__(self, et, ev, tb):
+            self.close()
+
+    return _BotPooledConn(conn)
+
+
+# 30s TTL cache for the bot-guild-ids DB lookup. Every dashboard request
+# passes through `_dash_guild_guard` which calls this; without caching, every
+# preset/mute/channel/role API hit added a Postgres round-trip. Membership in
+# alert_presets only changes on /setup or /alert-remove, so a 30s staleness
+# window is invisible to users.
+_DASH_BOT_GUILD_IDS_CACHE = {'ts': 0.0, 'data': set()}
+_DASH_BOT_GUILD_IDS_TTL = 30
+_DASH_BOT_GUILD_IDS_LOCK = threading.Lock()
+
+
+def _dash_bot_guild_ids():
+    """DISTINCT guild_ids that have any preset subscription.
+    Cached for 30 s to avoid hitting Postgres on every dashboard request.
+    """
+    now = time.time()
+    with _DASH_BOT_GUILD_IDS_LOCK:
+        if (now - _DASH_BOT_GUILD_IDS_CACHE['ts']) < _DASH_BOT_GUILD_IDS_TTL:
+            return set(_DASH_BOT_GUILD_IDS_CACHE['data'])
+    conn = _bot_db_conn()
+    if conn is None:
+        Log.warn("dashboard _dash_bot_guild_ids: BOT_DATA_DATABASE_URL not set")
+        return set()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT guild_id FROM alert_presets')
+        rows = cur.fetchall()
+        ids = {str(r['guild_id']) for r in rows}
+        with _DASH_BOT_GUILD_IDS_LOCK:
+            _DASH_BOT_GUILD_IDS_CACHE['ts'] = time.time()
+            _DASH_BOT_GUILD_IDS_CACHE['data'] = ids
+        return ids
+    except Exception as e:
+        Log.error(f"dashboard _dash_bot_guild_ids error: {e}")
+        return set()
+    finally:
+        conn.close()
+
+
+def _dash_public_base_url():
+    """Where the API lives — used to build the OAuth redirect_uri that
+    Discord is registered to call back to."""
+    return (os.environ.get('PUBLIC_BASE_URL') or '').rstrip('/')
+
+
+def _dash_frontend_base_url():
+    """Where the dashboard HTML page is served — can differ from the API's
+    host when the dashboard lives on a sibling subdomain (our case:
+    dashboard @ nswpsn.forcequit.xyz, API @ api.forcequit.xyz). Falls back
+    to PUBLIC_BASE_URL if not set."""
+    return (
+        os.environ.get('DASHBOARD_FRONTEND_URL')
+        or _dash_public_base_url()
+    ).rstrip('/')
+
+
+def _dash_redirect_uri():
+    base = _dash_public_base_url() or request.host_url.rstrip('/')
+    return f"{base}/api/dashboard/auth/callback"
+
+
+def _dash_bot_token():
+    # Prefer the shared DISCORD_BOT_TOKEN; fall back to env names some
+    # deployments may already have.
+    return (os.environ.get('DISCORD_BOT_TOKEN')
+            or os.environ.get('BOT_TOKEN') or '')
+
+
+def _dash_bot_api(path, params=None, timeout=10):
+    """Call the Discord REST API with the bot token. Returns (status, json|text, headers)."""
+    token = _dash_bot_token()
+    if not token:
+        Log.warn(f"dashboard bot_api {path}: DISCORD_BOT_TOKEN not set")
+        return 503, {'error': 'no_bot_token'}, {}
+    try:
+        r = requests.get(
+            f"{_DISCORD_API_BASE}{path}",
+            headers={'Authorization': f'Bot {token}',
+                     'User-Agent': 'NSWPSN-Dashboard (https://nswpsn.forcequit.xyz)'},
+            params=params,
+            timeout=timeout,
+        )
+    except Exception as e:
+        Log.warn(f"dashboard bot_api {path}: network error — {e}")
+        return 502, {'error': 'discord_unreachable', 'message': str(e)}, {}
+    try:
+        body = r.json()
+    except Exception:
+        body = r.text
+    if r.status_code >= 400:
+        # Short summary so the cause of a dashboard 502/503 is visible in logs
+        # without leaking the bot token or full response bodies.
+        msg = body.get('message') if isinstance(body, dict) else str(body)[:120]
+        Log.warn(f"dashboard bot_api {path}: HTTP {r.status_code} — {msg}")
+    return r.status_code, body, r.headers
+
+
+def _dash_user_avatar_url(user_id, avatar_hash):
+    if not avatar_hash:
+        return None
+    ext = 'gif' if str(avatar_hash).startswith('a_') else 'png'
+    return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{ext}"
+
+
+def _dash_guild_icon_url(guild_id, icon_hash):
+    if not icon_hash:
+        return None
+    ext = 'gif' if str(icon_hash).startswith('a_') else 'png'
+    return f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.{ext}"
+
+
+def _dash_normalize_guilds(raw_guilds, bot_guild_ids):
+    out = []
+    for g in raw_guilds or []:
+        try:
+            perms = int(g.get('permissions', 0) or 0)
+        except (TypeError, ValueError):
+            perms = 0
+        gid = str(g.get('id'))
+        owner = bool(g.get('owner'))
+        # Guild owners implicitly have every permission — Discord's
+        # `permissions` bitmask may not include MANAGE_CHANNELS even for
+        # owners of guilds created before certain permission migrations.
+        # Treat `owner=true` as equivalent to Administrator.
+        manage = owner or bool(perms & (_MANAGE_CHANNELS | _ADMINISTRATOR))
+        out.append({
+            'id': gid,
+            'name': g.get('name', ''),
+            'icon': g.get('icon'),
+            'owner': owner,
+            'permissions': str(perms),
+            'has_bot': gid in bot_guild_ids,
+            'manage_channels': manage,
+        })
+    return out
+
+
+def _dash_session_guild_entry(session, guild_id):
+    guild_id = str(guild_id)
+    for g in session.get('guilds', []):
+        if str(g.get('id')) == guild_id:
+            return g
+    return None
+
+
+def _dash_guild_guard(guild_id):
+    """Used inside @_dash_require_session endpoints. Returns (entry, error_response|None)."""
+    session = request._dash_session
+    entry = _dash_session_guild_entry(session, guild_id)
+    if not entry:
+        return None, _dash_err('guild_not_found',
+                               'You are not a member of that guild.', 403)
+    try:
+        perms = int(entry.get('permissions', 0) or 0)
+    except (TypeError, ValueError):
+        perms = 0
+    # Guild owners implicitly have every permission, even when Discord's
+    # permission bitmask doesn't happen to include MANAGE_CHANNELS.
+    is_owner = bool(entry.get('owner'))
+    if not is_owner and not (perms & (_MANAGE_CHANNELS | _ADMINISTRATOR)):
+        return None, _dash_err('forbidden',
+                               'Manage Channels permission is required on this guild.', 403)
+    if str(guild_id) not in _dash_bot_guild_ids():
+        return None, _dash_err('bot_not_in_guild',
+                               'The NSW PSN bot is not configured in this guild yet.', 403)
+    return entry, None
+
+
+# ---------- OAuth endpoints ----------
+
+@app.route('/api/dashboard/auth/login', methods=['GET'])
+def dashboard_auth_login():
+    from flask import redirect, make_response
+    from urllib.parse import urlencode
+    if not _dash_enabled():
+        return _dash_err('dashboard_disabled',
+                         'Dashboard is not configured on this server.', 503)
+    secret = _dash_get_session_secret()
+    if not secret:
+        return _dash_err('missing_session_secret',
+                         'DASHBOARD_SESSION_SECRET is not configured.', 503)
+    client_id = os.environ.get('DISCORD_CLIENT_ID', '')
+    if not client_id:
+        return _dash_err('dashboard_disabled',
+                         'DISCORD_CLIENT_ID is not configured.', 503)
+
+    # Short-lived signed state cookie (carries the `next` path + nonce).
+    next_path = request.args.get('next') or '/dashboard.html'
+    state_payload = {
+        'nonce': _dash_b64url(os.urandom(16)),
+        'next': next_path if next_path.startswith('/') else '/dashboard.html',
+        'exp': int(time.time()) + _DASH_OAUTH_STATE_TTL,
+    }
+    state_cookie = _dash_make_cookie(state_payload, secret)
+
+    params = {
+        'client_id': client_id,
+        'redirect_uri': _dash_redirect_uri(),
+        'response_type': 'code',
+        'scope': 'identify guilds',
+        'state': state_payload['nonce'],
+        'prompt': 'none',
+    }
+    url = f"{_DISCORD_API_BASE.replace('/api/v10', '')}/api/oauth2/authorize?" + urlencode(params)
+    resp = make_response(redirect(url, code=302))
+    _dash_set_cookie(resp, _DASH_OAUTH_COOKIE, state_cookie,
+                     max_age=_DASH_OAUTH_STATE_TTL)
+    return resp
+
+
+@app.route('/api/dashboard/auth/callback', methods=['GET'])
+def dashboard_auth_callback():
+    from flask import redirect, make_response
+    if not _dash_enabled():
+        return _dash_err('dashboard_disabled',
+                         'Dashboard is not configured on this server.', 503)
+    secret = _dash_get_session_secret()
+    if not secret:
+        return _dash_err('missing_session_secret',
+                         'DASHBOARD_SESSION_SECRET is not configured.', 503)
+
+    code = request.args.get('code')
+    state = request.args.get('state')
+    if not code or not state:
+        return _dash_err('bad_request', 'Missing code or state.', 400)
+
+    # Validate state cookie
+    state_cookie = request.cookies.get(_DASH_OAUTH_COOKIE)
+    state_payload = _dash_parse_cookie(state_cookie, secret)
+    if not state_payload:
+        return _dash_err('bad_request', 'Invalid OAuth state.', 400)
+    if state_payload.get('nonce') != state:
+        return _dash_err('bad_request', 'OAuth state mismatch.', 400)
+    if state_payload.get('exp', 0) < time.time():
+        return _dash_err('bad_request', 'OAuth state expired.', 400)
+    next_path = state_payload.get('next') or '/dashboard'
+
+    client_id = os.environ.get('DISCORD_CLIENT_ID', '')
+    client_secret = os.environ.get('DISCORD_CLIENT_SECRET', '')
+    if not client_id or not client_secret:
+        return _dash_err('dashboard_disabled',
+                         'Discord OAuth is not configured.', 503)
+
+    # Exchange code for access token
+    try:
+        tr = requests.post(
+            f"{_DISCORD_API_BASE}/oauth2/token",
+            data={
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'grant_type': 'authorization_code',
+                'code': code,
+                'redirect_uri': _dash_redirect_uri(),
+            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=15,
+        )
+    except Exception as e:
+        return _dash_err('discord_error', f'Token exchange failed: {e}', 502)
+    if tr.status_code != 200:
+        return _dash_err('discord_error',
+                         f'Token exchange rejected: {tr.status_code} {tr.text[:300]}', 502)
+    token_resp = tr.json() or {}
+    access_token = token_resp.get('access_token')
+    if not access_token:
+        return _dash_err('discord_error', 'No access_token from Discord.', 502)
+
+    def _with_token(path):
+        return requests.get(
+            f"{_DISCORD_API_BASE}{path}",
+            headers={'Authorization': f'Bearer {access_token}',
+                     'User-Agent': 'NSWPSN-Dashboard'},
+            timeout=15,
+        )
+    try:
+        ur = _with_token('/users/@me')
+        gr = _with_token('/users/@me/guilds')
+    except Exception as e:
+        return _dash_err('discord_error', f'Identity fetch failed: {e}', 502)
+    if ur.status_code != 200 or gr.status_code != 200:
+        return _dash_err('discord_error',
+                         f'Discord identity/guild fetch failed (user={ur.status_code}, '
+                         f'guilds={gr.status_code})', 502)
+
+    user = ur.json()
+    guilds_raw = gr.json() or []
+    bot_guild_ids = _dash_bot_guild_ids()
+    guild_entries = _dash_normalize_guilds(guilds_raw, bot_guild_ids)
+
+    now = int(time.time())
+    exp = now + _DASH_SESSION_TTL
+
+    # Heavy session data lives server-side (see _DASH_SESSIONS). The cookie
+    # only carries a signed {sid, exp} blob so it stays well under the 4 KB
+    # browser limit. New sid per login so stolen cookies from a prior session
+    # can't be revived.
+    sid = _dash_b64url(os.urandom(24))
+    _dash_session_put(sid, {
+        'uid': str(user.get('id')),
+        'username': user.get('username') or user.get('global_name') or '',
+        'avatar': user.get('avatar'),
+        # Store access_token so /me can refresh the guild list when the cache
+        # goes stale without forcing another full OAuth round-trip.
+        'access_token': token_resp.get('access_token'),
+        'token_type': token_resp.get('token_type', 'Bearer'),
+        'refresh_token': token_resp.get('refresh_token'),
+        # Compact guild list — id/name/icon/permissions only, the rest is
+        # noise from Discord's /users/@me/guilds response.
+        'guilds': [
+            {'id': g['id'], 'name': g['name'],
+             'icon': g.get('icon'), 'permissions': g.get('permissions', '0'),
+             'owner': bool(g.get('owner'))}
+            for g in guild_entries
+        ],
+        'gfresh': now,
+        'iat': now,
+        'exp': exp,
+    })
+    session_cookie = _dash_make_cookie({'sid': sid, 'exp': exp}, secret)
+
+    # Send the user back to the DASHBOARD FRONTEND (possibly a different
+    # subdomain from the API), not to the API subdomain. If the caller
+    # passed a `next` param we honour it — but only its path+query, never
+    # its host, so we can't be tricked into redirecting off-site.
+    base = _dash_frontend_base_url() or request.host_url.rstrip('/')
+    safe_next = next_path if next_path.startswith('/') else '/dashboard.html'
+    redirect_target = base + safe_next
+    resp = make_response(redirect(redirect_target, code=302))
+    _dash_set_cookie(resp, _DASH_SESSION_COOKIE, session_cookie,
+                     max_age=_DASH_SESSION_TTL)
+    _dash_clear_cookie(resp, _DASH_OAUTH_COOKIE)
+    return resp
+
+
+@app.route('/api/dashboard/auth/logout', methods=['POST'])
+def dashboard_auth_logout():
+    from flask import make_response
+    # Also nuke the server-side session so the sid can't be replayed even if
+    # the cookie somehow leaks.
+    secret = _dash_get_session_secret()
+    if secret:
+        payload = _dash_parse_cookie(
+            request.cookies.get(_DASH_SESSION_COOKIE), secret,
+        ) or {}
+        sid = payload.get('sid')
+        if sid:
+            _dash_session_drop(sid)
+    resp = make_response('', 204)
+    _dash_clear_cookie(resp, _DASH_SESSION_COOKIE)
+    _dash_clear_cookie(resp, _DASH_OAUTH_COOKIE)
+    return resp
+
+
+# ---------- Identity ----------
+
+@app.route('/api/dashboard/me', methods=['GET'])
+@_dash_require_session()
+def dashboard_me():
+    session = request._dash_session
+    bot_guild_ids = _dash_bot_guild_ids()
+    now = int(time.time())
+
+    # Refresh the guild list from Discord when ours is older than
+    # _DASH_GUILD_REFRESH_INTERVAL. Access token lives server-side so we can
+    # do this without a full OAuth round-trip.
+    if now - int(session.get('gfresh', 0) or 0) > _DASH_GUILD_REFRESH_INTERVAL:
+        access_token = session.get('access_token')
+        token_type = session.get('token_type') or 'Bearer'
+        if access_token:
+            try:
+                import requests as _rq
+                gr = _rq.get(
+                    f"{_DISCORD_API_BASE}/users/@me/guilds",
+                    headers={'Authorization': f'{token_type} {access_token}'},
+                    timeout=10,
+                )
+                if gr.status_code == 200:
+                    fresh = gr.json() or []
+                    session['guilds'] = [
+                        {'id': g['id'], 'name': g['name'],
+                         'icon': g.get('icon'),
+                         'permissions': g.get('permissions', '0')}
+                        for g in _dash_normalize_guilds(fresh, bot_guild_ids)
+                    ]
+                    session['gfresh'] = now
+                    # Persist the refreshed guild list so a restart doesn't
+                    # drop it and force another Discord round-trip.
+                    sid = session.get('_sid')
+                    if sid:
+                        _dash_session_persist(sid, session)
+                # Non-200 (401/403): leave the cached list, just don't bump
+                # gfresh so we retry next request. The user can always
+                # re-login if their token was revoked.
+            except Exception as e:
+                Log.warn(f"dashboard /me guild refresh failed: {e}")
+
+    session_guilds = session.get('guilds', [])
+    guilds_out = []
+    for g in session_guilds:
+        gid = str(g.get('id'))
+        try:
+            perms = int(g.get('permissions', 0) or 0)
+        except (TypeError, ValueError):
+            perms = 0
+        is_owner = bool(g.get('owner'))
+        guilds_out.append({
+            'id': gid,
+            'name': g.get('name', ''),
+            'icon_url': _dash_guild_icon_url(gid, g.get('icon')),
+            'has_bot': gid in bot_guild_ids,
+            'owner': is_owner,
+            # Owners have every permission implicitly, even when Discord's
+            # permissions bitmask doesn't include MANAGE_CHANNELS.
+            'manage_channels': is_owner or bool(perms & (_MANAGE_CHANNELS | _ADMINISTRATOR)),
+        })
+
+    # Bot install invite URL — OAuth2 bot + slash-commands scope. Admin grants
+    # only what the bot actually uses (Send Messages, Manage Webhooks,
+    # Read Message History, Embed Links, Attach Files, Use External Emojis).
+    bot_invite_url = None
+    client_id = os.environ.get('DISCORD_CLIENT_ID') or ''
+    if client_id:
+        bot_invite_url = (
+            'https://discord.com/oauth2/authorize'
+            f'?client_id={client_id}'
+            '&permissions=378091407360'
+            '&scope=bot+applications.commands'
+        )
+
+    body = {
+        'user': {
+            'id': session.get('uid'),
+            'username': session.get('username'),
+            'avatar_url': _dash_user_avatar_url(session.get('uid'), session.get('avatar')),
+            'is_admin': _dash_is_admin(session),
+        },
+        'guilds': guilds_out,
+        'bot_invite_url': bot_invite_url,
+    }
+    return jsonify(body)
+
+
+# ---------- Discord proxy (cached) ----------
+
+# Discord channel/role cache stale-entry threshold. Anything older than 10×
+# the per-kind TTL is unlikely to be re-read (entries past TTL get re-fetched
+# on next dashboard hit, populating a fresh row). Eviction runs inside the
+# existing cache lock on every _dash_cache_set so there's no extra contention.
+_DASH_DISCORD_CACHE_STALE_FACTOR = 10
+
+
+def _dash_discord_cache_evict_locked():
+    """Drop entries older than 10× their kind's TTL. Caller holds the lock."""
+    now = time.time()
+    ttl_for = {
+        'channels': _DISCORD_CHANNEL_CACHE_TTL,
+        'roles': _DISCORD_ROLE_CACHE_TTL,
+        'bcast_channels': _DISCORD_CHANNEL_CACHE_TTL,
+    }
+    stale = []
+    for key, (ts, _data) in _dash_discord_cache.items():
+        kind = key[0] if isinstance(key, tuple) else None
+        ttl = ttl_for.get(kind, _DISCORD_CHANNEL_CACHE_TTL)
+        if (now - ts) > (ttl * _DASH_DISCORD_CACHE_STALE_FACTOR):
+            stale.append(key)
+    for k in stale:
+        _dash_discord_cache.pop(k, None)
+
+
+def _dash_cache_get(kind, guild_id, ttl):
+    with _dash_discord_cache_lock:
+        entry = _dash_discord_cache.get((kind, str(guild_id)))
+        if entry and (time.time() - entry[0]) < ttl:
+            return entry[1]
+    return None
+
+
+def _dash_cache_set(kind, guild_id, data):
+    with _dash_discord_cache_lock:
+        _dash_discord_cache[(kind, str(guild_id))] = (time.time(), data)
+        # Sweep entries we'll never read again (e.g. for guilds the bot has
+        # left) so this dict can't grow forever across long uptime.
+        _dash_discord_cache_evict_locked()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/channels', methods=['GET'])
+@_dash_require_session()
+def dashboard_guild_channels(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    cached = _dash_cache_get('channels', guild_id, _DISCORD_CHANNEL_CACHE_TTL)
+    if cached is not None:
+        return jsonify(cached)
+
+    status, body, headers = _dash_bot_api(f'/guilds/{guild_id}/channels')
+    if status == 429:
+        retry = headers.get('Retry-After', '1')
+        try:
+            time.sleep(min(5.0, float(retry)))
+        except Exception:
+            time.sleep(1.0)
+        status, body, headers = _dash_bot_api(f'/guilds/{guild_id}/channels')
+        if status == 429:
+            return _dash_err('rate_limited',
+                             'Discord rate limit hit; please retry shortly.', 503)
+    if status != 200 or not isinstance(body, list):
+        return _dash_err('discord_error',
+                         f'Discord responded {status}.', 502 if status >= 500 else 503)
+
+    # Type 0 = GUILD_TEXT, Type 5 = GUILD_ANNOUNCEMENT (both accept bot posts).
+    channels = [
+        {'id': str(c.get('id')), 'name': c.get('name', ''),
+         'position': c.get('position', 0),
+         'parent_id': str(c['parent_id']) if c.get('parent_id') else None}
+        for c in body if c.get('type') in (0, 5)
+    ]
+    channels.sort(key=lambda c: (c['parent_id'] or '', c['position']))
+    _dash_cache_set('channels', guild_id, channels)
+    return jsonify(channels)
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/roles', methods=['GET'])
+@_dash_require_session()
+def dashboard_guild_roles(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    cached = _dash_cache_get('roles', guild_id, _DISCORD_ROLE_CACHE_TTL)
+    if cached is not None:
+        return jsonify(cached)
+
+    status, body, headers = _dash_bot_api(f'/guilds/{guild_id}/roles')
+    if status == 429:
+        retry = headers.get('Retry-After', '1')
+        try:
+            time.sleep(min(5.0, float(retry)))
+        except Exception:
+            time.sleep(1.0)
+        status, body, headers = _dash_bot_api(f'/guilds/{guild_id}/roles')
+        if status == 429:
+            return _dash_err('rate_limited',
+                             'Discord rate limit hit; please retry shortly.', 503)
+    if status != 200 or not isinstance(body, list):
+        return _dash_err('discord_error',
+                         f'Discord responded {status}.', 502 if status >= 500 else 503)
+
+    roles = []
+    for r in body:
+        # Skip @everyone (id == guild_id) and bot/integration-managed roles.
+        if str(r.get('id')) == str(guild_id):
+            continue
+        if r.get('managed'):
+            continue
+        roles.append({
+            'id': str(r.get('id')),
+            'name': r.get('name', ''),
+            'color': int(r.get('color', 0) or 0),
+            'position': int(r.get('position', 0) or 0),
+        })
+    roles.sort(key=lambda x: -x['position'])
+    _dash_cache_set('roles', guild_id, roles)
+    return jsonify(roles)
+
+
+# ---------- Presets & Mute State ----------
+
+_PG_UNIQUE_VIOLATION = '23505'
+
+
+def _dash_iso(ts):
+    try:
+        return ts.isoformat() if ts is not None else None
+    except Exception:
+        return str(ts) if ts is not None else None
+
+
+def _dash_row_to_preset(row):
+    role_ids = [str(int(r)) for r in (row.get('role_ids') or [])]
+    alert_types = list(row.get('alert_types') or [])
+    overrides_raw = row.get('type_overrides') or {}
+    type_overrides = {}
+    if isinstance(overrides_raw, dict):
+        for k, v in overrides_raw.items():
+            if not isinstance(v, dict):
+                continue
+            type_overrides[k] = {
+                'enabled': bool(v.get('enabled', True)),
+                'enabled_ping': bool(v.get('enabled_ping', True)),
+            }
+    filters_raw = row.get('filters') or {}
+    filters = filters_raw if isinstance(filters_raw, dict) else {}
+    return {
+        'id': int(row['id']),
+        'channel_id': str(int(row['channel_id'])),
+        'name': row.get('name') or '',
+        'alert_types': alert_types,
+        'pager_enabled': bool(row.get('pager_enabled', False)),
+        'pager_capcodes': row.get('pager_capcodes'),
+        'role_ids': role_ids,
+        'enabled': bool(row.get('enabled', True)),
+        'enabled_ping': bool(row.get('enabled_ping', True)),
+        'type_overrides': type_overrides,
+        'filters': filters,
+        'created_at': _dash_iso(row.get('created_at')),
+        'updated_at': _dash_iso(row.get('updated_at')),
+    }
+
+
+def _dash_row_to_mute(row, channel_mode=False):
+    out = {
+        'enabled': bool(row.get('enabled', True)),
+        'enabled_ping': bool(row.get('enabled_ping', True)),
+    }
+    if channel_mode:
+        out = {'channel_id': str(int(row['channel_id'])), **out}
+    return out
+
+
+def _dash_parse_role_ids_array(value):
+    """Body `role_ids` → list[int] deduped (order-preserving). None = invalid."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    seen = set()
+    out = []
+    for p in value:
+        s = str(p).strip() if p is not None else ''
+        if not s:
+            continue
+        try:
+            n = int(s)
+        except ValueError:
+            return None
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+    return out
+
+
+def _dash_parse_alert_types(value):
+    """Body `alert_types` → deduped list[str] validated against _DASH_ALERT_TYPES."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    seen = set()
+    out = []
+    for a in value:
+        if not isinstance(a, str):
+            return None
+        s = a.strip()
+        if not s:
+            continue
+        if s not in _DASH_ALERT_TYPES:
+            return None
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+# Whitelist of severity floor tokens accepted on preset.filters.severity_min.
+# Spans both the RFS scale (advice/watch_and_act/emergency) and the BOM /
+# traffic_major scale (minor/moderate/major). Validation is a flat membership
+# check — the bot picks the right scale per alert_type at evaluation time.
+_DASH_FILTER_SEVERITIES = {
+    'advice', 'watch_and_act', 'emergency',
+    'minor', 'moderate', 'major',
+}
+_DASH_FILTER_KNOWN_KEYS = {
+    'keywords_include', 'keywords_exclude', 'severity_min', 'bbox',
+}
+
+
+def _dash_validate_filters(v):
+    """Validate + normalise a preset.filters dict.
+
+    Returns a normalised dict (possibly empty). Raises ValueError on any
+    structural / value issue with a short message safe to surface in the
+    400 body.
+    """
+    if v is None:
+        return {}
+    if not isinstance(v, dict):
+        raise ValueError('filters must be an object.')
+    unknown = set(v.keys()) - _DASH_FILTER_KNOWN_KEYS
+    if unknown:
+        raise ValueError(f'unknown filter keys: {sorted(unknown)}')
+    out = {}
+
+    for key in ('keywords_include', 'keywords_exclude'):
+        raw = v.get(key)
+        if raw is None:
+            continue
+        if not isinstance(raw, list):
+            raise ValueError(f'{key} must be a list.')
+        if len(raw) > 20:
+            raise ValueError(f'{key}: max 20 entries.')
+        kws = []
+        for k in raw:
+            if not isinstance(k, str):
+                raise ValueError(f'{key}: each entry must be a string.')
+            s = k.strip()
+            if not s:
+                continue
+            if len(s) > 100:
+                raise ValueError(f'{key}: each entry must be <= 100 chars.')
+            kws.append(s)
+        if kws:
+            out[key] = kws
+
+    if 'severity_min' in v and v['severity_min'] is not None:
+        sev = v['severity_min']
+        if not isinstance(sev, str):
+            raise ValueError('severity_min must be a string.')
+        sev = sev.strip().lower()
+        if sev not in _DASH_FILTER_SEVERITIES:
+            raise ValueError(f'severity_min must be one of {sorted(_DASH_FILTER_SEVERITIES)}.')
+        out['severity_min'] = sev
+
+    if 'bbox' in v and v['bbox'] is not None:
+        b = v['bbox']
+        if not isinstance(b, dict):
+            raise ValueError('bbox must be an object.')
+        try:
+            lat_min = float(b['lat_min']); lat_max = float(b['lat_max'])
+            lng_min = float(b['lng_min']); lng_max = float(b['lng_max'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('bbox must have numeric lat_min/lat_max/lng_min/lng_max.')
+        if not (-90.0 <= lat_min <= 90.0 and -90.0 <= lat_max <= 90.0):
+            raise ValueError('bbox lat must be in [-90, 90].')
+        if not (-180.0 <= lng_min <= 180.0 and -180.0 <= lng_max <= 180.0):
+            raise ValueError('bbox lng must be in [-180, 180].')
+        if lat_min > lat_max:
+            raise ValueError('bbox lat_min must be <= lat_max.')
+        if lng_min > lng_max:
+            raise ValueError('bbox lng_min must be <= lng_max.')
+        out['bbox'] = {
+            'lat_min': lat_min, 'lat_max': lat_max,
+            'lng_min': lng_min, 'lng_max': lng_max,
+        }
+
+    return out
+
+
+_PRESET_COLS = (
+    'id, guild_id, channel_id, name, alert_types, pager_enabled, pager_capcodes, '
+    'role_ids, enabled, enabled_ping, type_overrides, filters, created_at, updated_at'
+)
+
+
+def _dash_fetch_preset(cur, gid, preset_id):
+    cur.execute(
+        f'SELECT {_PRESET_COLS} FROM alert_presets WHERE id=%s AND guild_id=%s',
+        (preset_id, gid),
+    )
+    return cur.fetchone()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/presets', methods=['GET'])
+@_dash_require_session()
+def dashboard_guild_presets_get(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f'SELECT {_PRESET_COLS} FROM alert_presets '
+            'WHERE guild_id=%s ORDER BY channel_id, name',
+            (gid,),
+        )
+        rows = cur.fetchall()
+        return jsonify({'presets': [_dash_row_to_preset(r) for r in rows]})
+    except Exception as e:
+        Log.error(f"dashboard presets_get error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/presets', methods=['POST'])
+@_dash_require_session()
+def dashboard_guild_presets_create(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    try:
+        gid = int(guild_id)
+        channel_id = int(body.get('channel_id') or 0)
+    except (TypeError, ValueError):
+        return _dash_err('bad_request', 'channel_id must be numeric.', 400)
+    if not channel_id:
+        return _dash_err('bad_request', 'channel_id is required.', 400)
+
+    name_raw = body.get('name')
+    if not isinstance(name_raw, str):
+        return _dash_err('bad_request', 'name is required.', 400)
+    name = name_raw.strip()
+    if not (1 <= len(name) <= 64):
+        return _dash_err('bad_request', 'name must be 1-64 characters.', 400)
+
+    alert_types = _dash_parse_alert_types(body.get('alert_types'))
+    if alert_types is None:
+        return _dash_err('bad_request',
+                         f'alert_types must be strings in {_DASH_ALERT_TYPES}.', 400)
+
+    role_ids = _dash_parse_role_ids_array(body.get('role_ids'))
+    if role_ids is None:
+        return _dash_err('bad_request', 'role_ids must be an array of numeric ids.', 400)
+
+    pager_enabled = bool(body.get('pager_enabled', False))
+    pager_capcodes = body.get('pager_capcodes')
+    if pager_capcodes is not None and not isinstance(pager_capcodes, str):
+        return _dash_err('bad_request', 'pager_capcodes must be a string.', 400)
+
+    if not alert_types and not pager_enabled:
+        return _dash_err('empty_preset',
+                         'Preset must have at least one alert_type or pager_enabled=true.', 400)
+
+    enabled = bool(body.get('enabled', True))
+    enabled_ping = bool(body.get('enabled_ping', True))
+
+    try:
+        filters = _dash_validate_filters(body.get('filters'))
+    except ValueError as fe:
+        return _dash_err('bad_filter', str(fe), 400)
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f'''
+            INSERT INTO alert_presets
+                (guild_id, channel_id, name, alert_types, pager_enabled, pager_capcodes,
+                 role_ids, enabled, enabled_ping, type_overrides, filters, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '{{}}'::jsonb, %s, now(), now())
+            RETURNING {_PRESET_COLS}
+            ''',
+            (gid, channel_id, name, alert_types, pager_enabled, pager_capcodes,
+             role_ids, enabled, enabled_ping, Json(filters)),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return jsonify({'preset': _dash_row_to_preset(row)}), 201
+    except Exception as e:
+        conn.rollback()
+        if getattr(e, 'pgcode', None) == _PG_UNIQUE_VIOLATION:
+            return _dash_err('name_conflict',
+                             'A preset with this name already exists on this channel.', 409)
+        Log.error(f"dashboard presets_create error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/presets/<int:preset_id>', methods=['PATCH'])
+@_dash_require_session()
+def dashboard_guild_presets_patch(guild_id, preset_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+
+    sets = []
+    params = []
+
+    if 'channel_id' in body:
+        try:
+            cid = int(body['channel_id'])
+        except (TypeError, ValueError):
+            return _dash_err('bad_request', 'channel_id must be numeric.', 400)
+        if not cid:
+            return _dash_err('bad_request', 'channel_id must be non-zero.', 400)
+        sets.append('channel_id=%s')
+        params.append(cid)
+
+    if 'name' in body:
+        nm = body['name']
+        if not isinstance(nm, str):
+            return _dash_err('bad_request', 'name must be a string.', 400)
+        nm = nm.strip()
+        if not (1 <= len(nm) <= 64):
+            return _dash_err('bad_request', 'name must be 1-64 characters.', 400)
+        sets.append('name=%s')
+        params.append(nm)
+
+    new_alert_types = None
+    if 'alert_types' in body:
+        new_alert_types = _dash_parse_alert_types(body['alert_types'])
+        if new_alert_types is None:
+            return _dash_err('bad_request',
+                             f'alert_types must be strings in {_DASH_ALERT_TYPES}.', 400)
+        sets.append('alert_types=%s')
+        params.append(new_alert_types)
+
+    new_pager_enabled = None
+    if 'pager_enabled' in body:
+        new_pager_enabled = bool(body['pager_enabled'])
+        sets.append('pager_enabled=%s')
+        params.append(new_pager_enabled)
+
+    if 'pager_capcodes' in body:
+        pc = body['pager_capcodes']
+        if pc is not None and not isinstance(pc, str):
+            return _dash_err('bad_request', 'pager_capcodes must be a string.', 400)
+        sets.append('pager_capcodes=%s')
+        params.append(pc)
+
+    if 'role_ids' in body:
+        rids = _dash_parse_role_ids_array(body['role_ids'])
+        if rids is None:
+            return _dash_err('bad_request', 'role_ids must be an array of numeric ids.', 400)
+        sets.append('role_ids=%s')
+        params.append(rids)
+
+    if 'enabled' in body:
+        sets.append('enabled=%s')
+        params.append(bool(body['enabled']))
+
+    if 'enabled_ping' in body:
+        sets.append('enabled_ping=%s')
+        params.append(bool(body['enabled_ping']))
+
+    if 'filters' in body:
+        try:
+            filters_norm = _dash_validate_filters(body['filters'])
+        except ValueError as fe:
+            return _dash_err('bad_filter', str(fe), 400)
+        sets.append('filters=%s')
+        params.append(Json(filters_norm))
+
+    if not sets:
+        return _dash_err('bad_request', 'No updatable fields supplied.', 400)
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        existing = _dash_fetch_preset(cur, gid, preset_id)
+        if not existing:
+            return _dash_err('not_found', 'Preset not found.', 404)
+
+        # Enforce the CHECK constraint pre-emptively to return a cleaner error.
+        final_alert_types = new_alert_types if new_alert_types is not None else list(existing.get('alert_types') or [])
+        final_pager = new_pager_enabled if new_pager_enabled is not None else bool(existing.get('pager_enabled'))
+        if not final_alert_types and not final_pager:
+            return _dash_err('empty_preset',
+                             'Preset must have at least one alert_type or pager_enabled=true.', 400)
+
+        sets.append('updated_at=now()')
+        sql = (
+            f'UPDATE alert_presets SET {", ".join(sets)} '
+            f'WHERE id=%s AND guild_id=%s RETURNING {_PRESET_COLS}'
+        )
+        cur.execute(sql, tuple(params) + (preset_id, gid))
+        row = cur.fetchone()
+        conn.commit()
+        return jsonify({'preset': _dash_row_to_preset(row)})
+    except Exception as e:
+        conn.rollback()
+        if getattr(e, 'pgcode', None) == _PG_UNIQUE_VIOLATION:
+            return _dash_err('name_conflict',
+                             'A preset with this name already exists on this channel.', 409)
+        Log.error(f"dashboard presets_patch error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/presets/<int:preset_id>', methods=['DELETE'])
+@_dash_require_session()
+def dashboard_guild_presets_delete(guild_id, preset_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'DELETE FROM alert_presets WHERE id=%s AND guild_id=%s',
+            (preset_id, gid),
+        )
+        if (cur.rowcount or 0) == 0:
+            conn.rollback()
+            return _dash_err('not_found', 'Preset not found.', 404)
+        conn.commit()
+        return jsonify({'ok': True})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard presets_delete error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route(
+    '/api/dashboard/guilds/<guild_id>/presets/<int:preset_id>/type-overrides/<alert_type>',
+    methods=['PUT'],
+)
+@_dash_require_session()
+def dashboard_guild_preset_override_put(guild_id, preset_id, alert_type):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    if alert_type not in _DASH_ALERT_TYPES:
+        return _dash_err('bad_request',
+                         f'alert_type must be one of {_DASH_ALERT_TYPES}.', 400)
+
+    body = request.get_json(silent=True) or {}
+    has_enabled = 'enabled' in body and body['enabled'] is not None
+    has_ping = 'enabled_ping' in body and body['enabled_ping'] is not None
+    if not has_enabled and not has_ping:
+        return _dash_err('bad_request',
+                         'Supply at least one of enabled/enabled_ping; use DELETE to clear.', 400)
+
+    enabled = bool(body['enabled']) if has_enabled else True
+    enabled_ping = bool(body['enabled_ping']) if has_ping else True
+    override_value = json.dumps({'enabled': enabled, 'enabled_ping': enabled_ping})
+    # alert_type already validated against allow-list, safe to inline in jsonb path.
+    path_literal = '{' + alert_type + '}'
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        existing = _dash_fetch_preset(cur, gid, preset_id)
+        if not existing:
+            return _dash_err('not_found', 'Preset not found.', 404)
+        cur.execute(
+            f'''
+            UPDATE alert_presets
+               SET type_overrides = jsonb_set(
+                        COALESCE(type_overrides, '{{}}'::jsonb),
+                        %s::text[],
+                        %s::jsonb,
+                        true),
+                   updated_at = now()
+             WHERE id=%s AND guild_id=%s
+             RETURNING {_PRESET_COLS}
+            ''',
+            (path_literal, override_value, preset_id, gid),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return jsonify({'preset': _dash_row_to_preset(row)})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard preset_override_put error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route(
+    '/api/dashboard/guilds/<guild_id>/presets/<int:preset_id>/type-overrides/<alert_type>',
+    methods=['DELETE'],
+)
+@_dash_require_session()
+def dashboard_guild_preset_override_delete(guild_id, preset_id, alert_type):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    if alert_type not in _DASH_ALERT_TYPES:
+        return _dash_err('bad_request',
+                         f'alert_type must be one of {_DASH_ALERT_TYPES}.', 400)
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        existing = _dash_fetch_preset(cur, gid, preset_id)
+        if not existing:
+            return _dash_err('not_found', 'Preset not found.', 404)
+        # `#- text[]` removes a key; param-binding the path avoids SQL injection
+        # even though alert_type is already allow-list validated.
+        cur.execute(
+            f'''
+            UPDATE alert_presets
+               SET type_overrides = COALESCE(type_overrides, '{{}}'::jsonb) #- %s::text[],
+                   updated_at = now()
+             WHERE id=%s AND guild_id=%s
+             RETURNING {_PRESET_COLS}
+            ''',
+            ([alert_type], preset_id, gid),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return jsonify({'preset': _dash_row_to_preset(row)})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard preset_override_delete error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+# ---------- Preset stats ----------
+
+@app.route('/api/dashboard/guilds/<guild_id>/preset-stats', methods=['GET'])
+@_dash_require_session()
+def dashboard_guild_preset_stats(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        # One row per preset: fires_7d + fires_30d + last_fire.
+        cur.execute('''
+            SELECT p.id AS preset_id,
+                   COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
+                   COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
+                   MAX(f.fired_at) AS last_fire
+              FROM alert_presets p
+         LEFT JOIN preset_fire_log f ON f.preset_id = p.id
+             WHERE p.guild_id = %s
+          GROUP BY p.id
+        ''', (gid,))
+        out = []
+        for r in cur.fetchall():
+            lf = r['last_fire']
+            out.append({
+                'preset_id': str(r['preset_id']),
+                'fires_7d': int(r['fires_7d'] or 0),
+                'fires_30d': int(r['fires_30d'] or 0),
+                'last_fire': lf.isoformat() if lf else None,
+            })
+    except Exception as e:
+        Log.error(f"dashboard preset_stats error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+    return jsonify({'stats': out})
+
+
+# ---------- Mute state ----------
+
+@app.route('/api/dashboard/guilds/<guild_id>/mute-state', methods=['GET'])
+@_dash_require_session()
+def dashboard_guild_mute_state_get(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT enabled, enabled_ping FROM guild_mute_state WHERE guild_id=%s',
+            (gid,),
+        )
+        g_row = cur.fetchone()
+        guild_state = (_dash_row_to_mute(g_row) if g_row
+                       else {'enabled': True, 'enabled_ping': True})
+        cur.execute(
+            'SELECT channel_id, enabled, enabled_ping FROM channel_mute_state '
+            'WHERE guild_id=%s ORDER BY channel_id',
+            (gid,),
+        )
+        ch_rows = cur.fetchall()
+        channels = [_dash_row_to_mute(r, channel_mode=True) for r in ch_rows]
+        return jsonify({'guild': guild_state, 'channels': channels})
+    except Exception as e:
+        Log.error(f"dashboard mute_state_get error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+def _dash_mute_partial_values(body):
+    """Returns (enabled, enabled_ping) with None for omitted fields, or (None, None, err)."""
+    has_enabled = 'enabled' in body and body['enabled'] is not None
+    has_ping = 'enabled_ping' in body and body['enabled_ping'] is not None
+    if not has_enabled and not has_ping:
+        return None, None, _dash_err(
+            'bad_request', 'Supply at least one of enabled/enabled_ping.', 400)
+    return (
+        bool(body['enabled']) if has_enabled else None,
+        bool(body['enabled_ping']) if has_ping else None,
+        None,
+    )
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/mute-state/guild', methods=['PUT'])
+@_dash_require_session()
+def dashboard_guild_mute_state_guild_put(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    body = request.get_json(silent=True) or {}
+    enabled, enabled_ping, berr = _dash_mute_partial_values(body)
+    if berr:
+        return berr
+
+    # Partial upsert: default missing fields to True on INSERT, keep existing on UPDATE.
+    ins_enabled = True if enabled is None else enabled
+    ins_ping = True if enabled_ping is None else enabled_ping
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            INSERT INTO guild_mute_state (guild_id, enabled, enabled_ping, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (guild_id) DO UPDATE SET
+                enabled = CASE WHEN %s THEN EXCLUDED.enabled ELSE guild_mute_state.enabled END,
+                enabled_ping = CASE WHEN %s THEN EXCLUDED.enabled_ping ELSE guild_mute_state.enabled_ping END,
+                updated_at = now()
+            RETURNING enabled, enabled_ping
+            ''',
+            (gid, ins_enabled, ins_ping, enabled is not None, enabled_ping is not None),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return jsonify({'guild': _dash_row_to_mute(row)})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard mute_state_guild_put error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/mute-state/guild', methods=['DELETE'])
+@_dash_require_session()
+def dashboard_guild_mute_state_guild_delete(guild_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM guild_mute_state WHERE guild_id=%s', (gid,))
+        conn.commit()
+        return jsonify({'ok': True})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard mute_state_guild_delete error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/mute-state/channels/<channel_id>', methods=['PUT'])
+@_dash_require_session()
+def dashboard_guild_mute_state_channel_put(guild_id, channel_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+        cid = int(channel_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id/channel_id must be numeric.', 400)
+    if not cid:
+        return _dash_err('bad_request', 'channel_id must be non-zero.', 400)
+
+    body = request.get_json(silent=True) or {}
+    enabled, enabled_ping, berr = _dash_mute_partial_values(body)
+    if berr:
+        return berr
+
+    ins_enabled = True if enabled is None else enabled
+    ins_ping = True if enabled_ping is None else enabled_ping
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            INSERT INTO channel_mute_state (guild_id, channel_id, enabled, enabled_ping, updated_at)
+            VALUES (%s, %s, %s, %s, now())
+            ON CONFLICT (guild_id, channel_id) DO UPDATE SET
+                enabled = CASE WHEN %s THEN EXCLUDED.enabled ELSE channel_mute_state.enabled END,
+                enabled_ping = CASE WHEN %s THEN EXCLUDED.enabled_ping ELSE channel_mute_state.enabled_ping END,
+                updated_at = now()
+            RETURNING channel_id, enabled, enabled_ping
+            ''',
+            (gid, cid, ins_enabled, ins_ping,
+             enabled is not None, enabled_ping is not None),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return jsonify({'channel': _dash_row_to_mute(row, channel_mode=True)})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard mute_state_channel_put error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+@app.route('/api/dashboard/guilds/<guild_id>/mute-state/channels/<channel_id>', methods=['DELETE'])
+@_dash_require_session()
+def dashboard_guild_mute_state_channel_delete(guild_id, channel_id):
+    _, err = _dash_guild_guard(guild_id)
+    if err:
+        return err
+    try:
+        gid = int(guild_id)
+        cid = int(channel_id)
+    except ValueError:
+        return _dash_err('bad_request', 'guild_id/channel_id must be numeric.', 400)
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'DELETE FROM channel_mute_state WHERE guild_id=%s AND channel_id=%s',
+            (gid, cid),
+        )
+        conn.commit()
+        return jsonify({'ok': True})
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard mute_state_channel_delete error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+
+# ---------- Admin (super-user) overview ----------
+
+def _dash_require_admin():
+    """Wraps _dash_require_session and additionally enforces admin membership."""
+    base = _dash_require_session()
+    def _wrap(fn):
+        from functools import wraps
+        session_wrapped = base(fn)
+        @wraps(fn)
+        def inner(*a, **kw):
+            if not _dash_enabled():
+                return _dash_err('dashboard_disabled',
+                                 'BOT_DATA_DATABASE_URL is not configured.', 503)
+            if not _dash_get_session_secret():
+                return _dash_err('missing_session_secret',
+                                 'DASHBOARD_SESSION_SECRET is not configured.', 503)
+            session = _dash_load_session()
+            if not session:
+                return _dash_err('invalid_session',
+                                 'Sign in via /api/dashboard/auth/login.', 401)
+            if not _dash_is_admin(session):
+                return _dash_err('not_admin',
+                                 'Admin access required.', 403)
+            request._dash_session = session
+            return fn(*a, **kw)
+        return inner
+    return _wrap
+
+
+def _dash_guild_names_from_sessions():
+    """Best-effort map of guild_id -> name/icon, derived from any session that
+    has that guild listed. Avoids an extra Discord API call per guild."""
+    out = {}
+    for sess in list(_DASH_SESSIONS.values()):
+        for g in sess.get('guilds', []) or []:
+            gid = str(g.get('id') or '')
+            if gid and gid not in out:
+                out[gid] = {
+                    'name': g.get('name') or '',
+                    'icon_url': _dash_guild_icon_url(gid, g.get('icon')),
+                }
+    return out
+
+
+# Module-level cache for guild metadata fetched via the bot token, used as a
+# fallback when no admin session covers the guild. 10-minute TTL — guild names
+# don't churn often.
+_DASH_GUILD_META_CACHE = {}  # gid -> (timestamp, {name, icon_url})
+_DASH_GUILD_META_TTL = 10 * 60
+_DASH_GUILD_META_CACHE_LOCK = threading.Lock()
+
+
+def _dash_guild_meta_evict_locked():
+    """Drop entries older than 2× TTL. Caller must hold the cache lock.
+    Without this, the cache accumulates 'every guild_id ever queried'
+    (including guilds the bot has long since left), since the TTL is only
+    enforced on read."""
+    cutoff = time.time() - (_DASH_GUILD_META_TTL * 2)
+    stale = [k for k, (ts, _) in _DASH_GUILD_META_CACHE.items() if ts < cutoff]
+    for k in stale:
+        _DASH_GUILD_META_CACHE.pop(k, None)
+
+# Cache for /applications/@me (bot guild count + user install count). 5-minute
+# TTL — these are "approximate" counts from Discord and don't churn often.
+_DASH_APP_INFO_CACHE = {'ts': 0, 'data': {}}
+_DASH_APP_INFO_TTL = 5 * 60
+
+
+def _dash_app_install_counts():
+    """Return {servers_total, user_installs} from /applications/@me. Cached.
+    Both fields default to None on failure so the UI can render a dash."""
+    now = time.time()
+    if _DASH_APP_INFO_CACHE['data'] and (now - _DASH_APP_INFO_CACHE['ts']) < _DASH_APP_INFO_TTL:
+        return _DASH_APP_INFO_CACHE['data']
+    out = {'servers_total': None, 'user_installs': None}
+    if not _dash_bot_token():
+        return out
+    try:
+        status, body, _hdrs = _dash_bot_api('/applications/@me')
+        if status == 200 and isinstance(body, dict):
+            gc = body.get('approximate_guild_count')
+            uc = body.get('approximate_user_install_count')
+            if isinstance(gc, int):
+                out['servers_total'] = gc
+            if isinstance(uc, int):
+                out['user_installs'] = uc
+            _DASH_APP_INFO_CACHE['data'] = out
+            _DASH_APP_INFO_CACHE['ts'] = now
+    except Exception:
+        pass
+    return out
+
+
+def _dash_guild_meta_lookup(guild_ids):
+    """Return {gid: {name, icon_url}} for the requested ids. Tries the
+    session-derived map first; for anything still missing, calls the Discord
+    bot API once per gid (with a 10-min cache). Empty values stay empty if
+    Discord returns an error — admin UI displays a dash."""
+    out = dict(_dash_guild_names_from_sessions())
+    now = time.time()
+    needed = [str(gid) for gid in guild_ids if str(gid) not in out or not out[str(gid)].get('name')]
+    if not needed:
+        return out
+    if not _dash_bot_token():
+        return out
+    for gid in needed:
+        with _DASH_GUILD_META_CACHE_LOCK:
+            cached = _DASH_GUILD_META_CACHE.get(gid)
+        if cached and (now - cached[0]) < _DASH_GUILD_META_TTL:
+            out[gid] = cached[1]
+            continue
+        try:
+            status, body, _hdrs = _dash_bot_api(f'/guilds/{gid}')
+            if status == 200 and isinstance(body, dict):
+                meta = {
+                    'name': body.get('name') or '',
+                    'icon_url': _dash_guild_icon_url(gid, body.get('icon')),
+                }
+                with _DASH_GUILD_META_CACHE_LOCK:
+                    _DASH_GUILD_META_CACHE[gid] = (now, meta)
+                    _dash_guild_meta_evict_locked()
+                out[gid] = meta
+        except Exception:
+            # Don't fail the whole admin endpoint over one missing name —
+            # leave the cache empty and the row will display as "—".
+            pass
+    return out
+
+
+@app.route('/api/dashboard/admin/overview', methods=['GET'])
+@_dash_require_admin()
+def dashboard_admin_overview():
+    now = int(time.time())
+
+    # Session stats (from in-memory session store). Collapse to one row per
+    # Discord user (freshest session wins) so the same person isn't listed
+    # multiple times if they have more than one active cookie (mobile+desktop,
+    # re-login after cookie clear, etc.).
+    sessions_active = 0
+    users_seen = set()
+    per_user = {}   # uid -> session-row dict, newest by 'iat'
+    for sid, sess in list(_DASH_SESSIONS.items()):
+        exp = int(sess.get('exp', 0) or 0)
+        if exp and exp < now:
+            continue
+        sessions_active += 1
+        uid = str(sess.get('uid') or '')
+        if not uid:
+            continue
+        users_seen.add(uid)
+        iat = int(sess.get('iat', 0) or 0)
+        row = {
+            'uid': uid,
+            'username': sess.get('username') or '',
+            'avatar_url': _dash_user_avatar_url(uid, sess.get('avatar')),
+            'guild_count': len(sess.get('guilds') or []),
+            'age_seconds': max(0, now - iat),
+            'is_admin': uid in _dash_admin_ids(),
+            '_iat': iat,
+        }
+        prev = per_user.get(uid)
+        if prev is None or iat > prev['_iat']:
+            per_user[uid] = row
+    sessions_out = sorted(per_user.values(), key=lambda s: s['age_seconds'])
+    for r in sessions_out:
+        r.pop('_iat', None)
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+
+        cur.execute('SELECT COUNT(*) AS n FROM alert_presets')
+        presets_total = cur.fetchone()['n'] or 0
+
+        cur.execute('SELECT COUNT(*) AS n FROM alert_presets WHERE pager_enabled = TRUE')
+        presets_pager = cur.fetchone()['n'] or 0
+
+        cur.execute('SELECT COUNT(*) AS n FROM alert_presets WHERE enabled = FALSE')
+        presets_muted = cur.fetchone()['n'] or 0
+
+        cur.execute('SELECT COUNT(DISTINCT guild_id) AS n FROM alert_presets')
+        guilds_with_presets = cur.fetchone()['n'] or 0
+
+        cur.execute('SELECT COUNT(DISTINCT (guild_id, channel_id)) AS n FROM alert_presets')
+        channels_configured = cur.fetchone()['n'] or 0
+
+        cur.execute('SELECT COUNT(*) AS n FROM guild_mute_state WHERE enabled = FALSE')
+        guilds_muted = cur.fetchone()['n'] or 0
+
+        cur.execute('SELECT COUNT(*) AS n FROM channel_mute_state WHERE enabled = FALSE')
+        channels_muted = cur.fetchone()['n'] or 0
+
+        # Per-alert-type subscriber count (number of presets subscribed)
+        type_counts = {t: 0 for t in _DASH_ALERT_TYPES}
+        cur.execute(
+            'SELECT unnest(alert_types) AS t, COUNT(*) AS n '
+            'FROM alert_presets GROUP BY t'
+        )
+        for r in cur.fetchall():
+            t = r['t']
+            if t in type_counts:
+                type_counts[t] = r['n'] or 0
+
+        # Per-guild breakdown
+        cur.execute('''
+            SELECT guild_id,
+                   COUNT(*) AS preset_count,
+                   COUNT(DISTINCT channel_id) AS channel_count,
+                   SUM(CASE WHEN pager_enabled THEN 1 ELSE 0 END) AS pager_presets,
+                   SUM(CASE WHEN NOT enabled THEN 1 ELSE 0 END) AS muted_presets,
+                   MAX(updated_at) AS last_change
+              FROM alert_presets
+          GROUP BY guild_id
+          ORDER BY preset_count DESC
+        ''')
+        guild_rows = cur.fetchall()
+        name_map = _dash_guild_meta_lookup([str(r['guild_id']) for r in guild_rows])
+        guilds_out = []
+        for r in guild_rows:
+            gid = str(r['guild_id'])
+            meta = name_map.get(gid, {})
+            lc = r['last_change']
+            guilds_out.append({
+                'guild_id': gid,
+                'name': meta.get('name') or '',
+                'icon_url': meta.get('icon_url') or '',
+                'preset_count': int(r['preset_count'] or 0),
+                'channel_count': int(r['channel_count'] or 0),
+                'pager_presets': int(r['pager_presets'] or 0),
+                'muted_presets': int(r['muted_presets'] or 0),
+                'last_change': lc.isoformat() if lc else None,
+            })
+    except Exception as e:
+        Log.error(f"dashboard admin_overview error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+
+    return jsonify({
+        'stats': {
+            'sessions_active': sessions_active,
+            'dashboard_users': len(users_seen),
+            # Backwards-compat alias for older frontend builds.
+            'users_total': len(users_seen),
+            'servers_total': _dash_app_install_counts().get('servers_total'),
+            'user_installs': _dash_app_install_counts().get('user_installs'),
+            'guilds_with_presets': guilds_with_presets,
+            'channels_configured': channels_configured,
+            'presets_total': presets_total,
+            'presets_pager': presets_pager,
+            'presets_muted': presets_muted,
+            'guilds_muted': guilds_muted,
+            'channels_muted': channels_muted,
+            'alert_type_counts': type_counts,
+        },
+        'guilds': guilds_out,
+        'sessions': sessions_out,
+        'admin_ids': sorted(list(_dash_admin_ids())),
+        'server_time': now,
+    })
+
+
+# ---------- Admin broadcast (send an embed to many servers) ----------
+
+_BCAST_CHANNEL_KEYWORDS = [
+    'staff-alert', 'staff-alerts', 'bot-alerts', 'bot-log', 'bot-logs',
+    'staff', 'admin', 'mods', 'mod', 'dev', 'ops', 'announce', 'team',
+]
+
+
+def _dash_bcast_fetch_channels(guild_id):
+    """Return (list_of_text_channels, error_or_none). Cached."""
+    cached = _dash_cache_get('bcast_channels', guild_id, _DISCORD_CHANNEL_CACHE_TTL)
+    if cached is not None:
+        return cached, None
+    status, body, _headers = _dash_bot_api(f'/guilds/{guild_id}/channels')
+    if status != 200 or not isinstance(body, list):
+        return [], f'discord {status}'
+    # Type 0 = GUILD_TEXT, 5 = GUILD_ANNOUNCEMENT
+    out = [
+        {'id': str(c.get('id')), 'name': c.get('name') or '',
+         'type': c.get('type'), 'position': c.get('position', 0)}
+        for c in body if c.get('type') in (0, 5)
+    ]
+    out.sort(key=lambda c: (c['position'], c['name']))
+    _dash_cache_set('bcast_channels', guild_id, out)
+    return out, None
+
+
+def _dash_guess_broadcast_channel(guild_id, text_channels):
+    """Pick a 'staff-ish' text channel for announcements. Heuristic:
+    1. channel whose name contains a keyword, preferring longer/earlier matches
+    2. channel with the most presets for this guild
+    3. first text channel
+    """
+    if not text_channels:
+        return None
+    for kw in _BCAST_CHANNEL_KEYWORDS:
+        for c in text_channels:
+            if kw in (c['name'] or '').lower():
+                return c
+    conn = _bot_db_conn()
+    if conn is not None:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT channel_id, COUNT(*) AS n FROM alert_presets '
+                'WHERE guild_id = %s GROUP BY channel_id ORDER BY n DESC LIMIT 1',
+                (int(guild_id),),
+            )
+            row = cur.fetchone()
+            if row:
+                cid = str(row['channel_id'])
+                match = next((c for c in text_channels if c['id'] == cid), None)
+                if match:
+                    return match
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    return text_channels[0]
+
+
+@app.route('/api/dashboard/admin/broadcast/targets', methods=['GET'])
+@_dash_require_admin()
+def dashboard_admin_broadcast_targets():
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT guild_id FROM alert_presets ORDER BY guild_id')
+        guild_ids = [str(r['guild_id']) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    name_map = _dash_guild_meta_lookup(guild_ids)
+    out = []
+    for gid in guild_ids:
+        channels, err = _dash_bcast_fetch_channels(gid)
+        guess = _dash_guess_broadcast_channel(gid, channels)
+        meta = name_map.get(gid, {})
+        out.append({
+            'guild_id': gid,
+            'guild_name': meta.get('name') or '',
+            'guild_icon_url': meta.get('icon_url') or '',
+            'detected_channel_id': guess['id'] if guess else None,
+            'detected_channel_name': (guess or {}).get('name') or '',
+            'channels': channels,
+            'channels_error': err,
+        })
+    return jsonify({'targets': out})
+
+
+def _hex_to_int(hex_str):
+    if not hex_str:
+        return None
+    s = str(hex_str).strip().lstrip('#')
+    if len(s) not in (3, 6):
+        return None
+    if len(s) == 3:
+        s = ''.join(ch * 2 for ch in s)
+    try:
+        return int(s, 16)
+    except ValueError:
+        return None
+
+
+@app.route('/api/dashboard/admin/broadcast', methods=['POST'])
+@_dash_require_admin()
+def dashboard_admin_broadcast():
+    """Enqueue a broadcast for the bot worker to deliver. Previously this
+    endpoint sent each Discord message synchronously, holding the request
+    worker for up to N×10s. Now it just validates + queues; the bot's
+    `drain_bot_actions` loop picks it up and uses channel.send() with
+    discord.py's built-in rate-limit handling."""
+    body = request.get_json(silent=True) or {}
+    title = (body.get('title') or '').strip()
+    description = (body.get('description') or '').strip()
+    color_hex = (body.get('color') or '').strip()
+    footer = (body.get('footer') or '').strip()
+    url = (body.get('url') or '').strip()
+    targets = body.get('targets') or []
+
+    if not title and not description:
+        return _dash_err('bad_request',
+                         'title or description is required.', 400)
+    if not isinstance(targets, list) or not targets:
+        return _dash_err('bad_request', 'targets must be a non-empty list.', 400)
+
+    # Normalise targets + dedupe by channel_id; reject malformed entries up
+    # front so the bot worker doesn't have to.
+    seen_channels = set()
+    clean_targets = []
+    for t in targets:
+        if not isinstance(t, dict):
+            continue
+        gid = str(t.get('guild_id') or '').strip()
+        cid = str(t.get('channel_id') or '').strip()
+        if not (gid.isdigit() and cid.isdigit()):
+            continue
+        if cid in seen_channels:
+            continue
+        seen_channels.add(cid)
+        clean_targets.append({'guild_id': gid, 'channel_id': cid})
+    if not clean_targets:
+        return _dash_err('bad_request',
+                         'no valid targets after normalisation.', 400)
+
+    params = {
+        'title': title[:256],
+        'description': description[:4000],
+        'color': color_hex,
+        'footer': footer[:2048],
+        'url': url,
+        'targets': clean_targets,
+    }
+    session = request._dash_session
+    requested_by = str(session.get('uid') or '')
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO pending_bot_actions (action, params, requested_by) '
+            'VALUES (%s, %s::jsonb, %s) RETURNING id',
+            ('broadcast', json.dumps(params), requested_by),
+        )
+        new_id = cur.fetchone()['id']
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard broadcast enqueue error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+    Log.info(f"dashboard broadcast queued: id={new_id} targets={len(clean_targets)} by={requested_by}")
+    # 202 Accepted — the broadcast hasn't actually been delivered yet; the
+    # client should poll /api/dashboard/admin/bot-actions to see status.
+    return jsonify({
+        'id': int(new_id),
+        'queued': True,
+        'total': len(clean_targets),
+    }), 202
+
+
+# ---------- Admin bot-action queue ----------
+
+_ALLOWED_BOT_ACTIONS = {'sync', 'test', 'cleanup', 'broadcast'}
+
+
+def _dash_bot_guild_ids_from_discord():
+    """Authoritative 'which guilds is the bot in RIGHT NOW' — uses the bot
+    token against Discord. Returns (set_of_guild_ids | None, error)."""
+    status, body, _headers = _dash_bot_api('/users/@me/guilds')
+    if status != 200 or not isinstance(body, list):
+        return None, f'discord {status}'
+    out = set()
+    for g in body:
+        try:
+            out.add(str(g.get('id')))
+        except Exception:
+            continue
+    return out, None
+
+
+@app.route('/api/dashboard/admin/cleanup/candidates', methods=['GET'])
+@_dash_require_admin()
+def dashboard_admin_cleanup_candidates():
+    live_ids, err = _dash_bot_guild_ids_from_discord()
+    if live_ids is None:
+        return _dash_err('discord_error', err or 'failed to list bot guilds', 502)
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT guild_id,
+                   COUNT(*) AS preset_count,
+                   COUNT(DISTINCT channel_id) AS channel_count,
+                   SUM(CASE WHEN pager_enabled THEN 1 ELSE 0 END) AS pager_presets,
+                   MAX(updated_at) AS last_change
+              FROM alert_presets
+          GROUP BY guild_id
+        ''')
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    candidate_ids = [str(r['guild_id']) for r in rows if str(r['guild_id']) not in live_ids]
+    name_map = _dash_guild_meta_lookup(candidate_ids)
+    candidates = []
+    for r in rows:
+        gid = str(r['guild_id'])
+        if gid in live_ids:
+            continue
+        meta = name_map.get(gid, {})
+        lc = r['last_change']
+        candidates.append({
+            'guild_id': gid,
+            'name': meta.get('name') or '',
+            'icon_url': meta.get('icon_url') or '',
+            'preset_count': int(r['preset_count'] or 0),
+            'channel_count': int(r['channel_count'] or 0),
+            'pager_presets': int(r['pager_presets'] or 0),
+            'last_change': lc.isoformat() if lc else None,
+        })
+    return jsonify({'candidates': candidates, 'bot_guild_count': len(live_ids)})
+
+
+@app.route('/api/dashboard/admin/bot-actions', methods=['GET'])
+@_dash_require_admin()
+def dashboard_admin_bot_actions_list():
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, action, params, status, requested_by, '
+            'requested_at, claimed_at, completed_at, result, error '
+            'FROM pending_bot_actions ORDER BY requested_at DESC LIMIT 30'
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    out = []
+    for r in rows:
+        out.append({
+            'id': int(r['id']),
+            'action': r['action'],
+            'params': r['params'] or {},
+            'status': r['status'],
+            'requested_by': r['requested_by'],
+            'requested_at': r['requested_at'].isoformat() if r['requested_at'] else None,
+            'claimed_at': r['claimed_at'].isoformat() if r['claimed_at'] else None,
+            'completed_at': r['completed_at'].isoformat() if r['completed_at'] else None,
+            'result': r['result'],
+            'error': r['error'],
+        })
+    return jsonify({'actions': out})
+
+
+@app.route('/api/dashboard/admin/bot-actions', methods=['POST'])
+@_dash_require_admin()
+def dashboard_admin_bot_actions_enqueue():
+    body = request.get_json(silent=True) or {}
+    action = (body.get('action') or '').strip().lower()
+    if action not in _ALLOWED_BOT_ACTIONS:
+        return _dash_err('bad_request',
+                         f"action must be one of {sorted(_ALLOWED_BOT_ACTIONS)}.", 400)
+    params = body.get('params') or {}
+    if not isinstance(params, dict):
+        return _dash_err('bad_request', 'params must be an object.', 400)
+
+    # Per-action validation.
+    if action == 'test':
+        gid = params.get('guild_id')
+        cid = params.get('channel_id')
+        if not (gid and cid):
+            return _dash_err('bad_request',
+                             'test action needs params.guild_id and params.channel_id.', 400)
+        at = params.get('alert_type') or 'all'
+        params = {'guild_id': str(gid), 'channel_id': str(cid), 'alert_type': str(at)}
+    elif action == 'cleanup':
+        gids = params.get('guild_ids') or []
+        if not isinstance(gids, list) or not gids:
+            return _dash_err('bad_request',
+                             'cleanup action needs params.guild_ids (non-empty array).', 400)
+        params = {'guild_ids': [str(x) for x in gids]}
+    else:  # sync
+        params = {}
+
+    session = request._dash_session
+    requested_by = str(session.get('uid') or '')
+
+    conn = _bot_db_conn()
+    if conn is None:
+        return _dash_err('dashboard_disabled',
+                         'BOT_DATA_DATABASE_URL is not configured.', 503)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO pending_bot_actions (action, params, requested_by) '
+            'VALUES (%s, %s::jsonb, %s) RETURNING id',
+            (action, json.dumps(params), requested_by),
+        )
+        new_id = cur.fetchone()['id']
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        Log.error(f"dashboard bot-action enqueue error: {e}")
+        return _dash_err('db_error', str(e), 500)
+    finally:
+        conn.close()
+    Log.info(f"dashboard bot-action queued: action={action} id={new_id} by={requested_by}")
+    return jsonify({'id': int(new_id), 'action': action, 'params': params}), 201
+
+
+@app.route('/api/dashboard/admin/sources', methods=['GET'])
+@_dash_require_admin()
+def dashboard_admin_sources():
+    """Return upstream data-source health for the admin dashboard panel.
+
+    Iterates _SOURCE_THRESHOLDS so every configured source shows up — sources
+    that have never been called yet appear with state='unknown'. State buckets
+    follow the soft/hard age thresholds defined per-source plus a consec-fails
+    rule (>=5 consecutive failures → 'down').
+    """
+    now = int(time.time())
+    out = []
+    with _SOURCE_HEALTH_LOCK:
+        snapshot = {k: dict(v) for k, v in _SOURCE_HEALTH.items()}
+
+    for name, cfg in _SOURCE_THRESHOLDS.items():
+        rec = snapshot.get(name) or {}
+        last_success = rec.get('last_success')
+        last_error = rec.get('last_error')
+        consec_fails = int(rec.get('consec_fails') or 0)
+        age = (now - last_success) if last_success else None
+
+        soft = int(cfg.get('soft') or 300)
+        hard = int(cfg.get('hard') or 900)
+
+        if last_success is None:
+            state = 'unknown'
+        elif consec_fails >= 5 or (age is not None and age > hard):
+            state = 'down'
+        elif consec_fails > 0 or (age is not None and age > soft):
+            state = 'degraded'
+        else:
+            state = 'ok'
+
+        out.append({
+            'name': name,
+            'label': cfg.get('label') or name,
+            'last_success': last_success,
+            'last_error': last_error,
+            'last_error_msg': rec.get('last_error_msg'),
+            'consec_fails': consec_fails,
+            'total_success': int(rec.get('total_success') or 0),
+            'total_fail': int(rec.get('total_fail') or 0),
+            'age_seconds': age,
+            'state': state,
+        })
+
+    return jsonify({'sources': out, 'server_time': now})
+
+
+@app.route('/api/dashboard/admin/sources', methods=['DELETE'])
+@_dash_require_admin()
+def dashboard_admin_sources_clear():
+    """Reset every source's counters to zero. Used by the admin "Clear stats"
+    button when an upstream incident has skewed the totals."""
+    _source_health_clear_all()
+    Log.info("source_health: cleared by admin")
+    return jsonify({'ok': True})
+
+
+# ==================== END DASHBOARD ====================
+
+
 # ============== INITIALIZATION ==============
 _initialized = False
 
@@ -11504,14 +16443,39 @@ def initialize():
     start_prewarm_thread()  # Start cache pre-warming
     start_cleanup_thread()  # Start data retention cleanup
 
-    # Pre-start Waze browser worker so it's ready for first fetch
-    if _playwright_available:
-        def _delayed_waze_browser_start():
-            time.sleep(10)
-            if not _shutdown_event.is_set():
-                _start_waze_browser_worker()
-                Log.info("Waze: Browser worker ready")
-        threading.Thread(target=_delayed_waze_browser_start, daemon=True, name='waze-prestart').start()
+    # Persistent source health: load whatever survived the last restart and
+    # start the 60s flusher. Best-effort — silently no-ops without BOT_DATA_DATABASE_URL.
+    try:
+        _source_health_load_from_db()
+        threading.Thread(
+            target=_source_health_flusher_loop,
+            daemon=True,
+            name='source-health-flusher',
+        ).start()
+    except Exception as e:
+        Log.warn(f"source_health init failed: {e}")
+
+    # Start rdio-scanner transcript summary scheduler (hourly via Gemini)
+    try:
+        start_rdio_summary_thread()
+    except Exception as e:
+        Log.error(f"rdio summary scheduler failed to start: {e}")
+
+    # Waze runs entirely off the Violentmonkey userscript ingest path now.
+    if WAZE_INGEST_ENABLED:
+        Log.startup("Waze: userscript ingest mode")
+        if not WAZE_INGEST_KEY:
+            Log.warn("Waze: WAZE_INGEST_KEY is empty — /api/waze/ingest will reject all POSTs")
+        if WAZE_INGEST_STALE_SECS > 0:
+            threading.Thread(
+                target=_waze_staleness_watcher,
+                daemon=True,
+                name='waze-staleness-watcher',
+            ).start()
+            Log.startup(
+                f"Waze: staleness watcher armed — threshold {WAZE_INGEST_STALE_SECS}s"
+                + (f" (Discord ping enabled)" if WAZE_STALE_WEBHOOK else "")
+            )
 
     mode_str = "DEV MODE" if DEV_MODE else "PRODUCTION"
     # Use lock to prevent prewarm thread logs from interleaving with banner

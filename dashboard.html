@@ -1,0 +1,4322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – Discord Bot Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="Manage alert presets for the NSW PSN Discord bot." />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <style>
+    /* -------- Base tokens (mirrored from styles.css on live.html) -------- */
+    :root {
+      --bg: #05070b;
+      --bg-elevated: #10131b;
+      --bg-elevated-soft: #151925;
+      --border-subtle: rgba(148, 163, 184, 0.35);
+      --border-accent: #f97316;
+      --accent: #f97316;
+      --accent-soft: rgba(249, 115, 22, 0.18);
+      --text-main: #f9fafb;
+      --text-muted: #a1a5b6;
+      --text-soft: #6b7280;
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-pill: 999px;
+      --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.65);
+      --discord: #5865f2;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --danger: #ef4444;
+      --sidebar-w: 280px;
+      --topbar-h: 58px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0; padding: 0; min-height: 100%; overflow-x: hidden; max-width: 100vw;
+    }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+      background:
+        radial-gradient(circle at top left, #111827 0, #020617 52%),
+        radial-gradient(circle at bottom right, #020617 0, #020617 65%);
+      background-attachment: fixed;
+      background-repeat: no-repeat;
+      background-color: #020617;
+      color: var(--text-main);
+      line-height: 1.45;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    button { font-family: inherit; }
+
+    /* -------- Top bar -------- */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.6rem;
+      padding: 0.7rem 1rem;
+      height: var(--topbar-h);
+      background: rgba(15, 23, 42, 0.88);
+      border-bottom: 1px solid var(--border-subtle);
+      backdrop-filter: blur(10px);
+      position: sticky; top: 0; z-index: 40;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+    .brand { display: flex; align-items: center; gap: 0.55rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; font-size: 0.9rem; white-space: nowrap; }
+    .brand .logo { color: var(--accent); font-size: 1.05rem; }
+    .brand a { color: var(--text-main); }
+    .topbar-center { flex: 1; display: flex; align-items: center; gap: 0.5rem; justify-content: flex-start; min-width: 0; }
+    .topbar-center .guild-select { max-width: 260px; }
+    .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+    .hamburger {
+      display: none;
+      width: 38px; height: 38px;
+      border-radius: 10px;
+      border: 1px solid var(--border-subtle);
+      background: rgba(2,6,23,0.55);
+      color: var(--text-main);
+      cursor: pointer;
+      align-items: center; justify-content: center;
+      font-size: 1rem;
+    }
+    .hamburger:hover { background: rgba(255,255,255,0.06); }
+
+    .user-chip {
+      display: inline-flex; align-items: center; gap: 0.55rem;
+      padding: 0.25rem 0.65rem 0.25rem 0.3rem;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-pill);
+      background: rgba(2, 6, 23, 0.55);
+      font-size: 0.82rem;
+    }
+    .user-chip img { width: 26px; height: 26px; border-radius: 50%; background: #334155; }
+
+    /* -------- Buttons -------- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+      padding: 0.55rem 1rem; border-radius: 10px; font-size: 0.85rem; font-weight: 600;
+      cursor: pointer; border: 1px solid transparent; transition: transform 0.1s, background 0.15s, border-color 0.15s;
+      text-decoration: none; letter-spacing: 0.02em;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn:not(:disabled):hover { transform: translateY(-1px); }
+    .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(249,115,22,0.3); }
+    .btn-primary:not(:disabled):hover { background: #ea580c; }
+    .btn-discord { background: var(--discord); color: #fff; box-shadow: 0 4px 12px rgba(88,101,242,0.35); }
+    .btn-discord:not(:disabled):hover { background: #4752c4; }
+    .btn-secondary { background: rgba(255,255,255,0.06); color: var(--text-main); border-color: rgba(255,255,255,0.08); }
+    .btn-secondary:not(:disabled):hover { background: rgba(255,255,255,0.12); }
+    .btn-ghost { background: transparent; color: var(--text-muted); border-color: var(--border-subtle); }
+    .btn-ghost:not(:disabled):hover { background: rgba(255,255,255,0.06); color: var(--text-main); }
+    .btn-danger { background: rgba(239,68,68,0.14); color: #fca5a5; border-color: rgba(239,68,68,0.4); }
+    .btn-danger:not(:disabled):hover { background: rgba(239,68,68,0.25); }
+    .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
+    .btn-xs { padding: 0.25rem 0.55rem; font-size: 0.72rem; border-radius: 8px; }
+    .btn-block { width: 100%; }
+
+    /* -------- App shell (sidebar + content) -------- */
+    .shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-w) 1fr;
+      min-height: calc(100vh - var(--topbar-h));
+    }
+
+    /* -------- Sidebar -------- */
+    .sidebar {
+      border-right: 1px solid var(--border-subtle);
+      background: rgba(10, 14, 24, 0.7);
+      display: flex; flex-direction: column;
+      position: sticky; top: var(--topbar-h);
+      height: calc(100vh - var(--topbar-h));
+      overflow: hidden;
+      z-index: 30;
+    }
+    .sidebar-head {
+      padding: 0.75rem 0.85rem 0.55rem;
+      border-bottom: 1px solid rgba(148,163,184,0.18);
+      display: flex; flex-direction: column; gap: 0.55rem;
+    }
+    .sidebar-title {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--text-soft); font-weight: 600; margin: 0;
+    }
+    .sidebar-body {
+      flex: 1; overflow-y: auto;
+      padding: 0.35rem 0.4rem;
+    }
+    .sidebar-foot {
+      padding: 0.7rem 0.8rem 0.9rem;
+      border-top: 1px solid rgba(148,163,184,0.18);
+      background: rgba(2,6,23,0.45);
+    }
+
+    /* Guild mute panel */
+    .mute-panel {
+      border: 1px solid rgba(148,163,184,0.22);
+      border-radius: 10px;
+      background: rgba(2,6,23,0.5);
+      padding: 0.55rem 0.65rem;
+      display: flex; flex-direction: column; gap: 0.45rem;
+    }
+    .mute-panel-head {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--text-soft); font-weight: 600;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .mute-banner {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.72rem; font-weight: 600;
+      padding: 0.25rem 0.5rem; border-radius: 6px;
+      margin-left: auto;
+    }
+    .mute-banner.red { background: rgba(239,68,68,0.18); color: #fca5a5; border: 1px solid rgba(239,68,68,0.4); }
+    .mute-banner.amber { background: rgba(234,179,8,0.14); color: #fde68a; border: 1px solid rgba(234,179,8,0.4); }
+    .mute-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.78rem; color: var(--text-muted);
+    }
+    .mute-row .mute-label { flex: 1; min-width: 0; }
+
+    /* iOS-ish toggle switch */
+    .swx {
+      position: relative; display: inline-block;
+      width: 34px; height: 18px; flex-shrink: 0;
+    }
+    .swx input { opacity: 0; width: 0; height: 0; }
+    .swx .track {
+      position: absolute; cursor: pointer;
+      inset: 0;
+      background: rgba(148,163,184,0.3);
+      border-radius: 999px; transition: 0.15s;
+    }
+    .swx .track::before {
+      content: ''; position: absolute;
+      height: 14px; width: 14px; left: 2px; top: 2px;
+      background: #fff; border-radius: 50%;
+      transition: 0.15s;
+    }
+    .swx input:checked + .track { background: var(--accent); }
+    .swx input:checked + .track::before { transform: translateX(16px); }
+    .swx input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
+    .swx.small { width: 26px; height: 14px; }
+    .swx.small .track::before { height: 10px; width: 10px; }
+    .swx.small input:checked + .track::before { transform: translateX(12px); }
+
+    .sb-empty {
+      margin: 0.4rem; padding: 0.8rem 0.7rem;
+      border: 1px dashed rgba(148,163,184,0.3);
+      border-radius: var(--radius-md);
+      font-size: 0.8rem; color: var(--text-muted);
+      text-align: center;
+    }
+
+    /* Sidebar channel rows */
+    .sb-ch {
+      border-radius: 10px;
+      margin: 0.15rem 0.15rem;
+      overflow: hidden;
+      border: 1px solid transparent;
+    }
+    .sb-ch.open {
+      background: rgba(255,255,255,0.025);
+      border-color: rgba(148,163,184,0.18);
+    }
+    .sb-ch-head {
+      display: grid;
+      grid-template-columns: 16px minmax(0,1fr) auto auto;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 0.55rem;
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.88rem;
+      outline: none;
+    }
+    .sb-ch-head:hover { background: rgba(255,255,255,0.035); }
+    .sb-ch-head:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 8px; }
+    .sb-ch-head .chev {
+      color: var(--text-soft);
+      font-size: 0.72rem;
+      transition: transform 0.18s;
+    }
+    .sb-ch.open .sb-ch-head .chev { transform: rotate(90deg); }
+    .sb-ch-name {
+      min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      color: #e5e7eb; font-weight: 500;
+    }
+    .sb-ch-name .hash { color: var(--text-soft); margin-right: 0.15rem; }
+    .sb-ch-count {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      background: rgba(148,163,184,0.14);
+      padding: 0.06rem 0.4rem;
+      border-radius: var(--radius-pill);
+    }
+    .sb-ch-glyph { font-size: 0.78rem; line-height: 1; color: var(--text-soft); }
+    .sb-ch-body { display: none; padding: 0.1rem 0.35rem 0.4rem 1.55rem; }
+    .sb-ch.open .sb-ch-body { display: block; }
+
+    .sb-ch-mute {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 0.15rem 0.75rem;
+      padding: 0.35rem 0.5rem 0.5rem;
+      margin: 0 0 0.2rem;
+      border-bottom: 1px dashed var(--border);
+    }
+    .sb-ch-mute-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .sb-ch-mute-label {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .sb-preset {
+      display: grid;
+      grid-template-columns: minmax(0,1fr) auto auto;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.5rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      border-radius: 7px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .sb-preset:hover { background: rgba(255,255,255,0.04); color: var(--text-main); }
+    .sb-preset.active {
+      background: var(--accent-soft);
+      border-color: rgba(249,115,22,0.45);
+      color: var(--text-main);
+    }
+    .sb-preset-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+    .sb-preset-count {
+      font-size: 0.68rem;
+      color: var(--text-soft);
+      background: rgba(148,163,184,0.1);
+      padding: 0.04rem 0.4rem;
+      border-radius: var(--radius-pill);
+    }
+    .sb-preset-state {
+      font-size: 0.78rem; line-height: 1;
+    }
+
+    /* -------- Content pane -------- */
+    .content {
+      padding: 1.4rem 1.6rem 3rem;
+      min-width: 0;
+    }
+
+    .crumb {
+      font-size: 0.78rem; color: var(--text-soft);
+      margin: 0 0 0.25rem;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 0.15rem;
+    }
+    .crumb .sep { margin: 0 0.35rem; opacity: 0.6; }
+    .crumb .crumb-main { color: var(--text-main); }
+    .pane-title-row {
+      display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+      margin: 0 0 1rem;
+    }
+    .pane-title { font-size: 1.4rem; margin: 0; flex: 1; min-width: 0; }
+    .pane-title .hash { color: var(--text-soft); margin-right: 0.2rem; }
+
+    .rename-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin: 0 0 1.1rem;
+    }
+    .rename-row .form-input {
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 0.5rem 0.7rem;
+      flex: 1; min-width: 0; max-width: 380px;
+    }
+
+    .section-label {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--text-soft); font-weight: 600; margin: 1.2rem 0 0.5rem;
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .section-label:first-child { margin-top: 0; }
+    .section-label .cap { flex: 1; }
+    .section-label .inherit-note {
+      font-weight: 500; text-transform: none; letter-spacing: 0;
+      color: var(--text-soft); font-size: 0.72rem;
+    }
+
+    .card {
+      border: 1px solid rgba(148,163,184,0.2);
+      border-radius: var(--radius-md);
+      background: rgba(2,6,23,0.35);
+      padding: 0.9rem 1rem;
+    }
+    .card-row {
+      display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+      padding: 0.35rem 0;
+    }
+    .card-row + .card-row { border-top: 1px dashed rgba(148,163,184,0.14); }
+    .card-row .label { flex: 1; min-width: 140px; font-size: 0.85rem; color: var(--text-main); }
+    .card-row .sub { display: block; font-size: 0.72rem; color: var(--text-soft); margin-top: 0.1rem; font-weight: 400; }
+
+    /* Chips (alert-type selector) */
+    .chip-row {
+      display: flex; flex-wrap: wrap; gap: 0.4rem;
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border-subtle);
+      background: rgba(2,6,23,0.55);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .chip:hover { border-color: rgba(249,115,22,0.5); color: var(--text-main); }
+    .chip.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .chip.active:hover { background: #ea580c; }
+    .chip .mono {
+      font-family: 'SF Mono','Consolas',monospace;
+      font-size: 0.66rem;
+      opacity: 0.7;
+    }
+
+    /* Per-type override rows */
+    .override-list {
+      display: flex; flex-direction: column;
+      border: 1px solid rgba(148,163,184,0.18);
+      border-radius: var(--radius-md);
+      background: rgba(2,6,23,0.3);
+      overflow: hidden;
+    }
+    .override-row {
+      display: grid;
+      grid-template-columns: minmax(0,1fr) auto auto auto;
+      align-items: center;
+      gap: 0.7rem;
+      padding: 0.55rem 0.8rem;
+      border-bottom: 1px solid rgba(148,163,184,0.1);
+      font-size: 0.85rem;
+    }
+    .override-row:last-child { border-bottom: none; }
+    .override-row.inherited {
+      background: repeating-linear-gradient(
+        -45deg,
+        rgba(148,163,184,0.04) 0 6px,
+        transparent 6px 12px
+      );
+    }
+    .override-row.inherited .override-name {
+      color: var(--text-muted); font-style: italic;
+    }
+    .override-row .override-name {
+      min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      color: var(--text-main); font-weight: 500;
+    }
+    .override-row .override-mono {
+      font-family: 'SF Mono','Consolas',monospace;
+      color: var(--text-soft); font-size: 0.7rem;
+      margin-left: 0.35rem; font-weight: 400;
+    }
+    .override-row .mini-toggle {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.72rem; color: var(--text-soft);
+    }
+    .override-row .mini-toggle.dim .swx .track { opacity: 0.55; }
+    .override-reset {
+      width: 22px; height: 22px; border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent; color: var(--text-soft);
+      cursor: pointer; font-size: 0.72rem;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .override-reset:hover { background: rgba(249,115,22,0.14); color: var(--accent); border-color: rgba(249,115,22,0.3); }
+    .override-reset:disabled { opacity: 0.25; cursor: default; pointer-events: none; }
+    .override-badge {
+      font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em;
+      padding: 0.08rem 0.45rem; border-radius: var(--radius-pill);
+    }
+    .override-badge.override-on {
+      background: rgba(249,115,22,0.18); color: #fdba74;
+      border: 1px solid rgba(249,115,22,0.35);
+    }
+    .override-badge.inherit-on {
+      background: rgba(148,163,184,0.1); color: var(--text-soft);
+      border: 1px solid rgba(148,163,184,0.2);
+    }
+
+    .pager-capcodes { margin-top: 0.6rem; }
+    .pager-capcodes label {
+      display: block; font-size: 0.72rem; color: var(--text-soft); margin-bottom: 0.25rem;
+    }
+
+    /* Forms */
+    .form-select, .form-input, .form-textarea {
+      background: rgba(2,6,23,0.65); border: 1px solid var(--border-subtle);
+      border-radius: 8px; color: var(--text-main); font-family: inherit;
+      padding: 0.5rem 0.65rem; font-size: 0.88rem; transition: border-color 0.15s;
+      min-width: 180px;
+    }
+    .form-select:focus, .form-input:focus, .form-textarea:focus { outline: none; border-color: var(--accent); }
+    .form-textarea { min-height: 70px; resize: vertical; width: 100%; min-width: 0; font-family: 'SF Mono','Consolas',monospace; font-size: 0.82rem; }
+
+    /* Filters card — bbox grid */
+    .filters-summary { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; font-size: 0.78rem; color: var(--text-soft); }
+    .filters-summary .pill {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      padding: 0.08rem 0.55rem; border-radius: var(--radius-pill);
+      background: rgba(88,101,242,0.14); border: 1px solid rgba(88,101,242,0.35);
+      color: #c7d2fe; font-size: 0.72rem;
+    }
+    .filters-toggle {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.15rem 0.55rem; border-radius: var(--radius-pill);
+      border: 1px dashed rgba(148,163,184,0.35);
+      color: var(--text-muted); font-size: 0.72rem;
+      cursor: pointer; background: transparent;
+    }
+    .filters-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    .filters-body { display: grid; gap: 0.7rem; padding-top: 0.6rem; }
+    .filters-body .field-label {
+      display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-soft); margin-bottom: 0.25rem;
+    }
+    .bbox-map {
+      height: 260px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      margin-top: 0.3rem;
+      position: relative;
+      background: #0b1220;
+    }
+    .bbox-map .leaflet-container { height: 100%; width: 100%; background: #0b1220; }
+    .bbox-map-hint {
+      position: absolute; top: 8px; left: 8px; z-index: 400;
+      background: rgba(5,7,11,0.85);
+      color: var(--text-main);
+      font-size: 0.72rem;
+      padding: 0.35rem 0.6rem;
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.4rem;
+      pointer-events: none;
+    }
+    .bbox-map-hint.hidden { display: none; }
+    .bbox-map.drawing .leaflet-container { cursor: crosshair; }
+    .bbox-coords {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      font-family: 'SF Mono','Consolas',monospace;
+      padding: 0.35rem 0.6rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-top: 0;
+      border-radius: 0 0 var(--radius-md) var(--radius-md);
+      margin-top: -1px;
+    }
+    .bbox-coords .none { color: var(--text-soft); font-style: italic; }
+    .bbox-map-actions {
+      display: flex; gap: 0.4rem; margin-top: 0.4rem; flex-wrap: wrap;
+    }
+
+    .bbox-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 0.4rem;
+    }
+    .bbox-grid .form-input { min-width: 0; width: 100%; font-family: 'SF Mono','Consolas',monospace; font-size: 0.8rem; }
+    .filters-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+    /* Role display */
+    .role-display {
+      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+    }
+    .role-pill {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.12rem 0.6rem; border-radius: var(--radius-pill);
+      background: rgba(88,101,242,0.14); border: 1px solid rgba(88,101,242,0.35);
+      color: #c7d2fe; font-size: 0.74rem;
+    }
+    .role-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #c7d2fe; }
+    .roles-edit {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.15rem 0.6rem; border-radius: var(--radius-pill);
+      border: 1px dashed rgba(148,163,184,0.35);
+      color: var(--text-muted); font-size: 0.74rem;
+      cursor: pointer; background: transparent;
+    }
+    .roles-edit:hover { border-color: var(--accent); color: var(--accent); }
+    .role-display .none { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
+
+    /* -------- Empty states -------- */
+    .big-empty {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center;
+      min-height: 55vh;
+      padding: 2rem 1.2rem;
+      gap: 0.4rem;
+    }
+    .big-empty .icon {
+      font-size: 3rem;
+      color: var(--text-soft);
+      margin-bottom: 0.4rem;
+      filter: drop-shadow(0 2px 8px rgba(249,115,22,0.2));
+    }
+    .big-empty h2 { margin: 0; font-size: 1.2rem; }
+    .big-empty p { color: var(--text-muted); margin: 0.2rem 0 0.8rem; max-width: 420px; font-size: 0.9rem; }
+
+    /* -------- Wizard -------- */
+    .wizard {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .wizard-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-bottom: 0.2rem;
+    }
+    .wizard-head h2 { margin: 0; font-size: 1.25rem; }
+    .wizard-steps {
+      display: flex; gap: 0.4rem; margin: 0.4rem 0 1.2rem;
+      font-size: 0.75rem; color: var(--text-soft);
+    }
+    .wizard-step {
+      padding: 0.2rem 0.55rem;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border-subtle);
+    }
+    .wizard-step.active { color: var(--accent); border-color: rgba(249,115,22,0.5); background: var(--accent-soft); }
+    .wizard-step.done { color: var(--ok); border-color: rgba(34,197,94,0.4); }
+
+    .wizard-body {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.2rem 1.3rem;
+      box-shadow: var(--shadow-soft);
+    }
+    .wizard-foot {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 0.6rem; margin-top: 1rem;
+    }
+
+    .channel-picker, .type-list, .role-list-w {
+      max-height: 340px;
+      overflow-y: auto;
+      border: 1px solid rgba(148,163,184,0.2);
+      border-radius: 10px;
+      background: rgba(2,6,23,0.4);
+      padding: 0.3rem;
+    }
+    .channel-cat-label {
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--text-soft); font-weight: 600;
+      padding: 0.6rem 0.55rem 0.25rem;
+    }
+    .channel-opt, .type-opt, .role-opt-w {
+      display: flex; align-items: center; gap: 0.55rem;
+      padding: 0.5rem 0.6rem;
+      border-radius: 8px; cursor: pointer; user-select: none;
+      font-size: 0.88rem;
+    }
+    .channel-opt:hover, .type-opt:hover, .role-opt-w:hover { background: rgba(255,255,255,0.05); }
+    .channel-opt input, .type-opt input, .role-opt-w input { accent-color: var(--accent); margin: 0; }
+    .channel-opt.selected, .type-opt.selected { background: var(--accent-soft); }
+    .channel-opt.disabled, .type-opt.disabled, .role-opt-w.disabled { opacity: 0.4; cursor: not-allowed; }
+    .channel-opt .hash { color: var(--text-soft); }
+    .channel-opt .name { color: #e5e7eb; font-weight: 500; }
+    .channel-opt .existing-note { margin-left: auto; font-size: 0.7rem; color: var(--text-soft); font-style: italic; }
+    .role-opt-w .swatch { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; flex-shrink: 0; }
+    .select-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-bottom: 0.55rem; font-size: 0.78rem; color: var(--text-soft);
+    }
+    .select-row .link-btn {
+      background: transparent; border: none; color: var(--accent); cursor: pointer;
+      font-size: 0.78rem; padding: 0; text-decoration: underline;
+    }
+    .wizard-search { margin-bottom: 0.6rem; width: 100%; }
+
+    /* -------- Unauth / Login view -------- */
+    .auth-wrap {
+      min-height: calc(100vh - var(--topbar-h) - 60px);
+      display: flex; align-items: center; justify-content: center; padding: 2rem 1rem;
+    }
+    .auth-card {
+      max-width: 420px; width: 100%;
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg); padding: 2rem; box-shadow: var(--shadow-soft);
+      text-align: center;
+    }
+    .auth-card h2 { margin: 0.6rem 0 0.3rem; font-size: 1.3rem; }
+    .auth-card p { color: var(--text-muted); margin: 0 0 1.4rem; font-size: 0.9rem; }
+    .auth-logo { font-size: 2.2rem; color: var(--accent); }
+
+    /* -------- Empty / loading -------- */
+    .empty {
+      padding: 2rem 1rem; text-align: center; color: var(--text-muted);
+      border: 1px dashed rgba(148,163,184,0.3); border-radius: var(--radius-md);
+      background: rgba(2,6,23,0.3);
+    }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%;
+      animation: spin 0.8s linear infinite; vertical-align: -2px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* -------- Modal -------- */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center; z-index: 100; padding: 1rem;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg); padding: 1.3rem 1.4rem; width: 100%; max-width: 480px;
+      box-shadow: var(--shadow-soft); max-height: 85vh; overflow: hidden; display: flex; flex-direction: column;
+    }
+    .modal-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.3rem; }
+    .modal h3 { margin: 0; font-size: 1.05rem; }
+    .modal .subtitle { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.8rem; }
+    .modal-roles { flex: 1; overflow-y: auto; border: 1px solid rgba(148,163,184,0.2); border-radius: 10px; background: rgba(2,6,23,0.4); padding: 0.4rem; margin-bottom: 0.8rem; }
+    .role-opt {
+      display: flex; align-items: center; gap: 0.55rem; padding: 0.45rem 0.55rem;
+      border-radius: 8px; cursor: pointer; user-select: none;
+    }
+    .role-opt:hover { background: rgba(255,255,255,0.05); }
+    .role-opt input { accent-color: var(--accent); }
+    .role-opt .swatch { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; flex-shrink: 0; }
+    .role-opt.disabled { opacity: 0.4; cursor: not-allowed; }
+    .modal-foot { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; }
+    .modal-foot .count { font-size: 0.78rem; color: var(--text-soft); }
+    .modal-search { margin-bottom: 0.6rem; }
+    .modal-field { margin-bottom: 0.7rem; display: flex; flex-direction: column; gap: 0.3rem; }
+    .modal-field label { font-size: 0.72rem; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+
+    /* Confirm modal */
+    .confirm-body { color: var(--text-muted); font-size: 0.9rem; margin: 0.2rem 0 1rem; }
+
+    /* -------- Toasts -------- */
+    .toasts {
+      position: fixed; top: 1rem; right: 1rem; display: flex; flex-direction: column; gap: 0.5rem;
+      z-index: 200; max-width: calc(100vw - 2rem);
+    }
+    .toast {
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+      border-left: 4px solid var(--accent);
+      padding: 0.65rem 0.9rem; border-radius: 10px; box-shadow: var(--shadow-soft);
+      font-size: 0.85rem; min-width: 240px; max-width: 380px;
+      animation: toastIn 0.2s ease-out;
+    }
+    .toast.ok { border-left-color: var(--ok); }
+    .toast.err { border-left-color: var(--danger); }
+    .toast.warn { border-left-color: var(--warn); }
+    @keyframes toastIn { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* -------- Mobile sidebar drawer -------- */
+    .sidebar-backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(2px);
+      z-index: 45;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .sidebar-backdrop.open { display: block; opacity: 1; }
+
+    .fab {
+      display: none;
+      position: fixed;
+      bottom: 1.1rem; right: 1.1rem;
+      z-index: 35;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      box-shadow: 0 10px 24px rgba(249,115,22,0.45);
+      cursor: pointer;
+      font-size: 1.4rem;
+    }
+    .fab:hover { background: #ea580c; }
+
+    /* Desktop: "+ New preset" button in the top-right of content pane */
+    .new-preset-btn-top {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+    }
+
+    /* Inheritance caption */
+    .inherit-caption {
+      font-size: 0.72rem; color: var(--text-soft);
+      margin-top: 0.3rem;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem;
+    }
+    .inherit-caption .pill {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      padding: 0.05rem 0.4rem;
+      border-radius: 4px;
+      background: rgba(148,163,184,0.12);
+      color: var(--text-muted);
+      font-size: 0.68rem;
+    }
+    .inherit-caption .pill.muted { background: rgba(239,68,68,0.14); color: #fca5a5; }
+    .inherit-caption .pill.pings-off { background: rgba(234,179,8,0.14); color: #fde68a; }
+
+    /* Collapsible (channel mute) */
+    .collapse-head {
+      display: flex; align-items: center; gap: 0.45rem;
+      cursor: pointer; user-select: none;
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--text-soft); font-weight: 600;
+      margin: 1.2rem 0 0.5rem;
+    }
+    .collapse-head .chev { font-size: 0.7rem; transition: transform 0.15s; }
+    .collapse-head.open .chev { transform: rotate(90deg); }
+
+    /* Delete button in editor header */
+    .editor-actions { display: flex; align-items: center; gap: 0.4rem; }
+
+    /* -------- Responsive: mobile drawer -------- */
+    @media (max-width: 1023.98px) {
+      .hamburger { display: inline-flex; }
+      .shell {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: fixed;
+        top: var(--topbar-h);
+        left: 0;
+        width: 85%;
+        max-width: 340px;
+        height: calc(100vh - var(--topbar-h));
+        transform: translateX(-100%);
+        transition: transform 0.24s ease;
+        box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+        background: rgba(10, 14, 24, 0.97);
+        z-index: 50;
+      }
+      .sidebar.open { transform: translateX(0); }
+      .content { padding: 1.1rem 1rem 5rem; }
+      .fab { display: inline-flex; align-items: center; justify-content: center; }
+      .wizard { max-width: 100%; }
+      .topbar-center .guild-select { max-width: 50vw; }
+    }
+
+    @media (max-width: 540px) {
+      .pane-title-row { flex-direction: column; align-items: flex-start; }
+      .brand { font-size: 0.75rem; letter-spacing: 0.1em; }
+      .topbar-center .guild-select { min-width: 0; max-width: 40vw; font-size: 0.8rem; }
+      .override-row { grid-template-columns: minmax(0,1fr) auto; grid-template-rows: auto auto; gap: 0.35rem 0.5rem; }
+      .override-row .mini-toggle { justify-self: end; }
+    }
+
+    /* -------- Reduced motion -------- */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
+
+    /* -------------------- Overview + Admin -------------------- */
+    .overview-wrap, .admin-wrap { padding: 1.2rem 1.4rem 2rem; max-width: 1200px; }
+    .overview-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; margin: 0 0 1rem;
+      padding-bottom: 0.85rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .overview-head h2 { margin: 0; font-size: 1.4rem; color: var(--text-main); }
+    .overview-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .overview-mute-banner { margin-bottom: 0.75rem; }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.7rem;
+      margin: 0.25rem 0 1.5rem;
+    }
+    .stat-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.85rem 1rem;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      grid-template-areas: "icon val" "icon label";
+      column-gap: 0.75rem; row-gap: 0.15rem;
+      align-items: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .stat-card:hover { border-color: rgba(249,115,22,0.45); transform: translateY(-1px); }
+    .stat-card > i { grid-area: icon; color: var(--accent); font-size: 1.5rem; width: 1.5rem; text-align: center; }
+    .stat-card .stat-val { grid-area: val; font-size: 1.5rem; font-weight: 700; color: var(--text-main); line-height: 1.1; }
+    .stat-card .stat-label { grid-area: label; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .section-head {
+      margin: 1.25rem 0 0.7rem;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-soft);
+      font-weight: 600;
+    }
+
+    .overview-channels { display: grid; gap: 0.7rem; }
+    .ov-ch-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.85rem 1rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+    .ov-ch-head {
+      display: flex; align-items: center; gap: 0.6rem;
+      font-weight: 600;
+      padding-bottom: 0.55rem; margin-bottom: 0.55rem;
+      border-bottom: 1px dashed var(--border-subtle);
+      color: var(--text-main);
+    }
+    .ov-ch-name { display: flex; align-items: center; gap: 0.1rem; }
+    .ov-ch-name .hash { color: var(--text-soft); margin-right: 0.15rem; }
+    .ov-ch-count { margin-left: auto; font-size: 0.72rem; color: var(--text-muted); font-weight: 400; }
+    .ov-preset-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .ov-preset-chip {
+      background: var(--accent-soft);
+      border: 1px solid rgba(249,115,22,0.45);
+      color: var(--text-main);
+      border-radius: var(--radius-pill);
+      padding: 0.35rem 0.75rem;
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      cursor: pointer; font-size: 0.82rem;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    }
+    .ov-preset-chip:hover { background: rgba(249,115,22,0.3); border-color: var(--accent); transform: translateY(-1px); }
+    .ov-preset-chip.off { opacity: 0.55; background: rgba(120,120,120,0.14); border-color: var(--border-subtle); }
+    .ov-preset-types { color: var(--text-soft); font-family: monospace; font-size: 0.72rem; }
+    .ov-preset-fires {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      padding-left: 0.5rem;
+      border-left: 1px solid var(--border-subtle);
+    }
+
+    .preset-activity {
+      display: flex; flex-wrap: wrap; gap: 0.85rem;
+      padding: 0.55rem 0.85rem;
+      margin: 0.25rem 0 1rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      font-size: 0.8rem;
+      color: var(--text-main);
+    }
+    .preset-activity i { color: var(--accent); margin-right: 0.35rem; }
+
+    /* Admin */
+    .admin-type-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .admin-type-cell {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.55rem 0.85rem;
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 0.85rem;
+      color: var(--text-main);
+    }
+    .admin-type-cell .at-count { font-weight: 700; color: var(--accent); font-size: 1rem; }
+
+    /* Data-source health panel */
+    .src-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.6rem;
+      margin-bottom: 1.5rem;
+    }
+    .src-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.7rem 0.85rem;
+      display: grid;
+      gap: 0.35rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+    .src-card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.6rem;
+    }
+    .src-label {
+      color: var(--text-main);
+      font-weight: 600;
+      font-size: 0.85rem;
+      line-height: 1.2;
+    }
+    .src-state {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.2rem 0.55rem;
+      border-radius: var(--radius-pill);
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .src-state.ok       { background: rgba(34,197,94,0.15);  color: var(--ok);     border-color: rgba(34,197,94,0.4); }
+    .src-state.degraded { background: rgba(234,179,8,0.15);  color: var(--warn);   border-color: rgba(234,179,8,0.45); }
+    .src-state.down     { background: rgba(239,68,68,0.18);  color: var(--danger); border-color: rgba(239,68,68,0.5); }
+    .src-state.unknown  { background: rgba(148,163,184,0.12); color: var(--text-muted); border-color: var(--border-subtle); }
+    .src-meta {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      display: flex; align-items: center; gap: 0.35rem;
+    }
+    .src-meta-muted { font-style: italic; color: var(--text-soft); }
+    .src-totals {
+      display: flex; flex-wrap: wrap; align-items: center;
+      gap: 0.45rem;
+      margin-top: 0.35rem;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .src-totals .src-tot-ok { color: var(--ok); }
+    .src-totals .src-tot-fail { color: var(--text-muted); }
+    .src-totals .src-tot-fail.has-fail { color: var(--danger); }
+    .src-totals .src-tot-sep { color: var(--text-soft); }
+    .src-err {
+      font-size: 0.7rem;
+      color: var(--danger);
+      word-break: break-word;
+      margin-top: 0.35rem;
+      display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;
+    }
+    .src-err .src-consec {
+      color: var(--text-muted);
+      margin-left: 0.4rem;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: var(--radius-pill);
+      padding: 0.05rem 0.45rem;
+      font-size: 0.65rem;
+    }
+
+    .admin-table-wrap {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+    .admin-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .admin-table th, .admin-table td {
+      padding: 0.6rem 0.85rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 0.85rem;
+      vertical-align: middle;
+      color: var(--text-main);
+    }
+    .admin-table th {
+      background: var(--bg-elevated-soft);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-soft);
+      font-weight: 600;
+    }
+    .admin-table tbody tr { transition: background 0.12s; }
+    .admin-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+    .admin-table tbody tr:last-child td { border-bottom: none; }
+    .admin-table .g-icon { width: 22px; height: 22px; border-radius: 50%; margin-right: 0.5rem; vertical-align: middle; }
+    .admin-table .g-name { font-weight: 500; }
+    .admin-table .g-id { margin-left: 0.5rem; color: var(--text-soft); font-family: monospace; font-size: 0.7rem; }
+    .admin-table .mono { font-family: monospace; font-size: 0.78rem; color: var(--text-muted); }
+    .admin-table .row-link { cursor: pointer; }
+    .admin-pill {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(249,115,22,0.45);
+      border-radius: var(--radius-pill);
+      margin-left: 0.5rem;
+      padding: 0.1rem 0.55rem;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Broadcast composer */
+    .broadcast-grid {
+      display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      align-items: start;  /* don't stretch shorter cards (e.g. sync) to match tall ones */
+    }
+    @media (max-width: 900px) { .broadcast-grid { grid-template-columns: 1fr; } }
+    .broadcast-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.1rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+    .broadcast-card h4 { margin: 0 0 0.6rem; font-size: 0.85rem; color: var(--text-main); }
+    .broadcast-card label { display: block; font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0.6rem 0 0.25rem; }
+    .broadcast-card input[type="text"],
+    .broadcast-card input[type="url"],
+    .broadcast-card textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      border-radius: 0.5rem;
+      padding: 0.45rem 0.6rem;
+      font-size: 0.88rem;
+      font-family: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .broadcast-card textarea { min-height: 120px; resize: vertical; }
+    .broadcast-card input:focus, .broadcast-card textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .broadcast-card .color-row {
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .broadcast-card .color-row input[type="color"] {
+      width: 44px; height: 32px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.5rem;
+      background: var(--bg);
+      cursor: pointer;
+      padding: 2px;
+    }
+    .broadcast-preview {
+      border-left: 4px solid var(--accent);
+      padding: 0.7rem 0.85rem;
+      background: var(--bg);
+      border-radius: 0.4rem;
+      color: var(--text-main);
+    }
+    .broadcast-preview .bp-title { font-weight: 700; color: var(--text-main); margin-bottom: 0.3rem; }
+    .broadcast-preview .bp-desc { font-size: 0.85rem; color: var(--text-muted); white-space: pre-wrap; }
+    .broadcast-preview .bp-footer { margin-top: 0.5rem; font-size: 0.72rem; color: var(--text-soft); }
+
+    .bcast-target-row .ch-pick {
+      background: var(--bg);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      border-radius: 0.4rem;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.8rem;
+      max-width: 260px;
+    }
+    .bcast-state { font-size: 0.75rem; color: var(--text-muted); }
+    .bcast-state.ok { color: var(--ok); }
+    .bcast-state.err { color: var(--danger); }
+    .bcast-state.pending { color: var(--warn); }
+    .bcast-auto { font-size: 0.68rem; color: var(--text-soft); margin-left: 0.45rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+    @media (max-width: 1024px) {
+      .overview-wrap, .admin-wrap { padding: 0.9rem 0.8rem 2rem; }
+      .admin-table th, .admin-table td { font-size: 0.78rem; padding: 0.45rem 0.55rem; }
+      .bbox-map { height: 240px; }
+      .preset-activity { font-size: 0.75rem; gap: 0.6rem; padding: 0.5rem 0.7rem; }
+      .stat-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.5rem; }
+      .admin-type-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+      .ov-ch-card { padding: 0.7rem 0.8rem; }
+    }
+
+    /* -------- Mobile refinements (phone-sized) -------- */
+    @media (max-width: 700px) {
+      /* Topbar: let admin/invite/logout wrap below guild selector instead of pushing it */
+      .topbar { height: auto; min-height: var(--topbar-h); padding: 0.35rem 0.6rem; flex-wrap: wrap; row-gap: 0.35rem; }
+      .topbar-left { flex: 0 0 auto; }
+      .topbar-center { order: 3; flex: 1 1 100%; justify-content: flex-start; }
+      .topbar-right { order: 2; flex: 0 0 auto; gap: 0.3rem; }
+      .topbar-center .guild-select { max-width: 70vw; }
+      .topbar-right .user-chip span { display: none; }
+      .topbar-right .user-chip { padding: 0; }
+      .topbar-right .btn .fa-right-from-bracket + :not(i) { display: none; }
+      :root { --topbar-h: 54px; }
+
+      /* Filters card */
+      .filters-summary { font-size: 0.72rem; }
+      .filters-body { gap: 0.55rem; padding-top: 0.5rem; }
+      .filters-body .field-label { font-size: 0.68rem; }
+      .filters-body .form-textarea { min-height: 56px; font-size: 0.85rem; }
+      .filters-actions { gap: 0.35rem; }
+      .filters-actions .btn { flex: 1 1 auto; justify-content: center; }
+
+      /* bbox map — slightly shorter on phones so it doesn't dominate the card */
+      .bbox-map { height: 200px; border-radius: 0.5rem; }
+      .bbox-map-hint { font-size: 0.68rem; padding: 0.3rem 0.5rem; right: 8px; }
+      .bbox-coords { font-size: 0.66rem; padding: 0.3rem 0.5rem; }
+      .bbox-map-actions { gap: 0.3rem; }
+      .bbox-map-actions .btn { flex: 1 1 0; min-width: 0; justify-content: center; font-size: 0.75rem; padding: 0.35rem 0.5rem; }
+      .bbox-map-actions .btn i { margin-right: 0.15rem; }
+
+      /* Overview */
+      .overview-wrap, .admin-wrap { padding: 0.75rem 0.6rem 3rem; }
+      .overview-head { flex-direction: column; align-items: flex-start; gap: 0.5rem; padding-bottom: 0.65rem; }
+      .overview-head h2 { font-size: 1.2rem; }
+      .stat-grid { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.4rem; }
+      .stat-card { padding: 0.6rem 0.7rem; }
+      .stat-card > i { font-size: 1.2rem; }
+      .stat-card .stat-val { font-size: 1.2rem; }
+      .stat-card .stat-label { font-size: 0.65rem; }
+      .ov-ch-head { gap: 0.4rem; }
+      .ov-ch-count { font-size: 0.68rem; }
+      .ov-preset-row { gap: 0.3rem; }
+      .ov-preset-chip { padding: 0.28rem 0.6rem; font-size: 0.76rem; gap: 0.35rem; }
+      .ov-preset-fires { font-size: 0.65rem; padding-left: 0.35rem; }
+      .ov-preset-types { font-size: 0.68rem; }
+
+      /* Preset editor */
+      .preset-activity { flex-direction: column; align-items: flex-start; gap: 0.25rem; padding: 0.55rem 0.7rem; }
+      .editor-actions { flex-wrap: wrap; gap: 0.35rem; }
+      .editor-actions .btn { flex: 1 1 auto; justify-content: center; }
+      .crumb { font-size: 0.75rem; flex-wrap: wrap; }
+      .pane-title .hash { font-size: 0.95rem; }
+      .card-row { grid-template-columns: minmax(0, 1fr) auto; }
+
+      /* Sidebar channel mute panel */
+      .sb-ch-mute { padding: 0.3rem 0.4rem 0.4rem; }
+      .sb-ch-mute-label { font-size: 0.68rem; }
+
+      /* Admin: stack stat grid 2-wide, compact tables */
+      .admin-type-grid { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.35rem; }
+      .admin-type-cell { font-size: 0.78rem; padding: 0.4rem 0.55rem; }
+      .admin-type-cell .at-count { font-size: 0.9rem; }
+      .admin-table th, .admin-table td { font-size: 0.7rem; padding: 0.35rem 0.4rem; }
+      .admin-table .g-id { display: none; }
+      .admin-table .g-icon { width: 18px; height: 18px; margin-right: 0.35rem; }
+
+      /* Broadcast composer */
+      .broadcast-card { padding: 0.7rem 0.8rem; }
+      .broadcast-card textarea { min-height: 90px; font-size: 0.82rem; }
+
+      /* Source health cards */
+      .src-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0.4rem; }
+
+      /* Confirm + role modal margin */
+      .modal { margin: 1rem; max-width: calc(100vw - 2rem); }
+    }
+
+    /* Very narrow phones */
+    @media (max-width: 400px) {
+      .bbox-map { height: 180px; }
+      .stat-grid { grid-template-columns: 1fr; }
+      .ov-preset-fires { display: none; }
+      .admin-type-grid { grid-template-columns: 1fr; }
+      .bbox-map-actions .btn { font-size: 0.7rem; padding: 0.3rem 0.4rem; }
+      .bbox-map-actions .btn i { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" id="hamburger" aria-label="Open channel list" aria-controls="sidebar">
+        <i class="fa-solid fa-bars"></i>
+      </button>
+      <div class="brand">
+        <span class="logo"><i class="fa-solid fa-tower-broadcast"></i></span>
+        <a href="/">NSW&nbsp;PSN <span style="color:var(--accent)">DASH</span></a>
+      </div>
+    </div>
+    <div class="topbar-center" id="topbar-center">
+      <!-- guild selector, filled by JS -->
+    </div>
+    <div class="topbar-right" id="topbar-right">
+      <!-- user chip + logout, filled by JS -->
+    </div>
+  </header>
+
+  <div id="app-root">
+    <div class="empty" style="margin: 2rem"><span class="spinner"></span> Loading…</div>
+  </div>
+
+  <!-- Mobile sidebar backdrop -->
+  <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+  <!-- Floating action button (mobile, when sidebar closed) -->
+  <button class="fab" id="fab" aria-label="Create preset" title="Create preset">
+    <i class="fa-solid fa-plus"></i>
+  </button>
+
+  <!-- Role picker modal -->
+  <div class="modal-backdrop" id="role-modal" role="dialog" aria-modal="true" aria-labelledby="role-modal-title">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="role-modal-title">Role pings</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeRoleModal()" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="subtitle" id="role-modal-sub">Pick up to 5 roles to ping when these alerts fire.</div>
+      <input class="form-input modal-search" id="role-search" placeholder="Search roles…" oninput="renderRoleOptions()" />
+      <div class="modal-roles" id="role-options"></div>
+      <div class="modal-foot">
+        <span class="count" id="role-count">0 / 5 selected</span>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-ghost btn-sm" onclick="closeRoleModal()">Cancel</button>
+          <button class="btn btn-primary btn-sm" onclick="saveRoleModal()">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm modal -->
+  <div class="modal-backdrop" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal" style="max-width: 420px">
+      <div class="modal-head">
+        <h3 id="confirm-title">Are you sure?</h3>
+      </div>
+      <div class="confirm-body" id="confirm-body">This action cannot be undone.</div>
+      <div class="modal-foot" style="justify-content: flex-end">
+        <button class="btn btn-ghost btn-sm" id="confirm-cancel">Cancel</button>
+        <button class="btn btn-danger btn-sm" id="confirm-ok">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+<script>
+/* =========================================================
+   NSW PSN Dashboard (preset-based)
+   Single-file plain JS. No framework. ES2020.
+   ========================================================= */
+
+// Backend is on a sibling subdomain. Cookie is Domain=.forcequit.xyz.
+const API = 'https://api.forcequit.xyz';
+window.API = API;
+
+const ALERT_TYPES = ['rfs', 'bom', 'traffic_incidents', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_major', 'power_endeavour', 'power_ausgrid', 'waze_hazards', 'waze_police', 'waze_roadwork', 'user_incidents', 'radio_summary'];
+const _DASH_ALERT_TYPES = ALERT_TYPES; // canonical name per contract
+const ALERT_TYPE_LABELS = {
+  rfs: 'RFS Major Incidents',
+  bom: 'BOM Warnings',
+  traffic_incidents: 'Traffic Incidents',
+  traffic_roadwork: 'Traffic Roadwork',
+  traffic_flood: 'Flood Hazards',
+  traffic_fire: 'Traffic Fires',
+  traffic_major: 'Major Events',
+  power_endeavour: 'Endeavour Outages',
+  power_ausgrid: 'Ausgrid Outages',
+  waze_hazards: 'Waze Hazards',
+  waze_police: 'Waze Police',
+  waze_roadwork: 'Waze Roadwork',
+  user_incidents: 'User Incidents',
+  radio_summary: 'Radio Summary',
+};
+const MOBILE_BREAKPOINT = 1024;
+const MAX_ROLES = 5;
+
+const state = {
+  user: null,
+  guilds: [],
+  activeGuildId: null,
+  channels: [],
+  roles: [],
+  presets: [],
+  muteState: { guild: { enabled: true, enabled_ping: true }, channels: new Map() },
+  presetStats: new Map(),    // preset_id (str) -> { fires_7d, fires_30d, last_fire }
+  selectedPresetId: null,
+  openChannels: new Set(),
+  loadingGuild: false,
+  view: 'editor',          // 'editor' | 'wizard' | 'empty' | 'admin'
+  drawerOpen: false,
+  deepLinkChannelId: null,
+  wizard: null,
+  admin: null,             // { loading, data, error }
+};
+
+/* -------------------- Utilities -------------------- */
+
+function qs(id) { return document.getElementById(id); }
+function el(tag, attrs, children) {
+  const n = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === 'class') n.className = attrs[k];
+    else if (k === 'html') n.innerHTML = attrs[k];
+    else if (k.startsWith('on') && typeof attrs[k] === 'function') n.addEventListener(k.slice(2), attrs[k]);
+    else if (k === 'for') n.htmlFor = attrs[k];
+    else if (attrs[k] === false || attrs[k] == null) { /* skip */ }
+    else n.setAttribute(k, attrs[k]);
+  }
+  if (children != null) {
+    if (!Array.isArray(children)) children = [children];
+    for (const c of children) {
+      if (c == null || c === false) continue;
+      n.appendChild(typeof c === 'string' || typeof c === 'number'
+        ? document.createTextNode(String(c))
+        : c);
+    }
+  }
+  return n;
+}
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function getQuery() {
+  const p = new URLSearchParams(window.location.search);
+  return { guild: p.get('guild'), channel: p.get('channel'), preset: p.get('preset') };
+}
+
+function setQueryGuild(gid) {
+  const url = new URL(window.location.href);
+  if (gid) url.searchParams.set('guild', gid); else url.searchParams.delete('guild');
+  url.searchParams.delete('channel');
+  url.searchParams.delete('preset');
+  window.history.replaceState({}, '', url);
+}
+
+function isMobile() {
+  return window.innerWidth < MOBILE_BREAKPOINT;
+}
+
+async function api(path, opts={}) {
+  const res = await fetch(API + path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) },
+    ...opts,
+  });
+  if (res.status === 204) return null;
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) {
+    const err = new Error((body && body.error) || `HTTP ${res.status}`);
+    err.status = res.status; err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+/* -------------------- Toasts -------------------- */
+
+function toast(msg, kind='info') {
+  const t = el('div', { class: `toast ${kind}` }, msg);
+  qs('toasts').appendChild(t);
+  setTimeout(() => {
+    t.style.transition = 'opacity 0.3s, transform 0.3s';
+    t.style.opacity = '0';
+    t.style.transform = 'translateX(30px)';
+    setTimeout(() => t.remove(), 320);
+  }, 5000);
+}
+
+function handleApiError(e, fallback) {
+  if (e && e.status === 401) {
+    state.user = null;
+    render();
+    return;
+  }
+  if (e && e.status === 403) {
+    toast('You need Manage Channels permission in this guild.', 'err');
+    return;
+  }
+  if (e && e.status === 409) {
+    toast((e.body && e.body.error) || 'Name conflict.', 'err');
+    return;
+  }
+  if (e && e.status >= 500) {
+    toast('Backend error, try again.', 'err');
+    return;
+  }
+  toast((e && e.message) || fallback || 'Request failed', 'err');
+}
+
+/* -------------------- Confirm dialog -------------------- */
+
+function confirmDialog(title, body, okLabel='Confirm', okDanger=true) {
+  return new Promise((resolve) => {
+    qs('confirm-title').textContent = title;
+    qs('confirm-body').textContent = body;
+    const okBtn = qs('confirm-ok');
+    okBtn.textContent = okLabel;
+    okBtn.className = okDanger ? 'btn btn-danger btn-sm' : 'btn btn-primary btn-sm';
+    const modal = qs('confirm-modal');
+    const cleanup = () => {
+      modal.classList.remove('open');
+      okBtn.onclick = null;
+      qs('confirm-cancel').onclick = null;
+    };
+    okBtn.onclick = () => { cleanup(); resolve(true); };
+    qs('confirm-cancel').onclick = () => { cleanup(); resolve(false); };
+    modal.classList.add('open');
+  });
+}
+
+/* -------------------- Bootstrap -------------------- */
+
+async function bootstrap() {
+  try {
+    const me = await api('/api/dashboard/me');
+    state.user = me.user;
+    state.guilds = me.guilds || [];
+    state.botInviteUrl = me.bot_invite_url || null;
+  } catch (e) {
+    if (e.status === 401) {
+      state.user = null;
+      render();
+      return;
+    }
+    handleApiError(e, 'Failed to load user.');
+    render();
+    return;
+  }
+
+  const q = getQuery();
+  const preferredGuild = q.guild && state.guilds.find(g => g.id === q.guild && g.has_bot && g.manage_channels);
+  const firstEligible = state.guilds.find(g => g.has_bot && g.manage_channels);
+  const pick = preferredGuild || firstEligible;
+  state.deepLinkChannelId = q.channel || null;
+
+  render();
+
+  if (pick) {
+    await selectGuild(pick.id, /*fromBoot=*/true, q.preset || null);
+  } else {
+    render();
+  }
+}
+
+async function selectGuild(gid, fromBoot=false, deepLinkPresetId=null) {
+  state.activeGuildId = gid;
+  state.channels = [];
+  state.roles = [];
+  state.presets = [];
+  state.muteState = { guild: { enabled: true, enabled_ping: true }, channels: new Map() };
+  state.presetStats = new Map();
+  state.openChannels = new Set();
+  state.selectedPresetId = null;
+  state.view = 'editor';
+  state.wizard = null;
+  state.loadingGuild = true;
+  if (!fromBoot) setQueryGuild(gid);
+  render();
+
+  try {
+    const [channels, roles, presetsRes, muteRes, statsRes] = await Promise.all([
+      api(`/api/dashboard/guilds/${gid}/channels`),
+      api(`/api/dashboard/guilds/${gid}/roles`),
+      api(`/api/dashboard/guilds/${gid}/presets`),
+      api(`/api/dashboard/guilds/${gid}/mute-state`),
+      api(`/api/dashboard/guilds/${gid}/preset-stats`).catch(() => ({ stats: [] })),
+    ]);
+    state.channels = channels || [];
+    state.roles = roles || [];
+    state.presets = (presetsRes && presetsRes.presets) || [];
+    ingestMuteState(muteRes);
+    ingestPresetStats(statsRes);
+    state.loadingGuild = false;
+
+    if (deepLinkPresetId) {
+      const target = state.presets.find(p => String(p.id) === String(deepLinkPresetId));
+      if (target) {
+        state.selectedPresetId = target.id;
+        state.openChannels.add(target.channel_id);
+        state.view = 'editor';
+      }
+    } else if (state.deepLinkChannelId) {
+      const firstInChan = state.presets.find(p => p.channel_id === state.deepLinkChannelId);
+      if (firstInChan) {
+        state.selectedPresetId = firstInChan.id;
+        state.openChannels.add(firstInChan.channel_id);
+        state.view = 'editor';
+      }
+    }
+
+    // Default landing: overview (not a specific preset). If there are no
+    // presets at all, the overview component itself renders the empty state.
+    if (state.view !== 'editor') {
+      state.view = 'overview';
+      state.selectedPresetId = null;
+    }
+
+    render();
+  } catch (e) {
+    state.loadingGuild = false;
+    handleApiError(e, 'Failed to load guild.');
+    render();
+  }
+}
+
+function ingestMuteState(res) {
+  const g = (res && res.guild) || { enabled: true, enabled_ping: true };
+  const channels = new Map();
+  if (res && Array.isArray(res.channels)) {
+    for (const row of res.channels) {
+      channels.set(String(row.channel_id), {
+        channel_id: String(row.channel_id),
+        enabled: !!row.enabled,
+        enabled_ping: !!row.enabled_ping,
+      });
+    }
+  }
+  state.muteState = {
+    guild: { enabled: !!g.enabled, enabled_ping: !!g.enabled_ping },
+    channels,
+  };
+}
+
+function ingestPresetStats(res) {
+  const map = new Map();
+  const list = (res && res.stats) || [];
+  for (const s of list) {
+    map.set(String(s.preset_id), {
+      fires_7d: Number(s.fires_7d) || 0,
+      fires_30d: Number(s.fires_30d) || 0,
+      last_fire: s.last_fire || null,
+    });
+  }
+  state.presetStats = map;
+}
+
+function presetFires(presetId) {
+  return state.presetStats.get(String(presetId)) || { fires_7d: 0, fires_30d: 0, last_fire: null };
+}
+
+/* -------------------- Selectors -------------------- */
+
+function channelById(id) { return state.channels.find(c => String(c.id) === String(id)) || null; }
+
+function presetById(id) { return state.presets.find(p => String(p.id) === String(id)) || null; }
+
+function sortedChannels() {
+  return [...state.channels].sort((a, b) => {
+    const pa = a.position ?? 0, pb = b.position ?? 0;
+    return pa - pb || (a.name||'').localeCompare(b.name||'');
+  });
+}
+
+function sortedPresets() {
+  // Sort by channel order, then by preset name
+  const chOrder = new Map();
+  sortedChannels().forEach((c, i) => chOrder.set(String(c.id), i));
+  return [...state.presets].sort((a, b) => {
+    const ai = chOrder.has(String(a.channel_id)) ? chOrder.get(String(a.channel_id)) : 9999;
+    const bi = chOrder.has(String(b.channel_id)) ? chOrder.get(String(b.channel_id)) : 9999;
+    if (ai !== bi) return ai - bi;
+    return (a.name||'').localeCompare(b.name||'');
+  });
+}
+
+function presetsByChannel(chId) {
+  return state.presets
+    .filter(p => String(p.channel_id) === String(chId))
+    .sort((a, b) => (a.name||'').localeCompare(b.name||''));
+}
+
+function configuredChannelIds() {
+  const s = new Set(state.presets.map(p => String(p.channel_id)));
+  const valid = new Set(state.channels.map(c => String(c.id)));
+  return Array.from(s).filter(id => valid.has(id));
+}
+
+function channelMute(chId) {
+  const m = state.muteState.channels.get(String(chId));
+  if (m) return m;
+  return { channel_id: String(chId), enabled: true, enabled_ping: true };
+}
+
+/**
+ * Compute effective state for a preset / type-override.
+ * Tiers stack: guild AND channel AND preset [AND type-override].
+ */
+function effectiveState(presetId, alertType=null) {
+  const preset = presetById(presetId);
+  if (!preset) return { enabled: false, enabled_ping: false };
+  const g = state.muteState.guild;
+  const c = channelMute(preset.channel_id);
+  const ov = alertType && preset.type_overrides && preset.type_overrides[alertType];
+  const pEnabled = !!preset.enabled;
+  const pPing = !!preset.enabled_ping;
+  const oEnabled = ov ? (ov.enabled != null ? !!ov.enabled : pEnabled) : pEnabled;
+  const oPing = ov ? (ov.enabled_ping != null ? !!ov.enabled_ping : pPing) : pPing;
+  return {
+    enabled: !!g.enabled && !!c.enabled && (alertType ? oEnabled : pEnabled),
+    enabled_ping: !!g.enabled_ping && !!c.enabled_ping && (alertType ? oPing : pPing),
+  };
+}
+
+function effectiveGlyph(eff) {
+  if (!eff.enabled) return '🔇';
+  if (!eff.enabled_ping) return '🔕';
+  return '🟢';
+}
+
+function effectiveGlyphTitle(eff) {
+  if (!eff.enabled) return 'Silenced';
+  if (!eff.enabled_ping) return 'Active, no pings';
+  return 'Active + pings';
+}
+
+function parseRoleIds(arr) {
+  if (!arr) return [];
+  if (Array.isArray(arr)) return arr.map(String);
+  // Defensive: handle legacy comma string too
+  return String(arr).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function discordColorToHex(color) {
+  const n = Number(color || 0);
+  if (!n) return '#94a3b8';
+  return '#' + n.toString(16).padStart(6, '0');
+}
+
+/* -------------------- Render (dispatch) -------------------- */
+
+function render() {
+  renderTopbar();
+  const root = qs('app-root');
+  if (!state.user) {
+    root.innerHTML = '';
+    root.appendChild(renderAuthCard());
+    return;
+  }
+  root.innerHTML = '';
+  root.appendChild(renderShell());
+  syncDrawer();
+}
+
+function renderTopbar() {
+  const center = qs('topbar-center');
+  const right = qs('topbar-right');
+  center.innerHTML = '';
+  right.innerHTML = '';
+
+  if (!state.user) return;
+
+  const eligible = (state.guilds || []).filter(g => g.has_bot && g.manage_channels);
+  if (eligible.length > 0) {
+    const sel = el('select', {
+      class: 'form-select guild-select',
+      id: 'guild-select',
+      'aria-label': 'Guild',
+      onchange: (e) => selectGuild(e.target.value),
+    });
+    for (const g of eligible) sel.appendChild(el('option', { value: g.id }, g.name));
+    if (state.activeGuildId) sel.value = state.activeGuildId;
+    center.appendChild(sel);
+
+    const ovBtn = el('button', {
+      class: 'btn btn-ghost btn-sm' + (state.view === 'overview' ? ' active' : ''),
+      title: 'Server overview',
+      onclick: () => openOverview(),
+    }, [el('i', { class: 'fa-solid fa-chart-simple' }), ' Overview']);
+    center.appendChild(ovBtn);
+  }
+
+  if (state.botInviteUrl) {
+    const inv = el('a', {
+      class: 'btn btn-ghost btn-sm',
+      href: state.botInviteUrl,
+      target: '_blank',
+      rel: 'noopener',
+      title: 'Add the bot to another server',
+    }, [el('i', { class: 'fa-solid fa-plus' }), ' Invite bot']);
+    right.appendChild(inv);
+  }
+
+  const avatar = state.user.avatar_url
+    || `https://cdn.discordapp.com/embed/avatars/${(parseInt(state.user.id||'0')>>22)%6}.png`;
+  const chip = document.createElement('div');
+  chip.className = 'user-chip';
+  chip.innerHTML = `<img src="${escapeHtml(avatar)}" alt="" onerror="this.style.visibility='hidden'"/><span>@${escapeHtml(state.user.username||'user')}</span>`;
+
+  if (state.user.is_admin) {
+    const adminBtn = document.createElement('button');
+    adminBtn.className = 'btn btn-ghost btn-sm' + (state.view === 'admin' ? ' active' : '');
+    adminBtn.innerHTML = state.view === 'admin'
+      ? '<i class="fa-solid fa-arrow-left"></i> Back'
+      : '<i class="fa-solid fa-shield-halved"></i> Admin';
+    adminBtn.onclick = () => {
+      if (state.view === 'admin') {
+        stopAdminSourcesAutoRefresh();
+        state.view = state.selectedPresetId ? 'editor' : 'empty';
+        render();
+      } else {
+        openAdmin();
+      }
+    };
+    right.appendChild(adminBtn);
+  }
+
+  const logout = document.createElement('button');
+  logout.className = 'btn btn-ghost btn-sm';
+  logout.innerHTML = '<i class="fa-solid fa-right-from-bracket"></i> Logout';
+  logout.onclick = async () => {
+    try { await api('/api/dashboard/auth/logout', { method: 'POST' }); } catch(e) {}
+    state.user = null; state.guilds = []; state.activeGuildId = null;
+    render();
+  };
+  right.appendChild(chip);
+  right.appendChild(logout);
+}
+
+function renderAuthCard() {
+  const next = encodeURIComponent(window.location.pathname + window.location.search);
+  const wrap = el('div', { class: 'auth-wrap' });
+  const card = el('div', { class: 'auth-card' });
+  card.innerHTML = `
+    <div class="auth-logo"><i class="fa-brands fa-discord"></i></div>
+    <h2>NSW PSN Dashboard</h2>
+    <p>Sign in with Discord to manage alert presets for any server where you have <strong>Manage Channels</strong>.</p>
+    <a class="btn btn-discord" href="${API}/api/dashboard/auth/login?next=${next}">
+      <i class="fa-brands fa-discord"></i> Login with Discord
+    </a>
+  `;
+  wrap.appendChild(card);
+  return wrap;
+}
+
+function renderShell() {
+  const eligible = (state.guilds || []).filter(g => g.has_bot && g.manage_channels);
+  if (eligible.length === 0) {
+    const wrap = el('div', { style: 'padding: 2rem 1.4rem' }, [
+      el('div', { class: 'empty' },
+        'You have no servers where the NSW PSN bot is installed and you hold Manage Channels. Ask an admin to invite the bot, or contact support.'),
+    ]);
+    return wrap;
+  }
+  const shell = el('div', { class: 'shell' });
+  shell.appendChild(renderSidebar());
+  shell.appendChild(renderContentPane());
+  return shell;
+}
+
+/* -------------------- Sidebar -------------------- */
+
+function renderSidebar() {
+  const aside = el('aside', { class: 'sidebar' + (state.drawerOpen ? ' open' : ''), id: 'sidebar' });
+
+  const head = el('div', { class: 'sidebar-head' });
+  head.appendChild(renderGuildMutePanel());
+  head.appendChild(el('p', { class: 'sidebar-title' }, 'Channels'));
+  aside.appendChild(head);
+
+  const body = el('div', { class: 'sidebar-body', id: 'sidebar-body' });
+
+  if (state.loadingGuild) {
+    body.appendChild(el('div', { class: 'sb-empty' }, [el('span', { class: 'spinner' }), ' Loading…']));
+  } else {
+    const cfgIds = new Set(configuredChannelIds());
+    const rows = sortedChannels().filter(ch => cfgIds.has(String(ch.id)));
+    if (rows.length === 0) {
+      body.appendChild(el('div', { class: 'sb-empty' }, 'No presets yet. Use “+ New preset” below.'));
+    } else {
+      for (const ch of rows) body.appendChild(renderSidebarChannelRow(ch));
+    }
+  }
+  aside.appendChild(body);
+
+  const foot = el('div', { class: 'sidebar-foot' }, [
+    el('button', {
+      class: 'btn btn-primary btn-block',
+      onclick: () => openWizard(),
+    }, [el('i', { class: 'fa-solid fa-plus' }), ' New preset']),
+  ]);
+  aside.appendChild(foot);
+
+  return aside;
+}
+
+function renderGuildMutePanel() {
+  const g = state.muteState.guild;
+  const banner = !g.enabled
+    ? el('span', { class: 'mute-banner red' }, [el('i', { class: 'fa-solid fa-volume-xmark' }), ' Muted'])
+    : (!g.enabled_ping
+      ? el('span', { class: 'mute-banner amber' }, [el('i', { class: 'fa-solid fa-bell-slash' }), ' Pings off'])
+      : null);
+
+  const head = el('div', { class: 'mute-panel-head' }, [
+    el('i', { class: 'fa-solid fa-shield-halved' }),
+    el('span', {}, 'Guild'),
+    banner,
+  ]);
+
+  const row1 = el('div', { class: 'mute-row' }, [
+    el('span', { class: 'mute-label' }, 'Alerts'),
+    makeSwitch(!!g.enabled, (checked) => setGuildMute({ enabled: checked }), 'On: alerts fire. Off: every preset in this guild is silent.'),
+  ]);
+  const row2 = el('div', { class: 'mute-row' }, [
+    el('span', { class: 'mute-label' }, 'Role pings'),
+    makeSwitch(!!g.enabled_ping, (checked) => setGuildMute({ enabled_ping: checked }), 'On: role mentions included. Off: alerts post with no pings.'),
+  ]);
+
+  return el('div', { class: 'mute-panel' }, [head, row1, row2]);
+}
+
+function makeSwitch(checked, onchange, title, opts={}) {
+  const id = 'sw-' + Math.random().toString(36).slice(2, 8);
+  const input = el('input', { type: 'checkbox', id, title: title || false });
+  input.checked = !!checked;
+  if (opts.disabled) input.disabled = true;
+  input.addEventListener('change', () => onchange(input.checked));
+  const track = el('span', { class: 'track' });
+  const lbl = el('label', { class: 'swx' + (opts.small ? ' small' : ''), for: id, title: title || false });
+  lbl.appendChild(input);
+  lbl.appendChild(track);
+  return lbl;
+}
+
+function renderSidebarChannelRow(ch) {
+  const presets = presetsByChannel(ch.id);
+  const open = state.openChannels.has(String(ch.id));
+  const cm = channelMute(ch.id);
+  const muteGlyph = !cm.enabled ? '🔇' : (!cm.enabled_ping ? '🔕' : '');
+
+  const row = el('div', { class: 'sb-ch' + (open ? ' open' : '') });
+
+  const head = el('div', {
+    class: 'sb-ch-head',
+    role: 'button',
+    tabindex: '0',
+    'aria-expanded': open ? 'true' : 'false',
+    'aria-label': `Channel ${ch.name}`,
+    onclick: () => toggleChannelOpen(ch.id),
+    onkeydown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggleChannelOpen(ch.id);
+      } else if (e.key === 'ArrowRight' && !open) {
+        e.preventDefault();
+        state.openChannels.add(String(ch.id)); render();
+      } else if (e.key === 'ArrowLeft' && open) {
+        e.preventDefault();
+        state.openChannels.delete(String(ch.id)); render();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveSidebarFocus(e.key === 'ArrowDown' ? 1 : -1);
+      }
+    },
+  }, [
+    el('span', { class: 'chev' }, el('i', { class: 'fa-solid fa-chevron-right' })),
+    el('span', { class: 'sb-ch-name' }, [
+      el('span', { class: 'hash' }, '#'),
+      ch.name || '(unnamed)',
+    ]),
+    el('span', { class: 'sb-ch-count', title: `${presets.length} preset${presets.length===1?'':'s'}` }, `${presets.length}`),
+    muteGlyph ? el('span', { class: 'sb-ch-glyph', title: !cm.enabled ? 'Channel muted' : 'Channel pings off' }, muteGlyph) : null,
+  ]);
+  row.appendChild(head);
+
+  const body = el('div', { class: 'sb-ch-body' });
+  body.appendChild(renderSidebarChannelMute(ch.id));
+  for (const p of presets) {
+    const active = String(state.selectedPresetId) === String(p.id) && state.view === 'editor';
+    const eff = effectiveState(p.id);
+    const typeCount = (p.alert_types || []).length + (p.pager_enabled ? 1 : 0);
+    const sub = el('div', {
+      class: 'sb-preset' + (active ? ' active' : ''),
+      title: effectiveGlyphTitle(eff),
+      onclick: (e) => {
+        e.stopPropagation();
+        selectPreset(p.id);
+      },
+    }, [
+      el('span', { class: 'sb-preset-name' }, p.name || '(unnamed)'),
+      el('span', { class: 'sb-preset-count' }, String(typeCount)),
+      el('span', { class: 'sb-preset-state' }, effectiveGlyph(eff)),
+    ]);
+    body.appendChild(sub);
+  }
+  row.appendChild(body);
+  return row;
+}
+
+function toggleChannelOpen(chId) {
+  const key = String(chId);
+  if (state.openChannels.has(key)) state.openChannels.delete(key);
+  else state.openChannels.add(key);
+  render();
+}
+
+function moveSidebarFocus(dir) {
+  const heads = Array.from(document.querySelectorAll('.sb-ch-head'));
+  const idx = heads.indexOf(document.activeElement);
+  const next = heads[Math.max(0, Math.min(heads.length - 1, idx + dir))];
+  if (next) next.focus();
+}
+
+function selectPreset(pid) {
+  state.selectedPresetId = pid;
+  state.view = 'editor';
+  state.wizard = null;
+  const p = presetById(pid);
+  if (p) state.openChannels.add(String(p.channel_id));
+  if (isMobile()) state.drawerOpen = false;
+  render();
+}
+
+/* -------------------- Content pane -------------------- */
+
+function renderContentPane() {
+  const pane = el('main', { class: 'content', id: 'content' });
+  if (state.loadingGuild) {
+    pane.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading guild…']));
+    return pane;
+  }
+  if (state.view === 'wizard') {
+    pane.appendChild(renderWizard());
+    return pane;
+  }
+  if (state.view === 'admin') {
+    pane.appendChild(renderAdmin());
+    return pane;
+  }
+  if (state.view === 'overview' || state.view === 'empty' || state.presets.length === 0) {
+    pane.appendChild(renderOverview());
+    return pane;
+  }
+  if (!state.selectedPresetId) {
+    pane.appendChild(renderOverview());
+    return pane;
+  }
+  const preset = presetById(state.selectedPresetId);
+  if (!preset) {
+    // stale selection
+    state.selectedPresetId = null;
+    pane.appendChild(renderPickPrompt());
+    return pane;
+  }
+  pane.appendChild(renderPresetEditor(preset));
+  return pane;
+}
+
+function openOverview() {
+  state.view = 'overview';
+  state.selectedPresetId = null;
+  if (isMobile()) state.drawerOpen = false;
+  render();
+}
+
+function renderOverview() {
+  const guild = state.guilds.find(g => g.id === state.activeGuildId);
+  const guildName = guild ? guild.name : 'this server';
+  const presetCount = state.presets.length;
+  const chanCount = new Set(state.presets.map(p => String(p.channel_id))).size;
+  const pagerCount = state.presets.filter(p => p.pager_enabled).length;
+  const mutedCount = state.presets.filter(p => !p.enabled).length;
+
+  if (presetCount === 0) {
+    return el('div', { class: 'big-empty' }, [
+      el('div', { class: 'icon' }, el('i', { class: 'fa-solid fa-inbox' })),
+      el('h2', {}, `No alerts configured in ${guildName}`),
+      el('p', {},
+        'A preset is a named bundle of alert types that post to one channel. Create your first one to get started.'),
+      el('button', { class: 'btn btn-primary', onclick: () => openWizard() },
+        [el('i', { class: 'fa-solid fa-plus' }), ' Create first preset']),
+    ]);
+  }
+
+  const wrap = el('div', { class: 'overview-wrap' });
+  wrap.appendChild(el('div', { class: 'overview-head' }, [
+    el('h2', {}, guildName),
+    el('div', { class: 'overview-actions' }, [
+      el('button', { class: 'btn btn-primary btn-sm', onclick: () => openWizard() },
+        [el('i', { class: 'fa-solid fa-plus' }), ' New preset']),
+    ]),
+  ]));
+
+  const gm = state.muteState.guild;
+  const mutePill = !gm.enabled
+    ? el('span', { class: 'pill muted' }, 'Guild muted')
+    : (!gm.enabled_ping ? el('span', { class: 'pill pings-off' }, 'Guild pings off') : null);
+  if (mutePill) wrap.appendChild(el('div', { class: 'overview-mute-banner' }, mutePill));
+
+  const cards = el('div', { class: 'stat-grid' });
+  cards.appendChild(statCard('Presets', presetCount, 'fa-layer-group'));
+  cards.appendChild(statCard('Channels', chanCount, 'fa-hashtag'));
+  cards.appendChild(statCard('Pager subs', pagerCount, 'fa-pager'));
+  cards.appendChild(statCard('Muted', mutedCount, 'fa-volume-xmark'));
+  wrap.appendChild(cards);
+
+  // Channel list
+  wrap.appendChild(el('h3', { class: 'section-head' }, 'Channels'));
+  const list = el('div', { class: 'overview-channels' });
+  const byChannel = new Map();
+  for (const p of state.presets) {
+    const k = String(p.channel_id);
+    if (!byChannel.has(k)) byChannel.set(k, []);
+    byChannel.get(k).push(p);
+  }
+  const chans = [...byChannel.keys()].map(cid => {
+    const ch = channelById(cid);
+    return { id: cid, name: ch ? ch.name : cid, presets: byChannel.get(cid) };
+  });
+  chans.sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const row of chans) {
+    const cm = channelMute(row.id);
+    const card = el('div', { class: 'ov-ch-card' });
+    const head = el('div', { class: 'ov-ch-head' }, [
+      el('span', { class: 'ov-ch-name' }, [el('span', { class: 'hash' }, '#'), row.name]),
+      !cm.enabled ? el('span', { class: 'pill muted' }, 'muted') :
+        (!cm.enabled_ping ? el('span', { class: 'pill pings-off' }, 'pings off') : null),
+      el('span', { class: 'ov-ch-count' }, `${row.presets.length} preset${row.presets.length === 1 ? '' : 's'}`),
+    ]);
+    card.appendChild(head);
+    const presetsRow = el('div', { class: 'ov-preset-row' });
+    for (const p of row.presets) {
+      const s = presetFires(p.id);
+      const statText = s.last_fire
+        ? `${s.fires_7d} in 7d · ${timeAgo(s.last_fire)} ago`
+        : 'no fires yet';
+      const chip = el('button', {
+        class: 'ov-preset-chip' + (!p.enabled ? ' off' : ''),
+        onclick: () => selectPreset(p.id),
+        title: `${p.name} — ${statText}`,
+      }, [
+        el('span', { class: 'ov-preset-name' }, p.name),
+        el('span', { class: 'ov-preset-types' },
+          `${(p.alert_types||[]).length}${p.pager_enabled ? '+p' : ''}`),
+        el('span', { class: 'ov-preset-fires' },
+          s.last_fire ? `${s.fires_7d}· ${timeAgo(s.last_fire)}` : '—'),
+      ]);
+      presetsRow.appendChild(chip);
+    }
+    card.appendChild(presetsRow);
+    list.appendChild(card);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function statCard(label, value, icon) {
+  return el('div', { class: 'stat-card' }, [
+    el('i', { class: 'fa-solid ' + icon }),
+    el('div', { class: 'stat-val' }, String(value)),
+    el('div', { class: 'stat-label' }, label),
+  ]);
+}
+
+function renderPickPrompt() {
+  return el('div', { class: 'big-empty' }, [
+    el('div', { class: 'icon' }, el('i', { class: 'fa-regular fa-hand-pointer' })),
+    el('h2', {}, 'Select a preset'),
+    el('p', {}, 'Pick a preset from the list on the left to edit it.'),
+    el('button', { class: 'btn btn-primary', onclick: () => openWizard() },
+      [el('i', { class: 'fa-solid fa-plus' }), ' New preset']),
+  ]);
+}
+
+/* -------------------- Preset editor -------------------- */
+
+function renderPresetEditor(preset) {
+  const ch = channelById(preset.channel_id);
+  const guild = state.guilds.find(g => g.id === state.activeGuildId);
+  const wrap = el('div', { class: 'editor', id: 'editor-' + preset.id });
+
+  // Breadcrumb
+  wrap.appendChild(el('div', { class: 'crumb' }, [
+    el('span', {}, guild ? guild.name : ''),
+    el('span', { class: 'sep' }, '/'),
+    el('span', {}, '#' + (ch ? ch.name : '(unknown)')),
+    el('span', { class: 'sep' }, '/'),
+    el('span', { class: 'crumb-main' }, preset.name || '(unnamed)'),
+  ]));
+
+  // Title row: button to open new preset modal + delete button
+  wrap.appendChild(el('div', { class: 'pane-title-row' }, [
+    el('h1', { class: 'pane-title' }, [
+      el('span', { class: 'hash' }, '#'),
+      (ch ? ch.name : 'channel'),
+      el('span', { style: 'color:var(--text-soft);font-weight:400' }, ' · '),
+      el('span', { style: 'font-size:1.05rem' }, preset.name || '(unnamed)'),
+    ]),
+    el('div', { class: 'editor-actions' }, [
+      el('button', {
+        class: 'btn btn-ghost btn-sm new-preset-btn-top',
+        onclick: () => openWizard(preset.channel_id),
+      }, [el('i', { class: 'fa-solid fa-plus' }), ' New preset']),
+      el('button', {
+        class: 'btn btn-danger btn-sm',
+        onclick: () => deletePreset(preset.id),
+      }, [el('i', { class: 'fa-solid fa-trash' }), ' Delete']),
+    ]),
+  ]));
+
+  // Activity summary (fires last 7/30d + last fire)
+  (() => {
+    const s = presetFires(preset.id);
+    const parts = [
+      el('span', {}, [el('i', { class: 'fa-solid fa-fire' }), ` ${s.fires_7d} in last 7d`]),
+      el('span', { style: 'color:var(--text-soft)' }, `${s.fires_30d} in last 30d`),
+      el('span', {}, s.last_fire
+        ? [el('i', { class: 'fa-regular fa-clock' }), ` last fire ${timeAgo(s.last_fire)} ago`]
+        : [el('i', { class: 'fa-regular fa-clock' }), ' never fired']),
+    ];
+    wrap.appendChild(el('div', { class: 'preset-activity' }, parts));
+  })();
+
+  // Rename row (inline)
+  const renameInput = el('input', {
+    class: 'form-input',
+    value: preset.name || '',
+    placeholder: 'Preset name',
+    maxlength: '100',
+    onblur: (e) => {
+      const v = (e.target.value || '').trim();
+      if (!v) { e.target.value = preset.name || ''; return; }
+      if (v === preset.name) return;
+      renamePreset(preset.id, v);
+    },
+    onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = preset.name || ''; e.target.blur(); } },
+  });
+  wrap.appendChild(el('div', { class: 'rename-row' }, [
+    el('span', { style: 'font-size:0.7rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-soft);font-weight:600' }, 'Name'),
+    renameInput,
+  ]));
+
+  // Effective state summary row
+  const eff = effectiveState(preset.id);
+  const effCaption = inheritanceCaption(preset);
+  const summary = el('div', { class: 'inherit-caption', style: 'margin:-0.5rem 0 1rem' }, [
+    el('span', { style: 'color:var(--text-muted)' }, `Effective: ${effectiveGlyphTitle(eff)}`),
+    ...effCaption,
+  ]);
+  wrap.appendChild(summary);
+
+  // -------- Alert types (chips) --------
+  wrap.appendChild(el('div', { class: 'section-label' }, [
+    el('span', { class: 'cap' }, 'Alert types'),
+    el('span', { class: 'inherit-note' }, `${(preset.alert_types||[]).length} selected`),
+  ]));
+  wrap.appendChild(renderAlertTypeChips(preset));
+
+  // -------- Pager --------
+  wrap.appendChild(el('div', { class: 'section-label' }, 'Pager'));
+  wrap.appendChild(renderPagerCard(preset));
+
+  // -------- Roles to ping --------
+  wrap.appendChild(el('div', { class: 'section-label' }, [
+    el('span', { class: 'cap' }, 'Roles to ping'),
+    el('span', { class: 'inherit-note' }, `${(preset.role_ids||[]).length} / ${MAX_ROLES}`),
+  ]));
+  wrap.appendChild(renderRolesCard(preset));
+
+  // -------- Filters (optional) --------
+  wrap.appendChild(el('div', { class: 'section-label' }, [
+    el('span', { class: 'cap' }, 'Filters (optional)'),
+    el('span', { class: 'inherit-note' }, filtersSummary(preset)),
+  ]));
+  wrap.appendChild(renderFiltersCard(preset));
+
+  // -------- Preset mute --------
+  wrap.appendChild(el('div', { class: 'section-label' }, 'Mute'));
+  wrap.appendChild(renderPresetMuteCard(preset));
+
+  // -------- Per-type overrides --------
+  if ((preset.alert_types||[]).length > 0) {
+    wrap.appendChild(el('div', { class: 'section-label' }, [
+      el('span', { class: 'cap' }, 'Per-type overrides'),
+      el('span', { class: 'inherit-note' }, 'Fine-tune individual alert types'),
+    ]));
+    wrap.appendChild(renderOverridesCard(preset));
+  }
+
+  return wrap;
+}
+
+function inheritanceCaption(preset) {
+  const out = [];
+  const g = state.muteState.guild;
+  const c = channelMute(preset.channel_id);
+  if (!g.enabled) out.push(el('span', { class: 'pill muted' }, 'guild muted'));
+  else if (!g.enabled_ping) out.push(el('span', { class: 'pill pings-off' }, 'guild pings off'));
+  if (!c.enabled) out.push(el('span', { class: 'pill muted' }, 'channel muted'));
+  else if (!c.enabled_ping) out.push(el('span', { class: 'pill pings-off' }, 'channel pings off'));
+  if (!preset.enabled) out.push(el('span', { class: 'pill muted' }, 'preset muted'));
+  else if (!preset.enabled_ping) out.push(el('span', { class: 'pill pings-off' }, 'preset pings off'));
+  return out;
+}
+
+function renderAlertTypeChips(preset) {
+  const selected = new Set(preset.alert_types || []);
+  const row = el('div', { class: 'chip-row' });
+  for (const t of _DASH_ALERT_TYPES) {
+    const active = selected.has(t);
+    row.appendChild(el('button', {
+      class: 'chip' + (active ? ' active' : ''),
+      onclick: () => toggleAlertType(preset.id, t),
+      title: t,
+    }, [
+      el('span', {}, ALERT_TYPE_LABELS[t] || t),
+      el('span', { class: 'mono' }, t),
+    ]));
+  }
+  return row;
+}
+
+function renderPagerCard(preset) {
+  const card = el('div', { class: 'card' });
+  const row = el('div', { class: 'card-row' }, [
+    el('span', { class: 'label' }, [
+      el('span', {}, 'Pager messages'),
+      el('span', { class: 'sub' }, 'Subscribe to pager/capcode-based alerts.'),
+    ]),
+    makeSwitch(!!preset.pager_enabled, (checked) => patchPreset(preset.id, { pager_enabled: checked }), 'Pager enabled'),
+  ]);
+  card.appendChild(row);
+
+  if (preset.pager_enabled) {
+    const caps = preset.pager_capcodes || '';
+    const ta = el('textarea', {
+      class: 'form-textarea',
+      placeholder: 'e.g. 1234567, 2345678, 3456789',
+      id: 'capcodes-' + preset.id,
+    });
+    ta.value = caps;
+    let dirty = false;
+    ta.addEventListener('input', () => { dirty = true; });
+    ta.addEventListener('blur', () => {
+      if (!dirty) return;
+      dirty = false;
+      const v = ta.value.trim();
+      if (v === (preset.pager_capcodes || '')) return;
+      patchPreset(preset.id, { pager_capcodes: v || null });
+    });
+    card.appendChild(el('div', { class: 'pager-capcodes' }, [
+      el('label', { for: ta.id }, 'Capcodes (comma-separated)'),
+      ta,
+    ]));
+  }
+
+  return card;
+}
+
+function renderRolesCard(preset) {
+  const roleIds = parseRoleIds(preset.role_ids);
+  const display = el('div', { class: 'role-display' });
+  if (roleIds.length === 0) {
+    display.appendChild(el('span', { class: 'none' }, 'No roles configured — alerts will post without pings.'));
+  } else {
+    for (const id of roleIds) {
+      const role = state.roles.find(r => String(r.id) === String(id));
+      const name = role ? role.name : id;
+      const color = role && role.color ? discordColorToHex(role.color) : '#c7d2fe';
+      display.appendChild(el('span', { class: 'role-pill' }, [
+        el('span', { class: 'dot', style: `background:${color}` }),
+        '@' + name,
+      ]));
+    }
+  }
+  display.appendChild(el('button', {
+    class: 'roles-edit',
+    onclick: () => openRoleModal(preset.id),
+  }, [el('i', { class: 'fa-solid fa-pen' }), ' Edit']));
+
+  return el('div', { class: 'card' }, el('div', { class: 'card-row' }, display));
+}
+
+// ============================================================================
+// Filters (per-preset keyword / severity floor / bbox).
+// Persisted on PATCH /presets/<id> as `filters` JSONB. Empty/missing means
+// "no filter" — every alert that passes the mute gate is delivered.
+// ============================================================================
+
+const _DASH_FILTER_SEVERITIES = ['advice', 'watch_and_act', 'emergency', 'minor', 'moderate', 'major'];
+const _DASH_FILTER_SEVERITY_LABELS = {
+  advice: 'Advice (RFS)', watch_and_act: 'Watch & Act (RFS)', emergency: 'Emergency (RFS)',
+  minor: 'Minor', moderate: 'Moderate', major: 'Major',
+};
+// Alert types whose severity_min has any effect. Other types ignore the floor.
+const _DASH_FILTER_SEVERITY_TYPES = new Set(['rfs', 'bom', 'traffic_major']);
+
+function presetFilters(preset) {
+  const f = (preset && preset.filters) || {};
+  return {
+    keywords_include: Array.isArray(f.keywords_include) ? f.keywords_include : [],
+    keywords_exclude: Array.isArray(f.keywords_exclude) ? f.keywords_exclude : [],
+    severity_min: typeof f.severity_min === 'string' ? f.severity_min : '',
+    bbox: (f.bbox && typeof f.bbox === 'object') ? f.bbox : null,
+  };
+}
+
+function filtersSummary(preset) {
+  const f = presetFilters(preset);
+  const bits = [];
+  const kw = f.keywords_include.length + f.keywords_exclude.length;
+  if (kw) bits.push(`${kw} keyword${kw === 1 ? '' : 's'}`);
+  if (f.severity_min) bits.push(`severity ≥ ${f.severity_min.replace(/_/g, ' ')}`);
+  if (f.bbox) bits.push('geofilter');
+  return bits.length ? `Filters: ${bits.join(', ')}` : 'Filters: off';
+}
+
+/* Interactive bbox picker — Leaflet map with click-and-drag rectangle.
+   Returns { dom, get(), set(bbox) }. Two draw modes:
+   - "Draw box" button: cursor becomes crosshair, click-and-drag creates a box.
+   - "Use map view" button: snaps the bbox to the current map viewport.
+*/
+function makeBboxMap(preset, initialBbox) {
+  const mapId = 'bbox-map-' + preset.id + '-' + Math.random().toString(36).slice(2, 7);
+  const hint = el('div', { class: 'bbox-map-hint' },
+    'Click "Draw box", then click-and-drag to define an area.');
+  const mapDiv = el('div', { class: 'bbox-map', id: mapId }, [hint]);
+  const coords = el('div', { class: 'bbox-coords' });
+
+  const drawBtn   = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-vector-square' }), ' Draw box']);
+  const useViewBtn = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-expand' }), ' Use map view']);
+  const clearBtn  = el('button', { class: 'btn btn-ghost btn-sm' },
+    [el('i', { class: 'fa-solid fa-eraser' }), ' Clear']);
+  const actions = el('div', { class: 'bbox-map-actions' }, [drawBtn, useViewBtn, clearBtn]);
+
+  const wrap = el('div', {}, [mapDiv, coords, actions]);
+
+  let map = null;
+  let rect = null;
+  let drawMode = false;
+  let startLatLng = null;
+  let current = (initialBbox && typeof initialBbox.lat_min === 'number') ? { ...initialBbox } : null;
+
+  function renderCoords() {
+    coords.innerHTML = '';
+    if (current) {
+      coords.appendChild(document.createTextNode(
+        `bbox: ${current.lat_min.toFixed(4)}, ${current.lng_min.toFixed(4)}  →  ${current.lat_max.toFixed(4)}, ${current.lng_max.toFixed(4)}`
+      ));
+    } else {
+      coords.appendChild(el('span', { class: 'none' }, 'No geofilter — alerts from anywhere will pass.'));
+    }
+  }
+
+  function renderRect() {
+    if (!map) return;
+    if (rect) { map.removeLayer(rect); rect = null; }
+    if (current) {
+      rect = L.rectangle(
+        [[current.lat_min, current.lng_min], [current.lat_max, current.lng_max]],
+        { color: '#f97316', weight: 2, fillOpacity: 0.15 }
+      ).addTo(map);
+    }
+  }
+
+  function enterDrawMode() {
+    if (!map || drawMode) return;
+    drawMode = true;
+    mapDiv.classList.add('drawing');
+    hint.textContent = 'Click and drag to draw the area.';
+    hint.classList.remove('hidden');
+    map.dragging.disable();
+    drawBtn.disabled = true;
+  }
+
+  function exitDrawMode() {
+    drawMode = false;
+    startLatLng = null;
+    mapDiv.classList.remove('drawing');
+    hint.classList.add('hidden');
+    if (map) map.dragging.enable();
+    drawBtn.disabled = false;
+  }
+
+  // Defer init until Leaflet is loaded AND the container is in the DOM.
+  function init(retries = 50) {
+    if (typeof L === 'undefined' || !document.body.contains(mapDiv)) {
+      if (retries > 0) setTimeout(() => init(retries - 1), 60);
+      return;
+    }
+    map = L.map(mapId, { attributionControl: false, zoomControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map);
+    L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map);
+
+    if (current) {
+      map.fitBounds([
+        [current.lat_min, current.lng_min], [current.lat_max, current.lng_max],
+      ], { padding: [20, 20], maxZoom: 11 });
+      renderRect();
+      hint.classList.add('hidden');
+    } else {
+      // Default: NSW (Sydney-centred, shows most of the state at zoom 6).
+      map.setView([-33.87, 151.21], 6);
+    }
+    renderCoords();
+
+    map.on('mousedown', (e) => {
+      if (!drawMode) return;
+      startLatLng = e.latlng;
+      if (rect) { map.removeLayer(rect); rect = null; }
+    });
+    map.on('mousemove', (e) => {
+      if (!drawMode || !startLatLng) return;
+      if (rect) map.removeLayer(rect);
+      rect = L.rectangle([startLatLng, e.latlng],
+        { color: '#f97316', weight: 2, fillOpacity: 0.15 }).addTo(map);
+    });
+    map.on('mouseup', (e) => {
+      if (!drawMode) return;
+      if (!startLatLng) { exitDrawMode(); return; }
+      const end = e.latlng;
+      const lat_min = Math.min(startLatLng.lat, end.lat);
+      const lat_max = Math.max(startLatLng.lat, end.lat);
+      const lng_min = Math.min(startLatLng.lng, end.lng);
+      const lng_max = Math.max(startLatLng.lng, end.lng);
+      if (Math.abs(lat_max - lat_min) < 1e-5 || Math.abs(lng_max - lng_min) < 1e-5) {
+        // Stray click — ignore.
+        if (rect) { map.removeLayer(rect); rect = null; }
+        renderRect();
+        exitDrawMode();
+        return;
+      }
+      current = { lat_min, lat_max, lng_min, lng_max };
+      exitDrawMode();
+      renderCoords();
+    });
+
+    // Force a recompute once the container settles (Leaflet needs this when
+    // the map starts in a collapsed parent).
+    setTimeout(() => { if (map) map.invalidateSize(); }, 120);
+  }
+  init();
+
+  drawBtn.onclick = (e) => { e.preventDefault(); enterDrawMode(); };
+  useViewBtn.onclick = (e) => {
+    e.preventDefault();
+    if (!map) return;
+    const b = map.getBounds();
+    current = {
+      lat_min: b.getSouth(), lat_max: b.getNorth(),
+      lng_min: b.getWest(),  lng_max: b.getEast(),
+    };
+    renderRect();
+    renderCoords();
+  };
+  clearBtn.onclick = (e) => {
+    e.preventDefault();
+    current = null;
+    if (rect && map) { map.removeLayer(rect); rect = null; }
+    renderCoords();
+  };
+
+  // Self-heal: if the container's size ever changes (parent un-hides, window
+  // resizes, sidebar toggles), re-run invalidateSize so Leaflet re-tiles.
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => {
+      if (!map) return;
+      if (mapDiv.clientWidth > 0 && mapDiv.clientHeight > 0) {
+        map.invalidateSize();
+      }
+    });
+    ro.observe(mapDiv);
+  }
+
+  return {
+    dom: wrap,
+    get: () => current ? { ...current } : null,
+    set: (bb) => {
+      current = (bb && typeof bb.lat_min === 'number') ? { ...bb } : null;
+      renderRect();
+      renderCoords();
+      if (map && current) {
+        map.fitBounds([
+          [current.lat_min, current.lng_min], [current.lat_max, current.lng_max],
+        ], { padding: [20, 20], maxZoom: 11 });
+      }
+    },
+    invalidate: () => { if (map) map.invalidateSize(); },
+  };
+}
+
+function renderFiltersCard(preset) {
+  const card = el('div', { class: 'card' });
+  const f = presetFilters(preset);
+
+  const hasSeverityType = (preset.alert_types || []).some(t => _DASH_FILTER_SEVERITY_TYPES.has(t));
+
+  // Header row: summary + toggle button.
+  const editorId = 'filters-editor-' + preset.id;
+  let expanded = !!(f.keywords_include.length || f.keywords_exclude.length || f.severity_min || f.bbox);
+
+  const summarySpan = el('span', { class: 'filters-summary' }, filtersSummary(preset));
+  const toggleBtn = el('button', {
+    class: 'filters-toggle',
+    onclick: () => {
+      expanded = !expanded;
+      const body = document.getElementById(editorId);
+      if (body) body.style.display = expanded ? 'grid' : 'none';
+      toggleBtn.textContent = expanded ? 'Hide' : 'Edit';
+      // Leaflet can't size itself while display:none — force a re-tile as
+      // soon as the container becomes visible.
+      if (expanded && bboxMap && bboxMap.invalidate) {
+        setTimeout(() => bboxMap.invalidate(), 30);
+      }
+    },
+  }, expanded ? 'Hide' : 'Edit');
+
+  card.appendChild(el('div', { class: 'card-row' }, [
+    el('span', { class: 'label' }, [
+      el('span', {}, 'Filters'),
+      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, or a bbox.'),
+    ]),
+    el('div', { style: 'display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap' }, [summarySpan, toggleBtn]),
+  ]));
+
+  // Editor body (hidden when collapsed).
+  const body = el('div', { class: 'filters-body', id: editorId });
+  body.style.display = expanded ? 'grid' : 'none';
+
+  // ---- Keywords include ----
+  const incTa = el('textarea', {
+    class: 'form-textarea',
+    placeholder: 'comma-separated, e.g. fire, structure, bushfire',
+    id: 'filters-inc-' + preset.id,
+  });
+  incTa.value = f.keywords_include.join(', ');
+  body.appendChild(el('div', {}, [
+    el('label', { class: 'field-label', for: incTa.id }, 'Include keywords (any-of, case-insensitive)'),
+    incTa,
+  ]));
+
+  // ---- Keywords exclude ----
+  const excTa = el('textarea', {
+    class: 'form-textarea',
+    placeholder: 'comma-separated, e.g. drill, exercise, test',
+    id: 'filters-exc-' + preset.id,
+  });
+  excTa.value = f.keywords_exclude.join(', ');
+  body.appendChild(el('div', {}, [
+    el('label', { class: 'field-label', for: excTa.id }, 'Exclude keywords (none-of)'),
+    excTa,
+  ]));
+
+  // ---- Severity floor ----
+  const sevSelect = el('select', {
+    class: 'form-select',
+    id: 'filters-sev-' + preset.id,
+  });
+  sevSelect.appendChild(el('option', { value: '' }, '(no severity floor)'));
+  for (const s of _DASH_FILTER_SEVERITIES) {
+    const opt = el('option', { value: s }, _DASH_FILTER_SEVERITY_LABELS[s] || s);
+    if (s === f.severity_min) opt.selected = true;
+    sevSelect.appendChild(opt);
+  }
+  const sevWrap = el('div', {}, [
+    el('label', { class: 'field-label', for: sevSelect.id }, 'Severity floor'),
+    sevSelect,
+    el('div', { style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.25rem' },
+       hasSeverityType
+         ? 'Applies to RFS / BOM / traffic_major; other types ignore.'
+         : 'No severity-aware alert types selected — floor is inactive until you add RFS, BOM, or traffic_major.'),
+  ]);
+  if (!hasSeverityType) {
+    sevSelect.disabled = true;
+    sevSelect.style.opacity = '0.55';
+  }
+  body.appendChild(sevWrap);
+
+  // ---- bbox (interactive map) ----
+  const bboxMap = makeBboxMap(preset, f.bbox);
+  body.appendChild(el('div', {}, [
+    el('label', { class: 'field-label' }, 'Geographic bbox (only fires for alerts with lat/lng inside)'),
+    bboxMap.dom,
+  ]));
+
+  // ---- Action row ----
+  const buildPayload = () => {
+    const parseList = (s) => (s || '').split(',').map(x => x.trim()).filter(Boolean);
+    const inc = parseList(incTa.value);
+    const exc = parseList(excTa.value);
+    const sev = sevSelect.disabled ? '' : (sevSelect.value || '');
+    const bb = bboxMap.get();
+    const out = {};
+    if (inc.length) out.keywords_include = inc;
+    if (exc.length) out.keywords_exclude = exc;
+    if (sev) out.severity_min = sev;
+    if (bb) out.bbox = bb;
+    return out;
+  };
+
+  const saveBtn = el('button', {
+    class: 'btn btn-primary btn-sm',
+    onclick: async () => {
+      let payload;
+      try {
+        payload = buildPayload();
+      } catch (e) {
+        alert(e.message); return;
+      }
+      saveBtn.disabled = true;
+      try {
+        await patchPreset(preset.id, { filters: payload });
+      } finally {
+        saveBtn.disabled = false;
+      }
+    },
+  }, [el('i', { class: 'fa-solid fa-check' }), ' Save filters']);
+
+  const resetBtn = el('button', {
+    class: 'btn btn-ghost btn-sm',
+    onclick: async () => {
+      incTa.value = ''; excTa.value = '';
+      if (!sevSelect.disabled) sevSelect.value = '';
+      bboxMap.set(null);
+      await patchPreset(preset.id, { filters: {} });
+    },
+  }, [el('i', { class: 'fa-solid fa-rotate-left' }), ' Reset filters']);
+
+  body.appendChild(el('div', { class: 'filters-actions' }, [saveBtn, resetBtn]));
+
+  card.appendChild(body);
+  return card;
+}
+
+function renderPresetMuteCard(preset) {
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { class: 'card-row' }, [
+    el('span', { class: 'label' }, [
+      el('span', {}, 'Alerts'),
+      el('span', { class: 'sub' }, 'On: this preset fires normally. Off: the preset is paused but stays configured.'),
+    ]),
+    makeSwitch(!!preset.enabled, (checked) => patchPreset(preset.id, { enabled: checked }), 'Preset alerts on/off'),
+  ]));
+  card.appendChild(el('div', { class: 'card-row' }, [
+    el('span', { class: 'label' }, [
+      el('span', {}, 'Role pings'),
+      el('span', { class: 'sub' }, 'On: alerts mention the configured roles. Off: alerts post silently.'),
+    ]),
+    makeSwitch(!!preset.enabled_ping, (checked) => patchPreset(preset.id, { enabled_ping: checked }), 'Preset pings on/off'),
+  ]));
+  return card;
+}
+
+function renderSidebarChannelMute(chId) {
+  const cm = channelMute(chId);
+  const g = state.muteState.guild;
+  const forcedOff = !g.enabled;
+  const forcedPingOff = !g.enabled_ping;
+
+  const row1 = el('div', { class: 'sb-ch-mute-row' }, [
+    el('span', { class: 'sb-ch-mute-label' }, 'Alerts'),
+    makeSwitch(!!cm.enabled,
+      (checked) => setChannelMute(chId, { enabled: checked }),
+      forcedOff ? 'Guild alerts are off — this switch has no effect' : 'On: presets in this channel fire. Off: channel is silent.',
+      { small: true }),
+  ]);
+  const row2 = el('div', { class: 'sb-ch-mute-row' }, [
+    el('span', { class: 'sb-ch-mute-label' }, 'Role pings'),
+    makeSwitch(!!cm.enabled_ping,
+      (checked) => setChannelMute(chId, { enabled_ping: checked }),
+      forcedPingOff ? 'Guild pings are off — this switch has no effect' : 'On: presets in this channel mention roles. Off: alerts post silently.',
+      { small: true }),
+  ]);
+  return el('div', { class: 'sb-ch-mute', onclick: (e) => e.stopPropagation() }, [row1, row2]);
+}
+
+function renderOverridesCard(preset) {
+  const list = el('div', { class: 'override-list' });
+  const overrides = preset.type_overrides || {};
+  const types = [...(preset.alert_types || [])].sort(
+    (a, b) => _DASH_ALERT_TYPES.indexOf(a) - _DASH_ALERT_TYPES.indexOf(b));
+
+  for (const t of types) {
+    const ov = overrides[t];
+    const hasOv = !!ov;
+    const effEnabled = hasOv && ov.enabled != null ? !!ov.enabled : !!preset.enabled;
+    const effPing = hasOv && ov.enabled_ping != null ? !!ov.enabled_ping : !!preset.enabled_ping;
+
+    const badge = hasOv
+      ? el('span', { class: 'override-badge override-on', title: 'Explicit override — click X to reset' }, 'override')
+      : el('span', { class: 'override-badge inherit-on', title: 'Inheriting from preset defaults — toggle to override' }, 'inherit');
+
+    const enabledToggle = makeSwitch(effEnabled, (checked) => {
+      // Always write an override when the user toggles
+      setTypeOverride(preset.id, t, { enabled: checked, enabled_ping: effPing });
+    }, 'Enable this alert type', { small: true });
+    const pingToggle = makeSwitch(effPing, (checked) => {
+      setTypeOverride(preset.id, t, { enabled: effEnabled, enabled_ping: checked });
+    }, 'Pings for this alert type', { small: true });
+
+    const row = el('div', {
+      class: 'override-row' + (hasOv ? '' : ' inherited'),
+    }, [
+      el('span', { class: 'override-name' }, [
+        el('span', {}, ALERT_TYPE_LABELS[t] || t),
+        el('span', { class: 'override-mono' }, t),
+        el('div', { style: 'display:flex;gap:0.4rem;margin-top:0.15rem;align-items:center' }, badge),
+      ]),
+      el('span', { class: 'mini-toggle' + (hasOv ? '' : ' dim') }, [
+        el('i', { class: 'fa-solid fa-bell', title: 'Enabled' }),
+        enabledToggle,
+      ]),
+      el('span', { class: 'mini-toggle' + (hasOv ? '' : ' dim') }, [
+        el('i', { class: 'fa-solid fa-at', title: 'Ping roles' }),
+        pingToggle,
+      ]),
+      el('button', {
+        class: 'override-reset',
+        title: hasOv ? 'Reset to inherit preset default' : 'No override to reset',
+        disabled: hasOv ? false : 'disabled',
+        onclick: () => hasOv && clearTypeOverride(preset.id, t),
+      }, el('i', { class: 'fa-solid fa-xmark' })),
+    ]);
+    list.appendChild(row);
+  }
+  return list;
+}
+
+/* -------------------- Preset mutations -------------------- */
+
+async function patchPreset(presetId, patch) {
+  const prev = presetById(presetId);
+  if (!prev) return;
+  // Optimistic
+  const optimistic = { ...prev, ...patch };
+  replacePreset(optimistic);
+  render();
+  try {
+    const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+    if (res && res.preset) {
+      replacePreset(res.preset);
+      render();
+    }
+  } catch (e) {
+    // Revert
+    replacePreset(prev);
+    render();
+    handleApiError(e, 'Failed to update preset.');
+  }
+}
+
+async function renamePreset(presetId, name) {
+  await patchPreset(presetId, { name });
+}
+
+async function toggleAlertType(presetId, type) {
+  const preset = presetById(presetId);
+  if (!preset) return;
+  const current = new Set(preset.alert_types || []);
+  if (current.has(type)) current.delete(type);
+  else current.add(type);
+  // Keep canonical ordering
+  const next = _DASH_ALERT_TYPES.filter(t => current.has(t));
+  await patchPreset(presetId, { alert_types: next });
+}
+
+async function deletePreset(presetId) {
+  const preset = presetById(presetId);
+  if (!preset) return;
+  const ok = await confirmDialog(
+    'Delete preset?',
+    `This will permanently remove the “${preset.name}” preset. This cannot be undone.`,
+    'Delete', true,
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}`, { method: 'DELETE' });
+    state.presets = state.presets.filter(p => String(p.id) !== String(presetId));
+    if (String(state.selectedPresetId) === String(presetId)) {
+      state.selectedPresetId = null;
+      // Prefer another preset in the same channel, else first overall
+      const same = presetsByChannel(preset.channel_id);
+      if (same.length) state.selectedPresetId = same[0].id;
+      else {
+        const first = sortedPresets()[0];
+        if (first) state.selectedPresetId = first.id;
+        else { state.view = 'empty'; }
+      }
+    }
+    toast('Preset deleted.', 'ok');
+    render();
+  } catch (e) {
+    handleApiError(e, 'Failed to delete preset.');
+  }
+}
+
+async function setTypeOverride(presetId, alertType, body) {
+  const prev = presetById(presetId);
+  if (!prev) return;
+  const prevOv = (prev.type_overrides || {})[alertType] || null;
+  // Optimistic
+  const nextOverrides = { ...(prev.type_overrides || {}) };
+  nextOverrides[alertType] = { ...body };
+  replacePreset({ ...prev, type_overrides: nextOverrides });
+  render();
+  try {
+    const res = await api(
+      `/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}/type-overrides/${alertType}`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    );
+    if (res && res.preset) {
+      replacePreset(res.preset);
+      render();
+    }
+  } catch (e) {
+    // Revert
+    const revertOv = { ...(prev.type_overrides || {}) };
+    if (prevOv) revertOv[alertType] = prevOv;
+    else delete revertOv[alertType];
+    replacePreset({ ...prev, type_overrides: revertOv });
+    render();
+    handleApiError(e, 'Failed to set override.');
+  }
+}
+
+async function clearTypeOverride(presetId, alertType) {
+  const prev = presetById(presetId);
+  if (!prev) return;
+  const prevOv = (prev.type_overrides || {})[alertType] || null;
+  // Optimistic
+  const nextOverrides = { ...(prev.type_overrides || {}) };
+  delete nextOverrides[alertType];
+  replacePreset({ ...prev, type_overrides: nextOverrides });
+  render();
+  try {
+    const res = await api(
+      `/api/dashboard/guilds/${state.activeGuildId}/presets/${presetId}/type-overrides/${alertType}`,
+      { method: 'DELETE' },
+    );
+    if (res && res.preset) {
+      replacePreset(res.preset);
+      render();
+    }
+  } catch (e) {
+    // Revert
+    const revertOv = { ...(prev.type_overrides || {}) };
+    if (prevOv) revertOv[alertType] = prevOv;
+    replacePreset({ ...prev, type_overrides: revertOv });
+    render();
+    handleApiError(e, 'Failed to reset override.');
+  }
+}
+
+function replacePreset(preset) {
+  const i = state.presets.findIndex(p => String(p.id) === String(preset.id));
+  if (i >= 0) state.presets[i] = preset;
+  else state.presets.push(preset);
+}
+
+/* -------------------- Mute-state mutations -------------------- */
+
+async function setGuildMute(patch) {
+  const prev = { ...state.muteState.guild };
+  state.muteState.guild = { ...prev, ...patch };
+  render();
+  try {
+    // If both enabled+enabled_ping are back to true, we can DELETE; else PUT.
+    const next = state.muteState.guild;
+    if (next.enabled === true && next.enabled_ping === true) {
+      const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/mute-state/guild`, { method: 'DELETE' });
+      // Leave optimistic state as-is (both true)
+      void res;
+    } else {
+      const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/mute-state/guild`, {
+        method: 'PUT', body: JSON.stringify(patch),
+      });
+      if (res && res.guild) {
+        state.muteState.guild = { enabled: !!res.guild.enabled, enabled_ping: !!res.guild.enabled_ping };
+        render();
+      }
+    }
+  } catch (e) {
+    state.muteState.guild = prev;
+    render();
+    handleApiError(e, 'Failed to update guild mute.');
+  }
+}
+
+async function setChannelMute(chId, patch) {
+  const key = String(chId);
+  const prev = { ...channelMute(chId) };
+  const next = { ...prev, ...patch, channel_id: key };
+  state.muteState.channels.set(key, next);
+  render();
+  try {
+    if (next.enabled === true && next.enabled_ping === true) {
+      await api(`/api/dashboard/guilds/${state.activeGuildId}/mute-state/channels/${chId}`, { method: 'DELETE' });
+      // Keep optimistic (both true); equivalent to no record.
+      state.muteState.channels.delete(key);
+      render();
+    } else {
+      const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/mute-state/channels/${chId}`, {
+        method: 'PUT', body: JSON.stringify(patch),
+      });
+      if (res && res.channel) {
+        state.muteState.channels.set(key, {
+          channel_id: String(res.channel.channel_id),
+          enabled: !!res.channel.enabled,
+          enabled_ping: !!res.channel.enabled_ping,
+        });
+        render();
+      }
+    }
+  } catch (e) {
+    state.muteState.channels.set(key, prev);
+    render();
+    handleApiError(e, 'Failed to update channel mute.');
+  }
+}
+
+
+/* -------------------- Wizard (3-step) -------------------- */
+
+function openWizard(defaultChannelId = null) {
+  state.wizard = {
+    step: defaultChannelId ? 2 : 1,
+    channelId: defaultChannelId || null,
+    name: '',
+    types: new Set(),
+    pagerEnabled: false,
+    search: '',
+    saving: false,
+  };
+  state.view = 'wizard';
+  if (isMobile()) state.drawerOpen = false;
+  render();
+}
+
+function closeWizard() {
+  state.wizard = null;
+  if (state.presets.length === 0) {
+    state.view = 'empty';
+    state.selectedPresetId = null;
+  } else {
+    state.view = 'editor';
+    if (!state.selectedPresetId) {
+      const first = sortedPresets()[0];
+      if (first) state.selectedPresetId = first.id;
+    }
+  }
+  render();
+}
+
+function renderWizard() {
+  const w = state.wizard;
+  const wrap = el('div', { class: 'wizard' });
+
+  wrap.appendChild(el('div', { class: 'wizard-head' }, [
+    el('h2', {}, 'Create preset'),
+    el('button', { class: 'btn btn-ghost btn-sm', onclick: () => closeWizard() },
+      [el('i', { class: 'fa-solid fa-xmark' }), ' Cancel']),
+  ]));
+
+  wrap.appendChild(el('div', { class: 'wizard-steps' }, [
+    el('span', { class: 'wizard-step' + (w.step === 1 ? ' active' : (w.step > 1 ? ' done' : '')) }, '1 · Channel'),
+    el('span', { class: 'wizard-step' + (w.step === 2 ? ' active' : (w.step > 2 ? ' done' : '')) }, '2 · Name'),
+    el('span', { class: 'wizard-step' + (w.step === 3 ? ' active' : '') }, '3 · Alert types'),
+  ]));
+
+  const body = el('div', { class: 'wizard-body' });
+  if (w.step === 1) body.appendChild(renderWizardStep1());
+  else if (w.step === 2) body.appendChild(renderWizardStep2());
+  else body.appendChild(renderWizardStep3());
+  wrap.appendChild(body);
+
+  wrap.appendChild(renderWizardNav());
+  return wrap;
+}
+
+function renderWizardStep1() {
+  const w = state.wizard;
+  const container = el('div', {});
+  container.appendChild(el('p', { style: 'margin:0 0 0.6rem;color:var(--text-muted);font-size:0.88rem' },
+    'Pick the text channel where alerts should be posted.'));
+  container.appendChild(el('input', {
+    class: 'form-input wizard-search',
+    placeholder: 'Search channels…',
+    value: w.search,
+    oninput: (e) => { w.search = e.target.value; renderWizardBodyOnly(); },
+  }));
+
+  const list = el('div', { class: 'channel-picker' });
+  const q = w.search.trim().toLowerCase();
+  const chans = sortedChannels();
+  const filtered = q ? chans.filter(c => (c.name || '').toLowerCase().includes(q)) : chans;
+
+  if (filtered.length === 0) {
+    list.appendChild(el('div', { class: 'empty', style: 'margin:0.3rem' }, 'No channels match.'));
+  } else {
+    const groups = new Map();
+    for (const c of filtered) {
+      const cat = c.parent_name || c.category_name || c.category || '';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(c);
+    }
+    const hasCategories = Array.from(groups.keys()).some(k => !!k) && groups.size > 1;
+    if (hasCategories) {
+      for (const [cat, items] of groups) {
+        if (cat) list.appendChild(el('div', { class: 'channel-cat-label' }, cat));
+        for (const c of items) list.appendChild(renderWizardChannelOpt(c));
+      }
+    } else {
+      for (const c of filtered) list.appendChild(renderWizardChannelOpt(c));
+    }
+  }
+  container.appendChild(list);
+  return container;
+}
+
+function renderWizardChannelOpt(c) {
+  const w = state.wizard;
+  const selected = String(w.channelId) === String(c.id);
+  const hasExisting = state.presets.some(p => String(p.channel_id) === String(c.id));
+  return el('div', {
+    class: 'channel-opt' + (selected ? ' selected' : ''),
+    onclick: () => { w.channelId = c.id; renderWizardBodyOnly(); },
+  }, [
+    el('input', { type: 'radio', name: 'wizard-ch', checked: selected ? 'checked' : false,
+      onclick: (e) => { e.stopPropagation(); w.channelId = c.id; renderWizardBodyOnly(); } }),
+    el('span', { class: 'hash' }, '#'),
+    el('span', { class: 'name' }, c.name || '(unnamed)'),
+    hasExisting ? el('span', { class: 'existing-note' }, 'already has preset(s)') : null,
+  ]);
+}
+
+function renderWizardStep2() {
+  const w = state.wizard;
+  const ch = channelById(w.channelId);
+  const container = el('div', {});
+  container.appendChild(el('p', { style: 'margin:0 0 0.6rem;color:var(--text-muted);font-size:0.88rem' },
+    `Give your preset a short, descriptive name. It will post to #${ch ? ch.name : ''}.`));
+  const suggest = el('input', {
+    class: 'form-input wizard-search',
+    id: 'wizard-name-input',
+    placeholder: 'e.g. Critical fires, BOM watches…',
+    value: w.name || '',
+    maxlength: '100',
+    oninput: (e) => {
+      w.name = e.target.value;
+      // Update Next button state without rebuilding the input (would lose focus)
+      const nav = document.querySelector('.wizard-foot');
+      if (nav) {
+        const btn = nav.querySelector('.btn-primary');
+        if (btn) btn.disabled = !(w.name && w.name.trim());
+      }
+    },
+    onkeydown: (e) => {
+      if (e.key === 'Enter' && w.name && w.name.trim()) {
+        e.preventDefault();
+        w.step = 3; render();
+      }
+    },
+  });
+  container.appendChild(suggest);
+  setTimeout(() => { try { suggest.focus(); } catch(_){} }, 30);
+  return container;
+}
+
+function renderWizardStep3() {
+  const w = state.wizard;
+  const container = el('div', {});
+  container.appendChild(el('p', { style: 'margin:0 0 0.6rem;color:var(--text-muted);font-size:0.88rem' },
+    'Select the alert types to include. You can optionally enable the pager channel too.'));
+
+  container.appendChild(el('div', { class: 'select-row' }, [
+    el('span', {}, `${w.types.size} selected`),
+    el('span', { style: 'flex:1' }),
+    el('button', { class: 'link-btn', onclick: () => { _DASH_ALERT_TYPES.forEach(k => w.types.add(k)); renderWizardBodyOnly(); } }, 'Select all'),
+    el('button', { class: 'link-btn', onclick: () => { w.types.clear(); renderWizardBodyOnly(); } }, 'Clear all'),
+  ]));
+
+  const list = el('div', { class: 'type-list' });
+  for (const k of _DASH_ALERT_TYPES) {
+    const checked = w.types.has(k);
+    list.appendChild(el('label', {
+      class: 'type-opt' + (checked ? ' selected' : ''),
+    }, [
+      el('input', { type: 'checkbox', checked: checked ? 'checked' : false,
+        onchange: (e) => { if (e.target.checked) w.types.add(k); else w.types.delete(k); renderWizardBodyOnly(); } }),
+      el('span', {}, ALERT_TYPE_LABELS[k]),
+      el('span', { style: 'margin-left:auto;color:var(--text-soft);font-family:monospace;font-size:0.7rem' }, k),
+    ]));
+  }
+  // Pager flag
+  list.appendChild(el('label', { class: 'type-opt' + (w.pagerEnabled ? ' selected' : '') }, [
+    el('input', { type: 'checkbox', checked: w.pagerEnabled ? 'checked' : false,
+      onchange: (e) => { w.pagerEnabled = !!e.target.checked; renderWizardBodyOnly(); } }),
+    el('span', {}, 'Pager messages'),
+    el('span', { style: 'margin-left:auto;color:var(--text-soft);font-family:monospace;font-size:0.7rem' }, 'pager'),
+  ]));
+  container.appendChild(list);
+  return container;
+}
+
+function renderWizardNav() {
+  const w = state.wizard;
+  const nav = el('div', { class: 'wizard-foot' });
+  const left = el('div', {});
+  const right = el('div', { style: 'display:flex;gap:0.5rem' });
+
+  if (w.step > 1) {
+    left.appendChild(el('button', { class: 'btn btn-ghost btn-sm',
+      onclick: () => { w.step -= 1; render(); } }, [el('i', { class: 'fa-solid fa-arrow-left' }), ' Back']));
+  }
+
+  if (w.step === 1) {
+    const next = el('button', { class: 'btn btn-primary btn-sm',
+      onclick: () => { w.step = 2; render(); } }, ['Next ', el('i', { class: 'fa-solid fa-arrow-right' })]);
+    if (!w.channelId) next.disabled = true;
+    right.appendChild(next);
+  } else if (w.step === 2) {
+    const next = el('button', { class: 'btn btn-primary btn-sm',
+      onclick: () => {
+        // Pull latest value from the input before advancing
+        const inp = qs('wizard-name-input');
+        if (inp) w.name = inp.value || '';
+        w.step = 3; render();
+      } }, ['Next ', el('i', { class: 'fa-solid fa-arrow-right' })]);
+    if (!(w.name && w.name.trim())) next.disabled = true;
+    right.appendChild(next);
+  } else {
+    const save = el('button', { class: 'btn btn-primary btn-sm',
+      onclick: () => wizardSave(),
+    }, w.saving ? [el('span', { class: 'spinner' }), ' Saving…'] : [el('i', { class: 'fa-solid fa-check' }), ' Create preset']);
+    if (w.saving || (w.types.size === 0 && !w.pagerEnabled)) save.disabled = true;
+    right.appendChild(save);
+  }
+  nav.appendChild(left);
+  nav.appendChild(right);
+  return nav;
+}
+
+function renderWizardBodyOnly() {
+  const body = document.querySelector('.wizard-body');
+  const nav  = document.querySelector('.wizard-foot');
+  if (!body || !nav) { render(); return; }
+  // Preserve both the wizard-body scroll and any inner scroller (e.g. channel/type list),
+  // otherwise a click rebuilds the DOM and jumps the list back to the top.
+  const outerScroll = body.scrollTop;
+  const innerScroller = body.querySelector('.channel-picker, .type-list');
+  const innerScroll = innerScroller ? innerScroller.scrollTop : 0;
+
+  body.innerHTML = '';
+  const w = state.wizard;
+  if (w.step === 1) body.appendChild(renderWizardStep1());
+  else if (w.step === 2) body.appendChild(renderWizardStep2());
+  else body.appendChild(renderWizardStep3());
+  const newNav = renderWizardNav();
+  nav.replaceWith(newNav);
+
+  body.scrollTop = outerScroll;
+  const newInner = body.querySelector('.channel-picker, .type-list');
+  if (newInner) newInner.scrollTop = innerScroll;
+}
+
+async function wizardSave() {
+  const w = state.wizard;
+  if (!w.channelId || !(w.name && w.name.trim())) return;
+  if (w.types.size === 0 && !w.pagerEnabled) return;
+  w.saving = true; render();
+  try {
+    const res = await api(`/api/dashboard/guilds/${state.activeGuildId}/presets`, {
+      method: 'POST',
+      body: JSON.stringify({
+        channel_id: w.channelId,
+        name: w.name.trim(),
+        alert_types: _DASH_ALERT_TYPES.filter(t => w.types.has(t)),
+        pager_enabled: !!w.pagerEnabled,
+        role_ids: [],
+        enabled: true,
+        enabled_ping: true,
+      }),
+    });
+    if (res && res.preset) {
+      state.presets.push(res.preset);
+      state.selectedPresetId = res.preset.id;
+      state.openChannels.add(String(res.preset.channel_id));
+      state.view = 'editor';
+      toast(`Created preset “${res.preset.name}”.`, 'ok');
+    }
+    state.wizard = null;
+    render();
+  } catch (e) {
+    w.saving = false;
+    render();
+    handleApiError(e, 'Failed to create preset.');
+  }
+}
+
+/* -------------------- Admin overview -------------------- */
+
+async function openAdmin() {
+  state.view = 'admin';
+  state.admin = { loading: true, data: null, error: null };
+  state.adminSources = { loading: true, data: null, error: null };
+  if (isMobile()) state.drawerOpen = false;
+  render();
+  // Fire both in parallel — sources panel is independent and shouldn't block
+  // the main overview if it lags or errors.
+  const overviewP = api('/api/dashboard/admin/overview')
+    .then(data => { state.admin = { loading: false, data, error: null }; })
+    .catch(e => { state.admin = { loading: false, data: null, error: (e && e.message) || 'Failed to load admin data.' }; });
+  const sourcesP = loadAdminSources();
+  await Promise.all([overviewP, sourcesP]);
+  render();
+}
+
+async function loadAdminSources() {
+  state.adminSources = { loading: true, data: null, error: null };
+  try {
+    const data = await api('/api/dashboard/admin/sources');
+    state.adminSources = { loading: false, data, error: null };
+  } catch (e) {
+    state.adminSources = { loading: false, data: null, error: (e && e.message) || 'Failed to load source health.' };
+  }
+}
+
+function renderAdmin() {
+  const a = state.admin || {};
+  const wrap = el('div', { class: 'admin-wrap' });
+  wrap.appendChild(el('div', { class: 'overview-head' }, [
+    el('h2', {}, 'Admin overview'),
+    el('div', { class: 'overview-actions' }, [
+      el('button', { class: 'btn btn-ghost btn-sm', onclick: () => openAdmin() },
+        [el('i', { class: 'fa-solid fa-rotate' }), ' Refresh']),
+    ]),
+  ]));
+
+  if (a.loading) {
+    wrap.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading…']));
+    return wrap;
+  }
+  if (a.error) {
+    wrap.appendChild(el('div', { class: 'empty' }, [el('i', { class: 'fa-solid fa-triangle-exclamation' }), ' ', a.error]));
+    return wrap;
+  }
+  if (!a.data) {
+    wrap.appendChild(el('div', { class: 'empty' }, 'No data.'));
+    return wrap;
+  }
+  const d = a.data;
+  const s = d.stats || {};
+
+  const cards = el('div', { class: 'stat-grid' });
+  const dashFmt = (v) => (v === null || v === undefined ? '—' : v);
+  cards.appendChild(statCard('Servers', dashFmt(s.servers_total), 'fa-server'));
+  cards.appendChild(statCard('User installs', dashFmt(s.user_installs), 'fa-user-plus'));
+  cards.appendChild(statCard('Dashboard users', s.dashboard_users ?? s.users_total ?? 0, 'fa-users'));
+  cards.appendChild(statCard('Active sessions', s.sessions_active || 0, 'fa-plug'));
+  cards.appendChild(statCard('Guilds w/ presets', s.guilds_with_presets || 0, 'fa-folder-tree'));
+  cards.appendChild(statCard('Channels configured', s.channels_configured || 0, 'fa-hashtag'));
+  cards.appendChild(statCard('Total presets', s.presets_total || 0, 'fa-layer-group'));
+  cards.appendChild(statCard('Pager presets', s.presets_pager || 0, 'fa-pager'));
+  cards.appendChild(statCard('Muted presets', s.presets_muted || 0, 'fa-volume-xmark'));
+  cards.appendChild(statCard('Muted channels', s.channels_muted || 0, 'fa-bell-slash'));
+  cards.appendChild(statCard('Muted guilds', s.guilds_muted || 0, 'fa-shield-halved'));
+  wrap.appendChild(cards);
+
+  // Data-source health panel
+  const sourcesHost = el('div', { id: 'admin-sources-host' });
+  sourcesHost.appendChild(renderAdminSources());
+  wrap.appendChild(sourcesHost);
+
+  // Alert-type breakdown
+  wrap.appendChild(el('h3', { class: 'section-head' }, 'Subscriptions per alert type'));
+  const tc = s.alert_type_counts || {};
+  const tcRow = el('div', { class: 'admin-type-grid' });
+  for (const t of _DASH_ALERT_TYPES) {
+    tcRow.appendChild(el('div', { class: 'admin-type-cell' }, [
+      el('span', { class: 'at-name' }, ALERT_TYPE_LABELS[t] || t),
+      el('span', { class: 'at-count' }, String(tc[t] || 0)),
+    ]));
+  }
+  wrap.appendChild(tcRow);
+
+  // Per-guild table
+  wrap.appendChild(el('h3', { class: 'section-head' }, `Guilds (${(d.guilds||[]).length})`));
+  const gtbl = el('table', { class: 'admin-table' });
+  const ghead = el('thead', {}, el('tr', {}, [
+    el('th', {}, 'Guild'),
+    el('th', {}, 'Presets'),
+    el('th', {}, 'Channels'),
+    el('th', {}, 'Pager'),
+    el('th', {}, 'Muted'),
+    el('th', {}, 'Last change'),
+  ]));
+  gtbl.appendChild(ghead);
+  const gbody = el('tbody', {});
+  for (const g of d.guilds || []) {
+    gbody.appendChild(el('tr', {}, [
+      el('td', {}, [
+        g.icon_url ? el('img', { class: 'g-icon', src: g.icon_url, alt: '' }) : null,
+        el('span', { class: 'g-name' }, g.name || '—'),
+        el('span', { class: 'g-id' }, g.guild_id),
+      ]),
+      el('td', {}, String(g.preset_count)),
+      el('td', {}, String(g.channel_count)),
+      el('td', {}, String(g.pager_presets)),
+      el('td', {}, String(g.muted_presets)),
+      el('td', {}, g.last_change ? timeAgo(g.last_change) : '—'),
+    ]));
+  }
+  gtbl.appendChild(gbody);
+  wrap.appendChild(el('div', { class: 'admin-table-wrap' }, gtbl));
+
+  // Dashboard users (deduped — one row per Discord user)
+  wrap.appendChild(el('h3', { class: 'section-head' }, `Dashboard users (${(d.sessions||[]).length})`));
+  const stbl = el('table', { class: 'admin-table' });
+  stbl.appendChild(el('thead', {}, el('tr', {}, [
+    el('th', {}, 'User'),
+    el('th', {}, 'ID'),
+    el('th', {}, 'Guilds'),
+    el('th', {}, 'Age'),
+  ])));
+  const sbody = el('tbody', {});
+  for (const u of d.sessions || []) {
+    sbody.appendChild(el('tr', {}, [
+      el('td', {}, [
+        u.avatar_url ? el('img', { class: 'g-icon', src: u.avatar_url, alt: '' }) : null,
+        el('span', {}, '@' + (u.username || '?')),
+        u.is_admin ? el('span', { class: 'admin-pill' }, 'admin') : null,
+      ]),
+      el('td', { class: 'mono' }, u.uid),
+      el('td', {}, String(u.guild_count)),
+      el('td', {}, formatAge(u.age_seconds)),
+    ]));
+  }
+  stbl.appendChild(sbody);
+  wrap.appendChild(el('div', { class: 'admin-table-wrap' }, stbl));
+
+  // Bot controls (sync / test / cleanup) + recent-actions log
+  wrap.appendChild(renderBotControls());
+
+  // Broadcast composer
+  wrap.appendChild(renderBroadcast());
+
+  return wrap;
+}
+
+// State labels mapped to friendlier wording for the source-health panel.
+const _SRC_STATE_LABEL = {
+  ok: 'Healthy',
+  degraded: 'Degraded',
+  down: 'Down',
+  unknown: 'No data yet',
+};
+
+// Auto-refresh handle. Set when the admin view mounts; cleared when the
+// user navigates away.
+let _adminSourcesTimer = null;
+
+function startAdminSourcesAutoRefresh() {
+  if (_adminSourcesTimer) return;
+  _adminSourcesTimer = setInterval(async () => {
+    if (state.view !== 'admin') return;
+    try {
+      await loadAdminSources();
+      // Repaint just the sources host so the user's scroll position is preserved.
+      const host = document.getElementById('admin-sources-host');
+      if (host) { host.innerHTML = ''; host.appendChild(renderAdminSources()); }
+    } catch (_) {}
+  }, 30000);  // every 30s — matches typical poll cadence
+}
+
+function stopAdminSourcesAutoRefresh() {
+  if (_adminSourcesTimer) {
+    clearInterval(_adminSourcesTimer);
+    _adminSourcesTimer = null;
+  }
+}
+
+async function clearAdminSources() {
+  const ok = await confirmDialog(
+    'Reset source counters?',
+    'This wipes the success/failure totals and last-error messages for every source. Counters resume from zero.',
+    'Reset', /*okDanger=*/false);
+  if (!ok) return;
+  try {
+    await api('/api/dashboard/admin/sources', { method: 'DELETE' });
+    await loadAdminSources();
+    const host = document.getElementById('admin-sources-host');
+    if (host) { host.innerHTML = ''; host.appendChild(renderAdminSources()); }
+    toast('Source counters cleared.', 'ok');
+  } catch (e) {
+    handleApiError(e, 'Clear failed.');
+  }
+}
+
+function renderAdminSources() {
+  const wrap = el('div', { class: 'admin-sources' });
+  startAdminSourcesAutoRefresh();
+  wrap.appendChild(el('h3', { class: 'section-head' }, [
+    'Data sources',
+    el('button', {
+      class: 'btn btn-ghost btn-sm',
+      style: 'margin-left: 0.6rem; padding: 0.15rem 0.55rem; font-size: 0.7rem; vertical-align: middle;',
+      onclick: async () => {
+        await loadAdminSources();
+        const host = document.getElementById('admin-sources-host');
+        if (host) { host.innerHTML = ''; host.appendChild(renderAdminSources()); }
+      },
+    }, [el('i', { class: 'fa-solid fa-rotate' }), ' Refresh']),
+    el('button', {
+      class: 'btn btn-ghost btn-sm',
+      style: 'margin-left: 0.4rem; padding: 0.15rem 0.55rem; font-size: 0.7rem; vertical-align: middle;',
+      onclick: () => clearAdminSources(),
+    }, [el('i', { class: 'fa-solid fa-eraser' }), ' Clear stats']),
+  ]));
+
+  const sa = state.adminSources || {};
+  if (sa.loading && !(sa.data && sa.data.sources)) {
+    wrap.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading sources…']));
+    return wrap;
+  }
+  if (sa.error) {
+    wrap.appendChild(el('div', { class: 'empty' }, [
+      el('i', { class: 'fa-solid fa-triangle-exclamation' }), ' ', sa.error,
+    ]));
+    return wrap;
+  }
+  const data = sa.data;
+  const sources = (data && data.sources) || [];
+  if (!sources.length) {
+    wrap.appendChild(el('div', { class: 'empty' }, 'No sources reporting yet.'));
+    return wrap;
+  }
+
+  const serverNow = Number((data && data.server_time) || 0) || Math.floor(Date.now() / 1000);
+  const grid = el('div', { class: 'src-grid' });
+  for (const src of sources) {
+    const stateStr = src.state || 'unknown';
+    const card = el('div', { class: 'src-card' });
+    card.appendChild(el('div', { class: 'src-card-head' }, [
+      el('span', { class: 'src-label' }, src.label || src.name),
+      el('span', { class: `src-state ${stateStr}` }, _SRC_STATE_LABEL[stateStr] || stateStr),
+    ]));
+
+    let lastLine;
+    if (src.last_success) {
+      const age = Math.max(0, serverNow - Number(src.last_success));
+      lastLine = el('div', { class: 'src-meta' }, [
+        el('i', { class: 'fa-regular fa-clock' }),
+        ` Last success: ${formatAge(age)} ago`,
+      ]);
+    } else {
+      lastLine = el('div', { class: 'src-meta src-meta-muted' }, [
+        el('i', { class: 'fa-regular fa-clock' }),
+        ' No successful fetch yet',
+      ]);
+    }
+    card.appendChild(lastLine);
+
+    const totSuccess = src.total_success || 0;
+    const totFail = src.total_fail || 0;
+    card.appendChild(el('div', { class: 'src-totals' }, [
+      el('span', { class: 'src-tot-ok', title: 'Successful fetches since last reset' }, [
+        el('i', { class: 'fa-solid fa-check' }),
+        ` ${totSuccess} successful`,
+      ]),
+      el('span', { class: 'src-tot-sep' }, '·'),
+      el('span', { class: 'src-tot-fail' + (totFail > 0 ? ' has-fail' : ''), title: 'Failed fetches since last reset' }, [
+        el('i', { class: 'fa-solid fa-xmark' }),
+        ` ${totFail} failed`,
+      ]),
+    ]));
+
+    if (src.last_error_msg) {
+      card.appendChild(el('div', { class: 'src-err' }, [
+        el('i', { class: 'fa-solid fa-circle-exclamation' }), ' ',
+        el('span', {}, String(src.last_error_msg)),
+        el('span', { class: 'src-consec' },
+          `${src.consec_fails || 0} in a row`),
+      ]));
+    }
+    grid.appendChild(card);
+  }
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+/* -------------------- Admin broadcast -------------------- */
+
+const bcast = {
+  loaded: false,
+  loading: false,
+  targets: [],          // [{guild_id, guild_name, channels:[{id,name}], selected_channel_id, include}]
+  form: {
+    title: 'NSW PSN announcement',
+    description: '',
+    color: '#f97316',
+    footer: '',
+    url: '',
+  },
+  sending: false,
+  lastResults: null,    // { sent, total, results: [...] }
+};
+
+async function loadBroadcastTargets(force=false) {
+  if (bcast.loaded && !force) return;
+  bcast.loading = true; render();
+  try {
+    const res = await api('/api/dashboard/admin/broadcast/targets');
+    bcast.targets = (res.targets || []).map(t => ({
+      ...t,
+      selected_channel_id: t.detected_channel_id || '',
+      include: !!t.detected_channel_id,
+    }));
+    bcast.loaded = true;
+  } catch (e) {
+    toast((e && e.message) || 'Failed to load broadcast targets.', 'err');
+  } finally {
+    bcast.loading = false;
+    render();
+  }
+}
+
+async function submitBroadcast() {
+  const wantTargets = bcast.targets.filter(t => t.include && t.selected_channel_id);
+  if (wantTargets.length === 0) {
+    toast('Select at least one target channel.', 'err');
+    return;
+  }
+  if (!bcast.form.title.trim() && !bcast.form.description.trim()) {
+    toast('Add a title or description.', 'err');
+    return;
+  }
+  const confirmed = await confirmDialog(
+    'Send broadcast?',
+    `This will post the embed to ${wantTargets.length} channel${wantTargets.length === 1 ? '' : 's'} across ${new Set(wantTargets.map(t => t.guild_id)).size} server${new Set(wantTargets.map(t => t.guild_id)).size === 1 ? '' : 's'}.`,
+    'Send',
+    /*okDanger=*/false);
+  if (!confirmed) return;
+
+  bcast.sending = true; bcast.lastResults = null; render();
+  try {
+    const res = await api('/api/dashboard/admin/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: bcast.form.title.trim(),
+        description: bcast.form.description.trim(),
+        color: bcast.form.color,
+        footer: bcast.form.footer.trim(),
+        url: bcast.form.url.trim(),
+        targets: wantTargets.map(t => ({ guild_id: t.guild_id, channel_id: t.selected_channel_id })),
+      }),
+    });
+    // Backend now enqueues the broadcast as a bot-action (202 Accepted)
+    // rather than sending synchronously. The actual delivery happens in the
+    // bot worker; user watches "Recent bot actions" for the outcome.
+    if (res && res.queued) {
+      bcast.lastResults = { queued: true, id: res.id, total: res.total };
+      toast(`Broadcast queued for ${res.total} channel${res.total === 1 ? '' : 's'} (action #${res.id}). Check Recent bot actions for status.`, 'ok');
+      // Refresh the bot-actions table immediately so the new row shows up.
+      try { await loadBotActions(); } catch (_) {}
+    } else if (res && typeof res.sent === 'number') {
+      // Backwards-compat: legacy synchronous response shape.
+      bcast.lastResults = res;
+      if (res.sent === res.total) {
+        toast(`Sent to ${res.sent} channel${res.sent === 1 ? '' : 's'}.`, 'ok');
+      } else {
+        toast(`Sent ${res.sent}/${res.total}.`, 'warn');
+      }
+    } else {
+      toast('Broadcast submitted.', 'ok');
+    }
+  } catch (e) {
+    handleApiError(e, 'Broadcast failed.');
+  } finally {
+    bcast.sending = false;
+    render();
+  }
+}
+
+/* -------------------- Bot controls (sync / test / cleanup) -------------------- */
+
+const botctl = {
+  cleanup: { loading: false, candidates: null, error: null },
+  test: { guildId: '', channelId: '', alertType: 'all', channels: [] },
+  actions: { loading: false, items: [] },
+};
+
+const _BOTCTL_ALERT_TYPES = [
+  { value: 'all', label: 'All alert types' },
+  ..._DASH_ALERT_TYPES.map(t => ({ value: t, label: ALERT_TYPE_LABELS[t] || t })),
+  { value: 'pager', label: 'Pager' },
+  { value: 'user_incidents', label: 'User incidents' },
+];
+
+async function enqueueBotAction(action, params) {
+  try {
+    const res = await api('/api/dashboard/admin/bot-actions', {
+      method: 'POST',
+      body: JSON.stringify({ action, params: params || {} }),
+    });
+    toast(`Queued ${action} (id ${res.id}).`, 'ok');
+    await loadBotActions();
+  } catch (e) {
+    handleApiError(e, `Failed to queue ${action}.`);
+  }
+}
+
+async function loadBotActions() {
+  botctl.actions.loading = true;
+  try {
+    const res = await api('/api/dashboard/admin/bot-actions');
+    botctl.actions.items = res.actions || [];
+  } catch (e) {
+    // Non-fatal
+  } finally {
+    botctl.actions.loading = false;
+    // Repaint just the actions table, not the whole admin view.
+    const host = document.getElementById('botctl-actions-host');
+    if (host) { host.innerHTML = ''; host.appendChild(renderBotActionsTable()); }
+  }
+}
+
+async function loadCleanupCandidates() {
+  botctl.cleanup.loading = true; botctl.cleanup.error = null;
+  const host = document.getElementById('botctl-cleanup-host');
+  if (host) { host.innerHTML = ''; host.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Checking…'])); }
+  try {
+    const res = await api('/api/dashboard/admin/cleanup/candidates');
+    botctl.cleanup.candidates = res.candidates || [];
+  } catch (e) {
+    botctl.cleanup.error = (e && e.message) || 'Failed to load candidates.';
+  } finally {
+    botctl.cleanup.loading = false;
+    if (host) { host.innerHTML = ''; host.appendChild(renderCleanupBody()); }
+  }
+}
+
+function renderBotControls() {
+  const wrap = el('div', {});
+  wrap.appendChild(el('h3', { class: 'section-head' }, 'Bot controls'));
+
+  const grid = el('div', { class: 'broadcast-grid' });
+
+  // Sync card
+  const syncCard = el('div', { class: 'broadcast-card' }, [
+    el('h4', {}, 'Sync slash commands'),
+    el('p', { style: 'font-size:0.8rem;color:var(--text-muted);margin:0 0 0.75rem' },
+      'Push the current bot command definitions to Discord globally. Use after deploying bot changes.'),
+    el('button', {
+      class: 'btn btn-primary btn-sm',
+      onclick: () => enqueueBotAction('sync'),
+    }, [el('i', { class: 'fa-solid fa-arrows-rotate' }), ' Queue sync']),
+  ]);
+  grid.appendChild(syncCard);
+
+  // Test card
+  grid.appendChild(renderTestCard());
+
+  wrap.appendChild(grid);
+
+  // Cleanup card + body
+  const cleanupCard = el('div', { class: 'broadcast-card', style: 'margin-bottom:1rem' });
+  cleanupCard.appendChild(el('h4', {}, 'Cleanup orphaned guilds'));
+  cleanupCard.appendChild(el('p', { style: 'font-size:0.8rem;color:var(--text-muted);margin:0 0 0.75rem' },
+    'Find guilds that still have presets in the database but that the bot has left. Review before confirming the delete.'));
+  const cleanupHost = el('div', { id: 'botctl-cleanup-host' });
+  cleanupHost.appendChild(renderCleanupBody());
+  cleanupCard.appendChild(cleanupHost);
+  cleanupCard.appendChild(el('div', { style: 'display:flex;gap:0.4rem;margin-top:0.6rem' }, [
+    el('button', { class: 'btn btn-ghost btn-sm', onclick: () => loadCleanupCandidates() },
+      [el('i', { class: 'fa-solid fa-magnifying-glass' }), ' Check for orphans']),
+  ]));
+  wrap.appendChild(cleanupCard);
+
+  // Recent actions table
+  wrap.appendChild(el('h3', { class: 'section-head' }, 'Recent bot actions'));
+  const actionsHost = el('div', { id: 'botctl-actions-host' });
+  actionsHost.appendChild(renderBotActionsTable());
+  wrap.appendChild(actionsHost);
+  // Fire-and-forget initial load.
+  if (!botctl.actions.items.length && !botctl.actions.loading) loadBotActions();
+
+  return wrap;
+}
+
+function renderTestCard() {
+  const card = el('div', { class: 'broadcast-card' });
+  card.appendChild(el('h4', {}, 'Send test alerts'));
+  card.appendChild(el('p', { style: 'font-size:0.8rem;color:var(--text-muted);margin:0 0 0.75rem' },
+    'Fetch current live data and post sample alerts to a channel for visual verification. Bypasses mute + filters.'));
+
+  // Guild picker — only admin-bot guilds are valid
+  const guildSel = el('select', { class: 'form-select', style: 'width:100%;margin-bottom:0.4rem' });
+  guildSel.appendChild(el('option', { value: '' }, '(select a server)'));
+  for (const g of state.guilds || []) {
+    if (!g.has_bot) continue;
+    guildSel.appendChild(el('option', { value: g.id }, g.name || g.id));
+  }
+  guildSel.value = botctl.test.guildId || '';
+  guildSel.onchange = async (e) => {
+    botctl.test.guildId = e.target.value;
+    botctl.test.channelId = '';
+    botctl.test.channels = [];
+    if (botctl.test.guildId) {
+      try {
+        const chans = await api(`/api/dashboard/guilds/${botctl.test.guildId}/channels`);
+        botctl.test.channels = chans || [];
+      } catch (_) { botctl.test.channels = []; }
+    }
+    refreshTestChannelSelect();
+  };
+  card.appendChild(guildSel);
+
+  const chanSel = el('select', { class: 'form-select', id: 'botctl-test-chan', style: 'width:100%;margin-bottom:0.4rem' });
+  chanSel.onchange = (e) => { botctl.test.channelId = e.target.value; };
+  card.appendChild(chanSel);
+
+  const typeSel = el('select', { class: 'form-select', style: 'width:100%;margin-bottom:0.6rem' });
+  for (const t of _BOTCTL_ALERT_TYPES) {
+    typeSel.appendChild(el('option', { value: t.value }, t.label));
+  }
+  typeSel.value = botctl.test.alertType;
+  typeSel.onchange = (e) => { botctl.test.alertType = e.target.value; };
+  card.appendChild(typeSel);
+
+  const btn = el('button', {
+    class: 'btn btn-primary btn-sm',
+    onclick: () => {
+      if (!botctl.test.guildId || !botctl.test.channelId) {
+        toast('Pick a server and channel first.', 'err');
+        return;
+      }
+      enqueueBotAction('test', {
+        guild_id: botctl.test.guildId,
+        channel_id: botctl.test.channelId,
+        alert_type: botctl.test.alertType,
+      });
+    },
+  }, [el('i', { class: 'fa-solid fa-paper-plane' }), ' Queue test']);
+  card.appendChild(btn);
+
+  // Seed with current state after appending
+  setTimeout(() => refreshTestChannelSelect(), 0);
+  return card;
+}
+
+function refreshTestChannelSelect() {
+  const sel = document.getElementById('botctl-test-chan');
+  if (!sel) return;
+  sel.innerHTML = '';
+  if (!botctl.test.channels.length) {
+    sel.appendChild(el('option', { value: '' }, '(select a server first)'));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.appendChild(el('option', { value: '' }, '(select a channel)'));
+  for (const c of botctl.test.channels) {
+    sel.appendChild(el('option', { value: c.id }, '#' + (c.name || c.id)));
+  }
+  if (botctl.test.channelId) sel.value = botctl.test.channelId;
+}
+
+function renderCleanupBody() {
+  if (botctl.cleanup.loading) {
+    return el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Checking…']);
+  }
+  if (botctl.cleanup.error) {
+    return el('div', { class: 'empty' }, [el('i', { class: 'fa-solid fa-triangle-exclamation' }), ' ', botctl.cleanup.error]);
+  }
+  if (botctl.cleanup.candidates === null) {
+    return el('div', { class: 'empty', style: 'padding:0.4rem 0' }, 'Click "Check for orphans" to scan.');
+  }
+  const list = botctl.cleanup.candidates;
+  if (!list.length) {
+    return el('div', { class: 'empty', style: 'padding:0.4rem 0' }, [el('i', { class: 'fa-solid fa-check' }), ' All configured guilds match bot presence. Nothing to clean up.']);
+  }
+  const wrap = el('div', {});
+  const tblWrap = el('div', { class: 'admin-table-wrap' });
+  const tbl = el('table', { class: 'admin-table' });
+  tbl.appendChild(el('thead', {}, el('tr', {}, [
+    el('th', {}, ''),
+    el('th', {}, 'Guild'),
+    el('th', {}, 'Presets'),
+    el('th', {}, 'Channels'),
+    el('th', {}, 'Pager'),
+  ])));
+  const selected = new Set();
+  const tb = el('tbody', {});
+  for (const g of list) {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = true; selected.add(g.guild_id);
+    cb.onchange = () => { if (cb.checked) selected.add(g.guild_id); else selected.delete(g.guild_id); };
+    tb.appendChild(el('tr', {}, [
+      el('td', {}, cb),
+      el('td', {}, [
+        g.icon_url ? el('img', { class: 'g-icon', src: g.icon_url, alt: '' }) : null,
+        el('span', { class: 'g-name' }, g.name || '—'),
+        el('span', { class: 'g-id' }, g.guild_id),
+      ]),
+      el('td', {}, String(g.preset_count)),
+      el('td', {}, String(g.channel_count)),
+      el('td', {}, String(g.pager_presets)),
+    ]));
+  }
+  tbl.appendChild(tb);
+  tblWrap.appendChild(tbl);
+  wrap.appendChild(tblWrap);
+  wrap.appendChild(el('div', { style: 'display:flex;gap:0.4rem;margin-top:0.5rem' }, [
+    el('button', {
+      class: 'btn btn-danger btn-sm',
+      onclick: async () => {
+        const ids = [...selected];
+        if (!ids.length) { toast('Select at least one guild.', 'err'); return; }
+        const ok = await confirmDialog(
+          'Delete orphaned data?',
+          `This will delete all presets and mute-state rows for ${ids.length} guild${ids.length === 1 ? '' : 's'}. Irreversible.`,
+          'Delete', /*okDanger=*/true);
+        if (!ok) return;
+        await enqueueBotAction('cleanup', { guild_ids: ids });
+        botctl.cleanup.candidates = null;
+        const host = document.getElementById('botctl-cleanup-host');
+        if (host) { host.innerHTML = ''; host.appendChild(renderCleanupBody()); }
+      },
+    }, [el('i', { class: 'fa-solid fa-trash' }), ' Delete selected']),
+  ]));
+  return wrap;
+}
+
+function renderBotActionsTable() {
+  const wrap = el('div', {});
+  if (botctl.actions.loading) {
+    wrap.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading…']));
+    return wrap;
+  }
+  const items = botctl.actions.items || [];
+  if (!items.length) {
+    wrap.appendChild(el('div', { class: 'empty', style: 'padding:0.4rem 0' }, 'No actions queued yet.'));
+    return wrap;
+  }
+  const tblWrap = el('div', { class: 'admin-table-wrap' });
+  const tbl = el('table', { class: 'admin-table' });
+  tbl.appendChild(el('thead', {}, el('tr', {}, [
+    el('th', {}, 'When'),
+    el('th', {}, 'Action'),
+    el('th', {}, 'Status'),
+    el('th', {}, 'Summary'),
+  ])));
+  const tb = el('tbody', {});
+  for (const a of items) {
+    const badge = {
+      pending:  el('span', { class: 'bcast-state pending' }, 'pending'),
+      running:  el('span', { class: 'bcast-state pending' }, 'running'),
+      done:     el('span', { class: 'bcast-state ok' }, 'done'),
+      error:    el('span', { class: 'bcast-state err' }, 'error'),
+    }[a.status] || el('span', {}, a.status);
+
+    let summary = '—';
+    if (a.error) summary = a.error;
+    else if (a.result) summary = summarizeActionResult(a.action, a.result);
+
+    tb.appendChild(el('tr', {}, [
+      el('td', {}, a.requested_at ? timeAgo(a.requested_at) : '—'),
+      el('td', { class: 'mono' }, a.action),
+      el('td', {}, badge),
+      el('td', {}, summary),
+    ]));
+  }
+  tbl.appendChild(tb);
+  tblWrap.appendChild(tbl);
+  wrap.appendChild(tblWrap);
+  wrap.appendChild(el('div', { style: 'display:flex;gap:0.4rem;margin-top:0.4rem' }, [
+    el('button', { class: 'btn btn-ghost btn-sm', onclick: () => loadBotActions() },
+      [el('i', { class: 'fa-solid fa-rotate' }), ' Refresh']),
+  ]));
+  return wrap;
+}
+
+function summarizeActionResult(action, r) {
+  try {
+    if (!r) return '—';
+    if (action === 'sync') return `synced ${r.synced_global || 0} global`;
+    if (action === 'test') {
+      const errs = (r.errors || []).length;
+      return `sent ${r.sent || 0}${errs ? ` · ${errs} warning${errs === 1 ? '' : 's'}` : ''}`;
+    }
+    if (action === 'cleanup') {
+      const ok = (r.results || []).filter(x => x.ok).length;
+      const presets = (r.results || []).reduce((n, x) => n + (x.presets || 0), 0);
+      return `${ok} guild${ok === 1 ? '' : 's'}, ${presets} preset${presets === 1 ? '' : 's'} removed`;
+    }
+    if (action === 'broadcast') {
+      const sent = r.sent || 0;
+      const total = r.total || 0;
+      const failed = total - sent;
+      return `delivered ${sent}/${total}${failed ? ` · ${failed} failed` : ''}`;
+    }
+    return JSON.stringify(r).slice(0, 80);
+  } catch (_) { return '—'; }
+}
+
+function renderBroadcast() {
+  if (!bcast.loaded && !bcast.loading) {
+    // fire & forget; component re-renders when targets arrive
+    loadBroadcastTargets();
+  }
+
+  const wrap = el('div', {});
+  wrap.appendChild(el('h3', { class: 'section-head' }, 'Broadcast announcement'));
+
+  const grid = el('div', { class: 'broadcast-grid' });
+  grid.appendChild(renderBcastForm());
+  grid.appendChild(renderBcastPreview());
+  wrap.appendChild(grid);
+
+  // Targets
+  wrap.appendChild(el('h3', { class: 'section-head' },
+    `Target channels (${bcast.targets.filter(t => t.include).length} of ${bcast.targets.length} selected)`));
+  wrap.appendChild(renderBcastTargets());
+
+  // Action row
+  const actionRow = el('div', { style: 'display:flex;gap:0.5rem;align-items:center;margin-top:1rem;flex-wrap:wrap' });
+  const sendBtn = el('button', {
+    class: 'btn btn-primary',
+    onclick: () => submitBroadcast(),
+  }, bcast.sending
+    ? [el('span', { class: 'spinner' }), ' Sending…']
+    : [el('i', { class: 'fa-solid fa-paper-plane' }), ' Send to selected']);
+  if (bcast.sending) sendBtn.disabled = true;
+  actionRow.appendChild(sendBtn);
+
+  actionRow.appendChild(el('button', {
+    class: 'btn btn-ghost btn-sm',
+    onclick: () => { bcast.targets.forEach(t => { t.include = !!t.detected_channel_id; t.selected_channel_id = t.detected_channel_id || t.selected_channel_id; }); render(); },
+  }, 'Reset to auto-detected'));
+  actionRow.appendChild(el('button', {
+    class: 'btn btn-ghost btn-sm',
+    onclick: () => { bcast.targets.forEach(t => { t.include = false; }); render(); },
+  }, 'Select none'));
+  actionRow.appendChild(el('button', {
+    class: 'btn btn-ghost btn-sm',
+    onclick: () => { bcast.targets.forEach(t => { t.include = !!t.selected_channel_id; }); render(); },
+  }, 'Select all'));
+
+  wrap.appendChild(actionRow);
+
+  // Last-run results
+  if (bcast.lastResults) {
+    wrap.appendChild(renderBcastResults(bcast.lastResults));
+  }
+
+  return wrap;
+}
+
+function renderBcastForm() {
+  const card = el('div', { class: 'broadcast-card' });
+  card.appendChild(el('h4', {}, 'Embed content'));
+  card.appendChild(el('label', {}, 'Title'));
+  card.appendChild(el('input', {
+    type: 'text', maxlength: '256',
+    value: bcast.form.title,
+    oninput: (e) => { bcast.form.title = e.target.value; updateBcastPreview(); },
+  }));
+  card.appendChild(el('label', {}, 'Description (markdown allowed)'));
+  const ta = el('textarea', {
+    maxlength: '4000',
+    oninput: (e) => { bcast.form.description = e.target.value; updateBcastPreview(); },
+  });
+  ta.value = bcast.form.description;
+  card.appendChild(ta);
+  card.appendChild(el('label', {}, 'Footer (optional)'));
+  card.appendChild(el('input', {
+    type: 'text', maxlength: '2048',
+    value: bcast.form.footer,
+    oninput: (e) => { bcast.form.footer = e.target.value; updateBcastPreview(); },
+  }));
+  card.appendChild(el('label', {}, 'Link URL (optional)'));
+  card.appendChild(el('input', {
+    type: 'url',
+    value: bcast.form.url,
+    oninput: (e) => { bcast.form.url = e.target.value; },
+  }));
+  card.appendChild(el('label', {}, 'Accent colour'));
+  const colorRow = el('div', { class: 'color-row' });
+  const ci = el('input', { type: 'color', value: bcast.form.color,
+    oninput: (e) => { bcast.form.color = e.target.value; updateBcastPreview(); } });
+  const cx = el('input', { type: 'text', value: bcast.form.color,
+    style: 'max-width:120px',
+    oninput: (e) => { bcast.form.color = e.target.value; ci.value = e.target.value; updateBcastPreview(); } });
+  colorRow.appendChild(ci);
+  colorRow.appendChild(cx);
+  card.appendChild(colorRow);
+  return card;
+}
+
+function renderBcastPreview() {
+  const card = el('div', { class: 'broadcast-card' });
+  card.appendChild(el('h4', {}, 'Preview'));
+  const pv = el('div', { class: 'broadcast-preview', id: 'bcast-preview' });
+  pv.style.borderLeftColor = bcast.form.color || 'var(--accent)';
+  pv.appendChild(el('div', { class: 'bp-title', id: 'bcast-pv-title' }, bcast.form.title || '(no title)'));
+  pv.appendChild(el('div', { class: 'bp-desc', id: 'bcast-pv-desc' }, bcast.form.description || '(no description)'));
+  if (bcast.form.footer) pv.appendChild(el('div', { class: 'bp-footer', id: 'bcast-pv-footer' }, bcast.form.footer));
+  card.appendChild(pv);
+  return card;
+}
+
+function updateBcastPreview() {
+  // Patch preview inline so typing doesn't force a full re-render (would lose focus).
+  const pv = qs('bcast-preview');
+  if (!pv) return;
+  pv.style.borderLeftColor = bcast.form.color || '#f97316';
+  const t = qs('bcast-pv-title');
+  if (t) t.textContent = bcast.form.title || '(no title)';
+  const d = qs('bcast-pv-desc');
+  if (d) d.textContent = bcast.form.description || '(no description)';
+  let f = qs('bcast-pv-footer');
+  if (bcast.form.footer) {
+    if (!f) {
+      f = el('div', { class: 'bp-footer', id: 'bcast-pv-footer' }, '');
+      pv.appendChild(f);
+    }
+    f.textContent = bcast.form.footer;
+  } else if (f) {
+    f.remove();
+  }
+}
+
+function renderBcastTargets() {
+  if (bcast.loading) {
+    return el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading targets…']);
+  }
+  if (!bcast.targets.length) {
+    return el('div', { class: 'empty' }, 'No guilds with presets found.');
+  }
+  const tblWrap = el('div', { class: 'admin-table-wrap' });
+  const tbl = el('table', { class: 'admin-table' });
+  tbl.appendChild(el('thead', {}, el('tr', {}, [
+    el('th', { style: 'width:34px' }, ''),
+    el('th', {}, 'Server'),
+    el('th', {}, 'Channel'),
+    el('th', {}, 'Status'),
+  ])));
+  const tb = el('tbody', {});
+  for (const t of bcast.targets) {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = !!t.include;
+    cb.onchange = () => { t.include = cb.checked; render(); };
+
+    const sel = el('select', { class: 'ch-pick' });
+    if (!t.channels || !t.channels.length) {
+      sel.appendChild(el('option', { value: '' }, '(no text channels)'));
+      sel.disabled = true;
+    } else {
+      for (const c of t.channels) {
+        sel.appendChild(el('option', { value: c.id }, '#' + (c.name || c.id)));
+      }
+    }
+    if (t.selected_channel_id) sel.value = String(t.selected_channel_id);
+    sel.onchange = (e) => { t.selected_channel_id = e.target.value; render(); };
+
+    const auto = t.detected_channel_id && String(t.detected_channel_id) === String(t.selected_channel_id)
+      ? el('span', { class: 'bcast-auto' }, 'auto') : null;
+
+    let status = t.include ? el('span', { class: 'bcast-state' }, 'ready') : el('span', { class: 'bcast-state' }, 'skipped');
+    const last = bcast.lastResults && (bcast.lastResults.results || [])
+      .find(r => String(r.guild_id) === String(t.guild_id) && String(r.channel_id) === String(t.selected_channel_id));
+    if (last) {
+      status = last.ok
+        ? el('span', { class: 'bcast-state ok' }, [el('i', { class: 'fa-solid fa-check' }), ' sent'])
+        : el('span', { class: 'bcast-state err', title: last.error || '' }, [el('i', { class: 'fa-solid fa-xmark' }), ' ' + (last.error || 'failed')]);
+    }
+
+    tb.appendChild(el('tr', {}, [
+      el('td', {}, cb),
+      el('td', {}, [
+        t.guild_icon_url ? el('img', { class: 'g-icon', src: t.guild_icon_url, alt: '' }) : null,
+        el('span', { class: 'g-name' }, t.guild_name || '—'),
+        el('span', { class: 'g-id' }, t.guild_id),
+      ]),
+      el('td', {}, [sel, auto]),
+      el('td', {}, status),
+    ]));
+  }
+  tbl.appendChild(tb);
+  tblWrap.appendChild(tbl);
+  return tblWrap;
+}
+
+function renderBcastResults(res) {
+  const wrap = el('div', { style: 'margin-top:1rem' });
+  wrap.appendChild(el('h3', { class: 'section-head' },
+    `Last run: ${res.sent}/${res.total} delivered`));
+  return wrap;
+}
+
+function timeAgo(iso) {
+  try {
+    const then = new Date(iso).getTime();
+    return formatAge(Math.max(0, Math.floor((Date.now() - then) / 1000)));
+  } catch (_) { return '—'; }
+}
+
+function formatAge(secs) {
+  secs = Math.max(0, Number(secs) || 0);
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m`;
+  if (secs < 86400) return `${Math.floor(secs/3600)}h`;
+  return `${Math.floor(secs/86400)}d`;
+}
+
+/* -------------------- Role modal -------------------- */
+
+let roleModalCtx = null; // { presetId, selected:Set }
+
+function openRoleModal(presetId) {
+  const preset = presetById(presetId);
+  if (!preset) return;
+  const current = parseRoleIds(preset.role_ids);
+  roleModalCtx = {
+    presetId,
+    selected: new Set(current),
+  };
+  qs('role-modal-title').textContent = `Role pings · ${preset.name}`;
+  const ch = channelById(preset.channel_id);
+  qs('role-modal-sub').textContent = `#${ch ? ch.name : ''} · choose up to ${MAX_ROLES} roles to ping.`;
+  qs('role-search').value = '';
+  renderRoleOptions();
+  qs('role-modal').classList.add('open');
+}
+
+function closeRoleModal() {
+  qs('role-modal').classList.remove('open');
+  roleModalCtx = null;
+}
+
+function renderRoleOptions() {
+  if (!roleModalCtx) return;
+  const q = qs('role-search').value.trim().toLowerCase();
+  const list = qs('role-options');
+  list.innerHTML = '';
+
+  const roles = [...state.roles]
+    .filter(r => r.name !== '@everyone' && !r.managed)
+    .sort((a, b) => {
+      const sa = roleModalCtx.selected.has(String(a.id)) ? 0 : 1;
+      const sb = roleModalCtx.selected.has(String(b.id)) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return (b.position ?? 0) - (a.position ?? 0);
+    });
+
+  const matches = q ? roles.filter(r => r.name.toLowerCase().includes(q)) : roles;
+  if (matches.length === 0) {
+    list.appendChild(el('div', { class: 'empty', style: 'margin:0.3rem' }, 'No roles match.'));
+  } else {
+    for (const r of matches) list.appendChild(renderRoleOpt(r));
+  }
+  qs('role-count').textContent = `${roleModalCtx.selected.size} / ${MAX_ROLES} selected`;
+}
+
+function renderRoleOpt(r) {
+  const rid = String(r.id);
+  const checked = roleModalCtx.selected.has(rid);
+  const atLimit = !checked && roleModalCtx.selected.size >= MAX_ROLES;
+  const cb = el('input', { type: 'checkbox' });
+  cb.checked = checked;
+  cb.disabled = atLimit;
+  cb.onchange = () => {
+    if (cb.checked) {
+      if (roleModalCtx.selected.size >= MAX_ROLES) { cb.checked = false; return; }
+      roleModalCtx.selected.add(rid);
+    } else {
+      roleModalCtx.selected.delete(rid);
+    }
+    renderRoleOptions();
+  };
+  const swatch = el('span', { class: 'swatch', style: `background:${discordColorToHex(r.color)}` });
+  return el('label', { class: 'role-opt' + (atLimit ? ' disabled' : '') }, [
+    cb, swatch, el('span', {}, '@' + r.name)
+  ]);
+}
+
+async function saveRoleModal() {
+  if (!roleModalCtx) return;
+  const { presetId, selected } = roleModalCtx;
+  const role_ids = Array.from(selected);
+  closeRoleModal();
+  await patchPreset(presetId, { role_ids });
+}
+
+/* -------------------- Drawer / FAB behavior -------------------- */
+
+function syncDrawer() {
+  const sb = qs('sidebar');
+  const bd = qs('sidebar-backdrop');
+  const fab = qs('fab');
+  if (!sb || !bd || !fab) return;
+  if (isMobile()) {
+    if (state.drawerOpen) { sb.classList.add('open'); bd.classList.add('open'); }
+    else { sb.classList.remove('open'); bd.classList.remove('open'); }
+    fab.style.display = (state.drawerOpen || state.view === 'wizard') ? 'none' : 'inline-flex';
+  } else {
+    sb.classList.remove('open');
+    bd.classList.remove('open');
+    fab.style.display = 'none';
+  }
+}
+
+function toggleDrawer(force) {
+  state.drawerOpen = force != null ? !!force : !state.drawerOpen;
+  syncDrawer();
+}
+
+/* -------------------- Kickoff -------------------- */
+
+qs('hamburger').addEventListener('click', () => toggleDrawer());
+qs('sidebar-backdrop').addEventListener('click', () => toggleDrawer(false));
+qs('fab').addEventListener('click', () => openWizard());
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (qs('role-modal').classList.contains('open')) { closeRoleModal(); return; }
+    if (qs('confirm-modal').classList.contains('open')) {
+      qs('confirm-modal').classList.remove('open');
+      return;
+    }
+    if (state.drawerOpen) { toggleDrawer(false); return; }
+    if (state.view === 'wizard') { closeWizard(); return; }
+  }
+});
+qs('role-modal').addEventListener('click', (e) => {
+  if (e.target === qs('role-modal')) closeRoleModal();
+});
+qs('confirm-modal').addEventListener('click', (e) => {
+  if (e.target === qs('confirm-modal')) qs('confirm-modal').classList.remove('open');
+});
+window.addEventListener('resize', () => { syncDrawer(); });
+
+bootstrap();
+</script>
+</body>
+</html>

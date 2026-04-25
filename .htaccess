@@ -34,6 +34,26 @@ DirectoryIndex index.html
   Require all granted
 </FilesMatch>
 
+# Clean URLs — visitors can drop the .html extension.
+# The redirect rule canonicalises the URL ("/live.html" → "/live"); the
+# rewrite rule transparently serves /<page>.html when /<page> is requested.
+<IfModule mod_rewrite.c>
+  # Skip /index.html (DirectoryIndex already handles the site root) so
+  # links to "/" don't bounce. The negative lookahead matches anything
+  # but index.html. The character class blocks dots/queries inside the
+  # captured slug so /api/foo.json never matches.
+  RewriteCond %{THE_REQUEST} \s/+(?!index\.html)([^./?\s]+)\.html[\s?] [NC]
+  RewriteRule ^ /%1 [R=301,L]
+
+  # Internally rewrite /page → /page.html — but only when that .html file
+  # actually exists on disk. Real files (config.js, styles.css, /assets/*)
+  # and real directories pass through untouched.
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{DOCUMENT_ROOT}/$1.html -f
+  RewriteRule ^([^/.]+)/?$ $1.html [L]
+</IfModule>
+
 # Security headers
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
