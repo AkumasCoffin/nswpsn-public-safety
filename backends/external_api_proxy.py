@@ -15028,8 +15028,81 @@ _DASH_FILTER_SEVERITIES = {
     'minor', 'moderate', 'major',
 }
 _DASH_FILTER_KNOWN_KEYS = {
-    'keywords_include', 'keywords_exclude', 'severity_min', 'bbox',
+    'keywords_include', 'keywords_exclude', 'severity_min', 'geofilter', 'bbox',
 }
+_DASH_GEOFILTER_TYPES = {'bbox', 'ring', 'polygon'}
+_DASH_RING_RADIUS_MIN_M = 1
+_DASH_RING_RADIUS_MAX_M = 500_000  # 500 km — generous cap, NSW spans ~1100 km E-W
+_DASH_POLYGON_MIN_POINTS = 3
+_DASH_POLYGON_MAX_POINTS = 100
+
+
+def _dash_validate_geofilter(g):
+    """Validate + normalise a geofilter (discriminated union on `type`).
+
+    Returns the normalised dict; raises ValueError on any structural / value
+    issue with a short message safe to surface in the 400 body.
+    """
+    if not isinstance(g, dict):
+        raise ValueError('geofilter must be an object.')
+    t = g.get('type')
+    if t not in _DASH_GEOFILTER_TYPES:
+        raise ValueError(f'geofilter.type must be one of {sorted(_DASH_GEOFILTER_TYPES)}.')
+
+    if t == 'bbox':
+        try:
+            lat_min = float(g['lat_min']); lat_max = float(g['lat_max'])
+            lng_min = float(g['lng_min']); lng_max = float(g['lng_max'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('bbox geofilter needs numeric lat_min/lat_max/lng_min/lng_max.')
+        if not (-90.0 <= lat_min <= 90.0 and -90.0 <= lat_max <= 90.0):
+            raise ValueError('bbox lat must be in [-90, 90].')
+        if not (-180.0 <= lng_min <= 180.0 and -180.0 <= lng_max <= 180.0):
+            raise ValueError('bbox lng must be in [-180, 180].')
+        if lat_min > lat_max:
+            raise ValueError('bbox lat_min must be <= lat_max.')
+        if lng_min > lng_max:
+            raise ValueError('bbox lng_min must be <= lng_max.')
+        return {'type': 'bbox',
+                'lat_min': lat_min, 'lat_max': lat_max,
+                'lng_min': lng_min, 'lng_max': lng_max}
+
+    if t == 'ring':
+        try:
+            lat = float(g['lat']); lng = float(g['lng'])
+            radius_m = float(g['radius_m'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('ring geofilter needs numeric lat/lng/radius_m.')
+        if not (-90.0 <= lat <= 90.0):
+            raise ValueError('ring lat must be in [-90, 90].')
+        if not (-180.0 <= lng <= 180.0):
+            raise ValueError('ring lng must be in [-180, 180].')
+        if not (_DASH_RING_RADIUS_MIN_M <= radius_m <= _DASH_RING_RADIUS_MAX_M):
+            raise ValueError(
+                f'ring radius_m must be in [{_DASH_RING_RADIUS_MIN_M}, {_DASH_RING_RADIUS_MAX_M}].')
+        return {'type': 'ring', 'lat': lat, 'lng': lng, 'radius_m': radius_m}
+
+    # polygon
+    pts = g.get('points')
+    if not isinstance(pts, list):
+        raise ValueError('polygon.points must be a list.')
+    n = len(pts)
+    if n < _DASH_POLYGON_MIN_POINTS:
+        raise ValueError(f'polygon needs at least {_DASH_POLYGON_MIN_POINTS} points.')
+    if n > _DASH_POLYGON_MAX_POINTS:
+        raise ValueError(f'polygon: max {_DASH_POLYGON_MAX_POINTS} points.')
+    norm_pts = []
+    for p in pts:
+        if not (isinstance(p, (list, tuple)) and len(p) == 2):
+            raise ValueError('polygon points must be [lat, lng] pairs.')
+        try:
+            plat = float(p[0]); plng = float(p[1])
+        except (TypeError, ValueError):
+            raise ValueError('polygon points must be numeric.')
+        if not (-90.0 <= plat <= 90.0 and -180.0 <= plng <= 180.0):
+            raise ValueError('polygon point out of lat/lng bounds.')
+        norm_pts.append([plat, plng])
+    return {'type': 'polygon', 'points': norm_pts}
 
 
 def _dash_validate_filters(v):
@@ -15078,27 +15151,19 @@ def _dash_validate_filters(v):
             raise ValueError(f'severity_min must be one of {sorted(_DASH_FILTER_SEVERITIES)}.')
         out['severity_min'] = sev
 
+    if 'geofilter' in v and v['geofilter'] is not None:
+        out['geofilter'] = _dash_validate_geofilter(v['geofilter'])
+
+    # Legacy alias: a top-level `bbox` is auto-converted to geofilter type=bbox.
+    # Older presets persist in the DB with this shape; the bot also still
+    # reads it. Both shapes can't be set simultaneously.
     if 'bbox' in v and v['bbox'] is not None:
-        b = v['bbox']
-        if not isinstance(b, dict):
+        if 'geofilter' in out:
+            raise ValueError('use only one of bbox / geofilter.')
+        legacy = v['bbox']
+        if not isinstance(legacy, dict):
             raise ValueError('bbox must be an object.')
-        try:
-            lat_min = float(b['lat_min']); lat_max = float(b['lat_max'])
-            lng_min = float(b['lng_min']); lng_max = float(b['lng_max'])
-        except (KeyError, TypeError, ValueError):
-            raise ValueError('bbox must have numeric lat_min/lat_max/lng_min/lng_max.')
-        if not (-90.0 <= lat_min <= 90.0 and -90.0 <= lat_max <= 90.0):
-            raise ValueError('bbox lat must be in [-90, 90].')
-        if not (-180.0 <= lng_min <= 180.0 and -180.0 <= lng_max <= 180.0):
-            raise ValueError('bbox lng must be in [-180, 180].')
-        if lat_min > lat_max:
-            raise ValueError('bbox lat_min must be <= lat_max.')
-        if lng_min > lng_max:
-            raise ValueError('bbox lng_min must be <= lng_max.')
-        out['bbox'] = {
-            'lat_min': lat_min, 'lat_max': lat_max,
-            'lng_min': lng_min, 'lng_max': lng_max,
-        }
+        out['geofilter'] = _dash_validate_geofilter({'type': 'bbox', **legacy})
 
     return out
 
