@@ -1245,7 +1245,7 @@ class EmbedBuilder:
                 inline=False
             )
         
-        embed.set_footer(text="NSW PSN Pager Feed")
+        embed.set_footer(text="Pagermon (self-hosted) · NSW PSN")
         return embed
 
     # Severity → embed colour mapping for incident embeds
@@ -1546,7 +1546,7 @@ class EmbedBuilder:
         if len(summary_text) > 3800:
             summary_text = summary_text[:3797] + '…'
 
-        footer_bits = []
+        footer_bits = ["📡 rdio-scanner (self-hosted)"]
         call_count = data.get('call_count')
         if call_count is not None:
             footer_bits.append(f"{call_count} calls")
@@ -2311,14 +2311,13 @@ class EmbedBuilder:
                 field_val = '\n'.join(desc_bits).strip()[:1024] or '—'
                 embed.add_field(name=field_name, value=field_val, inline=False)
 
-        footer_bits = []
+        footer_bits = ["rdio-scanner (self-hosted)"]
         if call_count:
             footer_bits.append(f"{call_count} calls")
         model = data.get('model')
         if model:
             footer_bits.append(model)
-        if footer_bits:
-            embed.set_footer(text=' · '.join(footer_bits))
+        embed.set_footer(text=' · '.join(footer_bits))
 
         return embed
 
@@ -3027,7 +3026,7 @@ class EmbedBuilder:
                 label = f"{msg_type} - {incident_id}" if msg_type and incident_id else (msg_type or incident_id or capcode)
                 map_url = build_map_url(lat, lon, label=label, layer="pager")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
-        self._append_container_footer(container, footer_bits, source="Pagermon (community-hosted)")
+        self._append_container_footer(container, footer_bits, source="Pagermon (self-hosted)")
         return container
 
     # ---- Generic fallback --------------------------------------
