@@ -1266,6 +1266,13 @@ def init_archive_db():
                     # out to the heap for every row — the heap fetches were
                     # what pushed the 5-minute statement_timeout.
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_waze_police_heatmap ON data_history (fetched_at DESC) INCLUDE (latitude, longitude, subcategory) WHERE is_latest = 1 AND source = 'waze_police'",
+                    # Partial UNIQUE index — guarantees at most one
+                    # is_latest=1 row per (source, source_id). Without
+                    # this, a write path that bypasses the master lock
+                    # (or a retry after partial failure) can leave
+                    # duplicate is_latest=1 rows that subsequent
+                    # archive cycles can never fully clear.
+                    "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_data_history_latest ON data_history (source, source_id) WHERE is_latest = 1 AND source_id IS NOT NULL",
                 ):
                     idx_name = sql.split()[6]  # CREATE INDEX CONCURRENTLY IF NOT EXISTS <name>...
                     try:
@@ -1441,13 +1448,22 @@ def cache_get(endpoint):
             data = json.loads(data_str)
             age = now - timestamp
             is_expired = age >= ttl
+            # Compare-and-swap: only seed RAM if no fresher entry was
+            # written by a concurrent cache_set() while we were querying.
+            # Without this, a slow reader can clobber a freshly-written
+            # value with the older row it just SELECTed.
             with _CACHE_GET_RAM_LOCK:
-                _CACHE_GET_RAM[endpoint] = (data, timestamp, ttl, now)
+                existing = _CACHE_GET_RAM.get(endpoint)
+                if existing is None or existing[1] <= timestamp:
+                    _CACHE_GET_RAM[endpoint] = (data, timestamp, ttl, now)
             return data, age, is_expired
-        # Negative cache the miss too — prevents repeated DB hits for
-        # endpoints that genuinely have no cached value yet.
+        # Negative cache the miss — but only if no fresher entry was
+        # written concurrently. Otherwise we'd poison a real cache_set
+        # result with our stale 'None' read.
         with _CACHE_GET_RAM_LOCK:
-            _CACHE_GET_RAM[endpoint] = (None, 0, 0, now)
+            existing = _CACHE_GET_RAM.get(endpoint)
+            if existing is None or existing[0] is None:
+                _CACHE_GET_RAM[endpoint] = (None, 0, 0, now)
         return None, 0, True
     except Exception as e:
         Log.cache(f"Get error for {endpoint}: {e}")
@@ -1938,52 +1954,56 @@ def cleanup_old_data():
     pager_ended = 0
     
     # Clean up history (single table in PostgreSQL)
+    # Note: previously this whole block ran under _db_lock_history_waze
+    # (which is the master lock). Holding the master lock around a
+    # multi-second DELETE serialized every archive writer behind
+    # cleanup. Postgres handles the row-level concurrency just fine on
+    # its own, so we don't need application-level serialisation here.
     try:
-        with _db_lock_history_waze:  # Use any history lock for coordination
-            conn = get_conn()
-            try:
-                c = conn.cursor()
+        conn = get_conn()
+        try:
+            c = conn.cursor()
 
-                # Mark pager hits as ended if older than 1 hour
-                c.execute('''
-                    UPDATE data_history
-                    SET is_live = 0
-                    WHERE source = 'pager' AND is_live = 1
-                    AND COALESCE(source_timestamp_unix, fetched_at) < %s
-                ''', (pager_cutoff,))
-                pager_ended = c.rowcount
-                if pager_ended > 0:
-                    Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
+            # Mark pager hits as ended if older than 1 hour
+            c.execute('''
+                UPDATE data_history
+                SET is_live = 0
+                WHERE source = 'pager' AND is_live = 1
+                AND COALESCE(source_timestamp_unix, fetched_at) < %s
+            ''', (pager_cutoff,))
+            pager_ended = c.rowcount
+            if pager_ended > 0:
+                Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
 
-                # Waze failover: mark as ended if last_seen older than 1 hour.
-                # Per-batch diffing is disabled for Waze (incomplete rotations would
-                # flip everything off), so this is the only path that clears stale
-                # Waze records from the live set.
-                waze_cutoff = int(time.time()) - 3600
-                c.execute('''
-                    UPDATE data_history
-                    SET is_live = 0
-                    WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
-                    AND is_live = 1
-                    AND COALESCE(last_seen, fetched_at) < %s
-                ''', (waze_cutoff,))
-                waze_ended = c.rowcount
-                if waze_ended > 0:
-                    Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
+            # Waze failover: mark as ended if last_seen older than 1 hour.
+            # Per-batch diffing is disabled for Waze (incomplete rotations would
+            # flip everything off), so this is the only path that clears stale
+            # Waze records from the live set.
+            waze_cutoff = int(time.time()) - 3600
+            c.execute('''
+                UPDATE data_history
+                SET is_live = 0
+                WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
+                AND is_live = 1
+                AND COALESCE(last_seen, fetched_at) < %s
+            ''', (waze_cutoff,))
+            waze_ended = c.rowcount
+            if waze_ended > 0:
+                Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
 
-                # Delete old data_history entries
-                c.execute('DELETE FROM data_history WHERE fetched_at < %s', (cutoff,))
-                deleted_history += c.rowcount
+            # Delete old data_history entries
+            c.execute('DELETE FROM data_history WHERE fetched_at < %s', (cutoff,))
+            deleted_history += c.rowcount
 
-                # Delete records from deprecated sources
-                for dep_src in DEPRECATED_SOURCES:
-                    c.execute('DELETE FROM data_history WHERE source = %s', (dep_src,))
-                    if c.rowcount > 0:
-                        Log.cleanup(f"Removed {c.rowcount} deprecated {dep_src} records")
+            # Delete records from deprecated sources
+            for dep_src in DEPRECATED_SOURCES:
+                c.execute('DELETE FROM data_history WHERE source = %s', (dep_src,))
+                if c.rowcount > 0:
+                    Log.cleanup(f"Removed {c.rowcount} deprecated {dep_src} records")
 
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         Log.error(f"Cleanup history error: {e}")
 
@@ -10770,6 +10790,12 @@ _DATA_HISTORY_COUNT_INFLIGHT = set()
 _DATA_HISTORY_COUNT_INFLIGHT_LOCK = threading.Lock()
 
 
+# Cap concurrent refresh workers. Each runs a 90s COUNT(*) and holds
+# a pooled connection — without this cap, a traffic spike can spawn
+# dozens of parallel refreshes and exhaust the connection pool.
+_DATA_HISTORY_COUNT_INFLIGHT_MAX = 4
+
+
 def _async_refresh_data_history_count(cache_key, actual_where, params,
                                        live_only, historical_only, pager_cutoff):
     """Kick off a background thread that runs the slow COUNT(*) and
@@ -10778,6 +10804,8 @@ def _async_refresh_data_history_count(cache_key, actual_where, params,
     with _DATA_HISTORY_COUNT_INFLIGHT_LOCK:
         if cache_key in _DATA_HISTORY_COUNT_INFLIGHT:
             return  # another worker is already on it
+        if len(_DATA_HISTORY_COUNT_INFLIGHT) >= _DATA_HISTORY_COUNT_INFLIGHT_MAX:
+            return  # too many workers already running — don't pile on
         _DATA_HISTORY_COUNT_INFLIGHT.add(cache_key)
 
     def _worker():
