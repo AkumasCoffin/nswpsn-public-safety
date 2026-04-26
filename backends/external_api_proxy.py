@@ -1316,6 +1316,26 @@ def init_archive_db():
                     # duplicate is_latest=1 rows that subsequent
                     # archive cycles can never fully clear.
                     "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_data_history_latest ON data_history (source, source_id) WHERE is_latest = 1 AND source_id IS NOT NULL",
+                    # Composite index for keyset (cursor) pagination on
+                    # /api/data/history. Without `id` in the index, the
+                    # planner has to heap-fetch every candidate row to
+                    # evaluate the (fetched_at = X AND id < Y) tiebreaker
+                    # in the cursor seek — making the per-page seek O(N)
+                    # in tied rows instead of O(log N). With ~200k+ rows
+                    # in the latest set this materially affects forward
+                    # paging when many rows share a fetched_at second.
+                    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_fetched_id ON data_history(fetched_at DESC, id DESC) WHERE is_latest = 1',
+                    # Source-scoped variant of the same. The list page
+                    # filters by source AND orders by (fetched_at, id);
+                    # without this index Postgres either re-sorts in
+                    # memory using idx_data_latest_only_source (slow with
+                    # an unbounded time range) or filter-scans the global
+                    # idx_data_latest_fetched_id row-by-row. Either way
+                    # the multi-source-no-time-filter query times out at
+                    # 25s. Adding source as the leading column gives the
+                    # planner a direct match for "WHERE source IN (...)
+                    # AND is_latest=1 ORDER BY fetched_at DESC, id DESC".
+                    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_source_fetched_id ON data_history(source, fetched_at DESC, id DESC) WHERE is_latest = 1',
                 ):
                     # Pull the index name from the word immediately after
                     # `EXISTS` — works for both `CREATE INDEX ... IF NOT
@@ -1408,6 +1428,19 @@ def init_archive_db():
         target=_police_heatmap_scheduler,
         daemon=True,
         name='police-heatmap-scheduler',
+    ).start()
+    # Restore the per-bbox Waze ingest cache from Postgres + start the
+    # periodic snapshot writer. Same motivation as above: a restart
+    # otherwise wipes the userscript-collected bboxes and /api/waze/* only
+    # surfaces whichever regions get re-visited in the first few minutes.
+    try:
+        _hydrate_waze_ingest_cache_from_db()
+    except Exception as e:
+        Log.warn(f"Waze ingest cache hydrate error: {e}")
+    threading.Thread(
+        target=_waze_ingest_persist_loop,
+        daemon=True,
+        name='waze-ingest-persist',
     ).start()
     # Pre-warm the /api/data/history count cache for the logs page
     # default query (hours=24, unique=1, no filters). Without this the
@@ -9124,6 +9157,11 @@ WAZE_INGEST_KEY = os.environ.get('WAZE_INGEST_KEY', '').strip()
 # brief glitches don't prune entries that the script is about to refresh.
 # Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
 WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 2400))
+# How often we snapshot _waze_ingest_cache to api_data_cache so a backend
+# restart doesn't lose all the bbox data the userscript spent ~16 min
+# rotating to collect. 0 disables the feature.
+WAZE_INGEST_PERSIST_INTERVAL = int(os.environ.get('WAZE_INGEST_PERSIST_INTERVAL', 90))
+_WAZE_INGEST_PERSIST_KEY = '_waze_ingest_snapshot_v1'
 # Alert if no ingest POST has arrived in this many seconds (0 = disabled).
 WAZE_INGEST_STALE_SECS = int(os.environ.get('WAZE_INGEST_STALE_SECS', '600'))
 # Optional Discord webhook — fired once when staleness first crosses threshold.
@@ -9471,55 +9509,81 @@ def _waze_reconcile_bbox_sync(bbox_raw, current_ids):
         return 0
 
     waze_sources = ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
-    n_gone = 0
-    by_source = {}
     # Note: the master lock previously wrapped this block. Archive writes
     # no longer hold it (commit 29595ea), and the reconcile worker is
     # already a single-threaded queue consumer (_waze_reconcile_worker),
     # so the lock served no purpose here — it just queued reconciles
     # behind any other code path that did happen to grab it. Postgres
     # row-level locking handles the SELECT/UPDATE concurrency safely.
-    try:
-        conn = get_conn()
+    #
+    # However, the archive writer's batch UPDATEs (last_seen + is_live=1)
+    # touch overlapping rows via a different index, so the two transactions
+    # can grab row locks in opposite orders and deadlock. Postgres aborts
+    # the loser; we retry it. Sorting the source_id lists also gives a
+    # stable lock acquisition order for repeat conflicts.
+    n_gone = 0
+    by_source = {}
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        n_gone = 0
+        by_source = {}
+        conn = None
         try:
-            c = conn.cursor()
-            # 30s budget — bigger than the old 15s now that we don't
-            # serialise behind a Python lock. The query uses the
-            # idx_data_waze_live_geo partial index (source, lat, lng
-            # WHERE is_live = 1 AND source IN (waze_*)).
-            c.execute("SET LOCAL statement_timeout = '30s'")
-            c.execute('''
-                SELECT source, source_id FROM data_history
-                WHERE source IN %s
-                AND is_live = 1
-                AND source_id IS NOT NULL
-                AND latitude BETWEEN %s AND %s
-                AND longitude BETWEEN %s AND %s
-            ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
-            rows = c.fetchall()
-            for src, sid in rows:
-                if sid not in current_ids:
-                    by_source.setdefault(src, []).append(sid)
-            for src, sids in by_source.items():
-                placeholders = ','.join(['%s'] * len(sids))
-                # AND is_live = 1 so we only touch the rows that actually
-                # need flipping — historical rows already have is_live = 0
-                # and shouldn't be rewritten. Cuts the UPDATE's scan/lock
-                # surface to the live set.
-                c.execute(
-                    f'UPDATE data_history SET is_live = 0 '
-                    f'WHERE source = %s AND is_live = 1 '
-                    f'AND source_id IN ({placeholders})',
-                    [src] + sids,
-                )
-                n_gone += len(sids)
-            if n_gone:
-                conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        Log.error(f"Waze bbox reconcile DB error: {e}")
-        return 0
+            conn = get_conn()
+            try:
+                c = conn.cursor()
+                # 30s budget — bigger than the old 15s now that we don't
+                # serialise behind a Python lock. The query uses the
+                # idx_data_waze_live_geo partial index (source, lat, lng
+                # WHERE is_live = 1 AND source IN (waze_*)).
+                c.execute("SET LOCAL statement_timeout = '30s'")
+                # Faster deadlock detection so the loser aborts quickly
+                # and we can retry within budget. Default is 1s.
+                c.execute("SET LOCAL deadlock_timeout = '200ms'")
+                c.execute('''
+                    SELECT source, source_id FROM data_history
+                    WHERE source IN %s
+                    AND is_live = 1
+                    AND source_id IS NOT NULL
+                    AND latitude BETWEEN %s AND %s
+                    AND longitude BETWEEN %s AND %s
+                ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
+                rows = c.fetchall()
+                for src, sid in rows:
+                    if sid not in current_ids:
+                        by_source.setdefault(src, []).append(sid)
+                for src, sids in by_source.items():
+                    # Sort for deterministic lock acquisition order across
+                    # retries — same set of rows, predictable order.
+                    sids.sort()
+                    placeholders = ','.join(['%s'] * len(sids))
+                    # AND is_live = 1 so we only touch the rows that actually
+                    # need flipping — historical rows already have is_live = 0
+                    # and shouldn't be rewritten. Cuts the UPDATE's scan/lock
+                    # surface to the live set.
+                    c.execute(
+                        f'UPDATE data_history SET is_live = 0 '
+                        f'WHERE source = %s AND is_live = 1 '
+                        f'AND source_id IN ({placeholders})',
+                        [src] + sids,
+                    )
+                    n_gone += len(sids)
+                if n_gone:
+                    conn.commit()
+            finally:
+                conn.close()
+            break
+        except psycopg2.Error as e:
+            # 40P01 = deadlock_detected. Postgres already rolled back the
+            # losing transaction; retry on a fresh connection.
+            if getattr(e, 'pgcode', None) == '40P01' and attempt < max_attempts - 1:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            Log.error(f"Waze bbox reconcile DB error: {e}")
+            return 0
+        except Exception as e:
+            Log.error(f"Waze bbox reconcile DB error: {e}")
+            return 0
     if n_gone and DEV_MODE:
         breakdown = ', '.join(f'{k}:{len(v)}' for k, v in by_source.items() if v)
         Log.live(f"Waze ✗ bbox reconcile — {n_gone} gone ({breakdown})")
@@ -9548,6 +9612,80 @@ def _waze_ingest_snapshot():
                 if uuid and uuid not in all_jams:
                     all_jams[uuid] = j
     return list(all_alerts.values()), list(all_jams.values())
+
+
+def _hydrate_waze_ingest_cache_from_db():
+    """Restore _waze_ingest_cache from the persistent api_data_cache row
+    written by _waze_ingest_persist_loop. Without this, a restart drops
+    every bbox the userscript collected and /api/waze/* serves only the
+    handful of regions visited since boot until the rotation completes
+    (~7-16 min). Stale per-bbox entries are pruned during the merge so we
+    never restore data the watcher would have already dropped."""
+    try:
+        payload, _age = cache_get_any(_WAZE_INGEST_PERSIST_KEY)
+    except Exception as e:
+        Log.warn(f"Waze ingest cache hydrate read failed: {e}")
+        return
+    if not payload or not isinstance(payload, list):
+        return
+    now = time.time()
+    restored = 0
+    pruned = 0
+    with _waze_ingest_lock:
+        for row in payload:
+            try:
+                key = tuple(row.get('key') or ())
+                if len(key) != 4:
+                    continue
+                ts = float(row.get('ts') or 0)
+                if now - ts > WAZE_INGEST_MAX_AGE:
+                    pruned += 1
+                    continue
+                _waze_ingest_cache[key] = {
+                    'alerts': row.get('alerts') or [],
+                    'jams': row.get('jams') or [],
+                    'users': row.get('users') or [],
+                    'ts': ts,
+                }
+                restored += 1
+            except Exception:
+                continue
+    if restored:
+        Log.startup(
+            f"Waze ingest cache hydrated from Postgres — "
+            f"{restored} regions restored, {pruned} expired"
+        )
+
+
+def _waze_ingest_persist_loop():
+    """Periodically snapshot _waze_ingest_cache to a single api_data_cache
+    row so a backend restart can resume with the bboxes the userscript
+    already collected, instead of starting from zero. The dict is copied
+    under the ingest lock; serialization and the DB write happen outside
+    the lock so we don't slow ingests."""
+    if WAZE_INGEST_PERSIST_INTERVAL <= 0:
+        return
+    while True:
+        try:
+            time.sleep(WAZE_INGEST_PERSIST_INTERVAL)
+            with _waze_ingest_lock:
+                snapshot = [
+                    {
+                        'key': list(key),
+                        'alerts': entry.get('alerts') or [],
+                        'jams': entry.get('jams') or [],
+                        'users': entry.get('users') or [],
+                        'ts': entry.get('ts') or 0,
+                    }
+                    for key, entry in _waze_ingest_cache.items()
+                ]
+            if not snapshot:
+                continue
+            # Long TTL — pruning is driven by the per-entry ts vs
+            # WAZE_INGEST_MAX_AGE on hydrate, not by cache_get's TTL.
+            cache_set(_WAZE_INGEST_PERSIST_KEY, snapshot, ttl=86400)
+        except Exception as e:
+            Log.warn(f"Waze ingest persist tick error: {e}")
 
 
 @app.route('/api/waze/ingest', methods=['POST'])
@@ -11189,6 +11327,38 @@ def _prewarm_data_history_count_cache():
         Log.warn(f"data/history exact count prewarm skipped (estimate retained): {e}")
 
 
+# --- Cursor pagination helpers --------------------------------------------
+# Keyset pagination encodes the position as (fetched_at, id) pairs because
+# fetched_at alone is not unique — an archive flush can write thousands of
+# rows with the same timestamp. The id tiebreak guarantees a stable forward
+# walk; the index `idx_data_latest_fetched_id` lets the seek stay O(log N).
+
+# Beyond this offset, /api/data/history rejects the request with a 400 and
+# directs the caller to `cursor`. Without a cap, deep offsets (we've seen
+# 245k+ in the wild) force a seq-scan-and-skip that runs until the 25s
+# statement_timeout and 500s. 10k is well past any realistic UI use:
+# pageSize=20 -> page 500, pageSize=100 -> page 100.
+_DATA_HISTORY_MAX_OFFSET = 10000
+
+
+def _encode_history_cursor(fetched_at, row_id):
+    raw = f"{int(fetched_at)}:{int(row_id)}".encode('ascii')
+    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+
+
+def _decode_history_cursor(cursor):
+    """Returns (fetched_at, id) or None on malformed input."""
+    if not cursor:
+        return None
+    try:
+        padded = cursor + '=' * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode('ascii')).decode('ascii')
+        fa_str, id_str = raw.split(':', 1)
+        return int(fa_str), int(id_str)
+    except Exception:
+        return None
+
+
 @app.route('/api/data/history')
 def data_history():
     """
@@ -11293,6 +11463,24 @@ def data_history():
         until_source = request.args.get('until_source', type=int)
         limit = min(request.args.get('limit', 100, type=int), 1000)
         offset = request.args.get('offset', 0, type=int)
+        # Cursor-based pagination is the preferred path — constant time
+        # regardless of how deep the client has paged. Offset is still
+        # honoured for backwards compatibility, but capped at
+        # _DATA_HISTORY_MAX_OFFSET so a runaway client can't grind out a
+        # 25s seq-scan.
+        cursor_raw = (request.args.get('cursor') or '').strip()
+        cursor_decoded = _decode_history_cursor(cursor_raw) if cursor_raw else None
+        if cursor_decoded is None and offset > _DATA_HISTORY_MAX_OFFSET:
+            return jsonify({
+                'error': 'offset_too_large',
+                'message': (
+                    f'offset={offset} exceeds {_DATA_HISTORY_MAX_OFFSET}. '
+                    f'Use ?cursor=<next_cursor from previous response> for '
+                    f'forward pagination, or narrow the result set with '
+                    f'date_from/hours/source.'
+                ),
+                'max_offset': _DATA_HISTORY_MAX_OFFSET,
+            }), 400
         active_only = request.args.get('active_only') == '1'
         # Include the full `data` JSONB blob only when asked. Skipping it cuts
         # the payload dramatically for list pages that just show title + source.
@@ -11487,6 +11675,22 @@ def data_history():
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
         # `data` is the heaviest column — pull it only if ?full=1.
         data_col = 'data' if include_data else "''::text AS data"
+
+        # Cursor seek clause. The (fetched_at, id) row-value comparison
+        # gives a stable forward walk: rows with fetched_at strictly past
+        # the cursor's, plus rows with the same fetched_at and an id past
+        # the cursor's id. Order direction flips the comparator. When a
+        # cursor is supplied we ignore offset entirely — keyset and
+        # offset don't compose, and the cursor is already the position.
+        seek_clause = ''
+        seek_params = []
+        if cursor_decoded is not None:
+            cursor_fa, cursor_id = cursor_decoded
+            cmp = '<' if order_dir == 'DESC' else '>'
+            seek_clause = f' AND (fetched_at {cmp} %s OR (fetched_at = %s AND id {cmp} %s))'
+            seek_params = [cursor_fa, cursor_fa, cursor_id]
+        effective_offset = 0 if cursor_decoded is not None else offset
+
         if len(dbs_to_query) == 1:
             # Single DB - simple query with proper pagination
             conn = get_conn()
@@ -11498,10 +11702,10 @@ def data_history():
                            latitude, longitude, location_text, title, category, subcategory,
                            status, severity, {data_col}, is_active, is_live, last_seen
                     FROM data_history
-                    WHERE {actual_where}
-                    ORDER BY fetched_at {order_dir}
+                    WHERE {actual_where}{seek_clause}
+                    ORDER BY fetched_at {order_dir}, id {order_dir}
                     LIMIT %s OFFSET %s
-                ''', params + [limit, offset])
+                ''', params + seek_params + [limit, effective_offset])
                 all_rows = c.fetchall()
             finally:
                 conn.close()
@@ -11519,10 +11723,10 @@ def data_history():
                                    latitude, longitude, location_text, title, category, subcategory,
                                    status, severity, {data_col}, is_active, is_live, last_seen
                             FROM data_history
-                            WHERE {actual_where}
-                            ORDER BY fetched_at {order_dir}
+                            WHERE {actual_where}{seek_clause}
+                            ORDER BY fetched_at {order_dir}, id {order_dir}
                             LIMIT %s
-                        ''', params + [offset + limit])
+                        ''', params + seek_params + [effective_offset + limit])
                         all_rows.extend(c.fetchall())
                     finally:
                         conn.close()
@@ -11531,8 +11735,8 @@ def data_history():
 
             # Sort merged results and apply pagination
             reverse = (order_dir == 'DESC')
-            all_rows.sort(key=lambda r: r[3] or 0, reverse=reverse)
-            all_rows = all_rows[offset:offset + limit]
+            all_rows.sort(key=lambda r: (r[3] or 0, r[0] or 0), reverse=reverse)
+            all_rows = all_rows[effective_offset:effective_offset + limit]
         
         records = []
         for row in all_rows:
@@ -11587,6 +11791,15 @@ def data_history():
         if unique:
             query_info['filters_applied']['unique'] = True
         
+        # Forward cursor for the next page. Only emit if the response is
+        # full — a short page means we've hit the end of the result set.
+        # Clients page sequentially by passing this back as ?cursor=…,
+        # which avoids the deep-offset performance cliff entirely.
+        next_cursor = None
+        if len(all_rows) >= limit:
+            last = all_rows[-1]
+            next_cursor = _encode_history_cursor(last[3] or 0, last[0] or 0)
+
         return jsonify({
             'total': total,
             'live_count': live_count,
@@ -11595,6 +11808,7 @@ def data_history():
             'offset': offset,
             'count': len(records),
             'records': records,
+            'next_cursor': next_cursor,
             'query': query_info
         })
     except Exception as e:

@@ -1127,6 +1127,43 @@
     let totalEndedCount = 0;
     let isLoading = false;
     let selectedIncident = null;
+    // Cursor returned by the backend with the previous page's response.
+    // Used by the Next button so sequential paging is constant-time on
+    // the server (offset-based pages 500+ time out at 25s).
+    let nextCursor = null;
+    let lastShownPage = 0; // page that nextCursor advances from
+
+    // Pagination strategy picker. Mutates `params` to set cursor/offset/order
+    // and returns { reverseDisplay } telling the caller whether the records
+    // came back in ascending order and need flipping for the descending UI.
+    //
+    //   - Sequential next-page click → use the cursor returned by the
+    //     previous response. Constant-time on the server.
+    //   - Otherwise pick the cheaper end: if the requested page is closer
+    //     to the oldest end of the result set, query order=asc with that
+    //     smaller offset and reverse client-side. Pages near the end (eg.
+    //     Last button, Prev from Last) used to send offset=189000+ which
+    //     the backend caps at 10000.
+    function applyPaginationParams(params, page) {
+      const useCursor = (page === lastShownPage + 1) && !!nextCursor;
+      if (useCursor) {
+        params.set('cursor', nextCursor);
+        params.set('order', 'desc');
+        return { reverseDisplay: false };
+      }
+      const offsetDesc = (page - 1) * pageSize;
+      const offsetAsc = totalPages > 0
+        ? (totalPages - page) * pageSize
+        : Number.POSITIVE_INFINITY;
+      if (offsetAsc < offsetDesc) {
+        params.set('offset', offsetAsc);
+        params.set('order', 'asc');
+        return { reverseDisplay: true };
+      }
+      params.set('offset', offsetDesc);
+      params.set('order', 'desc');
+      return { reverseDisplay: false };
+    }
     let map = null;
     let marker = null;
     let autoRefreshTimer = null;
@@ -2254,16 +2291,21 @@
       if (isLoading) return;
       if (typeof umami !== 'undefined') umami.track('logs-search', { page: page });
       isLoading = true;
-      
+
+      const previousPage = currentPage;
       currentPage = page;
-      const offset = (page - 1) * pageSize;
       showLoading();
-      
+
+      // Any non-incremental jump invalidates the saved cursor — it
+      // describes a position relative to a specific filter+order pair.
+      if (page !== lastShownPage + 1) {
+        nextCursor = null;
+      }
+
       const params = new URLSearchParams();
       params.set('limit', pageSize);
-      params.set('offset', offset);
-      params.set('order', 'desc');
       params.set('unique', '1');
+      const { reverseDisplay } = applyPaginationParams(params, page);
       // full=1 pulls the JSONB `data` column so list rows can render per-source
       // detail badges (pager message, waze street/city, endeavour suburb, etc.)
       params.set('full', '1');
@@ -2339,20 +2381,43 @@
       try {
         console.log('Searching with params:', params.toString());
         const res = await apiFetch(`${API_BASE}/api/data/history?${params}`);
-        
+
+        if (res.status === 400) {
+          // Server-side offset cap — only fires if cursor wasn't usable
+          // (e.g. user typed a page number directly). Surface the
+          // backend's hint instead of a silent failure.
+          let body = {};
+          try { body = await res.json(); } catch (_) {}
+          if (body && body.error === 'offset_too_large') {
+            console.warn('offset cap hit:', body.message);
+            currentPage = previousPage;
+            alert('That page is too far in for offset paging. Try Next/Prev or narrow the date range.');
+            return;
+          }
+        }
         if (!res.ok) {
           console.error('API error:', res.status, res.statusText);
           throw new Error(`API returned ${res.status}`);
         }
-        
+
         const data = await res.json();
         console.log('API response:', { total: data.total, live: data.live_count, ended: data.ended_count, recordCount: data.records?.length });
-        
+
         totalResults = data.total || 0;
         totalLiveCount = data.live_count || 0;
         totalEndedCount = data.ended_count || 0;
         totalPages = Math.ceil(totalResults / pageSize) || 1;
-        currentPageResults = data.records || [];
+        let recs = data.records || [];
+        if (reverseDisplay) {
+          // Asc-order trick — server returned the chronologically oldest
+          // pageSize records; flip them so the user sees descending dates
+          // like every other page.
+          recs = recs.slice().reverse();
+        }
+        currentPageResults = recs;
+        // Update cursor state so the next sequential click can use it.
+        nextCursor = data.next_cursor || null;
+        lastShownPage = currentPage;
         
         renderResults();
         updateStats();
@@ -2380,6 +2445,8 @@
     function changePageSize(newSize) {
       pageSize = parseInt(newSize, 10) || 20;
       currentPage = 1;
+      nextCursor = null;
+      lastShownPage = 0;
       performSearch(1);
     }
     
@@ -4248,9 +4315,11 @@
       const selectedSourceId = selectedIncident?.source_id;
       
       try {
-        // Only fetch current page
-        const offset = (currentPage - 1) * pageSize;
-        const params = new URLSearchParams({ api_key: API_KEY, limit: pageSize, offset: offset, unique: '1' });
+        // Only fetch current page. Use the shared pagination picker so a
+        // refresh while sitting on the last page doesn't send a deep
+        // offset that the backend now caps at 10000.
+        const params = new URLSearchParams({ api_key: API_KEY, limit: pageSize, unique: '1' });
+        const { reverseDisplay: refreshReverseDisplay } = applyPaginationParams(params, currentPage);
         
         // Apply current filters - source can come from type dropdown or be derived from provider
         let source = document.getElementById('filter-source')?.value || '';
@@ -4310,16 +4379,22 @@
         
         const res = await apiFetch(`${API_BASE}/api/data/history?${params}`);
         if (!res.ok) return;
-        
+
         const data = await res.json();
-        
+
         // Update counts (these are full query counts from backend)
         totalResults = data.total || 0;
         totalLiveCount = data.live_count || 0;
         totalEndedCount = data.ended_count || 0;
         totalPages = Math.ceil(totalResults / pageSize) || 1;
-        
-        const newRecords = data.records || [];
+
+        let newRecords = data.records || [];
+        if (refreshReverseDisplay) {
+          newRecords = newRecords.slice().reverse();
+        }
+        // Cursor freshness for the next manual page step.
+        nextCursor = data.next_cursor || null;
+        lastShownPage = currentPage;
         
         // Update stats
         updateStats();
