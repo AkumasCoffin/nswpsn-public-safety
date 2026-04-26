@@ -605,6 +605,38 @@
     #police-panel { border: 1px solid rgba(59, 130, 246, 0.3); }
     #police-panel h4 { color: #3b82f6; }
     #police-panel input[type="checkbox"] { accent-color: #3b82f6; }
+    .heatmap-legend-bar {
+      height: 9px;
+      border-radius: 4px;
+      background: linear-gradient(to right,
+        rgb(34,211,238)  0%,
+        rgb(6,182,212)  20%,
+        rgb(139,92,246) 45%,
+        rgb(217,70,239) 65%,
+        rgb(236,72,153) 82%,
+        rgb(244,63,94) 100%);
+      box-shadow: inset 0 0 0 1px rgba(15,23,42,0.4);
+    }
+    .heatmap-legend-labels {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 10px; color: #94a3b8;
+      margin-top: 3px;
+    }
+    .heatmap-legend-labels #heat-legend-mid {
+      color: #64748b; font-style: italic;
+    }
+    .heatmap-legend-empty {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 10px; color: #94a3b8;
+      margin-top: 5px;
+    }
+    .heatmap-legend-empty-swatch {
+      display: inline-block;
+      width: 14px; height: 9px;
+      border-radius: 2px;
+      background: rgba(15,23,42,0.7);
+      border: 1px solid rgba(148,163,184,0.55);
+    }
     /* Cameras settings panel */
     #cameras-panel { border: 1px solid rgba(139, 92, 246, 0.3); }
     #cameras-panel h4 { color: #c4b5fd; }
@@ -1431,6 +1463,18 @@
         <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(148,163,184,0.18);">
           <label><input type="checkbox" id="chk-police-heatmap" onchange="togglePoliceHeatmapMode(this.checked)"><i class="fa-solid fa-fire" style="color:#dc2626;margin-right:4px;"></i> Heatmap (historical density)</label>
           <div id="police-heatmap-controls" style="display:none;margin-top:8px;">
+            <div class="heatmap-legend" style="margin-top:4px;">
+              <div class="heatmap-legend-bar"></div>
+              <div class="heatmap-legend-labels">
+                <span id="heat-legend-min">0</span>
+                <span id="heat-legend-mid">pings</span>
+                <span id="heat-legend-max">—</span>
+              </div>
+              <div class="heatmap-legend-empty">
+                <span class="heatmap-legend-empty-swatch"></span>
+                <span>no data</span>
+              </div>
+            </div>
             <div id="heat-stats" style="font-size:10px;color:#64748b;margin-top:6px;text-align:center;">Loading…</div>
           </div>
         </div>
@@ -4401,6 +4445,10 @@ async function loadPagerData() {
         if (stats) {
           stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
         }
+        const lblMin = document.getElementById('heat-legend-min');
+        const lblMax = document.getElementById('heat-legend-max');
+        if (lblMin) lblMin.textContent = '1';
+        if (lblMax) lblMax.textContent = (data.max_count || 0).toLocaleString();
       } catch (e) {
         console.error('Police heatmap load failed', e);
         if (stats) stats.textContent = 'Failed to load. Retry.';
