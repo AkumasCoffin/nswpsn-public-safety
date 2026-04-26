@@ -2587,11 +2587,17 @@ const _DASH_SUBTYPE_AWARE_TYPES = new Set([
 // First call kicks off a request; subsequent calls reuse the same promise.
 // Used to populate the subtype filter chip lists with whatever values
 // have actually been observed in data_history.
+//
+// NOTE: deliberately bypasses api() — that helper sends `credentials:
+// 'include'` for the dashboard session cookie, but the filter endpoint
+// returns `Access-Control-Allow-Origin: *`, which browsers refuse to
+// combine with credentialled requests. The endpoint is public; no cookie
+// needed.
 let _dashFilterFetchPromise = null;
 function fetchFilterCatalogue() {
   if (_dashFilterFetchPromise) return _dashFilterFetchPromise;
-  _dashFilterFetchPromise = api('/api/data/history/filters')
-    .then(d => d || { providers: [] })
+  _dashFilterFetchPromise = fetch(API + '/api/data/history/filters')
+    .then(r => r.ok ? r.json() : { providers: [] })
     .catch(() => ({ providers: [] }));
   return _dashFilterFetchPromise;
 }
