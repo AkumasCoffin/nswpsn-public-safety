@@ -9686,82 +9686,82 @@ def waze_alerts():
 @app.route('/api/waze/hazards')
 def waze_hazards():
     """Waze road hazards (uses persistent cache)"""
-    # Check persistent cache first
     cached_data, age, expired = cache_get('waze_hazards')
     if cached_data and not expired:
         return jsonify(cached_data)
-    if cached_data:
-        return jsonify(cached_data)
-    
-    # Fallback: fetch live
+
+    # Stale or missing — rebuild from the ingest snapshot so new regions
+    # are picked up. See waze_police() for the full explanation.
     alerts, jams = fetch_waze_data()
     features = []
     jam_features = []
-    
     for alert in alerts:
         alert_type = alert.get('type', '').upper()
         subtype = alert.get('subtype', '') or ''
         subtype_upper = subtype.upper()
-        
         is_police = (alert_type == 'POLICE' or 'POLICE' in subtype_upper)
         if is_police:
             continue
-        
         is_roadwork = (alert_type == 'CONSTRUCTION' or 'CONSTRUCTION' in subtype_upper)
         if is_roadwork:
             continue
-        
         if alert_type in {'HAZARD', 'ACCIDENT', 'JAM', 'ROAD_CLOSED'}:
             feature = parse_waze_alert(alert, 'Hazard')
             if feature:
                 features.append(feature)
-    
     for jam in jams:
         feature = parse_waze_jam(jam)
         if feature:
             jam_features.append(feature)
-    
+
     result = {
         'type': 'FeatureCollection',
         'features': features,
         'jams': jam_features,
         'count': len(features),
-        'jamCount': len(jam_features)
+        'jamCount': len(jam_features),
     }
     if features or jam_features:
         cache_set('waze_hazards', result, 120)
+        return jsonify(result)
+    if cached_data:
+        return jsonify(cached_data)
     return jsonify(result)
 
 
 @app.route('/api/waze/police')
 def waze_police():
     """Waze police reports (uses persistent cache)"""
-    # Check persistent cache first
     cached_data, age, expired = cache_get('waze_police')
     if cached_data and not expired:
         return jsonify(cached_data)
-    if cached_data:
-        return jsonify(cached_data)
-    
-    # Fallback: fetch live
+
+    # Stale or missing — rebuild from the in-memory ingest snapshot. This
+    # is fast (no DB calls; just merges the per-bbox dict) and is the only
+    # way new regions ingested after the first cache_set make it into the
+    # response. Previous bug: a stale cache was returned without refresh,
+    # so once the cache populated with whatever bboxes were available at
+    # that moment (typically just Sydney right after a restart), regional
+    # data never surfaced again.
     alerts, _ = fetch_waze_data()
     features = []
-    
     for alert in alerts:
         alert_type = alert.get('type', '').upper()
         subtype = alert.get('subtype', '') or ''
-        
-        # Check if it's a police alert - type POLICE (including with no subtype) or police-specific subtypes
         is_police = (alert_type == 'POLICE' or 'POLICE' in subtype.upper())
-        
         if is_police:
             feature = parse_waze_alert(alert, 'Police')
             if feature:
                 features.append(feature)
-    
+
     result = {'type': 'FeatureCollection', 'features': features, 'count': len(features)}
     if features:
         cache_set('waze_police', result, 120)
+        return jsonify(result)
+    # Live rebuild produced nothing (e.g. ingest cache empty mid-restart);
+    # fall back to whatever we had cached so the map isn't blank.
+    if cached_data:
+        return jsonify(cached_data)
     return jsonify(result)
 
 
@@ -10037,31 +10037,28 @@ def waze_roadwork():
     cached_data, age, expired = cache_get('waze_roadwork')
     if cached_data and not expired:
         return jsonify(cached_data)
-    if cached_data:
-        return jsonify(cached_data)
-    
-    # Fallback: fetch live
+
+    # Stale or missing — rebuild from ingest snapshot. See waze_police().
     alerts, _ = fetch_waze_data()
     features = []
-    
     for alert in alerts:
         alert_type = alert.get('type', '').upper()
         subtype = alert.get('subtype', '') or ''
         subtype_upper = subtype.upper()
-        
-        # Include CONSTRUCTION type alerts and any construction-related subtypes
-        is_roadwork = (alert_type == 'CONSTRUCTION' or 
+        is_roadwork = (alert_type == 'CONSTRUCTION' or
                        subtype in WAZE_ROADWORK_SUBTYPES or
                        'CONSTRUCTION' in subtype_upper)
-        
         if is_roadwork:
             feature = parse_waze_alert(alert, 'Roadwork')
             if feature:
                 features.append(feature)
-    
+
     result = {'type': 'FeatureCollection', 'features': features, 'count': len(features)}
     if features:
         cache_set('waze_roadwork', result, CACHE_TTL_TRAFFIC)
+        return jsonify(result)
+    if cached_data:
+        return jsonify(cached_data)
     return jsonify(result)
 
 
