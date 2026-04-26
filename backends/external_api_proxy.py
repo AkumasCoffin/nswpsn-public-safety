@@ -9438,7 +9438,7 @@ _POLICE_VALID_SUBTYPES = {
     'POLICE_VISIBLE', 'POLICE_HIDING', 'POLICE_WITH_MOBILE_CAMERA',
 }
 POLICE_HEATMAP_REFRESH_INTERVAL = int(
-    os.environ.get('POLICE_HEATMAP_REFRESH_INTERVAL', 1800))  # 30 min
+    os.environ.get('POLICE_HEATMAP_REFRESH_INTERVAL', 600))  # 10 min
 
 # In-memory cache. Populated on startup from Postgres (instant warm-up)
 # and refreshed by the background scheduler. Protected by a lock so a
