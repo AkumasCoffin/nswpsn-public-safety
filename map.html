@@ -1989,7 +1989,25 @@
     const topoBase = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { attribution: 'Map data: &copy; OpenStreetMap | Map style: &copy; OpenTopoMap', maxZoom: 17 });
 
     const map = L.map('map', { zoomControl: false, layers: [darkBase] }).setView([-33.8688, 151.2093], 7);
-    
+
+    // Close any open tooltips when the map starts moving / zooming.
+    // Workaround for a Leaflet quirk: during a drag the map element
+    // captures the mouse, so a marker's mouseover fires but the matching
+    // mouseout never does — tooltip stays stuck until the user clicks
+    // somewhere. Closing on gesture start clears stuck tooltips.
+    function _closeAllTooltips() {
+      const closeRecursive = (layer) => {
+        try {
+          if (typeof layer.closeTooltip === 'function') layer.closeTooltip();
+        } catch (e) {}
+        if (typeof layer.eachLayer === 'function') {
+          try { layer.eachLayer(closeRecursive); } catch (e) {}
+        }
+      };
+      map.eachLayer(closeRecursive);
+    }
+    map.on('movestart dragstart zoomstart', _closeAllTooltips);
+
     // W3W grid pane (between tiles and overlays) with fade transition
     map.createPane('w3wPane');
     map.getPane('w3wPane').style.zIndex = 350;

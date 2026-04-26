@@ -2612,7 +2612,23 @@
       map = L.map('map', { zoomControl: false, layers: [darkBase] })
         .setView([-33.8688, 151.2093], 7);
       document.getElementById('map').classList.add('map-dark-mode');
-      
+
+      // Close stuck tooltips when the map starts moving — Leaflet quirk
+      // where dragging while the cursor is over a marker fires mouseover
+      // but the captured-mouse drag eats the matching mouseout.
+      const _closeAllTooltips = () => {
+        const recur = (layer) => {
+          try {
+            if (typeof layer.closeTooltip === 'function') layer.closeTooltip();
+          } catch (e) {}
+          if (typeof layer.eachLayer === 'function') {
+            try { layer.eachLayer(recur); } catch (e) {}
+          }
+        };
+        map.eachLayer(recur);
+      };
+      map.on('movestart dragstart zoomstart', _closeAllTooltips);
+
       // W3W grid pane (between tiles and overlays) with fade transition
       map.createPane('w3wPane');
       map.getPane('w3wPane').style.zIndex = 350;
