@@ -10,6 +10,8 @@
 // @grant        unsafeWindow
 // @connect      *
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/AkumasCoffin/nswpsn-public-safety/main/docs/waze-userscript.user.js
+// @downloadURL  https://raw.githubusercontent.com/AkumasCoffin/nswpsn-public-safety/main/docs/waze-userscript.user.js
 // ==/UserScript==
 
 (function () {
