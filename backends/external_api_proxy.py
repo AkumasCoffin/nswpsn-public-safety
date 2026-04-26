@@ -9489,55 +9489,81 @@ def _waze_reconcile_bbox_sync(bbox_raw, current_ids):
         return 0
 
     waze_sources = ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
-    n_gone = 0
-    by_source = {}
     # Note: the master lock previously wrapped this block. Archive writes
     # no longer hold it (commit 29595ea), and the reconcile worker is
     # already a single-threaded queue consumer (_waze_reconcile_worker),
     # so the lock served no purpose here — it just queued reconciles
     # behind any other code path that did happen to grab it. Postgres
     # row-level locking handles the SELECT/UPDATE concurrency safely.
-    try:
-        conn = get_conn()
+    #
+    # However, the archive writer's batch UPDATEs (last_seen + is_live=1)
+    # touch overlapping rows via a different index, so the two transactions
+    # can grab row locks in opposite orders and deadlock. Postgres aborts
+    # the loser; we retry it. Sorting the source_id lists also gives a
+    # stable lock acquisition order for repeat conflicts.
+    n_gone = 0
+    by_source = {}
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        n_gone = 0
+        by_source = {}
+        conn = None
         try:
-            c = conn.cursor()
-            # 30s budget — bigger than the old 15s now that we don't
-            # serialise behind a Python lock. The query uses the
-            # idx_data_waze_live_geo partial index (source, lat, lng
-            # WHERE is_live = 1 AND source IN (waze_*)).
-            c.execute("SET LOCAL statement_timeout = '30s'")
-            c.execute('''
-                SELECT source, source_id FROM data_history
-                WHERE source IN %s
-                AND is_live = 1
-                AND source_id IS NOT NULL
-                AND latitude BETWEEN %s AND %s
-                AND longitude BETWEEN %s AND %s
-            ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
-            rows = c.fetchall()
-            for src, sid in rows:
-                if sid not in current_ids:
-                    by_source.setdefault(src, []).append(sid)
-            for src, sids in by_source.items():
-                placeholders = ','.join(['%s'] * len(sids))
-                # AND is_live = 1 so we only touch the rows that actually
-                # need flipping — historical rows already have is_live = 0
-                # and shouldn't be rewritten. Cuts the UPDATE's scan/lock
-                # surface to the live set.
-                c.execute(
-                    f'UPDATE data_history SET is_live = 0 '
-                    f'WHERE source = %s AND is_live = 1 '
-                    f'AND source_id IN ({placeholders})',
-                    [src] + sids,
-                )
-                n_gone += len(sids)
-            if n_gone:
-                conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        Log.error(f"Waze bbox reconcile DB error: {e}")
-        return 0
+            conn = get_conn()
+            try:
+                c = conn.cursor()
+                # 30s budget — bigger than the old 15s now that we don't
+                # serialise behind a Python lock. The query uses the
+                # idx_data_waze_live_geo partial index (source, lat, lng
+                # WHERE is_live = 1 AND source IN (waze_*)).
+                c.execute("SET LOCAL statement_timeout = '30s'")
+                # Faster deadlock detection so the loser aborts quickly
+                # and we can retry within budget. Default is 1s.
+                c.execute("SET LOCAL deadlock_timeout = '200ms'")
+                c.execute('''
+                    SELECT source, source_id FROM data_history
+                    WHERE source IN %s
+                    AND is_live = 1
+                    AND source_id IS NOT NULL
+                    AND latitude BETWEEN %s AND %s
+                    AND longitude BETWEEN %s AND %s
+                ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
+                rows = c.fetchall()
+                for src, sid in rows:
+                    if sid not in current_ids:
+                        by_source.setdefault(src, []).append(sid)
+                for src, sids in by_source.items():
+                    # Sort for deterministic lock acquisition order across
+                    # retries — same set of rows, predictable order.
+                    sids.sort()
+                    placeholders = ','.join(['%s'] * len(sids))
+                    # AND is_live = 1 so we only touch the rows that actually
+                    # need flipping — historical rows already have is_live = 0
+                    # and shouldn't be rewritten. Cuts the UPDATE's scan/lock
+                    # surface to the live set.
+                    c.execute(
+                        f'UPDATE data_history SET is_live = 0 '
+                        f'WHERE source = %s AND is_live = 1 '
+                        f'AND source_id IN ({placeholders})',
+                        [src] + sids,
+                    )
+                    n_gone += len(sids)
+                if n_gone:
+                    conn.commit()
+            finally:
+                conn.close()
+            break
+        except psycopg2.Error as e:
+            # 40P01 = deadlock_detected. Postgres already rolled back the
+            # losing transaction; retry on a fresh connection.
+            if getattr(e, 'pgcode', None) == '40P01' and attempt < max_attempts - 1:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            Log.error(f"Waze bbox reconcile DB error: {e}")
+            return 0
+        except Exception as e:
+            Log.error(f"Waze bbox reconcile DB error: {e}")
+            return 0
     if n_gone and DEV_MODE:
         breakdown = ', '.join(f'{k}:{len(v)}' for k, v in by_source.items() if v)
         Log.live(f"Waze ✗ bbox reconcile — {n_gone} gone ({breakdown})")
