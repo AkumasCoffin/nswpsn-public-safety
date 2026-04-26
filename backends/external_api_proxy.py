@@ -54,6 +54,12 @@ import requests
 import cloudscraper
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+try:
+    from flask_compress import Compress
+    _COMPRESS_AVAILABLE = True
+except ImportError:
+    _COMPRESS_AVAILABLE = False
+    Compress = None
 
 # Try to import curl_cffi for better Cloudflare bypass
 try:
@@ -64,6 +70,25 @@ except ImportError:
     curl_requests = None
 
 app = Flask(__name__)
+
+# Response compression. Heavy JSON endpoints (essential/outages with
+# polygon boundaries, traffic/incidents, roadwork) compress 5-10x with
+# gzip; without this they ship hundreds of KB of repetitive coordinate
+# data uncompressed. flask-compress is opt-in via Accept-Encoding so
+# clients that can't decompress (rare) still get plain JSON.
+# Optional dependency — if it's not installed we just skip compression
+# and warn at startup.
+if _COMPRESS_AVAILABLE:
+    app.config['COMPRESS_MIN_SIZE'] = 1024  # don't bother for tiny responses
+    app.config['COMPRESS_LEVEL'] = 6        # default; good size/CPU trade-off
+    app.config['COMPRESS_MIMETYPES'] = [
+        'application/json',
+        'text/html',
+        'text/css',
+        'text/javascript',
+        'application/javascript',
+    ]
+    Compress(app)
 
 # Configure logging based on mode - MUST happen before any requests
 if not DEV_MODE:
@@ -498,10 +523,14 @@ def add_cors_headers(response):
         response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, Authorization'
-    # Cap preflight cache so an old "no PATCH" response doesn't linger in the
-    # browser. 60s is short enough to recover from a config change quickly,
-    # long enough to avoid hammering the OPTIONS path.
-    response.headers['Access-Control-Max-Age'] = '60'
+    # Preflight cache. 60s was hitting the browser with an OPTIONS round-trip
+    # (~80-120ms) before nearly every fetch on a fresh page. Bumped to 7200
+    # (Chrome's max — Firefox accepts up to 86400 but clamps to its own
+    # default; this is the highest value Chrome respects). Map page load
+    # used to do ~30 preflights costing several seconds; with caching the
+    # second visit costs zero. Recovery from CORS config change is at most
+    # 2 hours — acceptable trade for the latency win.
+    response.headers['Access-Control-Max-Age'] = '7200'
     # Add rate limit headers
     if hasattr(request, '_rate_limit_remaining'):
         response.headers['X-RateLimit-Remaining'] = str(request._rate_limit_remaining)
@@ -4871,18 +4900,29 @@ def essential_outages():
     feed_filter = request.args.get('feed', '').lower()
     if feed_filter in ('current', 'future'):
         all_outages = [o for o in all_outages if o.get('feedType') == feed_filter]
-    
+
     # Apply type filter if specified
     outage_type = request.args.get('type', '').lower()
     if outage_type in ('planned', 'unplanned'):
         all_outages = [o for o in all_outages if o.get('outageType') == outage_type]
-    
+
     # Calculate summary stats
     planned_count = sum(1 for o in all_outages if o.get('outageType') == 'planned')
     unplanned_count = sum(1 for o in all_outages if o.get('outageType') == 'unplanned')
     future_count = sum(1 for o in all_outages if o.get('feedType') == 'future')
     total_customers = sum(o.get('customersAffected', 0) for o in all_outages)
-    
+
+    # Lite mode: strip the polygon coordinate arrays for callers that
+    # only render point markers (the map). Polygons can be hundreds of
+    # coordinate pairs each and dominate the response size; the bot
+    # endpoints (/api/essential/planned, /api/essential/future) use a
+    # different code path and keep their full data for embed/preset use.
+    if request.args.get('lite') == '1':
+        all_outages = [
+            {k: v for k, v in o.items() if k != 'polygon'}
+            for o in all_outages
+        ]
+
     return jsonify({
         'outages': all_outages,
         'count': len(all_outages),

@@ -5311,11 +5311,35 @@ function initPagerHoursFromStorage() {
     let API_KEY = null;
     
     // Authenticated fetch wrapper
+    // In-flight request dedupe. The map page wires up several layers
+    // that each kick off their own fetch on init, so the same endpoint
+    // (incidents, endeavour/current, etc.) gets requested 2-4 times in
+    // parallel. Holding the in-flight promise per (method+url+body) lets
+    // every duplicate caller share one network round-trip.
+    const _inflightFetches = new Map();
     function apiFetch(url, options = {}) {
+      const method = (options.method || 'GET').toUpperCase();
       const headers = {
         ...options.headers,
         ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
       };
+      // Dedupe only safe idempotent reads. Anything with a body or
+      // non-GET/HEAD method gets a fresh fetch.
+      const dedupable = (method === 'GET' || method === 'HEAD') && !options.body;
+      if (dedupable) {
+        const key = method + ' ' + url;
+        const existing = _inflightFetches.get(key);
+        if (existing) {
+          // Clone so each caller gets its own consumable Response (body
+          // streams can only be read once).
+          return existing.then(r => r.clone());
+        }
+        const p = fetch(url, { ...options, headers }).finally(() => {
+          _inflightFetches.delete(key);
+        });
+        _inflightFetches.set(key, p);
+        return p.then(r => r.clone());
+      }
       return fetch(url, { ...options, headers });
     }
     
@@ -6272,7 +6296,7 @@ function initPagerHoursFromStorage() {
         const needEss = !essCached.data || (essNow - essCached.timestamp) >= LAYER_CACHE_TTL;
         
         if (needEss) {
-          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages`).then(r => r.json()).catch(() => ({ outages: [] }));
+          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages?lite=1`).then(r => r.json()).catch(() => ({ outages: [] }));
           layerCache.essential_energy = { data: essentialData, timestamp: essNow };
         } else {
           essentialData = essCached.data;
