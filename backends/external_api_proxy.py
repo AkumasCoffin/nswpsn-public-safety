@@ -8421,6 +8421,10 @@ def centralwatch_cameras():
 # In-memory cache for Central Watch camera images
 # Structure: { camera_id: { 'data': bytes, 'content_type': str, 'timestamp': float } }
 _centralwatch_image_cache = {}
+# Tracks (camera_id, status_code) tuples we've already logged a failure
+# for, so the same camera failing the same way every retry doesn't
+# spam the log. Cleared per-cid on successful fetch.
+_failed_cameras_logged = {}
 # Guards concurrent iteration/mutation of _centralwatch_image_cache and
 # _centralwatch_camera_timestamps. Individual .get()/dict[x]=v ops are atomic
 # under GIL, but iteration (cleanup loop) is not — must hold this lock for
@@ -8792,12 +8796,8 @@ def _continuous_cw_image_worker():
                     cached_total = len(_centralwatch_image_cache)
                     # Recovery: this cid succeeded, so clear any stuck
                     # 'Failed' entries for it so the next failure is logged.
-                    try:
-                        if '_failed_cameras_logged' in globals():
-                            for k in [k for k in _failed_cameras_logged if k[0] == cid]:
-                                _failed_cameras_logged.pop(k, None)
-                    except Exception:
-                        pass
+                    for k in [k for k in _failed_cameras_logged if k[0] == cid]:
+                        _failed_cameras_logged.pop(k, None)
                     if consecutive_429s > 0:
                         if DEV_MODE:
                             Log.info(f"Central Watch images: Rate limit cleared after {consecutive_429s} 429s")
@@ -8855,18 +8855,12 @@ def _continuous_cw_image_worker():
 
             else:
                 status = r.get('status', '?') if r else '?'
-                # Only log on state transition (cid wasn't already known
-                # to be failing). The same camera retrying every 30s with
-                # the same 403 was producing dozens of identical lines
-                # per minute. _failed_cameras_logged tracks which cids
-                # we've already complained about; a successful fetch
-                # below clears the entry on recovery so the next failure
-                # is logged again.
-                global _failed_cameras_logged
-                try:
-                    _failed_cameras_logged
-                except NameError:
-                    _failed_cameras_logged = {}
+                # Only log on state transition: the same camera retrying
+                # every 30s with the same 403 was producing dozens of
+                # identical lines per minute. _failed_cameras_logged
+                # (module-level dict) tracks (cid, status) tuples we've
+                # already complained about; a successful fetch above
+                # clears the entry on recovery so the next failure logs.
                 key = (cid, str(status))
                 if DEV_MODE and key not in _failed_cameras_logged:
                     Log.info(f"Central Watch images: Failed {cid[:8]}.. (HTTP {status})")
