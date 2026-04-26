@@ -5708,16 +5708,14 @@ function initPagerHoursFromStorage() {
       return [q, r];
     }
 
-    // Pick a hex radius (in degrees latitude) for the current zoom level.
-    // Smaller hexes when zoomed in, bigger when zoomed out, so the cells
-    // always read at a comfortable on-screen size.
+    // Hex radius per zoom level. Each zoom step halves the radius so
+    // cell density (cells across the viewport) stays roughly constant
+    // — viewport degrees also halve per zoom-in step. Calibrated to
+    // the user-approved z=6 baseline (R=0.18, ~60 hexes across NSW).
+    // Floored so we never go sub-cm at extreme zooms.
     function _hexRadiusForZoom(z) {
-      if (z >= 15) return 0.00065;
-      if (z >= 13) return 0.0015;
-      if (z >= 11) return 0.005;
-      if (z >= 9)  return 0.018;
-      if (z >= 7)  return 0.06;
-      return 0.18;
+      const R = 0.18 / Math.pow(2, Math.max(0, z - 6));
+      return Math.max(0.00012, R);   // ~13 m floor
     }
 
     // Fixed origin so panning doesn't shift the grid — every cell sits at
