@@ -54,6 +54,12 @@ import requests
 import cloudscraper
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+try:
+    from flask_compress import Compress
+    _COMPRESS_AVAILABLE = True
+except ImportError:
+    _COMPRESS_AVAILABLE = False
+    Compress = None
 
 # Try to import curl_cffi for better Cloudflare bypass
 try:
@@ -64,6 +70,25 @@ except ImportError:
     curl_requests = None
 
 app = Flask(__name__)
+
+# Response compression. Heavy JSON endpoints (essential/outages with
+# polygon boundaries, traffic/incidents, roadwork) compress 5-10x with
+# gzip; without this they ship hundreds of KB of repetitive coordinate
+# data uncompressed. flask-compress is opt-in via Accept-Encoding so
+# clients that can't decompress (rare) still get plain JSON.
+# Optional dependency — if it's not installed we just skip compression
+# and warn at startup.
+if _COMPRESS_AVAILABLE:
+    app.config['COMPRESS_MIN_SIZE'] = 1024  # don't bother for tiny responses
+    app.config['COMPRESS_LEVEL'] = 6        # default; good size/CPU trade-off
+    app.config['COMPRESS_MIMETYPES'] = [
+        'application/json',
+        'text/html',
+        'text/css',
+        'text/javascript',
+        'application/javascript',
+    ]
+    Compress(app)
 
 # Configure logging based on mode - MUST happen before any requests
 if not DEV_MODE:
@@ -281,17 +306,27 @@ _SOURCE_HEALTH = {}   # name -> {last_success, last_error, last_error_msg, conse
 _SOURCE_HEALTH_LOCK = threading.Lock()
 
 _SOURCE_THRESHOLDS = {
-    'rfs':               {'soft': 300,  'hard': 900,  'label': 'RFS incidents'},
-    'bom':               {'soft': 300,  'hard': 900,  'label': 'BOM warnings'},
-    'traffic_incidents': {'soft': 300,  'hard': 900,  'label': 'LiveTraffic — incidents'},
+    # Thresholds reflect each source's expected SUCCESSFUL POLL cadence —
+    # 'soft' = degraded (a warning), 'hard' = down (genuine concern).
+    # Sources whose upstream is slow/rate-limited or can have legitimate
+    # quiet periods get more headroom.
+    'rfs':               {'soft': 600,  'hard': 1800, 'label': 'RFS incidents'},
+    'bom':               {'soft': 600,  'hard': 1800, 'label': 'BOM warnings'},
+    'traffic_incidents': {'soft': 600,  'hard': 1800, 'label': 'LiveTraffic — incidents'},
     'traffic_roadwork':  {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — roadwork'},
     'traffic_flood':     {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — flood'},
     'traffic_fire':      {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — fire'},
     'traffic_major':     {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — major events'},
-    'power_endeavour':   {'soft': 600,  'hard': 1800, 'label': 'Endeavour outages'},
-    'power_ausgrid':     {'soft': 600,  'hard': 1800, 'label': 'Ausgrid outages'},
-    'waze':              {'soft': 300,  'hard': 900,  'label': 'Waze'},
-    'pager':             {'soft': 300,  'hard': 900,  'label': 'Pagermon'},
+    'power_endeavour':   {'soft': 1200, 'hard': 3600, 'label': 'Endeavour outages'},
+    # Ausgrid KML is rate-limited and only refreshes when outages change.
+    # Loose thresholds avoid flagging it Down during quiet weather.
+    'power_ausgrid':     {'soft': 1800, 'hard': 5400, 'label': 'Ausgrid outages'},
+    'waze':              {'soft': 600,  'hard': 1800, 'label': 'Waze'},
+    # Pager hits are bursty — a quiet night can have 30+ minutes between
+    # any pages. Polling itself happens every ~2 min, but a poll only
+    # registers source_ok when the upstream HTTP responds; if Pagermon's
+    # backend rate-limits or transiently fails, gaps are normal.
+    'pager':             {'soft': 1200, 'hard': 3600, 'label': 'Pagermon'},
     # rdio summary scheduler runs once per hour. Soft threshold sits just
     # past the cycle (65 min) so a healthy hourly cadence doesn't read
     # "degraded"; hard threshold flags 3+ missed cycles (3.5h).
@@ -498,10 +533,14 @@ def add_cors_headers(response):
         response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, Authorization'
-    # Cap preflight cache so an old "no PATCH" response doesn't linger in the
-    # browser. 60s is short enough to recover from a config change quickly,
-    # long enough to avoid hammering the OPTIONS path.
-    response.headers['Access-Control-Max-Age'] = '60'
+    # Preflight cache. 60s was hitting the browser with an OPTIONS round-trip
+    # (~80-120ms) before nearly every fetch on a fresh page. Bumped to 7200
+    # (Chrome's max — Firefox accepts up to 86400 but clamps to its own
+    # default; this is the highest value Chrome respects). Map page load
+    # used to do ~30 preflights costing several seconds; with caching the
+    # second visit costs zero. Recovery from CORS config change is at most
+    # 2 hours — acceptable trade for the latency win.
+    response.headers['Access-Control-Max-Age'] = '7200'
     # Add rate limit headers
     if hasattr(request, '_rate_limit_remaining'):
         response.headers['X-RateLimit-Remaining'] = str(request._rate_limit_remaining)
@@ -597,6 +636,11 @@ def check_rate_limit():
         # Summary endpoints are cheap DB reads polled by every open live.html
         # tab — don't let them eat the user's 100/min budget.
         '/api/summaries/latest', '/api/summaries',
+        # The Waze userscript fires one POST per region per rotation — at
+        # 70+ regions in a few seconds it would saturate the IP budget on
+        # its own. It carries its own X-Ingest-Key auth (matched against
+        # WAZE_INGEST_KEY) so we let it bypass the IP limit entirely.
+        '/api/waze/ingest',
     }
     if path in skip_rate_limit:
         return None
@@ -606,7 +650,20 @@ def check_rate_limit():
     # authenticated dashboard sessions.
     if path.startswith('/api/dashboard/'):
         return None
-    
+
+    # Skip rate limit for anyone carrying a valid NSWPSN_API_KEY — that's
+    # the operator's own frontend (config.js), the Discord bot, and any
+    # authenticated tooling. The IP-based limit is for anonymous public
+    # abuse only; authenticated callers shouldn't be capped.
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        provided_key = auth_header[7:]
+    else:
+        provided_key = (request.headers.get('X-API-Key', '')
+                        or request.args.get('api_key', ''))
+    if provided_key and API_KEY and provided_key == API_KEY:
+        return None
+
     # Check rate limit
     client_ip = _get_client_ip()
     is_limited, remaining = _check_rate_limit(client_ip)
@@ -822,9 +879,13 @@ def _fetch_endeavour_all_outages():
             if iid and iid not in enrichment:
                 enrichment[iid] = pt
     
-    if DEV_MODE:
-        Log.prewarm(f"Endeavour: {len(areas)} incidents, {len(enrichment)} enriched")
-    
+    # Removed: redundant 'Endeavour: N incidents, N enriched' log. This
+    # function is called once per consumer (current / planned / future)
+    # so the line printed 3-4 times per prewarm cycle, while the per-
+    # consumer 'Endeavour <kind>: N outages from Supabase' lines that
+    # follow are more informative.
+
+
     # Step 3: Normalize and split into 3 categories
     current_outages = []           # Unplanned outages
     current_maintenance = []       # Planned maintenance currently active (start_date in past)
@@ -931,22 +992,30 @@ _db_lock_cache = threading.Lock()    # For cache.db
 _db_lock_stats = threading.Lock()    # For stats.db
 _db_lock_config = threading.Lock()   # For config.db
 
-# History database locks - one per source type
-_db_lock_history_waze = threading.Lock()
-_db_lock_history_traffic = threading.Lock()
-_db_lock_history_rfs = threading.Lock()
-_db_lock_history_power = threading.Lock()
-_db_lock_history_pager = threading.Lock()
-_db_lock_history_weather = threading.Lock()
+# History database locks. Originally one Lock() per source type because
+# each source had its own SQLite file. With Postgres they all hit one
+# `data_history` table — separate Python locks left them free to run
+# concurrent UPDATEs on overlapping rows, which deadlocked at the DB
+# layer ("Cleanup history error: deadlock detected"). All aliases now
+# point to a single master lock so writes serialise cleanly in Python
+# and never reach the deadlock detector.
+_db_lock_history_master = threading.Lock()
+_db_lock_history_waze    = _db_lock_history_master
+_db_lock_history_traffic = _db_lock_history_master
+_db_lock_history_rfs     = _db_lock_history_master
+_db_lock_history_power   = _db_lock_history_master
+_db_lock_history_pager   = _db_lock_history_master
+_db_lock_history_weather = _db_lock_history_master
 
-# Map logical db keys to their locks
+# Map logical db keys to the same master lock (kept for API compatibility
+# with code that calls get_history_lock_for_source).
 _DB_LOCKS = {
-    DB_PATH_HISTORY_WAZE: _db_lock_history_waze,
-    DB_PATH_HISTORY_TRAFFIC: _db_lock_history_traffic,
-    DB_PATH_HISTORY_RFS: _db_lock_history_rfs,
-    DB_PATH_HISTORY_POWER: _db_lock_history_power,
-    DB_PATH_HISTORY_PAGER: _db_lock_history_pager,
-    DB_PATH_HISTORY_WEATHER: _db_lock_history_weather,
+    DB_PATH_HISTORY_WAZE: _db_lock_history_master,
+    DB_PATH_HISTORY_TRAFFIC: _db_lock_history_master,
+    DB_PATH_HISTORY_RFS: _db_lock_history_master,
+    DB_PATH_HISTORY_POWER: _db_lock_history_master,
+    DB_PATH_HISTORY_PAGER: _db_lock_history_master,
+    DB_PATH_HISTORY_WEATHER: _db_lock_history_master,
 }
 
 def get_history_lock_for_source(source):
@@ -1178,6 +1247,21 @@ def init_archive_db():
             ''')
             _cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind ON data_history_filter_cache(kind)')
             _cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind_source ON data_history_filter_cache(kind, source)')
+            # Pre-aggregated police-heatmap cache. Refreshed in the background
+            # so the request path never has to GROUP BY data_history rows
+            # while archiving holds locks.
+            _cur.execute('''
+                CREATE TABLE IF NOT EXISTS police_heatmap_cache (
+                    lat_bin     NUMERIC(8,3) NOT NULL,
+                    lng_bin     NUMERIC(9,3) NOT NULL,
+                    subcategory TEXT NOT NULL DEFAULT '',
+                    count       INTEGER NOT NULL,
+                    updated_at  TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (lat_bin, lng_bin, subcategory)
+                )
+            ''')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_police_heatmap_count ON police_heatmap_cache(count DESC)')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_police_heatmap_subcat ON police_heatmap_cache(subcategory)')
             _c.commit()
             _cur.close()
         finally:
@@ -1214,8 +1298,35 @@ def init_archive_db():
                 for sql in (
                     'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_only_fetched ON data_history(fetched_at DESC) WHERE is_latest = 1',
                     'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_only_source ON data_history(source, fetched_at DESC) WHERE is_latest = 1',
+                    # Partial index for the Waze bbox reconcile worker. The query
+                    # filters on (source IN waze_*) + is_live=1 + lat/lng range,
+                    # and was timing out at 15s under archiving contention.
+                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_waze_live_geo ON data_history (source, latitude, longitude) WHERE is_live = 1 AND source_id IS NOT NULL AND source IN ('waze_hazard','waze_police','waze_roadwork','waze_jam')",
+                    # Covering partial index for the police-heatmap aggregation.
+                    # The refresh scans is_latest=1 + source='waze_police' rows
+                    # and groups by (lat_bin, lng_bin, subcategory). INCLUDE
+                    # lets the planner do an index-only scan instead of fanning
+                    # out to the heap for every row — the heap fetches were
+                    # what pushed the 5-minute statement_timeout.
+                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_waze_police_heatmap ON data_history (fetched_at DESC) INCLUDE (latitude, longitude, subcategory) WHERE is_latest = 1 AND source = 'waze_police'",
+                    # Partial UNIQUE index — guarantees at most one
+                    # is_latest=1 row per (source, source_id). Without
+                    # this, a write path that bypasses the master lock
+                    # (or a retry after partial failure) can leave
+                    # duplicate is_latest=1 rows that subsequent
+                    # archive cycles can never fully clear.
+                    "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_data_history_latest ON data_history (source, source_id) WHERE is_latest = 1 AND source_id IS NOT NULL",
                 ):
-                    idx_name = sql.split()[4]
+                    # Pull the index name from the word immediately after
+                    # `EXISTS` — works for both `CREATE INDEX ... IF NOT
+                    # EXISTS <name>` and `CREATE UNIQUE INDEX ... IF NOT
+                    # EXISTS <name>` (the UNIQUE form has one extra word
+                    # earlier, which threw off the previous split()[6]).
+                    parts = sql.split()
+                    try:
+                        idx_name = parts[parts.index('EXISTS') + 1]
+                    except (ValueError, IndexError):
+                        idx_name = '<unknown>'
                     try:
                         Log.startup(f"Building partial index {idx_name} CONCURRENTLY (may take minutes)...")
                         cur.execute(sql)
@@ -1233,12 +1344,42 @@ def init_archive_db():
                         Log.startup("✓ ANALYZE complete")
                     except Exception as e:
                         Log.error(f"ANALYZE data_history failed: {e}")
+                # Aggressive autovacuum settings for data_history. This table
+                # sees continuous UPDATE/DELETE traffic from archive + cleanup
+                # workers, which generates dead tuples faster than the default
+                # autovacuum thresholds (20% / 10%) catch up with. Tightening
+                # the scale factors plus raising the per-run cost limit lets
+                # autovacuum trigger sooner and finish faster, keeping the
+                # visibility map clean enough for index-only scans.
+                #   - vacuum_scale_factor 0.05  -> trigger at 5% dead rows
+                #   - analyze_scale_factor 0.02 -> trigger ANALYZE at 2% changed
+                #   - vacuum_cost_limit 2000    -> let each run do more work
+                #     before pausing (default 200, way too conservative)
+                #   - vacuum_cost_delay 5ms     -> shorter pauses between
+                #     work batches inside a single autovacuum run
+                # ALTER TABLE SET (...) is idempotent, safe to run every
+                # boot — Postgres just no-ops if values are unchanged.
+                try:
+                    cur.execute('''
+                        ALTER TABLE data_history SET (
+                            autovacuum_vacuum_scale_factor = 0.05,
+                            autovacuum_analyze_scale_factor = 0.02,
+                            autovacuum_vacuum_cost_limit = 2000,
+                            autovacuum_vacuum_cost_delay = 5
+                        )
+                    ''')
+                    Log.startup("✓ data_history autovacuum settings tuned (5%/2% triggers, 2000 cost limit)")
+                except Exception as e:
+                    Log.warn(f"data_history autovacuum tuning skipped: {e}")
                 cur.close()
             finally:
                 conn.close()
         except Exception as e:
             Log.error(f"Partial index migration error: {e}")
     threading.Thread(target=_ensure_partial_indexes, daemon=True, name='partial-index-migration').start()
+    # Bot-DB index migration — separate thread so it doesn't block
+    # the main DB migration.
+    threading.Thread(target=_dash_bot_db_indexes_ensure, daemon=True, name='bot-db-index-migration').start()
 
     # Filter cache refresh scheduler — keeps /api/data/history/filters fast.
     threading.Thread(
@@ -1246,14 +1387,56 @@ def init_archive_db():
         daemon=True,
         name='filter-cache-scheduler',
     ).start()
+    # Buffered archive writer (Option B). Source workers push into
+    # _archive_buffer via store_incidents_batch(); this single thread
+    # drains every ARCHIVE_FLUSH_INTERVAL seconds and is the only caller
+    # of _store_incidents_batch_inner — eliminates per-source DB-write
+    # contention on prewarm.
+    threading.Thread(
+        target=_archive_writer_loop,
+        daemon=True,
+        name='archive-writer',
+    ).start()
+    # Hydrate the police-heatmap RAM cache from Postgres so the endpoint
+    # is hot the moment the backend is up — avoids a "warming" window.
+    try:
+        _hydrate_police_heatmap_ram_from_db()
+    except Exception as e:
+        Log.warn(f"Police heatmap RAM hydrate error: {e}")
+    # Police heatmap cache refresh scheduler — same pattern.
+    threading.Thread(
+        target=_police_heatmap_scheduler,
+        daemon=True,
+        name='police-heatmap-scheduler',
+    ).start()
+    # Pre-warm the /api/data/history count cache for the logs page
+    # default query (hours=24, unique=1, no filters). Without this the
+    # first user click after a restart sees a 40s wait or stale-fallback
+    # warning. Background thread so it doesn't block startup.
+    threading.Thread(
+        target=_prewarm_data_history_count_cache,
+        daemon=True,
+        name='count-cache-prewarm',
+    ).start()
+    # One-shot VACUUM right after boot to clean up the visibility map left
+    # behind by previous archive cycles. The hourly cleanup-loop call covers
+    # ongoing maintenance, but the first slow scan after a restart benefits
+    # from this immediate pass. Delayed so it doesn't fight the prewarm.
+    def _initial_vacuum():
+        time.sleep(60)
+        _vacuum_data_history()
+    threading.Thread(target=_initial_vacuum, daemon=True, name='initial-vacuum').start()
 
 
 # ==================== PERSISTENT DATA CACHE ====================
 # SQLite-backed cache that survives restarts and is pre-warmed in background
 
 def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
-    """Store data in persistent PostgreSQL cache"""
+    """Store data in persistent PostgreSQL cache. Also seeds the RAM
+    layer so a write is immediately visible to subsequent cache_get()
+    callers without a Postgres round-trip."""
     conn = None
+    timestamp = int(time.time())
     try:
         with _db_lock_cache:
             conn = get_conn()
@@ -1262,8 +1445,10 @@ def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
                 INSERT INTO api_data_cache (endpoint, data, timestamp, ttl, fetch_time_ms)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (endpoint) DO UPDATE SET data = EXCLUDED.data, timestamp = EXCLUDED.timestamp, ttl = EXCLUDED.ttl, fetch_time_ms = EXCLUDED.fetch_time_ms
-            ''', (endpoint, json.dumps(data), int(time.time()), ttl, fetch_time_ms))
+            ''', (endpoint, json.dumps(data), timestamp, ttl, fetch_time_ms))
             conn.commit()
+        with _CACHE_GET_RAM_LOCK:
+            _CACHE_GET_RAM[endpoint] = (data, timestamp, ttl, timestamp)
         return True
     except Exception as e:
         Log.cache(f"Set error for {endpoint}: {e}")
@@ -1273,11 +1458,50 @@ def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
             try: conn.close()
             except Exception: pass
 
+# In-process RAM layer in front of the Postgres cache. Bot + browser
+# poll most endpoints every 30-60s, and each handler calls cache_get()
+# 1-2 times — that's 30-50 Postgres SELECTs/min on api_data_cache even
+# when nothing changed. A 5-second RAM TTL dedupes rapid repeat polls
+# down to a single DB read per endpoint per ~5s, with no impact on
+# perceived data freshness (the underlying TTLs are 60s+).
+_CACHE_GET_RAM = {}             # endpoint -> (data, db_timestamp, ttl, fetched_at)
+_CACHE_GET_RAM_LOCK = threading.Lock()
+_CACHE_GET_RAM_TTL = 5          # seconds — short, just dedupe burst traffic
+_CACHE_GET_RAM_HITS = 0         # debug counters
+_CACHE_GET_RAM_MISSES = 0
+
+
+def _cache_get_ram_invalidate(endpoint):
+    """Drop the RAM entry so the next reader hits Postgres for fresh data."""
+    with _CACHE_GET_RAM_LOCK:
+        _CACHE_GET_RAM.pop(endpoint, None)
+
+
 def cache_get(endpoint):
     """
     Get data from persistent cache.
     Returns: (data, age_seconds, is_expired)
+
+    Layered: 5-second in-process RAM cache in front of the Postgres
+    cache, so repeated polls for the same endpoint within ~5s share
+    a single DB read.
     """
+    global _CACHE_GET_RAM_HITS, _CACHE_GET_RAM_MISSES
+    now = int(time.time())
+
+    # RAM hit path — instant, no DB.
+    with _CACHE_GET_RAM_LOCK:
+        ram = _CACHE_GET_RAM.get(endpoint)
+        if ram is not None and (now - ram[3]) < _CACHE_GET_RAM_TTL:
+            data, db_ts, ttl, _fetched_at = ram
+            _CACHE_GET_RAM_HITS += 1
+            if data is None:
+                return None, 0, True
+            age = now - db_ts
+            return data, age, age >= ttl
+
+    # RAM miss — fall through to Postgres.
+    _CACHE_GET_RAM_MISSES += 1
     conn = None
     try:
         conn = get_conn()
@@ -1286,9 +1510,25 @@ def cache_get(endpoint):
         row = c.fetchone()
         if row:
             data_str, timestamp, ttl = row
-            age = int(time.time()) - timestamp
+            data = json.loads(data_str)
+            age = now - timestamp
             is_expired = age >= ttl
-            return json.loads(data_str), age, is_expired
+            # Compare-and-swap: only seed RAM if no fresher entry was
+            # written by a concurrent cache_set() while we were querying.
+            # Without this, a slow reader can clobber a freshly-written
+            # value with the older row it just SELECTed.
+            with _CACHE_GET_RAM_LOCK:
+                existing = _CACHE_GET_RAM.get(endpoint)
+                if existing is None or existing[1] <= timestamp:
+                    _CACHE_GET_RAM[endpoint] = (data, timestamp, ttl, now)
+            return data, age, is_expired
+        # Negative cache the miss — but only if no fresher entry was
+        # written concurrently. Otherwise we'd poison a real cache_set
+        # result with our stale 'None' read.
+        with _CACHE_GET_RAM_LOCK:
+            existing = _CACHE_GET_RAM.get(endpoint)
+            if existing is None or existing[0] is None:
+                _CACHE_GET_RAM[endpoint] = (None, 0, 0, now)
         return None, 0, True
     except Exception as e:
         Log.cache(f"Get error for {endpoint}: {e}")
@@ -1482,85 +1722,203 @@ def _compute_data_hash(inc):
     return hashlib.md5(hash_str.encode()).hexdigest()[:16]
 
 
+# ==================== BUFFERED ARCHIVE WRITER ====================
+# Source workers used to call _store_incidents_batch_inner directly via
+# store_incidents_batch, which meant ~9 workers all hitting data_history at
+# once on prewarm (per-source DB write latency stacked). Option B routes
+# every store_incidents_batch() call through this in-memory buffer, and a
+# single dedicated writer thread (`archive-writer`) drains it every
+# ARCHIVE_FLUSH_INTERVAL seconds. Within one drain cycle, batches for the
+# same source are concatenated into one bigger DB call — fewer round trips,
+# and zero lock contention because there is exactly one writer.
+#
+# Trade-off: up to ARCHIVE_FLUSH_INTERVAL seconds of records can be lost
+# on hard crash. Live API endpoints are NOT affected — they read from
+# api_data_cache (set synchronously by the prewarm fetch path), not from
+# data_history.
+ARCHIVE_FLUSH_INTERVAL = int(os.environ.get('ARCHIVE_FLUSH_INTERVAL', '30'))
+_ARCHIVE_BUFFER_MAX_RECORDS = 50_000  # hard cap to bound RAM
+_archive_buffer = []  # list of (records, source_type) tuples
+_archive_buffer_records = 0  # running record count, kept in sync with the list
+_archive_buffer_lock = threading.Lock()
+
+# Friendly names for archive logging — also used by the writer thread.
+_ARCHIVE_NAMES = {
+    'rfs': 'RFS',
+    'traffic_incident': 'Traffic',
+    'traffic_roadwork': 'Roadwork',
+    'traffic_flood': 'Floods',
+    'traffic_fire': 'Traffic Fire',
+    'traffic_majorevent': 'Major Events',
+    'waze_hazard': 'Waze Hazards',
+    'waze_police': 'Waze Police',
+    'waze_roadwork': 'Waze Roadwork',
+    'waze_jam': 'Waze Jams',
+    'endeavour_current': 'Endeavour',
+    'endeavour_planned': 'Endeavour Planned',
+    'ausgrid': 'Ausgrid',
+    'bom_warning': 'BOM Warnings',
+}
+
+
 def store_incidents_batch(incidents, source_type=None):
     """
-    Store multiple incidents in a single transaction with DEDUPLICATION.
-    
-    Only inserts a new row if:
-    1. It's a new incident (never seen this source+source_id before), OR
-    2. The data has changed since the last snapshot
-    
-    Also tracks is_live status:
-    - All incidents in this batch are marked as is_live=1 (still in API)
-    - Incidents from this source_type NOT in this batch are marked is_live=0
-    
+    Queue a batch of incidents for the dedicated archive writer thread.
+
+    NOTE (Option B): this no longer writes to data_history synchronously.
+    It appends (incidents, source_type) to an in-memory buffer; the
+    `archive-writer` thread drains the buffer every ARCHIVE_FLUSH_INTERVAL
+    seconds and calls _store_incidents_batch_inner there.
+
+    Returns a synthetic stats dict so existing callers that read
+    result['new'] / ['changed'] / ['ended'] / ['unchanged'] don't crash.
+    The 'queued': True marker lets callers distinguish a deferred write
+    from a synchronous one if they care; nothing today does.
+
     Args:
         incidents: List of dicts with keys matching store_incident params
-        source_type: The source type (e.g., 'rfs', 'traffic_incident') - used to mark
-                     missing incidents as no longer live
-    
+        source_type: The source type (e.g., 'rfs', 'traffic_incident')
+
     Returns:
-        dict: {'total': int, 'new': int, 'changed': int, 'unchanged': int, 'ended': int}
+        dict: {'total': int, 'new': 0, 'changed': 0, 'unchanged': 0,
+               'ended': 0, 'queued': True}
     """
     if not incidents:
-        return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
-    
+        return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0, 'queued': True}
+
     # Determine source for logging
     src = source_type or (incidents[0].get('source') if incidents else 'unknown')
-    
-    # Friendly names for archive logging
-    ARCHIVE_NAMES = {
-        'rfs': 'RFS',
-        'traffic_incident': 'Traffic',
-        'traffic_roadwork': 'Roadwork',
-        'traffic_flood': 'Floods',
-        'traffic_fire': 'Traffic Fire',
-        'traffic_majorevent': 'Major Events',
-        'waze_hazard': 'Waze Hazards',
-        'waze_police': 'Waze Police',
-        'waze_roadwork': 'Waze Roadwork',
-        'waze_jam': 'Waze Jams',
-        'endeavour_current': 'Endeavour',
-        'endeavour_planned': 'Endeavour Planned',
-        'ausgrid': 'Ausgrid',
-        'bom_warning': 'BOM Warnings',
-    }
-    name = ARCHIVE_NAMES.get(src, src)
-    
-    # Log archive start in dev mode (verbose)
+    name = _ARCHIVE_NAMES.get(src, src)
+    n = len(incidents)
+
+    global _archive_buffer_records
+    dropped = 0
+    with _archive_buffer_lock:
+        # Bounded memory: if appending this batch would blow past the cap,
+        # drop oldest queued batches first. This is a coarse defense — the
+        # writer drains every ARCHIVE_FLUSH_INTERVAL seconds, so under
+        # normal load the buffer never gets close to the cap.
+        while _archive_buffer and (_archive_buffer_records + n) > _ARCHIVE_BUFFER_MAX_RECORDS:
+            old_records, _old_src = _archive_buffer.pop(0)
+            dropped += len(old_records)
+            _archive_buffer_records -= len(old_records)
+        _archive_buffer.append((incidents, source_type))
+        _archive_buffer_records += n
+
+    if dropped:
+        Log.warn(f"Archive buffer full ({_ARCHIVE_BUFFER_MAX_RECORDS} cap): "
+                 f"dropped {dropped} oldest records to make room for {name}")
+
+    # Log archive queueing in dev mode (verbose)
     if DEV_MODE:
-        Log.data(f"📥 {name} archiving {len(incidents)} incidents...")
-    
+        Log.data(f"📥 {name} queued {n} incidents")
+
+    return {'total': n, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0, 'queued': True}
+
+
+def _archive_writer_drain_once():
+    """Swap the buffer out under the lock, group by source, write each group.
+
+    Returns (sources_written, total_records, elapsed_ms). Called by the
+    writer loop and once more at shutdown.
+    """
+    global _archive_buffer_records
+    with _archive_buffer_lock:
+        if not _archive_buffer:
+            return (0, 0, 0)
+        pending = _archive_buffer[:]
+        _archive_buffer.clear()
+        _archive_buffer_records = 0
+
+    # Group by source so two batches for the same source within one cycle
+    # become one DB call. Preserve insertion order within a source.
+    grouped = {}
+    order = []
+    for records, src in pending:
+        if src is None and records:
+            src = records[0].get('source')
+        if src not in grouped:
+            grouped[src] = []
+            order.append(src)
+        grouped[src].extend(records)
+
+    start = time.time()
+    total_records = 0
+    sources_written = 0
+    for src in order:
+        recs = grouped[src]
+        if not recs:
+            continue
+        try:
+            _store_incidents_batch_inner_with_retry(recs, src)
+            sources_written += 1
+            total_records += len(recs)
+        except Exception as e:
+            # One bad source must not break the others — log and move on.
+            name = _ARCHIVE_NAMES.get(src, src)
+            Log.error(f"Archive writer: {name} flush failed: {e}")
+
+    elapsed_ms = int((time.time() - start) * 1000)
+    return (sources_written, total_records, elapsed_ms)
+
+
+def _store_incidents_batch_inner_with_retry(incidents, source_type):
+    """Wrap _store_incidents_batch_inner with the same retry-on-deadlock
+    logic that store_incidents_batch used to do synchronously. Lives here
+    (not in the inner function) so the inner function stays pure-write.
+    """
     max_retries = 3
     retry_delay = 1.0
-    start_time = time.time()
-    
     for attempt in range(max_retries):
         try:
-            result = _store_incidents_batch_inner(incidents, source_type)
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            
-            # Log archive results in dev (prewarm_single logs per-source in prod)
-            if DEV_MODE:
-                ended_str = f", Ended: {result['ended']}" if result['ended'] > 0 else ""
-                Log.data(f"📦 {name}: New: {result['new']}, Old: {result['unchanged']}, Upd: {result['changed']}{ended_str} [{elapsed_ms}ms]")
-            
-            return result
+            return _store_incidents_batch_inner(incidents, source_type)
         except psycopg2.OperationalError as e:
-            if 'locked' in str(e).lower() and attempt < max_retries - 1:
-                Log.warn(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+            msg = str(e).lower()
+            transient = ('locked' in msg or 'deadlock' in msg
+                         or 'serialization' in msg)
+            if transient and attempt < max_retries - 1:
+                Log.warn(f"Archive writer transient DB error, retrying in {retry_delay}s "
+                         f"(attempt {attempt + 1}/{max_retries}): {e}")
                 time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
+                retry_delay *= 2
             else:
-                Log.error(f"DataHistory batch store error: {e}")
-                return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+                raise
+
+
+def _archive_writer_loop():
+    """Dedicated archive writer thread. Drains _archive_buffer every
+    ARCHIVE_FLUSH_INTERVAL seconds; one final drain on shutdown."""
+    Log.startup(f"Archive writer started (flush every {ARCHIVE_FLUSH_INTERVAL}s, "
+                f"buffer cap {_ARCHIVE_BUFFER_MAX_RECORDS:,} records)")
+    while not _shutdown_event.is_set():
+        # _shutdown_event.wait returns True when set — exit loop, but still
+        # do one last drain below to flush any buffered records.
+        if _shutdown_event.wait(timeout=ARCHIVE_FLUSH_INTERVAL):
+            break
+        try:
+            sources, total, elapsed = _archive_writer_drain_once()
+            if sources or total:
+                Log.data(f"📦 Archive flush: {sources} sources, {total} records [{elapsed}ms]")
         except Exception as e:
-            Log.error(f"DataHistory batch store error: {e}")
-            return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
-    return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+            Log.error(f"Archive writer loop error: {e}")
+
+    # Shutdown drain — best effort, don't let an exception swallow the
+    # process exit path.
+    try:
+        sources, total, elapsed = _archive_writer_drain_once()
+        if sources or total:
+            Log.data(f"📦 Archive flush (shutdown): {sources} sources, {total} records [{elapsed}ms]")
+    except Exception as e:
+        Log.error(f"Archive writer shutdown drain error: {e}")
 
 def _store_incidents_batch_inner(incidents, source_type=None):
-    """Inner function for store_incidents_batch - uses source-specific history DB"""
+    """Inner function for store_incidents_batch - uses source-specific history DB.
+
+    Option B: this is now invoked only from the dedicated `archive-writer`
+    thread (via _store_incidents_batch_inner_with_retry). Source workers
+    call store_incidents_batch() which only enqueues into _archive_buffer.
+    Because there is exactly one writer, the previous lock-contention
+    chokepoint is gone."""
     gone_ids = set()  # Track incidents that are no longer live
     try:
         fetched_at = int(time.time())
@@ -1569,168 +1927,188 @@ def _store_incidents_batch_inner(incidents, source_type=None):
         if source_type is None and incidents:
             source_type = incidents[0].get('source')
         
-        # Get the right database and lock for this source type
+        # Get the right database for this source type. The Python lock that
+        # used to wrap this block was removed: with the partial UNIQUE INDEX
+        # uniq_data_history_latest (commit ac58dcb) Postgres now enforces
+        # "at most one is_latest=1 per (source, source_id)" structurally, so
+        # the in-process lock is redundant and was the dominant chokepoint —
+        # 9+ source workers serialized through it on restart.
         db_path = get_history_db_for_source(source_type)
-        db_lock = get_history_lock_for_source(source_type)
-        
-        with db_lock:
-            conn = get_conn()
-            try:
-                c = conn.cursor()
-                
-                # First, get the latest hash for each source+source_id we're about to insert
-                # Build lookup of existing hashes
-                source_ids = [(inc.get('source'), inc.get('source_id')) for inc in incidents if inc.get('source_id')]
-                existing_hashes = {}
-                
-                if source_ids:
-                    # Query latest data_hash for each source+source_id
-                    placeholders = ','.join(['(%s, %s)' for _ in source_ids])
-                    flat_params = [item for pair in source_ids for item in pair]
-                    
-                    c.execute(f'''
-                        SELECT source, source_id, data_hash 
-                        FROM data_history 
+
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+
+            # First, get the latest hash for each source+source_id we're about to insert
+            # Build lookup of existing hashes
+            source_ids = [(inc.get('source'), inc.get('source_id')) for inc in incidents if inc.get('source_id')]
+            existing_hashes = {}
+
+            if source_ids:
+                # Query latest data_hash for each source+source_id
+                placeholders = ','.join(['(%s, %s)' for _ in source_ids])
+                flat_params = [item for pair in source_ids for item in pair]
+
+                c.execute(f'''
+                    SELECT source, source_id, data_hash
+                    FROM data_history
+                    WHERE (source, source_id) IN ({placeholders})
+                    AND id IN (
+                        SELECT MAX(id) FROM data_history
                         WHERE (source, source_id) IN ({placeholders})
-                        AND id IN (
-                            SELECT MAX(id) FROM data_history 
-                            WHERE (source, source_id) IN ({placeholders})
-                            GROUP BY source, source_id
-                        )
-                    ''', flat_params + flat_params)
-                    
-                    for row in c.fetchall():
-                        existing_hashes[(row[0], row[1])] = row[2]
-                
-                # Filter to only new or changed incidents
-                rows_to_insert = []
-                all_source_ids_in_batch = set()
-                new_count = 0
-                changed_count = 0
-                skipped_count = 0
-                
-                for inc in incidents:
-                    source = inc.get('source')
-                    source_id = inc.get('source_id')
-                    data_hash = _compute_data_hash(inc)
-                    
-                    if source_id:
-                        all_source_ids_in_batch.add((source, source_id))
-                    
-                    # Check if this is new or changed
-                    existing_hash = existing_hashes.get((source, source_id))
-                    
-                    if existing_hash is None:
-                        # New incident - insert
-                        new_count += 1
-                    elif existing_hash != data_hash:
-                        # Data changed - insert new snapshot
-                        changed_count += 1
-                    else:
-                        # Same data - skip insert but still update last_seen
-                        skipped_count += 1
-                        continue
-                    
-                    source_ts_unix = parse_source_timestamp(inc.get('source_timestamp'))
-                    source_ts_str = str(inc.get('source_timestamp')) if inc.get('source_timestamp') else None
-                    
-                    # Get hierarchical source info
-                    src_provider = inc.get('source_provider')
-                    src_type = inc.get('source_type')
-                    if not src_provider or not src_type:
-                        src_provider, src_type = get_source_hierarchy(source)
-                    
-                    rows_to_insert.append((
-                        source,
-                        source_id,
-                        src_provider,
-                        src_type,
-                        fetched_at,
-                        source_ts_str,
-                        source_ts_unix,
-                        inc.get('lat'),
-                        inc.get('lon'),
-                        inc.get('location_text'),
-                        inc.get('title'),
-                        inc.get('category'),
-                        inc.get('subcategory'),
-                        inc.get('status'),
-                        inc.get('severity'),
-                        json.dumps(inc.get('data', {})),
-                        inc.get('is_active', 1),
-                        1,  # is_live = True (currently in API response)
-                        fetched_at,  # last_seen
-                        data_hash
-                    ))
-                
-                if rows_to_insert:
-                    # First, mark previous "latest" rows as not latest for source_ids we're inserting
-                    source_ids_to_update = [(r[0], r[1]) for r in rows_to_insert if r[1]]  # (source, source_id)
-                    if source_ids_to_update:
-                        for src, sid in source_ids_to_update:
-                            c.execute('''
-                                UPDATE data_history SET is_latest = 0 
-                                WHERE source = %s AND source_id = %s AND is_latest = 1
-                            ''', (src, sid))
-                    
-                    # Insert new rows with is_latest = 1
-                    c.executemany('''
-                        INSERT INTO data_history 
-                        (source, source_id, source_provider, source_type, fetched_at, source_timestamp, source_timestamp_unix,
-                         latitude, longitude, location_text, title, category, subcategory, 
-                         status, severity, data, is_active, is_live, last_seen, data_hash, is_latest)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
-                    ''', rows_to_insert)
-                
-                # Update last_seen for ALL incidents in this batch (even if data unchanged)
-                if all_source_ids_in_batch:
-                    for source, source_id in all_source_ids_in_batch:
-                        c.execute('''
-                            UPDATE data_history 
-                            SET last_seen = %s, is_live = 1
-                            WHERE source = %s AND source_id = %s
-                        ''', (fetched_at, source, source_id))
-                
-                # Mark incidents NO LONGER in API response as is_live = 0
-                # Only do this if we have a source_type and received at least some data
-                #
-                # Waze sources are exempt: with userscript ingest the prewarm batch
-                # only reflects regions scraped in the last few minutes (a full
-                # 129-region rotation takes ~11 min), so running the diff here
-                # would flip every non-recently-visited incident to is_live=0 on
-                # every cycle. Instead, cleanup_old_data() expires Waze records
-                # by `last_seen` age (1h).
-                waze_sources = {'waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam'}
-                if source_type in waze_sources:
-                    pass
-                elif source_type and all_source_ids_in_batch:
-                    # Get all source_ids we know about for this source_type that are still marked as live
-                    c.execute('''
-                        SELECT DISTINCT source_id FROM data_history 
-                        WHERE source = %s AND is_live = 1 AND source_id IS NOT NULL
-                    ''', (source_type,))
-                    
-                    known_ids = {row[0] for row in c.fetchall()}
-                    current_ids = {sid for (src, sid) in all_source_ids_in_batch if src == source_type}
-                    
-                    # Find IDs that are no longer in the API response
-                    gone_ids = known_ids - current_ids
-                    
-                    if gone_ids:
-                        # Mark these as no longer live
-                        placeholders = ','.join(['%s' for _ in gone_ids])
-                        c.execute(f'''
-                            UPDATE data_history 
-                            SET is_live = 0
-                            WHERE source = %s AND source_id IN ({placeholders})
-                        ''', [source_type] + list(gone_ids))
-                        
-                        Log.live(f"Marked {len(gone_ids)} {source_type} incidents as no longer live")
-                
-                conn.commit()
-            finally:
-                conn.close()
-        
+                        GROUP BY source, source_id
+                    )
+                ''', flat_params + flat_params)
+
+                for row in c.fetchall():
+                    existing_hashes[(row[0], row[1])] = row[2]
+
+            # Filter to only new or changed incidents
+            rows_to_insert = []
+            all_source_ids_in_batch = set()
+            new_count = 0
+            changed_count = 0
+            skipped_count = 0
+
+            for inc in incidents:
+                source = inc.get('source')
+                source_id = inc.get('source_id')
+                data_hash = _compute_data_hash(inc)
+
+                if source_id:
+                    all_source_ids_in_batch.add((source, source_id))
+
+                # Check if this is new or changed
+                existing_hash = existing_hashes.get((source, source_id))
+
+                if existing_hash is None:
+                    # New incident - insert
+                    new_count += 1
+                elif existing_hash != data_hash:
+                    # Data changed - insert new snapshot
+                    changed_count += 1
+                else:
+                    # Same data - skip insert but still update last_seen
+                    skipped_count += 1
+                    continue
+
+                source_ts_unix = parse_source_timestamp(inc.get('source_timestamp'))
+                source_ts_str = str(inc.get('source_timestamp')) if inc.get('source_timestamp') else None
+
+                # Get hierarchical source info
+                src_provider = inc.get('source_provider')
+                src_type = inc.get('source_type')
+                if not src_provider or not src_type:
+                    src_provider, src_type = get_source_hierarchy(source)
+
+                rows_to_insert.append((
+                    source,
+                    source_id,
+                    src_provider,
+                    src_type,
+                    fetched_at,
+                    source_ts_str,
+                    source_ts_unix,
+                    inc.get('lat'),
+                    inc.get('lon'),
+                    inc.get('location_text'),
+                    inc.get('title'),
+                    inc.get('category'),
+                    inc.get('subcategory'),
+                    inc.get('status'),
+                    inc.get('severity'),
+                    json.dumps(inc.get('data', {})),
+                    inc.get('is_active', 1),
+                    1,  # is_live = True (currently in API response)
+                    fetched_at,  # last_seen
+                    data_hash
+                ))
+
+            if rows_to_insert:
+                # Mark previous "latest" rows as not-latest for source_ids
+                # we're inserting. ONE bulk UPDATE instead of N round
+                # trips — for big batches (369 roadwork rows) this was
+                # the dominant cost.
+                source_ids_to_update = [(r[0], r[1]) for r in rows_to_insert if r[1]]
+                if source_ids_to_update:
+                    placeholders = ','.join(['(%s,%s)'] * len(source_ids_to_update))
+                    flat_params = [v for pair in source_ids_to_update for v in pair]
+                    c.execute(
+                        f'UPDATE data_history SET is_latest = 0 '
+                        f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
+                        flat_params,
+                    )
+
+                # Insert new rows with is_latest = 1
+                c.executemany('''
+                    INSERT INTO data_history
+                    (source, source_id, source_provider, source_type, fetched_at, source_timestamp, source_timestamp_unix,
+                     latitude, longitude, location_text, title, category, subcategory,
+                     status, severity, data, is_active, is_live, last_seen, data_hash, is_latest)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+                ''', rows_to_insert)
+
+            # Update last_seen for ALL incidents in this batch (even if
+            # data unchanged). Two prior bugs here:
+            #   1. Loop of N round trips (one UPDATE per source_id) —
+            #      replaced with a single bulk UPDATE.
+            #   2. Missing is_latest=1 predicate meant the UPDATE
+            #      touched every historical snapshot of each incident
+            #      (an incident polled 100 times would have 100 rows
+            #      written each tick). Only the is_latest=1 row carries
+            #      the live last_seen; older snapshots should stay
+            #      frozen at the time they were captured.
+            if all_source_ids_in_batch:
+                pairs = list(all_source_ids_in_batch)
+                placeholders = ','.join(['(%s,%s)'] * len(pairs))
+                flat_params = [v for pair in pairs for v in pair]
+                c.execute(
+                    f'UPDATE data_history '
+                    f'SET last_seen = %s, is_live = 1 '
+                    f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
+                    [fetched_at] + flat_params,
+                )
+
+            # Mark incidents NO LONGER in API response as is_live = 0
+            # Only do this if we have a source_type and received at least some data
+            #
+            # Waze sources are exempt: with userscript ingest the prewarm batch
+            # only reflects regions scraped in the last few minutes (a full
+            # 129-region rotation takes ~11 min), so running the diff here
+            # would flip every non-recently-visited incident to is_live=0 on
+            # every cycle. Instead, cleanup_old_data() expires Waze records
+            # by `last_seen` age (1h).
+            waze_sources = {'waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam'}
+            if source_type in waze_sources:
+                pass
+            elif source_type and all_source_ids_in_batch:
+                # Get all source_ids we know about for this source_type that are still marked as live
+                c.execute('''
+                    SELECT DISTINCT source_id FROM data_history
+                    WHERE source = %s AND is_live = 1 AND source_id IS NOT NULL
+                ''', (source_type,))
+
+                known_ids = {row[0] for row in c.fetchall()}
+                current_ids = {sid for (src, sid) in all_source_ids_in_batch if src == source_type}
+
+                # Find IDs that are no longer in the API response
+                gone_ids = known_ids - current_ids
+
+                if gone_ids:
+                    # Mark these as no longer live
+                    placeholders = ','.join(['%s' for _ in gone_ids])
+                    c.execute(f'''
+                        UPDATE data_history
+                        SET is_live = 0
+                        WHERE source = %s AND source_id IN ({placeholders})
+                    ''', [source_type] + list(gone_ids))
+
+                    Log.live(f"Marked {len(gone_ids)} {source_type} incidents as no longer live")
+
+            conn.commit()
+        finally:
+            conn.close()
+
         return {
             'total': len(incidents),
             'new': new_count,
@@ -1758,11 +2136,16 @@ def cleanup_old_data():
     pager_ended = 0
     
     # Clean up history (single table in PostgreSQL)
+    # Note: previously this whole block ran under _db_lock_history_waze
+    # (which is the master lock). Holding the master lock around a
+    # multi-second DELETE serialized every archive writer behind
+    # cleanup. Postgres handles the row-level concurrency just fine on
+    # its own, so we don't need application-level serialisation here.
     try:
-        with _db_lock_history_waze:  # Use any history lock for coordination
-            conn = get_conn()
+        conn = get_conn()
+        try:
             c = conn.cursor()
-            
+
             # Mark pager hits as ended if older than 1 hour
             c.execute('''
                 UPDATE data_history
@@ -1789,34 +2172,37 @@ def cleanup_old_data():
             waze_ended = c.rowcount
             if waze_ended > 0:
                 Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
-            
+
             # Delete old data_history entries
             c.execute('DELETE FROM data_history WHERE fetched_at < %s', (cutoff,))
             deleted_history += c.rowcount
-            
+
             # Delete records from deprecated sources
             for dep_src in DEPRECATED_SOURCES:
                 c.execute('DELETE FROM data_history WHERE source = %s', (dep_src,))
                 if c.rowcount > 0:
                     Log.cleanup(f"Removed {c.rowcount} deprecated {dep_src} records")
-            
+
             conn.commit()
+        finally:
             conn.close()
     except Exception as e:
         Log.error(f"Cleanup history error: {e}")
-    
+
     # Clean up stats.db
     try:
         with _db_lock_stats:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Delete old stats_snapshots (convert ms to seconds for comparison)
-            c.execute('DELETE FROM stats_snapshots WHERE timestamp < %s', (cutoff * 1000,))
-            deleted_stats = c.rowcount
-            
-            conn.commit()
-            conn.close()
+            try:
+                c = conn.cursor()
+
+                # Delete old stats_snapshots (convert ms to seconds for comparison)
+                c.execute('DELETE FROM stats_snapshots WHERE timestamp < %s', (cutoff * 1000,))
+                deleted_stats = c.rowcount
+
+                conn.commit()
+            finally:
+                conn.close()
     except Exception as e:
         Log.error(f"Cleanup stats error: {e}")
     
@@ -1835,52 +2221,56 @@ def migrate_endeavour_categories():
     - endeavour_planned (future outages): ALWAYS 'planned' (these are scheduled outages)
     - endeavour_current: Use outageType field ("P"/"Planned" = planned, "U"/"Unplanned" = unplanned)
     """
+    planned_source_fixed = 0
+    current_planned_fixed = 0
+    current_unplanned_fixed = 0
     try:
         with _db_lock_history_power:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Check if migration is needed - look for any Endeavour records
-            c.execute("SELECT COUNT(*) FROM data_history WHERE source LIKE 'endeavour%'")
-            count = c.fetchone()[0]
-            
-            if count == 0:
+            try:
+                c = conn.cursor()
+
+                # Check if migration is needed - look for any Endeavour records
+                c.execute("SELECT COUNT(*) FROM data_history WHERE source LIKE 'endeavour%'")
+                count = c.fetchone()[0]
+
+                if count == 0:
+                    return 0
+
+                # RULE 1: endeavour_planned source = ALWAYS planned
+                # These are from get-future-outage API which only contains scheduled/planned outages
+                c.execute('''
+                    UPDATE data_history
+                    SET category = 'planned'
+                    WHERE source = 'endeavour_planned'
+                    AND category != 'planned'
+                ''')
+                planned_source_fixed = c.rowcount
+
+                # RULE 2: endeavour_current with outageType = "P" or "Planned" → planned
+                c.execute('''
+                    UPDATE data_history
+                    SET category = 'planned'
+                    WHERE source = 'endeavour_current'
+                    AND category != 'planned'
+                    AND (data::json)->>'outageType' IN ('P', 'Planned')
+                ''')
+                current_planned_fixed = c.rowcount
+
+                # RULE 3: endeavour_current with outageType = "U", "Unplanned", or null → unplanned
+                c.execute('''
+                    UPDATE data_history
+                    SET category = 'unplanned'
+                    WHERE source = 'endeavour_current'
+                    AND category != 'unplanned'
+                    AND ((data::json)->>'outageType' IN ('U', 'Unplanned') OR (data::json)->>'outageType' IS NULL)
+                ''')
+                current_unplanned_fixed = c.rowcount
+
+                conn.commit()
+            finally:
                 conn.close()
-                return 0
-            
-            # RULE 1: endeavour_planned source = ALWAYS planned
-            # These are from get-future-outage API which only contains scheduled/planned outages
-            c.execute('''
-                UPDATE data_history 
-                SET category = 'planned'
-                WHERE source = 'endeavour_planned' 
-                AND category != 'planned'
-            ''')
-            planned_source_fixed = c.rowcount
-            
-            # RULE 2: endeavour_current with outageType = "P" or "Planned" → planned
-            c.execute('''
-                UPDATE data_history 
-                SET category = 'planned'
-                WHERE source = 'endeavour_current' 
-                AND category != 'planned'
-                AND (data::json)->>'outageType' IN ('P', 'Planned')
-            ''')
-            current_planned_fixed = c.rowcount
-            
-            # RULE 3: endeavour_current with outageType = "U", "Unplanned", or null → unplanned
-            c.execute('''
-                UPDATE data_history 
-                SET category = 'unplanned'
-                WHERE source = 'endeavour_current' 
-                AND category != 'unplanned'
-                AND ((data::json)->>'outageType' IN ('U', 'Unplanned') OR (data::json)->>'outageType' IS NULL)
-            ''')
-            current_unplanned_fixed = c.rowcount
-            
-            conn.commit()
-            conn.close()
-        
+
         total_fixed = planned_source_fixed + current_planned_fixed + current_unplanned_fixed
         if total_fixed > 0:
             Log.info(f"🔧 Endeavour category migration: endeavour_planned→planned: {planned_source_fixed}, endeavour_current→planned: {current_planned_fixed}, endeavour_current→unplanned: {current_unplanned_fixed}")
@@ -1896,51 +2286,54 @@ def migrate_bom_sources():
     One-time migration to split bom_warning into bom_land and bom_marine 
     based on the category field or title content in the stored data.
     """
+    marine_fixed = 0
+    land_fixed = 0
     try:
         with _db_lock_history_weather:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Check if migration is needed
-            c.execute("SELECT COUNT(*) FROM data_history WHERE source = 'bom_warning'")
-            count = c.fetchone()[0]
-            
-            if count == 0:
+            try:
+                c = conn.cursor()
+
+                # Check if migration is needed
+                c.execute("SELECT COUNT(*) FROM data_history WHERE source = 'bom_warning'")
+                count = c.fetchone()[0]
+
+                if count == 0:
+                    return 0
+
+                Log.info(f"🔧 BOM migration: {count} records to migrate...")
+
+                # Update marine warnings based on category OR subcategory OR title content
+                c.execute('''
+                    UPDATE data_history
+                    SET source = 'bom_marine',
+                        source_type = 'Marine'
+                    WHERE source = 'bom_warning'
+                    AND (
+                        category = 'marine'
+                        OR subcategory = 'marine'
+                        OR LOWER(title) LIKE '%marine%'
+                        OR LOWER(title) LIKE '%surf%'
+                        OR LOWER(title) LIKE '%hazardous surf%'
+                        OR LOWER(title) LIKE '%gale%'
+                        OR LOWER(title) LIKE '%wind warning summary%'
+                    )
+                ''')
+                marine_fixed = c.rowcount
+
+                # Update remaining bom_warning records to bom_land (everything else is land)
+                c.execute('''
+                    UPDATE data_history
+                    SET source = 'bom_land',
+                        source_type = 'Land'
+                    WHERE source = 'bom_warning'
+                ''')
+                land_fixed = c.rowcount
+
+                conn.commit()
+            finally:
                 conn.close()
-                return 0
-            
-            Log.info(f"🔧 BOM migration: {count} records to migrate...")
-            
-            # Update marine warnings based on category OR subcategory OR title content
-            c.execute('''
-                UPDATE data_history 
-                SET source = 'bom_marine',
-                    source_type = 'Marine'
-                WHERE source = 'bom_warning' 
-                AND (
-                    category = 'marine' 
-                    OR subcategory = 'marine'
-                    OR LOWER(title) LIKE '%marine%'
-                    OR LOWER(title) LIKE '%surf%'
-                    OR LOWER(title) LIKE '%hazardous surf%'
-                    OR LOWER(title) LIKE '%gale%'
-                    OR LOWER(title) LIKE '%wind warning summary%'
-                )
-            ''')
-            marine_fixed = c.rowcount
-            
-            # Update remaining bom_warning records to bom_land (everything else is land)
-            c.execute('''
-                UPDATE data_history 
-                SET source = 'bom_land',
-                    source_type = 'Land'
-                WHERE source = 'bom_warning'
-            ''')
-            land_fixed = c.rowcount
-            
-            conn.commit()
-            conn.close()
-        
+
         total_fixed = marine_fixed + land_fixed
         if total_fixed > 0:
             Log.info(f"🔧 BOM source migration complete: {land_fixed} → bom_land, {marine_fixed} → bom_marine")
@@ -1956,42 +2349,43 @@ def migrate_bom_subcategories():
     One-time migration to update BOM warning subcategories from 'land'/'marine' 
     to proper warning types (Wind, Flood, Thunderstorm, etc.) based on title.
     """
+    updated = 0
     try:
         with _db_lock_history_weather:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Check if migration is needed - look for records with old-style subcategories
-            c.execute("""
-                SELECT COUNT(*) FROM data_history 
-                WHERE (source = 'bom_land' OR source = 'bom_marine')
-                AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
-            """)
-            count = c.fetchone()[0]
-            
-            if count == 0:
+            try:
+                c = conn.cursor()
+
+                # Check if migration is needed - look for records with old-style subcategories
+                c.execute("""
+                    SELECT COUNT(*) FROM data_history
+                    WHERE (source = 'bom_land' OR source = 'bom_marine')
+                    AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
+                """)
+                count = c.fetchone()[0]
+
+                if count == 0:
+                    return 0
+
+                Log.info(f"🔧 BOM subcategory migration: {count} records to update...")
+
+                # Get all BOM records that need updating
+                c.execute("""
+                    SELECT id, title FROM data_history
+                    WHERE (source = 'bom_land' OR source = 'bom_marine')
+                    AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
+                """)
+                records = c.fetchall()
+
+                for record_id, title in records:
+                    warning_type = _extract_bom_warning_type(title)
+                    c.execute("UPDATE data_history SET subcategory = %s WHERE id = %s", (warning_type, record_id))
+                    updated += 1
+
+                conn.commit()
+            finally:
                 conn.close()
-                return 0
-            
-            Log.info(f"🔧 BOM subcategory migration: {count} records to update...")
-            
-            # Get all BOM records that need updating
-            c.execute("""
-                SELECT id, title FROM data_history 
-                WHERE (source = 'bom_land' OR source = 'bom_marine')
-                AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
-            """)
-            records = c.fetchall()
-            
-            updated = 0
-            for record_id, title in records:
-                warning_type = _extract_bom_warning_type(title)
-                c.execute("UPDATE data_history SET subcategory = %s WHERE id = %s", (warning_type, record_id))
-                updated += 1
-            
-            conn.commit()
-            conn.close()
-        
+
         if updated > 0:
             Log.info(f"🔧 BOM subcategory migration complete: {updated} records updated with proper warning types")
         
@@ -2124,6 +2518,35 @@ def _cleanup_role_cache():
     if expired and DEV_MODE:
         Log.cleanup(f"Role cache cleanup: evicted {len(expired)} expired entries, {len(_role_cache)} remaining")
 
+def _vacuum_data_history():
+    """VACUUM (ANALYZE) data_history to reclaim dead tuples left behind by
+    archive UPDATEs and cleanup DELETEs. Without this the table grows a
+    visibility-map gap that makes index-only scans fall back to heap
+    fetches, which is what makes COUNT(*) slow enough to time out.
+    Plain VACUUM (no FULL) doesn't lock the table — readers and writers
+    keep working through it."""
+    try:
+        import psycopg2
+        dsn = os.environ.get('DATABASE_URL', '')
+        if not dsn:
+            return
+        # VACUUM has to run outside a transaction; open a dedicated
+        # autocommit connection for it.
+        conn = psycopg2.connect(dsn)
+        try:
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            t0 = time.time()
+            cur.execute('VACUUM (ANALYZE) data_history')
+            cur.close()
+            if DEV_MODE:
+                Log.cleanup(f"VACUUM (ANALYZE) data_history complete [{int((time.time()-t0)*1000)}ms]")
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"VACUUM data_history skipped: {e}")
+
+
 def cleanup_loop():
     """Background loop that periodically cleans up old data"""
     global _cleanup_running
@@ -2138,6 +2561,16 @@ def cleanup_loop():
         if cleanup_counter % 5 == 0:
             _cleanup_rate_limits()
             _cleanup_role_cache()
+        # VACUUM data_history hourly. Without this, archive UPDATEs leave
+        # the visibility map dirty and index-only scans regress to heap
+        # fetches, which is what makes /api/data/history COUNT(*) time out.
+        # DATA_CLEANUP_INTERVAL is 5 min by default, so every 12 cycles ≈ 1h.
+        if cleanup_counter % 12 == 0:
+            threading.Thread(
+                target=_vacuum_data_history,
+                daemon=True,
+                name='vacuum-data-history',
+            ).start()
         # Use short sleeps to allow faster shutdown
         if _shutdown_event.wait(timeout=DATA_CLEANUP_INTERVAL):
             break  # Shutdown signal received
@@ -3709,9 +4142,17 @@ def _prewarm_fetch_pager():
         if PAGERMON_API_KEY:
             url = f"{PAGERMON_URL}?apikey={PAGERMON_API_KEY}&limit=100"
         
-        if DEV_MODE:
+        # Log the URL once per process — was firing every prewarm cycle
+        # because the prewarm scheduler hits this function on a loop.
+        global _pagermon_url_logged
+        try:
+            _pagermon_url_logged
+        except NameError:
+            _pagermon_url_logged = False
+        if DEV_MODE and not _pagermon_url_logged:
             Log.info(f"Pagermon URL: {url}")
-        
+            _pagermon_url_logged = True
+
         resp = requests.get(url, headers=headers, timeout=15)
         if not resp.ok:
             source_error('pager', f'HTTP {resp.status_code}')
@@ -4620,18 +5061,29 @@ def essential_outages():
     feed_filter = request.args.get('feed', '').lower()
     if feed_filter in ('current', 'future'):
         all_outages = [o for o in all_outages if o.get('feedType') == feed_filter]
-    
+
     # Apply type filter if specified
     outage_type = request.args.get('type', '').lower()
     if outage_type in ('planned', 'unplanned'):
         all_outages = [o for o in all_outages if o.get('outageType') == outage_type]
-    
+
     # Calculate summary stats
     planned_count = sum(1 for o in all_outages if o.get('outageType') == 'planned')
     unplanned_count = sum(1 for o in all_outages if o.get('outageType') == 'unplanned')
     future_count = sum(1 for o in all_outages if o.get('feedType') == 'future')
     total_customers = sum(o.get('customersAffected', 0) for o in all_outages)
-    
+
+    # Lite mode: strip the polygon coordinate arrays for callers that
+    # only render point markers (the map). Polygons can be hundreds of
+    # coordinate pairs each and dominate the response size; the bot
+    # endpoints (/api/essential/planned, /api/essential/future) use a
+    # different code path and keep their full data for embed/preset use.
+    if request.args.get('lite') == '1':
+        all_outages = [
+            {k: v for k, v in o.items() if k != 'polygon'}
+            for o in all_outages
+        ]
+
     return jsonify({
         'outages': all_outages,
         'count': len(all_outages),
@@ -4659,6 +5111,36 @@ def essential_outages_current():
 @require_api_key
 def essential_outages_future():
     """Essential Energy future planned outages"""
+    cached_data, age, expired = cache_get('essential_energy_future')
+    outages = cached_data if cached_data and isinstance(cached_data, list) else []
+    return jsonify({
+        'outages': outages,
+        'count': len(outages),
+        'totalCustomersAffected': sum(o.get('customersAffected', 0) for o in outages)
+    })
+
+
+@app.route('/api/essential/planned')
+@require_api_key
+def essential_planned():
+    """Bot-canonical alias — planned outages across current + future feeds."""
+    out = []
+    for cache_key in ('essential_energy', 'essential_energy_future'):
+        cached_data, age, expired = cache_get(cache_key)
+        if cached_data and isinstance(cached_data, list):
+            out.extend(o for o in cached_data
+                       if (o.get('outageType') or '').lower() == 'planned')
+    return jsonify({
+        'outages': out,
+        'count': len(out),
+        'totalCustomersAffected': sum(o.get('customersAffected', 0) for o in out)
+    })
+
+
+@app.route('/api/essential/future')
+@require_api_key
+def essential_future():
+    """Bot-canonical alias for /api/essential/outages/future."""
     cached_data, age, expired = cache_get('essential_energy_future')
     outages = cached_data if cached_data and isinstance(cached_data, list) else []
     return jsonify({
@@ -4721,6 +5203,25 @@ def endeavour_future():
     except Exception as e:
         Log.error(f"Endeavour future error: {e}")
         return jsonify([]), 200
+
+
+@app.route('/api/endeavour/planned')
+@require_api_key
+def endeavour_planned():
+    """Bot-canonical alias — current maintenance + future scheduled, flat list."""
+    items = []
+    for cache_key in ('endeavour_maintenance', 'endeavour_future'):
+        cached_data, age, expired = cache_get(cache_key)
+        if cached_data and isinstance(cached_data, list):
+            items.extend(cached_data)
+    if not items:
+        try:
+            all_data = _fetch_endeavour_all_outages()
+            items.extend(all_data.get('current_maintenance', []) or [])
+            items.extend(all_data.get('future_maintenance', []) or [])
+        except Exception as e:
+            Log.error(f"Endeavour planned error: {e}")
+    return jsonify(items)
 
 
 @app.route('/api/endeavour/future/raw')
@@ -7920,6 +8421,10 @@ def centralwatch_cameras():
 # In-memory cache for Central Watch camera images
 # Structure: { camera_id: { 'data': bytes, 'content_type': str, 'timestamp': float } }
 _centralwatch_image_cache = {}
+# Tracks (camera_id, status_code) tuples we've already logged a failure
+# for, so the same camera failing the same way every retry doesn't
+# spam the log. Cleared per-cid on successful fetch.
+_failed_cameras_logged = {}
 # Guards concurrent iteration/mutation of _centralwatch_image_cache and
 # _centralwatch_camera_timestamps. Individual .get()/dict[x]=v ops are atomic
 # under GIL, but iteration (cleanup loop) is not — must hold this lock for
@@ -8289,6 +8794,10 @@ def _continuous_cw_image_worker():
             if r and r.get('ok') and r.get('data'):
                 if _cache_result(r):
                     cached_total = len(_centralwatch_image_cache)
+                    # Recovery: this cid succeeded, so clear any stuck
+                    # 'Failed' entries for it so the next failure is logged.
+                    for k in [k for k in _failed_cameras_logged if k[0] == cid]:
+                        _failed_cameras_logged.pop(k, None)
                     if consecutive_429s > 0:
                         if DEV_MODE:
                             Log.info(f"Central Watch images: Rate limit cleared after {consecutive_429s} 429s")
@@ -8346,8 +8855,16 @@ def _continuous_cw_image_worker():
 
             else:
                 status = r.get('status', '?') if r else '?'
-                if DEV_MODE:
+                # Only log on state transition: the same camera retrying
+                # every 30s with the same 403 was producing dozens of
+                # identical lines per minute. _failed_cameras_logged
+                # (module-level dict) tracks (cid, status) tuples we've
+                # already complained about; a successful fetch above
+                # clears the entry on recovery so the next failure logs.
+                key = (cid, str(status))
+                if DEV_MODE and key not in _failed_cameras_logged:
                     Log.info(f"Central Watch images: Failed {cid[:8]}.. (HTTP {status})")
+                    _failed_cameras_logged[key] = True
                 drip_delay = _CW_DRIP_SUCCESS_DELAY
             
             # Periodic summary
@@ -8598,12 +9115,15 @@ NSW_REGIONS = [
 # blocked direct fetch. Setup: see docs/waze-userscript.md
 WAZE_INGEST_ENABLED = os.environ.get('WAZE_INGEST_ENABLED', 'false').lower() in ('1', 'true', 'yes')
 WAZE_INGEST_KEY = os.environ.get('WAZE_INGEST_KEY', '').strip()
-# Cached ingest per-bbox is evicted after this many seconds. The full userscript
-# rotation is ~5s × ~129 regions ≈ 11 min, so a 5-min window would prune most
-# of NSW from the snapshot at any given moment. 20 min is ~2× the rotation so
-# every snapshot holds a complete picture even if the browser falls behind
-# slightly. Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
-WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 1200))
+# Cached ingest per-bbox is evicted after this many seconds. The current
+# userscript rotation is ~5s × 190 regions ≈ 16 min. The userscript also
+# reloads itself every 30 min (absolute backstop) which causes a 30-60s
+# gap; if a region was just visited before that reload, the next visit
+# can be up to ~16 min later. Worst-case gap between visits is therefore
+# rotation + reload window ≈ 17-18 min. 40 min gives ~2× headroom so
+# brief glitches don't prune entries that the script is about to refresh.
+# Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
+WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 2400))
 # Alert if no ingest POST has arrived in this many seconds (0 = disabled).
 WAZE_INGEST_STALE_SECS = int(os.environ.get('WAZE_INGEST_STALE_SECS', '600'))
 # Optional Discord webhook — fired once when staleness first crosses threshold.
@@ -8835,7 +9355,13 @@ def parse_waze_jam(jam):
 # the fallback). This stops the userscript's 5s cadence from stacking up on the
 # waze DB lock and starving the pool.
 import queue as _queue_module
-_waze_reconcile_queue = _queue_module.Queue(maxsize=32)
+# Bigger buffer + per-bbox coalescing so the userscript revisiting the same
+# region back-to-back doesn't pile multiple reconciles on top of each other.
+# We queue bbox_keys; the actual payload (bbox + current_ids) is held in
+# _waze_reconcile_pending and only the latest version is processed.
+_waze_reconcile_queue = _queue_module.Queue(maxsize=256)
+_waze_reconcile_pending = {}     # bbox_key -> (bbox_raw, current_ids)
+_waze_reconcile_pending_lock = threading.Lock()
 _waze_reconcile_thread_started = False
 _waze_reconcile_thread_lock = threading.Lock()
 
@@ -8843,13 +9369,18 @@ _waze_reconcile_thread_lock = threading.Lock()
 def _waze_reconcile_worker():
     while not _shutdown_event.is_set():
         try:
-            task = _waze_reconcile_queue.get(timeout=1)
+            bbox_key = _waze_reconcile_queue.get(timeout=1)
         except Exception:
             continue
-        if task is None:
+        if bbox_key is None:
             continue
+        # Pop the latest snapshot for this bbox. If the userscript revisited
+        # in the interim, we run on the freshest data.
+        with _waze_reconcile_pending_lock:
+            payload = _waze_reconcile_pending.pop(bbox_key, None)
         try:
-            _waze_reconcile_bbox_sync(*task)
+            if payload is not None:
+                _waze_reconcile_bbox_sync(*payload)
         except Exception as e:
             Log.error(f"Waze reconcile worker error: {e}")
         finally:
@@ -8873,7 +9404,9 @@ def _ensure_reconcile_worker():
 
 
 def _waze_reconcile_bbox(bbox_raw, alerts, jams):
-    """Enqueue a per-region 'gone' reconcile. Non-blocking; drops on backlog."""
+    """Enqueue a per-region 'gone' reconcile. Non-blocking; coalesces by
+    bbox key so revisits don't pile up — the worker always processes the
+    freshest payload for each region."""
     _ensure_reconcile_worker()
     # Extract just the fields the sync worker needs — don't hold references
     # to the full payload alerts[] on the queue.
@@ -8887,9 +9420,29 @@ def _waze_reconcile_bbox(bbox_raw, alerts, jams):
         if uid is not None:
             current_ids.add(str(uid))
     try:
-        _waze_reconcile_queue.put_nowait((dict(bbox_raw), current_ids))
+        bbox_key = (
+            round(float(bbox_raw.get('top', 0)),    3),
+            round(float(bbox_raw.get('bottom', 0)), 3),
+            round(float(bbox_raw.get('left', 0)),   3),
+            round(float(bbox_raw.get('right', 0)),  3),
+        )
+    except (TypeError, ValueError):
+        return
+    with _waze_reconcile_pending_lock:
+        already_queued = bbox_key in _waze_reconcile_pending
+        # Always store the latest snapshot — the worker pops by key.
+        _waze_reconcile_pending[bbox_key] = (dict(bbox_raw), current_ids)
+    if already_queued:
+        # Worker hasn't picked up the previous task yet; it'll see our newer
+        # data when it does. No need to push another queue entry.
+        return
+    try:
+        _waze_reconcile_queue.put_nowait(bbox_key)
     except _queue_module.Full:
-        # Backlog. Drop. Falls back to 1-hour last_seen sweep.
+        # Backlog. Drop both the queue slot AND the pending payload so we
+        # don't leak memory waiting for a worker that won't get to it.
+        with _waze_reconcile_pending_lock:
+            _waze_reconcile_pending.pop(bbox_key, None)
         if DEV_MODE:
             Log.warn("Waze reconcile queue full — dropping task (fallback: 1h sweep)")
 
@@ -8919,37 +9472,51 @@ def _waze_reconcile_bbox_sync(bbox_raw, current_ids):
 
     waze_sources = ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
     n_gone = 0
+    by_source = {}
+    # Note: the master lock previously wrapped this block. Archive writes
+    # no longer hold it (commit 29595ea), and the reconcile worker is
+    # already a single-threaded queue consumer (_waze_reconcile_worker),
+    # so the lock served no purpose here — it just queued reconciles
+    # behind any other code path that did happen to grab it. Postgres
+    # row-level locking handles the SELECT/UPDATE concurrency safely.
     try:
-        with _db_lock_history_waze:
-            conn = get_conn()
-            try:
-                c = conn.cursor()
-                # Cap this query so a bad plan can't starve the pool.
-                c.execute("SET LOCAL statement_timeout = '15s'")
-                c.execute('''
-                    SELECT source, source_id FROM data_history
-                    WHERE source IN %s
-                    AND is_live = 1
-                    AND source_id IS NOT NULL
-                    AND latitude BETWEEN %s AND %s
-                    AND longitude BETWEEN %s AND %s
-                ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
-                rows = c.fetchall()
-                by_source = {}
-                for src, sid in rows:
-                    if sid not in current_ids:
-                        by_source.setdefault(src, []).append(sid)
-                for src, sids in by_source.items():
-                    placeholders = ','.join(['%s'] * len(sids))
-                    c.execute(
-                        f'UPDATE data_history SET is_live = 0 WHERE source = %s AND source_id IN ({placeholders})',
-                        [src] + sids,
-                    )
-                    n_gone += len(sids)
-                if n_gone:
-                    conn.commit()
-            finally:
-                conn.close()
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            # 30s budget — bigger than the old 15s now that we don't
+            # serialise behind a Python lock. The query uses the
+            # idx_data_waze_live_geo partial index (source, lat, lng
+            # WHERE is_live = 1 AND source IN (waze_*)).
+            c.execute("SET LOCAL statement_timeout = '30s'")
+            c.execute('''
+                SELECT source, source_id FROM data_history
+                WHERE source IN %s
+                AND is_live = 1
+                AND source_id IS NOT NULL
+                AND latitude BETWEEN %s AND %s
+                AND longitude BETWEEN %s AND %s
+            ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
+            rows = c.fetchall()
+            for src, sid in rows:
+                if sid not in current_ids:
+                    by_source.setdefault(src, []).append(sid)
+            for src, sids in by_source.items():
+                placeholders = ','.join(['%s'] * len(sids))
+                # AND is_live = 1 so we only touch the rows that actually
+                # need flipping — historical rows already have is_live = 0
+                # and shouldn't be rewritten. Cuts the UPDATE's scan/lock
+                # surface to the live set.
+                c.execute(
+                    f'UPDATE data_history SET is_live = 0 '
+                    f'WHERE source = %s AND is_live = 1 '
+                    f'AND source_id IN ({placeholders})',
+                    [src] + sids,
+                )
+                n_gone += len(sids)
+            if n_gone:
+                conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         Log.error(f"Waze bbox reconcile DB error: {e}")
         return 0
@@ -9031,8 +9598,28 @@ def waze_ingest():
             _waze_stale_alerted = False
             Log.info("Waze ✓ Ingest resumed — clearing stale flag")
 
+    # Per-ingest line was firing every ~3s in DEV_MODE — too noisy. Now
+    # accumulate into a rolling counter and emit one summary every 30s.
     if DEV_MODE:
-        Log.info(f"Waze ▶ Ingest bbox={key} alerts={len(alerts)} jams={len(jams)} (regions cached: {n_regions})")
+        global _waze_ingest_summary
+        try:
+            _waze_ingest_summary
+        except NameError:
+            _waze_ingest_summary = {'count': 0, 'alerts': 0, 'jams': 0,
+                                     'regions': 0, 'last_log': 0.0}
+        _waze_ingest_summary['count']   += 1
+        _waze_ingest_summary['alerts']  += len(alerts)
+        _waze_ingest_summary['jams']    += len(jams)
+        _waze_ingest_summary['regions']  = n_regions
+        if (now_ts - _waze_ingest_summary.get('last_log', 0)) >= 30:
+            s = _waze_ingest_summary
+            Log.info(
+                f"Waze ▶ Ingest summary (last 30s): {s['count']} ingests, "
+                f"{s['alerts']} alerts, {s['jams']} jams "
+                f"(regions cached: {s['regions']})"
+            )
+            _waze_ingest_summary = {'count': 0, 'alerts': 0, 'jams': 0,
+                                     'regions': n_regions, 'last_log': now_ts}
 
     # Per-region 'gone' reconcile: any archived Waze record inside this bbox
     # whose uuid isn't in the payload is cleared immediately. Failures here
@@ -9170,83 +9757,349 @@ def waze_alerts():
 @app.route('/api/waze/hazards')
 def waze_hazards():
     """Waze road hazards (uses persistent cache)"""
-    # Check persistent cache first
     cached_data, age, expired = cache_get('waze_hazards')
     if cached_data and not expired:
         return jsonify(cached_data)
-    if cached_data:
-        return jsonify(cached_data)
-    
-    # Fallback: fetch live
+
+    # Stale or missing — rebuild from the ingest snapshot so new regions
+    # are picked up. See waze_police() for the full explanation.
     alerts, jams = fetch_waze_data()
     features = []
     jam_features = []
-    
     for alert in alerts:
         alert_type = alert.get('type', '').upper()
         subtype = alert.get('subtype', '') or ''
         subtype_upper = subtype.upper()
-        
         is_police = (alert_type == 'POLICE' or 'POLICE' in subtype_upper)
         if is_police:
             continue
-        
         is_roadwork = (alert_type == 'CONSTRUCTION' or 'CONSTRUCTION' in subtype_upper)
         if is_roadwork:
             continue
-        
         if alert_type in {'HAZARD', 'ACCIDENT', 'JAM', 'ROAD_CLOSED'}:
             feature = parse_waze_alert(alert, 'Hazard')
             if feature:
                 features.append(feature)
-    
     for jam in jams:
         feature = parse_waze_jam(jam)
         if feature:
             jam_features.append(feature)
-    
+
     result = {
         'type': 'FeatureCollection',
         'features': features,
         'jams': jam_features,
         'count': len(features),
-        'jamCount': len(jam_features)
+        'jamCount': len(jam_features),
     }
     if features or jam_features:
         cache_set('waze_hazards', result, 120)
+        return jsonify(result)
+    if cached_data:
+        return jsonify(cached_data)
     return jsonify(result)
 
 
 @app.route('/api/waze/police')
 def waze_police():
     """Waze police reports (uses persistent cache)"""
-    # Check persistent cache first
     cached_data, age, expired = cache_get('waze_police')
     if cached_data and not expired:
         return jsonify(cached_data)
-    if cached_data:
-        return jsonify(cached_data)
-    
-    # Fallback: fetch live
+
+    # Stale or missing — rebuild from the in-memory ingest snapshot. This
+    # is fast (no DB calls; just merges the per-bbox dict) and is the only
+    # way new regions ingested after the first cache_set make it into the
+    # response. Previous bug: a stale cache was returned without refresh,
+    # so once the cache populated with whatever bboxes were available at
+    # that moment (typically just Sydney right after a restart), regional
+    # data never surfaced again.
     alerts, _ = fetch_waze_data()
     features = []
-    
     for alert in alerts:
         alert_type = alert.get('type', '').upper()
         subtype = alert.get('subtype', '') or ''
-        
-        # Check if it's a police alert - type POLICE (including with no subtype) or police-specific subtypes
         is_police = (alert_type == 'POLICE' or 'POLICE' in subtype.upper())
-        
         if is_police:
             feature = parse_waze_alert(alert, 'Police')
             if feature:
                 features.append(feature)
-    
+
     result = {'type': 'FeatureCollection', 'features': features, 'count': len(features)}
     if features:
         cache_set('waze_police', result, 120)
+        return jsonify(result)
+    # Live rebuild produced nothing (e.g. ingest cache empty mid-restart);
+    # fall back to whatever we had cached so the map isn't blank.
+    if cached_data:
+        return jsonify(cached_data)
     return jsonify(result)
+
+
+# --- Police heatmap -------------------------------------------------------
+# Two-tier cache: RAM (read path) backed by Postgres (restart durability).
+#   - Refresh worker aggregates data_history → writes to BOTH the in-memory
+#     dict and the police_heatmap_cache table.
+#   - Endpoint reads only the RAM dict — never touches Postgres on the
+#     request path, so write contention from archiving can't slow it down.
+#   - On startup we hydrate the RAM dict from the Postgres cache so the
+#     cache is hot the moment the backend is up, no warming window.
+
+_POLICE_HEATMAP_BIN_DEG = 0.001   # ~110 m at NSW latitudes
+# Output cap. Without a bbox, we ship the top N hottest bins in NSW. With
+# 41k+ bins live in the cache the old 5k cap silently dropped low-count
+# suburban/regional bins (count=1 in a quiet area), so a pin would render
+# without any hex underneath. Raise the safety net so the full set ships.
+# When the client passes ?bbox= we filter to the viewport BEFORE the cap
+# so bandwidth stays low on tight zooms.
+_POLICE_HEATMAP_MAX_BINS = 60000
+_POLICE_HEATMAP_WINDOW_DAYS = 30  # rolling window when refreshing the cache
+_POLICE_VALID_SUBTYPES = {
+    'POLICE_VISIBLE', 'POLICE_HIDING', 'POLICE_WITH_MOBILE_CAMERA',
+}
+POLICE_HEATMAP_REFRESH_INTERVAL = int(
+    os.environ.get('POLICE_HEATMAP_REFRESH_INTERVAL', 600))  # 10 min
+
+# In-memory cache. Populated on startup from Postgres (instant warm-up)
+# and refreshed by the background scheduler. Protected by a lock so a
+# refresh swap is atomic from the reader's POV.
+_POLICE_HEATMAP_RAM = {
+    'rows':       [],     # list of (lat, lng, subcategory, count)
+    'updated_at': None,   # datetime of last successful refresh
+}
+_POLICE_HEATMAP_RAM_LOCK = threading.Lock()
+
+
+@app.route('/api/waze/police-heatmap')
+@require_api_key
+def waze_police_heatmap():
+    """Heatmap of recent Waze police pings, served entirely from the
+    in-memory dict. The DB is never read on the request path."""
+    raw_subtypes = (request.args.get('subtypes') or '').strip()
+    if raw_subtypes:
+        wanted = {s.strip().upper() for s in raw_subtypes.split(',') if s.strip()}
+        wanted &= _POLICE_VALID_SUBTYPES
+    else:
+        wanted = None  # None = all (no filter)
+
+    # Optional viewport filter: bbox=south,west,north,east (decimal degrees).
+    # Lets the client request only bins that intersect the current map view,
+    # which keeps the response small on tight zooms and prevents the top-N
+    # cap from silently dropping low-count bins under visible pins.
+    bbox = None
+    raw_bbox = (request.args.get('bbox') or '').strip()
+    if raw_bbox:
+        try:
+            parts = [float(p) for p in raw_bbox.split(',')]
+            if len(parts) == 4:
+                s, w, n, e = parts
+                if s < n and w < e:
+                    bbox = (s, w, n, e)
+        except (TypeError, ValueError):
+            bbox = None
+
+    # Atomically grab the current snapshot. Refresh writes happen with the
+    # same lock held, so we always see a consistent set of rows.
+    with _POLICE_HEATMAP_RAM_LOCK:
+        rows = _POLICE_HEATMAP_RAM['rows']
+        updated_at = _POLICE_HEATMAP_RAM['updated_at']
+
+    # Group (lat_bin, lng_bin) → summed count, applying the subtype filter.
+    # Police alerts with no subtype (Waze can send bare type=POLICE) are
+    # treated as POLICE_VISIBLE — mirrors the frontend pin default in
+    # getPoliceCategory() so the heatmap and pins agree on coverage.
+    bins = {}
+    for lat_v, lng_v, sub, cnt in rows:
+        eff = sub or 'POLICE_VISIBLE'
+        if wanted is not None and eff not in wanted:
+            continue
+        if bbox is not None:
+            s, w, n, e = bbox
+            if lat_v < s or lat_v > n or lng_v < w or lng_v > e:
+                continue
+        key = (lat_v, lng_v)
+        bins[key] = bins.get(key, 0) + cnt
+
+    # Top N hottest bins.
+    items = sorted(bins.items(), key=lambda x: x[1], reverse=True)[:_POLICE_HEATMAP_MAX_BINS]
+    points = [[round(k[0], 5), round(k[1], 5), v] for k, v in items]
+    max_count = items[0][1] if items else 0
+    total_records = sum(v for _, v in items)
+
+    cache_status = 'ok' if updated_at is not None else 'warming'
+
+    return jsonify({
+        'points': points,
+        'total_records': total_records,
+        'bin_size_deg': _POLICE_HEATMAP_BIN_DEG,
+        'max_count': max_count,
+        'days': _POLICE_HEATMAP_WINDOW_DAYS,
+        'subtypes': sorted(wanted) if wanted else sorted(_POLICE_VALID_SUBTYPES),
+        'cache_updated_at': updated_at.isoformat() if updated_at else None,
+        'cache_status': cache_status,
+    })
+
+
+def _hydrate_police_heatmap_ram_from_db():
+    """Populate the RAM cache from the Postgres cache on startup. Called
+    once during init_archive_db so the heatmap is hot the moment the
+    backend is up — even if the first scheduled refresh is still running."""
+    rows = []
+    updated_at = None
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SET LOCAL statement_timeout = '10s'")
+            cur.execute(
+                'SELECT lat_bin, lng_bin, subcategory, count, updated_at '
+                'FROM police_heatmap_cache'
+            )
+            for lat_b, lng_b, sub, cnt, ts in cur.fetchall():
+                try:
+                    rows.append((float(lat_b), float(lng_b), sub or '', int(cnt)))
+                    if ts is not None and (updated_at is None or ts > updated_at):
+                        updated_at = ts
+                except (TypeError, ValueError):
+                    continue
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"Police heatmap RAM hydrate skipped: {e}")
+        return
+    with _POLICE_HEATMAP_RAM_LOCK:
+        _POLICE_HEATMAP_RAM['rows'] = rows
+        _POLICE_HEATMAP_RAM['updated_at'] = updated_at
+    if rows and DEV_MODE:
+        Log.startup(f"Police heatmap RAM hydrated from Postgres — {len(rows)} bins")
+
+
+def _refresh_police_heatmap_cache():
+    """Rebuild the police heatmap cache from data_history.
+
+    Three phases:
+      1. Slow read aggregates data_history into a Python list. No locks
+         held on either cache (RAM or Postgres) during this — readers
+         keep seeing the previous snapshot.
+      2. RAM swap (microseconds): atomic update under the RAM lock.
+         Reads after this point see the new data immediately.
+      3. Postgres swap (milliseconds): TRUNCATE + bulk insert so the
+         disk cache survives a restart. If this fails, RAM still has
+         the new data — the read path doesn't notice.
+    """
+    cutoff = int(time.time()) - (_POLICE_HEATMAP_WINDOW_DAYS * 86400)
+    bin_deg = _POLICE_HEATMAP_BIN_DEG
+
+    # ---- Phase 1: slow aggregation, no cache locks held ------------------
+    raw = []
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SET statement_timeout = '300s'")
+        cur.execute(
+            '''
+            SELECT
+                ROUND(latitude::numeric  / %s) * %s AS lat_bin,
+                ROUND(longitude::numeric / %s) * %s AS lng_bin,
+                COALESCE(subcategory, '') AS sub,
+                COUNT(*) AS cnt
+            FROM data_history
+            WHERE is_latest = 1
+              AND source = 'waze_police'
+              AND fetched_at >= %s
+              AND latitude  IS NOT NULL
+              AND longitude IS NOT NULL
+            GROUP BY ROUND(latitude::numeric  / %s) * %s,
+                     ROUND(longitude::numeric / %s) * %s,
+                     COALESCE(subcategory, '')
+            ''',
+            [bin_deg, bin_deg, bin_deg, bin_deg, cutoff,
+             bin_deg, bin_deg, bin_deg, bin_deg],
+        )
+        raw = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        Log.error(f"Police heatmap aggregation error: {e}")
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Normalise + ditch any rows that can't be coerced to numbers.
+    rows = []
+    for r in raw:
+        try:
+            rows.append((float(r[0]), float(r[1]), r[2] or '', int(r[3])))
+        except (TypeError, ValueError):
+            continue
+
+    # ---- Phase 2: RAM swap — instant, atomic ----------------------------
+    now = datetime.now()
+    with _POLICE_HEATMAP_RAM_LOCK:
+        _POLICE_HEATMAP_RAM['rows'] = rows
+        _POLICE_HEATMAP_RAM['updated_at'] = now
+    if DEV_MODE:
+        Log.cleanup(f"Police heatmap RAM refreshed — {len(rows)} bins")
+
+    # ---- Phase 3: Postgres swap — durability across restarts -----------
+    if not rows:
+        return
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '30s'")
+        cur.execute("SET LOCAL lock_timeout = '10s'")
+        cur.execute('TRUNCATE police_heatmap_cache')
+        try:
+            from psycopg2.extras import execute_values
+            execute_values(
+                cur,
+                'INSERT INTO police_heatmap_cache '
+                '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES %s',
+                [(r[0], r[1], r[2], r[3], now) for r in rows],
+                page_size=1000,
+            )
+        except ImportError:
+            args_str = b','.join(
+                cur.mogrify('(%s,%s,%s,%s,now())',
+                            (r[0], r[1], r[2], r[3])) for r in rows
+            ).decode('utf-8')
+            cur.execute(
+                'INSERT INTO police_heatmap_cache '
+                '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES '
+                + args_str
+            )
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # Postgres swap failed — RAM is still up to date, so the heatmap
+        # keeps working. Worst case, after a restart we lose the freshest
+        # snapshot and rehydrate from the previous DB state.
+        Log.warn(f"Police heatmap Postgres swap failed (RAM still fresh): {e}")
+    finally:
+        conn.close()
+
+
+def _police_heatmap_scheduler():
+    """Background loop that refreshes the police heatmap cache every N
+    seconds (POLICE_HEATMAP_REFRESH_INTERVAL). First refresh fires almost
+    immediately so the cache populates as soon as possible after restart."""
+    # Tiny stagger so we don't slam the DB the second the app starts.
+    time.sleep(5)
+    while not _shutdown_event.is_set():
+        try:
+            _refresh_police_heatmap_cache()
+        except Exception as e:
+            Log.error(f"Police heatmap scheduler error: {e}")
+        if _shutdown_event.wait(timeout=POLICE_HEATMAP_REFRESH_INTERVAL):
+            return
 
 
 @app.route('/api/waze/roadwork')
@@ -9255,31 +10108,28 @@ def waze_roadwork():
     cached_data, age, expired = cache_get('waze_roadwork')
     if cached_data and not expired:
         return jsonify(cached_data)
-    if cached_data:
-        return jsonify(cached_data)
-    
-    # Fallback: fetch live
+
+    # Stale or missing — rebuild from ingest snapshot. See waze_police().
     alerts, _ = fetch_waze_data()
     features = []
-    
     for alert in alerts:
         alert_type = alert.get('type', '').upper()
         subtype = alert.get('subtype', '') or ''
         subtype_upper = subtype.upper()
-        
-        # Include CONSTRUCTION type alerts and any construction-related subtypes
-        is_roadwork = (alert_type == 'CONSTRUCTION' or 
+        is_roadwork = (alert_type == 'CONSTRUCTION' or
                        subtype in WAZE_ROADWORK_SUBTYPES or
                        'CONSTRUCTION' in subtype_upper)
-        
         if is_roadwork:
             feature = parse_waze_alert(alert, 'Roadwork')
             if feature:
                 features.append(feature)
-    
+
     result = {'type': 'FeatureCollection', 'features': features, 'count': len(features)}
     if features:
         cache_set('waze_roadwork', result, CACHE_TTL_TRAFFIC)
+        return jsonify(result)
+    if cached_data:
+        return jsonify(cached_data)
     return jsonify(result)
 
 
@@ -10147,11 +10997,203 @@ def cache_status():
     })
 
 
+# /api/data/history count cache. The plain COUNT(*) over data_history with
+# is_latest=1 + 24h fetched_at filter can take 15-30s when archive UPDATEs
+# leave the visibility map dirty (Postgres falls back to heap fetches even
+# for an index-only scan). Cache the result by (where_clause, params) so
+# repeat polls — same filters, different page — return instantly, and a
+# slow scan failing doesn't zero out pagination on every refresh.
+_DATA_HISTORY_COUNT_CACHE = {}        # key -> {'total','live','ended','ts'}
+_DATA_HISTORY_COUNT_CACHE_LOCK = threading.Lock()
+_DATA_HISTORY_COUNT_CACHE_TTL = 600   # 10 min — long window so we don't retry
+                                       # the slow scan every minute. Counts
+                                       # only need to be roughly right for
+                                       # pagination; precision isn't critical.
+_DATA_HISTORY_COUNT_CACHE_MAX = 256   # cap entries to bound memory
+
+
+def _data_history_count_cache_get(key, allow_stale=False):
+    with _DATA_HISTORY_COUNT_CACHE_LOCK:
+        entry = _DATA_HISTORY_COUNT_CACHE.get(key)
+    if entry is None:
+        return None
+    age = time.time() - entry['ts']
+    if not allow_stale and age >= _DATA_HISTORY_COUNT_CACHE_TTL:
+        return None
+    return entry
+
+
+def _data_history_count_cache_set(key, total, live, ended):
+    with _DATA_HISTORY_COUNT_CACHE_LOCK:
+        if len(_DATA_HISTORY_COUNT_CACHE) >= _DATA_HISTORY_COUNT_CACHE_MAX:
+            # Drop the oldest entry — bound memory in case of high cardinality.
+            oldest_key = min(_DATA_HISTORY_COUNT_CACHE,
+                             key=lambda k: _DATA_HISTORY_COUNT_CACHE[k]['ts'])
+            _DATA_HISTORY_COUNT_CACHE.pop(oldest_key, None)
+        _DATA_HISTORY_COUNT_CACHE[key] = {
+            'total': total, 'live': live, 'ended': ended, 'ts': time.time(),
+        }
+
+
+# Track in-flight async refreshes per cache key so the same query
+# isn't re-issued repeatedly when many users land on the page at once.
+_DATA_HISTORY_COUNT_INFLIGHT = set()
+_DATA_HISTORY_COUNT_INFLIGHT_LOCK = threading.Lock()
+
+
+# Cap concurrent refresh workers. Each runs a 90s COUNT(*) and holds
+# a pooled connection — without this cap, a traffic spike can spawn
+# dozens of parallel refreshes and exhaust the connection pool.
+_DATA_HISTORY_COUNT_INFLIGHT_MAX = 4
+
+
+def _async_refresh_data_history_count(cache_key, actual_where, params,
+                                       live_only, historical_only, pager_cutoff):
+    """Kick off a background thread that runs the slow COUNT(*) and
+    populates the cache. The user request returns immediately with the
+    stale or estimated value — refresh is fire-and-forget."""
+    with _DATA_HISTORY_COUNT_INFLIGHT_LOCK:
+        if cache_key in _DATA_HISTORY_COUNT_INFLIGHT:
+            return  # another worker is already on it
+        if len(_DATA_HISTORY_COUNT_INFLIGHT) >= _DATA_HISTORY_COUNT_INFLIGHT_MAX:
+            return  # too many workers already running — don't pile on
+        _DATA_HISTORY_COUNT_INFLIGHT.add(cache_key)
+
+    def _worker():
+        try:
+            total = 0
+            live = 0
+            ended = 0
+            try:
+                conn = get_conn()
+                try:
+                    c = conn.cursor()
+                    c.execute("SET LOCAL statement_timeout = '90s'")
+                    c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+                    total = c.fetchone()[0] or 0
+                finally:
+                    conn.close()
+            except Exception as e:
+                if DEV_MODE:
+                    Log.info(f"Async count refresh skipped (still bloated): {e}")
+                return  # leave the cache as-is
+            if live_only:
+                live = total
+            elif historical_only:
+                ended = total
+            else:
+                try:
+                    conn = get_conn()
+                    try:
+                        c = conn.cursor()
+                        c.execute("SET LOCAL statement_timeout = '90s'")
+                        c.execute(f'''
+                            SELECT
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                                    OR (source != 'pager' AND is_live = 1)
+                                ),
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                                )
+                            FROM data_history WHERE {actual_where}
+                        ''', params)
+                        row = c.fetchone()
+                        live = row[0] or 0
+                        ended = row[1] or 0
+                    finally:
+                        conn.close()
+                except Exception:
+                    pass  # keep the total; breakdown stays at 0
+            _data_history_count_cache_set(cache_key, total, live, ended)
+        finally:
+            with _DATA_HISTORY_COUNT_INFLIGHT_LOCK:
+                _DATA_HISTORY_COUNT_INFLIGHT.discard(cache_key)
+
+    threading.Thread(target=_worker, daemon=True, name='count-refresh').start()
+
+
+def _data_history_reltuples_estimate():
+    """Instant row-count estimate from the planner's stats. Returns the
+    pg_class.reltuples value — refreshed by ANALYZE / autovacuum, so it
+    drifts a bit but is always near-correct for a high-churn table.
+    Used as a fallback when a real COUNT(*) times out."""
+    try:
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute("SET LOCAL statement_timeout = '2s'")
+            c.execute("SELECT reltuples::bigint FROM pg_class WHERE relname = 'data_history'")
+            row = c.fetchone()
+            return int(row[0]) if row and row[0] else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def _prewarm_data_history_count_cache():
+    """Seed the count cache for the logs-page default query (hours=24,
+    unique=1, no other filters). Strategy: prefer the instant pg_class
+    reltuples estimate so the cache is hot in milliseconds, then try
+    a real COUNT(*) for accuracy — if that times out we keep the
+    estimate. Either way the user's first click never sees total=0."""
+    time.sleep(15)
+    cutoff = int(time.time()) - 24 * 3600
+    actual_where = "(fetched_at >= %s) AND is_latest = 1"
+    params = [cutoff]
+    # Match the quantization done at the request site so the prewarmed
+    # entry actually matches a real user query's cache_key.
+    cache_key = (actual_where, ((cutoff // 60) * 60,), 'all')
+    pager_cutoff = int(time.time()) - 3600
+
+    # Phase 1: instant estimate. Uses reltuples for the whole table —
+    # an over-estimate vs. is_latest=1 + 24h, but better than zero and
+    # gives pagination something to chew on. Real count overwrites later.
+    est = _data_history_reltuples_estimate()
+    if est > 0:
+        _data_history_count_cache_set(cache_key, est, 0, 0)
+        if DEV_MODE:
+            Log.startup(f"data/history count cache seeded with reltuples estimate — ~{est}")
+
+    # Phase 2: try the real count. May still time out under heavy load —
+    # if so we keep the estimate from phase 1.
+    try:
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute("SET LOCAL statement_timeout = '90s'")
+            c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+            total = c.fetchone()[0] or 0
+            c.execute(f'''
+                SELECT
+                    COUNT(*) FILTER (WHERE
+                        (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                        OR (source != 'pager' AND is_live = 1)
+                    ),
+                    COUNT(*) FILTER (WHERE
+                        (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                        OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                    )
+                FROM data_history WHERE {actual_where}
+            ''', params)
+            row = c.fetchone()
+            live, ended = (row[0] or 0), (row[1] or 0)
+            _data_history_count_cache_set(cache_key, total, live, ended)
+            if DEV_MODE:
+                Log.startup(f"data/history count cache prewarmed (exact) — total={total}")
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"data/history exact count prewarm skipped (estimate retained): {e}")
+
+
 @app.route('/api/data/history')
 def data_history():
     """
     Query historical data from history databases (split by source type).
-    
+
     Query parameters:
         source: Filter by source (rfs, traffic_incident, waze_hazard, waze_police, etc.) - supports comma-separated
         source_id: Filter by specific source ID
@@ -10400,48 +11442,48 @@ def data_history():
         ended_count = 0
         all_rows = []
 
-        for db_path in dbs_to_query:
-            try:
-                conn = get_conn()
-                try:
-                    c = conn.cursor()
-                    # Cap this session so a bad plan fails fast (25s) instead of
-                    # timing out Cloudflare (100s). Applies to THIS session only.
-                    c.execute("SET LOCAL statement_timeout = '25s'")
-                    if live_only or historical_only:
-                        # Filter is already on is_live, so total IS live or ended
-                        c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
-                        db_total = c.fetchone()[0]
-                        total += db_total
-                        if live_only:
-                            live_count += db_total
-                        else:
-                            ended_count += db_total
-                    else:
-                        # Single pass: total + live + ended via FILTER
-                        c.execute(f'''
-                            SELECT
-                                COUNT(*) AS total,
-                                COUNT(*) FILTER (WHERE
-                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
-                                    OR (source != 'pager' AND is_live = 1)
-                                ) AS live_count,
-                                COUNT(*) FILTER (WHERE
-                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
-                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
-                                ) AS ended_count
-                            FROM data_history
-                            WHERE {actual_where}
-                        ''', params)
-                        row = c.fetchone()
-                        total += row[0] or 0
-                        live_count += row[1] or 0
-                        ended_count += row[2] or 0
-                finally:
-                    conn.close()
-            except Exception as e:
-                Log.error(f"Count error: {e}")
-        
+        # Two-step strategy: cheap plain COUNT(*) first (uses the partial
+        # idx_data_latest_only_fetched index when unique=1), then optional
+        # live/ended breakdown. The breakdown's FILTER expressions can't use
+        # an index and force per-row CPU work; if it times out we still keep
+        # the pagination total instead of returning zero.
+        # TTL-cached per (where, params, mode) so repeat polls don't hit
+        # the DB and a slow scan doesn't break pagination on every refresh.
+        # Quantize timestamp-shaped params (anything > 1 billion seconds)
+        # to 60s buckets so back-to-back requests for ?hours=24 share a
+        # cache key — without this `since` shifts every second and every
+        # request misses the cache.
+        def _ck_bucket(p):
+            if isinstance(p, int) and p > 1_000_000_000:
+                return (p // 60) * 60
+            return p
+        cache_key = (
+            actual_where,
+            tuple(_ck_bucket(p) for p in params),
+            'live' if live_only else ('hist' if historical_only else 'all'),
+        )
+        # Stale-while-revalidate: the request NEVER blocks on the slow
+        # count. We always serve the cached value (or a reltuples estimate
+        # if there's no cache yet), and if the cache is stale we kick off
+        # a background refresh. Pagination never stutters even if the DB
+        # is too bloated to count in 40s.
+        cached_fresh = _data_history_count_cache_get(cache_key)
+        cached_stale = _data_history_count_cache_get(cache_key, allow_stale=True)
+        if cached_fresh is not None:
+            total = cached_fresh['total']
+            live_count = cached_fresh['live']
+            ended_count = cached_fresh['ended']
+        elif cached_stale is not None:
+            total = cached_stale['total']
+            live_count = cached_stale['live']
+            ended_count = cached_stale['ended']
+            _async_refresh_data_history_count(
+                cache_key, actual_where, list(params), live_only, historical_only, pager_cutoff)
+        else:
+            total = _data_history_reltuples_estimate()
+            _async_refresh_data_history_count(
+                cache_key, actual_where, list(params), live_only, historical_only, pager_cutoff)
+
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
         # `data` is the heaviest column — pull it only if ?full=1.
         data_col = 'data' if include_data else "''::text AS data"
@@ -10746,7 +11788,12 @@ def _refresh_filter_cache():
         conn = get_conn()
         try:
             c = conn.cursor()
-            c.execute("SET LOCAL statement_timeout = '60s'")
+            # Background task — give it a generous budget. The 5 GROUP BYs
+            # over is_latest=1 rows can run long when archive UPDATEs leave
+            # the visibility map dirty; failing the refresh just leaves the
+            # filter dropdown stale, so it's worth waiting longer rather
+            # than hammering retries.
+            c.execute("SET LOCAL statement_timeout = '180s'")
 
             # Sources (no source scope — top-level list)
             c.execute(f'''
@@ -14393,6 +15440,49 @@ _DASH_SESSIONS = {}  # sid -> session dict
 _DASH_SESSIONS_DB_READY = False
 
 
+def _dash_bot_db_indexes_ensure():
+    """One-time index creation on bot-owned tables that the dashboard
+    queries frequently. The bot creates these tables; we just make sure
+    the read paths can use indexes. CONCURRENTLY so we don't block any
+    writes happening on the bot side. Best-effort — silently no-ops if
+    the table doesn't exist yet (first deploy with this feature) or if
+    BOT_DATA_DATABASE_URL isn't set."""
+    dsn = os.environ.get('BOT_DATA_DATABASE_URL', '')
+    if not dsn:
+        return
+    try:
+        import psycopg2
+        conn = psycopg2.connect(dsn)
+        try:
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            for sql in (
+                # preset-stats endpoint joins preset_fire_log on preset_id
+                # with a fired_at time filter — index makes both the join
+                # and the time-bucketed COUNT FILTERs fast.
+                'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_preset_fire_log_preset_fired '
+                '  ON preset_fire_log (preset_id, fired_at DESC)',
+            ):
+                parts = sql.split()
+                try:
+                    idx_name = parts[parts.index('EXISTS') + 1]
+                except (ValueError, IndexError):
+                    idx_name = '<unknown>'
+                try:
+                    Log.startup(f"Building bot-DB index {idx_name} CONCURRENTLY...")
+                    cur.execute(sql)
+                    Log.startup(f"✓ Bot-DB index {idx_name} ready")
+                except Exception as e:
+                    # Likely the table doesn't exist yet — bot hasn't created
+                    # it. Not an error worth alarming on.
+                    Log.warn(f"Bot-DB index {idx_name} skipped: {e}")
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"Bot-DB index migration error: {e}")
+
+
 def _dash_sessions_db_ensure():
     """Create the dash_sessions table (if missing) and hydrate the in-memory
     dict from any rows that survived a restart. Runs at most once per process;
@@ -14414,6 +15504,19 @@ def _dash_sessions_db_ensure():
             )
         ''')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_dash_sessions_exp ON dash_sessions(exp)')
+        # Persistent users table — survives session expiry. Lets the admin
+        # panel show "all users that have ever logged in" not just current
+        # active sessions.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS dashboard_users (
+                uid TEXT PRIMARY KEY,
+                username TEXT,
+                avatar TEXT,
+                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                login_count INTEGER NOT NULL DEFAULT 1
+            )
+        ''')
         now = int(time.time())
         cur.execute('DELETE FROM dash_sessions WHERE exp < %s', (now,))
         cur.execute('SELECT sid, data FROM dash_sessions')
@@ -14483,10 +15586,62 @@ def _dash_session_delete_db(sid):
         conn.close()
 
 
+def _dash_users_upsert(uid, username=None, avatar=None, increment_login=False):
+    """Record a Discord user in the persistent dashboard_users table.
+    Called on each login (increment_login=True) and on session load
+    (increment_login=False — only updates last_seen). Best-effort; if
+    BOT_DATA_DATABASE_URL isn't set the call is a no-op."""
+    if not uid:
+        return
+    conn = _bot_db_conn()
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        if increment_login:
+            cur.execute(
+                'INSERT INTO dashboard_users (uid, username, avatar) '
+                'VALUES (%s, %s, %s) '
+                'ON CONFLICT (uid) DO UPDATE SET '
+                '  username = COALESCE(EXCLUDED.username, dashboard_users.username), '
+                '  avatar = COALESCE(EXCLUDED.avatar, dashboard_users.avatar), '
+                '  last_seen = now(), '
+                '  login_count = dashboard_users.login_count + 1',
+                (str(uid), username or '', avatar or '')
+            )
+        else:
+            # Touch last_seen only — don't bump login_count for ordinary
+            # authenticated requests.
+            cur.execute(
+                'UPDATE dashboard_users SET last_seen = now() WHERE uid = %s',
+                (str(uid),)
+            )
+        conn.commit()
+    except Exception as e:
+        Log.warn(f"dashboard_users upsert failed: {e}")
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        conn.close()
+
+
 def _dash_session_put(sid, data):
     _dash_sessions_db_ensure()
     _DASH_SESSIONS[sid] = data
     _dash_session_persist(sid, data)
+    # Record/refresh the persistent user row in a background thread so the
+    # OAuth callback doesn't block on a second DB write — the user's
+    # session is already valid in memory and persisted via session_persist.
+    uid = data.get('uid')
+    if uid:
+        username = data.get('username')
+        avatar = data.get('avatar')
+        threading.Thread(
+            target=lambda: _dash_users_upsert(
+                uid, username=username, avatar=avatar, increment_login=True),
+            daemon=True,
+            name='dash-users-upsert',
+        ).start()
     # Opportunistic GC when the store grows — drop anything already expired.
     if len(_DASH_SESSIONS) > 512:
         now = int(time.time())
@@ -14541,6 +15696,11 @@ def _dash_load_session():
         return None
     # Expose sid on the session dict so downstream code can rotate/drop it.
     session['_sid'] = sid
+    # Touch last_seen on every authenticated request — admin overview uses
+    # this for the "Age" column instead of `iat` so it reflects recent
+    # activity, not how long the cookie has existed. In-memory only — we
+    # don't write through to Postgres on every request to keep this cheap.
+    session['last_seen'] = int(time.time())
     return session
 
 
@@ -14895,9 +16055,16 @@ def dashboard_auth_callback():
                      'User-Agent': 'NSWPSN-Dashboard'},
             timeout=15,
         )
+    # Parallelize the two Discord identity calls — they're independent and
+    # each can take 500-1500ms. Sequential they added up to several
+    # seconds of OAuth callback latency for the user.
     try:
-        ur = _with_token('/users/@me')
-        gr = _with_token('/users/@me/guilds')
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_ur = ex.submit(_with_token, '/users/@me')
+            f_gr = ex.submit(_with_token, '/users/@me/guilds')
+            ur = f_ur.result()
+            gr = f_gr.result()
     except Exception as e:
         return _dash_err('discord_error', f'Identity fetch failed: {e}', 502)
     if ur.status_code != 200 or gr.status_code != 200:
@@ -15902,6 +17069,64 @@ def dashboard_guild_preset_override_delete(guild_id, preset_id, alert_type):
 
 # ---------- Preset stats ----------
 
+# Per-guild preset-stats cache. Underlying query joins alert_presets
+# against preset_fire_log with two windowed COUNT FILTERs and a MAX —
+# can take seconds on a busy guild before the index lands. Stale-while-
+# revalidate so the dashboard never blocks waiting for it: serve the
+# previous value (or an empty stub) instantly, refresh in background.
+_DASH_PRESET_STATS_CACHE = {}      # gid -> (data, ts)
+_DASH_PRESET_STATS_CACHE_LOCK = threading.Lock()
+_DASH_PRESET_STATS_TTL = 60        # seconds — fresh window
+_DASH_PRESET_STATS_INFLIGHT = set()  # coalesce duplicate refreshes
+_DASH_PRESET_STATS_INFLIGHT_LOCK = threading.Lock()
+
+
+def _refresh_preset_stats(gid):
+    """Run the heavy preset-stats query and update the cache. Runs in a
+    background thread when the cache is stale or absent — the request
+    handler returns whatever was cached and never blocks on this."""
+    with _DASH_PRESET_STATS_INFLIGHT_LOCK:
+        if gid in _DASH_PRESET_STATS_INFLIGHT:
+            return
+        _DASH_PRESET_STATS_INFLIGHT.add(gid)
+    try:
+        conn = _bot_db_conn()
+        if conn is None:
+            return
+        out = []
+        try:
+            cur = conn.cursor()
+            cur.execute("SET LOCAL statement_timeout = '30s'")
+            cur.execute('''
+                SELECT p.id AS preset_id,
+                       COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
+                       COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
+                       MAX(f.fired_at) AS last_fire
+                  FROM alert_presets p
+             LEFT JOIN preset_fire_log f ON f.preset_id = p.id
+                 WHERE p.guild_id = %s
+              GROUP BY p.id
+            ''', (gid,))
+            for r in cur.fetchall():
+                lf = r['last_fire']
+                out.append({
+                    'preset_id': str(r['preset_id']),
+                    'fires_7d': int(r['fires_7d'] or 0),
+                    'fires_30d': int(r['fires_30d'] or 0),
+                    'last_fire': lf.isoformat() if lf else None,
+                })
+        except Exception as e:
+            Log.warn(f"preset_stats refresh skipped (still slow): {e}")
+            return
+        finally:
+            conn.close()
+        with _DASH_PRESET_STATS_CACHE_LOCK:
+            _DASH_PRESET_STATS_CACHE[gid] = (out, time.time())
+    finally:
+        with _DASH_PRESET_STATS_INFLIGHT_LOCK:
+            _DASH_PRESET_STATS_INFLIGHT.discard(gid)
+
+
 @app.route('/api/dashboard/guilds/<guild_id>/preset-stats', methods=['GET'])
 @_dash_require_session()
 def dashboard_guild_preset_stats(guild_id):
@@ -15912,38 +17137,31 @@ def dashboard_guild_preset_stats(guild_id):
         gid = int(guild_id)
     except ValueError:
         return _dash_err('bad_request', 'guild_id must be numeric.', 400)
-    conn = _bot_db_conn()
-    if conn is None:
-        return _dash_err('dashboard_disabled',
-                         'BOT_DATA_DATABASE_URL is not configured.', 503)
-    try:
-        cur = conn.cursor()
-        # One row per preset: fires_7d + fires_30d + last_fire.
-        cur.execute('''
-            SELECT p.id AS preset_id,
-                   COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
-                   COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
-                   MAX(f.fired_at) AS last_fire
-              FROM alert_presets p
-         LEFT JOIN preset_fire_log f ON f.preset_id = p.id
-             WHERE p.guild_id = %s
-          GROUP BY p.id
-        ''', (gid,))
-        out = []
-        for r in cur.fetchall():
-            lf = r['last_fire']
-            out.append({
-                'preset_id': str(r['preset_id']),
-                'fires_7d': int(r['fires_7d'] or 0),
-                'fires_30d': int(r['fires_30d'] or 0),
-                'last_fire': lf.isoformat() if lf else None,
-            })
-    except Exception as e:
-        Log.error(f"dashboard preset_stats error: {e}")
-        return _dash_err('db_error', str(e), 500)
-    finally:
-        conn.close()
-    return jsonify({'stats': out})
+
+    now = time.time()
+    with _DASH_PRESET_STATS_CACHE_LOCK:
+        cached = _DASH_PRESET_STATS_CACHE.get(gid)
+
+    if cached:
+        data, ts = cached
+        # Always return cached data immediately. If stale, kick off a
+        # background refresh — the next call gets fresh data.
+        if (now - ts) >= _DASH_PRESET_STATS_TTL:
+            threading.Thread(
+                target=_refresh_preset_stats, args=(gid,),
+                daemon=True, name='preset-stats-refresh',
+            ).start()
+        return jsonify({'stats': data, 'cache_age_seconds': int(now - ts)})
+
+    # First call ever for this guild — return an empty stub immediately
+    # and start the refresh. The dashboard will see empty stats on the
+    # first load (no historical data), and the refresh fills the cache
+    # within a few seconds for the next call.
+    threading.Thread(
+        target=_refresh_preset_stats, args=(gid,),
+        daemon=True, name='preset-stats-refresh',
+    ).start()
+    return jsonify({'stats': [], 'cache_age_seconds': None, 'warming': True})
 
 
 # ---------- Mute state ----------
@@ -16253,9 +17471,9 @@ def _dash_app_install_counts():
 
 def _dash_guild_meta_lookup(guild_ids):
     """Return {gid: {name, icon_url}} for the requested ids. Tries the
-    session-derived map first; for anything still missing, calls the Discord
-    bot API once per gid (with a 10-min cache). Empty values stay empty if
-    Discord returns an error — admin UI displays a dash."""
+    session-derived map first; for anything still missing, fetches each
+    via the Discord bot API in parallel (10-min cache per gid). Empty
+    values stay empty if Discord returns an error — admin UI shows a dash."""
     out = dict(_dash_guild_names_from_sessions())
     now = time.time()
     needed = [str(gid) for gid in guild_ids if str(gid) not in out or not out[str(gid)].get('name')]
@@ -16263,34 +17481,71 @@ def _dash_guild_meta_lookup(guild_ids):
         return out
     if not _dash_bot_token():
         return out
+
+    # Split needed into cache-hit and cache-miss buckets in one pass.
+    fresh_misses = []
     for gid in needed:
         with _DASH_GUILD_META_CACHE_LOCK:
             cached = _DASH_GUILD_META_CACHE.get(gid)
         if cached and (now - cached[0]) < _DASH_GUILD_META_TTL:
             out[gid] = cached[1]
-            continue
+        else:
+            fresh_misses.append(gid)
+
+    if not fresh_misses:
+        return out
+
+    # Parallelize the cache misses. Sequential per-gid Discord API calls
+    # were the dominant cost on first dashboard load with N guilds —
+    # 8-way concurrency cuts wall time by ~7-8x while staying well below
+    # Discord's per-route rate limit.
+    def _fetch_one(gid):
         try:
             status, body, _hdrs = _dash_bot_api(f'/guilds/{gid}')
             if status == 200 and isinstance(body, dict):
-                meta = {
+                return gid, {
                     'name': body.get('name') or '',
                     'icon_url': _dash_guild_icon_url(gid, body.get('icon')),
                 }
-                with _DASH_GUILD_META_CACHE_LOCK:
-                    _DASH_GUILD_META_CACHE[gid] = (now, meta)
-                    _dash_guild_meta_evict_locked()
-                out[gid] = meta
         except Exception:
-            # Don't fail the whole admin endpoint over one missing name —
-            # leave the cache empty and the row will display as "—".
             pass
+        return gid, None
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        max_workers = min(8, len(fresh_misses))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            for gid, meta in ex.map(_fetch_one, fresh_misses):
+                if meta is not None:
+                    with _DASH_GUILD_META_CACHE_LOCK:
+                        _DASH_GUILD_META_CACHE[gid] = (now, meta)
+                        _dash_guild_meta_evict_locked()
+                    out[gid] = meta
+    except Exception as e:
+        Log.warn(f"guild meta parallel fetch failed: {e}")
+
     return out
+
+
+# 30s cache for the admin overview response. The DB stats + guild meta +
+# Discord install counts dominate the cost; session info is in-memory and
+# cheap. 30s of staleness is acceptable for the speed win — admin users
+# refreshing the page back-to-back hit cache instead of paying 3s+ each
+# time.
+_DASH_OVERVIEW_CACHE = {'data': None, 'ts': 0}
+_DASH_OVERVIEW_CACHE_LOCK = threading.Lock()
+_DASH_OVERVIEW_TTL = 30
 
 
 @app.route('/api/dashboard/admin/overview', methods=['GET'])
 @_dash_require_admin()
 def dashboard_admin_overview():
     now = int(time.time())
+
+    with _DASH_OVERVIEW_CACHE_LOCK:
+        cached = _DASH_OVERVIEW_CACHE
+        if cached['data'] is not None and (now - cached['ts']) < _DASH_OVERVIEW_TTL:
+            return jsonify(cached['data'])
 
     # Session stats (from in-memory session store). Collapse to one row per
     # Discord user (freshest session wins) so the same person isn't listed
@@ -16309,12 +17564,18 @@ def dashboard_admin_overview():
             continue
         users_seen.add(uid)
         iat = int(sess.get('iat', 0) or 0)
+        # Prefer last_seen (touched on every authenticated request) for the
+        # "age" display so it reflects recent activity, not how long the
+        # cookie has existed. Falls back to iat for sessions that haven't
+        # been touched yet (e.g., just loaded from DB after a restart).
+        last_seen = int(sess.get('last_seen', 0) or 0) or iat
         row = {
             'uid': uid,
             'username': sess.get('username') or '',
             'avatar_url': _dash_user_avatar_url(uid, sess.get('avatar')),
             'guild_count': len(sess.get('guilds') or []),
-            'age_seconds': max(0, now - iat),
+            'age_seconds': max(0, now - last_seen),
+            'session_age_seconds': max(0, now - iat),
             'is_admin': uid in _dash_admin_ids(),
             '_iat': iat,
         }
@@ -16325,33 +17586,85 @@ def dashboard_admin_overview():
     for r in sessions_out:
         r.pop('_iat', None)
 
+    # Mark all currently-active rows so the frontend can style them.
+    for r in sessions_out:
+        r['is_active'] = True
+
     conn = _bot_db_conn()
     if conn is None:
         return _dash_err('dashboard_disabled',
                          'BOT_DATA_DATABASE_URL is not configured.', 503)
+    historical_users = []
     try:
         cur = conn.cursor()
 
-        cur.execute('SELECT COUNT(*) AS n FROM alert_presets')
-        presets_total = cur.fetchone()['n'] or 0
+        # Pull historical users from dashboard_users so the panel shows
+        # everyone who has ever logged in, not just current active sessions.
+        # Reuses the same connection as the rest of the endpoint to avoid
+        # a second round-trip to the pool.
+        try:
+            cur.execute(
+                'SELECT uid, username, avatar, '
+                '       EXTRACT(EPOCH FROM last_seen)::bigint AS last_seen, '
+                '       login_count '
+                '  FROM dashboard_users '
+                'ORDER BY last_seen DESC'
+            )
+            for r in cur.fetchall():
+                uid = str(r['uid'])
+                if uid in per_user:
+                    continue  # already covered by active session
+                last_seen = int(r.get('last_seen') or 0)
+                historical_users.append({
+                    'uid': uid,
+                    'username': r.get('username') or '',
+                    'avatar_url': _dash_user_avatar_url(uid, r.get('avatar')),
+                    'guild_count': 0,
+                    'age_seconds': max(0, now - last_seen),
+                    'session_age_seconds': max(0, now - last_seen),
+                    'is_admin': uid in _dash_admin_ids(),
+                    'is_active': False,
+                    'login_count': int(r.get('login_count') or 0),
+                })
+        except Exception as e:
+            Log.warn(f"dashboard_users query failed: {e}")
 
-        cur.execute('SELECT COUNT(*) AS n FROM alert_presets WHERE pager_enabled = TRUE')
-        presets_pager = cur.fetchone()['n'] or 0
+        # Lifetime unique-user count. Cheap COUNT — runs against the same
+        # cursor we just used.
+        try:
+            cur.execute('SELECT COUNT(*) AS n FROM dashboard_users')
+            users_lifetime = cur.fetchone()['n'] or 0
+        except Exception:
+            users_lifetime = len(users_seen)
 
-        cur.execute('SELECT COUNT(*) AS n FROM alert_presets WHERE enabled = FALSE')
-        presets_muted = cur.fetchone()['n'] or 0
+        # All five alert_presets aggregates in one round-trip via FILTER
+        # clauses. Was 5 separate COUNT queries adding up to several DB
+        # round-trips per dashboard load.
+        cur.execute('''
+            SELECT
+                COUNT(*)                                        AS total,
+                COUNT(*) FILTER (WHERE pager_enabled)           AS pager,
+                COUNT(*) FILTER (WHERE NOT enabled)             AS muted,
+                COUNT(DISTINCT guild_id)                        AS guilds_with_presets,
+                COUNT(DISTINCT (guild_id, channel_id))          AS channels_configured
+            FROM alert_presets
+        ''')
+        ap_row = cur.fetchone() or {}
+        presets_total = int(ap_row.get('total') or 0)
+        presets_pager = int(ap_row.get('pager') or 0)
+        presets_muted = int(ap_row.get('muted') or 0)
+        guilds_with_presets = int(ap_row.get('guilds_with_presets') or 0)
+        channels_configured = int(ap_row.get('channels_configured') or 0)
 
-        cur.execute('SELECT COUNT(DISTINCT guild_id) AS n FROM alert_presets')
-        guilds_with_presets = cur.fetchone()['n'] or 0
-
-        cur.execute('SELECT COUNT(DISTINCT (guild_id, channel_id)) AS n FROM alert_presets')
-        channels_configured = cur.fetchone()['n'] or 0
-
-        cur.execute('SELECT COUNT(*) AS n FROM guild_mute_state WHERE enabled = FALSE')
-        guilds_muted = cur.fetchone()['n'] or 0
-
-        cur.execute('SELECT COUNT(*) AS n FROM channel_mute_state WHERE enabled = FALSE')
-        channels_muted = cur.fetchone()['n'] or 0
+        # Combine the two mute-state COUNTs into a single round-trip.
+        cur.execute('''
+            SELECT
+                (SELECT COUNT(*) FROM guild_mute_state WHERE NOT enabled)   AS guilds_muted,
+                (SELECT COUNT(*) FROM channel_mute_state WHERE NOT enabled) AS channels_muted
+        ''')
+        ms_row = cur.fetchone() or {}
+        guilds_muted = int(ms_row.get('guilds_muted') or 0)
+        channels_muted = int(ms_row.get('channels_muted') or 0)
 
         # Per-alert-type subscriber count (number of presets subscribed)
         type_counts = {t: 0 for t in _DASH_ALERT_TYPES}
@@ -16399,14 +17712,26 @@ def dashboard_admin_overview():
     finally:
         conn.close()
 
-    return jsonify({
+    # Merge historical users after the active list (active first, sorted
+    # by recency).
+    sessions_out = sessions_out + historical_users
+
+    # Resolve once — was being called twice on the same response, doubling
+    # the time spent in this code path even though the function itself is
+    # cached internally.
+    install_counts = _dash_app_install_counts()
+
+    response_payload = {
         'stats': {
             'sessions_active': sessions_active,
-            'dashboard_users': len(users_seen),
+            # 'dashboard_users' = lifetime unique users (from dashboard_users
+            # table). 'users_active' is the count currently logged in.
+            'dashboard_users': users_lifetime,
+            'users_active': len(users_seen),
             # Backwards-compat alias for older frontend builds.
-            'users_total': len(users_seen),
-            'servers_total': _dash_app_install_counts().get('servers_total'),
-            'user_installs': _dash_app_install_counts().get('user_installs'),
+            'users_total': users_lifetime,
+            'servers_total': install_counts.get('servers_total'),
+            'user_installs': install_counts.get('user_installs'),
             'guilds_with_presets': guilds_with_presets,
             'channels_configured': channels_configured,
             'presets_total': presets_total,
@@ -16420,7 +17745,11 @@ def dashboard_admin_overview():
         'sessions': sessions_out,
         'admin_ids': sorted(list(_dash_admin_ids())),
         'server_time': now,
-    })
+    }
+    with _DASH_OVERVIEW_CACHE_LOCK:
+        _DASH_OVERVIEW_CACHE['data'] = response_payload
+        _DASH_OVERVIEW_CACHE['ts'] = now
+    return jsonify(response_payload)
 
 
 # ---------- Admin broadcast (send an embed to many servers) ----------
@@ -16484,9 +17813,23 @@ def _dash_guess_broadcast_channel(guild_id, text_channels):
     return text_channels[0]
 
 
+# 60s TTL cache for broadcast targets — list of guilds and their channels
+# rarely changes minute-to-minute, and the underlying Discord API calls
+# are the dominant cost on a cold load.
+_DASH_BCAST_TARGETS_CACHE = {'data': None, 'ts': 0}
+_DASH_BCAST_TARGETS_CACHE_LOCK = threading.Lock()
+_DASH_BCAST_TARGETS_TTL = 60
+
+
 @app.route('/api/dashboard/admin/broadcast/targets', methods=['GET'])
 @_dash_require_admin()
 def dashboard_admin_broadcast_targets():
+    now = time.time()
+    with _DASH_BCAST_TARGETS_CACHE_LOCK:
+        cached = _DASH_BCAST_TARGETS_CACHE
+        if cached['data'] is not None and (now - cached['ts']) < _DASH_BCAST_TARGETS_TTL:
+            return jsonify({'targets': cached['data']})
+
     conn = _bot_db_conn()
     if conn is None:
         return _dash_err('dashboard_disabled',
@@ -16499,9 +17842,28 @@ def dashboard_admin_broadcast_targets():
         conn.close()
 
     name_map = _dash_guild_meta_lookup(guild_ids)
+
+    # Parallelize the per-guild channel lookups. _dash_bcast_fetch_channels
+    # makes a Discord API call per guild — sequentially that was N×~150ms
+    # = several seconds with 30+ guilds. Same 8-way concurrency pattern as
+    # _dash_guild_meta_lookup, well under Discord's rate-limit ceiling.
+    from concurrent.futures import ThreadPoolExecutor
+    channels_by_gid = {}
+    if guild_ids:
+        max_workers = min(8, len(guild_ids))
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                for gid, result in zip(
+                    guild_ids,
+                    ex.map(_dash_bcast_fetch_channels, guild_ids)
+                ):
+                    channels_by_gid[gid] = result  # (channels, err)
+        except Exception as e:
+            Log.warn(f"broadcast targets parallel fetch failed: {e}")
+
     out = []
     for gid in guild_ids:
-        channels, err = _dash_bcast_fetch_channels(gid)
+        channels, err = channels_by_gid.get(gid, ([], 'fetch_failed'))
         guess = _dash_guess_broadcast_channel(gid, channels)
         meta = name_map.get(gid, {})
         out.append({
@@ -16513,6 +17875,10 @@ def dashboard_admin_broadcast_targets():
             'channels': channels,
             'channels_error': err,
         })
+
+    with _DASH_BCAST_TARGETS_CACHE_LOCK:
+        _DASH_BCAST_TARGETS_CACHE['data'] = out
+        _DASH_BCAST_TARGETS_CACHE['ts'] = now
     return jsonify({'targets': out})
 
 

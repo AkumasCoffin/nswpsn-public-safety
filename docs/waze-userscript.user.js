@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.13
+// @version      1.17
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -81,26 +81,54 @@
         { name: 'Katoomba / Leura',        lat: -33.715, lon: 150.310, zoom: 14 },
         { name: 'Springwood / Glenbrook',  lat: -33.700, lon: 150.575, zoom: 14 },
         // ---- Central Coast ----
+        { name: 'Woy Woy / Ettalong',      lat: -33.488, lon: 151.330, zoom: 14 },
         { name: 'Gosford',                 lat: -33.425, lon: 151.345, zoom: 14 },
-        { name: 'Wyong / Tuggerah',        lat: -33.280, lon: 151.425, zoom: 14 },
+        { name: 'Erina / Wamberal',        lat: -33.430, lon: 151.395, zoom: 14 },
+        { name: 'Avoca Beach',             lat: -33.470, lon: 151.435, zoom: 14 },
         { name: 'Terrigal / The Entrance', lat: -33.355, lon: 151.480, zoom: 14 },
+        { name: 'Wyong / Tuggerah',        lat: -33.280, lon: 151.425, zoom: 14 },
+        { name: 'Toukley / Budgewoi',      lat: -33.260, lon: 151.540, zoom: 14 },
         // ---- Newcastle / Hunter ----
         { name: 'Newcastle CBD',           lat: -32.925, lon: 151.780, zoom: 14 },
         { name: 'Newcastle West / Wallsend', lat: -32.900, lon: 151.720, zoom: 14 },
+        { name: 'Charlestown',             lat: -32.965, lon: 151.690, zoom: 14 },
+        { name: 'Belmont / Swansea',       lat: -33.030, lon: 151.665, zoom: 14 },
+        { name: 'Toronto / Lake Macquarie West', lat: -33.020, lon: 151.595, zoom: 14 },
         { name: 'Lake Macquarie',          lat: -33.050, lon: 151.630, zoom: 14 },
         { name: 'Maitland',                lat: -32.733, lon: 151.555, zoom: 14 },
+        { name: 'East Maitland / Thornton', lat: -32.745, lon: 151.605, zoom: 14 },
+        { name: 'Kurri Kurri',             lat: -32.815, lon: 151.480, zoom: 14 },
         { name: 'Cessnock',                lat: -32.833, lon: 151.355, zoom: 14 },
         { name: 'Singleton',               lat: -32.568, lon: 151.170, zoom: 14 },
         { name: 'Muswellbrook',            lat: -32.265, lon: 150.890, zoom: 14 },
         { name: 'Scone',                   lat: -32.058, lon: 150.865, zoom: 14 },
         // ---- Illawarra / South Coast ----
+        // Densified: each regional centre split into CBD + surrounding suburbs.
+        { name: 'Helensburgh / Stanwell',  lat: -34.180, lon: 150.985, zoom: 14 },
+        { name: 'Bulli / Thirroul',        lat: -34.330, lon: 150.920, zoom: 14 },
+        { name: 'Corrimal / Fairy Meadow', lat: -34.395, lon: 150.890, zoom: 14 },
         { name: 'Wollongong',              lat: -34.430, lon: 150.880, zoom: 14 },
+        { name: 'Figtree / Mount Keira',   lat: -34.435, lon: 150.860, zoom: 14 },
+        { name: 'Port Kembla',             lat: -34.475, lon: 150.905, zoom: 14 },
+        { name: 'Lake Heights / Warrawong', lat: -34.490, lon: 150.880, zoom: 14 },
+        { name: 'Dapto',                   lat: -34.495, lon: 150.795, zoom: 14 },
+        { name: 'Albion Park',             lat: -34.575, lon: 150.785, zoom: 14 },
         { name: 'Shellharbour / Kiama',    lat: -34.630, lon: 150.830, zoom: 14 },
+        { name: 'Shellharbour Square',     lat: -34.580, lon: 150.860, zoom: 14 },
+        { name: 'Berry / Gerringong',      lat: -34.760, lon: 150.700, zoom: 14 },
+        { name: 'Bomaderry / North Nowra', lat: -34.857, lon: 150.610, zoom: 14 },
         { name: 'Nowra / Bomaderry',       lat: -34.880, lon: 150.605, zoom: 14 },
+        { name: 'South Nowra',             lat: -34.910, lon: 150.595, zoom: 14 },
+        { name: 'Worrigee / Falls Creek',  lat: -34.930, lon: 150.625, zoom: 14 },
+        { name: 'Vincentia / Huskisson',   lat: -35.040, lon: 150.685, zoom: 14 },
+        { name: 'Sussex Inlet / St Georges Basin', lat: -35.155, lon: 150.605, zoom: 14 },
         { name: 'Ulladulla',               lat: -35.360, lon: 150.475, zoom: 14 },
+        { name: 'Mollymook / Milton',      lat: -35.330, lon: 150.470, zoom: 14 },
         { name: 'Batemans Bay',            lat: -35.710, lon: 150.180, zoom: 14 },
+        { name: 'Moruya',                  lat: -35.910, lon: 150.080, zoom: 14 },
         { name: 'Narooma',                 lat: -36.215, lon: 150.135, zoom: 14 },
         { name: 'Merimbula / Bega',        lat: -36.680, lon: 149.830, zoom: 14 },
+        { name: 'Eden',                    lat: -37.062, lon: 149.901, zoom: 14 },
         // ---- Southern Highlands ----
         { name: 'Bowral / Mittagong',      lat: -34.485, lon: 150.415, zoom: 14 },
         { name: 'Moss Vale / Goulburn',    lat: -34.755, lon: 149.720, zoom: 14 },
@@ -108,45 +136,79 @@
         { name: 'Canberra / ACT',          lat: -35.280, lon: 149.130, zoom: 14 },
         { name: 'Canberra North',          lat: -35.240, lon: 149.130, zoom: 14 },
         { name: 'Canberra South',          lat: -35.345, lon: 149.095, zoom: 14 },
+        { name: 'Belconnen',               lat: -35.235, lon: 149.067, zoom: 14 },
+        { name: 'Tuggeranong',             lat: -35.420, lon: 149.075, zoom: 14 },
+        { name: 'Gungahlin',               lat: -35.185, lon: 149.130, zoom: 14 },
         { name: 'Queanbeyan',              lat: -35.355, lon: 149.235, zoom: 14 },
         { name: 'Yass',                    lat: -34.845, lon: 148.915, zoom: 14 },
+        { name: 'Murrumbateman',           lat: -34.972, lon: 149.030, zoom: 14 },
         // ---- Snowy Mountains ----
         { name: 'Cooma',                   lat: -36.235, lon: 149.130, zoom: 14 },
         { name: 'Jindabyne',               lat: -36.415, lon: 148.625, zoom: 14 },
         // ---- Central West ----
         { name: 'Bathurst',                lat: -33.420, lon: 149.580, zoom: 14 },
+        { name: 'Kelso / Eglinton',        lat: -33.405, lon: 149.620, zoom: 14 },
         { name: 'Orange',                  lat: -33.285, lon: 149.100, zoom: 14 },
+        { name: 'Orange North',            lat: -33.265, lon: 149.090, zoom: 14 },
         { name: 'Lithgow',                 lat: -33.485, lon: 150.155, zoom: 14 },
+        { name: 'Portland / Wallerawang',  lat: -33.380, lon: 150.050, zoom: 14 },
         { name: 'Mudgee',                  lat: -32.593, lon: 149.585, zoom: 14 },
         { name: 'Parkes',                  lat: -33.135, lon: 148.175, zoom: 14 },
         { name: 'Forbes',                  lat: -33.385, lon: 148.010, zoom: 14 },
         { name: 'Cowra',                   lat: -33.835, lon: 148.685, zoom: 14 },
         { name: 'Young',                   lat: -34.315, lon: 148.300, zoom: 14 },
         { name: 'Dubbo',                   lat: -32.250, lon: 148.600, zoom: 14 },
+        { name: 'Dubbo West',              lat: -32.245, lon: 148.580, zoom: 14 },
         // ---- Riverina ----
         { name: 'Wagga Wagga',             lat: -35.115, lon: 147.370, zoom: 14 },
+        { name: 'Wagga South / Glenfield Park', lat: -35.140, lon: 147.355, zoom: 14 },
+        { name: 'Wagga North / Estella',   lat: -35.080, lon: 147.358, zoom: 14 },
+        { name: 'Junee',                   lat: -34.870, lon: 147.585, zoom: 14 },
         { name: 'Albury',                  lat: -36.080, lon: 146.915, zoom: 14 },
+        { name: 'Lavington',               lat: -36.040, lon: 146.945, zoom: 14 },
         { name: 'Griffith',                lat: -34.290, lon: 146.045, zoom: 14 },
         { name: 'Leeton',                  lat: -34.555, lon: 146.405, zoom: 14 },
         { name: 'Deniliquin',              lat: -35.535, lon: 144.960, zoom: 14 },
+        { name: 'Finley',                  lat: -35.640, lon: 145.575, zoom: 14 },
         { name: 'Tumut',                   lat: -35.305, lon: 148.225, zoom: 14 },
+        { name: 'Tumbarumba',              lat: -35.778, lon: 148.011, zoom: 14 },
         { name: 'Cootamundra',             lat: -34.640, lon: 148.030, zoom: 14 },
+        { name: 'Temora',                  lat: -34.450, lon: 147.535, zoom: 14 },
+        { name: 'Gundagai',                lat: -35.065, lon: 148.100, zoom: 14 },
         // ---- North Coast ----
+        { name: 'Bulahdelah',              lat: -32.404, lon: 152.215, zoom: 14 },
         { name: 'Taree',                   lat: -31.905, lon: 152.460, zoom: 14 },
         { name: 'Forster / Tuncurry',      lat: -32.180, lon: 152.510, zoom: 14 },
+        { name: 'Wingham',                 lat: -31.870, lon: 152.367, zoom: 14 },
         { name: 'Port Macquarie',          lat: -31.430, lon: 152.900, zoom: 14 },
+        { name: 'Port Macquarie West',     lat: -31.450, lon: 152.860, zoom: 14 },
+        { name: 'Wauchope',                lat: -31.460, lon: 152.730, zoom: 14 },
+        { name: 'Laurieton / Camden Haven', lat: -31.640, lon: 152.815, zoom: 14 },
         { name: 'Kempsey',                 lat: -31.080, lon: 152.835, zoom: 14 },
+        { name: 'South West Rocks',        lat: -30.895, lon: 153.040, zoom: 14 },
+        { name: 'Nambucca Heads',          lat: -30.640, lon: 152.985, zoom: 14 },
+        { name: 'Macksville',              lat: -30.710, lon: 152.918, zoom: 14 },
         { name: 'Coffs Harbour',           lat: -30.300, lon: 153.120, zoom: 14 },
+        { name: 'Coffs Harbour South / Sawtell', lat: -30.365, lon: 153.100, zoom: 14 },
+        { name: 'Woolgoolga',              lat: -30.110, lon: 153.200, zoom: 14 },
         { name: 'Grafton',                 lat: -29.695, lon: 152.935, zoom: 14 },
+        { name: 'Yamba / Maclean',         lat: -29.435, lon: 153.355, zoom: 14 },
         { name: 'Casino',                  lat: -28.865, lon: 153.050, zoom: 14 },
         { name: 'Lismore',                 lat: -28.810, lon: 153.280, zoom: 14 },
+        { name: 'Goonellabah',             lat: -28.815, lon: 153.305, zoom: 14 },
         { name: 'Ballina',                 lat: -28.865, lon: 153.565, zoom: 14 },
+        { name: 'Lennox Head',             lat: -28.787, lon: 153.585, zoom: 14 },
         { name: 'Byron Bay',               lat: -28.645, lon: 153.615, zoom: 14 },
+        { name: 'Mullumbimby',             lat: -28.555, lon: 153.500, zoom: 14 },
         { name: 'Tweed Heads',             lat: -28.180, lon: 153.545, zoom: 14 },
+        { name: 'Kingscliff / Pottsville', lat: -28.255, lon: 153.572, zoom: 14 },
         { name: 'Murwillumbah',            lat: -28.330, lon: 153.390, zoom: 14 },
         // ---- New England / North West ----
         { name: 'Tamworth',                lat: -31.090, lon: 150.930, zoom: 14 },
+        { name: 'Tamworth South / Hillvue', lat: -31.115, lon: 150.910, zoom: 14 },
+        { name: 'Tamworth West',           lat: -31.090, lon: 150.890, zoom: 14 },
         { name: 'Armidale',                lat: -30.510, lon: 151.665, zoom: 14 },
+        { name: 'Uralla',                  lat: -30.638, lon: 151.495, zoom: 14 },
         { name: 'Gunnedah',                lat: -30.980, lon: 150.250, zoom: 14 },
         { name: 'Narrabri',                lat: -30.325, lon: 149.785, zoom: 14 },
         { name: 'Moree',                   lat: -29.465, lon: 149.840, zoom: 14 },
@@ -186,7 +248,22 @@
     // occasionally stops emitting georss responses after long sessions —
     // backend warns "Waze ingest stale: no POST in 15m" when this happens.
     // Reloading restarts the SPA, the WebSocket, and our hooks. Cheap.
+    // Absolute backstop reload. Must be MORE than 2× full-rotation time
+    // (190 regions × 5s ≈ 16 min). Reloading sooner means a region visited
+    // just before the reload may not get re-visited within the backend's
+    // WAZE_INGEST_MAX_AGE window, so its pins get pruned and the map
+    // shows fewer markers. The 4-min stuck-watchdog still catches real
+    // hangs — this timer only exists for slow drift the watchdog misses.
     const RELOAD_INTERVAL_MS     = 30 * 60 * 1000;
+    // Watchdog: if no successful ingest in this long, force a reload
+    // even before the absolute timer fires. The backend's staleness
+    // threshold is 15 min — set the watchdog tighter so we recover
+    // before the backend pages anyone.
+    const STUCK_RELOAD_AFTER_MS  = 4 * 60 * 1000;
+    const STUCK_CHECK_INTERVAL_MS = 30 * 1000;     // check more often so we
+                                                    // catch stalls quickly
+                                                    // even when timers are
+                                                    // mildly throttled.
 
     const log = (...args) => console.log('[NSWPSN]', ...args);
 
@@ -216,6 +293,12 @@
         } catch (e) { log('parse err', e); }
     }
 
+    // Watchdog state: last time we successfully POSTed an ingest. If
+    // this stalls (Waze SPA wedged, fetch-hook detached, etc.) the
+    // backend goes blind to whichever region we were on. Reload
+    // proactively before the 30-min absolute timer fires.
+    let _lastIngestSuccess = Date.now();
+
     function forward(payload) {
         const xhr = (typeof GM_xmlhttpRequest !== 'undefined') ? GM_xmlhttpRequest
                   : (typeof GM !== 'undefined' && GM.xmlHttpRequest) ? GM.xmlHttpRequest
@@ -229,6 +312,7 @@
             timeout: 15000,
             onload: (r) => {
                 if (r.status >= 200 && r.status < 300) {
+                    _lastIngestSuccess = Date.now();
                     log('ingest OK', payload.alerts.length + 'a', payload.jams.length + 'j');
                     try { onIngestArrived(); } catch (e) {}
                 } else {
@@ -589,14 +673,76 @@
         log('not on live-map — rotation skipped');
     }
 
-    // Scheduled reload — fires once per page load. After reload, the script
-    // re-runs and schedules a fresh 30-min timer, so this naturally repeats.
-    // Region index is persisted in localStorage (LS_KEY) so we resume mid-rotation.
-    setTimeout(() => {
-        log(`scheduled reload (${RELOAD_INTERVAL_MS / 60000}m elapsed) — refreshing Waze map state`);
-        try { pageWin.location.reload(); } catch (e) { log('reload failed', e); }
-    }, RELOAD_INTERVAL_MS);
+    // Try every reload mechanism we can — pageWin.location.reload() can
+    // fail silently when the tab is heavily backgrounded or when Waze's
+    // SPA has wedged the JS context. Fall back to assigning to href and
+    // top-level reload.
+    let _reloadInProgress = false;
+    function forceReload(reason) {
+        if (_reloadInProgress) return;
+        _reloadInProgress = true;
+        log(`reload (${reason})`);
+        const tries = [
+            () => pageWin.location.reload(),
+            () => { pageWin.location.href = pageWin.location.href; },
+            () => window.location.reload(),
+            () => { window.location.href = window.location.href; },
+            () => { if (window.top) window.top.location.reload(); },
+        ];
+        for (const fn of tries) {
+            try { fn(); return; } catch (e) {}
+        }
+        log('all reload paths failed — manual refresh needed');
+    }
 
-    log('NSWPSN Waze Forwarder v1.13 loaded — backend:', BACKEND_URL,
-        '· auto-reload every', RELOAD_INTERVAL_MS / 60000, 'min');
+    // Scheduled reload — fires once per page load. After reload, the script
+    // re-runs and schedules a fresh timer, so this naturally repeats.
+    // Region index is persisted in localStorage (LS_KEY) so we resume mid-rotation.
+    setTimeout(() => forceReload(`scheduled ${RELOAD_INTERVAL_MS / 60000}m`),
+        RELOAD_INTERVAL_MS);
+
+    // Watchdog — runs on every check tick AND every visibility change.
+    // The visibility hook is the important one: backgrounded tabs get
+    // setInterval throttled to 1/min and sometimes stalled entirely, so
+    // when the user comes back to check on the tab we re-evaluate state
+    // immediately instead of waiting for the next throttled tick.
+    function checkStuck() {
+        const idleMs = Date.now() - _lastIngestSuccess;
+        if (idleMs > STUCK_RELOAD_AFTER_MS) {
+            forceReload(`watchdog ${Math.round(idleMs / 1000)}s idle`);
+        }
+    }
+
+    // Self-rescheduling setTimeout chain. Slightly more robust under
+    // background-throttling than setInterval — each tick reschedules
+    // from the actual fire time, so drift can't accumulate quietly.
+    function scheduleNextStuckCheck() {
+        setTimeout(() => {
+            try { checkStuck(); } catch (e) {}
+            scheduleNextStuckCheck();
+        }, STUCK_CHECK_INTERVAL_MS);
+    }
+    scheduleNextStuckCheck();
+
+    // Backup setInterval — belt-and-suspenders in case the chained
+    // setTimeout drops a beat.
+    setInterval(() => { try { checkStuck(); } catch (e) {} }, STUCK_CHECK_INTERVAL_MS);
+
+    // Visibility change handler — fires the moment the tab is foregrounded.
+    // Catches the common case where the tab was hidden long enough for
+    // browser throttling to stall the timers entirely.
+    try {
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                log('tab visible — running stuck check');
+                checkStuck();
+            }
+        });
+        pageWin.addEventListener('focus', checkStuck);
+    } catch (e) { log('visibility hook fail:', e); }
+
+    log('NSWPSN Waze Forwarder v1.17 loaded — backend:', BACKEND_URL,
+        `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
+        `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
+        `· check every ${STUCK_CHECK_INTERVAL_MS / 1000}s + on visibility`);
 })();
