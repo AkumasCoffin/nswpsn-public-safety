@@ -5728,6 +5728,12 @@ function initPagerHoursFromStorage() {
     const HEX_ORIGIN_LNG = 150.0;
     const HEX_ORIGIN_LNG_SCALE = 1 / Math.cos(HEX_ORIGIN_LAT * Math.PI / 180);
 
+    // Shared canvas renderer for the heatmap layer. Hexes are rendered
+    // onto a single canvas instead of separate SVG paths — handles
+    // tens of thousands of polygons easily where SVG bogs down at a
+    // few thousand. Tooltips still work via Leaflet's pointer hit-test.
+    const _heatmapCanvasRenderer = L.canvas({ padding: 0.2 });
+
     // Adaptive hex-grid renderer. Tiles the current viewport with
     // flat-top hexes from a fixed origin, buckets the server's bin
     // counts into them, and renders ALL cells — empty ones as faint
@@ -5774,11 +5780,10 @@ function initPagerHoursFromStorage() {
       // when the user pans.
       const qMin = Math.floor((west - HEX_ORIGIN_LNG) / COL_STEP_LNG) - 1;
       const qMax = Math.ceil((east - HEX_ORIGIN_LNG) / COL_STEP_LNG) + 1;
-      // Cell-count guard. Bumped from 4k to 8k — at zoom 7 a wide NSW
-      // viewport with R=0.06 needs ~5400 cells; the previous cap was
-      // truncating the iteration mid-way and leaving the right-hand
-      // half of the screen empty.
-      const MAX_CELLS = 8000;
+      // Cell-count guard against pathological viewports. With the canvas
+      // renderer the practical browser limit is far higher than SVG's;
+      // 50k cells covers a wide NSW view at the smallest dynamic radius.
+      const MAX_CELLS = 50000;
       let rendered = 0;
       for (let q = qMin; q <= qMax && rendered < MAX_CELLS; q++) {
         const cellLng = HEX_ORIGIN_LNG + q * COL_STEP_LNG;
@@ -5793,6 +5798,7 @@ function initPagerHoursFromStorage() {
           const t = isEmpty ? 0 : Math.sqrt(count) / sqrtMax;
           const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
           const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
+            renderer: _heatmapCanvasRenderer,   // canvas, not SVG
             color: color,
             weight: isEmpty ? 0.4 : 1.2,
             opacity: isEmpty ? 0.35 : 0.95,
