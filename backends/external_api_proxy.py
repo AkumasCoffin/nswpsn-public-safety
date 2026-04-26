@@ -879,9 +879,13 @@ def _fetch_endeavour_all_outages():
             if iid and iid not in enrichment:
                 enrichment[iid] = pt
     
-    if DEV_MODE:
-        Log.prewarm(f"Endeavour: {len(areas)} incidents, {len(enrichment)} enriched")
-    
+    # Removed: redundant 'Endeavour: N incidents, N enriched' log. This
+    # function is called once per consumer (current / planned / future)
+    # so the line printed 3-4 times per prewarm cycle, while the per-
+    # consumer 'Endeavour <kind>: N outages from Supabase' lines that
+    # follow are more informative.
+
+
     # Step 3: Normalize and split into 3 categories
     current_outages = []           # Unplanned outages
     current_maintenance = []       # Planned maintenance currently active (start_date in past)
@@ -4138,9 +4142,17 @@ def _prewarm_fetch_pager():
         if PAGERMON_API_KEY:
             url = f"{PAGERMON_URL}?apikey={PAGERMON_API_KEY}&limit=100"
         
-        if DEV_MODE:
+        # Log the URL once per process — was firing every prewarm cycle
+        # because the prewarm scheduler hits this function on a loop.
+        global _pagermon_url_logged
+        try:
+            _pagermon_url_logged
+        except NameError:
+            _pagermon_url_logged = False
+        if DEV_MODE and not _pagermon_url_logged:
             Log.info(f"Pagermon URL: {url}")
-        
+            _pagermon_url_logged = True
+
         resp = requests.get(url, headers=headers, timeout=15)
         if not resp.ok:
             source_error('pager', f'HTTP {resp.status_code}')
@@ -8778,6 +8790,14 @@ def _continuous_cw_image_worker():
             if r and r.get('ok') and r.get('data'):
                 if _cache_result(r):
                     cached_total = len(_centralwatch_image_cache)
+                    # Recovery: this cid succeeded, so clear any stuck
+                    # 'Failed' entries for it so the next failure is logged.
+                    try:
+                        if '_failed_cameras_logged' in globals():
+                            for k in [k for k in _failed_cameras_logged if k[0] == cid]:
+                                _failed_cameras_logged.pop(k, None)
+                    except Exception:
+                        pass
                     if consecutive_429s > 0:
                         if DEV_MODE:
                             Log.info(f"Central Watch images: Rate limit cleared after {consecutive_429s} 429s")
@@ -8835,8 +8855,22 @@ def _continuous_cw_image_worker():
 
             else:
                 status = r.get('status', '?') if r else '?'
-                if DEV_MODE:
+                # Only log on state transition (cid wasn't already known
+                # to be failing). The same camera retrying every 30s with
+                # the same 403 was producing dozens of identical lines
+                # per minute. _failed_cameras_logged tracks which cids
+                # we've already complained about; a successful fetch
+                # below clears the entry on recovery so the next failure
+                # is logged again.
+                global _failed_cameras_logged
+                try:
+                    _failed_cameras_logged
+                except NameError:
+                    _failed_cameras_logged = {}
+                key = (cid, str(status))
+                if DEV_MODE and key not in _failed_cameras_logged:
                     Log.info(f"Central Watch images: Failed {cid[:8]}.. (HTTP {status})")
+                    _failed_cameras_logged[key] = True
                 drip_delay = _CW_DRIP_SUCCESS_DELAY
             
             # Periodic summary
@@ -9570,8 +9604,28 @@ def waze_ingest():
             _waze_stale_alerted = False
             Log.info("Waze ✓ Ingest resumed — clearing stale flag")
 
+    # Per-ingest line was firing every ~3s in DEV_MODE — too noisy. Now
+    # accumulate into a rolling counter and emit one summary every 30s.
     if DEV_MODE:
-        Log.info(f"Waze ▶ Ingest bbox={key} alerts={len(alerts)} jams={len(jams)} (regions cached: {n_regions})")
+        global _waze_ingest_summary
+        try:
+            _waze_ingest_summary
+        except NameError:
+            _waze_ingest_summary = {'count': 0, 'alerts': 0, 'jams': 0,
+                                     'regions': 0, 'last_log': 0.0}
+        _waze_ingest_summary['count']   += 1
+        _waze_ingest_summary['alerts']  += len(alerts)
+        _waze_ingest_summary['jams']    += len(jams)
+        _waze_ingest_summary['regions']  = n_regions
+        if (now_ts - _waze_ingest_summary.get('last_log', 0)) >= 30:
+            s = _waze_ingest_summary
+            Log.info(
+                f"Waze ▶ Ingest summary (last 30s): {s['count']} ingests, "
+                f"{s['alerts']} alerts, {s['jams']} jams "
+                f"(regions cached: {s['regions']})"
+            )
+            _waze_ingest_summary = {'count': 0, 'alerts': 0, 'jams': 0,
+                                     'regions': n_regions, 'last_log': now_ts}
 
     # Per-region 'gone' reconcile: any archived Waze record inside this bbox
     # whose uuid isn't in the payload is cleared immediately. Failures here
