@@ -9403,31 +9403,34 @@ def waze_police_heatmap():
 
 
 def _refresh_police_heatmap_cache():
-    """Rebuild police_heatmap_cache from data_history. Runs in a background
-    thread, no statement_timeout — can take a while on a busy DB without
-    blocking request handlers."""
+    """Rebuild police_heatmap_cache from data_history.
+
+    Two-phase to avoid blocking readers:
+      1. Slow read aggregates data_history into Python memory. NO transaction
+         on the cache table — readers continue hitting the previous snapshot.
+      2. Quick swap: TRUNCATE + bulk-insert the in-memory rows in a small
+         autocommit transaction. ACCESS EXCLUSIVE held for milliseconds, not
+         the full 60s+ that the upstream aggregation can take under
+         contention.
+    """
     cutoff = int(time.time()) - (_POLICE_HEATMAP_WINDOW_DAYS * 86400)
     bin_deg = _POLICE_HEATMAP_BIN_DEG
 
+    # ---- Phase 1: slow read, no cache-table locks ------------------------
+    rows = []
     conn = get_conn()
     try:
         cur = conn.cursor()
-        # Generous timeout — this is the heavy aggregation. Background
-        # only, so a slow run doesn't hurt anyone.
-        cur.execute("SET LOCAL statement_timeout = '180s'")
-        cur.execute("SET LOCAL lock_timeout = '5s'")
-        # Atomic swap inside a single transaction. TRUNCATE + INSERT ... SELECT
-        # is faster than DELETE + INSERT and grabs less WAL.
-        cur.execute('TRUNCATE police_heatmap_cache')
+        # Background thread, generous timeout. statement_timeout (not
+        # SET LOCAL) so it carries through autocommit reads.
+        cur.execute("SET statement_timeout = '300s'")
         cur.execute(
             '''
-            INSERT INTO police_heatmap_cache (lat_bin, lng_bin, subcategory, count, updated_at)
             SELECT
                 ROUND(latitude::numeric  / %s) * %s AS lat_bin,
                 ROUND(longitude::numeric / %s) * %s AS lng_bin,
                 COALESCE(subcategory, '') AS sub,
-                COUNT(*),
-                now()
+                COUNT(*) AS cnt
             FROM data_history
             WHERE is_latest = 1
               AND source = 'waze_police'
@@ -9441,18 +9444,57 @@ def _refresh_police_heatmap_cache():
             [bin_deg, bin_deg, bin_deg, bin_deg, cutoff,
              bin_deg, bin_deg, bin_deg, bin_deg],
         )
+        rows = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        Log.error(f"Police heatmap cache aggregation error: {e}")
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # ---- Phase 2: brief swap. ACCESS EXCLUSIVE only for the milliseconds
+    # the TRUNCATE + bulk INSERT actually takes. Even with 5000+ rows this
+    # is fast because there's no upstream join/aggregation to wait on.
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '30s'")
+        cur.execute("SET LOCAL lock_timeout = '10s'")
+        cur.execute('TRUNCATE police_heatmap_cache')
+        if rows:
+            try:
+                from psycopg2.extras import execute_values
+                execute_values(
+                    cur,
+                    'INSERT INTO police_heatmap_cache '
+                    '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES %s',
+                    [(r[0], r[1], r[2], int(r[3]), datetime.now()) for r in rows],
+                    page_size=1000,
+                )
+            except ImportError:
+                # Fallback if psycopg2.extras isn't available — slower, but works.
+                args_str = b','.join(
+                    cur.mogrify('(%s,%s,%s,%s,now())',
+                                (r[0], r[1], r[2], int(r[3]))) for r in rows
+                ).decode('utf-8')
+                cur.execute(
+                    'INSERT INTO police_heatmap_cache '
+                    '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES '
+                    + args_str
+                )
         conn.commit()
         if DEV_MODE:
-            cur.execute('SELECT COUNT(*) FROM police_heatmap_cache')
-            n = cur.fetchone()[0]
-            Log.cleanup(f"Police heatmap cache refreshed — {n} bins")
+            Log.cleanup(f"Police heatmap cache refreshed — {len(rows)} bins")
         cur.close()
     except Exception as e:
         try:
             conn.rollback()
         except Exception:
             pass
-        Log.error(f"Police heatmap cache refresh error: {e}")
+        Log.error(f"Police heatmap cache swap error: {e}")
     finally:
         conn.close()
 
