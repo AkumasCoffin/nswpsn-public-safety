@@ -1127,6 +1127,11 @@
     let totalEndedCount = 0;
     let isLoading = false;
     let selectedIncident = null;
+    // Cursor returned by the backend with the previous page's response.
+    // Used by the Next button so sequential paging is constant-time on
+    // the server (offset-based pages 500+ time out at 25s).
+    let nextCursor = null;
+    let lastShownPage = 0; // page that nextCursor advances from
     let map = null;
     let marker = null;
     let autoRefreshTimer = null;
@@ -2254,16 +2259,40 @@
       if (isLoading) return;
       if (typeof umami !== 'undefined') umami.track('logs-search', { page: page });
       isLoading = true;
-      
+
+      const previousPage = currentPage;
       currentPage = page;
-      const offset = (page - 1) * pageSize;
       showLoading();
-      
+
+      // Any non-incremental jump invalidates the saved cursor — it
+      // describes a position relative to a specific filter+order pair.
+      if (page !== lastShownPage + 1) {
+        nextCursor = null;
+      }
+
+      // Sequential forward step (Next button) — use the cursor we got
+      // back with the previous response. Constant-time on the server.
+      const useCursor = (page === lastShownPage + 1) && !!nextCursor;
+      // Last-page jump — use ascending order to grab the chronologically
+      // oldest pageSize records, which is exactly the "last" page in a
+      // descending listing. Avoids the deep-offset seq-scan entirely.
+      // We reverse the records client-side before rendering.
+      const asLastPage = (page === totalPages && totalPages > 1 && !useCursor);
+      const reverseDisplay = asLastPage;
+
       const params = new URLSearchParams();
       params.set('limit', pageSize);
-      params.set('offset', offset);
-      params.set('order', 'desc');
       params.set('unique', '1');
+      if (useCursor) {
+        params.set('cursor', nextCursor);
+        params.set('order', 'desc');
+      } else if (asLastPage) {
+        params.set('order', 'asc');
+      } else {
+        const offset = (page - 1) * pageSize;
+        params.set('offset', offset);
+        params.set('order', 'desc');
+      }
       // full=1 pulls the JSONB `data` column so list rows can render per-source
       // detail badges (pager message, waze street/city, endeavour suburb, etc.)
       params.set('full', '1');
@@ -2339,20 +2368,43 @@
       try {
         console.log('Searching with params:', params.toString());
         const res = await apiFetch(`${API_BASE}/api/data/history?${params}`);
-        
+
+        if (res.status === 400) {
+          // Server-side offset cap — only fires if cursor wasn't usable
+          // (e.g. user typed a page number directly). Surface the
+          // backend's hint instead of a silent failure.
+          let body = {};
+          try { body = await res.json(); } catch (_) {}
+          if (body && body.error === 'offset_too_large') {
+            console.warn('offset cap hit:', body.message);
+            currentPage = previousPage;
+            alert('That page is too far in for offset paging. Try Next/Prev or narrow the date range.');
+            return;
+          }
+        }
         if (!res.ok) {
           console.error('API error:', res.status, res.statusText);
           throw new Error(`API returned ${res.status}`);
         }
-        
+
         const data = await res.json();
         console.log('API response:', { total: data.total, live: data.live_count, ended: data.ended_count, recordCount: data.records?.length });
-        
+
         totalResults = data.total || 0;
         totalLiveCount = data.live_count || 0;
         totalEndedCount = data.ended_count || 0;
         totalPages = Math.ceil(totalResults / pageSize) || 1;
-        currentPageResults = data.records || [];
+        let recs = data.records || [];
+        if (reverseDisplay) {
+          // Asc-order trick — server returned the chronologically oldest
+          // pageSize records; flip them so the user sees descending dates
+          // like every other page.
+          recs = recs.slice().reverse();
+        }
+        currentPageResults = recs;
+        // Update cursor state so the next sequential click can use it.
+        nextCursor = data.next_cursor || null;
+        lastShownPage = currentPage;
         
         renderResults();
         updateStats();
@@ -2380,6 +2432,8 @@
     function changePageSize(newSize) {
       pageSize = parseInt(newSize, 10) || 20;
       currentPage = 1;
+      nextCursor = null;
+      lastShownPage = 0;
       performSearch(1);
     }
     
