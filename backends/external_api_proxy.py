@@ -1310,6 +1310,15 @@ def init_archive_db():
         daemon=True,
         name='police-heatmap-scheduler',
     ).start()
+    # Pre-warm the /api/data/history count cache for the logs page
+    # default query (hours=24, unique=1, no filters). Without this the
+    # first user click after a restart sees a 40s wait or stale-fallback
+    # warning. Background thread so it doesn't block startup.
+    threading.Thread(
+        target=_prewarm_data_history_count_cache,
+        daemon=True,
+        name='count-cache-prewarm',
+    ).start()
 
 
 # ==================== PERSISTENT DATA CACHE ====================
@@ -10615,6 +10624,48 @@ def _data_history_count_cache_set(key, total, live, ended):
         }
 
 
+def _prewarm_data_history_count_cache():
+    """Background warm-up of the count cache for the logs-page default
+    query (hours=24, unique=1, no other filters). Wait briefly so other
+    startup tasks settle first, then run the count with a generous
+    timeout. If the result lands the cache is hot for the first user
+    click; if it times out we'll just retry on the next refresh cycle."""
+    time.sleep(20)  # let startup migrations / first-archive-pass settle
+    cutoff = int(time.time()) - 24 * 3600
+    actual_where = "(fetched_at >= %s) AND is_latest = 1"
+    params = [cutoff]
+    cache_key = (actual_where, tuple(params), 'all')
+    pager_cutoff = int(time.time()) - 3600
+    try:
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute("SET LOCAL statement_timeout = '120s'")
+            c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+            total = c.fetchone()[0] or 0
+            c.execute(f'''
+                SELECT
+                    COUNT(*) FILTER (WHERE
+                        (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                        OR (source != 'pager' AND is_live = 1)
+                    ),
+                    COUNT(*) FILTER (WHERE
+                        (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                        OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                    )
+                FROM data_history WHERE {actual_where}
+            ''', params)
+            row = c.fetchone()
+            live, ended = (row[0] or 0), (row[1] or 0)
+            _data_history_count_cache_set(cache_key, total, live, ended)
+            if DEV_MODE:
+                Log.startup(f"data/history count cache prewarmed — total={total}")
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"data/history count prewarm skipped: {e}")
+
+
 @app.route('/api/data/history')
 def data_history():
     """
@@ -10893,7 +10944,7 @@ def data_history():
                     conn = get_conn()
                     try:
                         c = conn.cursor()
-                        c.execute("SET LOCAL statement_timeout = '15s'")
+                        c.execute("SET LOCAL statement_timeout = '40s'")
                         c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
                         db_total = c.fetchone()[0] or 0
                         total += db_total
@@ -10913,7 +10964,7 @@ def data_history():
                     conn = get_conn()
                     try:
                         c = conn.cursor()
-                        c.execute("SET LOCAL statement_timeout = '15s'")
+                        c.execute("SET LOCAL statement_timeout = '40s'")
                         c.execute(f'''
                             SELECT
                                 COUNT(*) FILTER (WHERE
@@ -11250,7 +11301,12 @@ def _refresh_filter_cache():
         conn = get_conn()
         try:
             c = conn.cursor()
-            c.execute("SET LOCAL statement_timeout = '60s'")
+            # Background task — give it a generous budget. The 5 GROUP BYs
+            # over is_latest=1 rows can run long when archive UPDATEs leave
+            # the visibility map dirty; failing the refresh just leaves the
+            # filter dropdown stale, so it's worth waiting longer rather
+            # than hammering retries.
+            c.execute("SET LOCAL statement_timeout = '180s'")
 
             # Sources (no source scope — top-level list)
             c.execute(f'''
