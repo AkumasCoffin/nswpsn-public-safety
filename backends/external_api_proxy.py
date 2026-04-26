@@ -1374,6 +1374,16 @@ def init_archive_db():
         daemon=True,
         name='filter-cache-scheduler',
     ).start()
+    # Buffered archive writer (Option B). Source workers push into
+    # _archive_buffer via store_incidents_batch(); this single thread
+    # drains every ARCHIVE_FLUSH_INTERVAL seconds and is the only caller
+    # of _store_incidents_batch_inner — eliminates per-source DB-write
+    # contention on prewarm.
+    threading.Thread(
+        target=_archive_writer_loop,
+        daemon=True,
+        name='archive-writer',
+    ).start()
     # Hydrate the police-heatmap RAM cache from Postgres so the endpoint
     # is hot the moment the backend is up — avoids a "warming" window.
     try:
@@ -1699,89 +1709,203 @@ def _compute_data_hash(inc):
     return hashlib.md5(hash_str.encode()).hexdigest()[:16]
 
 
+# ==================== BUFFERED ARCHIVE WRITER ====================
+# Source workers used to call _store_incidents_batch_inner directly via
+# store_incidents_batch, which meant ~9 workers all hitting data_history at
+# once on prewarm (per-source DB write latency stacked). Option B routes
+# every store_incidents_batch() call through this in-memory buffer, and a
+# single dedicated writer thread (`archive-writer`) drains it every
+# ARCHIVE_FLUSH_INTERVAL seconds. Within one drain cycle, batches for the
+# same source are concatenated into one bigger DB call — fewer round trips,
+# and zero lock contention because there is exactly one writer.
+#
+# Trade-off: up to ARCHIVE_FLUSH_INTERVAL seconds of records can be lost
+# on hard crash. Live API endpoints are NOT affected — they read from
+# api_data_cache (set synchronously by the prewarm fetch path), not from
+# data_history.
+ARCHIVE_FLUSH_INTERVAL = int(os.environ.get('ARCHIVE_FLUSH_INTERVAL', '30'))
+_ARCHIVE_BUFFER_MAX_RECORDS = 50_000  # hard cap to bound RAM
+_archive_buffer = []  # list of (records, source_type) tuples
+_archive_buffer_records = 0  # running record count, kept in sync with the list
+_archive_buffer_lock = threading.Lock()
+
+# Friendly names for archive logging — also used by the writer thread.
+_ARCHIVE_NAMES = {
+    'rfs': 'RFS',
+    'traffic_incident': 'Traffic',
+    'traffic_roadwork': 'Roadwork',
+    'traffic_flood': 'Floods',
+    'traffic_fire': 'Traffic Fire',
+    'traffic_majorevent': 'Major Events',
+    'waze_hazard': 'Waze Hazards',
+    'waze_police': 'Waze Police',
+    'waze_roadwork': 'Waze Roadwork',
+    'waze_jam': 'Waze Jams',
+    'endeavour_current': 'Endeavour',
+    'endeavour_planned': 'Endeavour Planned',
+    'ausgrid': 'Ausgrid',
+    'bom_warning': 'BOM Warnings',
+}
+
+
 def store_incidents_batch(incidents, source_type=None):
     """
-    Store multiple incidents in a single transaction with DEDUPLICATION.
-    
-    Only inserts a new row if:
-    1. It's a new incident (never seen this source+source_id before), OR
-    2. The data has changed since the last snapshot
-    
-    Also tracks is_live status:
-    - All incidents in this batch are marked as is_live=1 (still in API)
-    - Incidents from this source_type NOT in this batch are marked is_live=0
-    
+    Queue a batch of incidents for the dedicated archive writer thread.
+
+    NOTE (Option B): this no longer writes to data_history synchronously.
+    It appends (incidents, source_type) to an in-memory buffer; the
+    `archive-writer` thread drains the buffer every ARCHIVE_FLUSH_INTERVAL
+    seconds and calls _store_incidents_batch_inner there.
+
+    Returns a synthetic stats dict so existing callers that read
+    result['new'] / ['changed'] / ['ended'] / ['unchanged'] don't crash.
+    The 'queued': True marker lets callers distinguish a deferred write
+    from a synchronous one if they care; nothing today does.
+
     Args:
         incidents: List of dicts with keys matching store_incident params
-        source_type: The source type (e.g., 'rfs', 'traffic_incident') - used to mark
-                     missing incidents as no longer live
-    
+        source_type: The source type (e.g., 'rfs', 'traffic_incident')
+
     Returns:
-        dict: {'total': int, 'new': int, 'changed': int, 'unchanged': int, 'ended': int}
+        dict: {'total': int, 'new': 0, 'changed': 0, 'unchanged': 0,
+               'ended': 0, 'queued': True}
     """
     if not incidents:
-        return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
-    
+        return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0, 'queued': True}
+
     # Determine source for logging
     src = source_type or (incidents[0].get('source') if incidents else 'unknown')
-    
-    # Friendly names for archive logging
-    ARCHIVE_NAMES = {
-        'rfs': 'RFS',
-        'traffic_incident': 'Traffic',
-        'traffic_roadwork': 'Roadwork',
-        'traffic_flood': 'Floods',
-        'traffic_fire': 'Traffic Fire',
-        'traffic_majorevent': 'Major Events',
-        'waze_hazard': 'Waze Hazards',
-        'waze_police': 'Waze Police',
-        'waze_roadwork': 'Waze Roadwork',
-        'waze_jam': 'Waze Jams',
-        'endeavour_current': 'Endeavour',
-        'endeavour_planned': 'Endeavour Planned',
-        'ausgrid': 'Ausgrid',
-        'bom_warning': 'BOM Warnings',
-    }
-    name = ARCHIVE_NAMES.get(src, src)
-    
-    # Log archive start in dev mode (verbose)
+    name = _ARCHIVE_NAMES.get(src, src)
+    n = len(incidents)
+
+    global _archive_buffer_records
+    dropped = 0
+    with _archive_buffer_lock:
+        # Bounded memory: if appending this batch would blow past the cap,
+        # drop oldest queued batches first. This is a coarse defense — the
+        # writer drains every ARCHIVE_FLUSH_INTERVAL seconds, so under
+        # normal load the buffer never gets close to the cap.
+        while _archive_buffer and (_archive_buffer_records + n) > _ARCHIVE_BUFFER_MAX_RECORDS:
+            old_records, _old_src = _archive_buffer.pop(0)
+            dropped += len(old_records)
+            _archive_buffer_records -= len(old_records)
+        _archive_buffer.append((incidents, source_type))
+        _archive_buffer_records += n
+
+    if dropped:
+        Log.warn(f"Archive buffer full ({_ARCHIVE_BUFFER_MAX_RECORDS} cap): "
+                 f"dropped {dropped} oldest records to make room for {name}")
+
+    # Log archive queueing in dev mode (verbose)
     if DEV_MODE:
-        Log.data(f"📥 {name} archiving {len(incidents)} incidents...")
-    
+        Log.data(f"📥 {name} queued {n} incidents")
+
+    return {'total': n, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0, 'queued': True}
+
+
+def _archive_writer_drain_once():
+    """Swap the buffer out under the lock, group by source, write each group.
+
+    Returns (sources_written, total_records, elapsed_ms). Called by the
+    writer loop and once more at shutdown.
+    """
+    global _archive_buffer_records
+    with _archive_buffer_lock:
+        if not _archive_buffer:
+            return (0, 0, 0)
+        pending = _archive_buffer[:]
+        _archive_buffer.clear()
+        _archive_buffer_records = 0
+
+    # Group by source so two batches for the same source within one cycle
+    # become one DB call. Preserve insertion order within a source.
+    grouped = {}
+    order = []
+    for records, src in pending:
+        if src is None and records:
+            src = records[0].get('source')
+        if src not in grouped:
+            grouped[src] = []
+            order.append(src)
+        grouped[src].extend(records)
+
+    start = time.time()
+    total_records = 0
+    sources_written = 0
+    for src in order:
+        recs = grouped[src]
+        if not recs:
+            continue
+        try:
+            _store_incidents_batch_inner_with_retry(recs, src)
+            sources_written += 1
+            total_records += len(recs)
+        except Exception as e:
+            # One bad source must not break the others — log and move on.
+            name = _ARCHIVE_NAMES.get(src, src)
+            Log.error(f"Archive writer: {name} flush failed: {e}")
+
+    elapsed_ms = int((time.time() - start) * 1000)
+    return (sources_written, total_records, elapsed_ms)
+
+
+def _store_incidents_batch_inner_with_retry(incidents, source_type):
+    """Wrap _store_incidents_batch_inner with the same retry-on-deadlock
+    logic that store_incidents_batch used to do synchronously. Lives here
+    (not in the inner function) so the inner function stays pure-write.
+    """
     max_retries = 3
     retry_delay = 1.0
-    start_time = time.time()
-    
     for attempt in range(max_retries):
         try:
-            result = _store_incidents_batch_inner(incidents, source_type)
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            
-            # Log archive results in dev (prewarm_single logs per-source in prod)
-            if DEV_MODE:
-                ended_str = f", Ended: {result['ended']}" if result['ended'] > 0 else ""
-                Log.data(f"📦 {name}: New: {result['new']}, Old: {result['unchanged']}, Upd: {result['changed']}{ended_str} [{elapsed_ms}ms]")
-            
-            return result
+            return _store_incidents_batch_inner(incidents, source_type)
         except psycopg2.OperationalError as e:
             msg = str(e).lower()
             transient = ('locked' in msg or 'deadlock' in msg
                          or 'serialization' in msg)
             if transient and attempt < max_retries - 1:
-                Log.warn(f"Database transient error, retrying in {retry_delay}s "
+                Log.warn(f"Archive writer transient DB error, retrying in {retry_delay}s "
                          f"(attempt {attempt + 1}/{max_retries}): {e}")
                 time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
+                retry_delay *= 2
             else:
-                Log.error(f"DataHistory batch store error: {e}")
-                return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+                raise
+
+
+def _archive_writer_loop():
+    """Dedicated archive writer thread. Drains _archive_buffer every
+    ARCHIVE_FLUSH_INTERVAL seconds; one final drain on shutdown."""
+    Log.startup(f"Archive writer started (flush every {ARCHIVE_FLUSH_INTERVAL}s, "
+                f"buffer cap {_ARCHIVE_BUFFER_MAX_RECORDS:,} records)")
+    while not _shutdown_event.is_set():
+        # _shutdown_event.wait returns True when set — exit loop, but still
+        # do one last drain below to flush any buffered records.
+        if _shutdown_event.wait(timeout=ARCHIVE_FLUSH_INTERVAL):
+            break
+        try:
+            sources, total, elapsed = _archive_writer_drain_once()
+            if sources or total:
+                Log.data(f"📦 Archive flush: {sources} sources, {total} records [{elapsed}ms]")
         except Exception as e:
-            Log.error(f"DataHistory batch store error: {e}")
-            return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
-    return {'total': 0, 'new': 0, 'changed': 0, 'unchanged': 0, 'ended': 0}
+            Log.error(f"Archive writer loop error: {e}")
+
+    # Shutdown drain — best effort, don't let an exception swallow the
+    # process exit path.
+    try:
+        sources, total, elapsed = _archive_writer_drain_once()
+        if sources or total:
+            Log.data(f"📦 Archive flush (shutdown): {sources} sources, {total} records [{elapsed}ms]")
+    except Exception as e:
+        Log.error(f"Archive writer shutdown drain error: {e}")
 
 def _store_incidents_batch_inner(incidents, source_type=None):
-    """Inner function for store_incidents_batch - uses source-specific history DB"""
+    """Inner function for store_incidents_batch - uses source-specific history DB.
+
+    Option B: this is now invoked only from the dedicated `archive-writer`
+    thread (via _store_incidents_batch_inner_with_retry). Source workers
+    call store_incidents_batch() which only enqueues into _archive_buffer.
+    Because there is exactly one writer, the previous lock-contention
+    chokepoint is gone."""
     gone_ids = set()  # Track incidents that are no longer live
     try:
         fetched_at = int(time.time())
