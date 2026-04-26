@@ -1333,8 +1333,11 @@ def init_archive_db():
 # SQLite-backed cache that survives restarts and is pre-warmed in background
 
 def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
-    """Store data in persistent PostgreSQL cache"""
+    """Store data in persistent PostgreSQL cache. Also seeds the RAM
+    layer so a write is immediately visible to subsequent cache_get()
+    callers without a Postgres round-trip."""
     conn = None
+    timestamp = int(time.time())
     try:
         with _db_lock_cache:
             conn = get_conn()
@@ -1343,8 +1346,10 @@ def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
                 INSERT INTO api_data_cache (endpoint, data, timestamp, ttl, fetch_time_ms)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (endpoint) DO UPDATE SET data = EXCLUDED.data, timestamp = EXCLUDED.timestamp, ttl = EXCLUDED.ttl, fetch_time_ms = EXCLUDED.fetch_time_ms
-            ''', (endpoint, json.dumps(data), int(time.time()), ttl, fetch_time_ms))
+            ''', (endpoint, json.dumps(data), timestamp, ttl, fetch_time_ms))
             conn.commit()
+        with _CACHE_GET_RAM_LOCK:
+            _CACHE_GET_RAM[endpoint] = (data, timestamp, ttl, timestamp)
         return True
     except Exception as e:
         Log.cache(f"Set error for {endpoint}: {e}")
@@ -1354,11 +1359,50 @@ def cache_set(endpoint, data, ttl=60, fetch_time_ms=0):
             try: conn.close()
             except Exception: pass
 
+# In-process RAM layer in front of the Postgres cache. Bot + browser
+# poll most endpoints every 30-60s, and each handler calls cache_get()
+# 1-2 times — that's 30-50 Postgres SELECTs/min on api_data_cache even
+# when nothing changed. A 5-second RAM TTL dedupes rapid repeat polls
+# down to a single DB read per endpoint per ~5s, with no impact on
+# perceived data freshness (the underlying TTLs are 60s+).
+_CACHE_GET_RAM = {}             # endpoint -> (data, db_timestamp, ttl, fetched_at)
+_CACHE_GET_RAM_LOCK = threading.Lock()
+_CACHE_GET_RAM_TTL = 5          # seconds — short, just dedupe burst traffic
+_CACHE_GET_RAM_HITS = 0         # debug counters
+_CACHE_GET_RAM_MISSES = 0
+
+
+def _cache_get_ram_invalidate(endpoint):
+    """Drop the RAM entry so the next reader hits Postgres for fresh data."""
+    with _CACHE_GET_RAM_LOCK:
+        _CACHE_GET_RAM.pop(endpoint, None)
+
+
 def cache_get(endpoint):
     """
     Get data from persistent cache.
     Returns: (data, age_seconds, is_expired)
+
+    Layered: 5-second in-process RAM cache in front of the Postgres
+    cache, so repeated polls for the same endpoint within ~5s share
+    a single DB read.
     """
+    global _CACHE_GET_RAM_HITS, _CACHE_GET_RAM_MISSES
+    now = int(time.time())
+
+    # RAM hit path — instant, no DB.
+    with _CACHE_GET_RAM_LOCK:
+        ram = _CACHE_GET_RAM.get(endpoint)
+        if ram is not None and (now - ram[3]) < _CACHE_GET_RAM_TTL:
+            data, db_ts, ttl, _fetched_at = ram
+            _CACHE_GET_RAM_HITS += 1
+            if data is None:
+                return None, 0, True
+            age = now - db_ts
+            return data, age, age >= ttl
+
+    # RAM miss — fall through to Postgres.
+    _CACHE_GET_RAM_MISSES += 1
     conn = None
     try:
         conn = get_conn()
@@ -1367,9 +1411,16 @@ def cache_get(endpoint):
         row = c.fetchone()
         if row:
             data_str, timestamp, ttl = row
-            age = int(time.time()) - timestamp
+            data = json.loads(data_str)
+            age = now - timestamp
             is_expired = age >= ttl
-            return json.loads(data_str), age, is_expired
+            with _CACHE_GET_RAM_LOCK:
+                _CACHE_GET_RAM[endpoint] = (data, timestamp, ttl, now)
+            return data, age, is_expired
+        # Negative cache the miss too — prevents repeated DB hits for
+        # endpoints that genuinely have no cached value yet.
+        with _CACHE_GET_RAM_LOCK:
+            _CACHE_GET_RAM[endpoint] = (None, 0, 0, now)
         return None, 0, True
     except Exception as e:
         Log.cache(f"Get error for {endpoint}: {e}")
