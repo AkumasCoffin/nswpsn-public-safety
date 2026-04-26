@@ -10752,6 +10752,77 @@ def _data_history_count_cache_set(key, total, live, ended):
         }
 
 
+# Track in-flight async refreshes per cache key so the same query
+# isn't re-issued repeatedly when many users land on the page at once.
+_DATA_HISTORY_COUNT_INFLIGHT = set()
+_DATA_HISTORY_COUNT_INFLIGHT_LOCK = threading.Lock()
+
+
+def _async_refresh_data_history_count(cache_key, actual_where, params,
+                                       live_only, historical_only, pager_cutoff):
+    """Kick off a background thread that runs the slow COUNT(*) and
+    populates the cache. The user request returns immediately with the
+    stale or estimated value — refresh is fire-and-forget."""
+    with _DATA_HISTORY_COUNT_INFLIGHT_LOCK:
+        if cache_key in _DATA_HISTORY_COUNT_INFLIGHT:
+            return  # another worker is already on it
+        _DATA_HISTORY_COUNT_INFLIGHT.add(cache_key)
+
+    def _worker():
+        try:
+            total = 0
+            live = 0
+            ended = 0
+            try:
+                conn = get_conn()
+                try:
+                    c = conn.cursor()
+                    c.execute("SET LOCAL statement_timeout = '90s'")
+                    c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+                    total = c.fetchone()[0] or 0
+                finally:
+                    conn.close()
+            except Exception as e:
+                if DEV_MODE:
+                    Log.info(f"Async count refresh skipped (still bloated): {e}")
+                return  # leave the cache as-is
+            if live_only:
+                live = total
+            elif historical_only:
+                ended = total
+            else:
+                try:
+                    conn = get_conn()
+                    try:
+                        c = conn.cursor()
+                        c.execute("SET LOCAL statement_timeout = '90s'")
+                        c.execute(f'''
+                            SELECT
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                                    OR (source != 'pager' AND is_live = 1)
+                                ),
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                                )
+                            FROM data_history WHERE {actual_where}
+                        ''', params)
+                        row = c.fetchone()
+                        live = row[0] or 0
+                        ended = row[1] or 0
+                    finally:
+                        conn.close()
+                except Exception:
+                    pass  # keep the total; breakdown stays at 0
+            _data_history_count_cache_set(cache_key, total, live, ended)
+        finally:
+            with _DATA_HISTORY_COUNT_INFLIGHT_LOCK:
+                _DATA_HISTORY_COUNT_INFLIGHT.discard(cache_key)
+
+    threading.Thread(target=_worker, daemon=True, name='count-refresh').start()
+
+
 def _data_history_reltuples_estimate():
     """Instant row-count estimate from the planner's stats. Returns the
     pg_class.reltuples value — refreshed by ANALYZE / autovacuum, so it
@@ -11090,81 +11161,27 @@ def data_history():
             tuple(params),
             'live' if live_only else ('hist' if historical_only else 'all'),
         )
+        # Stale-while-revalidate: the request NEVER blocks on the slow
+        # count. We always serve the cached value (or a reltuples estimate
+        # if there's no cache yet), and if the cache is stale we kick off
+        # a background refresh. Pagination never stutters even if the DB
+        # is too bloated to count in 40s.
         cached_fresh = _data_history_count_cache_get(cache_key)
+        cached_stale = _data_history_count_cache_get(cache_key, allow_stale=True)
         if cached_fresh is not None:
             total = cached_fresh['total']
             live_count = cached_fresh['live']
             ended_count = cached_fresh['ended']
+        elif cached_stale is not None:
+            total = cached_stale['total']
+            live_count = cached_stale['live']
+            ended_count = cached_stale['ended']
+            _async_refresh_data_history_count(
+                cache_key, actual_where, list(params), live_only, historical_only, pager_cutoff)
         else:
-            count_failed = False
-            for db_path in dbs_to_query:
-                db_total = 0
-                try:
-                    conn = get_conn()
-                    try:
-                        c = conn.cursor()
-                        c.execute("SET LOCAL statement_timeout = '40s'")
-                        c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
-                        db_total = c.fetchone()[0] or 0
-                        total += db_total
-                    finally:
-                        conn.close()
-                except Exception as e:
-                    # Demoted to debug — with the cache + reltuples
-                    # fallback this isn't user-facing anymore, just an
-                    # expected sign that VACUUM hasn't caught up yet.
-                    if DEV_MODE:
-                        Log.info(f"Count slow/timeout — using cache: {e}")
-                    count_failed = True
-                    continue
-                if live_only:
-                    live_count += db_total
-                    continue
-                if historical_only:
-                    ended_count += db_total
-                    continue
-                try:
-                    conn = get_conn()
-                    try:
-                        c = conn.cursor()
-                        c.execute("SET LOCAL statement_timeout = '40s'")
-                        c.execute(f'''
-                            SELECT
-                                COUNT(*) FILTER (WHERE
-                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
-                                    OR (source != 'pager' AND is_live = 1)
-                                ) AS live_count,
-                                COUNT(*) FILTER (WHERE
-                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
-                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
-                                ) AS ended_count
-                            FROM data_history
-                            WHERE {actual_where}
-                        ''', params)
-                        row = c.fetchone()
-                        live_count += row[0] or 0
-                        ended_count += row[1] or 0
-                    finally:
-                        conn.close()
-                except Exception as e:
-                    Log.warn(f"Count breakdown slow/timeout: {e}")
-            # If the fast count failed, prefer a stale cached value over
-            # returning zero. Pagination then keeps working on a slightly
-            # out-of-date total instead of breaking entirely. Last-ditch
-            # fallback: pg_class.reltuples — the planner's row estimate.
-            # Drifts a bit but is always near-correct for the whole table
-            # and returns in <100ms, so the user always gets a sensible
-            # pagination total.
-            if count_failed and total == 0:
-                stale = _data_history_count_cache_get(cache_key, allow_stale=True)
-                if stale is not None:
-                    total = stale['total']
-                    live_count = stale['live']
-                    ended_count = stale['ended']
-                else:
-                    total = _data_history_reltuples_estimate()
-            else:
-                _data_history_count_cache_set(cache_key, total, live_count, ended_count)
+            total = _data_history_reltuples_estimate()
+            _async_refresh_data_history_count(
+                cache_key, actual_where, list(params), live_only, historical_only, pager_cutoff)
 
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
         # `data` is the heaviest column — pull it only if ?full=1.
