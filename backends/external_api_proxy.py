@@ -9249,6 +9249,121 @@ def waze_police():
     return jsonify(result)
 
 
+# --- Police heatmap -------------------------------------------------------
+# Aggregates historical waze_police rows by lat/lng bins (~110 m squares) so
+# the frontend can paint a heat density layer without shipping 60k points.
+# Cached in-memory because the data only updates every poll cycle and the
+# binning is the expensive part.
+
+_POLICE_HEATMAP_CACHE = {}        # cache_key -> (timestamp, payload)
+_POLICE_HEATMAP_CACHE_TTL = 300   # 5 min — police density doesn't shift fast
+_POLICE_HEATMAP_BIN_DEG = 0.001   # ~110 m at NSW latitudes
+_POLICE_HEATMAP_MAX_BINS = 5000   # output cap, keeps the JSON small
+_POLICE_HEATMAP_MAX_DAYS = 365
+_POLICE_VALID_SUBTYPES = {
+    'POLICE_VISIBLE', 'POLICE_HIDING', 'POLICE_WITH_MOBILE_CAMERA',
+}
+
+
+@app.route('/api/waze/police-heatmap')
+@require_api_key
+def waze_police_heatmap():
+    """Server-side aggregated heatmap of historical Waze police pings.
+
+    Query params:
+        days     int  — sliding window in days (default 30, max 365)
+        subtypes csv  — POLICE_VISIBLE, POLICE_HIDING, POLICE_WITH_MOBILE_CAMERA
+                        (omit or empty = all three)
+    Response:
+        {
+          "points":      [[lat, lng, count], ...],   // top N hottest bins
+          "total_records": int,                      // raw rows aggregated
+          "bin_size_deg":  0.001,                    // grid resolution
+          "max_count":     int,                      // hottest bin count
+          "days":          int,
+          "subtypes":      [...],
+        }
+    """
+    try:
+        days = max(1, min(_POLICE_HEATMAP_MAX_DAYS,
+                          int(request.args.get('days') or 30)))
+    except (TypeError, ValueError):
+        days = 30
+
+    raw_subtypes = (request.args.get('subtypes') or '').strip()
+    if raw_subtypes:
+        wanted = [s.strip().upper() for s in raw_subtypes.split(',') if s.strip()]
+        wanted = [s for s in wanted if s in _POLICE_VALID_SUBTYPES]
+    else:
+        wanted = []  # empty = all (no filter)
+
+    # Cache key — sorted subtypes so equivalent queries share a cache row.
+    cache_key = (days, tuple(sorted(wanted)))
+    now = time.time()
+    cached = _POLICE_HEATMAP_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _POLICE_HEATMAP_CACHE_TTL:
+        return jsonify(cached[1])
+
+    cutoff = int(now) - (days * 86400)
+    bin_deg = _POLICE_HEATMAP_BIN_DEG
+
+    sql = '''
+        SELECT
+            ROUND(latitude::numeric  / %s) * %s AS lat_bin,
+            ROUND(longitude::numeric / %s) * %s AS lng_bin,
+            COUNT(*) AS cnt
+        FROM data_history
+        WHERE source = 'waze_police'
+          AND fetched_at >= %s
+          AND latitude  IS NOT NULL
+          AND longitude IS NOT NULL
+    '''
+    params = [bin_deg, bin_deg, bin_deg, bin_deg, cutoff]
+    if wanted:
+        sql += ' AND subcategory = ANY(%s)'
+        params.append(wanted)
+    sql += ' GROUP BY lat_bin, lng_bin ORDER BY cnt DESC LIMIT %s'
+    params.append(_POLICE_HEATMAP_MAX_BINS)
+
+    points = []
+    total_records = 0
+    max_count = 0
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SET LOCAL statement_timeout = '20s'")
+        cur.execute(sql, params)
+        for lat_bin, lng_bin, cnt in cur.fetchall():
+            try:
+                lat_f = float(lat_bin); lng_f = float(lng_bin); cnt_i = int(cnt)
+            except (TypeError, ValueError):
+                continue
+            points.append([round(lat_f, 5), round(lng_f, 5), cnt_i])
+            total_records += cnt_i
+            if cnt_i > max_count:
+                max_count = cnt_i
+        cur.close()
+    finally:
+        conn.close()
+
+    payload = {
+        'points': points,
+        'total_records': total_records,
+        'bin_size_deg': bin_deg,
+        'max_count': max_count,
+        'days': days,
+        'subtypes': sorted(wanted) if wanted else sorted(_POLICE_VALID_SUBTYPES),
+    }
+    _POLICE_HEATMAP_CACHE[cache_key] = (now, payload)
+    # Bound the cache. Drop oldest when we exceed 32 entries.
+    if len(_POLICE_HEATMAP_CACHE) > 32:
+        oldest_key = min(_POLICE_HEATMAP_CACHE,
+                         key=lambda k: _POLICE_HEATMAP_CACHE[k][0])
+        _POLICE_HEATMAP_CACHE.pop(oldest_key, None)
+    return jsonify(payload)
+
+
 @app.route('/api/waze/roadwork')
 def waze_roadwork():
     """Waze construction and road closures (uses persistent cache)"""
