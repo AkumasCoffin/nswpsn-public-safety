@@ -1941,62 +1941,66 @@ def cleanup_old_data():
     try:
         with _db_lock_history_waze:  # Use any history lock for coordination
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Mark pager hits as ended if older than 1 hour
-            c.execute('''
-                UPDATE data_history
-                SET is_live = 0
-                WHERE source = 'pager' AND is_live = 1
-                AND COALESCE(source_timestamp_unix, fetched_at) < %s
-            ''', (pager_cutoff,))
-            pager_ended = c.rowcount
-            if pager_ended > 0:
-                Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
+            try:
+                c = conn.cursor()
 
-            # Waze failover: mark as ended if last_seen older than 1 hour.
-            # Per-batch diffing is disabled for Waze (incomplete rotations would
-            # flip everything off), so this is the only path that clears stale
-            # Waze records from the live set.
-            waze_cutoff = int(time.time()) - 3600
-            c.execute('''
-                UPDATE data_history
-                SET is_live = 0
-                WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
-                AND is_live = 1
-                AND COALESCE(last_seen, fetched_at) < %s
-            ''', (waze_cutoff,))
-            waze_ended = c.rowcount
-            if waze_ended > 0:
-                Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
-            
-            # Delete old data_history entries
-            c.execute('DELETE FROM data_history WHERE fetched_at < %s', (cutoff,))
-            deleted_history += c.rowcount
-            
-            # Delete records from deprecated sources
-            for dep_src in DEPRECATED_SOURCES:
-                c.execute('DELETE FROM data_history WHERE source = %s', (dep_src,))
-                if c.rowcount > 0:
-                    Log.cleanup(f"Removed {c.rowcount} deprecated {dep_src} records")
-            
-            conn.commit()
-            conn.close()
+                # Mark pager hits as ended if older than 1 hour
+                c.execute('''
+                    UPDATE data_history
+                    SET is_live = 0
+                    WHERE source = 'pager' AND is_live = 1
+                    AND COALESCE(source_timestamp_unix, fetched_at) < %s
+                ''', (pager_cutoff,))
+                pager_ended = c.rowcount
+                if pager_ended > 0:
+                    Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
+
+                # Waze failover: mark as ended if last_seen older than 1 hour.
+                # Per-batch diffing is disabled for Waze (incomplete rotations would
+                # flip everything off), so this is the only path that clears stale
+                # Waze records from the live set.
+                waze_cutoff = int(time.time()) - 3600
+                c.execute('''
+                    UPDATE data_history
+                    SET is_live = 0
+                    WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
+                    AND is_live = 1
+                    AND COALESCE(last_seen, fetched_at) < %s
+                ''', (waze_cutoff,))
+                waze_ended = c.rowcount
+                if waze_ended > 0:
+                    Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
+
+                # Delete old data_history entries
+                c.execute('DELETE FROM data_history WHERE fetched_at < %s', (cutoff,))
+                deleted_history += c.rowcount
+
+                # Delete records from deprecated sources
+                for dep_src in DEPRECATED_SOURCES:
+                    c.execute('DELETE FROM data_history WHERE source = %s', (dep_src,))
+                    if c.rowcount > 0:
+                        Log.cleanup(f"Removed {c.rowcount} deprecated {dep_src} records")
+
+                conn.commit()
+            finally:
+                conn.close()
     except Exception as e:
         Log.error(f"Cleanup history error: {e}")
-    
+
     # Clean up stats.db
     try:
         with _db_lock_stats:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Delete old stats_snapshots (convert ms to seconds for comparison)
-            c.execute('DELETE FROM stats_snapshots WHERE timestamp < %s', (cutoff * 1000,))
-            deleted_stats = c.rowcount
-            
-            conn.commit()
-            conn.close()
+            try:
+                c = conn.cursor()
+
+                # Delete old stats_snapshots (convert ms to seconds for comparison)
+                c.execute('DELETE FROM stats_snapshots WHERE timestamp < %s', (cutoff * 1000,))
+                deleted_stats = c.rowcount
+
+                conn.commit()
+            finally:
+                conn.close()
     except Exception as e:
         Log.error(f"Cleanup stats error: {e}")
     
@@ -2015,52 +2019,56 @@ def migrate_endeavour_categories():
     - endeavour_planned (future outages): ALWAYS 'planned' (these are scheduled outages)
     - endeavour_current: Use outageType field ("P"/"Planned" = planned, "U"/"Unplanned" = unplanned)
     """
+    planned_source_fixed = 0
+    current_planned_fixed = 0
+    current_unplanned_fixed = 0
     try:
         with _db_lock_history_power:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Check if migration is needed - look for any Endeavour records
-            c.execute("SELECT COUNT(*) FROM data_history WHERE source LIKE 'endeavour%'")
-            count = c.fetchone()[0]
-            
-            if count == 0:
+            try:
+                c = conn.cursor()
+
+                # Check if migration is needed - look for any Endeavour records
+                c.execute("SELECT COUNT(*) FROM data_history WHERE source LIKE 'endeavour%'")
+                count = c.fetchone()[0]
+
+                if count == 0:
+                    return 0
+
+                # RULE 1: endeavour_planned source = ALWAYS planned
+                # These are from get-future-outage API which only contains scheduled/planned outages
+                c.execute('''
+                    UPDATE data_history
+                    SET category = 'planned'
+                    WHERE source = 'endeavour_planned'
+                    AND category != 'planned'
+                ''')
+                planned_source_fixed = c.rowcount
+
+                # RULE 2: endeavour_current with outageType = "P" or "Planned" → planned
+                c.execute('''
+                    UPDATE data_history
+                    SET category = 'planned'
+                    WHERE source = 'endeavour_current'
+                    AND category != 'planned'
+                    AND (data::json)->>'outageType' IN ('P', 'Planned')
+                ''')
+                current_planned_fixed = c.rowcount
+
+                # RULE 3: endeavour_current with outageType = "U", "Unplanned", or null → unplanned
+                c.execute('''
+                    UPDATE data_history
+                    SET category = 'unplanned'
+                    WHERE source = 'endeavour_current'
+                    AND category != 'unplanned'
+                    AND ((data::json)->>'outageType' IN ('U', 'Unplanned') OR (data::json)->>'outageType' IS NULL)
+                ''')
+                current_unplanned_fixed = c.rowcount
+
+                conn.commit()
+            finally:
                 conn.close()
-                return 0
-            
-            # RULE 1: endeavour_planned source = ALWAYS planned
-            # These are from get-future-outage API which only contains scheduled/planned outages
-            c.execute('''
-                UPDATE data_history 
-                SET category = 'planned'
-                WHERE source = 'endeavour_planned' 
-                AND category != 'planned'
-            ''')
-            planned_source_fixed = c.rowcount
-            
-            # RULE 2: endeavour_current with outageType = "P" or "Planned" → planned
-            c.execute('''
-                UPDATE data_history 
-                SET category = 'planned'
-                WHERE source = 'endeavour_current' 
-                AND category != 'planned'
-                AND (data::json)->>'outageType' IN ('P', 'Planned')
-            ''')
-            current_planned_fixed = c.rowcount
-            
-            # RULE 3: endeavour_current with outageType = "U", "Unplanned", or null → unplanned
-            c.execute('''
-                UPDATE data_history 
-                SET category = 'unplanned'
-                WHERE source = 'endeavour_current' 
-                AND category != 'unplanned'
-                AND ((data::json)->>'outageType' IN ('U', 'Unplanned') OR (data::json)->>'outageType' IS NULL)
-            ''')
-            current_unplanned_fixed = c.rowcount
-            
-            conn.commit()
-            conn.close()
-        
+
         total_fixed = planned_source_fixed + current_planned_fixed + current_unplanned_fixed
         if total_fixed > 0:
             Log.info(f"🔧 Endeavour category migration: endeavour_planned→planned: {planned_source_fixed}, endeavour_current→planned: {current_planned_fixed}, endeavour_current→unplanned: {current_unplanned_fixed}")
@@ -2076,51 +2084,54 @@ def migrate_bom_sources():
     One-time migration to split bom_warning into bom_land and bom_marine 
     based on the category field or title content in the stored data.
     """
+    marine_fixed = 0
+    land_fixed = 0
     try:
         with _db_lock_history_weather:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Check if migration is needed
-            c.execute("SELECT COUNT(*) FROM data_history WHERE source = 'bom_warning'")
-            count = c.fetchone()[0]
-            
-            if count == 0:
+            try:
+                c = conn.cursor()
+
+                # Check if migration is needed
+                c.execute("SELECT COUNT(*) FROM data_history WHERE source = 'bom_warning'")
+                count = c.fetchone()[0]
+
+                if count == 0:
+                    return 0
+
+                Log.info(f"🔧 BOM migration: {count} records to migrate...")
+
+                # Update marine warnings based on category OR subcategory OR title content
+                c.execute('''
+                    UPDATE data_history
+                    SET source = 'bom_marine',
+                        source_type = 'Marine'
+                    WHERE source = 'bom_warning'
+                    AND (
+                        category = 'marine'
+                        OR subcategory = 'marine'
+                        OR LOWER(title) LIKE '%marine%'
+                        OR LOWER(title) LIKE '%surf%'
+                        OR LOWER(title) LIKE '%hazardous surf%'
+                        OR LOWER(title) LIKE '%gale%'
+                        OR LOWER(title) LIKE '%wind warning summary%'
+                    )
+                ''')
+                marine_fixed = c.rowcount
+
+                # Update remaining bom_warning records to bom_land (everything else is land)
+                c.execute('''
+                    UPDATE data_history
+                    SET source = 'bom_land',
+                        source_type = 'Land'
+                    WHERE source = 'bom_warning'
+                ''')
+                land_fixed = c.rowcount
+
+                conn.commit()
+            finally:
                 conn.close()
-                return 0
-            
-            Log.info(f"🔧 BOM migration: {count} records to migrate...")
-            
-            # Update marine warnings based on category OR subcategory OR title content
-            c.execute('''
-                UPDATE data_history 
-                SET source = 'bom_marine',
-                    source_type = 'Marine'
-                WHERE source = 'bom_warning' 
-                AND (
-                    category = 'marine' 
-                    OR subcategory = 'marine'
-                    OR LOWER(title) LIKE '%marine%'
-                    OR LOWER(title) LIKE '%surf%'
-                    OR LOWER(title) LIKE '%hazardous surf%'
-                    OR LOWER(title) LIKE '%gale%'
-                    OR LOWER(title) LIKE '%wind warning summary%'
-                )
-            ''')
-            marine_fixed = c.rowcount
-            
-            # Update remaining bom_warning records to bom_land (everything else is land)
-            c.execute('''
-                UPDATE data_history 
-                SET source = 'bom_land',
-                    source_type = 'Land'
-                WHERE source = 'bom_warning'
-            ''')
-            land_fixed = c.rowcount
-            
-            conn.commit()
-            conn.close()
-        
+
         total_fixed = marine_fixed + land_fixed
         if total_fixed > 0:
             Log.info(f"🔧 BOM source migration complete: {land_fixed} → bom_land, {marine_fixed} → bom_marine")
@@ -2136,42 +2147,43 @@ def migrate_bom_subcategories():
     One-time migration to update BOM warning subcategories from 'land'/'marine' 
     to proper warning types (Wind, Flood, Thunderstorm, etc.) based on title.
     """
+    updated = 0
     try:
         with _db_lock_history_weather:
             conn = get_conn()
-            c = conn.cursor()
-            
-            # Check if migration is needed - look for records with old-style subcategories
-            c.execute("""
-                SELECT COUNT(*) FROM data_history 
-                WHERE (source = 'bom_land' OR source = 'bom_marine')
-                AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
-            """)
-            count = c.fetchone()[0]
-            
-            if count == 0:
+            try:
+                c = conn.cursor()
+
+                # Check if migration is needed - look for records with old-style subcategories
+                c.execute("""
+                    SELECT COUNT(*) FROM data_history
+                    WHERE (source = 'bom_land' OR source = 'bom_marine')
+                    AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
+                """)
+                count = c.fetchone()[0]
+
+                if count == 0:
+                    return 0
+
+                Log.info(f"🔧 BOM subcategory migration: {count} records to update...")
+
+                # Get all BOM records that need updating
+                c.execute("""
+                    SELECT id, title FROM data_history
+                    WHERE (source = 'bom_land' OR source = 'bom_marine')
+                    AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
+                """)
+                records = c.fetchall()
+
+                for record_id, title in records:
+                    warning_type = _extract_bom_warning_type(title)
+                    c.execute("UPDATE data_history SET subcategory = %s WHERE id = %s", (warning_type, record_id))
+                    updated += 1
+
+                conn.commit()
+            finally:
                 conn.close()
-                return 0
-            
-            Log.info(f"🔧 BOM subcategory migration: {count} records to update...")
-            
-            # Get all BOM records that need updating
-            c.execute("""
-                SELECT id, title FROM data_history 
-                WHERE (source = 'bom_land' OR source = 'bom_marine')
-                AND (subcategory = 'land' OR subcategory = 'marine' OR subcategory IS NULL)
-            """)
-            records = c.fetchall()
-            
-            updated = 0
-            for record_id, title in records:
-                warning_type = _extract_bom_warning_type(title)
-                c.execute("UPDATE data_history SET subcategory = %s WHERE id = %s", (warning_type, record_id))
-                updated += 1
-            
-            conn.commit()
-            conn.close()
-        
+
         if updated > 0:
             Log.info(f"🔧 BOM subcategory migration complete: {updated} records updated with proper warning types")
         
@@ -10852,7 +10864,9 @@ def _prewarm_data_history_count_cache():
     cutoff = int(time.time()) - 24 * 3600
     actual_where = "(fetched_at >= %s) AND is_latest = 1"
     params = [cutoff]
-    cache_key = (actual_where, tuple(params), 'all')
+    # Match the quantization done at the request site so the prewarmed
+    # entry actually matches a real user query's cache_key.
+    cache_key = (actual_where, ((cutoff // 60) * 60,), 'all')
     pager_cutoff = int(time.time()) - 3600
 
     # Phase 1: instant estimate. Uses reltuples for the whole table —
@@ -11156,9 +11170,17 @@ def data_history():
         # the pagination total instead of returning zero.
         # TTL-cached per (where, params, mode) so repeat polls don't hit
         # the DB and a slow scan doesn't break pagination on every refresh.
+        # Quantize timestamp-shaped params (anything > 1 billion seconds)
+        # to 60s buckets so back-to-back requests for ?hours=24 share a
+        # cache key — without this `since` shifts every second and every
+        # request misses the cache.
+        def _ck_bucket(p):
+            if isinstance(p, int) and p > 1_000_000_000:
+                return (p // 60) * 60
+            return p
         cache_key = (
             actual_where,
-            tuple(params),
+            tuple(_ck_bucket(p) for p in params),
             'live' if live_only else ('hist' if historical_only else 'all'),
         )
         # Stale-while-revalidate: the request NEVER blocks on the slow
