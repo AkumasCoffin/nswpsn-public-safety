@@ -5648,6 +5648,32 @@ function initPagerHoursFromStorage() {
       return wanted;
     }
 
+    // Linear interpolation between gradient stops so each bin gets a
+    // colour matching its position on the cyan/magenta/pink-red ramp.
+    const _HEATMAP_STOPS = [
+      [0.00, [ 34, 211, 238]],  // cyan
+      [0.35, [  6, 182, 212]],  // teal-cyan
+      [0.55, [139,  92, 246]],  // violet
+      [0.75, [217,  70, 239]],  // magenta
+      [0.90, [236,  72, 153]],  // hot pink
+      [1.00, [244,  63,  94]],  // pink-red
+    ];
+    function _heatmapColorAt(t) {
+      t = Math.max(0, Math.min(1, t));
+      for (let i = 1; i < _HEATMAP_STOPS.length; i++) {
+        if (t <= _HEATMAP_STOPS[i][0]) {
+          const [t0, c0] = _HEATMAP_STOPS[i - 1];
+          const [t1, c1] = _HEATMAP_STOPS[i];
+          const f = (t1 === t0) ? 0 : (t - t0) / (t1 - t0);
+          const r = Math.round(c0[0] + (c1[0] - c0[0]) * f);
+          const g = Math.round(c0[1] + (c1[1] - c0[1]) * f);
+          const b = Math.round(c0[2] + (c1[2] - c0[2]) * f);
+          return `rgb(${r},${g},${b})`;
+        }
+      }
+      return 'rgb(244,63,94)';
+    }
+
     function onPoliceHeatmapFilter() {
       if (document.getElementById('chk-police-heatmap')?.checked) {
         loadPoliceHeatmap(true);
@@ -5699,32 +5725,29 @@ function initPagerHoursFromStorage() {
         if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
           map.removeLayer(policeHeatmapLayer);
         }
-        // Sqrt-normalise intensities so a single hot bin doesn't flatten
-        // the rest into invisibility (linear scaling against max_count
-        // makes mid-density bins render at <2% of max).
-        const sqrtPoints = (data.points || []).map(
-          ([lat, lng, c]) => [lat, lng, Math.sqrt(Math.max(c, 0))]
-        );
-        const sqrtMax = Math.sqrt(data.max_count || 1);
-        policeHeatmapLayer = L.heatLayer(sqrtPoints, {
-          radius: 16,
-          blur: 14,
-          max: sqrtMax,
-          minOpacity: 0.45,
-          // Cyber palette — cyan through magenta to hot pink. Reads as
-          // a data visualisation rather than a blood splatter. Edges
-          // fade to transparent cyan, hotspots peak at a bright
-          // pink-red glow.
-          gradient: {
-            0.0:  'rgba(34,211,238,0)',     // transparent cyan
-            0.15: 'rgba(34,211,238,0.55)',  // faint cyan
-            0.35: '#06b6d4',                // cyan
-            0.55: '#8b5cf6',                // violet
-            0.75: '#d946ef',                // magenta
-            0.90: '#ec4899',                // hot pink
-            1.0:  '#f43f5e',                // pink-red peak
-          },
-        });
+        // Discrete circle markers, not a heat layer — no blobby merging
+        // at low zoom. Each bin renders as one fixed-pixel-size dot;
+        // size scales with sqrt(count), colour with count percentile
+        // through the cyan/magenta/pink-red ramp.
+        const max = data.max_count || 1;
+        const sqrtMax = Math.sqrt(max);
+        policeHeatmapLayer = L.layerGroup();
+        for (const [lat, lng, count] of points) {
+          if (!Number.isFinite(lat) || !Number.isFinite(lng) || !count) continue;
+          const t = Math.sqrt(count) / sqrtMax;     // 0..1
+          const radius = Math.max(3, Math.min(12, 3 + Math.sqrt(count) * 0.9));
+          const color = _heatmapColorAt(t);
+          L.circleMarker([lat, lng], {
+            radius: radius,
+            color: color,
+            fillColor: color,
+            fillOpacity: 0.55,
+            stroke: true,
+            weight: 1.2,
+            opacity: 0.9,
+          }).bindTooltip(`${count} pings`, { direction: 'top', sticky: true })
+            .addTo(policeHeatmapLayer);
+        }
         map.addLayer(policeHeatmapLayer);
         if (stats) {
           stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
