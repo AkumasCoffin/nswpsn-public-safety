@@ -10644,7 +10644,10 @@ def cache_status():
 # slow scan failing doesn't zero out pagination on every refresh.
 _DATA_HISTORY_COUNT_CACHE = {}        # key -> {'total','live','ended','ts'}
 _DATA_HISTORY_COUNT_CACHE_LOCK = threading.Lock()
-_DATA_HISTORY_COUNT_CACHE_TTL = 60    # seconds — fresh window
+_DATA_HISTORY_COUNT_CACHE_TTL = 600   # 10 min — long window so we don't retry
+                                       # the slow scan every minute. Counts
+                                       # only need to be roughly right for
+                                       # pagination; precision isn't critical.
 _DATA_HISTORY_COUNT_CACHE_MAX = 256   # cap entries to bound memory
 
 
@@ -11029,7 +11032,11 @@ def data_history():
                     finally:
                         conn.close()
                 except Exception as e:
-                    Log.warn(f"Count slow/timeout — falling back to cache: {e}")
+                    # Demoted to debug — with the cache + reltuples
+                    # fallback this isn't user-facing anymore, just an
+                    # expected sign that VACUUM hasn't caught up yet.
+                    if DEV_MODE:
+                        Log.info(f"Count slow/timeout — using cache: {e}")
                     count_failed = True
                     continue
                 if live_only:
