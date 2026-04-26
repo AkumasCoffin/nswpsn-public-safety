@@ -1313,7 +1313,16 @@ def init_archive_db():
                     # archive cycles can never fully clear.
                     "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_data_history_latest ON data_history (source, source_id) WHERE is_latest = 1 AND source_id IS NOT NULL",
                 ):
-                    idx_name = sql.split()[6]  # CREATE INDEX CONCURRENTLY IF NOT EXISTS <name>...
+                    # Pull the index name from the word immediately after
+                    # `EXISTS` — works for both `CREATE INDEX ... IF NOT
+                    # EXISTS <name>` and `CREATE UNIQUE INDEX ... IF NOT
+                    # EXISTS <name>` (the UNIQUE form has one extra word
+                    # earlier, which threw off the previous split()[6]).
+                    parts = sql.split()
+                    try:
+                        idx_name = parts[parts.index('EXISTS') + 1]
+                    except (ValueError, IndexError):
+                        idx_name = '<unknown>'
                     try:
                         Log.startup(f"Building partial index {idx_name} CONCURRENTLY (may take minutes)...")
                         cur.execute(sql)
@@ -9435,37 +9444,51 @@ def _waze_reconcile_bbox_sync(bbox_raw, current_ids):
 
     waze_sources = ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
     n_gone = 0
+    by_source = {}
+    # Note: the master lock previously wrapped this block. Archive writes
+    # no longer hold it (commit 29595ea), and the reconcile worker is
+    # already a single-threaded queue consumer (_waze_reconcile_worker),
+    # so the lock served no purpose here — it just queued reconciles
+    # behind any other code path that did happen to grab it. Postgres
+    # row-level locking handles the SELECT/UPDATE concurrency safely.
     try:
-        with _db_lock_history_waze:
-            conn = get_conn()
-            try:
-                c = conn.cursor()
-                # Cap this query so a bad plan can't starve the pool.
-                c.execute("SET LOCAL statement_timeout = '15s'")
-                c.execute('''
-                    SELECT source, source_id FROM data_history
-                    WHERE source IN %s
-                    AND is_live = 1
-                    AND source_id IS NOT NULL
-                    AND latitude BETWEEN %s AND %s
-                    AND longitude BETWEEN %s AND %s
-                ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
-                rows = c.fetchall()
-                by_source = {}
-                for src, sid in rows:
-                    if sid not in current_ids:
-                        by_source.setdefault(src, []).append(sid)
-                for src, sids in by_source.items():
-                    placeholders = ','.join(['%s'] * len(sids))
-                    c.execute(
-                        f'UPDATE data_history SET is_live = 0 WHERE source = %s AND source_id IN ({placeholders})',
-                        [src] + sids,
-                    )
-                    n_gone += len(sids)
-                if n_gone:
-                    conn.commit()
-            finally:
-                conn.close()
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            # 30s budget — bigger than the old 15s now that we don't
+            # serialise behind a Python lock. The query uses the
+            # idx_data_waze_live_geo partial index (source, lat, lng
+            # WHERE is_live = 1 AND source IN (waze_*)).
+            c.execute("SET LOCAL statement_timeout = '30s'")
+            c.execute('''
+                SELECT source, source_id FROM data_history
+                WHERE source IN %s
+                AND is_live = 1
+                AND source_id IS NOT NULL
+                AND latitude BETWEEN %s AND %s
+                AND longitude BETWEEN %s AND %s
+            ''', (waze_sources, lat_lo, lat_hi, lon_lo, lon_hi))
+            rows = c.fetchall()
+            for src, sid in rows:
+                if sid not in current_ids:
+                    by_source.setdefault(src, []).append(sid)
+            for src, sids in by_source.items():
+                placeholders = ','.join(['%s'] * len(sids))
+                # AND is_live = 1 so we only touch the rows that actually
+                # need flipping — historical rows already have is_live = 0
+                # and shouldn't be rewritten. Cuts the UPDATE's scan/lock
+                # surface to the live set.
+                c.execute(
+                    f'UPDATE data_history SET is_live = 0 '
+                    f'WHERE source = %s AND is_live = 1 '
+                    f'AND source_id IN ({placeholders})',
+                    [src] + sids,
+                )
+                n_gone += len(sids)
+            if n_gone:
+                conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         Log.error(f"Waze bbox reconcile DB error: {e}")
         return 0
@@ -15392,7 +15415,11 @@ def _dash_bot_db_indexes_ensure():
                 'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_preset_fire_log_preset_fired '
                 '  ON preset_fire_log (preset_id, fired_at DESC)',
             ):
-                idx_name = sql.split()[6]
+                parts = sql.split()
+                try:
+                    idx_name = parts[parts.index('EXISTS') + 1]
+                except (ValueError, IndexError):
+                    idx_name = '<unknown>'
                 try:
                     Log.startup(f"Building bot-DB index {idx_name} CONCURRENTLY...")
                     cur.execute(sql)
