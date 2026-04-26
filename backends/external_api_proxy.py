@@ -1316,6 +1316,15 @@ def init_archive_db():
                     # duplicate is_latest=1 rows that subsequent
                     # archive cycles can never fully clear.
                     "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_data_history_latest ON data_history (source, source_id) WHERE is_latest = 1 AND source_id IS NOT NULL",
+                    # Composite index for keyset (cursor) pagination on
+                    # /api/data/history. Without `id` in the index, the
+                    # planner has to heap-fetch every candidate row to
+                    # evaluate the (fetched_at = X AND id < Y) tiebreaker
+                    # in the cursor seek — making the per-page seek O(N)
+                    # in tied rows instead of O(log N). With ~200k+ rows
+                    # in the latest set this materially affects forward
+                    # paging when many rows share a fetched_at second.
+                    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_fetched_id ON data_history(fetched_at DESC, id DESC) WHERE is_latest = 1',
                 ):
                     # Pull the index name from the word immediately after
                     # `EXISTS` — works for both `CREATE INDEX ... IF NOT
@@ -11307,6 +11316,38 @@ def _prewarm_data_history_count_cache():
         Log.warn(f"data/history exact count prewarm skipped (estimate retained): {e}")
 
 
+# --- Cursor pagination helpers --------------------------------------------
+# Keyset pagination encodes the position as (fetched_at, id) pairs because
+# fetched_at alone is not unique — an archive flush can write thousands of
+# rows with the same timestamp. The id tiebreak guarantees a stable forward
+# walk; the index `idx_data_latest_fetched_id` lets the seek stay O(log N).
+
+# Beyond this offset, /api/data/history rejects the request with a 400 and
+# directs the caller to `cursor`. Without a cap, deep offsets (we've seen
+# 245k+ in the wild) force a seq-scan-and-skip that runs until the 25s
+# statement_timeout and 500s. 10k is well past any realistic UI use:
+# pageSize=20 -> page 500, pageSize=100 -> page 100.
+_DATA_HISTORY_MAX_OFFSET = 10000
+
+
+def _encode_history_cursor(fetched_at, row_id):
+    raw = f"{int(fetched_at)}:{int(row_id)}".encode('ascii')
+    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+
+
+def _decode_history_cursor(cursor):
+    """Returns (fetched_at, id) or None on malformed input."""
+    if not cursor:
+        return None
+    try:
+        padded = cursor + '=' * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode('ascii')).decode('ascii')
+        fa_str, id_str = raw.split(':', 1)
+        return int(fa_str), int(id_str)
+    except Exception:
+        return None
+
+
 @app.route('/api/data/history')
 def data_history():
     """
@@ -11411,6 +11452,24 @@ def data_history():
         until_source = request.args.get('until_source', type=int)
         limit = min(request.args.get('limit', 100, type=int), 1000)
         offset = request.args.get('offset', 0, type=int)
+        # Cursor-based pagination is the preferred path — constant time
+        # regardless of how deep the client has paged. Offset is still
+        # honoured for backwards compatibility, but capped at
+        # _DATA_HISTORY_MAX_OFFSET so a runaway client can't grind out a
+        # 25s seq-scan.
+        cursor_raw = (request.args.get('cursor') or '').strip()
+        cursor_decoded = _decode_history_cursor(cursor_raw) if cursor_raw else None
+        if cursor_decoded is None and offset > _DATA_HISTORY_MAX_OFFSET:
+            return jsonify({
+                'error': 'offset_too_large',
+                'message': (
+                    f'offset={offset} exceeds {_DATA_HISTORY_MAX_OFFSET}. '
+                    f'Use ?cursor=<next_cursor from previous response> for '
+                    f'forward pagination, or narrow the result set with '
+                    f'date_from/hours/source.'
+                ),
+                'max_offset': _DATA_HISTORY_MAX_OFFSET,
+            }), 400
         active_only = request.args.get('active_only') == '1'
         # Include the full `data` JSONB blob only when asked. Skipping it cuts
         # the payload dramatically for list pages that just show title + source.
@@ -11605,6 +11664,22 @@ def data_history():
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
         # `data` is the heaviest column — pull it only if ?full=1.
         data_col = 'data' if include_data else "''::text AS data"
+
+        # Cursor seek clause. The (fetched_at, id) row-value comparison
+        # gives a stable forward walk: rows with fetched_at strictly past
+        # the cursor's, plus rows with the same fetched_at and an id past
+        # the cursor's id. Order direction flips the comparator. When a
+        # cursor is supplied we ignore offset entirely — keyset and
+        # offset don't compose, and the cursor is already the position.
+        seek_clause = ''
+        seek_params = []
+        if cursor_decoded is not None:
+            cursor_fa, cursor_id = cursor_decoded
+            cmp = '<' if order_dir == 'DESC' else '>'
+            seek_clause = f' AND (fetched_at {cmp} %s OR (fetched_at = %s AND id {cmp} %s))'
+            seek_params = [cursor_fa, cursor_fa, cursor_id]
+        effective_offset = 0 if cursor_decoded is not None else offset
+
         if len(dbs_to_query) == 1:
             # Single DB - simple query with proper pagination
             conn = get_conn()
@@ -11616,10 +11691,10 @@ def data_history():
                            latitude, longitude, location_text, title, category, subcategory,
                            status, severity, {data_col}, is_active, is_live, last_seen
                     FROM data_history
-                    WHERE {actual_where}
-                    ORDER BY fetched_at {order_dir}
+                    WHERE {actual_where}{seek_clause}
+                    ORDER BY fetched_at {order_dir}, id {order_dir}
                     LIMIT %s OFFSET %s
-                ''', params + [limit, offset])
+                ''', params + seek_params + [limit, effective_offset])
                 all_rows = c.fetchall()
             finally:
                 conn.close()
@@ -11637,10 +11712,10 @@ def data_history():
                                    latitude, longitude, location_text, title, category, subcategory,
                                    status, severity, {data_col}, is_active, is_live, last_seen
                             FROM data_history
-                            WHERE {actual_where}
-                            ORDER BY fetched_at {order_dir}
+                            WHERE {actual_where}{seek_clause}
+                            ORDER BY fetched_at {order_dir}, id {order_dir}
                             LIMIT %s
-                        ''', params + [offset + limit])
+                        ''', params + seek_params + [effective_offset + limit])
                         all_rows.extend(c.fetchall())
                     finally:
                         conn.close()
@@ -11649,8 +11724,8 @@ def data_history():
 
             # Sort merged results and apply pagination
             reverse = (order_dir == 'DESC')
-            all_rows.sort(key=lambda r: r[3] or 0, reverse=reverse)
-            all_rows = all_rows[offset:offset + limit]
+            all_rows.sort(key=lambda r: (r[3] or 0, r[0] or 0), reverse=reverse)
+            all_rows = all_rows[effective_offset:effective_offset + limit]
         
         records = []
         for row in all_rows:
@@ -11705,6 +11780,15 @@ def data_history():
         if unique:
             query_info['filters_applied']['unique'] = True
         
+        # Forward cursor for the next page. Only emit if the response is
+        # full — a short page means we've hit the end of the result set.
+        # Clients page sequentially by passing this back as ?cursor=…,
+        # which avoids the deep-offset performance cliff entirely.
+        next_cursor = None
+        if len(all_rows) >= limit:
+            last = all_rows[-1]
+            next_cursor = _encode_history_cursor(last[3] or 0, last[0] or 0)
+
         return jsonify({
             'total': total,
             'live_count': live_count,
@@ -11713,6 +11797,7 @@ def data_history():
             'offset': offset,
             'count': len(records),
             'records': records,
+            'next_cursor': next_cursor,
             'query': query_info
         })
     except Exception as e:
