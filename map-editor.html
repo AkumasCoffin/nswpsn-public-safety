@@ -289,7 +289,6 @@
     .outage-pin-planned { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.5); }
     .btn-toggle.active#btn-hazards { border: 1px solid #ef4444; color: #fca5a5; }
     .btn-toggle.active#btn-police { border: 1px solid #3b82f6; color: #93c5fd; }
-    .btn-toggle.active#btn-police-heatmap { border: 1px solid #dc2626; color: #fca5a5; }
     .btn-toggle.active#btn-roadwork { border: 1px solid #eab308; color: #fde047; }
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
@@ -606,10 +605,6 @@
     #police-panel { border: 1px solid rgba(59, 130, 246, 0.3); }
     #police-panel h4 { color: #3b82f6; }
     #police-panel input[type="checkbox"] { accent-color: #3b82f6; }
-    #police-heatmap-panel { border: 1px solid rgba(220, 38, 38, 0.35); }
-    #police-heatmap-panel h4 { color: #dc2626; }
-    #police-heatmap-panel input[type="checkbox"] { accent-color: #dc2626; }
-    #police-heatmap-panel input[type="range"] { accent-color: #dc2626; }
     /* Cameras settings panel */
     #cameras-panel { border: 1px solid rgba(139, 92, 246, 0.3); }
     #cameras-panel h4 { color: #c4b5fd; }
@@ -1380,7 +1375,6 @@
         <button id="btn-outages" class="btn-toggle" onclick="toggleOutagesPanel()"><span class="dot-indicator" style="background:#f97316;"></span> Outages</button>
         <button id="btn-hazards" class="btn-toggle" onclick="toggleHazardsPanel()"><span class="dot-indicator" style="background:#ef4444;"></span> Traffic Hazards</button>
         <button id="btn-police" class="btn-toggle" onclick="togglePolicePanel()"><span class="dot-indicator" style="background:#3b82f6;"></span> Police</button>
-        <button id="btn-police-heatmap" class="btn-toggle" onclick="togglePoliceHeatmapPanel()"><span class="dot-indicator" style="background:#dc2626;"></span> Police Heatmap</button>
         <button id="btn-roadwork" class="btn-toggle" onclick="toggleMapLayer('roadwork')"><span class="dot-indicator" style="background:#eab308;"></span> Roadwork</button>
         <button id="btn-floods" class="btn-toggle" onclick="toggleMapLayer('floods')"><span class="dot-indicator" style="background:#06b6d4;"></span> Floods</button>
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()"><span class="dot-indicator" style="background:#8b5cf6;"></span> Cameras</button>
@@ -1432,23 +1426,17 @@
         <label><input type="checkbox" id="chk-police-visible" checked onchange="togglePoliceFilter('visible', this.checked)"><span class="filter-dot" style="background:#3b82f6;"></span> Visible</label>
         <label><input type="checkbox" id="chk-police-hidden" checked onchange="togglePoliceFilter('hidden', this.checked)"><span class="filter-dot" style="background:#6366f1;"></span> Hidden</label>
         <label><input type="checkbox" id="chk-police-camera" checked onchange="togglePoliceFilter('camera', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Speed Camera</label>
-      </div>
-
-      <!-- Police Heatmap Panel -->
-      <div class="filter-panel" id="police-heatmap-panel">
-        <h4><i class="fa-solid fa-fire"></i> Police Heatmap</h4>
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">Density of historical police pings (Waze).</div>
-        <label><input type="checkbox" id="chk-heat-visible" checked onchange="onPoliceHeatmapFilter()"><span class="filter-dot" style="background:#3b82f6;"></span> Visible</label>
-        <label><input type="checkbox" id="chk-heat-hidden" checked onchange="onPoliceHeatmapFilter()"><span class="filter-dot" style="background:#6366f1;"></span> Hidden</label>
-        <label><input type="checkbox" id="chk-heat-camera" checked onchange="onPoliceHeatmapFilter()"><span class="filter-dot" style="background:#8b5cf6;"></span> Mobile Camera</label>
-        <div style="margin-top:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#94a3b8;margin-bottom:4px;">
-            <span>Time window</span>
-            <span id="heat-days-label">30d</span>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(148,163,184,0.18);">
+          <label><input type="checkbox" id="chk-police-heatmap" onchange="togglePoliceHeatmapMode(this.checked)"><i class="fa-solid fa-fire" style="color:#dc2626;margin-right:4px;"></i> Heatmap (historical density)</label>
+          <div id="police-heatmap-controls" style="display:none;margin-top:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#94a3b8;margin-bottom:4px;">
+              <span>Time window</span>
+              <span id="heat-days-label">30d</span>
+            </div>
+            <input type="range" id="heat-days-range" min="1" max="90" value="30" style="width:100%;accent-color:#dc2626;" oninput="document.getElementById('heat-days-label').textContent = this.value + 'd';" onchange="onPoliceHeatmapFilter()" />
+            <div id="heat-stats" style="font-size:10px;color:#64748b;margin-top:6px;text-align:center;">Loading…</div>
           </div>
-          <input type="range" id="heat-days-range" min="1" max="90" value="30" style="width:100%;" oninput="document.getElementById('heat-days-label').textContent = this.value + 'd';" onchange="onPoliceHeatmapFilter()" />
         </div>
-        <div id="heat-stats" style="font-size:10px;color:#64748b;margin-top:8px;text-align:center;">No data loaded.</div>
       </div>
 
       <!-- Cameras Filter Panel -->
@@ -1658,7 +1646,6 @@
       { panel: 'outages-panel', btn: 'btn-outages' },
       { panel: 'hazards-panel', btn: 'btn-hazards' },
       { panel: 'police-panel', btn: 'btn-police' },
-      { panel: 'police-heatmap-panel', btn: 'btn-police-heatmap' },
       { panel: 'cameras-panel', btn: 'btn-cameras' },
       { panel: 'beaches-panel', btn: 'btn-beaches' },
       { panel: 'weather-panel', btn: 'btn-weather' }
@@ -1739,7 +1726,6 @@
           if (document.getElementById('weather-panel')?.classList.contains('open')) toggleWeatherPanel();
           if (document.getElementById('hazards-panel')?.classList.contains('open')) toggleHazardsPanel();
           if (document.getElementById('police-panel')?.classList.contains('open')) togglePolicePanel();
-          if (document.getElementById('police-heatmap-panel')?.classList.contains('open')) togglePoliceHeatmapPanel();
           if (document.getElementById('cameras-panel')?.classList.contains('open')) toggleCamerasPanel();
           if (document.getElementById('outages-panel')?.classList.contains('open')) toggleOutagesPanel();
           if (document.getElementById('beaches-panel')?.classList.contains('open')) toggleBeachesPanel();
@@ -4180,6 +4166,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(policeLayer);
+        if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
+          map.removeLayer(policeHeatmapLayer);
+        }
+        const heatChk = document.getElementById('chk-police-heatmap');
+        if (heatChk) heatChk.checked = false;
+        const heatCtl = document.getElementById('police-heatmap-controls');
+        if (heatCtl) heatCtl.style.display = 'none';
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
@@ -4190,39 +4183,31 @@ async function loadPagerData() {
       updateSettingsBackdrop();
     }
 
-    // Police Heatmap — historical density of waze_police records, grid-binned
-    // server-side via /api/waze/police-heatmap. Independent of policeLayer
-    // (live pins) so users can run both at once.
-    function togglePoliceHeatmapPanel() {
-      const panel = document.getElementById('police-heatmap-panel');
-      const btn = document.getElementById('btn-police-heatmap');
-      const isOpen = panel.classList.contains('open');
-      if (!isOpen) showFiltersSidebarToast();
-      if (isOpen) {
-        panel.classList.remove('open');
-        btn.classList.remove('active');
-        if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-          map.removeLayer(policeHeatmapLayer);
-        }
-      } else {
-        panel.classList.add('open');
-        btn.classList.add('active');
+    // Police Heatmap — sub-toggle inside the Police panel. Reuses the
+    // panel's three pin-filter checkboxes so the same type filter
+    // applies to both pins and heatmap.
+    function togglePoliceHeatmapMode(on) {
+      const controls = document.getElementById('police-heatmap-controls');
+      if (controls) controls.style.display = on ? '' : 'none';
+      if (on) {
         loadPoliceHeatmap();
+      } else if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
+        map.removeLayer(policeHeatmapLayer);
       }
-      updateFilterPanelPositions();
-      updateSettingsBackdrop();
     }
 
     function _heatmapSelectedSubtypes() {
       const wanted = [];
-      if (document.getElementById('chk-heat-visible')?.checked) wanted.push('POLICE_VISIBLE');
-      if (document.getElementById('chk-heat-hidden')?.checked)  wanted.push('POLICE_HIDING');
-      if (document.getElementById('chk-heat-camera')?.checked)  wanted.push('POLICE_WITH_MOBILE_CAMERA');
+      if (document.getElementById('chk-police-visible')?.checked) wanted.push('POLICE_VISIBLE');
+      if (document.getElementById('chk-police-hidden')?.checked)  wanted.push('POLICE_HIDING');
+      if (document.getElementById('chk-police-camera')?.checked)  wanted.push('POLICE_WITH_MOBILE_CAMERA');
       return wanted;
     }
 
     function onPoliceHeatmapFilter() {
-      loadPoliceHeatmap(true);
+      if (document.getElementById('chk-police-heatmap')?.checked) {
+        loadPoliceHeatmap(true);
+      }
     }
 
     async function loadPoliceHeatmap(forceRefresh = false) {
@@ -4356,7 +4341,7 @@ async function loadPagerData() {
     // Stack open filter panels vertically
     function updateFilterPanelPositions() {
       if (window.innerWidth <= 900) return; // Mobile uses bottom-sheet CSS
-      const panels = ['outages-panel', 'beaches-panel', 'hazards-panel', 'police-panel', 'police-heatmap-panel', 'cameras-panel', 'weather-panel'];
+      const panels = ['outages-panel', 'beaches-panel', 'hazards-panel', 'police-panel', 'cameras-panel', 'weather-panel'];
       let bottomOffset = 80; // Start above map type controls
       
       panels.forEach(panelId => {
@@ -4389,6 +4374,9 @@ async function loadPagerData() {
         } else {
           policeLayer.removeLayer(subLayer);
         }
+      }
+      if (document.getElementById('chk-police-heatmap')?.checked) {
+        loadPoliceHeatmap(true);
       }
     }
 

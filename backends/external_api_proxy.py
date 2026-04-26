@@ -9307,13 +9307,21 @@ def waze_police_heatmap():
     cutoff = int(now) - (days * 86400)
     bin_deg = _POLICE_HEATMAP_BIN_DEG
 
+    # is_latest = 1 narrows to one row per unique source_id (last-seen
+    # snapshot), which is what a "where police are commonly seen"
+    # heatmap actually wants — duplicate snapshots of the same ping
+    # over many polls would otherwise grossly inflate single-spot density.
+    # The partial index `idx_data_latest_only_source (source, fetched_at)
+    # WHERE is_latest = 1` makes this O(matching rows) instead of a full
+    # scan over every historical snapshot of every source.
     sql = '''
         SELECT
             ROUND(latitude::numeric  / %s) * %s AS lat_bin,
             ROUND(longitude::numeric / %s) * %s AS lng_bin,
             COUNT(*) AS cnt
         FROM data_history
-        WHERE source = 'waze_police'
+        WHERE is_latest = 1
+          AND source = 'waze_police'
           AND fetched_at >= %s
           AND latitude  IS NOT NULL
           AND longitude IS NOT NULL
