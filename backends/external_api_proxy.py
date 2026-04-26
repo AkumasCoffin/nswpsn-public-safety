@@ -306,17 +306,27 @@ _SOURCE_HEALTH = {}   # name -> {last_success, last_error, last_error_msg, conse
 _SOURCE_HEALTH_LOCK = threading.Lock()
 
 _SOURCE_THRESHOLDS = {
-    'rfs':               {'soft': 300,  'hard': 900,  'label': 'RFS incidents'},
-    'bom':               {'soft': 300,  'hard': 900,  'label': 'BOM warnings'},
-    'traffic_incidents': {'soft': 300,  'hard': 900,  'label': 'LiveTraffic — incidents'},
+    # Thresholds reflect each source's expected SUCCESSFUL POLL cadence —
+    # 'soft' = degraded (a warning), 'hard' = down (genuine concern).
+    # Sources whose upstream is slow/rate-limited or can have legitimate
+    # quiet periods get more headroom.
+    'rfs':               {'soft': 600,  'hard': 1800, 'label': 'RFS incidents'},
+    'bom':               {'soft': 600,  'hard': 1800, 'label': 'BOM warnings'},
+    'traffic_incidents': {'soft': 600,  'hard': 1800, 'label': 'LiveTraffic — incidents'},
     'traffic_roadwork':  {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — roadwork'},
     'traffic_flood':     {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — flood'},
     'traffic_fire':      {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — fire'},
     'traffic_major':     {'soft': 1800, 'hard': 3600, 'label': 'LiveTraffic — major events'},
-    'power_endeavour':   {'soft': 600,  'hard': 1800, 'label': 'Endeavour outages'},
-    'power_ausgrid':     {'soft': 600,  'hard': 1800, 'label': 'Ausgrid outages'},
-    'waze':              {'soft': 300,  'hard': 900,  'label': 'Waze'},
-    'pager':             {'soft': 300,  'hard': 900,  'label': 'Pagermon'},
+    'power_endeavour':   {'soft': 1200, 'hard': 3600, 'label': 'Endeavour outages'},
+    # Ausgrid KML is rate-limited and only refreshes when outages change.
+    # Loose thresholds avoid flagging it Down during quiet weather.
+    'power_ausgrid':     {'soft': 1800, 'hard': 5400, 'label': 'Ausgrid outages'},
+    'waze':              {'soft': 600,  'hard': 1800, 'label': 'Waze'},
+    # Pager hits are bursty — a quiet night can have 30+ minutes between
+    # any pages. Polling itself happens every ~2 min, but a poll only
+    # registers source_ok when the upstream HTTP responds; if Pagermon's
+    # backend rate-limits or transiently fails, gaps are normal.
+    'pager':             {'soft': 1200, 'hard': 3600, 'label': 'Pagermon'},
     # rdio summary scheduler runs once per hour. Soft threshold sits just
     # past the cycle (65 min) so a healthy hourly cadence doesn't read
     # "degraded"; hard threshold flags 3+ missed cycles (3.5h).
@@ -15253,6 +15263,19 @@ def _dash_sessions_db_ensure():
             )
         ''')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_dash_sessions_exp ON dash_sessions(exp)')
+        # Persistent users table — survives session expiry. Lets the admin
+        # panel show "all users that have ever logged in" not just current
+        # active sessions.
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS dashboard_users (
+                uid TEXT PRIMARY KEY,
+                username TEXT,
+                avatar TEXT,
+                first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+                login_count INTEGER NOT NULL DEFAULT 1
+            )
+        ''')
         now = int(time.time())
         cur.execute('DELETE FROM dash_sessions WHERE exp < %s', (now,))
         cur.execute('SELECT sid, data FROM dash_sessions')
@@ -15322,10 +15345,59 @@ def _dash_session_delete_db(sid):
         conn.close()
 
 
+def _dash_users_upsert(uid, username=None, avatar=None, increment_login=False):
+    """Record a Discord user in the persistent dashboard_users table.
+    Called on each login (increment_login=True) and on session load
+    (increment_login=False — only updates last_seen). Best-effort; if
+    BOT_DATA_DATABASE_URL isn't set the call is a no-op."""
+    if not uid:
+        return
+    conn = _bot_db_conn()
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        if increment_login:
+            cur.execute(
+                'INSERT INTO dashboard_users (uid, username, avatar) '
+                'VALUES (%s, %s, %s) '
+                'ON CONFLICT (uid) DO UPDATE SET '
+                '  username = COALESCE(EXCLUDED.username, dashboard_users.username), '
+                '  avatar = COALESCE(EXCLUDED.avatar, dashboard_users.avatar), '
+                '  last_seen = now(), '
+                '  login_count = dashboard_users.login_count + 1',
+                (str(uid), username or '', avatar or '')
+            )
+        else:
+            # Touch last_seen only — don't bump login_count for ordinary
+            # authenticated requests.
+            cur.execute(
+                'UPDATE dashboard_users SET last_seen = now() WHERE uid = %s',
+                (str(uid),)
+            )
+        conn.commit()
+    except Exception as e:
+        Log.warn(f"dashboard_users upsert failed: {e}")
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        conn.close()
+
+
 def _dash_session_put(sid, data):
     _dash_sessions_db_ensure()
     _DASH_SESSIONS[sid] = data
     _dash_session_persist(sid, data)
+    # Login = a fresh sid being put. Record/refresh the persistent user row.
+    try:
+        _dash_users_upsert(
+            data.get('uid'),
+            username=data.get('username'),
+            avatar=data.get('avatar'),
+            increment_login=True,
+        )
+    except Exception:
+        pass
     # Opportunistic GC when the store grows — drop anything already expired.
     if len(_DASH_SESSIONS) > 512:
         now = int(time.time())
@@ -15380,6 +15452,11 @@ def _dash_load_session():
         return None
     # Expose sid on the session dict so downstream code can rotate/drop it.
     session['_sid'] = sid
+    # Touch last_seen on every authenticated request — admin overview uses
+    # this for the "Age" column instead of `iat` so it reflects recent
+    # activity, not how long the cookie has existed. In-memory only — we
+    # don't write through to Postgres on every request to keep this cheap.
+    session['last_seen'] = int(time.time())
     return session
 
 
@@ -17148,12 +17225,18 @@ def dashboard_admin_overview():
             continue
         users_seen.add(uid)
         iat = int(sess.get('iat', 0) or 0)
+        # Prefer last_seen (touched on every authenticated request) for the
+        # "age" display so it reflects recent activity, not how long the
+        # cookie has existed. Falls back to iat for sessions that haven't
+        # been touched yet (e.g., just loaded from DB after a restart).
+        last_seen = int(sess.get('last_seen', 0) or 0) or iat
         row = {
             'uid': uid,
             'username': sess.get('username') or '',
             'avatar_url': _dash_user_avatar_url(uid, sess.get('avatar')),
             'guild_count': len(sess.get('guilds') or []),
-            'age_seconds': max(0, now - iat),
+            'age_seconds': max(0, now - last_seen),
+            'session_age_seconds': max(0, now - iat),
             'is_admin': uid in _dash_admin_ids(),
             '_iat': iat,
         }
@@ -17164,12 +17247,69 @@ def dashboard_admin_overview():
     for r in sessions_out:
         r.pop('_iat', None)
 
+    # Pull historical users from dashboard_users so the panel shows everyone
+    # who has ever logged in, not just current active sessions. Active
+    # sessions overlay the historical row (their `is_active` is true and
+    # age uses the in-memory last_seen). Inactive users get age based on
+    # their stored last_seen.
+    historical_users = []
+    try:
+        h_conn = _bot_db_conn()
+        if h_conn is not None:
+            try:
+                h_cur = h_conn.cursor()
+                h_cur.execute(
+                    'SELECT uid, username, avatar, '
+                    '       EXTRACT(EPOCH FROM first_seen)::bigint AS first_seen, '
+                    '       EXTRACT(EPOCH FROM last_seen)::bigint  AS last_seen, '
+                    '       login_count '
+                    '  FROM dashboard_users '
+                    'ORDER BY last_seen DESC'
+                )
+                for r in h_cur.fetchall():
+                    uid = str(r['uid'])
+                    if uid in per_user:
+                        # Already covered by an active session — skip.
+                        continue
+                    last_seen = int(r.get('last_seen') or 0)
+                    historical_users.append({
+                        'uid': uid,
+                        'username': r.get('username') or '',
+                        'avatar_url': _dash_user_avatar_url(uid, r.get('avatar')),
+                        'guild_count': 0,
+                        'age_seconds': max(0, now - last_seen),
+                        'session_age_seconds': max(0, now - last_seen),
+                        'is_admin': uid in _dash_admin_ids(),
+                        'is_active': False,
+                        'login_count': int(r.get('login_count') or 0),
+                    })
+            except Exception as e:
+                Log.warn(f"dashboard_users query failed: {e}")
+            finally:
+                h_conn.close()
+    except Exception:
+        pass
+    # Mark all currently-active rows so the frontend can style them.
+    for r in sessions_out:
+        r['is_active'] = True
+    # Merge: active first (already sorted by age), then historical.
+    sessions_out = sessions_out + historical_users
+
     conn = _bot_db_conn()
     if conn is None:
         return _dash_err('dashboard_disabled',
                          'BOT_DATA_DATABASE_URL is not configured.', 503)
     try:
         cur = conn.cursor()
+
+        # Lifetime unique-user count from the persistent users table.
+        # Falls back to active-session count if the table doesn't exist
+        # yet (first deploy with this feature).
+        try:
+            cur.execute('SELECT COUNT(*) AS n FROM dashboard_users')
+            users_lifetime = cur.fetchone()['n'] or 0
+        except Exception:
+            users_lifetime = len(users_seen)
 
         cur.execute('SELECT COUNT(*) AS n FROM alert_presets')
         presets_total = cur.fetchone()['n'] or 0
@@ -17241,9 +17381,12 @@ def dashboard_admin_overview():
     return jsonify({
         'stats': {
             'sessions_active': sessions_active,
-            'dashboard_users': len(users_seen),
+            # 'dashboard_users' = lifetime unique users (from dashboard_users
+            # table). 'users_active' is the count currently logged in.
+            'dashboard_users': users_lifetime,
+            'users_active': len(users_seen),
             # Backwards-compat alias for older frontend builds.
-            'users_total': len(users_seen),
+            'users_total': users_lifetime,
             'servers_total': _dash_app_install_counts().get('servers_total'),
             'user_installs': _dash_app_install_counts().get('user_installs'),
             'guilds_with_presets': guilds_with_presets,
