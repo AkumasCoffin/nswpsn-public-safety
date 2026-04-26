@@ -441,6 +441,26 @@
       font-variant-numeric: tabular-nums;
     }
     .provider-header .pv-count.has-selected { color: var(--accent); font-weight: 600; }
+    .provider-header .pv-toggle {
+      background: transparent;
+      border: 1px solid rgba(148,163,184,0.25);
+      border-radius: 999px;
+      width: 26px; height: 26px;
+      display: inline-flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--text-soft);
+      font-size: 0.75rem;
+      transition: all 0.12s ease;
+      flex-shrink: 0;
+    }
+    .provider-header .pv-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    .provider-header .pv-toggle.partial { color: var(--accent); border-color: rgba(249,115,22,0.45); }
+    .provider-header .pv-toggle.on {
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .provider-header .pv-toggle.on:hover { background: #ea580c; }
     .provider-header .pv-caret {
       font-size: 0.7rem;
       color: var(--text-soft);
@@ -2393,16 +2413,26 @@ function _renderProviderSection(provider, selected, opts) {
   const selectedCount = types.filter(t => selected.has(t.key)).length;
   const totalCount = types.length;
   const hasSelected = selectedCount > 0;
+  const allSelected = selectedCount === totalCount && totalCount > 0;
   const expanded = !!opts.expanded;
 
   const section = el('div', {
     class: 'provider-section' + (expanded ? ' expanded' : ''),
   });
-  const header = el('button', {
+  // Header is a div (not a button) so we can nest the on/off toggle as a
+  // real button. Clicks anywhere except the toggle expand the section.
+  const header = el('div', {
     class: 'provider-header',
-    type: 'button',
+    role: 'button',
+    tabindex: '0',
     'aria-expanded': expanded ? 'true' : 'false',
     onclick: () => opts.onExpand(!expanded),
+    onkeydown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        opts.onExpand(!expanded);
+      }
+    },
   }, [
     el('span', { class: 'pv-icon' },
       el('i', { class: `fa-solid fa-${provider.icon || 'circle'}`,
@@ -2410,6 +2440,20 @@ function _renderProviderSection(provider, selected, opts) {
     el('span', { class: 'pv-name' }, provider.name),
     el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
       `${selectedCount}/${totalCount}`),
+    // Per-source on/off — flips every type in the provider.
+    el('button', {
+      class: 'pv-toggle' + (allSelected ? ' on' : (hasSelected ? ' partial' : '')),
+      type: 'button',
+      title: allSelected
+        ? `Disable all ${provider.name} types`
+        : `Enable all ${provider.name} types`,
+      onclick: (e) => {
+        e.stopPropagation();
+        opts.onSelectAll(!hasSelected);
+      },
+    }, [
+      el('i', { class: 'fa-solid fa-power-off' }),
+    ]),
     el('i', { class: 'fa-solid fa-chevron-right pv-caret' }),
   ]);
   section.appendChild(header);
@@ -3202,22 +3246,19 @@ function renderFiltersCard(preset) {
   body.appendChild(sevWrap);
 
   // ---- Subtype filters (per subscribed subtype-aware alert type) ----
-  // Rendered shell now; chip options populate asynchronously once the
-  // /filters catalogue arrives. State is held in subtypeSelections map
-  // keyed by alert_type → Set of selected subtype strings.
+  // Section is hidden entirely when no subtype-aware alert types are
+  // subscribed — there's nothing to filter, so the empty heading would
+  // just be noise.
   const subtypeAware = (preset.alert_types || []).filter(t => _DASH_SUBTYPE_AWARE_TYPES.has(t));
   const subtypeSelections = {};
   for (const at of subtypeAware) {
     subtypeSelections[at] = new Set(f.subtype_filters[at] || []);
   }
-  const subtypeWrap = el('div', {});
-  subtypeWrap.appendChild(el('label', { class: 'field-label' }, 'Subtype filters (per source)'));
-  const subtypeBody = el('div', {});
-  subtypeWrap.appendChild(subtypeBody);
-  if (!subtypeAware.length) {
-    subtypeBody.appendChild(el('div', { style: 'font-size:0.75rem;color:var(--text-soft);' },
-      'No subscribed alert types support sub-type filtering. Add RFS, BOM, Traffic, Waze, or User incidents to use this.'));
-  } else {
+  if (subtypeAware.length) {
+    const subtypeWrap = el('div', {});
+    subtypeWrap.appendChild(el('label', { class: 'field-label' }, 'Subtype filters (per source)'));
+    const subtypeBody = el('div', {});
+    subtypeWrap.appendChild(subtypeBody);
     // Placeholder rows shown immediately; replaced once catalogue resolves.
     for (const at of subtypeAware) {
       const row = el('div', {
@@ -3301,8 +3342,8 @@ function renderFiltersCard(preset) {
     subtypeWrap.appendChild(el('div', {
       style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.35rem',
     }, 'Empty selection = all subtypes pass. Pick one or more to whitelist. Alerts with no subtype field still come through.'));
+    body.appendChild(subtypeWrap);
   }
-  body.appendChild(subtypeWrap);
 
   // ---- geofilter (interactive map) ----
   const geofilterMap = makeGeofilterMap(preset, f.geofilter);
