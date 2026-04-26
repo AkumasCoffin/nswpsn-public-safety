@@ -15430,16 +15430,19 @@ def _dash_session_put(sid, data):
     _dash_sessions_db_ensure()
     _DASH_SESSIONS[sid] = data
     _dash_session_persist(sid, data)
-    # Login = a fresh sid being put. Record/refresh the persistent user row.
-    try:
-        _dash_users_upsert(
-            data.get('uid'),
-            username=data.get('username'),
-            avatar=data.get('avatar'),
-            increment_login=True,
-        )
-    except Exception:
-        pass
+    # Record/refresh the persistent user row in a background thread so the
+    # OAuth callback doesn't block on a second DB write — the user's
+    # session is already valid in memory and persisted via session_persist.
+    uid = data.get('uid')
+    if uid:
+        username = data.get('username')
+        avatar = data.get('avatar')
+        threading.Thread(
+            target=lambda: _dash_users_upsert(
+                uid, username=username, avatar=avatar, increment_login=True),
+            daemon=True,
+            name='dash-users-upsert',
+        ).start()
     # Opportunistic GC when the store grows — drop anything already expired.
     if len(_DASH_SESSIONS) > 512:
         now = int(time.time())
@@ -15853,9 +15856,16 @@ def dashboard_auth_callback():
                      'User-Agent': 'NSWPSN-Dashboard'},
             timeout=15,
         )
+    # Parallelize the two Discord identity calls — they're independent and
+    # each can take 500-1500ms. Sequential they added up to several
+    # seconds of OAuth callback latency for the user.
     try:
-        ur = _with_token('/users/@me')
-        gr = _with_token('/users/@me/guilds')
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_ur = ex.submit(_with_token, '/users/@me')
+            f_gr = ex.submit(_with_token, '/users/@me/guilds')
+            ur = f_ur.result()
+            gr = f_gr.result()
     except Exception as e:
         return _dash_err('discord_error', f'Identity fetch failed: {e}', 502)
     if ur.status_code != 200 or gr.status_code != 200:
@@ -16860,13 +16870,62 @@ def dashboard_guild_preset_override_delete(guild_id, preset_id, alert_type):
 
 # ---------- Preset stats ----------
 
-# Per-guild preset-stats cache. The underlying query joins alert_presets
-# against preset_fire_log with two windowed COUNT FILTERs and a MAX, which
-# can take seconds on a busy guild even with the new index. Stats only
-# need to be roughly fresh — a 60s TTL is plenty.
+# Per-guild preset-stats cache. Underlying query joins alert_presets
+# against preset_fire_log with two windowed COUNT FILTERs and a MAX —
+# can take seconds on a busy guild before the index lands. Stale-while-
+# revalidate so the dashboard never blocks waiting for it: serve the
+# previous value (or an empty stub) instantly, refresh in background.
 _DASH_PRESET_STATS_CACHE = {}      # gid -> (data, ts)
 _DASH_PRESET_STATS_CACHE_LOCK = threading.Lock()
-_DASH_PRESET_STATS_TTL = 60        # seconds
+_DASH_PRESET_STATS_TTL = 60        # seconds — fresh window
+_DASH_PRESET_STATS_INFLIGHT = set()  # coalesce duplicate refreshes
+_DASH_PRESET_STATS_INFLIGHT_LOCK = threading.Lock()
+
+
+def _refresh_preset_stats(gid):
+    """Run the heavy preset-stats query and update the cache. Runs in a
+    background thread when the cache is stale or absent — the request
+    handler returns whatever was cached and never blocks on this."""
+    with _DASH_PRESET_STATS_INFLIGHT_LOCK:
+        if gid in _DASH_PRESET_STATS_INFLIGHT:
+            return
+        _DASH_PRESET_STATS_INFLIGHT.add(gid)
+    try:
+        conn = _bot_db_conn()
+        if conn is None:
+            return
+        out = []
+        try:
+            cur = conn.cursor()
+            cur.execute("SET LOCAL statement_timeout = '30s'")
+            cur.execute('''
+                SELECT p.id AS preset_id,
+                       COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
+                       COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
+                       MAX(f.fired_at) AS last_fire
+                  FROM alert_presets p
+             LEFT JOIN preset_fire_log f ON f.preset_id = p.id
+                 WHERE p.guild_id = %s
+              GROUP BY p.id
+            ''', (gid,))
+            for r in cur.fetchall():
+                lf = r['last_fire']
+                out.append({
+                    'preset_id': str(r['preset_id']),
+                    'fires_7d': int(r['fires_7d'] or 0),
+                    'fires_30d': int(r['fires_30d'] or 0),
+                    'last_fire': lf.isoformat() if lf else None,
+                })
+        except Exception as e:
+            Log.warn(f"preset_stats refresh skipped (still slow): {e}")
+            return
+        finally:
+            conn.close()
+        with _DASH_PRESET_STATS_CACHE_LOCK:
+            _DASH_PRESET_STATS_CACHE[gid] = (out, time.time())
+    finally:
+        with _DASH_PRESET_STATS_INFLIGHT_LOCK:
+            _DASH_PRESET_STATS_INFLIGHT.discard(gid)
 
 
 @app.route('/api/dashboard/guilds/<guild_id>/preset-stats', methods=['GET'])
@@ -16880,50 +16939,30 @@ def dashboard_guild_preset_stats(guild_id):
     except ValueError:
         return _dash_err('bad_request', 'guild_id must be numeric.', 400)
 
-    # Cache hit path — no DB.
     now = time.time()
     with _DASH_PRESET_STATS_CACHE_LOCK:
         cached = _DASH_PRESET_STATS_CACHE.get(gid)
-    if cached and (now - cached[1]) < _DASH_PRESET_STATS_TTL:
-        return jsonify({'stats': cached[0]})
 
-    conn = _bot_db_conn()
-    if conn is None:
-        return _dash_err('dashboard_disabled',
-                         'BOT_DATA_DATABASE_URL is not configured.', 503)
-    try:
-        cur = conn.cursor()
-        # One row per preset: fires_7d + fires_30d + last_fire.
-        # Uses idx_preset_fire_log_preset_fired (created by
-        # _dash_bot_db_indexes_ensure) for the join + time filter.
-        cur.execute('''
-            SELECT p.id AS preset_id,
-                   COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
-                   COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
-                   MAX(f.fired_at) AS last_fire
-              FROM alert_presets p
-         LEFT JOIN preset_fire_log f ON f.preset_id = p.id
-             WHERE p.guild_id = %s
-          GROUP BY p.id
-        ''', (gid,))
-        out = []
-        for r in cur.fetchall():
-            lf = r['last_fire']
-            out.append({
-                'preset_id': str(r['preset_id']),
-                'fires_7d': int(r['fires_7d'] or 0),
-                'fires_30d': int(r['fires_30d'] or 0),
-                'last_fire': lf.isoformat() if lf else None,
-            })
-    except Exception as e:
-        Log.error(f"dashboard preset_stats error: {e}")
-        return _dash_err('db_error', str(e), 500)
-    finally:
-        conn.close()
+    if cached:
+        data, ts = cached
+        # Always return cached data immediately. If stale, kick off a
+        # background refresh — the next call gets fresh data.
+        if (now - ts) >= _DASH_PRESET_STATS_TTL:
+            threading.Thread(
+                target=_refresh_preset_stats, args=(gid,),
+                daemon=True, name='preset-stats-refresh',
+            ).start()
+        return jsonify({'stats': data, 'cache_age_seconds': int(now - ts)})
 
-    with _DASH_PRESET_STATS_CACHE_LOCK:
-        _DASH_PRESET_STATS_CACHE[gid] = (out, now)
-    return jsonify({'stats': out})
+    # First call ever for this guild — return an empty stub immediately
+    # and start the refresh. The dashboard will see empty stats on the
+    # first load (no historical data), and the refresh fills the cache
+    # within a few seconds for the next call.
+    threading.Thread(
+        target=_refresh_preset_stats, args=(gid,),
+        daemon=True, name='preset-stats-refresh',
+    ).start()
+    return jsonify({'stats': [], 'cache_age_seconds': None, 'warming': True})
 
 
 # ---------- Mute state ----------
