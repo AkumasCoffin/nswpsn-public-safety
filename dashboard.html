@@ -2590,8 +2590,8 @@ const _DASH_SUBTYPE_AWARE_TYPES = new Set([
 let _dashFilterFetchPromise = null;
 function fetchFilterCatalogue() {
   if (_dashFilterFetchPromise) return _dashFilterFetchPromise;
-  _dashFilterFetchPromise = apiFetch(`${API_BASE_URL}/api/data/history/filters`)
-    .then(r => r.ok ? r.json() : { providers: [] })
+  _dashFilterFetchPromise = api('/api/data/history/filters')
+    .then(d => d || { providers: [] })
     .catch(() => ({ providers: [] }));
   return _dashFilterFetchPromise;
 }

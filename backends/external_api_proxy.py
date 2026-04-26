@@ -4452,7 +4452,10 @@ PUBLIC_ENDPOINTS = {'/api/health', '/', '/api/config', '/api/heartbeat', '/api/e
                     # /api/waze/ingest has its own auth (X-Ingest-Key matched against WAZE_INGEST_KEY);
                     # adding to public here means NSWPSN_API_KEY isn't required, so a userscript in
                     # a random user's browser can POST without knowing the full backend API key.
-                    '/api/waze/ingest'}
+                    '/api/waze/ingest',
+                    # Read-only filter catalogue — used by /logs and the dashboard to populate
+                    # dropdowns. No PII, just aggregated category/source/severity counts.
+                    '/api/data/history/filters'}
 # Endpoints that start with these prefixes are public (for dynamic routes like /api/check-editor/<user_id>)
 PUBLIC_ENDPOINT_PREFIXES = ['/api/check-editor/', '/api/centralwatch/image/', '/api/centralwatch/cameras',
                             # Dashboard endpoints use Discord OAuth2 session cookie auth
