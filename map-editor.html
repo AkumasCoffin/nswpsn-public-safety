@@ -1515,6 +1515,13 @@
                 </tr>
               </table>
             </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+              <span style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;width:48px;">Opacity</span>
+              <input type="range" id="heat-opacity" min="10" max="100" step="5" value="100"
+                     oninput="setHeatmapOpacity(this.value)"
+                     style="flex:1;accent-color:#22d3ee;cursor:pointer;">
+              <span id="heat-opacity-val" style="font-size:10px;color:#cbd5e1;width:32px;text-align:right;">100%</span>
+            </div>
             <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
               <button type="button" onclick="loadPoliceHeatmap(true)" style="background:rgba(220,38,38,0.18);border:1px solid rgba(220,38,38,0.55);color:#fecaca;font-size:10px;padding:4px 8px;border-radius:4px;cursor:pointer;">⟳ Refresh</button>
               <span id="heat-stats" style="font-size:10px;color:#64748b;flex:1;text-align:right;">Loading…</span>
@@ -1845,6 +1852,16 @@
     const roadworkLayer = L.layerGroup();
     let policeHeatmapLayer = null;       // L.heatLayer instance — created on first toggle
     let _policeHeatmapData = null;       // last fetched payload from /api/waze/police-heatmap
+    let _heatmapOpacityScale = 1.0;      // user-controlled multiplier (0.10–1.00)
+    function setHeatmapOpacity(v) {
+      const pct = Math.max(10, Math.min(100, parseInt(v, 10) || 100));
+      _heatmapOpacityScale = pct / 100;
+      const lbl = document.getElementById('heat-opacity-val');
+      if (lbl) lbl.textContent = pct + '%';
+      if (typeof _renderPoliceHexGrid === 'function' && _policeHeatmapData) {
+        _renderPoliceHexGrid();
+      }
+    }
     
     // Frontend cache for instant layer toggle (prevents re-fetch on quick on/off)
     // Backend handles actual data caching with pre-warming - this is just for UI responsiveness
@@ -4415,13 +4432,14 @@ async function loadPagerData() {
           const isEmpty = count === 0;
           const t = isEmpty ? 0 : (Math.log(count + 1) / Math.log(maxCount + 1));
           const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
+          const op = _heatmapOpacityScale;
           const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
             renderer: _heatmapCanvasRenderer,
             color: color,
             weight: isEmpty ? 0.4 : 1.2,
-            opacity: isEmpty ? 0.35 : 0.95,
+            opacity: (isEmpty ? 0.35 : 0.95) * op,
             fillColor: isEmpty ? '#0f172a' : color,
-            fillOpacity: isEmpty ? 0.05 : 0.45 + 0.45 * t,
+            fillOpacity: (isEmpty ? 0.05 : 0.45 + 0.45 * t) * op,
             lineJoin: 'round',
             interactive: !isEmpty,
           });
