@@ -441,6 +441,26 @@
       font-variant-numeric: tabular-nums;
     }
     .provider-header .pv-count.has-selected { color: var(--accent); font-weight: 600; }
+    .provider-header .pv-toggle {
+      background: transparent;
+      border: 1px solid rgba(148,163,184,0.25);
+      border-radius: 999px;
+      width: 26px; height: 26px;
+      display: inline-flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--text-soft);
+      font-size: 0.75rem;
+      transition: all 0.12s ease;
+      flex-shrink: 0;
+    }
+    .provider-header .pv-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    .provider-header .pv-toggle.partial { color: var(--accent); border-color: rgba(249,115,22,0.45); }
+    .provider-header .pv-toggle.on {
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .provider-header .pv-toggle.on:hover { background: #ea580c; }
     .provider-header .pv-caret {
       font-size: 0.7rem;
       color: var(--text-soft);
@@ -2393,16 +2413,26 @@ function _renderProviderSection(provider, selected, opts) {
   const selectedCount = types.filter(t => selected.has(t.key)).length;
   const totalCount = types.length;
   const hasSelected = selectedCount > 0;
+  const allSelected = selectedCount === totalCount && totalCount > 0;
   const expanded = !!opts.expanded;
 
   const section = el('div', {
     class: 'provider-section' + (expanded ? ' expanded' : ''),
   });
-  const header = el('button', {
+  // Header is a div (not a button) so we can nest the on/off toggle as a
+  // real button. Clicks anywhere except the toggle expand the section.
+  const header = el('div', {
     class: 'provider-header',
-    type: 'button',
+    role: 'button',
+    tabindex: '0',
     'aria-expanded': expanded ? 'true' : 'false',
     onclick: () => opts.onExpand(!expanded),
+    onkeydown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        opts.onExpand(!expanded);
+      }
+    },
   }, [
     el('span', { class: 'pv-icon' },
       el('i', { class: `fa-solid fa-${provider.icon || 'circle'}`,
@@ -2410,6 +2440,20 @@ function _renderProviderSection(provider, selected, opts) {
     el('span', { class: 'pv-name' }, provider.name),
     el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
       `${selectedCount}/${totalCount}`),
+    // Per-source on/off — flips every type in the provider.
+    el('button', {
+      class: 'pv-toggle' + (allSelected ? ' on' : (hasSelected ? ' partial' : '')),
+      type: 'button',
+      title: allSelected
+        ? `Disable all ${provider.name} types`
+        : `Enable all ${provider.name} types`,
+      onclick: (e) => {
+        e.stopPropagation();
+        opts.onSelectAll(!hasSelected);
+      },
+    }, [
+      el('i', { class: 'fa-solid fa-power-off' }),
+    ]),
     el('i', { class: 'fa-solid fa-chevron-right pv-caret' }),
   ]);
   section.appendChild(header);
@@ -2424,7 +2468,10 @@ function _renderProviderSection(provider, selected, opts) {
         onclick: (e) => { e.stopPropagation(); opts.onSelectAll(!allSelected); },
       }, allSelected ? 'Clear all' : 'Select all'),
     ]));
-    // Chips
+    // Chips — show only the human label. Provider context is already in
+    // the section header, so prefixing with the source (e.g. waze_hazard)
+    // is redundant. Canonical key kept on the title attribute for hover
+    // tooltips / quick debug.
     const row = el('div', { class: 'chip-row' });
     for (const t of types) {
       const active = selected.has(t.key);
@@ -2433,10 +2480,7 @@ function _renderProviderSection(provider, selected, opts) {
         onclick: (e) => { e.stopPropagation(); opts.onToggleType(t.key); },
         title: t.key,
         type: 'button',
-      }, [
-        el('span', {}, t.label || ALERT_TYPE_LABELS[t.key] || t.key),
-        el('span', { class: 'mono' }, t.key),
-      ]));
+      }, t.label || ALERT_TYPE_LABELS[t.key] || t.key));
     }
     body.appendChild(row);
     section.appendChild(body);
@@ -2571,6 +2615,61 @@ const _DASH_SEVERITY_TYPE_LABELS = {
 };
 const _DASH_FILTER_SEVERITY_TYPES = new Set(Object.keys(_DASH_SEVERITY_PER_TYPE));
 
+// Canonical alert_types that carry a meaningful sub-type field. Mirrors
+// _DASH_SUBTYPE_AWARE_TYPES on the backend. Only these show subtype-filter
+// rows in the filters card.
+const _DASH_SUBTYPE_AWARE_TYPES = new Set([
+  'rfs',
+  'bom_land', 'bom_marine',
+  'traffic_incident', 'traffic_roadwork', 'traffic_flood',
+  'traffic_fire', 'traffic_majorevent',
+  'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
+  'user_incident',
+]);
+
+// Lazy-fetched + cached `/api/data/history/filters` providers tree.
+// First call kicks off a request; subsequent calls reuse the same promise.
+// Used to populate the subtype filter chip lists with whatever values
+// have actually been observed in data_history.
+//
+// NOTE: deliberately bypasses api() — that helper sends `credentials:
+// 'include'` for the dashboard session cookie, but the filter endpoint
+// returns `Access-Control-Allow-Origin: *`, which browsers refuse to
+// combine with credentialled requests. The endpoint is public; no cookie
+// needed.
+let _dashFilterFetchPromise = null;
+function fetchFilterCatalogue() {
+  if (_dashFilterFetchPromise) return _dashFilterFetchPromise;
+  _dashFilterFetchPromise = fetch(API + '/api/data/history/filters')
+    .then(r => r.ok ? r.json() : { providers: [] })
+    .catch(() => ({ providers: [] }));
+  return _dashFilterFetchPromise;
+}
+
+// Given the catalogue + a canonical alert_type, return a deduped sorted
+// array of subtype values (drawing from both `categories` and `subcategories`
+// of the matching provider type).
+function subtypeOptionsFor(catalogue, alertType) {
+  if (!catalogue || !Array.isArray(catalogue.providers)) return [];
+  const seen = new Map();   // value -> count (for sort)
+  for (const p of catalogue.providers) {
+    for (const t of (p.types || [])) {
+      if (t.alert_type !== alertType) continue;
+      for (const list of [t.categories, t.subcategories]) {
+        if (!Array.isArray(list)) continue;
+        for (const e of list) {
+          if (!e || typeof e.value !== 'string' || !e.value) continue;
+          seen.set(e.value, (seen.get(e.value) || 0) + (Number(e.count) || 0));
+        }
+      }
+    }
+  }
+  // Sort by count desc, then alphabetically.
+  return Array.from(seen.entries())
+    .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+    .map(([v]) => v);
+}
+
 function presetFilters(preset) {
   const f = (preset && preset.filters) || {};
   // Geofilter: prefer the new `geofilter` key. Legacy presets stored a
@@ -2598,10 +2697,23 @@ function presetFilters(preset) {
       if (typeof v === 'string' && v) sev[at] = v;
     }
   }
+  // Subtype filters: per-alert-type whitelist of sub-classifications.
+  // Empty / missing dict means no filter.
+  let subtypeFilters = {};
+  const rawSf = f.subtype_filters;
+  if (rawSf && typeof rawSf === 'object') {
+    for (const [at, list] of Object.entries(rawSf)) {
+      if (Array.isArray(list)) {
+        const cleaned = list.filter(v => typeof v === 'string' && v);
+        if (cleaned.length) subtypeFilters[at] = cleaned;
+      }
+    }
+  }
   return {
     keywords_include: Array.isArray(f.keywords_include) ? f.keywords_include : [],
     keywords_exclude: Array.isArray(f.keywords_exclude) ? f.keywords_exclude : [],
     severity_min: sev,
+    subtype_filters: subtypeFilters,
     geofilter: gf,
   };
 }
@@ -2613,6 +2725,8 @@ function filtersSummary(preset) {
   if (kw) bits.push(`${kw} keyword${kw === 1 ? '' : 's'}`);
   const nSev = Object.keys(f.severity_min).length;
   if (nSev) bits.push(`severity (${nSev} source${nSev === 1 ? '' : 's'})`);
+  const nSub = Object.keys(f.subtype_filters).length;
+  if (nSub) bits.push(`subtypes (${nSub} source${nSub === 1 ? '' : 's'})`);
   if (f.geofilter) {
     const t = f.geofilter.type;
     bits.push(t === 'ring' ? 'circle' : (t === 'polygon' ? 'polygon' : 'square'));
@@ -3037,7 +3151,9 @@ function renderFiltersCard(preset) {
   // Header row: summary + toggle button.
   const editorId = 'filters-editor-' + preset.id;
   let expanded = !!(f.keywords_include.length || f.keywords_exclude.length
-                    || Object.keys(f.severity_min).length || f.geofilter);
+                    || Object.keys(f.severity_min).length
+                    || Object.keys(f.subtype_filters).length
+                    || f.geofilter);
 
   const summarySpan = el('span', { class: 'filters-summary' }, filtersSummary(preset));
   const toggleBtn = el('button', {
@@ -3058,7 +3174,7 @@ function renderFiltersCard(preset) {
   card.appendChild(el('div', { class: 'card-row' }, [
     el('span', { class: 'label' }, [
       el('span', {}, 'Filters'),
-      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, or a region.'),
+      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, sub-types, or a region.'),
     ]),
     el('div', { style: 'display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap' }, [summarySpan, toggleBtn]),
   ]));
@@ -3129,6 +3245,106 @@ function renderFiltersCard(preset) {
       : 'Add RFS, BOM, or traffic_major to this preset to use severity floors. Greyed-out rows are inactive.'));
   body.appendChild(sevWrap);
 
+  // ---- Subtype filters (per subscribed subtype-aware alert type) ----
+  // Section is hidden entirely when no subtype-aware alert types are
+  // subscribed — there's nothing to filter, so the empty heading would
+  // just be noise.
+  const subtypeAware = (preset.alert_types || []).filter(t => _DASH_SUBTYPE_AWARE_TYPES.has(t));
+  const subtypeSelections = {};
+  for (const at of subtypeAware) {
+    subtypeSelections[at] = new Set(f.subtype_filters[at] || []);
+  }
+  if (subtypeAware.length) {
+    const subtypeWrap = el('div', {});
+    subtypeWrap.appendChild(el('label', { class: 'field-label' }, 'Subtype filters (per source)'));
+    const subtypeBody = el('div', {});
+    subtypeWrap.appendChild(subtypeBody);
+    // Placeholder rows shown immediately; replaced once catalogue resolves.
+    for (const at of subtypeAware) {
+      const row = el('div', {
+        id: `subtype-row-${at}-${preset.id}`,
+        style: 'border:1px solid var(--border-subtle);border-radius:0.45rem;padding:0.45rem 0.55rem;margin-bottom:0.35rem;',
+      }, [
+        el('div', { style: 'display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;' }, [
+          el('span', { style: 'font-size:0.78rem;font-weight:600;' }, ALERT_TYPE_LABELS[at] || at),
+          el('span', { class: 'subtype-summary', style: 'font-size:0.7rem;color:var(--text-soft);' },
+             subtypeSelections[at].size
+               ? `${subtypeSelections[at].size} selected`
+               : 'all subtypes'),
+        ]),
+        el('div', { class: 'subtype-chips', style: 'display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem;font-size:0.75rem;color:var(--text-soft);' },
+           'Loading subtypes…'),
+      ]);
+      subtypeBody.appendChild(row);
+    }
+    // Async populate the chip rows.
+    fetchFilterCatalogue().then(catalogue => {
+      for (const at of subtypeAware) {
+        const row = document.getElementById(`subtype-row-${at}-${preset.id}`);
+        if (!row) continue;
+        const chipBox = row.querySelector('.subtype-chips');
+        const summary = row.querySelector('.subtype-summary');
+        if (!chipBox) continue;
+        chipBox.innerHTML = '';
+        const opts = subtypeOptionsFor(catalogue, at);
+        if (!opts.length) {
+          chipBox.appendChild(el('span', {}, 'No subtypes recorded yet for this source.'));
+          continue;
+        }
+        const updateSummary = () => {
+          summary.textContent = subtypeSelections[at].size
+            ? `${subtypeSelections[at].size} selected`
+            : 'all subtypes';
+        };
+        for (const v of opts) {
+          const isSel = subtypeSelections[at].has(v);
+          const chip = el('button', {
+            type: 'button',
+            class: 'chip' + (isSel ? ' active' : ''),
+            style: 'cursor:pointer;font-size:0.72rem;padding:0.2rem 0.55rem;',
+          }, v);
+          chip.onclick = (e) => {
+            e.preventDefault();
+            if (subtypeSelections[at].has(v)) {
+              subtypeSelections[at].delete(v);
+              chip.classList.remove('active');
+            } else {
+              subtypeSelections[at].add(v);
+              chip.classList.add('active');
+            }
+            updateSummary();
+          };
+          chipBox.appendChild(chip);
+        }
+        // Pre-existing selections that aren't in the catalogue (rare —
+        // user previously selected a value that since stopped appearing
+        // in data_history). Surface them as orphan chips so the user
+        // can deselect, but mark them.
+        for (const v of subtypeSelections[at]) {
+          if (!opts.includes(v)) {
+            const chip = el('button', {
+              type: 'button',
+              class: 'chip active',
+              style: 'cursor:pointer;font-size:0.72rem;padding:0.2rem 0.55rem;opacity:0.65;',
+              title: 'Not currently in the data catalogue — click to remove.',
+            }, v + ' *');
+            chip.onclick = (e) => {
+              e.preventDefault();
+              subtypeSelections[at].delete(v);
+              chip.remove();
+              updateSummary();
+            };
+            chipBox.appendChild(chip);
+          }
+        }
+      }
+    });
+    subtypeWrap.appendChild(el('div', {
+      style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.35rem',
+    }, 'Empty selection = all subtypes pass. Pick one or more to whitelist. Alerts with no subtype field still come through.'));
+    body.appendChild(subtypeWrap);
+  }
+
   // ---- geofilter (interactive map) ----
   const geofilterMap = makeGeofilterMap(preset, f.geofilter);
   body.appendChild(el('div', {}, [
@@ -3145,11 +3361,16 @@ function renderFiltersCard(preset) {
     for (const [at, sel] of Object.entries(sevSelects)) {
       if (!sel.disabled && sel.value) sev[at] = sel.value;
     }
+    const subtypes = {};
+    for (const [at, set] of Object.entries(subtypeSelections)) {
+      if (set.size) subtypes[at] = Array.from(set);
+    }
     const gf = geofilterMap.get();
     const out = {};
     if (inc.length) out.keywords_include = inc;
     if (exc.length) out.keywords_exclude = exc;
     if (Object.keys(sev).length) out.severity_min = sev;
+    if (Object.keys(subtypes).length) out.subtype_filters = subtypes;
     if (gf) out.geofilter = gf;
     return out;
   };
@@ -3178,6 +3399,17 @@ function renderFiltersCard(preset) {
       incTa.value = ''; excTa.value = '';
       for (const sel of Object.values(sevSelects)) {
         if (!sel.disabled) sel.value = '';
+      }
+      for (const set of Object.values(subtypeSelections)) set.clear();
+      // Re-render chips as unselected.
+      for (const at of Object.keys(subtypeSelections)) {
+        const row = document.getElementById(`subtype-row-${at}-${preset.id}`);
+        if (!row) continue;
+        for (const chip of row.querySelectorAll('.subtype-chips .chip')) {
+          chip.classList.remove('active');
+        }
+        const summary = row.querySelector('.subtype-summary');
+        if (summary) summary.textContent = 'all subtypes';
       }
       geofilterMap.set(null);
       await patchPreset(preset.id, { filters: {} });
