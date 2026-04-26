@@ -5699,33 +5699,30 @@ function initPagerHoursFromStorage() {
         if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
           map.removeLayer(policeHeatmapLayer);
         }
-        // Sqrt-normalise intensities. Linear scaling against max_count
-        // looks flat when one bin is way hotter than the rest — a single
-        // 500-count outlier flattens everything else to a barely-visible
-        // 1-2% of max. sqrt() compresses that distribution so mid-density
-        // bins land in the visible part of the gradient.
+        // Sqrt-normalise intensities so a single hot bin doesn't flatten
+        // the rest into invisibility (linear scaling against max_count
+        // makes mid-density bins render at <2% of max).
         const sqrtPoints = (data.points || []).map(
           ([lat, lng, c]) => [lat, lng, Math.sqrt(Math.max(c, 0))]
         );
         const sqrtMax = Math.sqrt(data.max_count || 1);
         policeHeatmapLayer = L.heatLayer(sqrtPoints, {
-          radius: 28,
-          blur: 22,
+          radius: 16,
+          blur: 14,
           max: sqrtMax,
-          minOpacity: 0.5,
-          // Pure red ramp — light at the edges, deep red at the hotspots.
-          // Each stop is reasonably spaced so a low-density area shows as
-          // a soft pink, mid-density as a clear red, and only the very
-          // hottest bins go dark. Transparent at the outer edge so blobs
-          // feather into the basemap without sharp boundaries.
+          minOpacity: 0.45,
+          // Cyber palette — cyan through magenta to hot pink. Reads as
+          // a data visualisation rather than a blood splatter. Edges
+          // fade to transparent cyan, hotspots peak at a bright
+          // pink-red glow.
           gradient: {
-            0.0:  'rgba(254,224,210,0)',
-            0.15: 'rgba(252,146,114,0.55)',  // soft pink-red, low density
-            0.35: '#fb6a4a',                 // medium red
-            0.55: '#ef3b2c',                 // bright red
-            0.75: '#cb181d',                 // deep red
-            0.90: '#a50f15',                 // dark red
-            1.0:  '#67000d',                 // deepest hotspots
+            0.0:  'rgba(34,211,238,0)',     // transparent cyan
+            0.15: 'rgba(34,211,238,0.55)',  // faint cyan
+            0.35: '#06b6d4',                // cyan
+            0.55: '#8b5cf6',                // violet
+            0.75: '#d946ef',                // magenta
+            0.90: '#ec4899',                // hot pink
+            1.0:  '#f43f5e',                // pink-red peak
           },
         });
         map.addLayer(policeHeatmapLayer);

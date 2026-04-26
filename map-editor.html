@@ -4268,18 +4268,18 @@ async function loadPagerData() {
         );
         const sqrtMax = Math.sqrt(data.max_count || 1);
         policeHeatmapLayer = L.heatLayer(sqrtPoints, {
-          radius: 28,
-          blur: 22,
+          radius: 16,
+          blur: 14,
           max: sqrtMax,
-          minOpacity: 0.5,
+          minOpacity: 0.45,
           gradient: {
-            0.0:  'rgba(254,224,210,0)',
-            0.15: 'rgba(252,146,114,0.55)',
-            0.35: '#fb6a4a',
-            0.55: '#ef3b2c',
-            0.75: '#cb181d',
-            0.90: '#a50f15',
-            1.0:  '#67000d',
+            0.0:  'rgba(34,211,238,0)',
+            0.15: 'rgba(34,211,238,0.55)',
+            0.35: '#06b6d4',
+            0.55: '#8b5cf6',
+            0.75: '#d946ef',
+            0.90: '#ec4899',
+            1.0:  '#f43f5e',
           },
         });
         map.addLayer(policeHeatmapLayer);
