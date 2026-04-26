@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.14
+// @version      1.15
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -249,6 +249,12 @@
     // backend warns "Waze ingest stale: no POST in 15m" when this happens.
     // Reloading restarts the SPA, the WebSocket, and our hooks. Cheap.
     const RELOAD_INTERVAL_MS     = 30 * 60 * 1000;
+    // Watchdog: if no successful ingest in this long, force a reload
+    // even before the 30-min absolute timer fires. The backend's
+    // staleness threshold is 15 min — set the watchdog tighter so we
+    // recover before backend pages anyone.
+    const STUCK_RELOAD_AFTER_MS  = 6 * 60 * 1000;
+    const STUCK_CHECK_INTERVAL_MS = 60 * 1000;
 
     const log = (...args) => console.log('[NSWPSN]', ...args);
 
@@ -278,6 +284,12 @@
         } catch (e) { log('parse err', e); }
     }
 
+    // Watchdog state: last time we successfully POSTed an ingest. If
+    // this stalls (Waze SPA wedged, fetch-hook detached, etc.) the
+    // backend goes blind to whichever region we were on. Reload
+    // proactively before the 30-min absolute timer fires.
+    let _lastIngestSuccess = Date.now();
+
     function forward(payload) {
         const xhr = (typeof GM_xmlhttpRequest !== 'undefined') ? GM_xmlhttpRequest
                   : (typeof GM !== 'undefined' && GM.xmlHttpRequest) ? GM.xmlHttpRequest
@@ -291,6 +303,7 @@
             timeout: 15000,
             onload: (r) => {
                 if (r.status >= 200 && r.status < 300) {
+                    _lastIngestSuccess = Date.now();
                     log('ingest OK', payload.alerts.length + 'a', payload.jams.length + 'j');
                     try { onIngestArrived(); } catch (e) {}
                 } else {
@@ -659,6 +672,19 @@
         try { pageWin.location.reload(); } catch (e) { log('reload failed', e); }
     }, RELOAD_INTERVAL_MS);
 
-    log('NSWPSN Waze Forwarder v1.14 loaded — backend:', BACKEND_URL,
-        '· auto-reload every', RELOAD_INTERVAL_MS / 60000, 'min');
+    // Watchdog — checks once a minute. If we haven't had a successful
+    // ingest in STUCK_RELOAD_AFTER_MS, force a reload even though the
+    // 30-min timer hasn't fired yet. Tighter than the backend's 15-min
+    // staleness threshold so we self-heal before the backend warns.
+    setInterval(() => {
+        const idleMs = Date.now() - _lastIngestSuccess;
+        if (idleMs > STUCK_RELOAD_AFTER_MS) {
+            log(`watchdog: no ingest in ${Math.round(idleMs / 1000)}s — forcing reload`);
+            try { pageWin.location.reload(); } catch (e) {}
+        }
+    }, STUCK_CHECK_INTERVAL_MS);
+
+    log('NSWPSN Waze Forwarder v1.15 loaded — backend:', BACKEND_URL,
+        `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
+        `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`);
 })();

@@ -1693,7 +1693,10 @@
                 </tr>
               </table>
             </div>
-            <div id="heat-stats" style="font-size:10px;color:#64748b;margin-top:6px;text-align:center;">Loading…</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+              <button type="button" onclick="loadPoliceHeatmap(true)" style="background:rgba(220,38,38,0.18);border:1px solid rgba(220,38,38,0.55);color:#fecaca;font-size:10px;padding:4px 8px;border-radius:4px;cursor:pointer;">⟳ Refresh</button>
+              <span id="heat-stats" style="font-size:10px;color:#64748b;flex:1;text-align:right;">Loading…</span>
+            </div>
           </div>
         </div>
       </div>
@@ -5672,13 +5675,28 @@ function initPagerHoursFromStorage() {
     // Police Heatmap — sub-toggle inside the Police panel. Reuses the
     // panel's three pin-filter checkboxes (chk-police-visible / hidden /
     // camera) so the same type filter applies to both pins and heatmap.
+    let _policeHeatmapRefreshTimer = null;
     function togglePoliceHeatmapMode(on) {
       const controls = document.getElementById('police-heatmap-controls');
       if (controls) controls.style.display = on ? '' : 'none';
       if (on) {
         loadPoliceHeatmap();
-      } else if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-        map.removeLayer(policeHeatmapLayer);
+        // Auto-refresh while the heatmap is visible. Backend cache
+        // refreshes every 30 min, so a 5-min frontend pull is plenty
+        // to pick up new server data shortly after each cache cycle
+        // without hammering the endpoint.
+        clearInterval(_policeHeatmapRefreshTimer);
+        _policeHeatmapRefreshTimer = setInterval(() => {
+          if (document.getElementById('chk-police-heatmap')?.checked) {
+            loadPoliceHeatmap(true);
+          }
+        }, 5 * 60 * 1000);
+      } else {
+        if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
+          map.removeLayer(policeHeatmapLayer);
+        }
+        clearInterval(_policeHeatmapRefreshTimer);
+        _policeHeatmapRefreshTimer = null;
       }
     }
 
