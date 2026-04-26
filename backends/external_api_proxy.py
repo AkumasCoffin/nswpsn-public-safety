@@ -1265,6 +1265,12 @@ def init_archive_db():
         daemon=True,
         name='filter-cache-scheduler',
     ).start()
+    # Hydrate the police-heatmap RAM cache from Postgres so the endpoint
+    # is hot the moment the backend is up — avoids a "warming" window.
+    try:
+        _hydrate_police_heatmap_ram_from_db()
+    except Exception as e:
+        Log.warn(f"Police heatmap RAM hydrate error: {e}")
     # Police heatmap cache refresh scheduler — same pattern.
     threading.Thread(
         target=_police_heatmap_scheduler,
@@ -1689,32 +1695,49 @@ def _store_incidents_batch_inner(incidents, source_type=None):
                     ))
                 
                 if rows_to_insert:
-                    # First, mark previous "latest" rows as not latest for source_ids we're inserting
-                    source_ids_to_update = [(r[0], r[1]) for r in rows_to_insert if r[1]]  # (source, source_id)
+                    # Mark previous "latest" rows as not-latest for source_ids
+                    # we're inserting. ONE bulk UPDATE instead of N round
+                    # trips — for big batches (369 roadwork rows) this was
+                    # the dominant cost.
+                    source_ids_to_update = [(r[0], r[1]) for r in rows_to_insert if r[1]]
                     if source_ids_to_update:
-                        for src, sid in source_ids_to_update:
-                            c.execute('''
-                                UPDATE data_history SET is_latest = 0 
-                                WHERE source = %s AND source_id = %s AND is_latest = 1
-                            ''', (src, sid))
-                    
+                        placeholders = ','.join(['(%s,%s)'] * len(source_ids_to_update))
+                        flat_params = [v for pair in source_ids_to_update for v in pair]
+                        c.execute(
+                            f'UPDATE data_history SET is_latest = 0 '
+                            f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
+                            flat_params,
+                        )
+
                     # Insert new rows with is_latest = 1
                     c.executemany('''
-                        INSERT INTO data_history 
+                        INSERT INTO data_history
                         (source, source_id, source_provider, source_type, fetched_at, source_timestamp, source_timestamp_unix,
-                         latitude, longitude, location_text, title, category, subcategory, 
+                         latitude, longitude, location_text, title, category, subcategory,
                          status, severity, data, is_active, is_live, last_seen, data_hash, is_latest)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
                     ''', rows_to_insert)
-                
-                # Update last_seen for ALL incidents in this batch (even if data unchanged)
+
+                # Update last_seen for ALL incidents in this batch (even if
+                # data unchanged). Two prior bugs here:
+                #   1. Loop of N round trips (one UPDATE per source_id) —
+                #      replaced with a single bulk UPDATE.
+                #   2. Missing is_latest=1 predicate meant the UPDATE
+                #      touched every historical snapshot of each incident
+                #      (an incident polled 100 times would have 100 rows
+                #      written each tick). Only the is_latest=1 row carries
+                #      the live last_seen; older snapshots should stay
+                #      frozen at the time they were captured.
                 if all_source_ids_in_batch:
-                    for source, source_id in all_source_ids_in_batch:
-                        c.execute('''
-                            UPDATE data_history 
-                            SET last_seen = %s, is_live = 1
-                            WHERE source = %s AND source_id = %s
-                        ''', (fetched_at, source, source_id))
+                    pairs = list(all_source_ids_in_batch)
+                    placeholders = ','.join(['(%s,%s)'] * len(pairs))
+                    flat_params = [v for pair in pairs for v in pair]
+                    c.execute(
+                        f'UPDATE data_history '
+                        f'SET last_seen = %s, is_live = 1 '
+                        f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
+                        [fetched_at] + flat_params,
+                    )
                 
                 # Mark incidents NO LONGER in API response as is_live = 0
                 # Only do this if we have a source_type and received at least some data
@@ -9308,10 +9331,13 @@ def waze_police():
 
 
 # --- Police heatmap -------------------------------------------------------
-# Pre-aggregated into police_heatmap_cache by a background thread so the
-# request path never touches data_history while heavy archiving holds
-# locks. Cache schema lives in init_archive_db; refresh logic in
-# _refresh_police_heatmap_cache().
+# Two-tier cache: RAM (read path) backed by Postgres (restart durability).
+#   - Refresh worker aggregates data_history → writes to BOTH the in-memory
+#     dict and the police_heatmap_cache table.
+#   - Endpoint reads only the RAM dict — never touches Postgres on the
+#     request path, so write contention from archiving can't slow it down.
+#   - On startup we hydrate the RAM dict from the Postgres cache so the
+#     cache is hot the moment the backend is up, no warming window.
 
 _POLICE_HEATMAP_BIN_DEG = 0.001   # ~110 m at NSW latitudes
 _POLICE_HEATMAP_MAX_BINS = 5000   # output cap, keeps the JSON small
@@ -9322,94 +9348,49 @@ _POLICE_VALID_SUBTYPES = {
 POLICE_HEATMAP_REFRESH_INTERVAL = int(
     os.environ.get('POLICE_HEATMAP_REFRESH_INTERVAL', 1800))  # 30 min
 
+# In-memory cache. Populated on startup from Postgres (instant warm-up)
+# and refreshed by the background scheduler. Protected by a lock so a
+# refresh swap is atomic from the reader's POV.
+_POLICE_HEATMAP_RAM = {
+    'rows':       [],     # list of (lat, lng, subcategory, count)
+    'updated_at': None,   # datetime of last successful refresh
+}
+_POLICE_HEATMAP_RAM_LOCK = threading.Lock()
+
 
 @app.route('/api/waze/police-heatmap')
 @require_api_key
 def waze_police_heatmap():
-    """Heatmap of recent Waze police pings, served from a pre-aggregated
-    cache table. Reads only the small cache, never aggregates data_history
-    on the request path.
-
-    Query params:
-        subtypes csv — POLICE_VISIBLE, POLICE_HIDING, POLICE_WITH_MOBILE_CAMERA
-                       (omit or empty = all three)
-        days     int — informational only; the cache always represents the
-                       last POLICE_HEATMAP_WINDOW_DAYS days. Accepted for
-                       backwards compat; no effect on results.
-    """
+    """Heatmap of recent Waze police pings, served entirely from the
+    in-memory dict. The DB is never read on the request path."""
     raw_subtypes = (request.args.get('subtypes') or '').strip()
     if raw_subtypes:
-        wanted = [s.strip().upper() for s in raw_subtypes.split(',') if s.strip()]
-        wanted = [s for s in wanted if s in _POLICE_VALID_SUBTYPES]
+        wanted = {s.strip().upper() for s in raw_subtypes.split(',') if s.strip()}
+        wanted &= _POLICE_VALID_SUBTYPES
     else:
-        wanted = []  # empty = all
+        wanted = None  # None = all (no filter)
 
-    # The cache is populated. Just read from it.
-    if wanted:
-        sql = (
-            'SELECT lat_bin, lng_bin, SUM(count) AS cnt '
-            'FROM police_heatmap_cache '
-            'WHERE subcategory = ANY(%s) '
-            'GROUP BY lat_bin, lng_bin '
-            'ORDER BY cnt DESC LIMIT %s'
-        )
-        params = [wanted, _POLICE_HEATMAP_MAX_BINS]
-    else:
-        sql = (
-            'SELECT lat_bin, lng_bin, SUM(count) AS cnt '
-            'FROM police_heatmap_cache '
-            'GROUP BY lat_bin, lng_bin '
-            'ORDER BY cnt DESC LIMIT %s'
-        )
-        params = [_POLICE_HEATMAP_MAX_BINS]
+    # Atomically grab the current snapshot. Refresh writes happen with the
+    # same lock held, so we always see a consistent set of rows.
+    with _POLICE_HEATMAP_RAM_LOCK:
+        rows = _POLICE_HEATMAP_RAM['rows']
+        updated_at = _POLICE_HEATMAP_RAM['updated_at']
 
-    points = []
-    total_records = 0
-    max_count = 0
-    last_refreshed = None
-    cache_status = 'ok'   # 'ok' | 'warming' | 'busy' (told to client)
+    # Group (lat_bin, lng_bin) → summed count, applying the subtype filter.
+    bins = {}
+    for lat_v, lng_v, sub, cnt in rows:
+        if wanted is not None and sub not in wanted:
+            continue
+        key = (lat_v, lng_v)
+        bins[key] = bins.get(key, 0) + cnt
 
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        # 10s read timeout + 8s lock_timeout. Higher than before because the
-        # cache table can briefly be ACCESS EXCLUSIVE'd by the refresh swap;
-        # we'd rather wait a few seconds than 500 to the client.
-        cur.execute("SET LOCAL statement_timeout = '10s'")
-        cur.execute("SET LOCAL lock_timeout = '8s'")
-        cur.execute(sql, params)
-        for lat_bin, lng_bin, cnt in cur.fetchall():
-            try:
-                lat_f = float(lat_bin); lng_f = float(lng_bin); cnt_i = int(cnt)
-            except (TypeError, ValueError):
-                continue
-            points.append([round(lat_f, 5), round(lng_f, 5), cnt_i])
-            total_records += cnt_i
-            if cnt_i > max_count:
-                max_count = cnt_i
-        # Latest refresh timestamp from the cache (any row).
-        cur.execute('SELECT MAX(updated_at) FROM police_heatmap_cache')
-        row = cur.fetchone()
-        if row and row[0]:
-            last_refreshed = row[0].isoformat()
-        cur.close()
-        if not points and last_refreshed is None:
-            cache_status = 'warming'   # cache hasn't been populated yet
-    except Exception as e:
-        # Any DB error (timeout, lock, etc.) — return empty + status flag
-        # rather than 500. The frontend can show "loading" until the cache
-        # is ready.
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        Log.warn(f"Police heatmap read deferred: {e}")
-        cache_status = 'busy'
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    # Top N hottest bins.
+    items = sorted(bins.items(), key=lambda x: x[1], reverse=True)[:_POLICE_HEATMAP_MAX_BINS]
+    points = [[round(k[0], 5), round(k[1], 5), v] for k, v in items]
+    max_count = items[0][1] if items else 0
+    total_records = sum(v for _, v in items)
+
+    cache_status = 'ok' if updated_at is not None else 'warming'
 
     return jsonify({
         'points': points,
@@ -9418,32 +9399,67 @@ def waze_police_heatmap():
         'max_count': max_count,
         'days': _POLICE_HEATMAP_WINDOW_DAYS,
         'subtypes': sorted(wanted) if wanted else sorted(_POLICE_VALID_SUBTYPES),
-        'cache_updated_at': last_refreshed,
+        'cache_updated_at': updated_at.isoformat() if updated_at else None,
         'cache_status': cache_status,
     })
 
 
-def _refresh_police_heatmap_cache():
-    """Rebuild police_heatmap_cache from data_history.
+def _hydrate_police_heatmap_ram_from_db():
+    """Populate the RAM cache from the Postgres cache on startup. Called
+    once during init_archive_db so the heatmap is hot the moment the
+    backend is up — even if the first scheduled refresh is still running."""
+    rows = []
+    updated_at = None
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SET LOCAL statement_timeout = '10s'")
+            cur.execute(
+                'SELECT lat_bin, lng_bin, subcategory, count, updated_at '
+                'FROM police_heatmap_cache'
+            )
+            for lat_b, lng_b, sub, cnt, ts in cur.fetchall():
+                try:
+                    rows.append((float(lat_b), float(lng_b), sub or '', int(cnt)))
+                    if ts is not None and (updated_at is None or ts > updated_at):
+                        updated_at = ts
+                except (TypeError, ValueError):
+                    continue
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"Police heatmap RAM hydrate skipped: {e}")
+        return
+    with _POLICE_HEATMAP_RAM_LOCK:
+        _POLICE_HEATMAP_RAM['rows'] = rows
+        _POLICE_HEATMAP_RAM['updated_at'] = updated_at
+    if rows and DEV_MODE:
+        Log.startup(f"Police heatmap RAM hydrated from Postgres — {len(rows)} bins")
 
-    Two-phase to avoid blocking readers:
-      1. Slow read aggregates data_history into Python memory. NO transaction
-         on the cache table — readers continue hitting the previous snapshot.
-      2. Quick swap: TRUNCATE + bulk-insert the in-memory rows in a small
-         autocommit transaction. ACCESS EXCLUSIVE held for milliseconds, not
-         the full 60s+ that the upstream aggregation can take under
-         contention.
+
+def _refresh_police_heatmap_cache():
+    """Rebuild the police heatmap cache from data_history.
+
+    Three phases:
+      1. Slow read aggregates data_history into a Python list. No locks
+         held on either cache (RAM or Postgres) during this — readers
+         keep seeing the previous snapshot.
+      2. RAM swap (microseconds): atomic update under the RAM lock.
+         Reads after this point see the new data immediately.
+      3. Postgres swap (milliseconds): TRUNCATE + bulk insert so the
+         disk cache survives a restart. If this fails, RAM still has
+         the new data — the read path doesn't notice.
     """
     cutoff = int(time.time()) - (_POLICE_HEATMAP_WINDOW_DAYS * 86400)
     bin_deg = _POLICE_HEATMAP_BIN_DEG
 
-    # ---- Phase 1: slow read, no cache-table locks ------------------------
-    rows = []
+    # ---- Phase 1: slow aggregation, no cache locks held ------------------
+    raw = []
     conn = get_conn()
     try:
         cur = conn.cursor()
-        # Background thread, generous timeout. statement_timeout (not
-        # SET LOCAL) so it carries through autocommit reads.
         cur.execute("SET statement_timeout = '300s'")
         cur.execute(
             '''
@@ -9465,10 +9481,10 @@ def _refresh_police_heatmap_cache():
             [bin_deg, bin_deg, bin_deg, bin_deg, cutoff,
              bin_deg, bin_deg, bin_deg, bin_deg],
         )
-        rows = cur.fetchall()
+        raw = cur.fetchall()
         cur.close()
     except Exception as e:
-        Log.error(f"Police heatmap cache aggregation error: {e}")
+        Log.error(f"Police heatmap aggregation error: {e}")
         return
     finally:
         try:
@@ -9476,46 +9492,61 @@ def _refresh_police_heatmap_cache():
         except Exception:
             pass
 
-    # ---- Phase 2: brief swap. ACCESS EXCLUSIVE only for the milliseconds
-    # the TRUNCATE + bulk INSERT actually takes. Even with 5000+ rows this
-    # is fast because there's no upstream join/aggregation to wait on.
+    # Normalise + ditch any rows that can't be coerced to numbers.
+    rows = []
+    for r in raw:
+        try:
+            rows.append((float(r[0]), float(r[1]), r[2] or '', int(r[3])))
+        except (TypeError, ValueError):
+            continue
+
+    # ---- Phase 2: RAM swap — instant, atomic ----------------------------
+    now = datetime.now()
+    with _POLICE_HEATMAP_RAM_LOCK:
+        _POLICE_HEATMAP_RAM['rows'] = rows
+        _POLICE_HEATMAP_RAM['updated_at'] = now
+    if DEV_MODE:
+        Log.cleanup(f"Police heatmap RAM refreshed — {len(rows)} bins")
+
+    # ---- Phase 3: Postgres swap — durability across restarts -----------
+    if not rows:
+        return
     conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute("SET LOCAL statement_timeout = '30s'")
         cur.execute("SET LOCAL lock_timeout = '10s'")
         cur.execute('TRUNCATE police_heatmap_cache')
-        if rows:
-            try:
-                from psycopg2.extras import execute_values
-                execute_values(
-                    cur,
-                    'INSERT INTO police_heatmap_cache '
-                    '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES %s',
-                    [(r[0], r[1], r[2], int(r[3]), datetime.now()) for r in rows],
-                    page_size=1000,
-                )
-            except ImportError:
-                # Fallback if psycopg2.extras isn't available — slower, but works.
-                args_str = b','.join(
-                    cur.mogrify('(%s,%s,%s,%s,now())',
-                                (r[0], r[1], r[2], int(r[3]))) for r in rows
-                ).decode('utf-8')
-                cur.execute(
-                    'INSERT INTO police_heatmap_cache '
-                    '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES '
-                    + args_str
-                )
+        try:
+            from psycopg2.extras import execute_values
+            execute_values(
+                cur,
+                'INSERT INTO police_heatmap_cache '
+                '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES %s',
+                [(r[0], r[1], r[2], r[3], now) for r in rows],
+                page_size=1000,
+            )
+        except ImportError:
+            args_str = b','.join(
+                cur.mogrify('(%s,%s,%s,%s,now())',
+                            (r[0], r[1], r[2], r[3])) for r in rows
+            ).decode('utf-8')
+            cur.execute(
+                'INSERT INTO police_heatmap_cache '
+                '(lat_bin, lng_bin, subcategory, count, updated_at) VALUES '
+                + args_str
+            )
         conn.commit()
-        if DEV_MODE:
-            Log.cleanup(f"Police heatmap cache refreshed — {len(rows)} bins")
         cur.close()
     except Exception as e:
         try:
             conn.rollback()
         except Exception:
             pass
-        Log.error(f"Police heatmap cache swap error: {e}")
+        # Postgres swap failed — RAM is still up to date, so the heatmap
+        # keeps working. Worst case, after a restart we lose the freshest
+        # snapshot and rehydrate from the previous DB state.
+        Log.warn(f"Police heatmap Postgres swap failed (RAM still fresh): {e}")
     finally:
         conn.close()
 
