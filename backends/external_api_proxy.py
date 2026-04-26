@@ -1178,6 +1178,21 @@ def init_archive_db():
             ''')
             _cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind ON data_history_filter_cache(kind)')
             _cur.execute('CREATE INDEX IF NOT EXISTS idx_filter_cache_kind_source ON data_history_filter_cache(kind, source)')
+            # Pre-aggregated police-heatmap cache. Refreshed in the background
+            # so the request path never has to GROUP BY data_history rows
+            # while archiving holds locks.
+            _cur.execute('''
+                CREATE TABLE IF NOT EXISTS police_heatmap_cache (
+                    lat_bin     NUMERIC(8,3) NOT NULL,
+                    lng_bin     NUMERIC(9,3) NOT NULL,
+                    subcategory TEXT NOT NULL DEFAULT '',
+                    count       INTEGER NOT NULL,
+                    updated_at  TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (lat_bin, lng_bin, subcategory)
+                )
+            ''')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_police_heatmap_count ON police_heatmap_cache(count DESC)')
+            _cur.execute('CREATE INDEX IF NOT EXISTS idx_police_heatmap_subcat ON police_heatmap_cache(subcategory)')
             _c.commit()
             _cur.close()
         finally:
@@ -1214,6 +1229,10 @@ def init_archive_db():
                 for sql in (
                     'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_only_fetched ON data_history(fetched_at DESC) WHERE is_latest = 1',
                     'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_only_source ON data_history(source, fetched_at DESC) WHERE is_latest = 1',
+                    # Partial index for the Waze bbox reconcile worker. The query
+                    # filters on (source IN waze_*) + is_live=1 + lat/lng range,
+                    # and was timing out at 15s under archiving contention.
+                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_waze_live_geo ON data_history (source, latitude, longitude) WHERE is_live = 1 AND source_id IS NOT NULL AND source IN ('waze_hazard','waze_police','waze_roadwork','waze_jam')",
                 ):
                     idx_name = sql.split()[4]
                     try:
@@ -1245,6 +1264,12 @@ def init_archive_db():
         target=_filter_cache_scheduler,
         daemon=True,
         name='filter-cache-scheduler',
+    ).start()
+    # Police heatmap cache refresh scheduler — same pattern.
+    threading.Thread(
+        target=_police_heatmap_scheduler,
+        daemon=True,
+        name='police-heatmap-scheduler',
     ).start()
 
 
@@ -8835,7 +8860,13 @@ def parse_waze_jam(jam):
 # the fallback). This stops the userscript's 5s cadence from stacking up on the
 # waze DB lock and starving the pool.
 import queue as _queue_module
-_waze_reconcile_queue = _queue_module.Queue(maxsize=32)
+# Bigger buffer + per-bbox coalescing so the userscript revisiting the same
+# region back-to-back doesn't pile multiple reconciles on top of each other.
+# We queue bbox_keys; the actual payload (bbox + current_ids) is held in
+# _waze_reconcile_pending and only the latest version is processed.
+_waze_reconcile_queue = _queue_module.Queue(maxsize=256)
+_waze_reconcile_pending = {}     # bbox_key -> (bbox_raw, current_ids)
+_waze_reconcile_pending_lock = threading.Lock()
 _waze_reconcile_thread_started = False
 _waze_reconcile_thread_lock = threading.Lock()
 
@@ -8843,13 +8874,18 @@ _waze_reconcile_thread_lock = threading.Lock()
 def _waze_reconcile_worker():
     while not _shutdown_event.is_set():
         try:
-            task = _waze_reconcile_queue.get(timeout=1)
+            bbox_key = _waze_reconcile_queue.get(timeout=1)
         except Exception:
             continue
-        if task is None:
+        if bbox_key is None:
             continue
+        # Pop the latest snapshot for this bbox. If the userscript revisited
+        # in the interim, we run on the freshest data.
+        with _waze_reconcile_pending_lock:
+            payload = _waze_reconcile_pending.pop(bbox_key, None)
         try:
-            _waze_reconcile_bbox_sync(*task)
+            if payload is not None:
+                _waze_reconcile_bbox_sync(*payload)
         except Exception as e:
             Log.error(f"Waze reconcile worker error: {e}")
         finally:
@@ -8873,7 +8909,9 @@ def _ensure_reconcile_worker():
 
 
 def _waze_reconcile_bbox(bbox_raw, alerts, jams):
-    """Enqueue a per-region 'gone' reconcile. Non-blocking; drops on backlog."""
+    """Enqueue a per-region 'gone' reconcile. Non-blocking; coalesces by
+    bbox key so revisits don't pile up — the worker always processes the
+    freshest payload for each region."""
     _ensure_reconcile_worker()
     # Extract just the fields the sync worker needs — don't hold references
     # to the full payload alerts[] on the queue.
@@ -8887,9 +8925,29 @@ def _waze_reconcile_bbox(bbox_raw, alerts, jams):
         if uid is not None:
             current_ids.add(str(uid))
     try:
-        _waze_reconcile_queue.put_nowait((dict(bbox_raw), current_ids))
+        bbox_key = (
+            round(float(bbox_raw.get('top', 0)),    3),
+            round(float(bbox_raw.get('bottom', 0)), 3),
+            round(float(bbox_raw.get('left', 0)),   3),
+            round(float(bbox_raw.get('right', 0)),  3),
+        )
+    except (TypeError, ValueError):
+        return
+    with _waze_reconcile_pending_lock:
+        already_queued = bbox_key in _waze_reconcile_pending
+        # Always store the latest snapshot — the worker pops by key.
+        _waze_reconcile_pending[bbox_key] = (dict(bbox_raw), current_ids)
+    if already_queued:
+        # Worker hasn't picked up the previous task yet; it'll see our newer
+        # data when it does. No need to push another queue entry.
+        return
+    try:
+        _waze_reconcile_queue.put_nowait(bbox_key)
     except _queue_module.Full:
-        # Backlog. Drop. Falls back to 1-hour last_seen sweep.
+        # Backlog. Drop both the queue slot AND the pending payload so we
+        # don't leak memory waiting for a worker that won't get to it.
+        with _waze_reconcile_pending_lock:
+            _waze_reconcile_pending.pop(bbox_key, None)
         if DEV_MODE:
             Log.warn("Waze reconcile queue full — dropping task (fallback: 1h sweep)")
 
@@ -9250,97 +9308,70 @@ def waze_police():
 
 
 # --- Police heatmap -------------------------------------------------------
-# Aggregates historical waze_police rows by lat/lng bins (~110 m squares) so
-# the frontend can paint a heat density layer without shipping 60k points.
-# Cached in-memory because the data only updates every poll cycle and the
-# binning is the expensive part.
+# Pre-aggregated into police_heatmap_cache by a background thread so the
+# request path never touches data_history while heavy archiving holds
+# locks. Cache schema lives in init_archive_db; refresh logic in
+# _refresh_police_heatmap_cache().
 
-_POLICE_HEATMAP_CACHE = {}        # cache_key -> (timestamp, payload)
-_POLICE_HEATMAP_CACHE_TTL = 300   # 5 min — police density doesn't shift fast
 _POLICE_HEATMAP_BIN_DEG = 0.001   # ~110 m at NSW latitudes
 _POLICE_HEATMAP_MAX_BINS = 5000   # output cap, keeps the JSON small
-_POLICE_HEATMAP_MAX_DAYS = 365
+_POLICE_HEATMAP_WINDOW_DAYS = 30  # rolling window when refreshing the cache
 _POLICE_VALID_SUBTYPES = {
     'POLICE_VISIBLE', 'POLICE_HIDING', 'POLICE_WITH_MOBILE_CAMERA',
 }
+POLICE_HEATMAP_REFRESH_INTERVAL = int(
+    os.environ.get('POLICE_HEATMAP_REFRESH_INTERVAL', 600))  # 10 min
 
 
 @app.route('/api/waze/police-heatmap')
 @require_api_key
 def waze_police_heatmap():
-    """Server-side aggregated heatmap of historical Waze police pings.
+    """Heatmap of recent Waze police pings, served from a pre-aggregated
+    cache table. Reads only the small cache, never aggregates data_history
+    on the request path.
 
     Query params:
-        days     int  — sliding window in days (default 30, max 365)
-        subtypes csv  — POLICE_VISIBLE, POLICE_HIDING, POLICE_WITH_MOBILE_CAMERA
-                        (omit or empty = all three)
-    Response:
-        {
-          "points":      [[lat, lng, count], ...],   // top N hottest bins
-          "total_records": int,                      // raw rows aggregated
-          "bin_size_deg":  0.001,                    // grid resolution
-          "max_count":     int,                      // hottest bin count
-          "days":          int,
-          "subtypes":      [...],
-        }
+        subtypes csv — POLICE_VISIBLE, POLICE_HIDING, POLICE_WITH_MOBILE_CAMERA
+                       (omit or empty = all three)
+        days     int — informational only; the cache always represents the
+                       last POLICE_HEATMAP_WINDOW_DAYS days. Accepted for
+                       backwards compat; no effect on results.
     """
-    try:
-        days = max(1, min(_POLICE_HEATMAP_MAX_DAYS,
-                          int(request.args.get('days') or 30)))
-    except (TypeError, ValueError):
-        days = 30
-
     raw_subtypes = (request.args.get('subtypes') or '').strip()
     if raw_subtypes:
         wanted = [s.strip().upper() for s in raw_subtypes.split(',') if s.strip()]
         wanted = [s for s in wanted if s in _POLICE_VALID_SUBTYPES]
     else:
-        wanted = []  # empty = all (no filter)
+        wanted = []  # empty = all
 
-    # Cache key — sorted subtypes so equivalent queries share a cache row.
-    cache_key = (days, tuple(sorted(wanted)))
-    now = time.time()
-    cached = _POLICE_HEATMAP_CACHE.get(cache_key)
-    if cached and (now - cached[0]) < _POLICE_HEATMAP_CACHE_TTL:
-        return jsonify(cached[1])
-
-    cutoff = int(now) - (days * 86400)
-    bin_deg = _POLICE_HEATMAP_BIN_DEG
-
-    # is_latest = 1 narrows to one row per unique source_id (last-seen
-    # snapshot), which is what a "where police are commonly seen"
-    # heatmap actually wants — duplicate snapshots of the same ping
-    # over many polls would otherwise grossly inflate single-spot density.
-    # The partial index `idx_data_latest_only_source (source, fetched_at)
-    # WHERE is_latest = 1` makes this O(matching rows) instead of a full
-    # scan over every historical snapshot of every source.
-    sql = '''
-        SELECT
-            ROUND(latitude::numeric  / %s) * %s AS lat_bin,
-            ROUND(longitude::numeric / %s) * %s AS lng_bin,
-            COUNT(*) AS cnt
-        FROM data_history
-        WHERE is_latest = 1
-          AND source = 'waze_police'
-          AND fetched_at >= %s
-          AND latitude  IS NOT NULL
-          AND longitude IS NOT NULL
-    '''
-    params = [bin_deg, bin_deg, bin_deg, bin_deg, cutoff]
+    # The cache is populated. Just read from it.
     if wanted:
-        sql += ' AND subcategory = ANY(%s)'
-        params.append(wanted)
-    sql += ' GROUP BY lat_bin, lng_bin ORDER BY cnt DESC LIMIT %s'
-    params.append(_POLICE_HEATMAP_MAX_BINS)
+        sql = (
+            'SELECT lat_bin, lng_bin, SUM(count) AS cnt '
+            'FROM police_heatmap_cache '
+            'WHERE subcategory = ANY(%s) '
+            'GROUP BY lat_bin, lng_bin '
+            'ORDER BY cnt DESC LIMIT %s'
+        )
+        params = [wanted, _POLICE_HEATMAP_MAX_BINS]
+    else:
+        sql = (
+            'SELECT lat_bin, lng_bin, SUM(count) AS cnt '
+            'FROM police_heatmap_cache '
+            'GROUP BY lat_bin, lng_bin '
+            'ORDER BY cnt DESC LIMIT %s'
+        )
+        params = [_POLICE_HEATMAP_MAX_BINS]
 
     points = []
     total_records = 0
     max_count = 0
+    last_refreshed = None
 
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SET LOCAL statement_timeout = '20s'")
+        cur.execute("SET LOCAL statement_timeout = '5s'")
         cur.execute(sql, params)
         for lat_bin, lng_bin, cnt in cur.fetchall():
             try:
@@ -9351,25 +9382,93 @@ def waze_police_heatmap():
             total_records += cnt_i
             if cnt_i > max_count:
                 max_count = cnt_i
+        # Latest refresh timestamp from the cache (any row).
+        cur.execute('SELECT MAX(updated_at) FROM police_heatmap_cache')
+        row = cur.fetchone()
+        if row and row[0]:
+            last_refreshed = row[0].isoformat()
         cur.close()
     finally:
         conn.close()
 
-    payload = {
+    return jsonify({
         'points': points,
         'total_records': total_records,
-        'bin_size_deg': bin_deg,
+        'bin_size_deg': _POLICE_HEATMAP_BIN_DEG,
         'max_count': max_count,
-        'days': days,
+        'days': _POLICE_HEATMAP_WINDOW_DAYS,
         'subtypes': sorted(wanted) if wanted else sorted(_POLICE_VALID_SUBTYPES),
-    }
-    _POLICE_HEATMAP_CACHE[cache_key] = (now, payload)
-    # Bound the cache. Drop oldest when we exceed 32 entries.
-    if len(_POLICE_HEATMAP_CACHE) > 32:
-        oldest_key = min(_POLICE_HEATMAP_CACHE,
-                         key=lambda k: _POLICE_HEATMAP_CACHE[k][0])
-        _POLICE_HEATMAP_CACHE.pop(oldest_key, None)
-    return jsonify(payload)
+        'cache_updated_at': last_refreshed,
+    })
+
+
+def _refresh_police_heatmap_cache():
+    """Rebuild police_heatmap_cache from data_history. Runs in a background
+    thread, no statement_timeout — can take a while on a busy DB without
+    blocking request handlers."""
+    cutoff = int(time.time()) - (_POLICE_HEATMAP_WINDOW_DAYS * 86400)
+    bin_deg = _POLICE_HEATMAP_BIN_DEG
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        # Generous timeout — this is the heavy aggregation. Background
+        # only, so a slow run doesn't hurt anyone.
+        cur.execute("SET LOCAL statement_timeout = '180s'")
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        # Atomic swap inside a single transaction. TRUNCATE + INSERT ... SELECT
+        # is faster than DELETE + INSERT and grabs less WAL.
+        cur.execute('TRUNCATE police_heatmap_cache')
+        cur.execute(
+            '''
+            INSERT INTO police_heatmap_cache (lat_bin, lng_bin, subcategory, count, updated_at)
+            SELECT
+                ROUND(latitude::numeric  / %s) * %s AS lat_bin,
+                ROUND(longitude::numeric / %s) * %s AS lng_bin,
+                COALESCE(subcategory, '') AS sub,
+                COUNT(*),
+                now()
+            FROM data_history
+            WHERE is_latest = 1
+              AND source = 'waze_police'
+              AND fetched_at >= %s
+              AND latitude  IS NOT NULL
+              AND longitude IS NOT NULL
+            GROUP BY ROUND(latitude::numeric  / %s) * %s,
+                     ROUND(longitude::numeric / %s) * %s,
+                     COALESCE(subcategory, '')
+            ''',
+            [bin_deg, bin_deg, bin_deg, bin_deg, cutoff,
+             bin_deg, bin_deg, bin_deg, bin_deg],
+        )
+        conn.commit()
+        if DEV_MODE:
+            cur.execute('SELECT COUNT(*) FROM police_heatmap_cache')
+            n = cur.fetchone()[0]
+            Log.cleanup(f"Police heatmap cache refreshed — {n} bins")
+        cur.close()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        Log.error(f"Police heatmap cache refresh error: {e}")
+    finally:
+        conn.close()
+
+
+def _police_heatmap_scheduler():
+    """Background loop that refreshes the police heatmap cache every N
+    seconds (POLICE_HEATMAP_REFRESH_INTERVAL)."""
+    # Stagger so we don't all-fire at startup.
+    time.sleep(45)
+    while not _shutdown_event.is_set():
+        try:
+            _refresh_police_heatmap_cache()
+        except Exception as e:
+            Log.error(f"Police heatmap scheduler error: {e}")
+        if _shutdown_event.wait(timeout=POLICE_HEATMAP_REFRESH_INTERVAL):
+            return
 
 
 @app.route('/api/waze/roadwork')
