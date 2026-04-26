@@ -1319,6 +1319,14 @@ def init_archive_db():
         daemon=True,
         name='count-cache-prewarm',
     ).start()
+    # One-shot VACUUM right after boot to clean up the visibility map left
+    # behind by previous archive cycles. The hourly cleanup-loop call covers
+    # ongoing maintenance, but the first slow scan after a restart benefits
+    # from this immediate pass. Delayed so it doesn't fight the prewarm.
+    def _initial_vacuum():
+        time.sleep(60)
+        _vacuum_data_history()
+    threading.Thread(target=_initial_vacuum, daemon=True, name='initial-vacuum').start()
 
 
 # ==================== PERSISTENT DATA CACHE ====================
@@ -2218,6 +2226,35 @@ def _cleanup_role_cache():
     if expired and DEV_MODE:
         Log.cleanup(f"Role cache cleanup: evicted {len(expired)} expired entries, {len(_role_cache)} remaining")
 
+def _vacuum_data_history():
+    """VACUUM (ANALYZE) data_history to reclaim dead tuples left behind by
+    archive UPDATEs and cleanup DELETEs. Without this the table grows a
+    visibility-map gap that makes index-only scans fall back to heap
+    fetches, which is what makes COUNT(*) slow enough to time out.
+    Plain VACUUM (no FULL) doesn't lock the table — readers and writers
+    keep working through it."""
+    try:
+        import psycopg2
+        dsn = os.environ.get('DATABASE_URL', '')
+        if not dsn:
+            return
+        # VACUUM has to run outside a transaction; open a dedicated
+        # autocommit connection for it.
+        conn = psycopg2.connect(dsn)
+        try:
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            t0 = time.time()
+            cur.execute('VACUUM (ANALYZE) data_history')
+            cur.close()
+            if DEV_MODE:
+                Log.cleanup(f"VACUUM (ANALYZE) data_history complete [{int((time.time()-t0)*1000)}ms]")
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"VACUUM data_history skipped: {e}")
+
+
 def cleanup_loop():
     """Background loop that periodically cleans up old data"""
     global _cleanup_running
@@ -2232,6 +2269,16 @@ def cleanup_loop():
         if cleanup_counter % 5 == 0:
             _cleanup_rate_limits()
             _cleanup_role_cache()
+        # VACUUM data_history hourly. Without this, archive UPDATEs leave
+        # the visibility map dirty and index-only scans regress to heap
+        # fetches, which is what makes /api/data/history COUNT(*) time out.
+        # DATA_CLEANUP_INTERVAL is 5 min by default, so every 12 cycles ≈ 1h.
+        if cleanup_counter % 12 == 0:
+            threading.Thread(
+                target=_vacuum_data_history,
+                daemon=True,
+                name='vacuum-data-history',
+            ).start()
         # Use short sleeps to allow faster shutdown
         if _shutdown_event.wait(timeout=DATA_CLEANUP_INTERVAL):
             break  # Shutdown signal received
@@ -10624,23 +10671,54 @@ def _data_history_count_cache_set(key, total, live, ended):
         }
 
 
+def _data_history_reltuples_estimate():
+    """Instant row-count estimate from the planner's stats. Returns the
+    pg_class.reltuples value — refreshed by ANALYZE / autovacuum, so it
+    drifts a bit but is always near-correct for a high-churn table.
+    Used as a fallback when a real COUNT(*) times out."""
+    try:
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+            c.execute("SET LOCAL statement_timeout = '2s'")
+            c.execute("SELECT reltuples::bigint FROM pg_class WHERE relname = 'data_history'")
+            row = c.fetchone()
+            return int(row[0]) if row and row[0] else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
 def _prewarm_data_history_count_cache():
-    """Background warm-up of the count cache for the logs-page default
-    query (hours=24, unique=1, no other filters). Wait briefly so other
-    startup tasks settle first, then run the count with a generous
-    timeout. If the result lands the cache is hot for the first user
-    click; if it times out we'll just retry on the next refresh cycle."""
-    time.sleep(20)  # let startup migrations / first-archive-pass settle
+    """Seed the count cache for the logs-page default query (hours=24,
+    unique=1, no other filters). Strategy: prefer the instant pg_class
+    reltuples estimate so the cache is hot in milliseconds, then try
+    a real COUNT(*) for accuracy — if that times out we keep the
+    estimate. Either way the user's first click never sees total=0."""
+    time.sleep(15)
     cutoff = int(time.time()) - 24 * 3600
     actual_where = "(fetched_at >= %s) AND is_latest = 1"
     params = [cutoff]
     cache_key = (actual_where, tuple(params), 'all')
     pager_cutoff = int(time.time()) - 3600
+
+    # Phase 1: instant estimate. Uses reltuples for the whole table —
+    # an over-estimate vs. is_latest=1 + 24h, but better than zero and
+    # gives pagination something to chew on. Real count overwrites later.
+    est = _data_history_reltuples_estimate()
+    if est > 0:
+        _data_history_count_cache_set(cache_key, est, 0, 0)
+        if DEV_MODE:
+            Log.startup(f"data/history count cache seeded with reltuples estimate — ~{est}")
+
+    # Phase 2: try the real count. May still time out under heavy load —
+    # if so we keep the estimate from phase 1.
     try:
         conn = get_conn()
         try:
             c = conn.cursor()
-            c.execute("SET LOCAL statement_timeout = '120s'")
+            c.execute("SET LOCAL statement_timeout = '90s'")
             c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
             total = c.fetchone()[0] or 0
             c.execute(f'''
@@ -10659,11 +10737,11 @@ def _prewarm_data_history_count_cache():
             live, ended = (row[0] or 0), (row[1] or 0)
             _data_history_count_cache_set(cache_key, total, live, ended)
             if DEV_MODE:
-                Log.startup(f"data/history count cache prewarmed — total={total}")
+                Log.startup(f"data/history count cache prewarmed (exact) — total={total}")
         finally:
             conn.close()
     except Exception as e:
-        Log.warn(f"data/history count prewarm skipped: {e}")
+        Log.warn(f"data/history exact count prewarm skipped (estimate retained): {e}")
 
 
 @app.route('/api/data/history')
@@ -10987,13 +11065,19 @@ def data_history():
                     Log.warn(f"Count breakdown slow/timeout: {e}")
             # If the fast count failed, prefer a stale cached value over
             # returning zero. Pagination then keeps working on a slightly
-            # out-of-date total instead of breaking entirely.
+            # out-of-date total instead of breaking entirely. Last-ditch
+            # fallback: pg_class.reltuples — the planner's row estimate.
+            # Drifts a bit but is always near-correct for the whole table
+            # and returns in <100ms, so the user always gets a sensible
+            # pagination total.
             if count_failed and total == 0:
                 stale = _data_history_count_cache_get(cache_key, allow_stale=True)
                 if stale is not None:
                     total = stale['total']
                     live_count = stale['live']
                     ended_count = stale['ended']
+                else:
+                    total = _data_history_reltuples_estimate()
             else:
                 _data_history_count_cache_set(cache_key, total, live_count, ended_count)
 
