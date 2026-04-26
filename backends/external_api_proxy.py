@@ -1325,6 +1325,17 @@ def init_archive_db():
                     # in the latest set this materially affects forward
                     # paging when many rows share a fetched_at second.
                     'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_fetched_id ON data_history(fetched_at DESC, id DESC) WHERE is_latest = 1',
+                    # Source-scoped variant of the same. The list page
+                    # filters by source AND orders by (fetched_at, id);
+                    # without this index Postgres either re-sorts in
+                    # memory using idx_data_latest_only_source (slow with
+                    # an unbounded time range) or filter-scans the global
+                    # idx_data_latest_fetched_id row-by-row. Either way
+                    # the multi-source-no-time-filter query times out at
+                    # 25s. Adding source as the leading column gives the
+                    # planner a direct match for "WHERE source IN (...)
+                    # AND is_latest=1 ORDER BY fetched_at DESC, id DESC".
+                    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_latest_source_fetched_id ON data_history(source, fetched_at DESC, id DESC) WHERE is_latest = 1',
                 ):
                     # Pull the index name from the word immediately after
                     # `EXISTS` — works for both `CREATE INDEX ... IF NOT
