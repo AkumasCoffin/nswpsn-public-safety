@@ -5813,7 +5813,14 @@ function initPagerHoursFromStorage() {
         if (c > maxCount) maxCount = c;
       }
       if (maxCount < 1) maxCount = 1;
-      const sqrtMax = Math.sqrt(maxCount);
+
+      // Update the legend to reflect this render's real hex max — bins
+      // can collapse into a single hex (especially at low zoom) so the
+      // hex max is often greater than the server's bin max.
+      const lblMin = document.getElementById('heat-legend-min');
+      const lblMax = document.getElementById('heat-legend-max');
+      if (lblMin) lblMin.textContent = '1';
+      if (lblMax) lblMax.textContent = maxCount.toLocaleString();
 
       // Render every hex in the viewport (including empty cells).
       // (q,r) iterated relative to the fixed origin so cells stay put
@@ -5835,7 +5842,10 @@ function initPagerHoursFromStorage() {
           const k = q + ',' + r;
           const count = counts.get(k) || 0;
           const isEmpty = count === 0;
-          const t = isEmpty ? 0 : Math.sqrt(count) / sqrtMax;
+          // Linear scaling so colour matches the legend faithfully —
+          // a hex at half the max ping count lands halfway along the
+          // gradient (violet), not pre-stretched into the red zone.
+          const t = isEmpty ? 0 : (count / maxCount);
           const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
           const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
             renderer: _heatmapCanvasRenderer,   // canvas, not SVG
@@ -5931,11 +5941,9 @@ function initPagerHoursFromStorage() {
         if (stats) {
           stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
         }
-        // Update legend min/max so users know what the colours mean.
-        const lblMin = document.getElementById('heat-legend-min');
-        const lblMax = document.getElementById('heat-legend-max');
-        if (lblMin) lblMin.textContent = '1';
-        if (lblMax) lblMax.textContent = (data.max_count || 0).toLocaleString();
+        // Legend min/max are set inside _renderPoliceHexGrid using the
+        // actual hex-max (which can be larger than data.max_count after
+        // multiple bins collapse into one hex at low zooms).
       } catch (e) {
         console.error('Police heatmap load failed', e);
         if (stats) stats.textContent = 'Failed to load. Retry.';
