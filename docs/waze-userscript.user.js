@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.15
+// @version      1.16
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -248,13 +248,16 @@
     // occasionally stops emitting georss responses after long sessions —
     // backend warns "Waze ingest stale: no POST in 15m" when this happens.
     // Reloading restarts the SPA, the WebSocket, and our hooks. Cheap.
-    const RELOAD_INTERVAL_MS     = 30 * 60 * 1000;
+    const RELOAD_INTERVAL_MS     = 15 * 60 * 1000;  // absolute backstop
     // Watchdog: if no successful ingest in this long, force a reload
-    // even before the 30-min absolute timer fires. The backend's
-    // staleness threshold is 15 min — set the watchdog tighter so we
-    // recover before backend pages anyone.
-    const STUCK_RELOAD_AFTER_MS  = 6 * 60 * 1000;
-    const STUCK_CHECK_INTERVAL_MS = 60 * 1000;
+    // even before the absolute timer fires. The backend's staleness
+    // threshold is 15 min — set the watchdog tighter so we recover
+    // before the backend pages anyone.
+    const STUCK_RELOAD_AFTER_MS  = 4 * 60 * 1000;
+    const STUCK_CHECK_INTERVAL_MS = 30 * 1000;     // check more often so we
+                                                    // catch stalls quickly
+                                                    // even when timers are
+                                                    // mildly throttled.
 
     const log = (...args) => console.log('[NSWPSN]', ...args);
 
@@ -664,27 +667,76 @@
         log('not on live-map — rotation skipped');
     }
 
-    // Scheduled reload — fires once per page load. After reload, the script
-    // re-runs and schedules a fresh 30-min timer, so this naturally repeats.
-    // Region index is persisted in localStorage (LS_KEY) so we resume mid-rotation.
-    setTimeout(() => {
-        log(`scheduled reload (${RELOAD_INTERVAL_MS / 60000}m elapsed) — refreshing Waze map state`);
-        try { pageWin.location.reload(); } catch (e) { log('reload failed', e); }
-    }, RELOAD_INTERVAL_MS);
+    // Try every reload mechanism we can — pageWin.location.reload() can
+    // fail silently when the tab is heavily backgrounded or when Waze's
+    // SPA has wedged the JS context. Fall back to assigning to href and
+    // top-level reload.
+    let _reloadInProgress = false;
+    function forceReload(reason) {
+        if (_reloadInProgress) return;
+        _reloadInProgress = true;
+        log(`reload (${reason})`);
+        const tries = [
+            () => pageWin.location.reload(),
+            () => { pageWin.location.href = pageWin.location.href; },
+            () => window.location.reload(),
+            () => { window.location.href = window.location.href; },
+            () => { if (window.top) window.top.location.reload(); },
+        ];
+        for (const fn of tries) {
+            try { fn(); return; } catch (e) {}
+        }
+        log('all reload paths failed — manual refresh needed');
+    }
 
-    // Watchdog — checks once a minute. If we haven't had a successful
-    // ingest in STUCK_RELOAD_AFTER_MS, force a reload even though the
-    // 30-min timer hasn't fired yet. Tighter than the backend's 15-min
-    // staleness threshold so we self-heal before the backend warns.
-    setInterval(() => {
+    // Scheduled reload — fires once per page load. After reload, the script
+    // re-runs and schedules a fresh timer, so this naturally repeats.
+    // Region index is persisted in localStorage (LS_KEY) so we resume mid-rotation.
+    setTimeout(() => forceReload(`scheduled ${RELOAD_INTERVAL_MS / 60000}m`),
+        RELOAD_INTERVAL_MS);
+
+    // Watchdog — runs on every check tick AND every visibility change.
+    // The visibility hook is the important one: backgrounded tabs get
+    // setInterval throttled to 1/min and sometimes stalled entirely, so
+    // when the user comes back to check on the tab we re-evaluate state
+    // immediately instead of waiting for the next throttled tick.
+    function checkStuck() {
         const idleMs = Date.now() - _lastIngestSuccess;
         if (idleMs > STUCK_RELOAD_AFTER_MS) {
-            log(`watchdog: no ingest in ${Math.round(idleMs / 1000)}s — forcing reload`);
-            try { pageWin.location.reload(); } catch (e) {}
+            forceReload(`watchdog ${Math.round(idleMs / 1000)}s idle`);
         }
-    }, STUCK_CHECK_INTERVAL_MS);
+    }
 
-    log('NSWPSN Waze Forwarder v1.15 loaded — backend:', BACKEND_URL,
+    // Self-rescheduling setTimeout chain. Slightly more robust under
+    // background-throttling than setInterval — each tick reschedules
+    // from the actual fire time, so drift can't accumulate quietly.
+    function scheduleNextStuckCheck() {
+        setTimeout(() => {
+            try { checkStuck(); } catch (e) {}
+            scheduleNextStuckCheck();
+        }, STUCK_CHECK_INTERVAL_MS);
+    }
+    scheduleNextStuckCheck();
+
+    // Backup setInterval — belt-and-suspenders in case the chained
+    // setTimeout drops a beat.
+    setInterval(() => { try { checkStuck(); } catch (e) {} }, STUCK_CHECK_INTERVAL_MS);
+
+    // Visibility change handler — fires the moment the tab is foregrounded.
+    // Catches the common case where the tab was hidden long enough for
+    // browser throttling to stall the timers entirely.
+    try {
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                log('tab visible — running stuck check');
+                checkStuck();
+            }
+        });
+        pageWin.addEventListener('focus', checkStuck);
+    } catch (e) { log('visibility hook fail:', e); }
+
+    log('NSWPSN Waze Forwarder v1.16 loaded — backend:', BACKEND_URL,
         `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
-        `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`);
+        `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
+        `· check every ${STUCK_CHECK_INTERVAL_MS / 1000}s + on visibility`);
 })();
