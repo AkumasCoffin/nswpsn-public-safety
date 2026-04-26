@@ -1259,8 +1259,15 @@ def init_archive_db():
                     # filters on (source IN waze_*) + is_live=1 + lat/lng range,
                     # and was timing out at 15s under archiving contention.
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_waze_live_geo ON data_history (source, latitude, longitude) WHERE is_live = 1 AND source_id IS NOT NULL AND source IN ('waze_hazard','waze_police','waze_roadwork','waze_jam')",
+                    # Covering partial index for the police-heatmap aggregation.
+                    # The refresh scans is_latest=1 + source='waze_police' rows
+                    # and groups by (lat_bin, lng_bin, subcategory). INCLUDE
+                    # lets the planner do an index-only scan instead of fanning
+                    # out to the heap for every row — the heap fetches were
+                    # what pushed the 5-minute statement_timeout.
+                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_waze_police_heatmap ON data_history (fetched_at DESC) INCLUDE (latitude, longitude, subcategory) WHERE is_latest = 1 AND source = 'waze_police'",
                 ):
-                    idx_name = sql.split()[4]
+                    idx_name = sql.split()[6]  # CREATE INDEX CONCURRENTLY IF NOT EXISTS <name>...
                     try:
                         Log.startup(f"Building partial index {idx_name} CONCURRENTLY (may take minutes)...")
                         cur.execute(sql)
@@ -4746,6 +4753,36 @@ def essential_outages_future():
     })
 
 
+@app.route('/api/essential/planned')
+@require_api_key
+def essential_planned():
+    """Bot-canonical alias — planned outages across current + future feeds."""
+    out = []
+    for cache_key in ('essential_energy', 'essential_energy_future'):
+        cached_data, age, expired = cache_get(cache_key)
+        if cached_data and isinstance(cached_data, list):
+            out.extend(o for o in cached_data
+                       if (o.get('outageType') or '').lower() == 'planned')
+    return jsonify({
+        'outages': out,
+        'count': len(out),
+        'totalCustomersAffected': sum(o.get('customersAffected', 0) for o in out)
+    })
+
+
+@app.route('/api/essential/future')
+@require_api_key
+def essential_future():
+    """Bot-canonical alias for /api/essential/outages/future."""
+    cached_data, age, expired = cache_get('essential_energy_future')
+    outages = cached_data if cached_data and isinstance(cached_data, list) else []
+    return jsonify({
+        'outages': outages,
+        'count': len(outages),
+        'totalCustomersAffected': sum(o.get('customersAffected', 0) for o in outages)
+    })
+
+
 @app.route('/api/essential/outages/raw')
 @require_api_key
 def essential_outages_raw():
@@ -4799,6 +4836,25 @@ def endeavour_future():
     except Exception as e:
         Log.error(f"Endeavour future error: {e}")
         return jsonify([]), 200
+
+
+@app.route('/api/endeavour/planned')
+@require_api_key
+def endeavour_planned():
+    """Bot-canonical alias — current maintenance + future scheduled, flat list."""
+    items = []
+    for cache_key in ('endeavour_maintenance', 'endeavour_future'):
+        cached_data, age, expired = cache_get(cache_key)
+        if cached_data and isinstance(cached_data, list):
+            items.extend(cached_data)
+    if not items:
+        try:
+            all_data = _fetch_endeavour_all_outages()
+            items.extend(all_data.get('current_maintenance', []) or [])
+            items.extend(all_data.get('future_maintenance', []) or [])
+        except Exception as e:
+            Log.error(f"Endeavour planned error: {e}")
+    return jsonify(items)
 
 
 @app.route('/api/endeavour/future/raw')
@@ -9370,7 +9426,13 @@ def waze_police():
 #     cache is hot the moment the backend is up, no warming window.
 
 _POLICE_HEATMAP_BIN_DEG = 0.001   # ~110 m at NSW latitudes
-_POLICE_HEATMAP_MAX_BINS = 5000   # output cap, keeps the JSON small
+# Output cap. Without a bbox, we ship the top N hottest bins in NSW. With
+# 41k+ bins live in the cache the old 5k cap silently dropped low-count
+# suburban/regional bins (count=1 in a quiet area), so a pin would render
+# without any hex underneath. Raise the safety net so the full set ships.
+# When the client passes ?bbox= we filter to the viewport BEFORE the cap
+# so bandwidth stays low on tight zooms.
+_POLICE_HEATMAP_MAX_BINS = 60000
 _POLICE_HEATMAP_WINDOW_DAYS = 30  # rolling window when refreshing the cache
 _POLICE_VALID_SUBTYPES = {
     'POLICE_VISIBLE', 'POLICE_HIDING', 'POLICE_WITH_MOBILE_CAMERA',
@@ -9400,6 +9462,22 @@ def waze_police_heatmap():
     else:
         wanted = None  # None = all (no filter)
 
+    # Optional viewport filter: bbox=south,west,north,east (decimal degrees).
+    # Lets the client request only bins that intersect the current map view,
+    # which keeps the response small on tight zooms and prevents the top-N
+    # cap from silently dropping low-count bins under visible pins.
+    bbox = None
+    raw_bbox = (request.args.get('bbox') or '').strip()
+    if raw_bbox:
+        try:
+            parts = [float(p) for p in raw_bbox.split(',')]
+            if len(parts) == 4:
+                s, w, n, e = parts
+                if s < n and w < e:
+                    bbox = (s, w, n, e)
+        except (TypeError, ValueError):
+            bbox = None
+
     # Atomically grab the current snapshot. Refresh writes happen with the
     # same lock held, so we always see a consistent set of rows.
     with _POLICE_HEATMAP_RAM_LOCK:
@@ -9407,10 +9485,18 @@ def waze_police_heatmap():
         updated_at = _POLICE_HEATMAP_RAM['updated_at']
 
     # Group (lat_bin, lng_bin) → summed count, applying the subtype filter.
+    # Police alerts with no subtype (Waze can send bare type=POLICE) are
+    # treated as POLICE_VISIBLE — mirrors the frontend pin default in
+    # getPoliceCategory() so the heatmap and pins agree on coverage.
     bins = {}
     for lat_v, lng_v, sub, cnt in rows:
-        if wanted is not None and sub not in wanted:
+        eff = sub or 'POLICE_VISIBLE'
+        if wanted is not None and eff not in wanted:
             continue
+        if bbox is not None:
+            s, w, n, e = bbox
+            if lat_v < s or lat_v > n or lng_v < w or lng_v > e:
+                continue
         key = (lat_v, lng_v)
         bins[key] = bins.get(key, 0) + cnt
 
@@ -10747,47 +10833,57 @@ def data_history():
         ended_count = 0
         all_rows = []
 
+        # Two-step strategy: cheap plain COUNT(*) first (uses the partial
+        # idx_data_latest_only_fetched index when unique=1), then optional
+        # live/ended breakdown. The breakdown's FILTER expressions can't use
+        # an index and force per-row CPU work; if it times out we still keep
+        # the pagination total instead of returning zero.
         for db_path in dbs_to_query:
+            db_total = 0
             try:
                 conn = get_conn()
                 try:
                     c = conn.cursor()
-                    # Cap this session so a bad plan fails fast (25s) instead of
-                    # timing out Cloudflare (100s). Applies to THIS session only.
-                    c.execute("SET LOCAL statement_timeout = '25s'")
-                    if live_only or historical_only:
-                        # Filter is already on is_live, so total IS live or ended
-                        c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
-                        db_total = c.fetchone()[0]
-                        total += db_total
-                        if live_only:
-                            live_count += db_total
-                        else:
-                            ended_count += db_total
-                    else:
-                        # Single pass: total + live + ended via FILTER
-                        c.execute(f'''
-                            SELECT
-                                COUNT(*) AS total,
-                                COUNT(*) FILTER (WHERE
-                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
-                                    OR (source != 'pager' AND is_live = 1)
-                                ) AS live_count,
-                                COUNT(*) FILTER (WHERE
-                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
-                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
-                                ) AS ended_count
-                            FROM data_history
-                            WHERE {actual_where}
-                        ''', params)
-                        row = c.fetchone()
-                        total += row[0] or 0
-                        live_count += row[1] or 0
-                        ended_count += row[2] or 0
+                    c.execute("SET LOCAL statement_timeout = '15s'")
+                    c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+                    db_total = c.fetchone()[0] or 0
+                    total += db_total
                 finally:
                     conn.close()
             except Exception as e:
                 Log.error(f"Count error: {e}")
+                continue
+            if live_only:
+                live_count += db_total
+                continue
+            if historical_only:
+                ended_count += db_total
+                continue
+            try:
+                conn = get_conn()
+                try:
+                    c = conn.cursor()
+                    c.execute("SET LOCAL statement_timeout = '15s'")
+                    c.execute(f'''
+                        SELECT
+                            COUNT(*) FILTER (WHERE
+                                (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                                OR (source != 'pager' AND is_live = 1)
+                            ) AS live_count,
+                            COUNT(*) FILTER (WHERE
+                                (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                                OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                            ) AS ended_count
+                        FROM data_history
+                        WHERE {actual_where}
+                    ''', params)
+                    row = c.fetchone()
+                    live_count += row[0] or 0
+                    ended_count += row[1] or 0
+                finally:
+                    conn.close()
+            except Exception as e:
+                Log.error(f"Count breakdown error: {e}")
         
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
         # `data` is the heaviest column — pull it only if ?full=1.
