@@ -10580,11 +10580,46 @@ def cache_status():
     })
 
 
+# /api/data/history count cache. The plain COUNT(*) over data_history with
+# is_latest=1 + 24h fetched_at filter can take 15-30s when archive UPDATEs
+# leave the visibility map dirty (Postgres falls back to heap fetches even
+# for an index-only scan). Cache the result by (where_clause, params) so
+# repeat polls — same filters, different page — return instantly, and a
+# slow scan failing doesn't zero out pagination on every refresh.
+_DATA_HISTORY_COUNT_CACHE = {}        # key -> {'total','live','ended','ts'}
+_DATA_HISTORY_COUNT_CACHE_LOCK = threading.Lock()
+_DATA_HISTORY_COUNT_CACHE_TTL = 60    # seconds — fresh window
+_DATA_HISTORY_COUNT_CACHE_MAX = 256   # cap entries to bound memory
+
+
+def _data_history_count_cache_get(key, allow_stale=False):
+    with _DATA_HISTORY_COUNT_CACHE_LOCK:
+        entry = _DATA_HISTORY_COUNT_CACHE.get(key)
+    if entry is None:
+        return None
+    age = time.time() - entry['ts']
+    if not allow_stale and age >= _DATA_HISTORY_COUNT_CACHE_TTL:
+        return None
+    return entry
+
+
+def _data_history_count_cache_set(key, total, live, ended):
+    with _DATA_HISTORY_COUNT_CACHE_LOCK:
+        if len(_DATA_HISTORY_COUNT_CACHE) >= _DATA_HISTORY_COUNT_CACHE_MAX:
+            # Drop the oldest entry — bound memory in case of high cardinality.
+            oldest_key = min(_DATA_HISTORY_COUNT_CACHE,
+                             key=lambda k: _DATA_HISTORY_COUNT_CACHE[k]['ts'])
+            _DATA_HISTORY_COUNT_CACHE.pop(oldest_key, None)
+        _DATA_HISTORY_COUNT_CACHE[key] = {
+            'total': total, 'live': live, 'ended': ended, 'ts': time.time(),
+        }
+
+
 @app.route('/api/data/history')
 def data_history():
     """
     Query historical data from history databases (split by source type).
-    
+
     Query parameters:
         source: Filter by source (rfs, traffic_incident, waze_hazard, waze_police, etc.) - supports comma-separated
         source_id: Filter by specific source ID
@@ -10838,53 +10873,79 @@ def data_history():
         # live/ended breakdown. The breakdown's FILTER expressions can't use
         # an index and force per-row CPU work; if it times out we still keep
         # the pagination total instead of returning zero.
-        for db_path in dbs_to_query:
-            db_total = 0
-            try:
-                conn = get_conn()
+        # TTL-cached per (where, params, mode) so repeat polls don't hit
+        # the DB and a slow scan doesn't break pagination on every refresh.
+        cache_key = (
+            actual_where,
+            tuple(params),
+            'live' if live_only else ('hist' if historical_only else 'all'),
+        )
+        cached_fresh = _data_history_count_cache_get(cache_key)
+        if cached_fresh is not None:
+            total = cached_fresh['total']
+            live_count = cached_fresh['live']
+            ended_count = cached_fresh['ended']
+        else:
+            count_failed = False
+            for db_path in dbs_to_query:
+                db_total = 0
                 try:
-                    c = conn.cursor()
-                    c.execute("SET LOCAL statement_timeout = '15s'")
-                    c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
-                    db_total = c.fetchone()[0] or 0
-                    total += db_total
-                finally:
-                    conn.close()
-            except Exception as e:
-                Log.error(f"Count error: {e}")
-                continue
-            if live_only:
-                live_count += db_total
-                continue
-            if historical_only:
-                ended_count += db_total
-                continue
-            try:
-                conn = get_conn()
+                    conn = get_conn()
+                    try:
+                        c = conn.cursor()
+                        c.execute("SET LOCAL statement_timeout = '15s'")
+                        c.execute(f'SELECT COUNT(*) FROM data_history WHERE {actual_where}', params)
+                        db_total = c.fetchone()[0] or 0
+                        total += db_total
+                    finally:
+                        conn.close()
+                except Exception as e:
+                    Log.warn(f"Count slow/timeout — falling back to cache: {e}")
+                    count_failed = True
+                    continue
+                if live_only:
+                    live_count += db_total
+                    continue
+                if historical_only:
+                    ended_count += db_total
+                    continue
                 try:
-                    c = conn.cursor()
-                    c.execute("SET LOCAL statement_timeout = '15s'")
-                    c.execute(f'''
-                        SELECT
-                            COUNT(*) FILTER (WHERE
-                                (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
-                                OR (source != 'pager' AND is_live = 1)
-                            ) AS live_count,
-                            COUNT(*) FILTER (WHERE
-                                (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
-                                OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
-                            ) AS ended_count
-                        FROM data_history
-                        WHERE {actual_where}
-                    ''', params)
-                    row = c.fetchone()
-                    live_count += row[0] or 0
-                    ended_count += row[1] or 0
-                finally:
-                    conn.close()
-            except Exception as e:
-                Log.error(f"Count breakdown error: {e}")
-        
+                    conn = get_conn()
+                    try:
+                        c = conn.cursor()
+                        c.execute("SET LOCAL statement_timeout = '15s'")
+                        c.execute(f'''
+                            SELECT
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) >= {pager_cutoff})
+                                    OR (source != 'pager' AND is_live = 1)
+                                ) AS live_count,
+                                COUNT(*) FILTER (WHERE
+                                    (source = 'pager' AND COALESCE(source_timestamp_unix, fetched_at) < {pager_cutoff})
+                                    OR (source != 'pager' AND (is_live = 0 OR is_live IS NULL))
+                                ) AS ended_count
+                            FROM data_history
+                            WHERE {actual_where}
+                        ''', params)
+                        row = c.fetchone()
+                        live_count += row[0] or 0
+                        ended_count += row[1] or 0
+                    finally:
+                        conn.close()
+                except Exception as e:
+                    Log.warn(f"Count breakdown slow/timeout: {e}")
+            # If the fast count failed, prefer a stale cached value over
+            # returning zero. Pagination then keeps working on a slightly
+            # out-of-date total instead of breaking entirely.
+            if count_failed and total == 0:
+                stale = _data_history_count_cache_get(cache_key, allow_stale=True)
+                if stale is not None:
+                    total = stale['total']
+                    live_count = stale['live']
+                    ended_count = stale['ended']
+            else:
+                _data_history_count_cache_set(cache_key, total, live_count, ended_count)
+
         # For single-DB queries, use OFFSET directly. For multi-DB, need to fetch more and sort in memory.
         # `data` is the heaviest column — pull it only if ?full=1.
         data_col = 'data' if include_data else "''::text AS data"
