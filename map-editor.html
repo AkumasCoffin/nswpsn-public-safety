@@ -4414,7 +4414,7 @@ async function loadPagerData() {
           const k = q + ',' + r;
           const count = counts.get(k) || 0;
           const isEmpty = count === 0;
-          const t = isEmpty ? 0 : (count / maxCount);
+          const t = isEmpty ? 0 : (Math.log(count + 1) / Math.log(maxCount + 1));
           const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
           const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
             renderer: _heatmapCanvasRenderer,
