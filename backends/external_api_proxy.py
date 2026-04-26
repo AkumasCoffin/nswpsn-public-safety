@@ -17328,10 +17328,25 @@ def _dash_guild_meta_lookup(guild_ids):
     return out
 
 
+# 30s cache for the admin overview response. The DB stats + guild meta +
+# Discord install counts dominate the cost; session info is in-memory and
+# cheap. 30s of staleness is acceptable for the speed win — admin users
+# refreshing the page back-to-back hit cache instead of paying 3s+ each
+# time.
+_DASH_OVERVIEW_CACHE = {'data': None, 'ts': 0}
+_DASH_OVERVIEW_CACHE_LOCK = threading.Lock()
+_DASH_OVERVIEW_TTL = 30
+
+
 @app.route('/api/dashboard/admin/overview', methods=['GET'])
 @_dash_require_admin()
 def dashboard_admin_overview():
     now = int(time.time())
+
+    with _DASH_OVERVIEW_CACHE_LOCK:
+        cached = _DASH_OVERVIEW_CACHE
+        if cached['data'] is not None and (now - cached['ts']) < _DASH_OVERVIEW_TTL:
+            return jsonify(cached['data'])
 
     # Session stats (from in-memory session store). Collapse to one row per
     # Discord user (freshest session wins) so the same person isn't listed
@@ -17507,7 +17522,7 @@ def dashboard_admin_overview():
     # cached internally.
     install_counts = _dash_app_install_counts()
 
-    return jsonify({
+    response_payload = {
         'stats': {
             'sessions_active': sessions_active,
             # 'dashboard_users' = lifetime unique users (from dashboard_users
@@ -17531,7 +17546,11 @@ def dashboard_admin_overview():
         'sessions': sessions_out,
         'admin_ids': sorted(list(_dash_admin_ids())),
         'server_time': now,
-    })
+    }
+    with _DASH_OVERVIEW_CACHE_LOCK:
+        _DASH_OVERVIEW_CACHE['data'] = response_payload
+        _DASH_OVERVIEW_CACHE['ts'] = now
+    return jsonify(response_payload)
 
 
 # ---------- Admin broadcast (send an embed to many servers) ----------
@@ -17595,9 +17614,23 @@ def _dash_guess_broadcast_channel(guild_id, text_channels):
     return text_channels[0]
 
 
+# 60s TTL cache for broadcast targets — list of guilds and their channels
+# rarely changes minute-to-minute, and the underlying Discord API calls
+# are the dominant cost on a cold load.
+_DASH_BCAST_TARGETS_CACHE = {'data': None, 'ts': 0}
+_DASH_BCAST_TARGETS_CACHE_LOCK = threading.Lock()
+_DASH_BCAST_TARGETS_TTL = 60
+
+
 @app.route('/api/dashboard/admin/broadcast/targets', methods=['GET'])
 @_dash_require_admin()
 def dashboard_admin_broadcast_targets():
+    now = time.time()
+    with _DASH_BCAST_TARGETS_CACHE_LOCK:
+        cached = _DASH_BCAST_TARGETS_CACHE
+        if cached['data'] is not None and (now - cached['ts']) < _DASH_BCAST_TARGETS_TTL:
+            return jsonify({'targets': cached['data']})
+
     conn = _bot_db_conn()
     if conn is None:
         return _dash_err('dashboard_disabled',
@@ -17610,9 +17643,28 @@ def dashboard_admin_broadcast_targets():
         conn.close()
 
     name_map = _dash_guild_meta_lookup(guild_ids)
+
+    # Parallelize the per-guild channel lookups. _dash_bcast_fetch_channels
+    # makes a Discord API call per guild — sequentially that was N×~150ms
+    # = several seconds with 30+ guilds. Same 8-way concurrency pattern as
+    # _dash_guild_meta_lookup, well under Discord's rate-limit ceiling.
+    from concurrent.futures import ThreadPoolExecutor
+    channels_by_gid = {}
+    if guild_ids:
+        max_workers = min(8, len(guild_ids))
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                for gid, result in zip(
+                    guild_ids,
+                    ex.map(_dash_bcast_fetch_channels, guild_ids)
+                ):
+                    channels_by_gid[gid] = result  # (channels, err)
+        except Exception as e:
+            Log.warn(f"broadcast targets parallel fetch failed: {e}")
+
     out = []
     for gid in guild_ids:
-        channels, err = _dash_bcast_fetch_channels(gid)
+        channels, err = channels_by_gid.get(gid, ([], 'fetch_failed'))
         guess = _dash_guess_broadcast_channel(gid, channels)
         meta = name_map.get(gid, {})
         out.append({
@@ -17624,6 +17676,10 @@ def dashboard_admin_broadcast_targets():
             'channels': channels,
             'channels_error': err,
         })
+
+    with _DASH_BCAST_TARGETS_CACHE_LOCK:
+        _DASH_BCAST_TARGETS_CACHE['data'] = out
+        _DASH_BCAST_TARGETS_CACHE['ts'] = now
     return jsonify({'targets': out})
 
 
