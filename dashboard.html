@@ -402,6 +402,68 @@
       opacity: 0.7;
     }
 
+    /* Provider-grouped alert-type selector (used by editor + wizard). */
+    .provider-list {
+      display: flex; flex-direction: column;
+      gap: 0.45rem;
+    }
+    .provider-section {
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      background: rgba(2,6,23,0.45);
+      overflow: hidden;
+    }
+    .provider-section.expanded { border-color: rgba(249,115,22,0.35); }
+    .provider-header {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.55rem 0.8rem;
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.85rem;
+      color: var(--text-main);
+      background: rgba(15,23,42,0.4);
+      border: none;
+      width: 100%;
+      text-align: left;
+    }
+    .provider-header:hover { background: rgba(30,41,59,0.6); }
+    .provider-header .pv-icon {
+      width: 22px; height: 22px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 50%;
+      background: rgba(148,163,184,0.12);
+    }
+    .provider-header .pv-name { font-weight: 600; }
+    .provider-header .pv-count {
+      margin-left: auto;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .provider-header .pv-count.has-selected { color: var(--accent); font-weight: 600; }
+    .provider-header .pv-caret {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      transition: transform 0.15s ease;
+    }
+    .provider-section.expanded .pv-caret { transform: rotate(90deg); }
+    .provider-body {
+      padding: 0.55rem 0.8rem 0.7rem;
+      border-top: 1px dashed rgba(148,163,184,0.12);
+      display: flex; flex-direction: column; gap: 0.45rem;
+    }
+    .provider-toolbar {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.72rem; color: var(--text-soft);
+    }
+    .provider-toolbar .link-btn {
+      background: none; border: none; padding: 0;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 0.72rem;
+    }
+    .provider-toolbar .link-btn:hover { text-decoration: underline; }
+
     /* Per-type override rows */
     .override-list {
       display: flex; flex-direction: column;
@@ -1327,24 +1389,62 @@
 const API = 'https://api.forcequit.xyz';
 window.API = API;
 
-const ALERT_TYPES = ['rfs', 'bom', 'traffic_incidents', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_major', 'power_endeavour', 'power_ausgrid', 'waze_hazards', 'waze_police', 'waze_roadwork', 'user_incidents', 'radio_summary'];
-const _DASH_ALERT_TYPES = ALERT_TYPES; // canonical name per contract
-const ALERT_TYPE_LABELS = {
-  rfs: 'RFS Major Incidents',
-  bom: 'BOM Warnings',
-  traffic_incidents: 'Traffic Incidents',
-  traffic_roadwork: 'Traffic Roadwork',
-  traffic_flood: 'Flood Hazards',
-  traffic_fire: 'Traffic Fires',
-  traffic_major: 'Major Events',
-  power_endeavour: 'Endeavour Outages',
-  power_ausgrid: 'Ausgrid Outages',
-  waze_hazards: 'Waze Hazards',
-  waze_police: 'Waze Police',
-  waze_roadwork: 'Waze Roadwork',
-  user_incidents: 'User Incidents',
-  radio_summary: 'Radio Summary',
-};
+// Provider-grouped alert type catalog. Keep in sync with discord-bot
+// ALERT_TYPES and the data_history `source` values.
+const PROVIDERS = [
+  { key: 'rfs',         name: 'NSW Rural Fire Service', icon: 'fire',  color: '#ef4444',
+    types: [
+      { key: 'rfs', label: 'Major Incidents' },
+    ] },
+  { key: 'bom',         name: 'Bureau of Meteorology',  icon: 'cloud', color: '#3b82f6',
+    types: [
+      { key: 'bom_land',   label: 'Land Warnings' },
+      { key: 'bom_marine', label: 'Marine Warnings' },
+    ] },
+  { key: 'livetraffic', name: 'LiveTraffic NSW',        icon: 'road',  color: '#f97316',
+    types: [
+      { key: 'traffic_incident',   label: 'Incidents' },
+      { key: 'traffic_roadwork',   label: 'Roadwork' },
+      { key: 'traffic_flood',      label: 'Flooding' },
+      { key: 'traffic_fire',       label: 'Fires' },
+      { key: 'traffic_majorevent', label: 'Major Events' },
+    ] },
+  { key: 'endeavour',   name: 'Endeavour Energy',       icon: 'bolt',  color: '#fbbf24',
+    types: [
+      { key: 'endeavour_current', label: 'Current Outages' },
+      { key: 'endeavour_planned', label: 'Planned Outages' },
+    ] },
+  { key: 'ausgrid',     name: 'Ausgrid',                icon: 'plug',  color: '#f59e0b',
+    types: [
+      { key: 'ausgrid', label: 'Outages' },
+    ] },
+  { key: 'essential',   name: 'Essential Energy',       icon: 'bolt',  color: '#06b6d4',
+    types: [
+      { key: 'essential_planned', label: 'Planned Outages' },
+      { key: 'essential_future',  label: 'Future Outages' },
+    ] },
+  { key: 'waze',        name: 'Waze',                   icon: 'car',   color: '#00d4ff',
+    types: [
+      { key: 'waze_hazard',   label: 'Hazards' },
+      { key: 'waze_jam',      label: 'Traffic Jams' },
+      { key: 'waze_police',   label: 'Police' },
+      { key: 'waze_roadwork', label: 'Roadwork' },
+    ] },
+  { key: 'user',        name: 'User Submissions',       icon: 'user',  color: '#a855f7',
+    types: [
+      { key: 'user_incident', label: 'User Incidents' },
+    ] },
+  { key: 'rdio',        name: 'Radio Scanner',          icon: 'radio', color: '#10b981',
+    types: [
+      { key: 'radio_summary', label: 'Hourly Summaries' },
+    ] },
+];
+
+const ALERT_TYPES = PROVIDERS.flatMap(p => p.types.map(t => t.key));
+const _DASH_ALERT_TYPES = ALERT_TYPES;
+const ALERT_TYPE_LABELS = Object.fromEntries(
+  PROVIDERS.flatMap(p => p.types.map(t => [t.key, t.label]))
+);
 const MOBILE_BREAKPOINT = 1024;
 const MAX_ROLES = 5;
 
@@ -2272,21 +2372,104 @@ function inheritanceCaption(preset) {
   return out;
 }
 
+// Per-preset provider expand/collapse state. Keyed by `${presetId}:${providerKey}`.
+// Sections are collapsed by default; toggled-open state survives re-renders within
+// the same dashboard session but isn't persisted (cheap to re-derive from selection).
+const _providerOpen = new Map();
+function _providerKey(presetId, providerKey) { return `${presetId}:${providerKey}`; }
+function isProviderOpen(presetId, providerKey, hasSelected) {
+  const k = _providerKey(presetId, providerKey);
+  if (_providerOpen.has(k)) return _providerOpen.get(k);
+  // Default: open when any of this provider's types is selected on this preset.
+  return !!hasSelected;
+}
+function setProviderOpen(presetId, providerKey, open) {
+  _providerOpen.set(_providerKey(presetId, providerKey), !!open);
+}
+
+function _renderProviderSection(provider, selected, opts) {
+  // opts: { onToggleType(typeKey), onSelectAll(), presetId, expanded, onExpand(open) }
+  const types = provider.types || [];
+  const selectedCount = types.filter(t => selected.has(t.key)).length;
+  const totalCount = types.length;
+  const hasSelected = selectedCount > 0;
+  const expanded = !!opts.expanded;
+
+  const section = el('div', {
+    class: 'provider-section' + (expanded ? ' expanded' : ''),
+  });
+  const header = el('button', {
+    class: 'provider-header',
+    type: 'button',
+    'aria-expanded': expanded ? 'true' : 'false',
+    onclick: () => opts.onExpand(!expanded),
+  }, [
+    el('span', { class: 'pv-icon' },
+      el('i', { class: `fa-solid fa-${provider.icon || 'circle'}`,
+                style: `color:${provider.color || '#94a3b8'}` })),
+    el('span', { class: 'pv-name' }, provider.name),
+    el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
+      `${selectedCount}/${totalCount}`),
+    el('i', { class: 'fa-solid fa-chevron-right pv-caret' }),
+  ]);
+  section.appendChild(header);
+
+  if (expanded) {
+    const body = el('div', { class: 'provider-body' });
+    // Toolbar: Select all / Clear (per provider).
+    const allSelected = selectedCount === totalCount && totalCount > 0;
+    body.appendChild(el('div', { class: 'provider-toolbar' }, [
+      el('button', {
+        class: 'link-btn',
+        onclick: (e) => { e.stopPropagation(); opts.onSelectAll(!allSelected); },
+      }, allSelected ? 'Clear all' : 'Select all'),
+    ]));
+    // Chips
+    const row = el('div', { class: 'chip-row' });
+    for (const t of types) {
+      const active = selected.has(t.key);
+      row.appendChild(el('button', {
+        class: 'chip' + (active ? ' active' : ''),
+        onclick: (e) => { e.stopPropagation(); opts.onToggleType(t.key); },
+        title: t.key,
+        type: 'button',
+      }, [
+        el('span', {}, t.label || ALERT_TYPE_LABELS[t.key] || t.key),
+        el('span', { class: 'mono' }, t.key),
+      ]));
+    }
+    body.appendChild(row);
+    section.appendChild(body);
+  }
+  return section;
+}
+
 function renderAlertTypeChips(preset) {
   const selected = new Set(preset.alert_types || []);
-  const row = el('div', { class: 'chip-row' });
-  for (const t of _DASH_ALERT_TYPES) {
-    const active = selected.has(t);
-    row.appendChild(el('button', {
-      class: 'chip' + (active ? ' active' : ''),
-      onclick: () => toggleAlertType(preset.id, t),
-      title: t,
-    }, [
-      el('span', {}, ALERT_TYPE_LABELS[t] || t),
-      el('span', { class: 'mono' }, t),
-    ]));
+  const wrap = el('div', { class: 'provider-list' });
+  for (const provider of PROVIDERS) {
+    const hasSelected = provider.types.some(t => selected.has(t.key));
+    const expanded = isProviderOpen(preset.id, provider.key, hasSelected);
+    wrap.appendChild(_renderProviderSection(provider, selected, {
+      presetId: preset.id,
+      expanded,
+      onExpand: (open) => {
+        setProviderOpen(preset.id, provider.key, open);
+        // Replace this section in-place to keep editor scroll position.
+        render();
+      },
+      onToggleType: (typeKey) => toggleAlertType(preset.id, typeKey),
+      onSelectAll: (turnOn) => {
+        // Compute the next alert_types array off the current preset state.
+        const cur = new Set(preset.alert_types || []);
+        for (const t of provider.types) {
+          if (turnOn) cur.add(t.key); else cur.delete(t.key);
+        }
+        patchPreset(preset.id, { alert_types: Array.from(cur) });
+      },
+    }));
   }
-  return row;
+  return wrap;
 }
 
 function renderPagerCard(preset) {
@@ -2364,21 +2547,27 @@ const _DASH_SEVERITY_PER_TYPE = {
     { value: 'watch_and_act', label: 'Watch & Act' },
     { value: 'emergency',     label: 'Emergency' },
   ],
-  bom: [
+  bom_land: [
     { value: 'minor',    label: 'Minor' },
     { value: 'moderate', label: 'Moderate' },
     { value: 'major',    label: 'Major' },
   ],
-  traffic_major: [
+  bom_marine: [
+    { value: 'minor',    label: 'Minor' },
+    { value: 'moderate', label: 'Moderate' },
+    { value: 'major',    label: 'Major' },
+  ],
+  traffic_majorevent: [
     { value: 'minor',    label: 'Minor' },
     { value: 'moderate', label: 'Moderate' },
     { value: 'major',    label: 'Major' },
   ],
 };
 const _DASH_SEVERITY_TYPE_LABELS = {
-  rfs:           'RFS (bushfires)',
-  bom:           'BOM (weather)',
-  traffic_major: 'Traffic (major incidents)',
+  rfs:                'RFS (bushfires)',
+  bom_land:           'BOM Land (weather)',
+  bom_marine:         'BOM Marine (weather)',
+  traffic_majorevent: 'Traffic (major events)',
 };
 const _DASH_FILTER_SEVERITY_TYPES = new Set(Object.keys(_DASH_SEVERITY_PER_TYPE));
 
@@ -3438,6 +3627,10 @@ function renderWizardStep2() {
   return container;
 }
 
+// Wizard provider expand/collapse state — keyed by provider.key alone since
+// the wizard only edits one in-flight preset at a time.
+const _wizardProviderOpen = new Map();
+
 function renderWizardStep3() {
   const w = state.wizard;
   const container = el('div', {});
@@ -3451,26 +3644,47 @@ function renderWizardStep3() {
     el('button', { class: 'link-btn', onclick: () => { w.types.clear(); renderWizardBodyOnly(); } }, 'Clear all'),
   ]));
 
-  const list = el('div', { class: 'type-list' });
-  for (const k of _DASH_ALERT_TYPES) {
-    const checked = w.types.has(k);
-    list.appendChild(el('label', {
-      class: 'type-opt' + (checked ? ' selected' : ''),
-    }, [
-      el('input', { type: 'checkbox', checked: checked ? 'checked' : false,
-        onchange: (e) => { if (e.target.checked) w.types.add(k); else w.types.delete(k); renderWizardBodyOnly(); } }),
-      el('span', {}, ALERT_TYPE_LABELS[k]),
-      el('span', { style: 'margin-left:auto;color:var(--text-soft);font-family:monospace;font-size:0.7rem' }, k),
-    ]));
+  const list = el('div', { class: 'provider-list' });
+  for (const provider of PROVIDERS) {
+    const hasSelected = provider.types.some(t => w.types.has(t.key));
+    const expanded = _wizardProviderOpen.has(provider.key)
+      ? !!_wizardProviderOpen.get(provider.key)
+      : hasSelected;
+    list.appendChild(_renderProviderSection(provider, w.types, {
+      presetId: '__wizard__',
+      expanded,
+      onExpand: (open) => {
+        _wizardProviderOpen.set(provider.key, !!open);
+        renderWizardBodyOnly();
+      },
+      onToggleType: (typeKey) => {
+        if (w.types.has(typeKey)) w.types.delete(typeKey);
+        else w.types.add(typeKey);
+        renderWizardBodyOnly();
+      },
+      onSelectAll: (turnOn) => {
+        for (const t of provider.types) {
+          if (turnOn) w.types.add(t.key); else w.types.delete(t.key);
+        }
+        renderWizardBodyOnly();
+      },
+    }));
   }
-  // Pager flag
-  list.appendChild(el('label', { class: 'type-opt' + (w.pagerEnabled ? ' selected' : '') }, [
+  container.appendChild(list);
+
+  // Pager flag — kept as a standalone toggle so the visual mapping stays
+  // "providers expand into types" while pager (capcode-driven) sits
+  // alongside as a non-provider channel.
+  const pagerWrap = el('div', { style: 'margin-top:0.6rem' });
+  pagerWrap.appendChild(el('label', {
+    class: 'type-opt' + (w.pagerEnabled ? ' selected' : ''),
+  }, [
     el('input', { type: 'checkbox', checked: w.pagerEnabled ? 'checked' : false,
       onchange: (e) => { w.pagerEnabled = !!e.target.checked; renderWizardBodyOnly(); } }),
     el('span', {}, 'Pager messages'),
     el('span', { style: 'margin-left:auto;color:var(--text-soft);font-family:monospace;font-size:0.7rem' }, 'pager'),
   ]));
-  container.appendChild(list);
+  container.appendChild(pagerWrap);
   return container;
 }
 
@@ -3965,7 +4179,6 @@ const _BOTCTL_ALERT_TYPES = [
   { value: 'all', label: 'All alert types' },
   ..._DASH_ALERT_TYPES.map(t => ({ value: t, label: ALERT_TYPE_LABELS[t] || t })),
   { value: 'pager', label: 'Pager' },
-  { value: 'user_incidents', label: 'User incidents' },
 ];
 
 async function enqueueBotAction(action, params) {

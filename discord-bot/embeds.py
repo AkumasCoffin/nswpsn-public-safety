@@ -291,17 +291,22 @@ class EmbedBuilder:
     COLORS = {
         'rfs': 0xFF4500,
         'traffic_fire': 0xFF6347,
-        'bom': 0x1E90FF,
-        'traffic_incidents': 0xFFA500,
+        'bom_land': 0x1E90FF,
+        'bom_marine': 0x4169E1,
+        'traffic_incident': 0xFFA500,
         'traffic_roadwork': 0xFFD700,
         'traffic_flood': 0x00CED1,
-        'traffic_major': 0xFF8C00,
-        'power_endeavour': 0x8B008B,
+        'traffic_majorevent': 0xFF8C00,
+        'endeavour_current': 0x8B008B,
+        'endeavour_planned': 0x6A1B9A,
         'pager': 0x32CD32,
         'pager_stop': 0x228B22,
-        'power_ausgrid': 0xE67E22,  # Orange for Ausgrid
-        'user_incidents': 0x9333EA,  # Purple for user incidents
-        'waze_hazards': 0xEAB308,    # Yellow for hazards
+        'ausgrid': 0xE67E22,         # Orange for Ausgrid
+        'essential_planned': 0x06B6D4,
+        'essential_future': 0x0891B2,
+        'user_incident': 0x9333EA,   # Purple for user incidents
+        'waze_hazard': 0xEAB308,     # Yellow for hazards
+        'waze_jam': 0xF97316,        # Orange for jams
         'waze_police': 0x3B82F6,     # Blue for police
         'waze_roadwork': 0xA855F7,   # Purple for roadwork
     }
@@ -372,16 +377,22 @@ class EmbedBuilder:
     
     ICONS = {
         'rfs': '🔥',
-        'bom': '⛈️',
-        'traffic_incidents': '🚗',
+        'bom_land': '⛈️',
+        'bom_marine': '🌊',
+        'traffic_incident': '🚗',
         'traffic_roadwork': '🚧',
         'traffic_flood': '🌊',
         'traffic_fire': '🔥',
-        'traffic_major': '🎉',
-        'power_endeavour': '⚡',
+        'traffic_majorevent': '🎉',
+        'endeavour_current': '⚡',
+        'endeavour_planned': '🔧',
+        'ausgrid': '⚡',
+        'essential_planned': '🔧',
+        'essential_future': '📅',
         'pager': '📟',
-        'user_incidents': '📢',
-        'waze_hazards': '⚠️',
+        'user_incident': '📢',
+        'waze_hazard': '⚠️',
+        'waze_jam': '🚙',
         'waze_police': '👮',
         'waze_roadwork': '🚧',
     }
@@ -405,15 +416,17 @@ class EmbedBuilder:
         
         if alert_type == 'rfs':
             return self._build_rfs_embed(data, previous_message=previous_message)
-        elif alert_type == 'bom':
+        elif alert_type.startswith('bom_'):
             return self._build_bom_embed(data, alert_type)
         elif alert_type.startswith('traffic_'):
             return self._build_traffic_embed(data, alert_type)
-        elif alert_type.startswith('power_'):
+        elif (alert_type.startswith('endeavour_')
+              or alert_type == 'ausgrid'
+              or alert_type.startswith('essential_')):
             return self._build_power_embed(data, alert_type)
         elif alert_type.startswith('waze_'):
             return self._build_waze_embed(data, alert_type)
-        elif alert_type == 'user_incidents':
+        elif alert_type == 'user_incident':
             return self._build_user_incident_embed(data, previous_message=previous_message)
         elif alert_type == 'radio_summary':
             return self._build_radio_summary_embed(data)
@@ -787,7 +800,8 @@ class EmbedBuilder:
         
         # Build title based on alert type
         type_labels = {
-            'waze_hazards': 'Waze Hazard',
+            'waze_hazard': 'Waze Hazard',
+            'waze_jam': 'Waze Traffic Jam',
             'waze_police': 'Waze Police Report',
             'waze_roadwork': 'Waze Roadwork',
         }
@@ -845,7 +859,8 @@ class EmbedBuilder:
             if len(coords) >= 2:
                 lon, lat = coords[0], coords[1]
                 layer_map = {
-                    'waze_hazards':  'hazards',
+                    'waze_hazard':   'hazards',
+                    'waze_jam':      'jams',
                     'waze_police':   'police',
                     'waze_roadwork': 'roadwork',
                 }
@@ -857,13 +872,17 @@ class EmbedBuilder:
         return embed
     
     def _build_power_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
-        """Build embed for power outages"""
-        if alert_type == 'power_ausgrid':
+        """Build embed for power outages (Endeavour, Ausgrid, Essential)."""
+        if alert_type == 'ausgrid':
             return self._build_ausgrid_embed(data)
-        return self._build_endeavour_embed(data)
+        if alert_type.startswith('essential_'):
+            return self._build_essential_embed(data, alert_type)
+        # endeavour_current / endeavour_planned share the same shape
+        return self._build_endeavour_embed(data, alert_type)
     
-    def _build_endeavour_embed(self, data: Dict[str, Any]) -> discord.Embed:
-        """Build embed for Endeavour outages"""
+    def _build_endeavour_embed(self, data: Dict[str, Any],
+                               alert_type: str = 'endeavour_current') -> discord.Embed:
+        """Build embed for Endeavour outages (current + planned)."""
         suburb = data.get('suburb', 'Unknown')
         streets = strip_html(data.get('streets', ''))
         customers = data.get('customersAffected', 0)
@@ -873,16 +892,16 @@ class EmbedBuilder:
         restoration = data.get('estimatedRestoration', '')
         start_time = data.get('startTime', '')
         last_updated = data.get('lastUpdated', '')
-        
+
         title_prefix = "🔧" if outage_type == 'Planned' else "⚡"
-        
+
         # Use source timestamp (start time or last updated)
         source_time = start_time or last_updated
         embed_timestamp = parse_timestamp_to_datetime(source_time) or datetime.now()
-        
+
         embed = discord.Embed(
             title=f"{title_prefix} {outage_type} Outage - {suburb}",
-            color=self.COLORS['power_endeavour'],
+            color=self.COLORS.get(alert_type, self.COLORS['endeavour_current']),
             timestamp=embed_timestamp
         )
         
@@ -935,7 +954,7 @@ class EmbedBuilder:
         
         embed = discord.Embed(
             title=f"{title_prefix} {type_text} Outage - {suburb}",
-            color=self.COLORS['power_ausgrid'],
+            color=self.COLORS['ausgrid'],
             timestamp=embed_timestamp
         )
         
@@ -970,7 +989,67 @@ class EmbedBuilder:
         
         embed.set_footer(text="Ausgrid")
         return embed
-    
+
+    def _build_essential_embed(self, data: Dict[str, Any],
+                               alert_type: str = 'essential_planned') -> discord.Embed:
+        """Build embed for Essential Energy outages (planned + future).
+
+        Field shape is best-effort — Essential's API contract isn't pinned
+        yet; we read common spellings and fall back to the generic path for
+        anything missing. Mirrors the Endeavour layout so the visual
+        language stays consistent across power providers.
+        """
+        suburb = (data.get('suburb') or data.get('Suburb')
+                  or data.get('locality') or 'Unknown')
+        streets = strip_html(str(
+            data.get('streets') or data.get('streetName')
+            or data.get('StreetName') or data.get('street') or ''
+        ))
+        customers = (data.get('customersAffected')
+                     or data.get('CustomersAffected') or 0)
+        status = data.get('status') or data.get('Status') or ''
+        cause = data.get('cause') or data.get('Cause') or ''
+        start_time = (data.get('startTime') or data.get('StartTime')
+                      or data.get('plannedStart') or '')
+        restoration = (data.get('estimatedRestoration')
+                       or data.get('EstRestoration')
+                       or data.get('expectedRestore') or '')
+        is_future = alert_type == 'essential_future'
+
+        title_prefix = "📅" if is_future else "🔧"
+        type_text = 'Future' if is_future else 'Planned'
+
+        embed_timestamp = parse_timestamp_to_datetime(start_time) or datetime.now()
+        embed = discord.Embed(
+            title=f"{title_prefix} {type_text} Outage - {suburb}",
+            color=self.COLORS.get(alert_type, self.COLORS['essential_planned']),
+            timestamp=embed_timestamp,
+        )
+
+        if is_valid_value(streets):
+            embed.add_field(name="Streets Affected", value=streets[:1024], inline=False)
+        if is_valid_value(customers) and customers > 0:
+            embed.add_field(name="Customers Affected", value=f"**{int(customers):,}**", inline=True)
+        if is_valid_value(status):
+            embed.add_field(name="Status", value=str(status), inline=True)
+        if is_valid_value(cause):
+            embed.add_field(name="Cause", value=str(cause), inline=False)
+        formatted_start = format_timestamp(start_time)
+        if formatted_start:
+            embed.add_field(name="Start", value=formatted_start, inline=True)
+        formatted_restoration = format_timestamp(restoration)
+        if formatted_restoration:
+            embed.add_field(name="Est. Restoration", value=formatted_restoration, inline=True)
+
+        lat = data.get('latitude') or data.get('Latitude')
+        lon = data.get('longitude') or data.get('Longitude')
+        if lat and lon:
+            map_url = build_map_url(lat, lon, label=f"{type_text} Outage - {suburb}", layer="outages")
+            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
+
+        embed.set_footer(text="Essential Energy")
+        return embed
+
     def _build_generic_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
         """Build a generic embed for unknown alert types"""
         icon = self.ICONS.get(alert_type, '📢')
@@ -1027,9 +1106,9 @@ class EmbedBuilder:
         logs = data.get('logs', [])
         
         # Determine color based on type or status
-        color = self.COLORS['user_incidents']
+        color = self.COLORS['user_incident']
         icon = '📢'
-        
+
         # Check for fire-related types
         type_lower = type_display.lower() if type_display else ''
         if 'fire' in type_lower or 'bush' in type_lower:
@@ -1053,16 +1132,16 @@ class EmbedBuilder:
         elif 'storm' in type_lower or 'weather' in type_lower:
             color = 0x6B7280  # Gray for weather
             icon = '⛈️'
-        
+
         # Use source timestamp (created_at from Supabase)
         embed_timestamp = parse_timestamp_to_datetime(created_at) or datetime.now()
-        
+
         embed = discord.Embed(
             title=f"{icon} {title}",
             color=color,
             timestamp=embed_timestamp
         )
-        
+
         # Build description with location
         desc_parts = []
         if is_valid_value(location):
@@ -1071,7 +1150,7 @@ class EmbedBuilder:
             desc_parts.append(description[:500])
         if desc_parts:
             embed.description = "\n\n".join(desc_parts)
-        
+
         # Info row - compact inline fields
         info_parts = []
         if is_valid_value(type_display):
@@ -1327,18 +1406,23 @@ class EmbedBuilder:
     # alert types are added.
     _ALERT_TYPE_LABELS = {
         'rfs': 'RFS Major Incidents',
-        'bom': 'BOM Warnings',
-        'traffic_incidents': 'Traffic Incidents',
+        'bom_land': 'BOM Land Warnings',
+        'bom_marine': 'BOM Marine Warnings',
+        'traffic_incident': 'Traffic Incidents',
         'traffic_roadwork': 'Traffic Roadwork',
         'traffic_flood': 'Flood Hazards',
         'traffic_fire': 'Traffic Fires',
-        'traffic_major': 'Major Events',
-        'power_endeavour': 'Endeavour Outages',
-        'power_ausgrid': 'Ausgrid Outages',
-        'waze_hazards': 'Waze Hazards',
+        'traffic_majorevent': 'Major Events',
+        'endeavour_current': 'Endeavour Current Outages',
+        'endeavour_planned': 'Endeavour Planned Outages',
+        'ausgrid': 'Ausgrid Outages',
+        'essential_planned': 'Essential Energy Planned Outages',
+        'essential_future': 'Essential Energy Future Outages',
+        'waze_hazard': 'Waze Hazards',
+        'waze_jam': 'Waze Traffic Jams',
         'waze_police': 'Waze Police',
         'waze_roadwork': 'Waze Roadwork',
-        'user_incidents': 'User Incidents',
+        'user_incident': 'User Incidents',
         'radio_summary': 'Radio Summary',
     }
 
@@ -2348,15 +2432,17 @@ class EmbedBuilder:
 
         if alert_type == 'rfs':
             return self.build_rfs_container(data, previous_message=previous_message)
-        elif alert_type == 'bom':
+        elif alert_type.startswith('bom_'):
             return self.build_bom_container(data)
         elif alert_type.startswith('traffic_'):
             return self.build_traffic_container(data, alert_type)
-        elif alert_type.startswith('power_'):
+        elif (alert_type.startswith('endeavour_')
+              or alert_type == 'ausgrid'
+              or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
         elif alert_type.startswith('waze_'):
             return self.build_waze_container(data, alert_type)
-        elif alert_type == 'user_incidents':
+        elif alert_type == 'user_incident':
             return self.build_user_incident_container(data, previous_message=previous_message)
         else:
             return self.build_generic_container(data, alert_type)
@@ -2639,7 +2725,8 @@ class EmbedBuilder:
         color = self.COLORS.get(alert_type, 0xEAB308)
 
         type_labels = {
-            'waze_hazards': 'Waze Hazard',
+            'waze_hazard': 'Waze Hazard',
+            'waze_jam': 'Waze Traffic Jam',
             'waze_police': 'Waze Police Report',
             'waze_roadwork': 'Waze Roadwork',
         }
@@ -2689,7 +2776,8 @@ class EmbedBuilder:
             if len(coords) >= 2:
                 lon, lat = coords[0], coords[1]
                 layer_map = {
-                    'waze_hazards':  'hazards',
+                    'waze_hazard':   'hazards',
+                    'waze_jam':      'jams',
                     'waze_police':   'police',
                     'waze_roadwork': 'roadwork',
                 }
@@ -2702,12 +2790,15 @@ class EmbedBuilder:
 
     # ---- Power (dispatcher) ------------------------------------
     def build_power_container(self, data: Dict[str, Any], alert_type: str):
-        if alert_type == 'power_ausgrid':
+        if alert_type == 'ausgrid':
             return self.build_ausgrid_container(data)
-        return self.build_endeavour_container(data)
+        if alert_type.startswith('essential_'):
+            return self.build_essential_container(data, alert_type)
+        return self.build_endeavour_container(data, alert_type)
 
-    def build_endeavour_container(self, data: Dict[str, Any]):
-        """Components V2 container for Endeavour power outages."""
+    def build_endeavour_container(self, data: Dict[str, Any],
+                                  alert_type: str = 'endeavour_current'):
+        """Components V2 container for Endeavour power outages (current + planned)."""
         suburb = data.get('suburb', 'Unknown')
         streets = strip_html(data.get('streets', ''))
         customers = data.get('customersAffected', 0)
@@ -2720,7 +2811,9 @@ class EmbedBuilder:
 
         title_prefix = "🔧" if outage_type == 'Planned' else "⚡"
 
-        container = discord.ui.Container(accent_colour=self.COLORS['power_endeavour'])
+        container = discord.ui.Container(
+            accent_colour=self.COLORS.get(alert_type, self.COLORS['endeavour_current'])
+        )
         container.add_item(discord.ui.TextDisplay(
             content=f"### {title_prefix} {outage_type} Outage — {suburb}"
         ))
@@ -2776,7 +2869,7 @@ class EmbedBuilder:
         type_text = 'Planned' if is_planned else 'Unplanned'
         title_prefix = "🔧" if is_planned else "⚡"
 
-        container = discord.ui.Container(accent_colour=self.COLORS['power_ausgrid'])
+        container = discord.ui.Container(accent_colour=self.COLORS['ausgrid'])
         container.add_item(discord.ui.TextDisplay(
             content=f"### {title_prefix} {type_text} Outage — {suburb}"
         ))
@@ -2819,6 +2912,75 @@ class EmbedBuilder:
         self._append_container_footer(container, footer_bits, source="Ausgrid")
         return container
 
+    # ---- Essential Energy --------------------------------------
+    def build_essential_container(self, data: Dict[str, Any],
+                                  alert_type: str = 'essential_planned'):
+        """Components V2 container for Essential Energy outages
+        (planned + future). Best-effort field reads — Essential's API
+        contract isn't pinned yet; we accept several common spellings and
+        gracefully omit anything missing."""
+        suburb = (data.get('suburb') or data.get('Suburb')
+                  or data.get('locality') or 'Unknown')
+        streets = strip_html(str(
+            data.get('streets') or data.get('streetName')
+            or data.get('StreetName') or data.get('street') or ''
+        ))
+        customers = (data.get('customersAffected')
+                     or data.get('CustomersAffected') or 0)
+        status = data.get('status') or data.get('Status') or ''
+        cause = data.get('cause') or data.get('Cause') or ''
+        start_time = (data.get('startTime') or data.get('StartTime')
+                      or data.get('plannedStart') or '')
+        restoration = (data.get('estimatedRestoration')
+                       or data.get('EstRestoration')
+                       or data.get('expectedRestore') or '')
+
+        is_future = alert_type == 'essential_future'
+        title_prefix = "📅" if is_future else "🔧"
+        type_text = 'Future' if is_future else 'Planned'
+
+        container = discord.ui.Container(
+            accent_colour=self.COLORS.get(alert_type, self.COLORS['essential_planned'])
+        )
+        container.add_item(discord.ui.TextDisplay(
+            content=f"### {title_prefix} {type_text} Outage — {suburb}"
+        ))
+
+        if is_valid_value(streets):
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"📍 {streets[:1500]}")
+            ))
+
+        meta_bits = []
+        if is_valid_value(customers) and customers and int(customers) > 0:
+            meta_bits.append(f"👥 **{int(customers):,}**")
+        if is_valid_value(status):
+            meta_bits.append(str(status))
+        if meta_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' · '.join(meta_bits))
+            ))
+
+        if is_valid_value(cause):
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"Cause: {cause}")
+            ))
+
+        footer_bits = []
+        formatted_start = format_timestamp(start_time)
+        if formatted_start:
+            footer_bits.append(f"start {formatted_start}")
+        formatted_restoration = format_timestamp(restoration)
+        if formatted_restoration:
+            footer_bits.append(f"ETA: {formatted_restoration}")
+        lat = data.get('latitude') or data.get('Latitude')
+        lon = data.get('longitude') or data.get('Longitude')
+        if lat and lon:
+            map_url = build_map_url(lat, lon, label=f"{type_text} Outage - {suburb}", layer="outages")
+            footer_bits.append(f"[🗺️ Map]({map_url})")
+        self._append_container_footer(container, footer_bits, source="Essential Energy")
+        return container
+
     # ---- User incidents ----------------------------------------
     def build_user_incident_container(self, data: Dict[str, Any],
                                       previous_message: Dict[str, Any] = None):
@@ -2844,7 +3006,7 @@ class EmbedBuilder:
         created_at = data.get('created_at', '')
         logs = data.get('logs', [])
 
-        color = self.COLORS['user_incidents']
+        color = self.COLORS['user_incident']
         icon = '📢'
         type_lower = type_display.lower() if type_display else ''
         if 'fire' in type_lower or 'bush' in type_lower:
