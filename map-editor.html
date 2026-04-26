@@ -4340,7 +4340,10 @@ async function loadPagerData() {
         if (c > maxCount) maxCount = c;
       }
       if (maxCount < 1) maxCount = 1;
-      const sqrtMax = Math.sqrt(maxCount);
+      const lblMin = document.getElementById('heat-legend-min');
+      const lblMax = document.getElementById('heat-legend-max');
+      if (lblMin) lblMin.textContent = '1';
+      if (lblMax) lblMax.textContent = maxCount.toLocaleString();
       const qMin = Math.floor((west - HEX_ORIGIN_LNG) / COL_STEP_LNG) - 1;
       const qMax = Math.ceil((east - HEX_ORIGIN_LNG) / COL_STEP_LNG) + 1;
       const MAX_CELLS = 50000;
@@ -4355,7 +4358,7 @@ async function loadPagerData() {
           const k = q + ',' + r;
           const count = counts.get(k) || 0;
           const isEmpty = count === 0;
-          const t = isEmpty ? 0 : Math.sqrt(count) / sqrtMax;
+          const t = isEmpty ? 0 : (count / maxCount);
           const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
           const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
             renderer: _heatmapCanvasRenderer,
@@ -4443,10 +4446,8 @@ async function loadPagerData() {
         if (stats) {
           stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
         }
-        const lblMin = document.getElementById('heat-legend-min');
-        const lblMax = document.getElementById('heat-legend-max');
-        if (lblMin) lblMin.textContent = '1';
-        if (lblMax) lblMax.textContent = (data.max_count || 0).toLocaleString();
+        // Legend labels are set inside _renderPoliceHexGrid using the
+        // actual hex-max after client-side rebinning.
       } catch (e) {
         console.error('Police heatmap load failed', e);
         if (stats) stats.textContent = 'Failed to load. Retry.';
