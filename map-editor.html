@@ -1423,17 +1423,14 @@
       <!-- Police Filter Panel -->
       <div class="filter-panel" id="police-panel">
         <h4><i class="fa-solid fa-shield-halved"></i> Police Reports</h4>
+        <label><input type="checkbox" id="chk-police-pins" checked onchange="togglePolicePinsMode(this.checked)"><i class="fa-solid fa-map-pin" style="color:#3b82f6;margin-right:4px;"></i> Show pins</label>
+        <div style="font-size:11px;color:#94a3b8;margin:6px 0 4px;">Filter by type:</div>
         <label><input type="checkbox" id="chk-police-visible" checked onchange="togglePoliceFilter('visible', this.checked)"><span class="filter-dot" style="background:#3b82f6;"></span> Visible</label>
         <label><input type="checkbox" id="chk-police-hidden" checked onchange="togglePoliceFilter('hidden', this.checked)"><span class="filter-dot" style="background:#6366f1;"></span> Hidden</label>
         <label><input type="checkbox" id="chk-police-camera" checked onchange="togglePoliceFilter('camera', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Speed Camera</label>
         <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(148,163,184,0.18);">
           <label><input type="checkbox" id="chk-police-heatmap" onchange="togglePoliceHeatmapMode(this.checked)"><i class="fa-solid fa-fire" style="color:#dc2626;margin-right:4px;"></i> Heatmap (historical density)</label>
           <div id="police-heatmap-controls" style="display:none;margin-top:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#94a3b8;margin-bottom:4px;">
-              <span>Time window</span>
-              <span id="heat-days-label">30d</span>
-            </div>
-            <input type="range" id="heat-days-range" min="1" max="90" value="30" style="width:100%;accent-color:#dc2626;" oninput="document.getElementById('heat-days-label').textContent = this.value + 'd';" onchange="onPoliceHeatmapFilter()" />
             <div id="heat-stats" style="font-size:10px;color:#64748b;margin-top:6px;text-align:center;">Loading…</div>
           </div>
         </div>
@@ -4165,7 +4162,7 @@ async function loadPagerData() {
       if (isOpen) {
         panel.classList.remove('open');
         btn.classList.remove('active');
-        map.removeLayer(policeLayer);
+        if (map.hasLayer(policeLayer)) map.removeLayer(policeLayer);
         if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
           map.removeLayer(policeHeatmapLayer);
         }
@@ -4173,14 +4170,29 @@ async function loadPagerData() {
         if (heatChk) heatChk.checked = false;
         const heatCtl = document.getElementById('police-heatmap-controls');
         if (heatCtl) heatCtl.style.display = 'none';
+        const pinChk = document.getElementById('chk-police-pins');
+        if (pinChk) pinChk.checked = true;
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
-        map.addLayer(policeLayer);
-        if (policeLayer.getLayers().length === 0) loadPoliceData();
+        const pinChk = document.getElementById('chk-police-pins');
+        if (!pinChk || pinChk.checked) {
+          if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
+          if (policeLayer.getLayers().length === 0) loadPoliceData();
+        }
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
+    }
+
+    // Police pins on/off (independent of the panel being open).
+    function togglePolicePinsMode(on) {
+      if (on) {
+        if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
+        if (policeLayer.getLayers().length === 0) loadPoliceData();
+      } else {
+        if (map.hasLayer(policeLayer)) map.removeLayer(policeLayer);
+      }
     }
 
     // Police Heatmap — sub-toggle inside the Police panel. Reuses the
@@ -4223,8 +4235,7 @@ async function loadPagerData() {
           if (stats) stats.textContent = 'Pick at least one type.';
           return;
         }
-        const days = parseInt(document.getElementById('heat-days-range')?.value || '30', 10);
-        const url = `${PROXY_BASE}/api/waze/police-heatmap?days=${days}&subtypes=${encodeURIComponent(subs.join(','))}`;
+        const url = `${PROXY_BASE}/api/waze/police-heatmap?subtypes=${encodeURIComponent(subs.join(','))}`;
         if (stats) stats.textContent = 'Loading…';
         const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4236,21 +4247,21 @@ async function loadPagerData() {
         }
         const max = data.max_count || 1;
         policeHeatmapLayer = L.heatLayer(points, {
-          radius: 22,
-          blur: 18,
+          radius: 18,
+          blur: 14,
           max: max,
-          minOpacity: 0.25,
+          minOpacity: 0.4,
           gradient: {
-            0.0: '#fee5d9',
-            0.25: '#fcae91',
-            0.5: '#fb6a4a',
-            0.75: '#de2d26',
-            1.0: '#a50f15',
+            0.0:  'rgba(252,174,145,0)',
+            0.15: '#fcae91',
+            0.4:  '#fb6a4a',
+            0.7:  '#cb181d',
+            1.0:  '#67000d',
           },
         });
         map.addLayer(policeHeatmapLayer);
         if (stats) {
-          stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · last ${data.days}d`;
+          stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
         }
       } catch (e) {
         console.error('Police heatmap load failed', e);
