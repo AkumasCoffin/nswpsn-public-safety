@@ -4430,8 +4430,7 @@ async function loadPagerData() {
             const unit = count === 1 ? 'ping' : 'pings';
             poly.bindTooltip(
               `<div class="hex-tt-label"><i class="fa-solid fa-fire" style="margin-right:4px;color:#f43f5e;"></i>Police Density</div>` +
-              `<div class="hex-tt-count">${count.toLocaleString()}<span class="hex-tt-unit">${unit}</span></div>` +
-              `<div class="hex-tt-window">past 30 days</div>`,
+              `<div class="hex-tt-count">${count.toLocaleString()}<span class="hex-tt-unit">${unit}</span></div>`,
               { direction: 'top', sticky: true, className: 'hex-tooltip' }
             );
           }
