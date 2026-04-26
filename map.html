@@ -5690,6 +5690,125 @@ function initPagerHoursFromStorage() {
       return verts;
     }
 
+    // Cube-round to snap fractional axial (q,r) to the nearest hex cell.
+    // Standard hex-grid algorithm; see redblobgames.com/grids/hexagons.
+    function _hexRound(qf, rf) {
+      const sf = -qf - rf;
+      let q = Math.round(qf);
+      let r = Math.round(rf);
+      let s = Math.round(sf);
+      const dq = Math.abs(q - qf);
+      const dr = Math.abs(r - rf);
+      const ds = Math.abs(s - sf);
+      if (dq > dr && dq > ds) q = -r - s;
+      else if (dr > ds) r = -q - s;
+      return [q, r];
+    }
+
+    // Pick a hex radius (in degrees latitude) for the current zoom level.
+    // Smaller hexes when zoomed in, bigger when zoomed out, so the cells
+    // always read at a comfortable on-screen size.
+    function _hexRadiusForZoom(z) {
+      if (z >= 15) return 0.00065;
+      if (z >= 13) return 0.0015;
+      if (z >= 11) return 0.005;
+      if (z >= 9)  return 0.018;
+      if (z >= 7)  return 0.06;
+      return 0.18;
+    }
+
+    // Adaptive hex-grid renderer. Tiles the current viewport with
+    // flat-top hexes, buckets the server's bin counts into them, and
+    // renders ALL cells — empty ones as faint outlines so the grid
+    // structure is always visible.
+    function _renderPoliceHexGrid() {
+      if (!policeHeatmapLayer || !_policeHeatmapData) return;
+      policeHeatmapLayer.clearLayers();
+
+      const z = map.getZoom();
+      const R = _hexRadiusForZoom(z);
+
+      const bounds = map.getBounds().pad(0.05);
+      const south = bounds.getSouth();
+      const north = bounds.getNorth();
+      const west  = bounds.getWest();
+      const east  = bounds.getEast();
+      const originLat = (south + north) / 2;
+      const originLng = (west + east) / 2;
+      const lngScale = 1 / Math.max(0.05, Math.cos(originLat * Math.PI / 180));
+
+      const COL_STEP_LNG = R * 1.5 * lngScale;       // between hex columns
+      const ROW_STEP_LAT = R * Math.sqrt(3);          // between hex rows
+
+      // Bucket detection points by axial (q,r).
+      const counts = new Map();
+      let maxCount = 0;
+      for (const [lat, lng, count] of (_policeHeatmapData.points || [])) {
+        if (lat < south - R || lat > north + R) continue;
+        if (lng < west - R * lngScale || lng > east + R * lngScale) continue;
+        const x = (lng - originLng) / lngScale / R;
+        const y = (lat - originLat) / R;
+        const qf = (2 / 3) * x;
+        const rf = (-x / 3) + (Math.sqrt(3) / 3) * y;
+        const [q, r] = _hexRound(qf, rf);
+        const k = q + ',' + r;
+        const c = (counts.get(k) || 0) + count;
+        counts.set(k, c);
+        if (c > maxCount) maxCount = c;
+      }
+      if (maxCount < 1) maxCount = 1;
+      const sqrtMax = Math.sqrt(maxCount);
+
+      // Render every hex in the viewport (including empty cells).
+      const qMin = Math.floor((west - originLng) / COL_STEP_LNG) - 1;
+      const qMax = Math.ceil((east - originLng) / COL_STEP_LNG) + 1;
+      // Cell-count guard so a wide-zoom view doesn't try to render 50k cells.
+      const MAX_CELLS = 4000;
+      let rendered = 0;
+      for (let q = qMin; q <= qMax && rendered < MAX_CELLS; q++) {
+        const cellLng = originLng + q * COL_STEP_LNG;
+        // Row range varies slightly per column due to axial offset; recompute.
+        const rMin = Math.floor((south - originLat) / ROW_STEP_LAT - q / 2) - 1;
+        const rMax = Math.ceil((north - originLat) / ROW_STEP_LAT - q / 2) + 1;
+        for (let r = rMin; r <= rMax && rendered < MAX_CELLS; r++) {
+          const cellLat = originLat + (r + q / 2) * ROW_STEP_LAT;
+          if (cellLat < south - R || cellLat > north + R) continue;
+          const k = q + ',' + r;
+          const count = counts.get(k) || 0;
+          const isEmpty = count === 0;
+          const t = isEmpty ? 0 : Math.sqrt(count) / sqrtMax;
+          const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
+          const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
+            color: color,
+            weight: isEmpty ? 0.4 : 1.2,
+            opacity: isEmpty ? 0.35 : 0.95,
+            fillColor: isEmpty ? '#0f172a' : color,
+            fillOpacity: isEmpty ? 0.05 : 0.20 + 0.55 * t,
+            lineJoin: 'round',
+            interactive: !isEmpty,
+          });
+          if (count > 0) {
+            poly.bindTooltip(`${count} pings`, { direction: 'top', sticky: true });
+          }
+          poly.addTo(policeHeatmapLayer);
+          rendered++;
+        }
+      }
+    }
+
+    // Debounced viewport listeners — wired once per heatmap activation.
+    let _hexRenderTimer = null;
+    function _scheduleHexRerender() {
+      clearTimeout(_hexRenderTimer);
+      _hexRenderTimer = setTimeout(_renderPoliceHexGrid, 180);
+    }
+    let _hexListenersInstalled = false;
+    function _ensureHexViewportListeners() {
+      if (_hexListenersInstalled) return;
+      _hexListenersInstalled = true;
+      map.on('moveend zoomend', _scheduleHexRerender);
+    }
+
     function onPoliceHeatmapFilter() {
       if (document.getElementById('chk-police-heatmap')?.checked) {
         loadPoliceHeatmap(true);
@@ -5741,31 +5860,14 @@ function initPagerHoursFromStorage() {
         if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
           map.removeLayer(policeHeatmapLayer);
         }
-        // Hex grid cells — one polygon per bin, flat-top hexagon a
-        // smidge larger than the bin spacing so adjacent cells touch.
-        // No blob merging at any zoom; clean dashboard-grid look.
-        // Fill opacity scales with density so empty cells are mostly
-        // outline and hot cells are saturated.
-        const max = data.max_count || 1;
-        const sqrtMax = Math.sqrt(max);
-        const HEX_RADIUS_DEG = 0.00065;  // ~72m, matches the 0.001° bin grid
-        policeHeatmapLayer = L.layerGroup();
-        for (const [lat, lng, count] of points) {
-          if (!Number.isFinite(lat) || !Number.isFinite(lng) || !count) continue;
-          const t = Math.sqrt(count) / sqrtMax;
-          const color = _heatmapColorAt(t);
-          L.polygon(_hexPolygon(lat, lng, HEX_RADIUS_DEG), {
-            color: color,
-            weight: 1.3,
-            opacity: 0.95,
-            fillColor: color,
-            fillOpacity: 0.20 + 0.55 * t,
-            // Smooth corners — line joins look hard otherwise on small hexes.
-            lineJoin: 'round',
-          }).bindTooltip(`${count} pings`, { direction: 'top', sticky: true })
-            .addTo(policeHeatmapLayer);
-        }
-        map.addLayer(policeHeatmapLayer);
+        // Adaptive hex grid — tile the viewport with cells, including
+        // empty ones, and re-tile on every pan / zoom. The actual
+        // rendering lives in _renderPoliceHexGrid; here we just stash
+        // the data and trigger a render.
+        if (!policeHeatmapLayer) policeHeatmapLayer = L.layerGroup();
+        if (!map.hasLayer(policeHeatmapLayer)) map.addLayer(policeHeatmapLayer);
+        _ensureHexViewportListeners();
+        _renderPoliceHexGrid();
         if (stats) {
           stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
         }
