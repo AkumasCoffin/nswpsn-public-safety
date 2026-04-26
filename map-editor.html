@@ -4274,6 +4274,7 @@ async function loadPagerData() {
     const HEX_ORIGIN_LAT = -33.0;
     const HEX_ORIGIN_LNG = 150.0;
     const HEX_ORIGIN_LNG_SCALE = 1 / Math.cos(HEX_ORIGIN_LAT * Math.PI / 180);
+    const _heatmapCanvasRenderer = L.canvas({ padding: 0.2 });
     function _renderPoliceHexGrid() {
       if (!policeHeatmapLayer || !_policeHeatmapData) return;
       policeHeatmapLayer.clearLayers();
@@ -4304,7 +4305,7 @@ async function loadPagerData() {
       const sqrtMax = Math.sqrt(maxCount);
       const qMin = Math.floor((west - HEX_ORIGIN_LNG) / COL_STEP_LNG) - 1;
       const qMax = Math.ceil((east - HEX_ORIGIN_LNG) / COL_STEP_LNG) + 1;
-      const MAX_CELLS = 8000;
+      const MAX_CELLS = 50000;
       let rendered = 0;
       for (let q = qMin; q <= qMax && rendered < MAX_CELLS; q++) {
         const cellLng = HEX_ORIGIN_LNG + q * COL_STEP_LNG;
@@ -4319,6 +4320,7 @@ async function loadPagerData() {
           const t = isEmpty ? 0 : Math.sqrt(count) / sqrtMax;
           const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
           const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
+            renderer: _heatmapCanvasRenderer,
             color: color,
             weight: isEmpty ? 0.4 : 1.2,
             opacity: isEmpty ? 0.35 : 0.95,
