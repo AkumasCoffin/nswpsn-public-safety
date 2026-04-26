@@ -5675,6 +5675,27 @@ function initPagerHoursFromStorage() {
         const data = await res.json();
         _policeHeatmapData = data;
         const points = (data.points || []).map(([lat, lng, c]) => [lat, lng, c]);
+        // Cache hasn't been built yet (warming) or briefly busy with the
+        // refresh swap (busy) — show a status line and retry after a
+        // short backoff so the heatmap appears as soon as it's ready.
+        if (data.cache_status && data.cache_status !== 'ok' && points.length === 0) {
+          if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
+            map.removeLayer(policeHeatmapLayer);
+          }
+          policeHeatmapLayer = null;
+          if (stats) {
+            stats.textContent = data.cache_status === 'warming'
+              ? 'Cache warming up… retrying in 10s'
+              : 'Cache busy — retrying in 5s';
+          }
+          const delay = data.cache_status === 'warming' ? 10000 : 5000;
+          setTimeout(() => {
+            if (document.getElementById('chk-police-heatmap')?.checked) {
+              loadPoliceHeatmap(true);
+            }
+          }, delay);
+          return;
+        }
         if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
           map.removeLayer(policeHeatmapLayer);
         }
