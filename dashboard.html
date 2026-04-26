@@ -2646,16 +2646,31 @@ function fetchFilterCatalogue() {
   return _dashFilterFetchPromise;
 }
 
+// Per-alert-type choice of which catalogue field to draw subtype options
+// from — mirrors what the bot's _alert_subtype_token() extracts from each
+// alert. Waze stores its meaningful sub-classifications in `subcategory`
+// (HAZARD_WEATHER_FOG, POLICE_HIDING, etc.), so pulling from `categories`
+// would surface the parent label ("Hazard", "Police") which is redundant
+// with the chip's own name. Other sources use the category column.
+const _SUBTYPE_FIELDS_BY_TYPE = {
+  waze_hazard:   ['subcategories'],
+  waze_jam:      ['subcategories'],
+  waze_police:   ['subcategories'],
+  waze_roadwork: ['subcategories'],
+};
+const _SUBTYPE_FIELDS_DEFAULT = ['categories'];
+
 // Given the catalogue + a canonical alert_type, return a deduped sorted
-// array of subtype values (drawing from both `categories` and `subcategories`
-// of the matching provider type).
+// array of subtype values from the relevant field(s).
 function subtypeOptionsFor(catalogue, alertType) {
   if (!catalogue || !Array.isArray(catalogue.providers)) return [];
+  const fields = _SUBTYPE_FIELDS_BY_TYPE[alertType] || _SUBTYPE_FIELDS_DEFAULT;
   const seen = new Map();   // value -> count (for sort)
   for (const p of catalogue.providers) {
     for (const t of (p.types || [])) {
       if (t.alert_type !== alertType) continue;
-      for (const list of [t.categories, t.subcategories]) {
+      for (const fieldName of fields) {
+        const list = t[fieldName];
         if (!Array.isArray(list)) continue;
         for (const e of list) {
           if (!e || typeof e.value !== 'string' || !e.value) continue;
@@ -2664,10 +2679,18 @@ function subtypeOptionsFor(catalogue, alertType) {
       }
     }
   }
-  // Sort by count desc, then alphabetically.
   return Array.from(seen.entries())
     .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
     .map(([v]) => v);
+}
+
+// Look up the provider display name for a canonical alert_type.
+// Used to disambiguate rows like "Roadwork" (Waze vs Traffic).
+function providerNameForAlertType(alertType) {
+  for (const p of PROVIDERS) {
+    if ((p.types || []).some(t => t.key === alertType)) return p.name;
+  }
+  return '';
 }
 
 function presetFilters(preset) {
@@ -3261,12 +3284,15 @@ function renderFiltersCard(preset) {
     subtypeWrap.appendChild(subtypeBody);
     // Placeholder rows shown immediately; replaced once catalogue resolves.
     for (const at of subtypeAware) {
+      const providerName = providerNameForAlertType(at);
+      const typeLabel = ALERT_TYPE_LABELS[at] || at;
       const row = el('div', {
         id: `subtype-row-${at}-${preset.id}`,
         style: 'border:1px solid var(--border-subtle);border-radius:0.45rem;padding:0.45rem 0.55rem;margin-bottom:0.35rem;',
       }, [
         el('div', { style: 'display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;' }, [
-          el('span', { style: 'font-size:0.78rem;font-weight:600;' }, ALERT_TYPE_LABELS[at] || at),
+          el('span', { style: 'font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-muted);font-weight:600;' }, providerName),
+          el('span', { style: 'font-size:0.78rem;font-weight:600;' }, typeLabel),
           el('span', { class: 'subtype-summary', style: 'font-size:0.7rem;color:var(--text-soft);' },
              subtypeSelections[at].size
                ? `${subtypeSelections[at].size} selected`
