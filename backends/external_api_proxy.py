@@ -1285,6 +1285,33 @@ def init_archive_db():
                         Log.startup("✓ ANALYZE complete")
                     except Exception as e:
                         Log.error(f"ANALYZE data_history failed: {e}")
+                # Aggressive autovacuum settings for data_history. This table
+                # sees continuous UPDATE/DELETE traffic from archive + cleanup
+                # workers, which generates dead tuples faster than the default
+                # autovacuum thresholds (20% / 10%) catch up with. Tightening
+                # the scale factors plus raising the per-run cost limit lets
+                # autovacuum trigger sooner and finish faster, keeping the
+                # visibility map clean enough for index-only scans.
+                #   - vacuum_scale_factor 0.05  -> trigger at 5% dead rows
+                #   - analyze_scale_factor 0.02 -> trigger ANALYZE at 2% changed
+                #   - vacuum_cost_limit 2000    -> let each run do more work
+                #     before pausing (default 200, way too conservative)
+                #   - vacuum_cost_delay 5ms     -> shorter pauses between
+                #     work batches inside a single autovacuum run
+                # ALTER TABLE SET (...) is idempotent, safe to run every
+                # boot — Postgres just no-ops if values are unchanged.
+                try:
+                    cur.execute('''
+                        ALTER TABLE data_history SET (
+                            autovacuum_vacuum_scale_factor = 0.05,
+                            autovacuum_analyze_scale_factor = 0.02,
+                            autovacuum_vacuum_cost_limit = 2000,
+                            autovacuum_vacuum_cost_delay = 5
+                        )
+                    ''')
+                    Log.startup("✓ data_history autovacuum settings tuned (5%/2% triggers, 2000 cost limit)")
+                except Exception as e:
+                    Log.warn(f"data_history autovacuum tuning skipped: {e}")
                 cur.close()
             finally:
                 conn.close()
