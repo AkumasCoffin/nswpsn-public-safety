@@ -4271,6 +4271,9 @@ async function loadPagerData() {
       if (z >= 7)  return 0.06;
       return 0.18;
     }
+    const HEX_ORIGIN_LAT = -33.0;
+    const HEX_ORIGIN_LNG = 150.0;
+    const HEX_ORIGIN_LNG_SCALE = 1 / Math.cos(HEX_ORIGIN_LAT * Math.PI / 180);
     function _renderPoliceHexGrid() {
       if (!policeHeatmapLayer || !_policeHeatmapData) return;
       policeHeatmapLayer.clearLayers();
@@ -4279,9 +4282,7 @@ async function loadPagerData() {
       const bounds = map.getBounds().pad(0.05);
       const south = bounds.getSouth(), north = bounds.getNorth();
       const west  = bounds.getWest(),  east  = bounds.getEast();
-      const originLat = (south + north) / 2;
-      const originLng = (west + east) / 2;
-      const lngScale = 1 / Math.max(0.05, Math.cos(originLat * Math.PI / 180));
+      const lngScale = HEX_ORIGIN_LNG_SCALE;
       const COL_STEP_LNG = R * 1.5 * lngScale;
       const ROW_STEP_LAT = R * Math.sqrt(3);
       const counts = new Map();
@@ -4289,8 +4290,8 @@ async function loadPagerData() {
       for (const [lat, lng, count] of (_policeHeatmapData.points || [])) {
         if (lat < south - R || lat > north + R) continue;
         if (lng < west - R * lngScale || lng > east + R * lngScale) continue;
-        const x = (lng - originLng) / lngScale / R;
-        const y = (lat - originLat) / R;
+        const x = (lng - HEX_ORIGIN_LNG) / lngScale / R;
+        const y = (lat - HEX_ORIGIN_LAT) / R;
         const qf = (2 / 3) * x;
         const rf = (-x / 3) + (Math.sqrt(3) / 3) * y;
         const [q, r] = _hexRound(qf, rf);
@@ -4301,16 +4302,16 @@ async function loadPagerData() {
       }
       if (maxCount < 1) maxCount = 1;
       const sqrtMax = Math.sqrt(maxCount);
-      const qMin = Math.floor((west - originLng) / COL_STEP_LNG) - 1;
-      const qMax = Math.ceil((east - originLng) / COL_STEP_LNG) + 1;
-      const MAX_CELLS = 4000;
+      const qMin = Math.floor((west - HEX_ORIGIN_LNG) / COL_STEP_LNG) - 1;
+      const qMax = Math.ceil((east - HEX_ORIGIN_LNG) / COL_STEP_LNG) + 1;
+      const MAX_CELLS = 8000;
       let rendered = 0;
       for (let q = qMin; q <= qMax && rendered < MAX_CELLS; q++) {
-        const cellLng = originLng + q * COL_STEP_LNG;
-        const rMin = Math.floor((south - originLat) / ROW_STEP_LAT - q / 2) - 1;
-        const rMax = Math.ceil((north - originLat) / ROW_STEP_LAT - q / 2) + 1;
+        const cellLng = HEX_ORIGIN_LNG + q * COL_STEP_LNG;
+        const rMin = Math.floor((south - HEX_ORIGIN_LAT) / ROW_STEP_LAT - q / 2) - 1;
+        const rMax = Math.ceil((north - HEX_ORIGIN_LAT) / ROW_STEP_LAT - q / 2) + 1;
         for (let r = rMin; r <= rMax && rendered < MAX_CELLS; r++) {
-          const cellLat = originLat + (r + q / 2) * ROW_STEP_LAT;
+          const cellLat = HEX_ORIGIN_LAT + (r + q / 2) * ROW_STEP_LAT;
           if (cellLat < south - R || cellLat > north + R) continue;
           const k = q + ',' + r;
           const count = counts.get(k) || 0;
