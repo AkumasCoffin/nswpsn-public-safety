@@ -2424,7 +2424,10 @@ function _renderProviderSection(provider, selected, opts) {
         onclick: (e) => { e.stopPropagation(); opts.onSelectAll(!allSelected); },
       }, allSelected ? 'Clear all' : 'Select all'),
     ]));
-    // Chips
+    // Chips — show only the human label. Provider context is already in
+    // the section header, so prefixing with the source (e.g. waze_hazard)
+    // is redundant. Canonical key kept on the title attribute for hover
+    // tooltips / quick debug.
     const row = el('div', { class: 'chip-row' });
     for (const t of types) {
       const active = selected.has(t.key);
@@ -2433,10 +2436,7 @@ function _renderProviderSection(provider, selected, opts) {
         onclick: (e) => { e.stopPropagation(); opts.onToggleType(t.key); },
         title: t.key,
         type: 'button',
-      }, [
-        el('span', {}, t.label || ALERT_TYPE_LABELS[t.key] || t.key),
-        el('span', { class: 'mono' }, t.key),
-      ]));
+      }, t.label || ALERT_TYPE_LABELS[t.key] || t.key));
     }
     body.appendChild(row);
     section.appendChild(body);
