@@ -1364,6 +1364,9 @@ def init_archive_db():
         except Exception as e:
             Log.error(f"Partial index migration error: {e}")
     threading.Thread(target=_ensure_partial_indexes, daemon=True, name='partial-index-migration').start()
+    # Bot-DB index migration — separate thread so it doesn't block
+    # the main DB migration.
+    threading.Thread(target=_dash_bot_db_indexes_ensure, daemon=True, name='bot-db-index-migration').start()
 
     # Filter cache refresh scheduler — keeps /api/data/history/filters fast.
     threading.Thread(
@@ -15242,6 +15245,45 @@ _DASH_SESSIONS = {}  # sid -> session dict
 _DASH_SESSIONS_DB_READY = False
 
 
+def _dash_bot_db_indexes_ensure():
+    """One-time index creation on bot-owned tables that the dashboard
+    queries frequently. The bot creates these tables; we just make sure
+    the read paths can use indexes. CONCURRENTLY so we don't block any
+    writes happening on the bot side. Best-effort — silently no-ops if
+    the table doesn't exist yet (first deploy with this feature) or if
+    BOT_DATA_DATABASE_URL isn't set."""
+    dsn = os.environ.get('BOT_DATA_DATABASE_URL', '')
+    if not dsn:
+        return
+    try:
+        import psycopg2
+        conn = psycopg2.connect(dsn)
+        try:
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            for sql in (
+                # preset-stats endpoint joins preset_fire_log on preset_id
+                # with a fired_at time filter — index makes both the join
+                # and the time-bucketed COUNT FILTERs fast.
+                'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_preset_fire_log_preset_fired '
+                '  ON preset_fire_log (preset_id, fired_at DESC)',
+            ):
+                idx_name = sql.split()[6]
+                try:
+                    Log.startup(f"Building bot-DB index {idx_name} CONCURRENTLY...")
+                    cur.execute(sql)
+                    Log.startup(f"✓ Bot-DB index {idx_name} ready")
+                except Exception as e:
+                    # Likely the table doesn't exist yet — bot hasn't created
+                    # it. Not an error worth alarming on.
+                    Log.warn(f"Bot-DB index {idx_name} skipped: {e}")
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as e:
+        Log.warn(f"Bot-DB index migration error: {e}")
+
+
 def _dash_sessions_db_ensure():
     """Create the dash_sessions table (if missing) and hydrate the in-memory
     dict from any rows that survived a restart. Runs at most once per process;
@@ -16818,6 +16860,15 @@ def dashboard_guild_preset_override_delete(guild_id, preset_id, alert_type):
 
 # ---------- Preset stats ----------
 
+# Per-guild preset-stats cache. The underlying query joins alert_presets
+# against preset_fire_log with two windowed COUNT FILTERs and a MAX, which
+# can take seconds on a busy guild even with the new index. Stats only
+# need to be roughly fresh — a 60s TTL is plenty.
+_DASH_PRESET_STATS_CACHE = {}      # gid -> (data, ts)
+_DASH_PRESET_STATS_CACHE_LOCK = threading.Lock()
+_DASH_PRESET_STATS_TTL = 60        # seconds
+
+
 @app.route('/api/dashboard/guilds/<guild_id>/preset-stats', methods=['GET'])
 @_dash_require_session()
 def dashboard_guild_preset_stats(guild_id):
@@ -16828,6 +16879,14 @@ def dashboard_guild_preset_stats(guild_id):
         gid = int(guild_id)
     except ValueError:
         return _dash_err('bad_request', 'guild_id must be numeric.', 400)
+
+    # Cache hit path — no DB.
+    now = time.time()
+    with _DASH_PRESET_STATS_CACHE_LOCK:
+        cached = _DASH_PRESET_STATS_CACHE.get(gid)
+    if cached and (now - cached[1]) < _DASH_PRESET_STATS_TTL:
+        return jsonify({'stats': cached[0]})
+
     conn = _bot_db_conn()
     if conn is None:
         return _dash_err('dashboard_disabled',
@@ -16835,6 +16894,8 @@ def dashboard_guild_preset_stats(guild_id):
     try:
         cur = conn.cursor()
         # One row per preset: fires_7d + fires_30d + last_fire.
+        # Uses idx_preset_fire_log_preset_fired (created by
+        # _dash_bot_db_indexes_ensure) for the join + time filter.
         cur.execute('''
             SELECT p.id AS preset_id,
                    COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
@@ -16859,6 +16920,9 @@ def dashboard_guild_preset_stats(guild_id):
         return _dash_err('db_error', str(e), 500)
     finally:
         conn.close()
+
+    with _DASH_PRESET_STATS_CACHE_LOCK:
+        _DASH_PRESET_STATS_CACHE[gid] = (out, now)
     return jsonify({'stats': out})
 
 
