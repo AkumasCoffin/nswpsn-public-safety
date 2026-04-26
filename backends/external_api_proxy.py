@@ -1036,6 +1036,103 @@ def get_source_hierarchy(source):
         return parts[0].title(), parts[1].replace('_', ' ').title()
     return source.title(), 'Other'
 
+
+# ============== CANONICAL ALERT-TYPE / PROVIDER MAPS ==============
+# Used by /api/data/history/filters to expose a stable provider/type
+# nesting regardless of how the underlying data_history.source values
+# evolve. Keep in sync with the frontend filter tree.
+
+RAW_SOURCE_TO_ALERT_TYPE = {
+    'rfs':                'rfs',
+    'bom_marine':         'bom_marine',
+    'bom_land':           'bom_land',
+    'bom_warning':        'bom_land',     # legacy fold-in
+    'bom':                'bom_land',     # legacy fold-in
+    'traffic_incident':   'traffic_incident',
+    'traffic_roadwork':   'traffic_roadwork',
+    'traffic_flood':      'traffic_flood',
+    'traffic_fire':       'traffic_fire',
+    'traffic_majorevent': 'traffic_majorevent',
+    'livetraffic':        'traffic_incident',  # legacy fold-in
+    'endeavour_current':  'endeavour_current',
+    'endeavour_planned':  'endeavour_planned',
+    'endeavour':          'endeavour_current',  # legacy
+    'ausgrid':            'ausgrid',
+    'essential_current':  'essential_planned',  # fold "current" into "planned"
+    'essential_planned':  'essential_planned',
+    'essential_future':   'essential_future',
+    'essential':          'essential_planned',  # legacy
+    'waze_hazard':        'waze_hazard',
+    'waze_jam':           'waze_jam',
+    'waze_police':        'waze_police',
+    'waze_roadwork':      'waze_roadwork',
+    'pager':              'pager',
+}
+
+# Canonical alert_type -> (provider key, type display name)
+ALERT_TYPE_PROVIDER = {
+    'rfs':                ('rfs',         'Major Incidents'),
+    'bom_land':           ('bom',         'Land Warnings'),
+    'bom_marine':         ('bom',         'Marine Warnings'),
+    'traffic_incident':   ('livetraffic', 'Incidents'),
+    'traffic_roadwork':   ('livetraffic', 'Roadwork'),
+    'traffic_flood':      ('livetraffic', 'Flooding'),
+    'traffic_fire':       ('livetraffic', 'Fires'),
+    'traffic_majorevent': ('livetraffic', 'Major Events'),
+    'endeavour_current':  ('endeavour',   'Current Outages'),
+    'endeavour_planned':  ('endeavour',   'Planned Outages'),
+    'ausgrid':            ('ausgrid',     'Outages'),
+    'essential_planned':  ('essential',   'Planned Outages'),
+    'essential_future':   ('essential',   'Future Outages'),
+    'waze_hazard':        ('waze',        'Hazards'),
+    'waze_jam':           ('waze',        'Traffic Jams'),
+    'waze_police':        ('waze',        'Police'),
+    'waze_roadwork':      ('waze',        'Roadwork'),
+    'pager':              ('pager',       'Messages'),
+    'user_incident':      ('user',        'User Incidents'),
+    'radio_summary':      ('rdio',        'Hourly Summaries'),
+}
+
+# Provider display metadata. Keys mirror ALERT_TYPE_PROVIDER's first tuple
+# element; every provider that should appear in /filters must have an
+# entry here.
+PROVIDER_DISPLAY = {
+    'rfs':         {'name': 'NSW Rural Fire Service',     'icon': 'fire',  'color': '#ef4444'},
+    'bom':         {'name': 'Bureau of Meteorology',      'icon': 'cloud', 'color': '#3b82f6'},
+    'livetraffic': {'name': 'LiveTraffic NSW',            'icon': 'road',  'color': '#f97316'},
+    'endeavour':   {'name': 'Endeavour Energy',           'icon': 'bolt',  'color': '#fbbf24'},
+    'ausgrid':     {'name': 'Ausgrid',                    'icon': 'plug',  'color': '#f59e0b'},
+    'essential':   {'name': 'Essential Energy',           'icon': 'bolt',  'color': '#06b6d4'},
+    'waze':        {'name': 'Waze',                       'icon': 'car',   'color': '#00d4ff'},
+    'pager':       {'name': 'Pager',                      'icon': 'pager', 'color': '#8b5cf6'},
+    'user':        {'name': 'NSW PSN User Submissions',   'icon': 'user',  'color': '#a855f7'},
+    'rdio':        {'name': 'Radio Scanner',              'icon': 'radio', 'color': '#10b981'},
+}
+
+# Display order for the providers array — the frontend uses this as a
+# stable sort so the panel doesn't reshuffle each request.
+PROVIDER_ORDER = ['rfs', 'bom', 'livetraffic', 'endeavour', 'ausgrid',
+                  'essential', 'waze', 'pager', 'user', 'rdio']
+
+# Per-provider type ordering. Types not listed here fall to the end in
+# alphabetical order — only the ones we explicitly want a fixed sequence
+# for need to appear.
+PROVIDER_TYPE_ORDER = {
+    'bom':         ['bom_land', 'bom_marine'],
+    'livetraffic': ['traffic_incident', 'traffic_roadwork',
+                    'traffic_flood', 'traffic_fire', 'traffic_majorevent'],
+    'endeavour':   ['endeavour_current', 'endeavour_planned'],
+    'essential':   ['essential_planned', 'essential_future'],
+    'waze':        ['waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork'],
+}
+
+
+def _canonical_alert_type(raw_source):
+    """Resolve a data_history.source value to its canonical alert_type."""
+    if not raw_source:
+        return None
+    return RAW_SOURCE_TO_ALERT_TYPE.get(raw_source, raw_source)
+
 # Track active page sessions with unique IDs and timestamps
 # Format: {page_id: {'last_seen': timestamp, 'user_agent': str, 'ip': str, 'page_type': str, 'is_data_page': bool}}
 # Guarded by _page_sessions_lock (RLock so cleanup can be called from within
@@ -10730,8 +10827,15 @@ def _filter_cache_has_data():
 
 def _filters_from_cache(source_filter, hours):
     """Serve /api/data/history/filters from the filter cache table.
-    `hours` is accepted for API compatibility but not applied — the cache
-    already represents current-state (is_latest=1) options.
+
+    Returns the new provider/type-nested shape. `hours` is accepted for
+    API compatibility but the cache already represents current-state
+    (is_latest=1) options, so it is not applied.
+
+    `source_filter` may be either a canonical alert_type
+    (`waze_hazard`, `traffic_incident`, …) or a raw `data_history.source`
+    value (`livetraffic`, `bom_warning`, …). It scopes the response to a
+    single provider/type pair.
     """
     try:
         conn = get_conn()
@@ -10739,43 +10843,71 @@ def _filters_from_cache(source_filter, hours):
             c = conn.cursor()
             c.execute("SET LOCAL statement_timeout = '10s'")
 
-            # Sources (unfiltered — the cache stores one row per source)
-            c.execute("SELECT value, count FROM data_history_filter_cache WHERE kind = 'source' ORDER BY count DESC")
-            sources_data = {v: cnt for v, cnt in c.fetchall()}
+            # Per-source counts (one row per source)
+            c.execute(
+                "SELECT value, count FROM data_history_filter_cache "
+                "WHERE kind = 'source'"
+            )
+            source_counts = {v: int(cnt) for v, cnt in c.fetchall()}
 
-            # Per-dimension: when source_filter set, only that source; otherwise sum across sources
-            def dim(kind):
-                if source_filter:
-                    c.execute(
-                        'SELECT value, count FROM data_history_filter_cache WHERE kind = %s AND source = %s',
-                        (kind, source_filter),
-                    )
-                    return {v: cnt for v, cnt in c.fetchall()}
-                else:
-                    c.execute(
-                        'SELECT value, SUM(count) FROM data_history_filter_cache WHERE kind = %s GROUP BY value',
-                        (kind,),
-                    )
-                    return {v: int(cnt) for v, cnt in c.fetchall()}
+            # Per-source / per-dimension breakdowns. We always pull the
+            # full table — it's small (<10k rows) and the caller-side
+            # nesting is simpler with everything in memory.
+            c.execute(
+                "SELECT kind, source, value, count FROM data_history_filter_cache "
+                "WHERE kind IN ('category','subcategory','status','severity')"
+            )
+            per_source_dims = {}  # alert_type -> kind -> {value: count}
+            for kind, src, value, cnt in c.fetchall():
+                alert_type = _canonical_alert_type(src)
+                if not alert_type:
+                    continue
+                per_source_dims.setdefault(alert_type, {}) \
+                               .setdefault(kind, {})
+                d = per_source_dims[alert_type][kind]
+                d[value] = d.get(value, 0) + int(cnt)
 
-            categories_data = dim('category')
-            subcategories_data = dim('subcategory')
-            statuses_data = dim('status')
-            severities_data = dim('severity')
+            # Aggregate raw-source counts onto canonical alert_types.
+            type_counts = {}
+            for raw_src, cnt in source_counts.items():
+                alert_type = _canonical_alert_type(raw_src)
+                if not alert_type:
+                    continue
+                type_counts[alert_type] = type_counts.get(alert_type, 0) + int(cnt)
 
-            # Date range is still cheap: idx_data_fetched supports MIN/MAX in O(log n).
-            c.execute('SET LOCAL statement_timeout = \'5s\'')
+            # rdio_summaries: counted directly (it's not in the cache table).
+            try:
+                c.execute("SET LOCAL statement_timeout = '3s'")
+                c.execute("SELECT COUNT(*) FROM rdio_summaries "
+                          "WHERE release_at IS NULL OR release_at <= now()")
+                rdio_count = int(c.fetchone()[0] or 0)
+            except Exception:
+                rdio_count = 0
+            type_counts['radio_summary'] = rdio_count
+
+            # user_incident: count rows in the user-submissions `incidents`
+            # table. Best-effort — if the table is missing, fall back to 0.
+            try:
+                c.execute("SELECT COUNT(*) FROM incidents")
+                user_count = int(c.fetchone()[0] or 0)
+            except Exception:
+                user_count = 0
+            type_counts['user_incident'] = user_count
+
+            # Date range over data_history. idx_data_fetched supports MIN/MAX
+            # in O(log n).
+            c.execute("SET LOCAL statement_timeout = '5s'")
             c.execute('SELECT MIN(fetched_at), MAX(fetched_at) FROM data_history')
             min_ts, max_ts = c.fetchone() or (None, None)
         finally:
-            conn.close()
+            try: conn.close()
+            except Exception: pass
     except Exception as e:
         Log.error(f"Filter cache read error: {e}")
         return jsonify({'error': str(e)}), 500
 
     return jsonify(_build_filters_response(
-        sources_data, categories_data, subcategories_data, statuses_data, severities_data,
-        min_ts, max_ts, source_filter, hours,
+        type_counts, per_source_dims, min_ts, max_ts, source_filter,
     ))
 
 
@@ -10801,72 +10933,143 @@ def _merge_case_insensitive(d):
     return merged
 
 
-def _build_filters_response(sources_data, categories_data, subcategories_data,
-                            statuses_data, severities_data,
-                            min_ts, max_ts, source_filter, hours):
-    """Shared response formatter — used by both the cache path and the
-    live-scan fallback so the wire format stays identical."""
-    # Case-insensitive dedup on user-facing dropdowns. Sources stay as-is
-    # since they're machine identifiers (`waze_hazard` vs `WAZE_HAZARD` would
-    # be different records, not casing of the same one).
-    categories_data = _merge_case_insensitive(categories_data)
-    subcategories_data = _merge_case_insensitive(subcategories_data)
-    statuses_data = _merge_case_insensitive(statuses_data)
-    severities_data = _merge_case_insensitive(severities_data)
+def _resolve_filter_target(source_filter):
+    """Map a `?source=` query value to (alert_type, provider_key) or None.
 
-    sources = [{'value': k, 'count': v} for k, v in sorted(sources_data.items(), key=lambda x: x[1], reverse=True)]
-    categories = [{'value': k, 'count': v} for k, v in sorted(categories_data.items(), key=lambda x: x[1], reverse=True)]
-    subcategories = [{'value': k, 'count': v} for k, v in sorted(subcategories_data.items(), key=lambda x: x[1], reverse=True)][:100]
-    statuses = [{'value': k, 'count': v} for k, v in sorted(statuses_data.items(), key=lambda x: x[1], reverse=True)]
-    severities = [{'value': k, 'count': v} for k, v in sorted(severities_data.items(), key=lambda x: x[1], reverse=True)]
+    Accepts both canonical alert_types (waze_hazard, traffic_incident, …)
+    and raw data_history.source values (livetraffic, bom_warning, …) so
+    legacy frontends keep working during the migration.
+    """
+    if not source_filter:
+        return None
+    s = str(source_filter).strip()
+    if not s:
+        return None
+    # Canonical alert_type lookup wins.
+    if s in ALERT_TYPE_PROVIDER:
+        return s, ALERT_TYPE_PROVIDER[s][0]
+    # Raw source -> canonical alert_type.
+    canonical = RAW_SOURCE_TO_ALERT_TYPE.get(s)
+    if canonical and canonical in ALERT_TYPE_PROVIDER:
+        return canonical, ALERT_TYPE_PROVIDER[canonical][0]
+    return None
 
-    providers_data = {}
-    for source_name, count in sources_data.items():
-        provider, source_type = get_source_hierarchy(source_name)
-        if provider not in providers_data:
-            providers_data[provider] = {'count': 0, 'types': {}}
-        providers_data[provider]['count'] += count
-        if source_type not in providers_data[provider]['types']:
-            providers_data[provider]['types'][source_type] = {'count': 0, 'source': source_name}
-        providers_data[provider]['types'][source_type]['count'] += count
 
-    providers = []
-    for provider_name, pdata in sorted(providers_data.items(), key=lambda x: x[1]['count'], reverse=True):
-        provider_info = SOURCE_PROVIDERS.get(provider_name, {})
-        types_list = [
-            {'name': type_name, 'source': tdata['source'], 'count': tdata['count']}
-            for type_name, tdata in sorted(pdata['types'].items(), key=lambda x: x[1]['count'], reverse=True)
-        ]
-        providers.append({
-            'name': provider_name,
-            'icon': provider_info.get('icon', '📊'),
-            'color': provider_info.get('color', '#64748b'),
-            'count': pdata['count'],
-            'types': types_list,
-        })
+def _build_filters_response(type_counts, per_source_dims, min_ts, max_ts,
+                            source_filter):
+    """Format the provider/type-nested response for /api/data/history/filters.
+
+    Args:
+        type_counts: dict[alert_type -> int] total record count per type.
+        per_source_dims: dict[alert_type -> dict[kind -> dict[value -> count]]]
+            categories/subcategories/statuses/severities per type.
+        min_ts, max_ts: integer unix seconds bracket for data_history.
+        source_filter: optional ?source= query value (alert_type or raw).
+    """
+    target = _resolve_filter_target(source_filter)
+
+    # Build the full provider map, then filter at the end so the
+    # always-include-all-10 rule still applies in the unfiltered case.
+    providers_map = {pkey: {'types': []} for pkey in PROVIDER_ORDER}
+
+    # Group alert_types by provider
+    by_provider = {}
+    for alert_type, (provider_key, _disp) in ALERT_TYPE_PROVIDER.items():
+        by_provider.setdefault(provider_key, []).append(alert_type)
+
+    for provider_key in PROVIDER_ORDER:
+        alert_types = by_provider.get(provider_key, [])
+        # Stable type ordering: explicit list first, then any leftovers
+        # alphabetically.
+        explicit = PROVIDER_TYPE_ORDER.get(provider_key, [])
+        ordered = [t for t in explicit if t in alert_types]
+        ordered += sorted(t for t in alert_types if t not in explicit)
+
+        types_out = []
+        for alert_type in ordered:
+            cnt = int(type_counts.get(alert_type, 0) or 0)
+            dims = per_source_dims.get(alert_type, {}) if per_source_dims else {}
+            categories_d = _merge_case_insensitive(dims.get('category', {}) or {})
+            subcategories_d = _merge_case_insensitive(dims.get('subcategory', {}) or {})
+            statuses_d = _merge_case_insensitive(dims.get('status', {}) or {})
+            severities_d = _merge_case_insensitive(dims.get('severity', {}) or {})
+
+            categories = [{'value': k, 'count': v}
+                          for k, v in sorted(categories_d.items(),
+                                             key=lambda x: (-x[1], x[0]))]
+            subcategories = [{'value': k, 'count': v}
+                             for k, v in sorted(subcategories_d.items(),
+                                                key=lambda x: (-x[1], x[0]))][:100]
+            statuses = [{'value': k, 'count': v}
+                        for k, v in sorted(statuses_d.items(),
+                                           key=lambda x: (-x[1], x[0]))]
+            severities = [{'value': k, 'count': v}
+                          for k, v in sorted(severities_d.items(),
+                                             key=lambda x: (-x[1], x[0]))]
+
+            type_disp = ALERT_TYPE_PROVIDER[alert_type][1]
+            types_out.append({
+                'alert_type': alert_type,
+                'name': type_disp,
+                'count': cnt,
+                'categories': categories,
+                'subcategories': subcategories,
+                'statuses': statuses,
+                'severities': severities,
+            })
+        providers_map[provider_key]['types'] = types_out
+
+    # Apply ?source= filter if given.
+    if source_filter:
+        if not target:
+            providers_out = []
+        else:
+            target_type, target_provider = target
+            kept_types = [
+                t for t in providers_map[target_provider]['types']
+                if t['alert_type'] == target_type
+            ]
+            if not kept_types:
+                providers_out = []
+            else:
+                disp = PROVIDER_DISPLAY[target_provider]
+                providers_out = [{
+                    'key': target_provider,
+                    'name': disp['name'],
+                    'icon': disp['icon'],
+                    'color': disp['color'],
+                    'count': sum(t['count'] for t in kept_types),
+                    'types': kept_types,
+                }]
+    else:
+        providers_out = []
+        for provider_key in PROVIDER_ORDER:
+            disp = PROVIDER_DISPLAY[provider_key]
+            types_out = providers_map[provider_key]['types']
+            providers_out.append({
+                'key': provider_key,
+                'name': disp['name'],
+                'icon': disp['icon'],
+                'color': disp['color'],
+                'count': sum(t['count'] for t in types_out),
+                'types': types_out,
+            })
 
     return {
-        'sources': sources,
-        'providers': providers,
-        'categories': categories,
-        'subcategories': subcategories,
-        'statuses': statuses,
-        'severities': severities,
+        'providers': providers_out,
         'date_range': {
             'oldest': datetime.fromtimestamp(min_ts).isoformat() if min_ts else None,
             'newest': datetime.fromtimestamp(max_ts).isoformat() if max_ts else None,
             'oldest_unix': min_ts,
             'newest_unix': max_ts,
         },
-        'filtered_by_source': source_filter,
-        'filtered_by_hours': hours,
     }
 
 
 @app.route('/api/data/history/filters')
 def data_history_filters():
     """
-    Get all available filter values for the history search UI.
+    Provider/type-nested filter tree for the history search UI.
 
     Default path reads from data_history_filter_cache (refreshed every
     5 min from is_latest=1 rows). That keeps this endpoint under 100ms
@@ -10874,17 +11077,40 @@ def data_history_filters():
     data_history directly (slower, but respects `hours` exactly).
 
     Query parameters:
-        source: Optional - filter categories/subcategories/statuses by source
-        hours: Optional - only count records within the last N hours
-                          (ignored when reading from cache — cache is
-                          always current-state is_latest=1)
-        fresh: If '1', bypass cache and GROUPING SETS data_history.
-        all_history: Legacy - same effect as fresh=1 + full-history scope.
+        source: Optional. Either a canonical alert_type
+                (waze_hazard, traffic_incident, …) or a raw
+                data_history.source value. Restricts the response to
+                that single provider/type pair.
+        hours:  Optional, only honored on the live-scan path. Restricts
+                the count to records fetched within the last N hours.
+        fresh:  If '1', bypass cache and scan data_history.
+        all_history: Same effect as fresh=1 (legacy alias).
 
-    Examples:
-        /api/data/history/filters
-        /api/data/history/filters?source=waze_police
-        /api/data/history/filters?fresh=1&hours=24
+    Response shape (also when ?source= matches):
+        {
+            "providers": [
+                {
+                    "key": "waze",
+                    "name": "Waze",
+                    "icon": "car",
+                    "color": "#00d4ff",
+                    "count": 1234,
+                    "types": [
+                        {
+                            "alert_type": "waze_hazard",
+                            "name": "Hazards",
+                            "count": 567,
+                            "categories":    [{"value": "...", "count": 5}, ...],
+                            "subcategories": [...],
+                            "statuses":      [...],
+                            "severities":    [...]
+                        }, ...
+                    ]
+                }, ...
+            ],
+            "date_range": { "oldest": ISO, "newest": ISO,
+                            "oldest_unix": int, "newest_unix": int }
+        }
     """
     try:
         source_filter = request.args.get('source')
@@ -10898,99 +11124,108 @@ def data_history_filters():
         if use_cache:
             return _filters_from_cache(source_filter, hours)
 
-        # Fallback: scan data_history directly.
-        # Scope to is_latest=1 by default. The list view always uses unique=1
-        # so any filter option that only exists on historical (non-latest) rows
-        # would never match a visible record anyway.
-        scope_latest = request.args.get('all_history') != '1'
-
-        # Determine which databases to query
-        dbs_to_query = get_history_dbs_for_sources([source_filter] if source_filter else None)
-        
-        # Aggregated results
-        sources_data = {}  # value -> count
-        categories_data = {}
-        subcategories_data = {}
-        statuses_data = {}
-        severities_data = {}
-        min_ts = None
-        max_ts = None
-        
-        # Build time condition if hours filter specified
-        time_condition = ""
+        # Live-scan fallback. Scope to is_latest=1 — the list view always
+        # uses unique=1 so any option only existing on historical (non-
+        # latest) rows would never match a visible record anyway.
+        time_condition_sql = ""
         time_params = []
         if hours:
             cutoff = int(time.time()) - (hours * 3600)
-            time_condition = "fetched_at >= %s"
+            time_condition_sql = "AND fetched_at >= %s"
             time_params = [cutoff]
-        
-        for db_path in dbs_to_query:
+
+        type_counts = {}      # alert_type -> count
+        per_source_dims = {}  # alert_type -> kind -> {value: count}
+        min_ts = None
+        max_ts = None
+
+        try:
+            conn = get_conn()
             try:
-                conn = get_conn()
                 c = conn.cursor()
                 c.execute("SET LOCAL statement_timeout = '25s'")
 
-                # Build base conditions for filtered queries
-                conditions = []
-                params = list(time_params)
-                
-                if time_condition:
-                    conditions.append(time_condition.rstrip(' AND'))
-                if source_filter:
-                    conditions.append("source = %s")
-                    params.append(source_filter)
-                if scope_latest:
-                    conditions.append("is_latest = 1")
+                deprecated = list(DEPRECATED_SOURCES) or ['__nothing__']
+                dep_ph = ','.join(['%s'] * len(deprecated))
 
-                base_where = " AND ".join(conditions) if conditions else "1=1"
-                
-                # Single-pass: compute all 5 dimensions at once via GROUPING SETS.
-                # GROUPING(col) = 0 means we are grouping by that column on this row.
-                c.execute(f'''
-                    SELECT
-                        source, category, subcategory, status, severity,
-                        GROUPING(source)      AS g_src,
-                        GROUPING(category)    AS g_cat,
-                        GROUPING(subcategory) AS g_sub,
-                        GROUPING(status)      AS g_stat,
-                        GROUPING(severity)    AS g_sev,
-                        COUNT(*) AS cnt
-                    FROM data_history
-                    WHERE {base_where}
-                    GROUP BY GROUPING SETS ((source), (category), (subcategory), (status), (severity))
-                ''', params)
-                for src, cat, sub, stat, sev, g_src, g_cat, g_sub, g_stat, g_sev, cnt in c.fetchall():
-                    if g_src == 0:
-                        if src and src not in DEPRECATED_SOURCES:
-                            sources_data[src] = sources_data.get(src, 0) + cnt
-                    elif g_cat == 0:
-                        if cat:
-                            categories_data[cat] = categories_data.get(cat, 0) + cnt
-                    elif g_sub == 0:
-                        if sub:
-                            subcategories_data[sub] = subcategories_data.get(sub, 0) + cnt
-                    elif g_stat == 0:
-                        if stat:
-                            statuses_data[stat] = statuses_data.get(stat, 0) + cnt
-                    elif g_sev == 0:
-                        if sev:
-                            severities_data[sev] = severities_data.get(sev, 0) + cnt
+                # Per-source totals for the live-scan window.
+                c.execute(
+                    f"SELECT source, COUNT(*) FROM data_history "
+                    f"WHERE is_latest = 1 AND source NOT IN ({dep_ph}) "
+                    f"{time_condition_sql} GROUP BY source",
+                    deprecated + time_params,
+                )
+                for src, cnt in c.fetchall():
+                    alert_type = _canonical_alert_type(src)
+                    if not alert_type:
+                        continue
+                    type_counts[alert_type] = type_counts.get(alert_type, 0) + int(cnt)
 
-                # Date range — uses idx_data_fetched (B-tree), so MIN/MAX is O(log n)
+                # Per-source/per-dimension breakdowns. Pager-style numeric
+                # subcategories ("1160008", …) are dropped on the live path
+                # too, matching the cache-refresh behavior.
+                for kind in ('category', 'subcategory', 'status', 'severity'):
+                    c.execute(
+                        f"SELECT source, {kind}, COUNT(*) FROM data_history "
+                        f"WHERE is_latest = 1 AND source NOT IN ({dep_ph}) "
+                        f"  AND {kind} IS NOT NULL AND {kind} <> '' "
+                        f"  {time_condition_sql} "
+                        f"GROUP BY source, {kind}",
+                        deprecated + time_params,
+                    )
+                    for src, val, cnt in c.fetchall():
+                        if not (src and val):
+                            continue
+                        val_s = str(val).strip()
+                        if not val_s:
+                            continue
+                        if kind == 'subcategory' and val_s.isdigit():
+                            continue
+                        alert_type = _canonical_alert_type(src)
+                        if not alert_type:
+                            continue
+                        per_source_dims.setdefault(alert_type, {}) \
+                                       .setdefault(kind, {})
+                        d = per_source_dims[alert_type][kind]
+                        d[val_s] = d.get(val_s, 0) + int(cnt)
+
+                # rdio_summaries (live, hours-aware).
+                try:
+                    if hours:
+                        c.execute(
+                            "SELECT COUNT(*) FROM rdio_summaries "
+                            "WHERE (release_at IS NULL OR release_at <= now()) "
+                            "  AND created_at >= now() - (%s::int || ' hours')::interval",
+                            (hours,),
+                        )
+                    else:
+                        c.execute(
+                            "SELECT COUNT(*) FROM rdio_summaries "
+                            "WHERE release_at IS NULL OR release_at <= now()"
+                        )
+                    type_counts['radio_summary'] = int(c.fetchone()[0] or 0)
+                except Exception:
+                    type_counts['radio_summary'] = 0
+
+                # user_incident: total rows in the user-submission table.
+                try:
+                    c.execute("SELECT COUNT(*) FROM incidents")
+                    type_counts['user_incident'] = int(c.fetchone()[0] or 0)
+                except Exception:
+                    type_counts['user_incident'] = 0
+
+                # Date range (cheap via idx_data_fetched).
                 c.execute('SELECT MIN(fetched_at), MAX(fetched_at) FROM data_history')
-                db_min, db_max = c.fetchone()
-                if db_min and (min_ts is None or db_min < min_ts):
-                    min_ts = db_min
-                if db_max and (max_ts is None or db_max > max_ts):
-                    max_ts = db_max
-                
-                conn.close()
-            except Exception as e:
-                Log.error(f"Filters error: {e}")
-        
+                row = c.fetchone() or (None, None)
+                min_ts, max_ts = row
+            finally:
+                try: conn.close()
+                except Exception: pass
+        except Exception as e:
+            Log.error(f"Filters live-scan error: {e}")
+
         return jsonify(_build_filters_response(
-            sources_data, categories_data, subcategories_data, statuses_data, severities_data,
-            min_ts, max_ts, source_filter, hours,
+            type_counts, per_source_dims, min_ts, max_ts, source_filter,
         ))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -11006,18 +11241,23 @@ def data_history_incident(source, source_id):
         conn = get_conn()
         try:
             c = conn.cursor()
+            # Cap so a hot incident with thousands of snapshots can't OOM the
+            # response. 5000 is well above any real history (RFS leaders top
+            # out around ~1500 snapshots).
             c.execute('''
                 SELECT id, fetched_at, source_timestamp, source_timestamp_unix,
                        latitude, longitude, location_text, title, category, subcategory,
                        status, severity, data, is_active, is_live, last_seen
-                FROM data_history 
+                FROM data_history
                 WHERE source = %s AND source_id = %s
                 ORDER BY fetched_at ASC
+                LIMIT 5000
             ''', (source, source_id))
-            
+
             rows = c.fetchall()
         finally:
-            conn.close()
+            try: conn.close()
+            except Exception: pass
         
         history = []
         for row in rows:
@@ -11071,30 +11311,33 @@ def cleanup_duplicate_history():
         total_before = 0
         total_unique = 0
         total_deleted = 0
-        
+
         with _db_lock_history_waze:
             conn = get_conn()
-            c = conn.cursor()
-            
-            c.execute('SELECT COUNT(*) FROM data_history')
-            total_before = c.fetchone()[0]
-            
-            c.execute('SELECT COUNT(DISTINCT source || COALESCE(source_id, \'\')) FROM data_history')
-            total_unique = c.fetchone()[0]
-            
-            c.execute('''
-                DELETE FROM data_history 
-                WHERE id NOT IN (
-                    SELECT MIN(id) 
-                    FROM data_history 
-                    GROUP BY source, source_id, data_hash
-                )
-            ''')
-            total_deleted = c.rowcount
-            
-            conn.commit()
-            conn.close()
-        
+            try:
+                c = conn.cursor()
+
+                c.execute('SELECT COUNT(*) FROM data_history')
+                total_before = c.fetchone()[0]
+
+                c.execute('SELECT COUNT(DISTINCT source || COALESCE(source_id, \'\')) FROM data_history')
+                total_unique = c.fetchone()[0]
+
+                c.execute('''
+                    DELETE FROM data_history
+                    WHERE id NOT IN (
+                        SELECT MIN(id)
+                        FROM data_history
+                        GROUP BY source, source_id, data_hash
+                    )
+                ''')
+                total_deleted = c.rowcount
+
+                conn.commit()
+            finally:
+                try: conn.close()
+                except Exception: pass
+
         count_after = total_before - total_deleted
         Log.info(f"Cleanup: deleted {total_deleted} duplicate rows ({total_before} -> {count_after})")
         
@@ -11125,39 +11368,46 @@ def db_stats():
         live_count = 0
         history_db_stats = {}
         
+        conn = None
         try:
             conn = get_conn()
             c = conn.cursor()
-            
-            c.execute('SELECT COUNT(*) FROM data_history')
-            db_rows = c.fetchone()[0]
+
+            # Combine all 4 small COUNTs into a single round-trip — fewer
+            # statement overheads on a hot dashboard panel.
+            c.execute('''
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(DISTINCT source || COALESCE(source_id, '')) AS unique_n,
+                    COUNT(*) FILTER (WHERE is_live = 1) AS live_n,
+                    pg_total_relation_size('data_history') AS size_bytes
+                FROM data_history
+            ''')
+            row = c.fetchone()
+            db_rows = row[0] or 0
             total_rows = db_rows
-            
-            c.execute('SELECT COUNT(DISTINCT source || COALESCE(source_id, \'\')) FROM data_history')
-            db_unique = c.fetchone()[0]
+            db_unique = row[1] or 0
             unique_incidents = db_unique
-            
+            db_live = row[2] or 0
+            live_count = db_live
+            db_size = row[3] or 0
+
             c.execute('SELECT source, COUNT(*) FROM data_history GROUP BY source')
             for r in c.fetchall():
                 by_source[r[0]] = by_source.get(r[0], 0) + r[1]
-            
-            c.execute('SELECT COUNT(*) FROM data_history WHERE is_live = 1')
-            db_live = c.fetchone()[0]
-            live_count = db_live
-            
-            c.execute("SELECT pg_total_relation_size('data_history')")
-            db_size = c.fetchone()[0]
-            
+
             history_db_stats['data_history'] = {
                 'rows': db_rows,
                 'unique_incidents': db_unique,
                 'live_count': db_live,
                 'size_mb': round(db_size / (1024 * 1024), 2)
             }
-            
-            conn.close()
         except Exception as e:
             history_db_stats['data_history'] = {'error': str(e)}
+        finally:
+            if conn is not None:
+                try: conn.close()
+                except Exception: pass
         
         stats['data_history'] = {
             'total_rows': total_rows,
@@ -11168,6 +11418,7 @@ def db_stats():
         }
         
         # api_data_cache stats (from cache.db)
+        conn = None
         try:
             conn = get_conn()
             c = conn.cursor()
@@ -11175,22 +11426,29 @@ def db_stats():
             stats['api_data_cache'] = {'total_rows': c.fetchone()[0]}
             c.execute('SELECT endpoint, ttl, fetch_time_ms FROM api_data_cache ORDER BY endpoint')
             stats['api_data_cache']['endpoints'] = [
-                {'endpoint': r[0], 'ttl': r[1], 'fetch_ms': r[2]} 
+                {'endpoint': r[0], 'ttl': r[1], 'fetch_ms': r[2]}
                 for r in c.fetchall()
             ]
-            conn.close()
         except Exception as e:
             stats['api_data_cache'] = {'error': str(e)}
-        
+        finally:
+            if conn is not None:
+                try: conn.close()
+                except Exception: pass
+
         # stats_snapshots stats (from stats.db)
+        conn = None
         try:
             conn = get_conn()
             c = conn.cursor()
             c.execute('SELECT COUNT(*) FROM stats_snapshots')
             stats['stats_snapshots'] = {'total_rows': c.fetchone()[0]}
-            conn.close()
         except Exception as e:
             stats['stats_snapshots'] = {'error': str(e)}
+        finally:
+            if conn is not None:
+                try: conn.close()
+                except Exception: pass
         
         return jsonify(stats)
     except Exception as e:
@@ -11207,26 +11465,30 @@ def vacuum_db():
         total_saved = 0
         
         conn = get_conn()
-        cur = conn.cursor()
-        for table in tables:
-            try:
-                cur.execute("SELECT pg_total_relation_size(%s)", (table,))
-                size_before = cur.fetchone()[0] / (1024 * 1024)
-                cur.execute(f'VACUUM "{table}"')
-                conn.commit()
-                cur.execute("SELECT pg_total_relation_size(%s)", (table,))
-                size_after = cur.fetchone()[0] / (1024 * 1024)
-                saved = size_before - size_after
-                total_saved += saved
-                results[table] = {
-                    'size_before_mb': round(size_before, 2),
-                    'size_after_mb': round(size_after, 2),
-                    'saved_mb': round(saved, 2)
-                }
-            except Exception as e:
-                results[table] = {'error': str(e)}
-        cur.close()
-        conn.close()
+        try:
+            # VACUUM cannot run inside a transaction block — use autocommit.
+            conn.autocommit = True
+            cur = conn.cursor()
+            for table in tables:
+                try:
+                    cur.execute("SELECT pg_total_relation_size(%s)", (table,))
+                    size_before = cur.fetchone()[0] / (1024 * 1024)
+                    cur.execute(f'VACUUM "{table}"')
+                    cur.execute("SELECT pg_total_relation_size(%s)", (table,))
+                    size_after = cur.fetchone()[0] / (1024 * 1024)
+                    saved = size_before - size_after
+                    total_saved += saved
+                    results[table] = {
+                        'size_before_mb': round(size_before, 2),
+                        'size_after_mb': round(size_after, 2),
+                        'saved_mb': round(saved, 2)
+                    }
+                except Exception as e:
+                    results[table] = {'error': str(e)}
+            cur.close()
+        finally:
+            try: conn.close()
+            except Exception: pass
         
         Log.info(f"VACUUM complete: saved {total_saved:.2f}MB total")
         
@@ -11554,15 +11816,13 @@ def approve_editor_request(request_id):
             # Get the request
             c.execute('SELECT * FROM editor_requests WHERE id = %s', (request_id,))
             req = c.fetchone()
-            
+
             if not req:
-                conn.close()
                 return jsonify({'error': 'Request not found'}), 404
-            
+
             if req['status'] != 'pending':
-                conn.close()
                 return jsonify({'error': f'Request is already {req["status"]}'}), 400
-            
+
             temp_password = None
             supabase_account_created = False
             supabase_error = None
@@ -11691,19 +11951,17 @@ def reject_editor_request(request_id):
             # Get the request
             c.execute('SELECT * FROM editor_requests WHERE id = %s', (request_id,))
             req = c.fetchone()
-            
+
             if not req:
-                conn.close()
                 return jsonify({'error': 'Request not found'}), 404
-            
+
             if req['status'] != 'pending':
-                conn.close()
                 return jsonify({'error': f'Request is already {req["status"]}'}), 400
-            
+
             # Update request status
             reviewed_at = int(time.time())
             c.execute('''
-                UPDATE editor_requests 
+                UPDATE editor_requests
                 SET status = 'rejected', reviewed_at = %s, notes = %s
                 WHERE id = %s
             ''', (reviewed_at, reason or 'Rejected', request_id))
