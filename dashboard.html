@@ -4157,17 +4157,27 @@ function renderAdmin() {
   gtbl.appendChild(gbody);
   wrap.appendChild(el('div', { class: 'admin-table-wrap' }, gtbl));
 
-  // Dashboard users (deduped — one row per Discord user)
-  wrap.appendChild(el('h3', { class: 'section-head' }, `Dashboard users (${(d.sessions||[]).length})`));
+  // Dashboard users — active sessions first, then historical users from
+  // dashboard_users table. "Age" column shows time since last activity
+  // (last_seen) for active users, or time since last login for historical.
+  const allUsers = d.sessions || [];
+  const activeCount = allUsers.filter(u => u.is_active !== false).length;
+  const totalCount = allUsers.length;
+  const heading = totalCount === activeCount
+    ? `Dashboard users (${activeCount})`
+    : `Dashboard users (${activeCount} active · ${totalCount} total)`;
+  wrap.appendChild(el('h3', { class: 'section-head' }, heading));
   const stbl = el('table', { class: 'admin-table' });
   stbl.appendChild(el('thead', {}, el('tr', {}, [
     el('th', {}, 'User'),
     el('th', {}, 'ID'),
     el('th', {}, 'Guilds'),
-    el('th', {}, 'Age'),
+    el('th', {}, 'Last seen'),
+    el('th', {}, 'Status'),
   ])));
   const sbody = el('tbody', {});
-  for (const u of d.sessions || []) {
+  for (const u of allUsers) {
+    const isActive = u.is_active !== false;
     sbody.appendChild(el('tr', {}, [
       el('td', {}, [
         u.avatar_url ? el('img', { class: 'g-icon', src: u.avatar_url, alt: '' }) : null,
@@ -4175,8 +4185,11 @@ function renderAdmin() {
         u.is_admin ? el('span', { class: 'admin-pill' }, 'admin') : null,
       ]),
       el('td', { class: 'mono' }, u.uid),
-      el('td', {}, String(u.guild_count)),
+      el('td', {}, String(u.guild_count || 0)),
       el('td', {}, formatAge(u.age_seconds)),
+      el('td', {}, isActive
+        ? el('span', { style: 'color:#4ade80;' }, '● online')
+        : el('span', { style: 'color:#94a3b8;' }, 'offline')),
     ]));
   }
   stbl.appendChild(sbody);
