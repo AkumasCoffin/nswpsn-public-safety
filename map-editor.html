@@ -4242,6 +4242,24 @@ async function loadPagerData() {
         const data = await res.json();
         _policeHeatmapData = data;
         const points = (data.points || []).map(([lat, lng, c]) => [lat, lng, c]);
+        if (data.cache_status && data.cache_status !== 'ok' && points.length === 0) {
+          if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
+            map.removeLayer(policeHeatmapLayer);
+          }
+          policeHeatmapLayer = null;
+          if (stats) {
+            stats.textContent = data.cache_status === 'warming'
+              ? 'Cache warming up… retrying in 10s'
+              : 'Cache busy — retrying in 5s';
+          }
+          const delay = data.cache_status === 'warming' ? 10000 : 5000;
+          setTimeout(() => {
+            if (document.getElementById('chk-police-heatmap')?.checked) {
+              loadPoliceHeatmap(true);
+            }
+          }, delay);
+          return;
+        }
         if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
           map.removeLayer(policeHeatmapLayer);
         }

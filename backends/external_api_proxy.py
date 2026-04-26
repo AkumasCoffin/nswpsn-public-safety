@@ -9367,11 +9367,16 @@ def waze_police_heatmap():
     total_records = 0
     max_count = 0
     last_refreshed = None
+    cache_status = 'ok'   # 'ok' | 'warming' | 'busy' (told to client)
 
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SET LOCAL statement_timeout = '5s'")
+        # 10s read timeout + 8s lock_timeout. Higher than before because the
+        # cache table can briefly be ACCESS EXCLUSIVE'd by the refresh swap;
+        # we'd rather wait a few seconds than 500 to the client.
+        cur.execute("SET LOCAL statement_timeout = '10s'")
+        cur.execute("SET LOCAL lock_timeout = '8s'")
         cur.execute(sql, params)
         for lat_bin, lng_bin, cnt in cur.fetchall():
             try:
@@ -9388,8 +9393,23 @@ def waze_police_heatmap():
         if row and row[0]:
             last_refreshed = row[0].isoformat()
         cur.close()
+        if not points and last_refreshed is None:
+            cache_status = 'warming'   # cache hasn't been populated yet
+    except Exception as e:
+        # Any DB error (timeout, lock, etc.) — return empty + status flag
+        # rather than 500. The frontend can show "loading" until the cache
+        # is ready.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        Log.warn(f"Police heatmap read deferred: {e}")
+        cache_status = 'busy'
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     return jsonify({
         'points': points,
@@ -9399,6 +9419,7 @@ def waze_police_heatmap():
         'days': _POLICE_HEATMAP_WINDOW_DAYS,
         'subtypes': sorted(wanted) if wanted else sorted(_POLICE_VALID_SUBTYPES),
         'cache_updated_at': last_refreshed,
+        'cache_status': cache_status,
     })
 
 
@@ -9501,9 +9522,10 @@ def _refresh_police_heatmap_cache():
 
 def _police_heatmap_scheduler():
     """Background loop that refreshes the police heatmap cache every N
-    seconds (POLICE_HEATMAP_REFRESH_INTERVAL)."""
-    # Stagger so we don't all-fire at startup.
-    time.sleep(45)
+    seconds (POLICE_HEATMAP_REFRESH_INTERVAL). First refresh fires almost
+    immediately so the cache populates as soon as possible after restart."""
+    # Tiny stagger so we don't slam the DB the second the app starts.
+    time.sleep(5)
     while not _shutdown_event.is_set():
         try:
             _refresh_police_heatmap_cache()
