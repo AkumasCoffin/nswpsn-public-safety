@@ -949,22 +949,30 @@ _db_lock_cache = threading.Lock()    # For cache.db
 _db_lock_stats = threading.Lock()    # For stats.db
 _db_lock_config = threading.Lock()   # For config.db
 
-# History database locks - one per source type
-_db_lock_history_waze = threading.Lock()
-_db_lock_history_traffic = threading.Lock()
-_db_lock_history_rfs = threading.Lock()
-_db_lock_history_power = threading.Lock()
-_db_lock_history_pager = threading.Lock()
-_db_lock_history_weather = threading.Lock()
+# History database locks. Originally one Lock() per source type because
+# each source had its own SQLite file. With Postgres they all hit one
+# `data_history` table — separate Python locks left them free to run
+# concurrent UPDATEs on overlapping rows, which deadlocked at the DB
+# layer ("Cleanup history error: deadlock detected"). All aliases now
+# point to a single master lock so writes serialise cleanly in Python
+# and never reach the deadlock detector.
+_db_lock_history_master = threading.Lock()
+_db_lock_history_waze    = _db_lock_history_master
+_db_lock_history_traffic = _db_lock_history_master
+_db_lock_history_rfs     = _db_lock_history_master
+_db_lock_history_power   = _db_lock_history_master
+_db_lock_history_pager   = _db_lock_history_master
+_db_lock_history_weather = _db_lock_history_master
 
-# Map logical db keys to their locks
+# Map logical db keys to the same master lock (kept for API compatibility
+# with code that calls get_history_lock_for_source).
 _DB_LOCKS = {
-    DB_PATH_HISTORY_WAZE: _db_lock_history_waze,
-    DB_PATH_HISTORY_TRAFFIC: _db_lock_history_traffic,
-    DB_PATH_HISTORY_RFS: _db_lock_history_rfs,
-    DB_PATH_HISTORY_POWER: _db_lock_history_power,
-    DB_PATH_HISTORY_PAGER: _db_lock_history_pager,
-    DB_PATH_HISTORY_WEATHER: _db_lock_history_weather,
+    DB_PATH_HISTORY_WAZE: _db_lock_history_master,
+    DB_PATH_HISTORY_TRAFFIC: _db_lock_history_master,
+    DB_PATH_HISTORY_RFS: _db_lock_history_master,
+    DB_PATH_HISTORY_POWER: _db_lock_history_master,
+    DB_PATH_HISTORY_PAGER: _db_lock_history_master,
+    DB_PATH_HISTORY_WEATHER: _db_lock_history_master,
 }
 
 def get_history_lock_for_source(source):
@@ -1596,8 +1604,12 @@ def store_incidents_batch(incidents, source_type=None):
             
             return result
         except psycopg2.OperationalError as e:
-            if 'locked' in str(e).lower() and attempt < max_retries - 1:
-                Log.warn(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+            msg = str(e).lower()
+            transient = ('locked' in msg or 'deadlock' in msg
+                         or 'serialization' in msg)
+            if transient and attempt < max_retries - 1:
+                Log.warn(f"Database transient error, retrying in {retry_delay}s "
+                         f"(attempt {attempt + 1}/{max_retries}): {e}")
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
             else:
