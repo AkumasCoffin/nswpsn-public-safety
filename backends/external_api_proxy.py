@@ -4452,7 +4452,10 @@ PUBLIC_ENDPOINTS = {'/api/health', '/', '/api/config', '/api/heartbeat', '/api/e
                     # /api/waze/ingest has its own auth (X-Ingest-Key matched against WAZE_INGEST_KEY);
                     # adding to public here means NSWPSN_API_KEY isn't required, so a userscript in
                     # a random user's browser can POST without knowing the full backend API key.
-                    '/api/waze/ingest'}
+                    '/api/waze/ingest',
+                    # Read-only filter catalogue — used by /logs and the dashboard to populate
+                    # dropdowns. No PII, just aggregated category/source/severity counts.
+                    '/api/data/history/filters'}
 # Endpoints that start with these prefixes are public (for dynamic routes like /api/check-editor/<user_id>)
 PUBLIC_ENDPOINT_PREFIXES = ['/api/check-editor/', '/api/centralwatch/image/', '/api/centralwatch/cameras',
                             # Dashboard endpoints use Discord OAuth2 session cookie auth
@@ -14261,9 +14264,15 @@ def _dash_is_admin(session):
 # Mirror of discord-bot/bot.py ALERT_TYPES — duplicated here because the
 # dashboard must work without importing bot.py (different process).
 _DASH_ALERT_TYPES = [
-    'rfs', 'bom', 'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
-    'traffic_fire', 'traffic_major', 'power_endeavour', 'power_ausgrid',
-    'waze_hazards', 'waze_police', 'waze_roadwork', 'user_incidents',
+    'rfs',
+    'bom_land', 'bom_marine',
+    'traffic_incident', 'traffic_roadwork', 'traffic_flood',
+    'traffic_fire', 'traffic_majorevent',
+    'endeavour_current', 'endeavour_planned',
+    'ausgrid',
+    'essential_planned', 'essential_future',
+    'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
+    'user_incident',
     'radio_summary',
 ]
 
@@ -15278,18 +15287,34 @@ def _dash_parse_alert_types(value):
 
 
 # Per-alert-type severity scales. filters.severity_min is now a dict keyed
-# by alert_type → token; older presets stored a single string applied
-# generically and that legacy shape is still accepted on input.
+# by canonical alert_type → token; older presets stored a single string
+# applied generically and that legacy shape is still accepted on input.
 _DASH_SEVERITY_SCALES = {
-    'rfs':           {'advice', 'watch_and_act', 'emergency'},
-    'bom':           {'minor', 'moderate', 'major'},
-    'traffic_major': {'minor', 'moderate', 'major'},
+    'rfs':                {'advice', 'watch_and_act', 'emergency'},
+    'bom_land':           {'minor', 'moderate', 'major'},
+    'bom_marine':         {'minor', 'moderate', 'major'},
+    'traffic_majorevent': {'minor', 'moderate', 'major'},
 }
 # Flat union of every token in any per-type scale — used to validate the
 # legacy string form, which doesn't carry type context.
 _DASH_FILTER_SEVERITIES = set().union(*_DASH_SEVERITY_SCALES.values())
+
+# Canonical alert_types whose alerts carry a meaningful sub-type field
+# (RFS category, BOM warning category, traffic incidentType, Waze subtype).
+# subtype_filters can only be set for these.
+_DASH_SUBTYPE_AWARE_TYPES = {
+    'rfs',
+    'bom_land', 'bom_marine',
+    'traffic_incident', 'traffic_roadwork', 'traffic_flood',
+    'traffic_fire', 'traffic_majorevent',
+    'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
+    'user_incident',
+}
+
 _DASH_FILTER_KNOWN_KEYS = {
-    'keywords_include', 'keywords_exclude', 'severity_min', 'geofilter', 'bbox',
+    'keywords_include', 'keywords_exclude',
+    'severity_min', 'subtype_filters',
+    'geofilter', 'bbox',
 }
 _DASH_GEOFILTER_TYPES = {'bbox', 'ring', 'polygon'}
 _DASH_RING_RADIUS_MIN_M = 1
@@ -15432,6 +15457,42 @@ def _dash_validate_filters(v):
                 out['severity_min'] = normalised
         else:
             raise ValueError('severity_min must be a string or object.')
+
+    if 'subtype_filters' in v and v['subtype_filters'] is not None:
+        sf = v['subtype_filters']
+        if not isinstance(sf, dict):
+            raise ValueError('subtype_filters must be an object.')
+        unknown = set(sf.keys()) - _DASH_SUBTYPE_AWARE_TYPES
+        if unknown:
+            raise ValueError(
+                f'subtype_filters: unsupported alert types {sorted(unknown)}.')
+        normalised = {}
+        for at, raw in sf.items():
+            if raw is None:
+                continue
+            if not isinstance(raw, list):
+                raise ValueError(f'subtype_filters[{at}] must be a list.')
+            if len(raw) > 50:
+                raise ValueError(f'subtype_filters[{at}]: max 50 entries.')
+            items = []
+            for s in raw:
+                if not isinstance(s, str):
+                    raise ValueError(f'subtype_filters[{at}]: each entry must be a string.')
+                ss = s.strip()
+                if not ss:
+                    continue
+                if len(ss) > 100:
+                    raise ValueError(f'subtype_filters[{at}]: each entry must be <= 100 chars.')
+                items.append(ss)
+            if items:
+                # Dedup while preserving insertion order.
+                seen = set(); deduped = []
+                for it in items:
+                    if it not in seen:
+                        seen.add(it); deduped.append(it)
+                normalised[at] = deduped
+        if normalised:
+            out['subtype_filters'] = normalised
 
     if 'geofilter' in v and v['geofilter'] is not None:
         out['geofilter'] = _dash_validate_geofilter(v['geofilter'])

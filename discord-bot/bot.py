@@ -265,6 +265,38 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
     return (None, None)
 
 
+def _alert_subtype_token(alert_type: str, alert_data: dict):
+    """Return the alert's per-type sub-classification, or None if not applicable.
+
+    Each source uses a different field name:
+      rfs              → properties.category   ("Bush Fire", "Grass Fire", "Hazard Reduction")
+      bom_*            → properties.category or top-level category   ("Severe Weather", "Wind", ...)
+      traffic_*        → properties.incidentType  ("CRASH", "BREAKDOWN", "BUSHFIRE", ...)
+      waze_*           → subtype                  ("HAZARD_WEATHER_FOG", "POLICE_HIDING", ...)
+      user_incident    → category
+    For unsupported types, returns None — subtype_filters has no effect on them.
+    """
+    if not isinstance(alert_data, dict):
+        return None
+    if alert_type == 'rfs':
+        props = alert_data.get('properties') or {}
+        return (str(props.get('category') or '').strip()) or None
+    if alert_type and alert_type.startswith('bom_'):
+        props = alert_data.get('properties') or {}
+        raw = props.get('category') or alert_data.get('category')
+        return (str(raw or '').strip()) or None
+    if alert_type and alert_type.startswith('traffic_'):
+        props = alert_data.get('properties') or {}
+        return (str(props.get('incidentType') or '').strip()) or None
+    if alert_type and alert_type.startswith('waze_'):
+        raw = alert_data.get('subtype') or alert_data.get('type')
+        return (str(raw or '').strip()) or None
+    if alert_type == 'user_incident':
+        raw = alert_data.get('category') or alert_data.get('type')
+        return (str(raw or '').strip()) or None
+    return None
+
+
 def _alert_severity_token(alert_type: str, alert_data: dict):
     """Map raw alert severity to a token in _SEVERITY_SCALES[alert_type]."""
     if not isinstance(alert_data, dict):
@@ -377,6 +409,16 @@ def preset_alert_matches(preset: dict, alert_type: str, alert_data: dict) -> boo
 
     if not alert_passes_severity(alert_type, alert_data, f.get('severity_min')):
         return False
+
+    sf = f.get('subtype_filters')
+    if isinstance(sf, dict):
+        allowed = sf.get(alert_type)
+        if allowed:  # non-empty list → whitelist gate
+            token = _alert_subtype_token(alert_type, alert_data)
+            # Pass-through when the alert has no subtype field — same policy
+            # as severity, so a missing field never blocks legit traffic.
+            if token and token not in allowed:
+                return False
 
     gf = f.get('geofilter')
     # Legacy: a top-level `bbox` without a geofilter wrapper is treated as
