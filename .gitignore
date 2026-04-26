@@ -49,8 +49,11 @@ npm-debug.log*
 # Stale snapshot folder — kept locally for reference, not shipped.
 backup/
 
-# Internal docs (Waze userscript source, summary-flow notes, etc.) — local-only.
-docs/
+# Internal docs are local-only by default — operator notes, probe scripts,
+# raw flow diagrams. The Waze userscript IS checked in so contributors and
+# self-hosters can grab the same code that powers the live ingest path.
+docs/*
+!docs/waze-userscript.user.js
 
 # Radio unit reference data (local operator data, not for the public repo).
 backends/reference/
