@@ -1271,7 +1271,7 @@
         const url = hours ? `${API_BASE}/api/data/history/filters?hours=${hours}` : `${API_BASE}/api/data/history/filters`;
         const res = await apiFetch(url);
         const data = await res.json();
-        
+
         // Add provider options (icon from API is just the name like 'car', we add 'fa-' prefix)
         // Icon mappings for providers (Font Awesome icon names)
         const providerIcons = {
@@ -1294,10 +1294,33 @@
           'Bureau of Meteorology': '#3b82f6',
           'Pager': '#8b5cf6'
         };
-        
-        // Store providers data for hierarchical filtering
-        // Filter out unknown/deprecated providers (e.g. legacy "Essential" from removed essential_energy_cancelled)
-        providersData = (data.providers || []).filter(p => providerIcons[p.name] || providerColors[p.name]);
+
+        // Normalise providers from the new endpoint shape into the structure
+        // the rest of this page expects. The new contract returns:
+        //   data.providers[].types[] = {
+        //     alert_type, name, count,
+        //     categories: [{value,count},...],
+        //     subcategories: [...], statuses: [...], severities: [...]
+        //   }
+        // Internally we still address each type by `.source` (the canonical
+        // alert_type), so map alert_type -> source. Per-type categories /
+        // subcategories / statuses / severities are kept on the normalised
+        // shape so onSourceChange / source-filtered calls can read them
+        // without a second backend round-trip.
+        const rawProviders = (data.providers || []).filter(
+          p => providerIcons[p.name] || providerColors[p.name]
+        );
+        providersData = rawProviders.map(p => ({
+          ...p,
+          types: (p.types || []).map(t => ({
+            ...t,
+            source: t.alert_type || t.source,
+            categories:    t.categories    || [],
+            subcategories: t.subcategories || [],
+            statuses:      t.statuses      || [],
+            severities:    t.severities    || [],
+          })),
+        }));
         
         // Populate custom provider dropdown
         const optionsContainer = document.getElementById('provider-options');
@@ -1708,57 +1731,94 @@
       }
       
       if (!sourceToQuery) return;
-      
+
       try {
         const hours = getHoursParam();
         const hoursParam = hours ? `&hours=${hours}` : '';
-        
+
+        // The new /api/data/history/filters response is provider/type-nested:
+        //   { providers: [{ types: [{ alert_type, categories, subcategories,
+        //                              statuses, severities, ... }] }] }
+        // Older flat top-level keys are gone. flattenFilterResponse() walks the
+        // single-source response (one provider, one type) into the flat shape
+        // the rest of this function expects.
+        const flattenFilterResponse = (d) => {
+          if (!d || typeof d !== 'object') return { categories: [], subcategories: [], statuses: [], severities: [] };
+          // Backwards-compat: if the backend ever returns flat keys, prefer them.
+          if (d.categories || d.subcategories || d.statuses || d.severities) {
+            return {
+              categories:    d.categories    || [],
+              subcategories: d.subcategories || [],
+              statuses:      d.statuses      || [],
+              severities:    d.severities    || [],
+            };
+          }
+          const t = (d.providers && d.providers[0] && d.providers[0].types && d.providers[0].types[0]) || {};
+          return {
+            categories:    t.categories    || [],
+            subcategories: t.subcategories || [],
+            statuses:      t.statuses      || [],
+            severities:    t.severities    || [],
+          };
+        };
+
         // For combined Endeavour sources, fetch from all sources and combine
         const isEndeavour = sourceToQuery.includes('endeavour');
         let data;
-        
+
         if (isEndeavour && sourceToQuery.includes(',')) {
           // Fetch from both endeavour sources and combine
           const sources = sourceToQuery.split(',');
-          const results = await Promise.all(
-            sources.map(s => apiFetch(`${API_BASE}/api/data/history/filters?source=${s.trim()}${hoursParam}`).then(r => r.json()))
+          const flatResults = await Promise.all(
+            sources.map(s => apiFetch(`${API_BASE}/api/data/history/filters?source=${s.trim()}${hoursParam}`)
+              .then(r => r.json()).then(flattenFilterResponse))
           );
-          
+
           // Combine categories
           const catMap = new Map();
-          results.forEach(d => {
+          flatResults.forEach(d => {
             (d.categories || []).forEach(c => {
               const existing = catMap.get(c.value);
               catMap.set(c.value, { value: c.value, count: (existing?.count || 0) + c.count });
             });
           });
-          
+
           // Combine subcategories
           const subMap = new Map();
-          results.forEach(d => {
+          flatResults.forEach(d => {
             (d.subcategories || []).forEach(s => {
               const existing = subMap.get(s.value);
               subMap.set(s.value, { value: s.value, count: (existing?.count || 0) + s.count });
             });
           });
-          
+
           // Combine statuses
           const statusMap = new Map();
-          results.forEach(d => {
+          flatResults.forEach(d => {
             (d.statuses || []).forEach(s => {
               const existing = statusMap.get(s.value);
               statusMap.set(s.value, { value: s.value, count: (existing?.count || 0) + s.count });
             });
           });
-          
+
+          // Combine severities (rare but covered for completeness)
+          const sevMap = new Map();
+          flatResults.forEach(d => {
+            (d.severities || []).forEach(s => {
+              const existing = sevMap.get(s.value);
+              sevMap.set(s.value, { value: s.value, count: (existing?.count || 0) + s.count });
+            });
+          });
+
           data = {
-            categories: Array.from(catMap.values()).sort((a, b) => b.count - a.count),
+            categories:    Array.from(catMap.values()).sort((a, b) => b.count - a.count),
             subcategories: Array.from(subMap.values()).sort((a, b) => b.count - a.count),
-            statuses: Array.from(statusMap.values()).sort((a, b) => b.count - a.count)
+            statuses:      Array.from(statusMap.values()).sort((a, b) => b.count - a.count),
+            severities:    Array.from(sevMap.values()).sort((a, b) => b.count - a.count),
           };
         } else {
           const res = await apiFetch(`${API_BASE}/api/data/history/filters?source=${sourceToQuery}${hoursParam}`);
-          data = await res.json();
+          data = flattenFilterResponse(await res.json());
         }
         
         // Determine what to show in the Category dropdown
