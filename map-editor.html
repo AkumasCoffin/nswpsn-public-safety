@@ -181,6 +181,48 @@
       border-top-color: rgba(15, 23, 42, 0.98) !important;
     }
 
+    /* Compact hex-cell tooltip for the police-density heatmap. */
+    .leaflet-tooltip.hex-tooltip {
+      min-width: 0 !important;
+      max-width: none !important;
+      padding: 6px 10px !important;
+      background: rgba(15, 23, 42, 0.94) !important;
+      color: #f8fafc !important;
+      border: 1px solid rgba(139, 92, 246, 0.55) !important;
+      border-radius: 6px !important;
+      box-shadow: 0 0 14px rgba(139, 92, 246, 0.35), 0 4px 14px rgba(0,0,0,0.5) !important;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    }
+    .leaflet-tooltip.hex-tooltip::before {
+      border-top-color: rgba(15, 23, 42, 0.94) !important;
+      border-bottom-color: rgba(15, 23, 42, 0.94) !important;
+    }
+    .hex-tooltip .hex-tt-label {
+      color: #c4b5fd;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 2px;
+    }
+    .hex-tooltip .hex-tt-count {
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .hex-tooltip .hex-tt-unit {
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 500;
+      margin-left: 3px;
+    }
+    .hex-tooltip .hex-tt-window {
+      color: #64748b;
+      font-size: 9px;
+      margin-top: 3px;
+    }
+
     /* CONTROLS */
     .map-type-controls { position: absolute; bottom: 30px; left: 20px; z-index: 800; display: flex; align-items: center; gap: 6px; background: rgba(15, 23, 42, 0.9); padding: 6px 10px; border-radius: 50px; border: 1px solid rgba(255,255,255,0.15); backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
     
@@ -4385,7 +4427,13 @@ async function loadPagerData() {
             interactive: !isEmpty,
           });
           if (count > 0) {
-            poly.bindTooltip(`${count} pings`, { direction: 'top', sticky: true });
+            const unit = count === 1 ? 'ping' : 'pings';
+            poly.bindTooltip(
+              `<div class="hex-tt-label"><i class="fa-solid fa-fire" style="margin-right:4px;color:#f43f5e;"></i>Police Density</div>` +
+              `<div class="hex-tt-count">${count.toLocaleString()}<span class="hex-tt-unit">${unit}</span></div>` +
+              `<div class="hex-tt-window">past 30 days</div>`,
+              { direction: 'top', sticky: true, className: 'hex-tooltip' }
+            );
           }
           poly.addTo(policeHeatmapLayer);
           rendered++;
