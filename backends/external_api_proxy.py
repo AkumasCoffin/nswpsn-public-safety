@@ -1790,185 +1790,188 @@ def _store_incidents_batch_inner(incidents, source_type=None):
         if source_type is None and incidents:
             source_type = incidents[0].get('source')
         
-        # Get the right database and lock for this source type
+        # Get the right database for this source type. The Python lock that
+        # used to wrap this block was removed: with the partial UNIQUE INDEX
+        # uniq_data_history_latest (commit ac58dcb) Postgres now enforces
+        # "at most one is_latest=1 per (source, source_id)" structurally, so
+        # the in-process lock is redundant and was the dominant chokepoint —
+        # 9+ source workers serialized through it on restart.
         db_path = get_history_db_for_source(source_type)
-        db_lock = get_history_lock_for_source(source_type)
-        
-        with db_lock:
-            conn = get_conn()
-            try:
-                c = conn.cursor()
-                
-                # First, get the latest hash for each source+source_id we're about to insert
-                # Build lookup of existing hashes
-                source_ids = [(inc.get('source'), inc.get('source_id')) for inc in incidents if inc.get('source_id')]
-                existing_hashes = {}
-                
-                if source_ids:
-                    # Query latest data_hash for each source+source_id
-                    placeholders = ','.join(['(%s, %s)' for _ in source_ids])
-                    flat_params = [item for pair in source_ids for item in pair]
-                    
-                    c.execute(f'''
-                        SELECT source, source_id, data_hash 
-                        FROM data_history 
+
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+
+            # First, get the latest hash for each source+source_id we're about to insert
+            # Build lookup of existing hashes
+            source_ids = [(inc.get('source'), inc.get('source_id')) for inc in incidents if inc.get('source_id')]
+            existing_hashes = {}
+
+            if source_ids:
+                # Query latest data_hash for each source+source_id
+                placeholders = ','.join(['(%s, %s)' for _ in source_ids])
+                flat_params = [item for pair in source_ids for item in pair]
+
+                c.execute(f'''
+                    SELECT source, source_id, data_hash
+                    FROM data_history
+                    WHERE (source, source_id) IN ({placeholders})
+                    AND id IN (
+                        SELECT MAX(id) FROM data_history
                         WHERE (source, source_id) IN ({placeholders})
-                        AND id IN (
-                            SELECT MAX(id) FROM data_history 
-                            WHERE (source, source_id) IN ({placeholders})
-                            GROUP BY source, source_id
-                        )
-                    ''', flat_params + flat_params)
-                    
-                    for row in c.fetchall():
-                        existing_hashes[(row[0], row[1])] = row[2]
-                
-                # Filter to only new or changed incidents
-                rows_to_insert = []
-                all_source_ids_in_batch = set()
-                new_count = 0
-                changed_count = 0
-                skipped_count = 0
-                
-                for inc in incidents:
-                    source = inc.get('source')
-                    source_id = inc.get('source_id')
-                    data_hash = _compute_data_hash(inc)
-                    
-                    if source_id:
-                        all_source_ids_in_batch.add((source, source_id))
-                    
-                    # Check if this is new or changed
-                    existing_hash = existing_hashes.get((source, source_id))
-                    
-                    if existing_hash is None:
-                        # New incident - insert
-                        new_count += 1
-                    elif existing_hash != data_hash:
-                        # Data changed - insert new snapshot
-                        changed_count += 1
-                    else:
-                        # Same data - skip insert but still update last_seen
-                        skipped_count += 1
-                        continue
-                    
-                    source_ts_unix = parse_source_timestamp(inc.get('source_timestamp'))
-                    source_ts_str = str(inc.get('source_timestamp')) if inc.get('source_timestamp') else None
-                    
-                    # Get hierarchical source info
-                    src_provider = inc.get('source_provider')
-                    src_type = inc.get('source_type')
-                    if not src_provider or not src_type:
-                        src_provider, src_type = get_source_hierarchy(source)
-                    
-                    rows_to_insert.append((
-                        source,
-                        source_id,
-                        src_provider,
-                        src_type,
-                        fetched_at,
-                        source_ts_str,
-                        source_ts_unix,
-                        inc.get('lat'),
-                        inc.get('lon'),
-                        inc.get('location_text'),
-                        inc.get('title'),
-                        inc.get('category'),
-                        inc.get('subcategory'),
-                        inc.get('status'),
-                        inc.get('severity'),
-                        json.dumps(inc.get('data', {})),
-                        inc.get('is_active', 1),
-                        1,  # is_live = True (currently in API response)
-                        fetched_at,  # last_seen
-                        data_hash
-                    ))
-                
-                if rows_to_insert:
-                    # Mark previous "latest" rows as not-latest for source_ids
-                    # we're inserting. ONE bulk UPDATE instead of N round
-                    # trips — for big batches (369 roadwork rows) this was
-                    # the dominant cost.
-                    source_ids_to_update = [(r[0], r[1]) for r in rows_to_insert if r[1]]
-                    if source_ids_to_update:
-                        placeholders = ','.join(['(%s,%s)'] * len(source_ids_to_update))
-                        flat_params = [v for pair in source_ids_to_update for v in pair]
-                        c.execute(
-                            f'UPDATE data_history SET is_latest = 0 '
-                            f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
-                            flat_params,
-                        )
-
-                    # Insert new rows with is_latest = 1
-                    c.executemany('''
-                        INSERT INTO data_history
-                        (source, source_id, source_provider, source_type, fetched_at, source_timestamp, source_timestamp_unix,
-                         latitude, longitude, location_text, title, category, subcategory,
-                         status, severity, data, is_active, is_live, last_seen, data_hash, is_latest)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
-                    ''', rows_to_insert)
-
-                # Update last_seen for ALL incidents in this batch (even if
-                # data unchanged). Two prior bugs here:
-                #   1. Loop of N round trips (one UPDATE per source_id) —
-                #      replaced with a single bulk UPDATE.
-                #   2. Missing is_latest=1 predicate meant the UPDATE
-                #      touched every historical snapshot of each incident
-                #      (an incident polled 100 times would have 100 rows
-                #      written each tick). Only the is_latest=1 row carries
-                #      the live last_seen; older snapshots should stay
-                #      frozen at the time they were captured.
-                if all_source_ids_in_batch:
-                    pairs = list(all_source_ids_in_batch)
-                    placeholders = ','.join(['(%s,%s)'] * len(pairs))
-                    flat_params = [v for pair in pairs for v in pair]
-                    c.execute(
-                        f'UPDATE data_history '
-                        f'SET last_seen = %s, is_live = 1 '
-                        f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
-                        [fetched_at] + flat_params,
+                        GROUP BY source, source_id
                     )
-                
-                # Mark incidents NO LONGER in API response as is_live = 0
-                # Only do this if we have a source_type and received at least some data
-                #
-                # Waze sources are exempt: with userscript ingest the prewarm batch
-                # only reflects regions scraped in the last few minutes (a full
-                # 129-region rotation takes ~11 min), so running the diff here
-                # would flip every non-recently-visited incident to is_live=0 on
-                # every cycle. Instead, cleanup_old_data() expires Waze records
-                # by `last_seen` age (1h).
-                waze_sources = {'waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam'}
-                if source_type in waze_sources:
-                    pass
-                elif source_type and all_source_ids_in_batch:
-                    # Get all source_ids we know about for this source_type that are still marked as live
-                    c.execute('''
-                        SELECT DISTINCT source_id FROM data_history 
-                        WHERE source = %s AND is_live = 1 AND source_id IS NOT NULL
-                    ''', (source_type,))
-                    
-                    known_ids = {row[0] for row in c.fetchall()}
-                    current_ids = {sid for (src, sid) in all_source_ids_in_batch if src == source_type}
-                    
-                    # Find IDs that are no longer in the API response
-                    gone_ids = known_ids - current_ids
-                    
-                    if gone_ids:
-                        # Mark these as no longer live
-                        placeholders = ','.join(['%s' for _ in gone_ids])
-                        c.execute(f'''
-                            UPDATE data_history 
-                            SET is_live = 0
-                            WHERE source = %s AND source_id IN ({placeholders})
-                        ''', [source_type] + list(gone_ids))
-                        
-                        Log.live(f"Marked {len(gone_ids)} {source_type} incidents as no longer live")
-                
-                conn.commit()
-            finally:
-                conn.close()
-        
+                ''', flat_params + flat_params)
+
+                for row in c.fetchall():
+                    existing_hashes[(row[0], row[1])] = row[2]
+
+            # Filter to only new or changed incidents
+            rows_to_insert = []
+            all_source_ids_in_batch = set()
+            new_count = 0
+            changed_count = 0
+            skipped_count = 0
+
+            for inc in incidents:
+                source = inc.get('source')
+                source_id = inc.get('source_id')
+                data_hash = _compute_data_hash(inc)
+
+                if source_id:
+                    all_source_ids_in_batch.add((source, source_id))
+
+                # Check if this is new or changed
+                existing_hash = existing_hashes.get((source, source_id))
+
+                if existing_hash is None:
+                    # New incident - insert
+                    new_count += 1
+                elif existing_hash != data_hash:
+                    # Data changed - insert new snapshot
+                    changed_count += 1
+                else:
+                    # Same data - skip insert but still update last_seen
+                    skipped_count += 1
+                    continue
+
+                source_ts_unix = parse_source_timestamp(inc.get('source_timestamp'))
+                source_ts_str = str(inc.get('source_timestamp')) if inc.get('source_timestamp') else None
+
+                # Get hierarchical source info
+                src_provider = inc.get('source_provider')
+                src_type = inc.get('source_type')
+                if not src_provider or not src_type:
+                    src_provider, src_type = get_source_hierarchy(source)
+
+                rows_to_insert.append((
+                    source,
+                    source_id,
+                    src_provider,
+                    src_type,
+                    fetched_at,
+                    source_ts_str,
+                    source_ts_unix,
+                    inc.get('lat'),
+                    inc.get('lon'),
+                    inc.get('location_text'),
+                    inc.get('title'),
+                    inc.get('category'),
+                    inc.get('subcategory'),
+                    inc.get('status'),
+                    inc.get('severity'),
+                    json.dumps(inc.get('data', {})),
+                    inc.get('is_active', 1),
+                    1,  # is_live = True (currently in API response)
+                    fetched_at,  # last_seen
+                    data_hash
+                ))
+
+            if rows_to_insert:
+                # Mark previous "latest" rows as not-latest for source_ids
+                # we're inserting. ONE bulk UPDATE instead of N round
+                # trips — for big batches (369 roadwork rows) this was
+                # the dominant cost.
+                source_ids_to_update = [(r[0], r[1]) for r in rows_to_insert if r[1]]
+                if source_ids_to_update:
+                    placeholders = ','.join(['(%s,%s)'] * len(source_ids_to_update))
+                    flat_params = [v for pair in source_ids_to_update for v in pair]
+                    c.execute(
+                        f'UPDATE data_history SET is_latest = 0 '
+                        f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
+                        flat_params,
+                    )
+
+                # Insert new rows with is_latest = 1
+                c.executemany('''
+                    INSERT INTO data_history
+                    (source, source_id, source_provider, source_type, fetched_at, source_timestamp, source_timestamp_unix,
+                     latitude, longitude, location_text, title, category, subcategory,
+                     status, severity, data, is_active, is_live, last_seen, data_hash, is_latest)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+                ''', rows_to_insert)
+
+            # Update last_seen for ALL incidents in this batch (even if
+            # data unchanged). Two prior bugs here:
+            #   1. Loop of N round trips (one UPDATE per source_id) —
+            #      replaced with a single bulk UPDATE.
+            #   2. Missing is_latest=1 predicate meant the UPDATE
+            #      touched every historical snapshot of each incident
+            #      (an incident polled 100 times would have 100 rows
+            #      written each tick). Only the is_latest=1 row carries
+            #      the live last_seen; older snapshots should stay
+            #      frozen at the time they were captured.
+            if all_source_ids_in_batch:
+                pairs = list(all_source_ids_in_batch)
+                placeholders = ','.join(['(%s,%s)'] * len(pairs))
+                flat_params = [v for pair in pairs for v in pair]
+                c.execute(
+                    f'UPDATE data_history '
+                    f'SET last_seen = %s, is_live = 1 '
+                    f'WHERE is_latest = 1 AND (source, source_id) IN ({placeholders})',
+                    [fetched_at] + flat_params,
+                )
+
+            # Mark incidents NO LONGER in API response as is_live = 0
+            # Only do this if we have a source_type and received at least some data
+            #
+            # Waze sources are exempt: with userscript ingest the prewarm batch
+            # only reflects regions scraped in the last few minutes (a full
+            # 129-region rotation takes ~11 min), so running the diff here
+            # would flip every non-recently-visited incident to is_live=0 on
+            # every cycle. Instead, cleanup_old_data() expires Waze records
+            # by `last_seen` age (1h).
+            waze_sources = {'waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam'}
+            if source_type in waze_sources:
+                pass
+            elif source_type and all_source_ids_in_batch:
+                # Get all source_ids we know about for this source_type that are still marked as live
+                c.execute('''
+                    SELECT DISTINCT source_id FROM data_history
+                    WHERE source = %s AND is_live = 1 AND source_id IS NOT NULL
+                ''', (source_type,))
+
+                known_ids = {row[0] for row in c.fetchall()}
+                current_ids = {sid for (src, sid) in all_source_ids_in_batch if src == source_type}
+
+                # Find IDs that are no longer in the API response
+                gone_ids = known_ids - current_ids
+
+                if gone_ids:
+                    # Mark these as no longer live
+                    placeholders = ','.join(['%s' for _ in gone_ids])
+                    c.execute(f'''
+                        UPDATE data_history
+                        SET is_live = 0
+                        WHERE source = %s AND source_id IN ({placeholders})
+                    ''', [source_type] + list(gone_ids))
+
+                    Log.live(f"Marked {len(gone_ids)} {source_type} incidents as no longer live")
+
+            conn.commit()
+        finally:
+            conn.close()
+
         return {
             'total': len(incidents),
             'new': new_count,
