@@ -1506,7 +1506,7 @@
           <label><input type="checkbox" id="chk-police-heatmap" onchange="togglePoliceHeatmapMode(this.checked)"><i class="fa-solid fa-fire" style="color:#dc2626;margin-right:4px;"></i> Heatmap (historical density)</label>
           <div id="police-heatmap-controls" style="display:none;margin-top:8px;">
             <div style="margin-top:4px;">
-              <div style="height:9px;border-radius:4px;background:linear-gradient(to right,rgb(34,211,238) 0%,rgb(6,182,212) 20%,rgb(139,92,246) 45%,rgb(217,70,239) 65%,rgb(236,72,153) 82%,rgb(244,63,94) 100%);box-shadow:inset 0 0 0 1px rgba(15,23,42,0.4);"></div>
+              <div style="height:9px;border-radius:4px;background:linear-gradient(to right,rgb(34,211,238) 0%,rgb(16,185,129) 25%,rgb(250,204,21) 50%,rgb(251,113,36) 75%,rgb(244,63,94) 100%);box-shadow:inset 0 0 0 1px rgba(15,23,42,0.4);"></div>
               <table style="width:100%;font-size:10px;color:#94a3b8;margin-top:3px;border-collapse:collapse;">
                 <tr>
                   <td style="text-align:left;padding:0;"><span id="heat-legend-min">0</span></td>
@@ -4315,12 +4315,11 @@ async function loadPagerData() {
     }
 
     const _HEATMAP_STOPS = [
-      [0.00, [ 34, 211, 238]],
-      [0.35, [  6, 182, 212]],
-      [0.55, [139,  92, 246]],
-      [0.75, [217,  70, 239]],
-      [0.90, [236,  72, 153]],
-      [1.00, [244,  63,  94]],
+      [0.00, [ 34, 211, 238]],  // cyan
+      [0.25, [ 16, 185, 129]],  // emerald
+      [0.50, [250, 204,  21]],  // yellow
+      [0.75, [251, 113,  36]],  // orange
+      [1.00, [244,  63,  94]],  // pink-red
     ];
     function _heatmapColorAt(t) {
       t = Math.max(0, Math.min(1, t));
@@ -4422,7 +4421,7 @@ async function loadPagerData() {
             weight: isEmpty ? 0.4 : 1.2,
             opacity: isEmpty ? 0.35 : 0.95,
             fillColor: isEmpty ? '#0f172a' : color,
-            fillOpacity: isEmpty ? 0.05 : 0.20 + 0.55 * t,
+            fillOpacity: isEmpty ? 0.05 : 0.45 + 0.45 * t,
             lineJoin: 'round',
             interactive: !isEmpty,
           });
