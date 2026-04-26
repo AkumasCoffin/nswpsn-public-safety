@@ -8938,12 +8938,15 @@ NSW_REGIONS = [
 # blocked direct fetch. Setup: see docs/waze-userscript.md
 WAZE_INGEST_ENABLED = os.environ.get('WAZE_INGEST_ENABLED', 'false').lower() in ('1', 'true', 'yes')
 WAZE_INGEST_KEY = os.environ.get('WAZE_INGEST_KEY', '').strip()
-# Cached ingest per-bbox is evicted after this many seconds. The full userscript
-# rotation is ~5s × ~129 regions ≈ 11 min, so a 5-min window would prune most
-# of NSW from the snapshot at any given moment. 20 min is ~2× the rotation so
-# every snapshot holds a complete picture even if the browser falls behind
-# slightly. Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
-WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 1200))
+# Cached ingest per-bbox is evicted after this many seconds. The current
+# userscript rotation is ~5s × 190 regions ≈ 16 min. The userscript also
+# reloads itself every 30 min (absolute backstop) which causes a 30-60s
+# gap; if a region was just visited before that reload, the next visit
+# can be up to ~16 min later. Worst-case gap between visits is therefore
+# rotation + reload window ≈ 17-18 min. 40 min gives ~2× headroom so
+# brief glitches don't prune entries that the script is about to refresh.
+# Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
+WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 2400))
 # Alert if no ingest POST has arrived in this many seconds (0 = disabled).
 WAZE_INGEST_STALE_SECS = int(os.environ.get('WAZE_INGEST_STALE_SECS', '600'))
 # Optional Discord webhook — fired once when staleness first crosses threshold.

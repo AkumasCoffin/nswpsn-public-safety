@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.16
+// @version      1.17
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -248,7 +248,13 @@
     // occasionally stops emitting georss responses after long sessions —
     // backend warns "Waze ingest stale: no POST in 15m" when this happens.
     // Reloading restarts the SPA, the WebSocket, and our hooks. Cheap.
-    const RELOAD_INTERVAL_MS     = 15 * 60 * 1000;  // absolute backstop
+    // Absolute backstop reload. Must be MORE than 2× full-rotation time
+    // (190 regions × 5s ≈ 16 min). Reloading sooner means a region visited
+    // just before the reload may not get re-visited within the backend's
+    // WAZE_INGEST_MAX_AGE window, so its pins get pruned and the map
+    // shows fewer markers. The 4-min stuck-watchdog still catches real
+    // hangs — this timer only exists for slow drift the watchdog misses.
+    const RELOAD_INTERVAL_MS     = 30 * 60 * 1000;
     // Watchdog: if no successful ingest in this long, force a reload
     // even before the absolute timer fires. The backend's staleness
     // threshold is 15 min — set the watchdog tighter so we recover
@@ -735,7 +741,7 @@
         pageWin.addEventListener('focus', checkStuck);
     } catch (e) { log('visibility hook fail:', e); }
 
-    log('NSWPSN Waze Forwarder v1.16 loaded — backend:', BACKEND_URL,
+    log('NSWPSN Waze Forwarder v1.17 loaded — backend:', BACKEND_URL,
         `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
         `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
         `· check every ${STUCK_CHECK_INTERVAL_MS / 1000}s + on visibility`);
