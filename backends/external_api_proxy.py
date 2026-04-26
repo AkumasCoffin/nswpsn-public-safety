@@ -597,6 +597,11 @@ def check_rate_limit():
         # Summary endpoints are cheap DB reads polled by every open live.html
         # tab — don't let them eat the user's 100/min budget.
         '/api/summaries/latest', '/api/summaries',
+        # The Waze userscript fires one POST per region per rotation — at
+        # 70+ regions in a few seconds it would saturate the IP budget on
+        # its own. It carries its own X-Ingest-Key auth (matched against
+        # WAZE_INGEST_KEY) so we let it bypass the IP limit entirely.
+        '/api/waze/ingest',
     }
     if path in skip_rate_limit:
         return None
@@ -606,7 +611,20 @@ def check_rate_limit():
     # authenticated dashboard sessions.
     if path.startswith('/api/dashboard/'):
         return None
-    
+
+    # Skip rate limit for anyone carrying a valid NSWPSN_API_KEY — that's
+    # the operator's own frontend (config.js), the Discord bot, and any
+    # authenticated tooling. The IP-based limit is for anonymous public
+    # abuse only; authenticated callers shouldn't be capped.
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        provided_key = auth_header[7:]
+    else:
+        provided_key = (request.headers.get('X-API-Key', '')
+                        or request.args.get('api_key', ''))
+    if provided_key and API_KEY and provided_key == API_KEY:
+        return None
+
     # Check rate limit
     client_ip = _get_client_ip()
     is_limited, remaining = _check_rate_limit(client_ip)
