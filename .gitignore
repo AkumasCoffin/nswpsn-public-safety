@@ -54,6 +54,7 @@ backup/
 # self-hosters can grab the same code that powers the live ingest path.
 docs/*
 !docs/waze-userscript.user.js
+!docs/waze-userscript-manual.user.js
 
 # Radio unit reference data (local operator data, not for the public repo).
 backends/reference/
