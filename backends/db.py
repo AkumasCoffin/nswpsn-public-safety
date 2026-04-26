@@ -46,6 +46,17 @@ class _PooledConn:
         if self._closed:
             return
         object.__setattr__(self, '_closed', True)
+        # Rollback any pending or aborted transaction before returning the
+        # connection to the pool. Without this, a query that hits
+        # statement_timeout leaves the connection in "idle in transaction
+        # (aborted)" state, and the next caller to lease it gets
+        # "current transaction is aborted, commands ignored until end of
+        # transaction block" on every query. autocommit-mode connections
+        # have no in-flight transaction so rollback is a cheap no-op.
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
         try:
             _pool.putconn(self._conn)
         except Exception:
