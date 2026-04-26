@@ -1409,6 +1409,19 @@ def init_archive_db():
         daemon=True,
         name='police-heatmap-scheduler',
     ).start()
+    # Restore the per-bbox Waze ingest cache from Postgres + start the
+    # periodic snapshot writer. Same motivation as above: a restart
+    # otherwise wipes the userscript-collected bboxes and /api/waze/* only
+    # surfaces whichever regions get re-visited in the first few minutes.
+    try:
+        _hydrate_waze_ingest_cache_from_db()
+    except Exception as e:
+        Log.warn(f"Waze ingest cache hydrate error: {e}")
+    threading.Thread(
+        target=_waze_ingest_persist_loop,
+        daemon=True,
+        name='waze-ingest-persist',
+    ).start()
     # Pre-warm the /api/data/history count cache for the logs page
     # default query (hours=24, unique=1, no filters). Without this the
     # first user click after a restart sees a 40s wait or stale-fallback
@@ -9124,6 +9137,11 @@ WAZE_INGEST_KEY = os.environ.get('WAZE_INGEST_KEY', '').strip()
 # brief glitches don't prune entries that the script is about to refresh.
 # Tune down with WAZE_INGEST_MAX_AGE if memory pressure matters more.
 WAZE_INGEST_MAX_AGE = int(os.environ.get('WAZE_INGEST_MAX_AGE', 2400))
+# How often we snapshot _waze_ingest_cache to api_data_cache so a backend
+# restart doesn't lose all the bbox data the userscript spent ~16 min
+# rotating to collect. 0 disables the feature.
+WAZE_INGEST_PERSIST_INTERVAL = int(os.environ.get('WAZE_INGEST_PERSIST_INTERVAL', 90))
+_WAZE_INGEST_PERSIST_KEY = '_waze_ingest_snapshot_v1'
 # Alert if no ingest POST has arrived in this many seconds (0 = disabled).
 WAZE_INGEST_STALE_SECS = int(os.environ.get('WAZE_INGEST_STALE_SECS', '600'))
 # Optional Discord webhook — fired once when staleness first crosses threshold.
@@ -9548,6 +9566,80 @@ def _waze_ingest_snapshot():
                 if uuid and uuid not in all_jams:
                     all_jams[uuid] = j
     return list(all_alerts.values()), list(all_jams.values())
+
+
+def _hydrate_waze_ingest_cache_from_db():
+    """Restore _waze_ingest_cache from the persistent api_data_cache row
+    written by _waze_ingest_persist_loop. Without this, a restart drops
+    every bbox the userscript collected and /api/waze/* serves only the
+    handful of regions visited since boot until the rotation completes
+    (~7-16 min). Stale per-bbox entries are pruned during the merge so we
+    never restore data the watcher would have already dropped."""
+    try:
+        payload, _age = cache_get_any(_WAZE_INGEST_PERSIST_KEY)
+    except Exception as e:
+        Log.warn(f"Waze ingest cache hydrate read failed: {e}")
+        return
+    if not payload or not isinstance(payload, list):
+        return
+    now = time.time()
+    restored = 0
+    pruned = 0
+    with _waze_ingest_lock:
+        for row in payload:
+            try:
+                key = tuple(row.get('key') or ())
+                if len(key) != 4:
+                    continue
+                ts = float(row.get('ts') or 0)
+                if now - ts > WAZE_INGEST_MAX_AGE:
+                    pruned += 1
+                    continue
+                _waze_ingest_cache[key] = {
+                    'alerts': row.get('alerts') or [],
+                    'jams': row.get('jams') or [],
+                    'users': row.get('users') or [],
+                    'ts': ts,
+                }
+                restored += 1
+            except Exception:
+                continue
+    if restored:
+        Log.startup(
+            f"Waze ingest cache hydrated from Postgres — "
+            f"{restored} regions restored, {pruned} expired"
+        )
+
+
+def _waze_ingest_persist_loop():
+    """Periodically snapshot _waze_ingest_cache to a single api_data_cache
+    row so a backend restart can resume with the bboxes the userscript
+    already collected, instead of starting from zero. The dict is copied
+    under the ingest lock; serialization and the DB write happen outside
+    the lock so we don't slow ingests."""
+    if WAZE_INGEST_PERSIST_INTERVAL <= 0:
+        return
+    while True:
+        try:
+            time.sleep(WAZE_INGEST_PERSIST_INTERVAL)
+            with _waze_ingest_lock:
+                snapshot = [
+                    {
+                        'key': list(key),
+                        'alerts': entry.get('alerts') or [],
+                        'jams': entry.get('jams') or [],
+                        'users': entry.get('users') or [],
+                        'ts': entry.get('ts') or 0,
+                    }
+                    for key, entry in _waze_ingest_cache.items()
+                ]
+            if not snapshot:
+                continue
+            # Long TTL — pruning is driven by the per-entry ts vs
+            # WAZE_INGEST_MAX_AGE on hydrate, not by cache_get's TTL.
+            cache_set(_WAZE_INGEST_PERSIST_KEY, snapshot, ttl=86400)
+        except Exception as e:
+            Log.warn(f"Waze ingest persist tick error: {e}")
 
 
 @app.route('/api/waze/ingest', methods=['POST'])
