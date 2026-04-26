@@ -14264,9 +14264,15 @@ def _dash_is_admin(session):
 # Mirror of discord-bot/bot.py ALERT_TYPES — duplicated here because the
 # dashboard must work without importing bot.py (different process).
 _DASH_ALERT_TYPES = [
-    'rfs', 'bom', 'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
-    'traffic_fire', 'traffic_major', 'power_endeavour', 'power_ausgrid',
-    'waze_hazards', 'waze_police', 'waze_roadwork', 'user_incidents',
+    'rfs',
+    'bom_land', 'bom_marine',
+    'traffic_incident', 'traffic_roadwork', 'traffic_flood',
+    'traffic_fire', 'traffic_majorevent',
+    'endeavour_current', 'endeavour_planned',
+    'ausgrid',
+    'essential_planned', 'essential_future',
+    'waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork',
+    'user_incident',
     'radio_summary',
 ]
 
