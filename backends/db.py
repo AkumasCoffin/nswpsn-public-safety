@@ -24,8 +24,13 @@ if not DATABASE_URL:
         "Example: postgresql://user:password@localhost:5432/nswpsn"
     )
 
-# Connection pool: min 2, max 20 connections shared across threads
-_pool = pool.ThreadedConnectionPool(2, 20, DATABASE_URL)
+# Connection pool: min 4, max 20 connections shared across threads.
+# Min was 2; bumped to 4 because on boot ~9 source workers + count
+# prewarm + heatmap + filter cache scheduler all want a connection at
+# once. Min=2 meant the first two grabbed pooled conns instantly and
+# the rest paid the cost of opening a new connection under load,
+# adding latency and TCP/auth churn during the worst possible window.
+_pool = pool.ThreadedConnectionPool(4, 20, DATABASE_URL)
 
 
 class _PooledConn:
