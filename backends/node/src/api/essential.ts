@@ -17,6 +17,8 @@
 import { Hono } from 'hono';
 import { liveStore } from '../store/live.js';
 import type { EssentialOutage } from '../sources/essential.js';
+import { fetchFeed } from '../sources/essential.js';
+import { log } from '../lib/log.js';
 
 export const essentialRouter = new Hono();
 
@@ -98,4 +100,47 @@ essentialRouter.get('/api/essential/future', (c) => {
     count: items.length,
     totalCustomersAffected: totalCustomers(items),
   });
+});
+
+// /api/essential/outages/current — current-feed outages only. Python
+// line 5237-5247 reads cache_get('essential_energy'); we read the same
+// LiveStore key our poller writes to.
+essentialRouter.get('/api/essential/outages/current', (c) => {
+  const items = readArray('essential_current');
+  return c.json({
+    outages: items,
+    count: items.length,
+    totalCustomersAffected: totalCustomers(items),
+  });
+});
+
+// /api/essential/outages/future — future-feed outages only. Python
+// line 5250-5260.
+essentialRouter.get('/api/essential/outages/future', (c) => {
+  const items = readArray('essential_future');
+  return c.json({
+    outages: items,
+    count: items.length,
+    totalCustomersAffected: totalCustomers(items),
+  });
+});
+
+// /api/essential/outages/raw — fetches both KMLs upstream and returns
+// the merged parsed list. Python line 5293-5305 hits both feeds without
+// the LiveStore intermediary so debug tooling can see exactly what
+// upstream is shipping. We keep the same behaviour for parity.
+essentialRouter.get('/api/essential/outages/raw', async (c) => {
+  const out: EssentialOutage[] = [];
+  for (const feed of ['current', 'future'] as const) {
+    try {
+      const items = await fetchFeed(feed);
+      out.push(...items);
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message, feed },
+        'essential raw fetch failed',
+      );
+    }
+  }
+  return c.json(out);
 });

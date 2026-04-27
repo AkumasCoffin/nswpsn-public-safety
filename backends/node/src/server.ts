@@ -43,6 +43,11 @@ import { transcriptsRouter } from './api/transcripts.js';
 // are 503 stubs — Apache routes those prefixes to python.
 import { centralwatchRouter } from './api/centralwatch.js';
 import { dashboardRouter } from './api/dashboard.js';
+// Uptime Kuma-shaped /api/status (cutover blocker for monitor flips).
+import { statusRouter } from './api/status.js';
+// What3Words proxy + system/debug/admin.
+import { w3wRouter } from './api/w3w.js';
+import { systemRouter } from './api/system.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { log } from './lib/log.js';
 
@@ -108,6 +113,12 @@ export function createApp() {
   // Centralwatch reads + dashboard 503 stubs (W8)
   app.route('/', centralwatchRouter);
   app.route('/', dashboardRouter);
+  // Uptime-Kuma-shaped status endpoint
+  app.route('/', statusRouter);
+  // What3Words proxy
+  app.route('/', w3wRouter);
+  // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
+  app.route('/', systemRouter);
 
   // Root route — useful for "is this the right backend?" smoke tests
   // when both Python and Node are running side by side.

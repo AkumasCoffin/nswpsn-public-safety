@@ -134,7 +134,7 @@ function isValidDatetime(s: string): boolean {
   return year >= 2000 && year <= 2100;
 }
 
-async function callSupabase(
+export async function callSupabase(
   endpoint: string,
   init: { method: 'GET' | 'POST'; body?: unknown; query?: Record<string, string> } = {
     method: 'GET',
