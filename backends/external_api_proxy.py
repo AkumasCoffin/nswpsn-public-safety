@@ -13597,7 +13597,14 @@ def check_editor_status(user_id):
 @app.route('/api/check-admin/<user_id>', methods=['GET'])
 @require_api_key
 def check_admin_status(user_id):
-    """Check user's admin access level (owner or team_member)"""
+    """Check user's admin access level (owner / team_member / dev).
+
+    Returns per-tab visibility flags under `tabs` so the admin page can
+    render exactly the tabs each role is allowed to see:
+      - owner:        all three tabs (requests, users, dev)
+      - team_member:  requests + users (no dev)
+      - dev:          dev only (no requests, no users)
+    """
     try:
         # Check cache first
         cache_key = f"admin_{user_id}"
@@ -13617,7 +13624,8 @@ def check_admin_status(user_id):
 
         is_owner = 'owner' in user_roles
         is_team_member = 'team_member' in user_roles
-        is_admin = is_owner or is_team_member
+        is_dev = 'dev' in user_roles
+        is_admin = is_owner or is_team_member or is_dev
 
         # Fallback: If NO owner exists anywhere, check if this is the first setup
         # This prevents lockout during initial setup
@@ -13635,17 +13643,33 @@ def check_admin_status(user_id):
                 Log.warn(f"No owners exist in system - granting first-time owner to {user_id}")
                 is_admin = True
                 is_owner = True
-        
-        # Permission levels:
-        # - Owner: Full access (approve, deny, any role, user management)
-        # - Team Member: Approve/deny requests, can only assign map_editor/pager_contributor/radio_contributor
+
+        # Permission matrix (per-tab):
+        # - Owner:        all three tabs.
+        # - Team Member:  Requests + Users. Cannot assign privileged roles
+        #                 (team_member/dev/owner) — only map_editor /
+        #                 pager_contributor / radio_contributor.
+        # - Dev:          Dev tab only (status + future backend controls).
+        can_view_requests = is_owner or is_team_member
+        can_view_users    = is_owner or is_team_member
+        can_view_dev      = is_owner or is_dev
         result = {
             'user_id': user_id,
             'is_admin': is_admin,
             'is_owner': is_owner,
             'is_team_member': is_team_member,
-            'can_manage_users': is_owner,  # Only owners can edit existing users
-            'can_assign_privileged_roles': is_owner,  # Only owners can assign team_member/dev/owner
+            'is_dev': is_dev,
+            # Kept for backwards compatibility with older clients. Now means
+            # "can the Users tab be opened" — owner OR team_member.
+            'can_manage_users': can_view_users,
+            # Owner-only — gates which role checkboxes are visible in the
+            # Users tab. Team members can edit users but not promote them.
+            'can_assign_privileged_roles': is_owner,
+            'tabs': {
+                'requests': can_view_requests,
+                'users':    can_view_users,
+                'dev':      can_view_dev,
+            },
             'roles': user_roles
         }
         
