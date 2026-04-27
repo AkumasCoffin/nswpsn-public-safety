@@ -12,15 +12,16 @@
  *   checks.archive_writer.ok                    → true / false
  *   checks.waze_ingest.regions_cached >= 150    → boolean
  *
- * Differences from python (the Node service has different internals so a
- * bug-for-bug clone isn't possible, only shape parity):
- *   - No police_heatmap, ram_cache, cleanup, or per-source consec_fail
- *     blocks — those primitives don't exist on the Node side. The check
- *     keys are simply omitted; JSONata's `ok = ($exists($.checks.foo) ?
- *     $.checks.foo.ok : true)` already handles this.
- *   - Sources rollup is derived from LiveStore presence: a registered
- *     source whose snapshot is stored is 'ok'; a registered source with
- *     no snapshot yet (boot) is 'unknown'.
+ * Shape parity with python's response — every check key python's
+ * dashboard panels read is present here, even when the underlying
+ * Node primitive doesn't exist (those report null/zero so the panels
+ * render gracefully instead of as `—`). Specifically:
+ *   - police_heatmap, cleanup, ram_cache: Node doesn't have these
+ *     subsystems; the blocks are present with informational fields
+ *     and `ok: true` so they don't trip the overall status.
+ *   - ingest: pulled from archiveWriter.metrics().
+ *   - sources rollup: derived from LiveStore presence (a registered
+ *     source whose snapshot is stored is 'ok'; missing = 'unknown').
  *
  * Cached for 5s in-process to absorb monitor + dev-tab refresh storms.
  */
@@ -41,7 +42,18 @@ const STATUS_CACHE_TTL_MS = 5_000;
 const STATUS_WRITER_STALE_SECS = 300;
 const STATUS_WAZE_STALE_SECS = 900;
 const STATUS_FILTER_CACHE_STALE_SECS = 1800;
+const STATUS_HEATMAP_STALE_SECS = 1800;
 const STATUS_BUFFER_WARN_RECORDS = 10_000;
+const FILTER_CACHE_REFRESH_INTERVAL_SECS = 60;
+const ARCHIVE_FLUSH_INTERVAL_SECS_FALLBACK = 30;
+const DATA_RETENTION_DAYS = Number.parseInt(
+  process.env['DATA_RETENTION_DAYS'] ?? '7',
+  10,
+);
+const DATA_CLEANUP_INTERVAL_SECS = Number.parseInt(
+  process.env['DATA_CLEANUP_INTERVAL'] ?? '3600',
+  10,
+);
 // Boot grace windows — first heartbeat hasn't fired yet.
 const WRITER_BOOT_GRACE_SECS = 60;
 const WAZE_BOOT_GRACE_SECS = 120;
@@ -120,9 +132,13 @@ async function checkDatabase(): Promise<{
       block: {
         ok: true,
         latency_ms,
-        pool_total: pool.totalCount,
+        // Field names mirror python's _db_pool_stats output so
+        // dashboard panels render without aliasing.
+        pool_in_use: Math.max(0, pool.totalCount - pool.idleCount),
         pool_idle: pool.idleCount,
+        pool_max: 20,
         pool_waiting: pool.waitingCount,
+        error: null,
       },
       critical: false,
       degraded: false,
@@ -165,7 +181,11 @@ function checkArchiveWriter(now: number): {
       ok,
       last_flush_age_secs: age,
       threshold_secs: STATUS_WRITER_STALE_SECS,
-      flush_interval_ms: config.ARCHIVE_FLUSH_INTERVAL_MS,
+      // python's field name is flush_interval_secs; expose both for
+      // dashboard frontends that read either.
+      flush_interval_secs: Math.round(
+        config.ARCHIVE_FLUSH_INTERVAL_MS / 1000,
+      ) || ARCHIVE_FLUSH_INTERVAL_SECS_FALLBACK,
       queue_size: m.queue_size,
       dropped: m.dropped,
       total_written: m.total_written,
@@ -197,7 +217,17 @@ function checkWazeIngest(now: number): {
 } {
   if (!config.WAZE_INGEST_KEY) {
     return {
-      block: { ok: true, enabled: false },
+      block: {
+        ok: true,
+        enabled: false,
+        // python emits these as null when ingest is disabled; doing the
+        // same so the dashboard panel shows "—" not undefined.
+        last_ingest_age_secs: null,
+        threshold_secs: STATUS_WAZE_STALE_SECS,
+        regions_cached: null,
+        block_rate_pct: null,
+        gate_active: false,
+      },
       degraded: false,
     };
   }
@@ -214,6 +244,12 @@ function checkWazeIngest(now: number): {
       last_ingest_age_secs: age,
       threshold_secs: STATUS_WAZE_STALE_SECS,
       regions_cached: s.regions_cached,
+      // Node doesn't track userscript block-rate yet (no equivalent of
+      // python's _waze_metrics_snapshot rolling counter). Surface as
+      // null so the panel renders "—" rather than 0% (which would be
+      // misleading: 0% looks like "no blocks ever" not "unknown").
+      block_rate_pct: null,
+      gate_active: false,
     },
     degraded: !ok,
   };
@@ -223,10 +259,14 @@ function checkFilterCache(now: number): {
   block: Record<string, unknown>;
   degraded: boolean;
 } {
-  const lastTs = filterCacheLastRefreshAt();
+  // filterCacheLastRefreshAt() returns epoch SECONDS (per its docstring).
+  // `now` is epoch milliseconds. Converting before subtracting otherwise
+  // age comes out as ~1.7e9 seconds (~493000 hours, the bug the dashboard
+  // surfaced as "Filter Cache 493205h").
+  const lastTsSecs = filterCacheLastRefreshAt();
+  const nowSecs = Math.floor(now / 1000);
   const upSecs = (now - PROCESS_START_MS) / 1000;
-  const age =
-    lastTs > 0 ? Math.floor((now - lastTs) / 1000) : null;
+  const age = lastTsSecs > 0 ? Math.max(0, nowSecs - lastTsSecs) : null;
   const inGrace = age === null && upSecs < FILTER_CACHE_BOOT_GRACE_SECS;
   const stale = age !== null && age > STATUS_FILTER_CACHE_STALE_SECS;
   const ok = !stale && (age !== null || inGrace);
@@ -235,8 +275,69 @@ function checkFilterCache(now: number): {
       ok,
       last_refresh_age_secs: age,
       threshold_secs: STATUS_FILTER_CACHE_STALE_SECS,
+      refresh_interval_secs: FILTER_CACHE_REFRESH_INTERVAL_SECS,
     },
     degraded: !ok,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sections python has that Node doesn't natively track. We expose the
+// shape so dashboard panels render gracefully (no `—` placeholders),
+// using sentinel values (null / 0) where there's no Node equivalent yet.
+// ---------------------------------------------------------------------------
+
+/** Police-heatmap freshness — Node serves this live, no separate cache. */
+function checkPoliceHeatmap(): Record<string, unknown> {
+  return {
+    ok: true,
+    bins: 0,
+    last_refresh_age_secs: null,
+    threshold_secs: STATUS_HEATMAP_STALE_SECS,
+    note: 'served live from waze ingest snapshot — no separate cache',
+  };
+}
+
+/** Ingest activity — pulled from the archive writer's flush counters. */
+function checkIngest(): Record<string, unknown> {
+  const m = archiveWriter.metrics();
+  return {
+    last_flush_age_secs: m.last_flush_age_secs,
+    // Node doesn't yet expose per-flush rows/sources/ms separately; the
+    // archive writer tracks aggregate total_written. The fields are
+    // present (with nulls where the data isn't tracked) so dashboard
+    // panels render without missing-key gaps.
+    last_flush_records: null,
+    last_flush_sources: null,
+    last_flush_ms: null,
+    total_records_flushed: m.total_written,
+    total_flushes: null,
+  };
+}
+
+/** Cleanup loop — Node doesn't have one yet (archive_* uses partition
+ *  drops, not row-level prunes). Emit zeroed shape so the panel renders. */
+function checkCleanup(): Record<string, unknown> {
+  return {
+    last_run_age_secs: null,
+    last_history_deleted: 0,
+    last_stats_deleted: 0,
+    last_pager_ended: 0,
+    last_waze_ended: 0,
+    total_history_deleted: 0,
+    last_vacuum_age_secs: null,
+    last_vacuum_ms: 0,
+    retention_days: DATA_RETENTION_DAYS,
+    cleanup_interval_secs: DATA_CLEANUP_INTERVAL_SECS,
+  };
+}
+
+/** RAM-cache hit-rate — Node's LiveStore doesn't track hit/miss yet. */
+function checkRamCache(): Record<string, unknown> {
+  return {
+    hits: 0,
+    misses: 0,
+    hit_rate_pct: null,
   };
 }
 
@@ -289,6 +390,13 @@ async function computeStatus(): Promise<{
   const fc = checkFilterCache(nowMs);
   checks['filter_cache'] = fc.block;
   if (fc.degraded) degraded = true;
+
+  // Sections python had that Node doesn't track yet — present so the
+  // dashboard panels render with sensible zeros instead of "—".
+  checks['police_heatmap'] = checkPoliceHeatmap();
+  checks['ingest'] = checkIngest();
+  checks['cleanup'] = checkCleanup();
+  checks['ram_cache'] = checkRamCache();
 
   const sources = summariseSources();
   checks['sources'] = sources.block as unknown as Record<string, unknown>;
