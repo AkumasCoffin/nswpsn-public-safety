@@ -1,0 +1,193 @@
+/**
+ * Generic source poller — replaces python's `prewarm_loop`.
+ *
+ * Walks every registered source and runs it on its own setInterval.
+ * Each source's failures are tracked independently; on consecutive
+ * failure the next attempt waits backoffSeconds(failureCount) past the
+ * normal interval. Success resets the counter.
+ *
+ * Activity-mode awareness: when activeMode flips, every source's
+ * interval is reset to the matching cadence on the next tick.
+ *
+ * Why each source is its own setInterval rather than one big tick:
+ *   - One slow source can't starve the others
+ *   - Backoff per-source is simpler to reason about
+ *   - Idle/active switch only re-arms the affected timers
+ */
+import { liveStore } from '../store/live.js';
+import { archiveWriter } from '../store/archive.js';
+import { log } from '../lib/log.js';
+import { backoffSeconds } from '../sources/shared/backoff.js';
+import {
+  allSources,
+  familyTable,
+  type SourceDefinition,
+} from './sourceRegistry.js';
+
+interface SourceState {
+  timer: NodeJS.Timeout | null;
+  failureCount: number;
+  /** Wall-clock of last successful fetch (epoch seconds). */
+  lastSuccessTs: number | null;
+  /** Wall-clock of last attempt (success or failure). */
+  lastAttemptTs: number | null;
+  lastError: string | null;
+}
+
+let activeMode = true; // true = active interval, false = idle
+const _state = new Map<string, SourceState>();
+let _running = false;
+
+/**
+ * Toggle activity mode. Causes every source's next tick to use the
+ * appropriate interval. Called by the heartbeat / activityMode service
+ * when page-active state changes.
+ */
+export function setActivityMode(active: boolean): void {
+  if (active === activeMode) return;
+  activeMode = active;
+  log.info({ active }, 'activity mode changed; rearming pollers');
+  if (_running) {
+    // Re-arm immediately so cadence reflects the new mode.
+    for (const src of allSources()) {
+      armOne(src);
+    }
+  }
+}
+
+export function isActiveMode(): boolean {
+  return activeMode;
+}
+
+function intervalFor(src: SourceDefinition): number {
+  return activeMode ? src.intervalActiveMs : src.intervalIdleMs;
+}
+
+function ensureState(name: string): SourceState {
+  let s = _state.get(name);
+  if (!s) {
+    s = {
+      timer: null,
+      failureCount: 0,
+      lastSuccessTs: null,
+      lastAttemptTs: null,
+      lastError: null,
+    };
+    _state.set(name, s);
+  }
+  return s;
+}
+
+async function runOnce(src: SourceDefinition): Promise<void> {
+  const state = ensureState(src.name);
+  const startedAt = Date.now();
+  state.lastAttemptTs = Math.floor(startedAt / 1000);
+  try {
+    const data = await src.fetch();
+    liveStore.set(src.name, data);
+    // Mirror to archive (append-only). Whether we actually want to
+    // archive is per-source policy — currently waze is skipped via
+    // its own fetcher returning a sentinel, but for everything else
+    // we record one row per poll snapshot.
+    const fetchedAt = Math.floor(Date.now() / 1000);
+    archiveWriter.push(familyTable(src.family), {
+      source: src.name,
+      fetched_at: fetchedAt,
+      data,
+    });
+
+    state.failureCount = 0;
+    state.lastSuccessTs = fetchedAt;
+    state.lastError = null;
+    log.debug(
+      { source: src.name, ms: Date.now() - startedAt },
+      'poll success',
+    );
+  } catch (err) {
+    state.failureCount += 1;
+    state.lastError = (err as Error).message;
+    log.warn(
+      {
+        source: src.name,
+        consec_fails: state.failureCount,
+        err: state.lastError,
+      },
+      'poll failed',
+    );
+  }
+}
+
+function armOne(src: SourceDefinition): void {
+  const state = ensureState(src.name);
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  // Backoff added on top of the normal interval after consecutive
+  // failures so an unhappy source doesn't spam its upstream every cycle.
+  const backoffMs = backoffSeconds(state.failureCount) * 1000;
+  const delayMs = intervalFor(src) + backoffMs;
+  state.timer = setTimeout(() => {
+    void runOnce(src).finally(() => {
+      // Re-arm regardless of outcome so the next tick is scheduled.
+      if (_running) armOne(src);
+    });
+  }, delayMs);
+  state.timer.unref?.();
+}
+
+/** Start polling every registered source on its own interval. */
+export function startPolling(initialDelayMs: number = 0): void {
+  if (_running) return;
+  _running = true;
+  for (const src of allSources()) {
+    // Stagger the first tick of each source so a fleet of pollers
+    // doesn't all hit the DB / network at the same instant after boot.
+    const stagger = Math.floor(Math.random() * 2000);
+    const delay = initialDelayMs + stagger;
+    setTimeout(() => {
+      if (!_running) return;
+      void runOnce(src).finally(() => {
+        if (_running) armOne(src);
+      });
+    }, delay).unref?.();
+  }
+  log.info({ count: allSources().length }, 'pollers started');
+}
+
+export function stopPolling(): void {
+  _running = false;
+  for (const s of _state.values()) {
+    if (s.timer) {
+      clearTimeout(s.timer);
+      s.timer = null;
+    }
+  }
+}
+
+/** Snapshot of poller health — used by /api/status and /api/collection/status. */
+export function pollerHealth(): Record<
+  string,
+  {
+    failure_count: number;
+    last_success_age_secs: number | null;
+    last_attempt_age_secs: number | null;
+    last_error: string | null;
+  }
+> {
+  const now = Math.floor(Date.now() / 1000);
+  const out: Record<string, ReturnType<typeof entryFor>> = {};
+  for (const [name, s] of _state) {
+    out[name] = entryFor(s, now);
+  }
+  return out;
+
+  function entryFor(s: SourceState, n: number) {
+    return {
+      failure_count: s.failureCount,
+      last_success_age_secs: s.lastSuccessTs ? n - s.lastSuccessTs : null,
+      last_attempt_age_secs: s.lastAttemptTs ? n - s.lastAttemptTs : null,
+      last_error: s.lastError,
+    };
+  }
+}

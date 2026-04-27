@@ -14,6 +14,12 @@ export default defineConfig({
       STATE_DIR: './test/.tmp-state',
       // Quieter logs in CI; debug only when running locally.
       LOG_LEVEL: 'warn',
+      // Stub Endeavour Supabase config so the source's config-presence
+      // check doesn't trip its mocked fetch tests. The values are never
+      // hit upstream — every test that exercises the fetcher mocks
+      // shared/http.js to return canned payloads.
+      ENDEAVOUR_SUPABASE_URL: 'https://test.supabase.co',
+      ENDEAVOUR_SUPABASE_KEY: 'test-key',
     },
   },
 });
