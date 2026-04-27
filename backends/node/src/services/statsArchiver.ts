@@ -51,20 +51,20 @@ export function buildStatsSnapshot(): StatsSnapshot {
   };
 }
 
-/** Insert one snapshot row. Idempotent on (ts) PK — concurrent calls
- *  in the same instant collapse via ON CONFLICT, but the timer is
- *  the only caller so this is mostly defensive. */
+/** Insert one snapshot row. Schema matches python's
+ *  `(timestamp BIGINT ms, data JSONB)` — see migration 009 for the
+ *  rationale. */
 export async function writeStatsSnapshot(): Promise<boolean> {
   const pool = await getPool();
   if (!pool) return false;
   const data = buildStatsSnapshot();
+  const tsMs = Date.now();
   try {
     await pool.query(
-      `INSERT INTO stats_snapshots (ts, data) VALUES (NOW(), $1::jsonb)
-       ON CONFLICT (ts) DO UPDATE SET data = EXCLUDED.data`,
-      [JSON.stringify(data)],
+      `INSERT INTO stats_snapshots ("timestamp", data) VALUES ($1, $2::jsonb)`,
+      [tsMs, JSON.stringify(data)],
     );
-    lastWriteAt = Math.floor(Date.now() / 1000);
+    lastWriteAt = Math.floor(tsMs / 1000);
     consecutiveErrors = 0;
     return true;
   } catch (err) {
@@ -84,11 +84,11 @@ export async function writeStatsSnapshot(): Promise<boolean> {
 export async function pruneOldSnapshots(): Promise<number> {
   const pool = await getPool();
   if (!pool) return 0;
+  const cutoffMs = Date.now() - RETENTION_DAYS * 86_400_000;
   try {
-    const result = await pool.query<{ deleted: string }>(
-      `DELETE FROM stats_snapshots
-       WHERE ts < NOW() - INTERVAL '${RETENTION_DAYS} days'
-       RETURNING ts`,
+    const result = await pool.query(
+      `DELETE FROM stats_snapshots WHERE "timestamp" < $1`,
+      [cutoffMs],
     );
     return result.rowCount ?? 0;
   } catch (err) {

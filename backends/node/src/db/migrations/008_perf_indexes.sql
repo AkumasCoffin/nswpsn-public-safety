@@ -1,20 +1,28 @@
+-- noTransaction
+-- 008_perf_indexes.sql
+--
 -- Performance indexes for the /api/data/history hot paths.
 --
--- Identified by the W4 perf audit. The data + count queries on
--- archive_waze were spending most of their budget on JSONB extraction
--- and DISTINCT ON sorts; these indexes let Postgres do those scans
--- index-only.
---
--- All CREATE INDEX statements are CONCURRENTLY-safe but the migration
--- runner doesn't run them outside transactions, so they're plain
--- CREATE INDEX IF NOT EXISTS — first deploy will block briefly per
--- index. Acceptable: the production tables are large but no single
--- index here scans more than ~100GB.
+-- ⚠ Notes:
+--   1. Cannot use CREATE INDEX CONCURRENTLY here — Postgres rejects it
+--      on partitioned tables (`archive_*` are RANGE-partitioned by month).
+--      Plain CREATE INDEX takes a SHARE lock on each partition while
+--      building; on archive_waze (multi-million-row partitions) this can
+--      block writes for minutes. Acceptable: the writer re-queues failed
+--      INSERTs, so the worst case is brief queue growth during deploy.
+--   2. statement_timeout = 0 unlocks the migration runner's default 30s
+--      cap (set in src/db/migrate.ts).
+--   3. `IF NOT EXISTS` makes this idempotent if a previous run got
+--      partway through before timing out.
 
--- 1. Covering composite for the unique=1 path.
---    `DISTINCT ON (source, source_id) ORDER BY source, source_id, fetched_at DESC`
---    can do an index-only scan with this. Earlier the planner had to
---    sort 10k rows from a fetched_at-only index.
+SET statement_timeout = 0;
+
+-- ---------------------------------------------------------------------
+-- Covering composite for the unique=1 path.
+-- DISTINCT ON (source, source_id) ORDER BY source, source_id, fetched_at DESC
+-- can do an index-only scan with this; without it the planner sorts
+-- 10k rows from a fetched_at-only index.
+-- ---------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_archive_waze_src_sid_ts
   ON archive_waze (source, source_id, fetched_at DESC)
   INCLUDE (lat, lng, category, subcategory);
@@ -35,10 +43,11 @@ CREATE INDEX IF NOT EXISTS idx_archive_rfs_src_sid_ts
   ON archive_rfs (source, source_id, fetched_at DESC)
   INCLUDE (lat, lng, category, subcategory);
 
--- 2. Live-only partial index. The default logs.html view filters to
---    is_live-truthy rows; a partial index halves the row set the
---    count query has to scan.
---    Truthy convention matches formatRecord's read predicate.
+-- ---------------------------------------------------------------------
+-- Live-only partial index. The default logs.html view filters to
+-- is_live-truthy rows; the partial index halves the row set for the
+-- count query's COUNT(*) FILTER aggregate.
+-- ---------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_archive_waze_live
   ON archive_waze (source, fetched_at DESC)
   WHERE (data->>'is_live') IN ('1','true','True');
@@ -59,9 +68,11 @@ CREATE INDEX IF NOT EXISTS idx_archive_rfs_live
   ON archive_rfs (source, fetched_at DESC)
   WHERE (data->>'is_live') IN ('1','true','True');
 
--- 3. Heatmap helper: only index rows with non-null coords so the
---    heatmap query's `WHERE lat_v IS NOT NULL AND lng_v IS NOT NULL`
---    becomes index-implicit.
+-- ---------------------------------------------------------------------
+-- Heatmap helper: only index rows with non-null coords so the query's
+-- `WHERE lat IS NOT NULL AND lng IS NOT NULL` becomes index-implicit.
+-- archive_waze only — the others don't go through that path.
+-- ---------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_archive_waze_heatmap
   ON archive_waze (source, fetched_at DESC)
   WHERE lat IS NOT NULL AND lng IS NOT NULL;
