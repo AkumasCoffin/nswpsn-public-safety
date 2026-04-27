@@ -178,9 +178,45 @@ export class ArchiveWriter {
     return { tables: buckets.size, rows: totalRows, ms };
   }
 
-  /** Batched multi-VALUES INSERT. One round-trip per table per flush. */
+  /**
+   * Batched multi-VALUES INSERT. Splits very large batches into
+   * INSERT_CHUNK_SIZE sub-batches so each statement finishes well
+   * under the (database-default) statement_timeout, even when the
+   * archive queue has been growing while a previous flush was stuck.
+   * With archive_waze under heavy ingest the queue can reach 5k+ rows
+   * per flush window, and a single INSERT of that size with 4 indexes
+   * + JSONB blobs reliably hit 60s. Chunking keeps each insert in the
+   * single-digit-second range.
+   */
   private async insertBatch(
     pool: Pool,
+    table: ArchiveTable,
+    rows: ArchiveRow[],
+  ): Promise<void> {
+    if (rows.length === 0) return;
+
+    const INSERT_CHUNK_SIZE = 500;
+    // Reuse one connection across chunks — `SET LOCAL` only takes
+    // effect inside an explicit transaction, so each chunk runs in
+    // its own BEGIN/COMMIT pair. Holding one client for the whole
+    // batch avoids burning pool slots while archive_waze ingest is
+    // hot. Failure on any chunk surfaces to the caller, which
+    // re-queues the entire input batch (the writer-side dedup catches
+    // duplicates the next round-trip — there is no UNIQUE constraint
+    // on archive_*).
+    const client = await pool.connect();
+    try {
+      for (let start = 0; start < rows.length; start += INSERT_CHUNK_SIZE) {
+        const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
+        await this.insertChunk(client, table, slice);
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  private async insertChunk(
+    client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
     table: ArchiveTable,
     rows: ArchiveRow[],
   ): Promise<void> {
@@ -224,14 +260,19 @@ export class ArchiveWriter {
       `INSERT INTO ${table} (${cols.join(',')}) VALUES ` +
       placeholders.join(',');
 
-    // 30s budget per batch. Beyond that something's wrong; better to
-    // re-queue and let the next flush try a smaller batch.
-    const client = await pool.connect();
+    // SET LOCAL only applies inside an explicit transaction (pg
+    // semantics) — wrap in BEGIN/COMMIT so the 30s timeout actually
+    // overrides the global default. Earlier revisions used SET LOCAL
+    // without a transaction, which silently inherited the database's
+    // ~60s statement_timeout and caused 60s INSERT failures.
+    await client.query('BEGIN');
     try {
       await client.query("SET LOCAL statement_timeout = '30s'");
       await client.query(sql, params);
-    } finally {
-      client.release();
+      await client.query('COMMIT');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
     }
   }
 
