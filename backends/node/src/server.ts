@@ -28,6 +28,13 @@ import { ausgridRouter } from './api/ausgrid.js';
 import { essentialRouter } from './api/essential.js';
 import { heartbeatRouter } from './api/heartbeat.js';
 import { statsRouter } from './api/stats.js';
+// Incidents / editor / users (W5).
+import { incidentsRouter } from './api/incidents.js';
+import { editorRouter } from './api/editor.js';
+import { usersRouter } from './api/users.js';
+// Data-history archive reads (W6).
+import { dataHistoryRouter } from './api/data-history.js';
+import { requireApiKey } from './services/auth/apiKey.js';
 import { log } from './lib/log.js';
 
 export function createApp() {
@@ -50,6 +57,13 @@ export function createApp() {
     }),
   );
 
+  // Global NSWPSN_API_KEY gate. The middleware itself short-circuits for
+  // OPTIONS preflights, public endpoints (/api/health, /api/config,
+  // /api/heartbeat, POST /api/editor-requests, POST /api/waze/ingest,
+  // /api/check-editor/*, etc.), and any non-/api path. Mirrors Python's
+  // global @app.before_request hook.
+  app.use('*', requireApiKey);
+
   // Register route modules. Each router defines its own paths under
   // /api/...; mounting at '/' keeps the handlers' URLs identical to
   // the Python equivalents.
@@ -71,6 +85,12 @@ export function createApp() {
   app.route('/', essentialRouter);
   app.route('/', heartbeatRouter);
   app.route('/', statsRouter);
+  // Incidents + editor + users (W5)
+  app.route('/', incidentsRouter);
+  app.route('/', editorRouter);
+  app.route('/', usersRouter);
+  // Data-history archive reads (W6)
+  app.route('/', dataHistoryRouter);
 
   // Root route — useful for "is this the right backend?" smoke tests
   // when both Python and Node are running side by side.

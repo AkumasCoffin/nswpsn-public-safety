@@ -21,6 +21,7 @@
     "@hono/node-server": "^1.13.0",
     "fast-xml-parser": "^5.7.2",
     "hono": "^4.6.0",
+    "jose": "^6.2.2",
     "pg": "^8.13.0",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",

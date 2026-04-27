@@ -39,8 +39,18 @@ describe('W1 endpoints', () => {
     expect(typeof body['version']).toBe('string');
   });
 
-  it('unknown route 404s', async () => {
+  it('unknown /api route is gated by the API-key middleware (401)', async () => {
+    // The global requireApiKey middleware runs before route lookup, so
+    // unknown /api/* paths return 401 rather than 404 — bug-for-bug
+    // compatible with Python's @app.before_request hook (which fires
+    // before Flask's URL map resolves the view function).
     const res = await app.request('/api/this-does-not-exist');
+    expect(res.status).toBe(401);
+  });
+
+  it('unknown non-/api route 404s', async () => {
+    // Non-/api paths bypass the API-key gate and hit Hono's default 404.
+    const res = await app.request('/not-an-api-path');
     expect(res.status).toBe(404);
   });
 });

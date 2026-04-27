@@ -14,6 +14,10 @@ import { liveStore } from '../../src/store/live.js';
 // happen at vitest level (not beforeAll) because src/config.ts parses
 // process.env at module load time.
 const INGEST_KEY = 'test-ingest-key';
+const API_KEY = 'test-api-key';
+// Header bag for GETs on private endpoints — the global requireApiKey
+// middleware now gates everything except a small public allowlist.
+const AUTH_HEADERS = { 'X-API-Key': API_KEY } as const;
 
 describe('waze ingest end-to-end', () => {
   let app: ReturnType<typeof createApp>;
@@ -83,7 +87,9 @@ describe('waze ingest end-to-end', () => {
     expect(ingestBody['ok']).toBe(true);
     expect(ingestBody['regions_cached']).toBe(1);
 
-    const policeRes = await app.request('/api/waze/police');
+    const policeRes = await app.request('/api/waze/police', {
+      headers: AUTH_HEADERS,
+    });
     expect(policeRes.status).toBe(200);
     const police = (await policeRes.json()) as {
       type: string;
@@ -122,13 +128,13 @@ describe('waze ingest end-to-end', () => {
     });
 
     const police = (await (
-      await app.request('/api/waze/police')
+      await app.request('/api/waze/police', { headers: AUTH_HEADERS })
     ).json()) as { count: number };
     const hazards = (await (
-      await app.request('/api/waze/hazards')
+      await app.request('/api/waze/hazards', { headers: AUTH_HEADERS })
     ).json()) as { count: number };
     const roadwork = (await (
-      await app.request('/api/waze/roadwork')
+      await app.request('/api/waze/roadwork', { headers: AUTH_HEADERS })
     ).json()) as { count: number };
 
     expect(police.count).toBe(1);
@@ -151,7 +157,7 @@ describe('waze ingest end-to-end', () => {
       },
     });
     const police = (await (
-      await app.request('/api/waze/police')
+      await app.request('/api/waze/police', { headers: AUTH_HEADERS })
     ).json()) as { count: number };
     expect(police.count).toBe(0);
   });
@@ -169,7 +175,7 @@ describe('waze ingest end-to-end', () => {
       },
     });
     const m = (await (
-      await app.request('/api/waze/metrics')
+      await app.request('/api/waze/metrics', { headers: AUTH_HEADERS })
     ).json()) as Record<string, unknown>;
     expect(m['regions_cached']).toBe(1);
     expect(typeof m['last_ingest_age_secs']).toBe('number');

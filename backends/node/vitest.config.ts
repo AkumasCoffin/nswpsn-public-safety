@@ -9,6 +9,9 @@ export default defineConfig({
       // WAZE_INGEST_KEY enables the /api/waze/ingest auth middleware in
       // tests. Without it the middleware returns 403 "ingest disabled".
       WAZE_INGEST_KEY: 'test-ingest-key',
+      // Stable NSWPSN_API_KEY so tests hitting private endpoints can
+      // pass it via X-API-Key without depending on the prod default.
+      NSWPSN_API_KEY: 'test-api-key',
       // Stable temp-ish state dir so LiveStore disk writes don't bleed
       // into the project tree during tests.
       STATE_DIR: './test/.tmp-state',
