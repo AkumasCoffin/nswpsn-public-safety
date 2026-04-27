@@ -1,23 +1,22 @@
 /**
  * Central Watch fire-tower cameras.
  *
- * The python service maintains the canonical data file at
- * backends/data/centralwatch_cameras.json (Vercel-bypass via Playwright,
- * 30-min refresh, atomic write). Porting that worker is out of W8 scope —
- * we'd need to bring chromium into the Node runtime. So we treat the
- * JSON file as the source of truth and ride along.
+ * Now owned end-to-end by the Node backend. The refresh loop fetches the
+ * upstream camera list every 30 minutes via the Playwright browser worker
+ * (which solves the Vercel Security Checkpoint), normalises the response,
+ * and atomically writes backends/data/centralwatch_cameras.json. The
+ * file readers below stay backwards-compatible — when the writer is
+ * disabled (no Playwright / CENTRALWATCH_DISABLED=true), the readers
+ * still serve the last-good JSON file so deploys without chromium keep
+ * working.
  *
- * Refresh strategy: re-read the JSON every 60s (only when its mtime has
- * changed) so the Node service picks up python's atomic-rename writes
- * without hammering the filesystem.
- *
- * The image proxy (/api/centralwatch/image/:id) stays on python — its
- * cache is populated by the Playwright worker that solves the Vercel
- * challenge. Apache pins that route to python.
+ * Mirrors python `_refresh_centralwatch_data` and `_update_centralwatch_json`
+ * (external_api_proxy.py:8321-8438).
  */
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { log } from '../lib/log.js';
+import { centralwatchBrowser } from '../services/centralwatchBrowser.js';
 
 const JSON_PATH = path.resolve(
   process.cwd(),
@@ -25,7 +24,9 @@ const JSON_PATH = path.resolve(
   'data',
   'centralwatch_cameras.json',
 );
-const REFRESH_INTERVAL_MS = 60_000;
+const REFRESH_INTERVAL_MS = 60_000; // file-reader cache invalidation
+const API_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min — match python
+const API_ENDPOINT = 'https://centralwatch.watchtowers.io/au/api/cameras';
 
 export interface CentralwatchSite {
   name: string;
@@ -71,11 +72,11 @@ interface CacheEntry {
 }
 
 let cache: CacheEntry | null = null;
+let refreshTimer: NodeJS.Timeout | null = null;
+let refreshInFlight = false;
+let lastRefreshOk = 0;
 
 function normaliseTime(raw: string): string {
-  // python normalises "2026-02-26T02:25:55.366+00:00" -> "...Z" before
-  // passing the timestamp through. Match that so frontend cache-busting
-  // stays consistent across both backends.
   if (!raw) return '';
   if (raw.includes('+') && !raw.endsWith('Z')) {
     const idx = raw.indexOf('+');
@@ -125,7 +126,6 @@ async function loadFromDisk(): Promise<CacheEntry | null> {
     }
     return null;
   }
-  // Re-read only when the python writer has touched the file.
   if (cache && stat.mtimeMs === cache.fileMtimeMs) {
     cache.loadedAt = Date.now();
     return cache;
@@ -207,8 +207,186 @@ export async function getCentralwatchSites(): Promise<
   return Array.from(groups.values());
 }
 
+// =============================================================================
+// Writer + refresh loop (W8 port).
+// =============================================================================
+
+interface UpstreamSite {
+  id?: string;
+  name?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  altitude?: number | null;
+  state?: string | null;
+}
+
+interface UpstreamCamera {
+  id?: string;
+  name?: string;
+  siteId?: string;
+  time?: string;
+}
+
+interface UpstreamPayload {
+  sites?: UpstreamSite[];
+  cameras?: UpstreamCamera[];
+}
+
+/**
+ * Atomic write — temp file + rename. Mirrors python's
+ * `_update_centralwatch_json` (line ~8369).
+ */
+export async function writeCentralwatchJson(api: UpstreamPayload): Promise<boolean> {
+  if (!api || typeof api !== 'object') return false;
+  const rawSites = Array.isArray(api.sites) ? api.sites : [];
+  const rawCameras = Array.isArray(api.cameras) ? api.cameras : [];
+  if (rawSites.length === 0 || rawCameras.length === 0) {
+    log.warn(
+      { sites: rawSites.length, cameras: rawCameras.length },
+      'centralwatch JSON update skipped: empty upstream payload',
+    );
+    return false;
+  }
+
+  const sitesDict: Record<string, CentralwatchSite> = {};
+  for (const s of rawSites) {
+    if (!s || !s.id) continue;
+    sitesDict[s.id] = {
+      name: s.name ?? '',
+      latitude: typeof s.latitude === 'number' ? s.latitude : (null as unknown as number),
+      longitude:
+        typeof s.longitude === 'number' ? s.longitude : (null as unknown as number),
+      altitude: s.altitude ?? null,
+      state: s.state ?? '',
+    };
+  }
+
+  const camerasList: CentralwatchCameraRaw[] = [];
+  for (const cam of rawCameras) {
+    if (!cam || !cam.id) continue;
+    let camTime = cam.time ?? '';
+    if (camTime && camTime.includes('+') && !camTime.endsWith('Z')) {
+      camTime = `${camTime.split('+')[0]}Z`;
+    }
+    camerasList.push({
+      id: cam.id,
+      name: cam.name ?? '',
+      siteId: cam.siteId ?? '',
+      time: camTime,
+    });
+  }
+
+  const lastUpdated = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const payload = {
+    lastUpdated,
+    source: API_ENDPOINT,
+    sites: sitesDict,
+    cameras: camerasList,
+  };
+
+  const tmpPath = `${JSON_PATH}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(JSON_PATH), { recursive: true });
+    await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
+    await fs.rename(tmpPath, JSON_PATH);
+    // Drop the in-memory cache so the next reader sees fresh data.
+    cache = null;
+    log.info(
+      { sites: Object.keys(sitesDict).length, cameras: camerasList.length },
+      'centralwatch JSON updated',
+    );
+    return true;
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'centralwatch JSON write failed',
+    );
+    try {
+      await fs.unlink(tmpPath);
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+}
+
+/**
+ * One-shot refresh: pull from the upstream API via the browser worker,
+ * normalise, atomic-write the JSON file. Returns true on success.
+ */
+export async function refreshCentralwatchJson(): Promise<boolean> {
+  if (!centralwatchBrowser.isReady()) {
+    return false;
+  }
+  try {
+    const data = (await centralwatchBrowser.fetchJson(API_ENDPOINT)) as
+      | UpstreamPayload
+      | null;
+    if (!data || typeof data !== 'object') {
+      log.warn('centralwatch refresh: upstream returned no data');
+      return false;
+    }
+    if (!Array.isArray(data.cameras) || data.cameras.length === 0) {
+      log.warn('centralwatch refresh: upstream returned no cameras');
+      return false;
+    }
+    const ok = await writeCentralwatchJson(data);
+    if (ok) {
+      lastRefreshOk = Date.now();
+      log.info(
+        { count: data.cameras.length },
+        'centralwatch refresh: data refreshed',
+      );
+    }
+    return ok;
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'centralwatch refresh: threw',
+    );
+    return false;
+  }
+}
+
+export function startCentralwatchRefreshLoop(): void {
+  if (refreshTimer) return;
+  if (process.env['CENTRALWATCH_DISABLED'] === 'true') {
+    log.info('centralwatch refresh loop disabled via env');
+    return;
+  }
+  const tick = async (): Promise<void> => {
+    if (refreshInFlight) return;
+    if (Date.now() - lastRefreshOk < API_REFRESH_INTERVAL_MS) return;
+    refreshInFlight = true;
+    try {
+      await refreshCentralwatchJson();
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'centralwatch refresh tick failed',
+      );
+    } finally {
+      refreshInFlight = false;
+    }
+  };
+  // Run on a 5-min cadence; the 30-min throttle inside `tick` keeps
+  // the actual upstream traffic to once per half-hour but lets us
+  // recover quickly from a missed window after a restart.
+  refreshTimer = setInterval(() => void tick(), 5 * 60 * 1000);
+  // First tick a few seconds after boot to let the browser settle.
+  setTimeout(() => void tick(), 5_000);
+}
+
+export function stopCentralwatchRefreshLoop(): void {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
 export function _resetCentralwatchCacheForTests(): void {
   cache = null;
+  lastRefreshOk = 0;
 }
 
 export const _testHooks = {

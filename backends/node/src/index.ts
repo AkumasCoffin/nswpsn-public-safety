@@ -22,6 +22,17 @@ import {
   startRdioSummaryScheduler,
   stopRdioSummaryScheduler,
 } from './services/llm.js';
+import { ensureSessionTables } from './services/dashboardSession.js';
+import { closeBotDbPool } from './services/botDb.js';
+import { centralwatchBrowser } from './services/centralwatchBrowser.js';
+import {
+  startCentralwatchRefreshLoop,
+  stopCentralwatchRefreshLoop,
+} from './sources/centralwatch.js';
+import {
+  startCentralwatchImageBatchLoop,
+  stopCentralwatchImageBatchLoop,
+} from './services/centralwatchImageCache.js';
 import { startPolling, stopPolling } from './services/poller.js';
 import {
   start as startActivityMode,
@@ -74,6 +85,28 @@ async function preflight(): Promise<void> {
   // double-spend Gemini quota. Flip NODE_RDIO_SCHEDULER=true once the
   // python scheduler thread is stopped.
   startRdioSummaryScheduler();
+
+  // Dashboard session table hydration — best effort. The router calls
+  // this lazily too, but doing it here means the first OAuth callback
+  // doesn't pay the CREATE TABLE / row-load.
+  try {
+    await ensureSessionTables();
+  } catch (err) {
+    log.warn({ err }, 'dashboard session table hydrate failed (non-fatal)');
+  }
+
+  // Centralwatch: kick the Playwright worker init off (non-blocking;
+  // the loops below no-op until it reports ready) then start the
+  // refresh + image batch loops. Honour CENTRALWATCH_DISABLED so a
+  // deploy without chromium can still serve the last-good JSON via
+  // /api/centralwatch/cameras.
+  if (!config.CENTRALWATCH_DISABLED) {
+    void centralwatchBrowser.init();
+    startCentralwatchRefreshLoop();
+    startCentralwatchImageBatchLoop();
+  } else {
+    log.info('centralwatch disabled (CENTRALWATCH_DISABLED=true)');
+  }
 }
 
 await preflight();
@@ -107,10 +140,16 @@ async function shutdown(signal: string) {
     stopActivityMode();
     stopFilterCacheRefresh();
     stopRdioSummaryScheduler();
+    // Centralwatch: stop the loops first so they don't enqueue more
+    // browser jobs, then close the browser worker.
+    stopCentralwatchRefreshLoop();
+    stopCentralwatchImageBatchLoop();
+    await centralwatchBrowser.shutdown();
     await liveStore.stopAndFlush();
     await archiveWriter.stopAndFlush();
     await closePool();
     await closeRdioPool();
+    await closeBotDbPool();
     log.info('shutdown complete');
     process.exit(0);
   } catch (err) {

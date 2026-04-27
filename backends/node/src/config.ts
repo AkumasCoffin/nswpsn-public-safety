@@ -153,6 +153,35 @@ const Schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((s) => s === 'true'),
+
+  // Discord OAuth dashboard. All optional — when unset the dashboard
+  // routes return 503 with a clear error body. Mirrors python's
+  // _dash_enabled() check.
+  DISCORD_CLIENT_ID: z.string().optional(),
+  DISCORD_CLIENT_SECRET: z.string().optional(),
+  DISCORD_BOT_TOKEN: z.string().optional(),
+  DASHBOARD_SESSION_SECRET: z.string().optional(),
+  DASHBOARD_REDIRECT_URI: z.string().optional(),
+  DASHBOARD_FRONTEND_URL: z.string().optional(),
+  DASHBOARD_FRONTEND_BASE: z.string().optional(),
+  DASHBOARD_COOKIE_DOMAIN: z.string().default('.forcequit.xyz'),
+  DASHBOARD_ADMIN_IDS: z.string().optional(),
+  // Bot-data Postgres (the discord-bot's separate Postgres cluster).
+  // Holds dash_sessions + alert_presets + mute_state + bot_actions.
+  // Optional — when unset the dashboard returns 503 on all routes
+  // that touch this pool.
+  BOT_DATA_DATABASE_URL: z.string().optional(),
+  // Public base URL of the API itself (used in OAuth redirect_uri).
+  PUBLIC_BASE_URL: z.string().optional(),
+
+  // Kill switch for the centralwatch Playwright browser worker. When
+  // true, the worker doesn't init, the JSON refresh loop is skipped,
+  // and the image batch loop stays idle. Reads use the last-good JSON
+  // file. Mirrors python's _playwright_available short-circuit.
+  CENTRALWATCH_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
 });
 
 const parsed = Schema.safeParse(process.env);
