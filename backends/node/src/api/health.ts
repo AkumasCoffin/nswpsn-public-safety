@@ -19,6 +19,7 @@
  */
 import { Hono } from 'hono';
 import { modeLabel } from '../config.js';
+import { liveStore } from '../store/live.js';
 
 export const healthRouter = new Hono();
 
@@ -26,11 +27,12 @@ healthRouter.get('/api/health', (c) =>
   c.json({
     status: 'ok',
     mode: modeLabel(),
-    // W1 stub. Once the LiveStore lands in W2, this becomes
-    // `Array.from(liveStore.keys())` so it lists currently-cached
-    // upstream feeds the way Python's `cache.keys()` does.
-    cache_keys: [] as string[],
-    // W1 stub. Becomes the heartbeat-tracker count in W4.
+    // Real LiveStore keys now that W2 is wired up. Same shape Python
+    // returns via `cache.keys()` — list of source names currently
+    // holding a snapshot in memory.
+    cache_keys: liveStore.keys(),
+    // Still a W4 stub; becomes the real heartbeat-tracker count when
+    // /api/heartbeat lands.
     active_viewers: 0,
   }),
 );

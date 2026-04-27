@@ -9,8 +9,34 @@ import { serve } from '@hono/node-server';
 import { config } from './config.js';
 import { log } from './lib/log.js';
 import { closePool } from './db/pool.js';
+import { runMigrations } from './db/migrate.js';
 import { createApp } from './server.js';
+import { liveStore } from './store/live.js';
+import { archiveWriter } from './store/archive.js';
 
+// Pre-flight: hydrate the live store so /api/waze/* serves something
+// useful immediately after restart, and run any pending DB migrations
+// before the server binds. Each step is best-effort and logged — a
+// missing DATABASE_URL or empty STATE_DIR shouldn't block startup.
+async function preflight(): Promise<void> {
+  try {
+    await liveStore.hydrateFromDisk();
+  } catch (err) {
+    log.error({ err }, 'liveStore hydrate failed');
+  }
+  try {
+    await runMigrations();
+  } catch (err) {
+    // Migration failure is more serious — log but still start the
+    // server so /api/health stays observable. Subsequent boot will
+    // retry; persistent failure shows up loudly in logs.
+    log.error({ err }, 'migration failed');
+  }
+  liveStore.startPersistLoop();
+  archiveWriter.startFlushLoop();
+}
+
+await preflight();
 const app = createApp();
 
 const server = serve(
@@ -34,6 +60,9 @@ async function shutdown(signal: string) {
   try {
     // Stop accepting new connections; finish in-flight ones.
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    // Drain LiveStore + ArchiveWriter so we don't lose buffered work.
+    await liveStore.stopAndFlush();
+    await archiveWriter.stopAndFlush();
     await closePool();
     log.info('shutdown complete');
     process.exit(0);
