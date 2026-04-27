@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_script_dir, '.env'), override=True)
 
-from db import get_conn, get_conn_dict
+from db import get_conn, get_conn_dict, pool_stats as _db_pool_stats
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='NSW PSN API Proxy Server')
@@ -10876,31 +10876,94 @@ def health():
 # Thresholds for /api/status. Tunable via env so we can tighten/loosen
 # without a redeploy. Defaults are generous — they only fire when something
 # is genuinely wrong, not on transient hiccups.
-STATUS_DB_TIMEOUT_SECS       = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 3))
-STATUS_WRITER_STALE_SECS     = int(os.environ.get('STATUS_WRITER_STALE_SECS', 300))   # 5 min
-STATUS_WAZE_STALE_SECS       = int(os.environ.get('STATUS_WAZE_STALE_SECS', 900))     # 15 min
-STATUS_BUFFER_WARN_RECORDS   = int(os.environ.get('STATUS_BUFFER_WARN_RECORDS', 10_000))
+STATUS_DB_TIMEOUT_SECS         = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 3))
+STATUS_WRITER_STALE_SECS       = int(os.environ.get('STATUS_WRITER_STALE_SECS', 300))    # 5 min
+STATUS_WAZE_STALE_SECS         = int(os.environ.get('STATUS_WAZE_STALE_SECS', 900))      # 15 min
+STATUS_BUFFER_WARN_RECORDS     = int(os.environ.get('STATUS_BUFFER_WARN_RECORDS', 10_000))
+STATUS_HEATMAP_STALE_SECS      = int(os.environ.get('STATUS_HEATMAP_STALE_SECS', 1800))  # 30 min
+STATUS_FILTER_CACHE_STALE_SECS = int(os.environ.get('STATUS_FILTER_CACHE_STALE_SECS', 1800))
+
+
+def _status_source_summary(now):
+    """Roll up _SOURCE_HEALTH into a per-source dict that's easy to query
+    with JSONata: sources.<name>.ok, sources.<name>.last_success_age_secs,
+    etc. Status per source is ok | degraded | down | unknown, derived from
+    the soft/hard thresholds in _SOURCE_THRESHOLDS."""
+    out = {}
+    counts = {'ok': 0, 'degraded': 0, 'down': 0, 'unknown': 0}
+    with _SOURCE_HEALTH_LOCK:
+        snapshot = {k: dict(v) for k, v in _SOURCE_HEALTH.items()}
+    # Walk threshold table so sources we know about but never heard from
+    # still appear (as 'unknown') — otherwise an Uptime Kuma monitor
+    # configured on `sources.rfs.ok` would silently miss "RFS never
+    # polled" right after a restart.
+    for name, t in _SOURCE_THRESHOLDS.items():
+        h = snapshot.get(name, {})
+        last_success = h.get('last_success')
+        last_error = h.get('last_error')
+        consec = int(h.get('consec_fails') or 0)
+        success_age = int(now - last_success) if last_success else None
+        error_age = int(now - last_error) if last_error else None
+        if last_success is None:
+            src_status = 'unknown'
+            ok = False
+        elif success_age >= t['hard']:
+            src_status = 'down'
+            ok = False
+        elif success_age >= t['soft']:
+            src_status = 'degraded'
+            ok = False
+        else:
+            src_status = 'ok'
+            ok = True
+        counts[src_status] += 1
+        out[name] = {
+            'ok': ok,
+            'status': src_status,
+            'label': t.get('label', name),
+            'last_success_age_secs': success_age,
+            'last_error_age_secs': error_age,
+            'last_error_msg': h.get('last_error_msg'),
+            'consec_fails': consec,
+            'total_success': int(h.get('total_success') or 0),
+            'total_fail': int(h.get('total_fail') or 0),
+            'soft_threshold_secs': t['soft'],
+            'hard_threshold_secs': t['hard'],
+        }
+    return out, counts
 
 
 @app.route('/api/status')
 def status_endpoint():
-    """Health endpoint shaped for Uptime Kuma (or any HTTP/keyword monitor).
+    """Health endpoint shaped for Uptime Kuma JSON-Query (JSONata) monitors.
 
-    HTTP status reflects critical state:
+    HTTP status reflects critical backend state only:
       - 200 when the backend is functional (DB reachable, writer thread alive)
       - 503 when a critical subsystem is broken
 
-    JSON body has a finer-grained `status` of ok | degraded | down, and a
-    per-check breakdown so you can configure a Keyword monitor on
-    `"status":"ok"` for stricter alerting (e.g. fire on Waze ingest
-    staleness without taking the page red on a transient userscript hiccup).
+    The JSON body has a finer-grained status of ok | degraded | down plus a
+    per-check breakdown and per-source roll-up. The tree is shaped so
+    common JSONata expressions stay short:
+
+        status                                      → 'ok' | 'degraded' | 'down'
+        checks.database.ok                          → true / false
+        checks.database.latency_ms < 200            → boolean
+        checks.archive_writer.ok                    → true / false
+        checks.waze_ingest.regions_cached >= 150    → boolean
+        sources.rfs.ok                              → true / false
+        sources.rfs.consec_fails < 5                → boolean
+        summary.sources_down                        → number
+        summary.sources_down + summary.sources_degraded   → number
+
+    Sources that have never reported are exposed with status='unknown' so
+    a "is RFS healthy" monitor doesn't silently pass right after a restart.
     """
     now = time.time()
     checks = {}
     critical_failed = False
     degraded = False
 
-    # 1. DB ping. Cheapest possible round-trip.
+    # ---- 1. Database connectivity + pool occupancy ----------------------
     db_ok = False
     db_latency_ms = None
     db_error = None
@@ -10921,20 +10984,20 @@ def status_endpoint():
         if conn is not None:
             try: conn.close()
             except Exception: pass
+    pool_info = _db_pool_stats()
     checks['database'] = {
         'ok': db_ok,
         'latency_ms': db_latency_ms,
+        'pool_in_use': pool_info.get('in_use'),
+        'pool_idle': pool_info.get('idle'),
+        'pool_max': pool_info.get('max'),
         'error': db_error,
     }
 
-    # 2. Archive writer heartbeat. If the dedicated writer thread is wedged,
-    # archive flushes stop and incident history goes stale. _last_flush_at
-    # is bumped every ARCHIVE_FLUSH_INTERVAL even on empty drains, so a
-    # stale value means the thread itself is sick.
+    # ---- 2. Archive writer heartbeat ------------------------------------
     writer_age = now - _archive_writer_last_flush_at if _archive_writer_last_flush_at else None
     writer_ok = writer_age is not None and writer_age <= STATUS_WRITER_STALE_SECS
-    # During the first ARCHIVE_FLUSH_INTERVAL after boot we haven't flushed
-    # yet — don't flag that as failed.
+    # Boot grace: first ARCHIVE_FLUSH_INTERVAL after start, no heartbeat yet.
     if writer_age is None and (now - _PROCESS_START_TIME) < (ARCHIVE_FLUSH_INTERVAL + 30):
         writer_ok = True
     if not writer_ok:
@@ -10943,9 +11006,10 @@ def status_endpoint():
         'ok': writer_ok,
         'last_flush_age_secs': int(writer_age) if writer_age is not None else None,
         'threshold_secs': STATUS_WRITER_STALE_SECS,
+        'flush_interval_secs': ARCHIVE_FLUSH_INTERVAL,
     }
 
-    # 3. Archive buffer occupancy. Growing means the writer can't keep up.
+    # ---- 3. Archive buffer occupancy ------------------------------------
     with _archive_buffer_lock:
         buf_records = _archive_buffer_records
     buffer_ok = buf_records <= STATUS_BUFFER_WARN_RECORDS
@@ -10958,25 +11022,115 @@ def status_endpoint():
         'hard_cap': _ARCHIVE_BUFFER_MAX_RECORDS,
     }
 
-    # 4. Waze ingest freshness. Userscript-driven, so a stale value can
-    # mean the operator's browser tab crashed — not a backend failure.
-    # Reported as degraded, not down, so an Uptime Kuma HTTP-status check
-    # doesn't page on it. Use a Keyword monitor on "status":"ok" to alert.
+    # ---- 4. Waze ingest freshness + userscript health -------------------
     if WAZE_INGEST_ENABLED:
         waze_age = now - _waze_last_ingest_at if _waze_last_ingest_at else None
         waze_ok = waze_age is not None and waze_age <= STATUS_WAZE_STALE_SECS
         if waze_age is None and (now - _PROCESS_START_TIME) < 120:
-            # Just-booted, hasn't received the first POST yet.
             waze_ok = True
         if not waze_ok:
             degraded = True
+        try:
+            with _waze_ingest_lock:
+                regions_cached = len(_waze_ingest_cache)
+        except Exception:
+            regions_cached = None
+        try:
+            metrics = _waze_metrics_snapshot()
+            block_rate = metrics.get('block_rate_percent')
+            gate_active = bool(metrics.get('gate_active'))
+        except Exception:
+            block_rate = None
+            gate_active = False
         checks['waze_ingest'] = {
             'ok': waze_ok,
+            'enabled': True,
             'last_ingest_age_secs': int(waze_age) if waze_age is not None else None,
             'threshold_secs': STATUS_WAZE_STALE_SECS,
+            'regions_cached': regions_cached,
+            'block_rate_pct': block_rate,
+            'gate_active': gate_active,
         }
     else:
         checks['waze_ingest'] = {'ok': True, 'enabled': False}
+
+    # ---- 5. Police heatmap freshness ------------------------------------
+    try:
+        with _POLICE_HEATMAP_RAM_LOCK:
+            hm_updated_at = _POLICE_HEATMAP_RAM.get('updated_at')
+            hm_bins = len(_POLICE_HEATMAP_RAM.get('rows') or [])
+    except Exception:
+        hm_updated_at = None
+        hm_bins = 0
+    if hm_updated_at is not None:
+        try:
+            hm_ts = hm_updated_at.timestamp() if hasattr(hm_updated_at, 'timestamp') else float(hm_updated_at)
+            hm_age = int(now - hm_ts)
+        except Exception:
+            hm_age = None
+    else:
+        hm_age = None
+    hm_ok = hm_age is not None and hm_age <= STATUS_HEATMAP_STALE_SECS
+    # Boot grace — first refresh runs ~POLICE_HEATMAP_REFRESH_INTERVAL after start.
+    if hm_age is None and (now - _PROCESS_START_TIME) < 900:
+        hm_ok = True
+    if not hm_ok:
+        degraded = True
+    checks['police_heatmap'] = {
+        'ok': hm_ok,
+        'bins': hm_bins,
+        'last_refresh_age_secs': hm_age,
+        'threshold_secs': STATUS_HEATMAP_STALE_SECS,
+    }
+
+    # ---- 6. Filter cache freshness --------------------------------------
+    fc_age = int(now - _filter_cache_last_refresh_at) if _filter_cache_last_refresh_at else None
+    fc_ok = fc_age is not None and fc_age <= STATUS_FILTER_CACHE_STALE_SECS
+    if fc_age is None and (now - _PROCESS_START_TIME) < (FILTER_CACHE_REFRESH_INTERVAL + 60):
+        fc_ok = True
+    if not fc_ok:
+        degraded = True
+    checks['filter_cache'] = {
+        'ok': fc_ok,
+        'last_refresh_age_secs': fc_age,
+        'threshold_secs': STATUS_FILTER_CACHE_STALE_SECS,
+        'refresh_interval_secs': FILTER_CACHE_REFRESH_INTERVAL,
+    }
+
+    # ---- 7. RAM cache layer hit rate (informational, no ok/fail) --------
+    try:
+        ram_hits = int(_CACHE_GET_RAM_HITS)
+        ram_misses = int(_CACHE_GET_RAM_MISSES)
+    except Exception:
+        ram_hits = ram_misses = 0
+    total_cache_lookups = ram_hits + ram_misses
+    hit_rate_pct = round(ram_hits / total_cache_lookups * 100.0, 2) if total_cache_lookups else None
+    checks['ram_cache'] = {
+        'hits': ram_hits,
+        'misses': ram_misses,
+        'hit_rate_pct': hit_rate_pct,
+    }
+
+    # ---- 8. Per-source rollup ------------------------------------------
+    sources, source_counts = _status_source_summary(now)
+    if source_counts['down'] > 0:
+        degraded = True  # source-level outage doesn't 503 the backend
+    elif source_counts['degraded'] > 0:
+        degraded = True
+
+    # ---- Summary aggregate ---------------------------------------------
+    failed_checks = sum(
+        1 for k, v in checks.items()
+        if isinstance(v, dict) and v.get('ok') is False
+    )
+    summary = {
+        'checks_failed': failed_checks,
+        'sources_total': len(_SOURCE_THRESHOLDS),
+        'sources_ok': source_counts['ok'],
+        'sources_degraded': source_counts['degraded'],
+        'sources_down': source_counts['down'],
+        'sources_unknown': source_counts['unknown'],
+    }
 
     if critical_failed:
         overall = 'down'
@@ -10991,8 +11145,12 @@ def status_endpoint():
     return jsonify({
         'status': overall,
         'uptime_secs': int(now - _PROCESS_START_TIME),
+        'started_at': int(_PROCESS_START_TIME),
+        'now': int(now),
         'mode': 'dev' if DEV_MODE else 'production',
+        'summary': summary,
         'checks': checks,
+        'sources': sources,
     }), http_code
 
 @app.route('/api/cache/clear')
@@ -12115,6 +12273,9 @@ def pager_hits():
 # =========================================================================
 
 FILTER_CACHE_REFRESH_INTERVAL = int(os.environ.get('FILTER_CACHE_REFRESH_INTERVAL', 300))
+# Wall-clock of the last successful filter-cache refresh, exposed by
+# /api/status. 0.0 means "never".
+_filter_cache_last_refresh_at = 0.0
 
 
 def _refresh_filter_cache():
@@ -12186,6 +12347,8 @@ def _refresh_filter_cache():
                     + args_str
                 )
             conn.commit()
+            global _filter_cache_last_refresh_at
+            _filter_cache_last_refresh_at = time.time()
             if DEV_MODE:
                 Log.cleanup(f"Filter cache refreshed — {len(rows_to_insert)} rows")
         finally:
