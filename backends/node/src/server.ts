@@ -7,8 +7,8 @@
  * As more routes get ported in W2+, register them here.
  */
 import { Hono } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
-import { logger as honoLogger } from 'hono/logger';
 // Core endpoints (W1).
 import { healthRouter } from './api/health.js';
 import { configRouter } from './api/config.js';
@@ -51,13 +51,55 @@ import { systemRouter } from './api/system.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { log } from './lib/log.js';
 
+// Paths that should never appear in the request log even on
+// success — they fire constantly and drown out everything else.
+// Failures still show up because the success-only filter below
+// only short-circuits on 2xx/3xx.
+const QUIET_PATHS_RE =
+  /^\/(?:api\/heartbeat|api\/check-editor\/|api\/config|api\/health|api\/status)/;
+
+const SLOW_REQUEST_MS = 500;
+
+/**
+ * Replacement for Hono's built-in logger. Differences:
+ *   - 2xx + 3xx on QUIET_PATHS_RE are silent
+ *   - 2xx + 3xx slower than SLOW_REQUEST_MS log at info ("slow")
+ *   - other 2xx + 3xx log at debug (silent unless LOG_LEVEL=debug)
+ *   - 4xx logs at info ("client error")
+ *   - 5xx logs at warn ("server error")
+ *   - OPTIONS preflights are silent (huge volume, no signal)
+ */
+const requestLogger: MiddlewareHandler = async (c, next) => {
+  const start = Date.now();
+  await next();
+  const ms = Date.now() - start;
+  const status = c.res.status;
+  const method = c.req.method;
+  const path = new URL(c.req.url).pathname;
+
+  if (method === 'OPTIONS') return;
+
+  if (status >= 500) {
+    log.warn({ method, path, status, ms }, 'request 5xx');
+    return;
+  }
+  if (status >= 400) {
+    log.info({ method, path, status, ms }, 'request 4xx');
+    return;
+  }
+  if (QUIET_PATHS_RE.test(path)) return;
+  if (ms >= SLOW_REQUEST_MS) {
+    log.info({ method, path, status, ms }, 'slow request');
+    return;
+  }
+  log.debug({ method, path, status, ms }, 'request');
+};
+
 export function createApp() {
   const app = new Hono();
 
-  // Hono's built-in logger pipes through to our pino instance so request
-  // logs show up structured rather than as console.log lines. Keeps the
-  // log stream uniform with everything else the service emits.
-  app.use('*', honoLogger((msg) => log.info(msg)));
+  // Custom request logger — see comment on requestLogger above.
+  app.use('*', requestLogger);
 
   // Permissive CORS for now. Locks down (origin allowlist) in W4 once
   // the heartbeat + auth middleware lands and we know exactly which
