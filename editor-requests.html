@@ -1372,6 +1372,8 @@
       const db = checks.database || {};
       const aw = checks.archive_writer || {};
       const ab = checks.archive_buffer || {};
+      const ig = checks.ingest || {};
+      const cl = checks.cleanup || {};
       const wi = checks.waze_ingest || {};
       const ph = checks.police_heatmap || {};
       const fc = checks.filter_cache || {};
@@ -1404,6 +1406,36 @@
             { label: 'warn', value: ab.warn_threshold != null ? ab.warn_threshold.toLocaleString() : null },
             { label: 'cap',  value: ab.hard_cap != null ? ab.hard_cap.toLocaleString() : null },
           ],
+        }),
+        _renderCard({
+          name: 'Ingest', icon: 'inbox', statusCls: '',
+          primary: {
+            value: ig.last_flush_records != null ? ig.last_flush_records.toLocaleString() : '—',
+            label: 'last flush · records',
+          },
+          secondary: [
+            { label: 'sources', value: ig.last_flush_sources ?? null },
+            { label: 'took',    value: ig.last_flush_ms != null ? `${ig.last_flush_ms}ms` : null },
+            { label: 'ago',     value: _fmtAge(ig.last_flush_age_secs) },
+            { label: 'total',   value: ig.total_records_flushed != null ? ig.total_records_flushed.toLocaleString() : null },
+          ],
+        }),
+        _renderCard({
+          name: 'Cleanup', icon: 'broom', statusCls: '',
+          primary: {
+            value: _fmtAge(cl.last_run_age_secs),
+            label: 'since last run',
+          },
+          secondary: [
+            (cl.last_history_deleted   ? { label: 'deleted',  value: cl.last_history_deleted.toLocaleString() } : null),
+            (cl.last_pager_ended       ? { label: 'pager✗',   value: cl.last_pager_ended } : null),
+            (cl.last_waze_ended        ? { label: 'waze✗',    value: cl.last_waze_ended  } : null),
+            { label: 'total del', value: cl.total_history_deleted != null ? cl.total_history_deleted.toLocaleString() : null },
+            (cl.last_vacuum_age_secs != null
+              ? { label: 'vacuum',  value: `${_fmtAge(cl.last_vacuum_age_secs)} (${cl.last_vacuum_ms}ms)` }
+              : null),
+            { label: 'retain',    value: cl.retention_days != null ? `${cl.retention_days}d` : null },
+          ].filter(Boolean),
         }),
         _renderCard({
           name: 'Waze Ingest', icon: 'satellite-dish', statusCls: _cls(wi),
