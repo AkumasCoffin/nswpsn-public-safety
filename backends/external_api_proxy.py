@@ -10297,10 +10297,17 @@ def _refresh_police_heatmap_cache():
 
 def _police_heatmap_scheduler():
     """Background loop that refreshes the police heatmap cache every N
-    seconds (POLICE_HEATMAP_REFRESH_INTERVAL). First refresh fires almost
-    immediately so the cache populates as soon as possible after restart."""
-    # Tiny stagger so we don't slam the DB the second the app starts.
-    time.sleep(5)
+    seconds (POLICE_HEATMAP_REFRESH_INTERVAL).
+
+    First refresh used to fire 5s after boot, but that put the heaviest
+    GROUP BY of the cycle right alongside the first archive flush
+    (which lands at ARCHIVE_FLUSH_INTERVAL=30s) and the source workers'
+    first round of upstream fetches. The pool would saturate and every
+    subsequent cheap query queued behind the aggregation. Now we wait
+    60s — by then the initial archive flush is done, the source pollers
+    have settled into their loop, and the pool has slack.
+    The RAM hydrate at startup keeps the endpoint hot in the meantime."""
+    time.sleep(60)
     while not _shutdown_event.is_set():
         try:
             _refresh_police_heatmap_cache()
@@ -11755,8 +11762,15 @@ def _prewarm_data_history_count_cache():
     unique=1, no other filters). Strategy: prefer the instant pg_class
     reltuples estimate so the cache is hot in milliseconds, then try
     a real COUNT(*) for accuracy — if that times out we keep the
-    estimate. Either way the user's first click never sees total=0."""
-    time.sleep(15)
+    estimate. Either way the user's first click never sees total=0.
+
+    Phase 1 (reltuples) runs immediately — it's a single index lookup
+    against pg_class. Phase 2 (real COUNT(*) with 90s timeout) waits
+    90s so it doesn't compete with the first archive flush + filter
+    cache refresh + heatmap aggregation for the same data_history
+    rows. Bumped from 15s; under boot load the COUNT(*) was timing
+    out and falling back to the estimate anyway, so the wait is
+    effectively free."""
     cutoff = int(time.time()) - 24 * 3600
     actual_where = "(fetched_at >= %s) AND is_latest = 1"
     params = [cutoff]
@@ -11765,7 +11779,8 @@ def _prewarm_data_history_count_cache():
     cache_key = (actual_where, ((cutoff // 60) * 60,), 'all')
     pager_cutoff = int(time.time()) - 3600
 
-    # Phase 1: instant estimate. Uses reltuples for the whole table —
+    # Phase 1: instant estimate. Runs immediately so the cache is hot
+    # within milliseconds of boot — uses reltuples for the whole table,
     # an over-estimate vs. is_latest=1 + 24h, but better than zero and
     # gives pagination something to chew on. Real count overwrites later.
     est = _data_history_reltuples_estimate()
@@ -11774,8 +11789,11 @@ def _prewarm_data_history_count_cache():
         if DEV_MODE:
             Log.startup(f"data/history count cache seeded with reltuples estimate — ~{est}")
 
-    # Phase 2: try the real count. May still time out under heavy load —
-    # if so we keep the estimate from phase 1.
+    # Phase 2: try the real count. Wait 90s so this doesn't compete
+    # with the first archive flush + filter cache refresh + heatmap
+    # aggregation for the same data_history rows. Under boot load the
+    # COUNT(*) was timing out and falling back to the estimate anyway.
+    time.sleep(90)
     try:
         conn = get_conn()
         try:
@@ -12547,9 +12565,16 @@ def _refresh_filter_cache():
 
 
 def _filter_cache_scheduler():
-    """Background loop that refreshes the filter cache every N seconds."""
-    # Let the DB settle after startup, then do the first refresh.
-    time.sleep(30)
+    """Background loop that refreshes the filter cache every N seconds.
+
+    First refresh delayed 120s — the 5×GROUP BY rebuild has a 180s
+    timeout and competes for the same is_latest=1 rows that archive
+    UPDATEs are touching. Letting the boot storm pass first means the
+    first refresh completes in ~1s instead of timing out. Filter cache
+    serves stale data from data_history_filter_cache during the
+    delay, which is exactly its design — five extra minutes of
+    eventually-consistent dropdown values is invisible to users."""
+    time.sleep(120)
     while not _shutdown_event.is_set():
         try:
             _refresh_filter_cache()
