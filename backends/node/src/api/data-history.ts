@@ -256,11 +256,25 @@ async function runWithTimeout(
     // partitioned schema hasn't accumulated all the indexes yet,
     // and on a freshly-backfilled archive_waze (~257k rows) the
     // DISTINCT ON + COUNT(DISTINCT ...) pair can stretch to 30s+
-    // until the planner caches a stable plan. Once the new
-    // (source, fetched_at) index from migration 005 is hot, queries
-    // settle to single-digit seconds.
-    await client.query("SET LOCAL statement_timeout = '60s'");
-    return await client.query<RawArchiveRow>(sql, params);
+    // until the planner caches a stable plan.
+    //
+    // CRITICAL: SET LOCAL is a no-op outside an explicit transaction
+    // block (the pg docs are explicit on this). Earlier revisions
+    // skipped the BEGIN/COMMIT pair and the statement_timeout never
+    // applied — Postgres fell back to the global default (~30s) and
+    // queries hit that ceiling instead of the 60s we intended. Wrap
+    // in BEGIN/COMMIT so SET LOCAL actually scopes to this query and
+    // gets reset before the connection returns to the pool.
+    await client.query('BEGIN');
+    try {
+      await client.query("SET LOCAL statement_timeout = '60s'");
+      const r = await client.query<RawArchiveRow>(sql, params);
+      await client.query('COMMIT');
+      return r;
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
+    }
   } finally {
     client.release();
   }

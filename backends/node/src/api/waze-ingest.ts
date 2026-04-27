@@ -1,23 +1,127 @@
 /**
  * POST /api/waze/ingest — userscript pushes scraped Waze georss here.
  *
- * Replaces the Python `waze_ingest` endpoint. New behaviour vs Python:
- *   - Writes to LiveStore via WazeIngestCache (same in-memory pattern)
- *   - DOES NOT write to data_history. Waze archival was the source of
- *     today's contention; this backend's archive_waze table is also
- *     skipped for now per the migration plan (see W2 commit notes).
- *     If/when we want historical Waze, flip ARCHIVE_WAZE on and the
- *     ingest will queue archive rows here.
+ * Replaces the Python `waze_ingest` endpoint. Behaviour:
+ *   - Writes the bbox-keyed snapshot to LiveStore via WazeIngestCache
+ *     (in-memory; backs the live /api/waze/* endpoints).
+ *   - Fans each alert / jam out to one append-only row in archive_waze
+ *     so /api/data/history and the police-heatmap aggregation see
+ *     fresh data. Source tag matches python's split:
+ *       waze_police   — POLICE-typed alerts
+ *       waze_roadwork — CONSTRUCTION-typed alerts
+ *       waze_hazard   — everything else (HAZARD / ACCIDENT / etc.)
+ *       waze_jam      — jam line features
+ *     Bypasses ARCHIVE_WAZE feature flag because the new partitioned
+ *     archive_waze table is what every downstream consumer queries.
  *
  * Auth: X-Ingest-Key matched against WAZE_INGEST_KEY env var.
  */
 import { Hono } from 'hono';
 import { requireIngestKey } from '../services/auth/ingestKey.js';
-import { WazeIngestPayloadSchema } from '../types/waze.js';
+import { WazeIngestPayloadSchema, type WazeAlert, type WazeJam } from '../types/waze.js';
 import { ingest } from '../store/wazeIngestCache.js';
+import { archiveWriter, type ArchiveRow } from '../store/archive.js';
+import {
+  isPoliceAlert,
+  isRoadworkAlert,
+  isHazardAlert,
+} from '../services/wazeAlerts.js';
 import { log } from '../lib/log.js';
 
 export const wazeIngestRouter = new Hono();
+
+function alertSource(a: WazeAlert): string | null {
+  if (isPoliceAlert(a)) return 'waze_police';
+  if (isRoadworkAlert(a)) return 'waze_roadwork';
+  if (isHazardAlert(a)) return 'waze_hazard';
+  // Bare-type 'POLICE' / 'CONSTRUCTION' / 'HAZARD' alerts are caught
+  // above; anything else (e.g. JAM-typed alerts that aren't already
+  // classified) we drop because the live read path doesn't surface
+  // them and archiving would just bloat the table.
+  return null;
+}
+
+function alertLatLng(a: WazeAlert): { lat: number | null; lng: number | null } {
+  const loc = a.location ?? {};
+  const lat =
+    typeof loc.y === 'number'
+      ? loc.y
+      : typeof loc.latitude === 'number'
+        ? loc.latitude
+        : typeof a.lat === 'number'
+          ? a.lat
+          : null;
+  const lng =
+    typeof loc.x === 'number'
+      ? loc.x
+      : typeof loc.longitude === 'number'
+        ? loc.longitude
+        : typeof a.lon === 'number'
+          ? a.lon
+          : null;
+  return { lat, lng };
+}
+
+function jamCenter(j: WazeJam): { lat: number | null; lng: number | null } {
+  const j0 = j as Record<string, unknown>;
+  const line = j0['line'];
+  if (!Array.isArray(line) || line.length === 0) {
+    return { lat: null, lng: null };
+  }
+  // Use the midpoint of the polyline so a jam pin lands on the road
+  // rather than at one of its arbitrary endpoints.
+  const mid = line[Math.floor(line.length / 2)] as Record<string, unknown> | undefined;
+  if (!mid || typeof mid !== 'object') return { lat: null, lng: null };
+  const lat = typeof mid['y'] === 'number' ? (mid['y'] as number) : null;
+  const lng = typeof mid['x'] === 'number' ? (mid['x'] as number) : null;
+  return { lat, lng };
+}
+
+function archiveAlertsAndJams(alerts: WazeAlert[], jams: WazeJam[]): number {
+  const fetchedAt = Math.floor(Date.now() / 1000);
+  let queued = 0;
+  for (const a of alerts) {
+    const source = alertSource(a);
+    if (!source) continue;
+    const { lat, lng } = alertLatLng(a);
+    if (lat === null || lng === null) continue;
+    const raw = a as Record<string, unknown>;
+    const subtype = typeof raw['subtype'] === 'string' ? (raw['subtype'] as string) : null;
+    const type = typeof raw['type'] === 'string' ? (raw['type'] as string) : null;
+    const row: ArchiveRow = {
+      source,
+      source_id: String(a.uuid ?? a.id ?? '') || null,
+      fetched_at: fetchedAt,
+      lat,
+      lng,
+      category: type ?? null,
+      subcategory: subtype ?? type ?? null,
+      // The data blob mirrors what defaultArchiveItems would produce
+      // for a GeoJSON Feature.properties: top-level title/subtype/etc
+      // so dataHistoryQuery's JSONB projection finds them.
+      data: a as unknown as Record<string, unknown>,
+    };
+    archiveWriter.push('archive_waze', row);
+    queued += 1;
+  }
+  for (const j of jams) {
+    const { lat, lng } = jamCenter(j);
+    if (lat === null || lng === null) continue;
+    const row: ArchiveRow = {
+      source: 'waze_jam',
+      source_id: String(j.uuid ?? j.id ?? '') || null,
+      fetched_at: fetchedAt,
+      lat,
+      lng,
+      category: 'JAM',
+      subcategory: null,
+      data: j as unknown as Record<string, unknown>,
+    };
+    archiveWriter.push('archive_waze', row);
+    queued += 1;
+  }
+  return queued;
+}
 
 wazeIngestRouter.post('/api/waze/ingest', requireIngestKey, async (c) => {
   let body: unknown;
@@ -41,12 +145,25 @@ wazeIngestRouter.post('/api/waze/ingest', requireIngestKey, async (c) => {
     );
   }
   const result = ingest(parsed.data);
+  // Mirror to the partitioned archive table so historical / heatmap
+  // queries see fresh data. The archive writer is async-batched so
+  // this doesn't block the ingest response.
+  let archived = 0;
+  try {
+    archived = archiveAlertsAndJams(parsed.data.alerts, parsed.data.jams);
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'waze ingest archive enqueue failed',
+    );
+  }
   log.debug(
     {
       bbox: result.bboxKey,
       alerts: result.alerts,
       jams: result.jams,
       regions: result.regions,
+      archived,
     },
     'waze ingest',
   );
@@ -54,5 +171,6 @@ wazeIngestRouter.post('/api/waze/ingest', requireIngestKey, async (c) => {
     ok: true,
     regions_cached: result.regions,
     received: { alerts: result.alerts, jams: result.jams },
+    archived,
   });
 });

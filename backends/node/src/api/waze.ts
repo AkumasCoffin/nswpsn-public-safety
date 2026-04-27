@@ -248,11 +248,18 @@ async function buildHeatmapFromArchive(
 
   const client = await pool.connect();
   try {
-    // Generous timeout — the aggregation is a single GroupAgg over the
-    // 30d window using the new (source, fetched_at) index from
-    // migration 005. Should be sub-second once the index lands.
-    await client.query("SET LOCAL statement_timeout = '20s'");
-    const r = await client.query<HeatmapRow>(sql, params);
+    // SET LOCAL is a no-op outside a transaction (pg semantics) — wrap
+    // the query in BEGIN/COMMIT so the 20s timeout actually applies.
+    await client.query('BEGIN');
+    let r: { rows: HeatmapRow[] };
+    try {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      r = await client.query<HeatmapRow>(sql, params);
+      await client.query('COMMIT');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
+    }
     const points: [number, number, number][] = r.rows.map((row) => [
       Number(row.lat_bin.toFixed(5)),
       Number(row.lng_bin.toFixed(5)),
