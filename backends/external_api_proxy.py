@@ -1847,6 +1847,24 @@ def store_incidents_batch(incidents, source_type=None):
     name = _ARCHIVE_NAMES.get(src, src)
     n = len(incidents)
 
+    # Skip Waze archival entirely. Waze produces ~1300 records every 30s
+    # and archiving them was creating sustained UPDATE contention on
+    # data_history (archive writer + bbox reconcile + cleanup all fighting
+    # for the same rows, statement timeouts cascading into pool
+    # exhaustion). Live Waze data is served from _waze_ingest_cache
+    # (in-memory dict populated by the userscript ingest POST), so the
+    # map and /api/waze/* endpoints are unaffected. The only loss is the
+    # historical Waze view on the logs page — niche use case.
+    #
+    # This is intentionally a hard cutoff rather than a soft one (env
+    # toggle): the contention pattern is structural and won't reappear
+    # in the Node rewrite (separate per-source partitioned tables, no
+    # is_live UPDATEs). When the rewrite is done, this whole function is
+    # going away.
+    if src in ('waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork'):
+        return {'total': n, 'new': 0, 'changed': 0, 'unchanged': 0,
+                'ended': 0, 'queued': False, 'skipped': 'waze_archive_disabled'}
+
     global _archive_buffer_records
     dropped = 0
     with _archive_buffer_lock:
@@ -9533,8 +9551,17 @@ def _ensure_reconcile_worker():
 def _waze_reconcile_bbox(bbox_raw, alerts, jams):
     """Enqueue a per-region 'gone' reconcile. Non-blocking; coalesces by
     bbox key so revisits don't pile up — the worker always processes the
-    freshest payload for each region."""
-    _ensure_reconcile_worker()
+    freshest payload for each region.
+
+    DISABLED — paired with the Waze archive-disable (store_incidents_batch
+    skips waze_*). With no fresh waze rows being written, the only thing
+    reconcile would do is fight cleanup_old_data for the same stale rows
+    and produce statement-timeout cascades. Live waze state lives in
+    _waze_ingest_cache (in-memory); historical state ages out via
+    cleanup_old_data after 1h. Going away entirely in the Node rewrite.
+    """
+    return
+    _ensure_reconcile_worker()  # noqa: unreachable, keeps the import live for now
     # Extract just the fields the sync worker needs — don't hold references
     # to the full payload alerts[] on the queue.
     current_ids = set()
