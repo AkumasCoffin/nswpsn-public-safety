@@ -4,7 +4,7 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>User Management | Forcequit Admin</title>
+  <title>Admin | Forcequit</title>
   <meta name="theme-color" content="#0f172a">
   
   <meta name="description" content="Admin panel for managing NSW PSN editor requests and user permissions.">
@@ -12,14 +12,14 @@
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/editor-requests.html">
-  <meta property="og:title" content="User Management – Forcequit Admin">
+  <meta property="og:title" content="Admin – Forcequit">
   <meta property="og:description" content="Admin panel for managing NSW PSN editor requests and user permissions.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
   <meta property="og:site_name" content="Forcequit NSW PSN">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/editor-requests.html">
-  <meta name="twitter:title" content="User Management – Forcequit Admin">
+  <meta name="twitter:title" content="Admin – Forcequit">
   <meta name="twitter:description" content="Admin panel for managing NSW PSN editor requests and user permissions.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
 
@@ -173,6 +173,97 @@
     .stat-card.pending .stat-value { color: var(--warning); }
     .stat-card.approved .stat-value { color: var(--success); }
     .stat-card.rejected .stat-value { color: var(--danger); }
+
+    /* === Dev tab — backend status panel === */
+    .dev-overall {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .dev-overall-badge {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.4rem 0.9rem;
+      border-radius: 8px;
+      background: rgba(34, 197, 94, 0.18);
+      color: var(--success);
+      border: 1px solid rgba(34, 197, 94, 0.4);
+    }
+    .dev-overall-badge.degraded {
+      background: rgba(234, 179, 8, 0.18);
+      color: var(--warning);
+      border-color: rgba(234, 179, 8, 0.4);
+    }
+    .dev-overall-badge.down {
+      background: rgba(239, 68, 68, 0.18);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+    .dev-overall-meta { color: var(--text-soft); font-size: 0.9rem; }
+
+    .dev-section-h {
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 1.5rem 0 0.75rem;
+    }
+    .dev-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .dev-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-left: 3px solid var(--success);
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+    }
+    .dev-card.degraded { border-left-color: var(--warning); }
+    .dev-card.down     { border-left-color: var(--danger); }
+    .dev-card.unknown  { border-left-color: var(--text-soft); }
+    .dev-card-name {
+      display: flex; justify-content: space-between; align-items: center;
+      font-weight: 600; color: var(--text-primary); margin-bottom: 0.4rem;
+    }
+    .dev-card-status {
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(34, 197, 94, 0.18);
+      color: var(--success);
+    }
+    .dev-card-status.degraded { background: rgba(234, 179, 8, 0.18); color: var(--warning); }
+    .dev-card-status.down     { background: rgba(239, 68, 68, 0.18); color: var(--danger); }
+    .dev-card-status.unknown  { background: rgba(148, 163, 184, 0.18); color: var(--text-soft); }
+    .dev-card-meta {
+      font-size: 0.78rem;
+      color: var(--text-soft);
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .dev-card-meta .k { display: inline-block; width: 6.5em; opacity: 0.7; }
+
+    .dev-status-pill {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+    .dev-status-pill.degraded { background: var(--warning); }
+    .dev-status-pill.down     { background: var(--danger); }
     
     .filter-bar {
       display: flex;
@@ -558,7 +649,7 @@
         <i class="fas fa-arrow-left"></i> Back to Map
       </a>
       <h2>Forcequit <span>Admin</span></h2>
-      <p id="login-message" style="color: var(--text-soft); margin-bottom: 1.5rem;">Sign in to access User Management</p>
+      <p id="login-message" style="color: var(--text-soft); margin-bottom: 1.5rem;">Sign in to access Admin</p>
       
       <div id="login-form-container">
         <div style="margin-bottom: 1rem;">
@@ -577,7 +668,7 @@
       
       <div style="border-top: 1px solid var(--border-subtle); margin-top: 1.5rem; padding-top: 1.5rem; text-align: center;">
         <p style="color: var(--text-soft); font-size: 0.8rem;">
-          <i class="fas fa-lock"></i> Team Member or Owner role required
+          <i class="fas fa-lock"></i> Owner, Team Member, or Dev role required
         </p>
       </div>
     </div>
@@ -611,6 +702,10 @@
         </button>
         <button class="tab-btn" data-tab="users" onclick="switchTab('users')">
           <i class="fas fa-users"></i> Users
+        </button>
+        <button class="tab-btn" data-tab="dev" onclick="switchTab('dev')">
+          <i class="fas fa-server"></i> Dev
+          <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
         </button>
       </div>
 
@@ -675,6 +770,20 @@
             <i class="fas fa-spinner"></i>
           </div>
         </div>
+      </div>
+
+      <!-- Dev Tab -->
+      <div id="dev-tab" class="tab-content">
+        <div class="dev-overall" id="dev-overall">
+          <div class="dev-overall-badge" id="dev-overall-badge">…</div>
+          <div class="dev-overall-meta" id="dev-overall-meta">loading status</div>
+        </div>
+
+        <h3 class="dev-section-h">Backend Internals</h3>
+        <div class="dev-card-grid" id="dev-internals-grid"></div>
+
+        <h3 class="dev-section-h">Data Sources</h3>
+        <div class="dev-card-grid" id="dev-sources-grid"></div>
       </div>
     </div>
   </div>
@@ -930,18 +1039,28 @@
     let currentEditUserId = null;
     let currentTab = 'requests';
     
-    // Permission state
+    // Permission state. `tabs` is the per-tab visibility set we get from
+    // /api/check-admin — the page renders only the tabs the user's role
+    // mix is allowed to open.
     let userPermissions = {
       is_owner: false,
       is_team_member: false,
+      is_dev: false,
       is_map_editor: false,
       can_manage_users: false,
-      can_assign_privileged_roles: false
+      can_assign_privileged_roles: false,
+      tabs: { requests: false, users: false, dev: false }
     };
+
+    // Dev-tab status polling state. We refresh /api/status while the Dev
+    // tab is the active panel; pause when it's not, so we don't burn
+    // requests in the background.
+    let _devStatusTimer = null;
+    const _devStatusIntervalMs = 30_000;
     
     function switchTab(tab) {
       currentTab = tab;
-      
+
       // Update tab buttons
       document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.remove('active');
@@ -949,25 +1068,214 @@
           btn.classList.add('active');
         }
       });
-      
+
       // Update tab content
       document.querySelectorAll('.tab-content').forEach(content => {
         content.classList.remove('active');
       });
       document.getElementById(`${tab}-tab`).classList.add('active');
-      
+
       // Load data if needed
       if (tab === 'users' && allUsers.length === 0) {
         loadUsers();
       }
+
+      // Dev tab: start polling /api/status when entered, stop when left.
+      // Other tabs don't need a per-tab polling loop.
+      if (tab === 'dev') {
+        startDevStatusPolling();
+      } else {
+        stopDevStatusPolling();
+      }
     }
-    
+
     async function refreshAll() {
       if (currentTab === 'requests') {
         await refreshRequests();
-      } else {
+      } else if (currentTab === 'users') {
         await loadUsers();
+      } else if (currentTab === 'dev') {
+        await refreshDevStatus();
       }
+    }
+
+    // === Dev tab — backend status panel =================================
+    function startDevStatusPolling() {
+      // First refresh is immediate; then every _devStatusIntervalMs.
+      refreshDevStatus();
+      if (_devStatusTimer) return;
+      _devStatusTimer = setInterval(refreshDevStatus, _devStatusIntervalMs);
+    }
+
+    function stopDevStatusPolling() {
+      if (_devStatusTimer) {
+        clearInterval(_devStatusTimer);
+        _devStatusTimer = null;
+      }
+    }
+
+    async function refreshDevStatus() {
+      try {
+        // /api/status is unauthenticated by design (so external monitors
+        // like Uptime Kuma can hit it). No api_key needed.
+        const res = await fetch(`${API_BASE_URL}/api/status`);
+        if (!res.ok && res.status !== 503) {
+          // 503 still has a JSON body; only bail on network errors / 4xx.
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderDevStatus(data);
+      } catch (e) {
+        const overall = document.getElementById('dev-overall-badge');
+        const meta = document.getElementById('dev-overall-meta');
+        if (overall) {
+          overall.textContent = 'ERROR';
+          overall.className = 'dev-overall-badge down';
+        }
+        if (meta) meta.textContent = `Could not fetch /api/status: ${e.message}`;
+      }
+    }
+
+    // Render helpers — small enough to keep inline.
+    function _fmtAge(secs) {
+      if (secs == null) return '—';
+      if (secs < 60)   return `${Math.round(secs)}s`;
+      if (secs < 3600) return `${Math.round(secs / 60)}m`;
+      return `${Math.round(secs / 3600)}h`;
+    }
+    function _fmtUptime(secs) {
+      if (secs == null) return '—';
+      const d = Math.floor(secs / 86400);
+      const h = Math.floor((secs % 86400) / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      if (d > 0) return `${d}d ${h}h`;
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
+    function _kv(k, v) {
+      return `<div><span class="k">${k}</span>${v == null ? '—' : v}</div>`;
+    }
+
+    function _checkCard(name, c, lines) {
+      const ok = c && c.ok !== false;
+      const cls = ok ? '' : 'down';
+      const status = ok ? 'OK' : 'ISSUE';
+      const statusCls = ok ? '' : 'down';
+      return `
+        <div class="dev-card ${cls}">
+          <div class="dev-card-name">
+            <span>${name}</span>
+            <span class="dev-card-status ${statusCls}">${status}</span>
+          </div>
+          <div class="dev-card-meta">${lines.join('')}</div>
+        </div>`;
+    }
+
+    function _sourceCard(name, s) {
+      const status = (s && s.status) || 'unknown';
+      return `
+        <div class="dev-card ${status}">
+          <div class="dev-card-name">
+            <span>${s && s.label ? s.label : name}</span>
+            <span class="dev-card-status ${status}">${status}</span>
+          </div>
+          <div class="dev-card-meta">
+            ${_kv('last ok',     _fmtAge(s ? s.last_success_age_secs : null))}
+            ${_kv('last err',    _fmtAge(s ? s.last_error_age_secs : null))}
+            ${_kv('fails',       s ? s.consec_fails : '—')}
+            ${_kv('soft / hard', s ? `${_fmtAge(s.soft_threshold_secs)} / ${_fmtAge(s.hard_threshold_secs)}` : '—')}
+          </div>
+        </div>`;
+    }
+
+    function renderDevStatus(data) {
+      // Overall badge + meta line.
+      const overall = data.status || 'unknown';
+      const badge = document.getElementById('dev-overall-badge');
+      badge.textContent = overall.toUpperCase();
+      badge.className = `dev-overall-badge ${overall === 'ok' ? '' : overall}`;
+      const meta = document.getElementById('dev-overall-meta');
+      const sum = data.summary || {};
+      meta.innerHTML =
+        `uptime <strong>${_fmtUptime(data.uptime_secs)}</strong> · ` +
+        `mode <strong>${data.mode || '?'}</strong> · ` +
+        `sources <strong>${sum.sources_ok || 0}/${sum.sources_total || 0}</strong> ok` +
+        (sum.sources_down ? `, <strong style="color:var(--danger)">${sum.sources_down} down</strong>` : '') +
+        (sum.sources_degraded ? `, <strong style="color:var(--warning)">${sum.sources_degraded} degraded</strong>` : '') +
+        (sum.sources_unknown ? `, ${sum.sources_unknown} unknown` : '');
+
+      // Tab-button pill mirrors the overall colour so a quick glance at
+      // the tab nav tells you backend state without opening the panel.
+      const pill = document.getElementById('dev-status-pill');
+      if (pill) {
+        pill.style.display = '';
+        pill.className = `dev-status-pill ${overall === 'ok' ? '' : overall}`;
+      }
+
+      // Backend internals grid.
+      const checks = data.checks || {};
+      const intGrid = document.getElementById('dev-internals-grid');
+      const db = checks.database || {};
+      const aw = checks.archive_writer || {};
+      const ab = checks.archive_buffer || {};
+      const wi = checks.waze_ingest || {};
+      const ph = checks.police_heatmap || {};
+      const fc = checks.filter_cache || {};
+      const rc = checks.ram_cache || {};
+      intGrid.innerHTML = [
+        _checkCard('Database', db, [
+          _kv('latency',  db.latency_ms != null ? `${db.latency_ms} ms` : '—'),
+          _kv('pool',     `${db.pool_in_use ?? '?'}/${db.pool_max ?? '?'} in use`),
+          db.error ? _kv('error', `<span style="color:var(--danger)">${db.error}</span>`) : '',
+        ]),
+        _checkCard('Archive Writer', aw, [
+          _kv('last flush', _fmtAge(aw.last_flush_age_secs)),
+          _kv('interval',   _fmtAge(aw.flush_interval_secs)),
+          _kv('threshold',  _fmtAge(aw.threshold_secs)),
+        ]),
+        _checkCard('Archive Buffer', ab, [
+          _kv('records', ab.records ?? '—'),
+          _kv('warn',    ab.warn_threshold ?? '—'),
+          _kv('cap',     ab.hard_cap ?? '—'),
+        ]),
+        _checkCard('Waze Ingest', wi, [
+          _kv('last',    _fmtAge(wi.last_ingest_age_secs)),
+          _kv('regions', wi.regions_cached ?? '—'),
+          _kv('block',   wi.block_rate_pct != null ? `${wi.block_rate_pct}%` : '—'),
+          _kv('gated',   wi.gate_active ? 'YES' : 'no'),
+        ]),
+        _checkCard('Police Heatmap', ph, [
+          _kv('bins',         ph.bins ?? '—'),
+          _kv('last refresh', _fmtAge(ph.last_refresh_age_secs)),
+          _kv('threshold',    _fmtAge(ph.threshold_secs)),
+        ]),
+        _checkCard('Filter Cache', fc, [
+          _kv('last refresh', _fmtAge(fc.last_refresh_age_secs)),
+          _kv('interval',     _fmtAge(fc.refresh_interval_secs)),
+          _kv('threshold',    _fmtAge(fc.threshold_secs)),
+        ]),
+        _checkCard('RAM Cache', { ok: true }, [
+          _kv('hit rate', rc.hit_rate_pct != null ? `${rc.hit_rate_pct}%` : '—'),
+          _kv('hits',     rc.hits ?? '—'),
+          _kv('misses',   rc.misses ?? '—'),
+        ]),
+      ].join('');
+
+      // Sources grid — render in a stable order so the layout doesn't
+      // jiggle on every refresh.
+      const sources = data.sources || {};
+      const order = [
+        'rfs', 'bom', 'pager',
+        'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
+        'traffic_fire', 'traffic_major',
+        'power_endeavour', 'power_ausgrid',
+        'waze', 'rdio',
+      ];
+      const srcGrid = document.getElementById('dev-sources-grid');
+      srcGrid.innerHTML = order
+        .filter(name => sources[name])
+        .map(name => _sourceCard(name, sources[name]))
+        .join('');
     }
     
     async function doAdminLogin() {
@@ -987,7 +1295,7 @@
       
       if (error) {
         errorDiv.textContent = error.message;
-        document.getElementById('login-message').textContent = 'Sign in to access User Management';
+        document.getElementById('login-message').textContent = 'Sign in to access Admin';
         return;
       }
       
@@ -1000,7 +1308,7 @@
       const session = data.session;
       
       if (!session) {
-        document.getElementById('login-message').textContent = 'Sign in to access User Management';
+        document.getElementById('login-message').textContent = 'Sign in to access Admin';
         document.getElementById('login-form-container').style.display = 'block';
         return;
       }
@@ -1025,7 +1333,7 @@
         });
         
         if (!response.ok) {
-          document.getElementById('login-message').textContent = 'Access denied. Team Member or Owner role required.';
+          document.getElementById('login-message').textContent = 'Access denied. Owner, Team Member, or Dev role required.';
           return;
         }
         
@@ -1036,7 +1344,7 @@
               <i class="fas fa-exclamation-triangle"></i> Access Denied
             </div>
             <div style="font-size: 0.85rem;">
-              You need the <strong>Team Member</strong> or <strong>Owner</strong> role to access this page.
+              You need the <strong>Owner</strong>, <strong>Team Member</strong>, or <strong>Dev</strong> role to access this page.
               ${result.roles && result.roles.length > 0 
                 ? `<br><br>Your current roles: ${result.roles.join(', ')}` 
                 : '<br><br>You have no assigned roles.'}
@@ -1052,16 +1360,25 @@
           return;
         }
         
-        // Store permissions
+        // Store permissions. Older backends won't return the `tabs` block
+        // or `is_dev`; fall back to legacy semantics so the page still
+        // works during a partial deploy.
         const hasMapEditor = result.roles && result.roles.includes('map_editor');
-        userPermissions = {
-          is_owner: result.is_owner,
-          is_team_member: result.is_team_member,
-          is_map_editor: hasMapEditor,
-          can_manage_users: result.can_manage_users,
-          can_assign_privileged_roles: result.can_assign_privileged_roles
+        const tabs = result.tabs || {
+          requests: !!(result.is_owner || result.is_team_member),
+          users:    !!result.can_manage_users,
+          dev:      !!result.is_owner,  // legacy: only owners had dev-equivalent access
         };
-        
+        userPermissions = {
+          is_owner: !!result.is_owner,
+          is_team_member: !!result.is_team_member,
+          is_dev: !!result.is_dev,
+          is_map_editor: hasMapEditor,
+          can_manage_users: !!result.can_manage_users,
+          can_assign_privileged_roles: !!result.can_assign_privileged_roles,
+          tabs: tabs,
+        };
+
         // Apply UI restrictions based on permissions
         applyPermissionRestrictions();
         
@@ -1079,21 +1396,43 @@
     }
     
     function applyPermissionRestrictions() {
-      // Hide Users tab if not owner
-      const usersTab = document.querySelector('[data-tab="users"]');
-      if (!userPermissions.can_manage_users) {
-        usersTab.style.display = 'none';
+      const tabs = userPermissions.tabs;
+
+      // Hide each tab button the user isn't allowed to open. The page
+      // shows only the tabs they have access to — a dev-only user lands
+      // straight on the Dev panel and never sees Requests / Users.
+      const reqBtn = document.querySelector('[data-tab="requests"]');
+      const usrBtn = document.querySelector('[data-tab="users"]');
+      const devBtn = document.querySelector('[data-tab="dev"]');
+      if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
+      if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
+      if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
+
+      // Pick a default tab the user can actually see. Without this a
+      // dev-only user would open the page on the (now-hidden) Requests
+      // tab and stare at an empty container.
+      const defaultTab = tabs.requests ? 'requests' :
+                         tabs.users    ? 'users' :
+                         tabs.dev      ? 'dev' : null;
+      if (defaultTab && defaultTab !== currentTab) {
+        switchTab(defaultTab);
       }
-      
-      // Show Editor link only if user has map_editor access
+
+      // Editor link — show whenever they could plausibly use it.
       const editorLink = document.getElementById('editor-link');
       if (userPermissions.is_map_editor || userPermissions.is_owner) {
         editorLink.style.display = 'inline-flex';
       }
-      
-      // Update header to show role
-      const roleIndicator = userPermissions.is_owner ? '👑 Owner' : '👥 Team Member';
-      document.querySelector('.header h1').innerHTML = `User <span>Management</span> <span style="font-size: 0.7rem; color: var(--text-soft); margin-left: 0.5rem;">${roleIndicator}</span>`;
+
+      // Header — use the broadest title so a dev-only user doesn't see
+      // "User Management" on a page where Users is hidden.
+      const roleBits = [];
+      if (userPermissions.is_owner)       roleBits.push('👑 Owner');
+      if (userPermissions.is_team_member) roleBits.push('👥 Team Member');
+      if (userPermissions.is_dev)         roleBits.push('🛠️ Dev');
+      const roleIndicator = roleBits.join(' · ') || 'Authenticated';
+      document.querySelector('.header h1').innerHTML =
+        `Admin <span style="font-size: 0.7rem; color: var(--text-soft); margin-left: 0.5rem; font-weight: 400;">${roleIndicator}</span>`;
     }
     
     async function loadRequests() {
