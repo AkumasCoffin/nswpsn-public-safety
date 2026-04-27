@@ -262,34 +262,60 @@ class CentralwatchBrowser {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
       const page = this.page as {
-        evaluate: <T>(fn: string, arg: unknown) => Promise<T>;
+        evaluate: <T>(fn: string) => Promise<T>;
       };
+      // IIFE with values baked into the string. Playwright's
+      // `page.evaluate(string, arg)` ignores the second argument when
+      // the first is a string (it evaluates the string as an expression
+      // and returns its value). Bake `url` + `timeout` directly so the
+      // call is unambiguous.
+      const script = `(async () => {
+        const url = ${JSON.stringify(url)};
+        const timeout = ${JSON.stringify(timeoutMs)};
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        try {
+          const resp = await fetch(url, { signal: controller.signal, credentials: 'include' });
+          clearTimeout(timer);
+          const ct = resp.headers.get('content-type') || '';
+          if (!resp.ok) {
+            // Capture a body-preview when the response is non-2xx so
+            // operators can tell whether it's a Vercel block page or
+            // a real upstream HTTP error.
+            const bodyText = (await resp.text()).slice(0, 300);
+            return { ok: false, status: resp.status, contentType: ct, bodyPreview: bodyText };
+          }
+          // Some Vercel WAF challenge responses come back as 200 + HTML.
+          // Detect that and surface as ok:false so we don't try to JSON.parse it.
+          if (!ct.includes('json')) {
+            const bodyText = (await resp.text()).slice(0, 300);
+            return { ok: false, status: resp.status, contentType: ct, bodyPreview: bodyText };
+          }
+          const data = await resp.json();
+          return { ok: true, status: resp.status, data };
+        } catch (e) {
+          clearTimeout(timer);
+          return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+      })()`;
       try {
         const result = await page.evaluate<{
           ok: boolean;
           status?: number;
+          contentType?: string;
+          bodyPreview?: string;
           data?: unknown;
           error?: string;
-        }>(
-          `async ([url, timeout]) => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeout);
-            try {
-              const resp = await fetch(url, { signal: controller.signal });
-              clearTimeout(timer);
-              if (!resp.ok) return { ok: false, status: resp.status };
-              const data = await resp.json();
-              return { ok: true, status: resp.status, data: data };
-            } catch (e) {
-              clearTimeout(timer);
-              return { ok: false, error: String(e) };
-            }
-          }`,
-          [url, timeoutMs],
-        );
+        }>(script);
         if (result && result.ok) return result.data ?? null;
         log.warn(
-          { url, status: result?.status, err: result?.error },
+          {
+            url,
+            status: result?.status,
+            contentType: result?.contentType,
+            bodyPreview: result?.bodyPreview,
+            err: result?.error,
+          },
           'centralwatch browser fetchJson failed',
         );
         return null;
@@ -310,9 +336,33 @@ class CentralwatchBrowser {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
       const page = this.page as {
-        evaluate: <T>(fn: string, arg: unknown) => Promise<T>;
+        evaluate: <T>(fn: string) => Promise<T>;
       };
       try {
+        // IIFE with baked values — see fetchJson for why string-form
+        // evaluate's second-arg is ignored.
+        const script = `(async () => {
+          const url = ${JSON.stringify(url)};
+          const timeout = ${JSON.stringify(timeoutMs)};
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeout);
+          try {
+            const resp = await fetch(url, { signal: controller.signal, credentials: 'include' });
+            clearTimeout(timer);
+            if (!resp.ok) return { ok: false, status: resp.status };
+            const blob = await resp.blob();
+            if (!blob.type.startsWith('image/')) return { ok: false, status: resp.status, type: blob.type };
+            const buf = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const dataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
+            return { ok: true, status: resp.status, contentType: blob.type, size: blob.size, data: dataUrl };
+          } catch (e) {
+            clearTimeout(timer);
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+          }
+        })()`;
         const result = await page.evaluate<{
           ok: boolean;
           status?: number;
@@ -320,29 +370,7 @@ class CentralwatchBrowser {
           size?: number;
           data?: string;
           error?: string;
-        }>(
-          `async ([url, timeout]) => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeout);
-            try {
-              const resp = await fetch(url, { signal: controller.signal });
-              clearTimeout(timer);
-              if (!resp.ok) return { ok: false, status: resp.status };
-              const blob = await resp.blob();
-              if (!blob.type.startsWith('image/')) return { ok: false, status: resp.status, type: blob.type };
-              const buf = await blob.arrayBuffer();
-              const bytes = new Uint8Array(buf);
-              let binary = '';
-              for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-              const dataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
-              return { ok: true, status: resp.status, contentType: blob.type, size: blob.size, data: dataUrl };
-            } catch (e) {
-              clearTimeout(timer);
-              return { ok: false, error: String(e) };
-            }
-          }`,
-          [url, timeoutMs],
-        );
+        }>(script);
         if (result && result.ok && result.data) {
           const dataUrl = result.data;
           const commaIdx = dataUrl.indexOf(',');
@@ -397,12 +425,13 @@ class CentralwatchBrowser {
     if (!this.isReady() || images.length === 0) return [];
     return this.runExclusive(async () => {
       const page = this.page as {
-        evaluate: <T>(fn: string, arg: unknown) => Promise<T>;
+        evaluate: <T>(fn: string) => Promise<T>;
       };
       const imageList = images.map((i) => [i.id, i.url]);
       try {
-        const results = await page.evaluate<BatchImageResultJs[]>(
-          `async (imageList) => {
+        const script = `(async () => {
+          const imageList = ${JSON.stringify(imageList)};
+          return await (async (imageList) => {
             const PER_IMAGE_TIMEOUT = 15000;
             // Shared hidden canvas — created once, cleaned up at end.
             const canvas = document.createElement('canvas');
@@ -455,9 +484,9 @@ class CentralwatchBrowser {
               if (r.status === 'fulfilled') return r.value;
               return { id: imageList[i] ? imageList[i][0] : null, ok: false, error: String(r.reason) };
             });
-          }`,
-          imageList,
-        );
+          })(imageList);
+        })()`;
+        const results = await page.evaluate<BatchImageResultJs[]>(script);
         const out: BatchImageResult[] = [];
         for (const r of results || []) {
           if (r && r.ok && r.data) {
@@ -509,40 +538,39 @@ class CentralwatchBrowser {
     if (!this.isReady() || images.length === 0) return [];
     return this.runExclusive(async () => {
       const page = this.page as {
-        evaluate: <T>(fn: string, arg: unknown) => Promise<T>;
+        evaluate: <T>(fn: string) => Promise<T>;
       };
       const imageList = images.map((i) => [i.id, i.url]);
       try {
-        const results = await page.evaluate<BatchImageResultJs[]>(
-          `async (imageList) => {
-            const TIMEOUT = 15000;
-            const results = await Promise.allSettled(imageList.map(async ([id, url]) => {
-              const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), TIMEOUT);
-              try {
-                const resp = await fetch(url, { signal: controller.signal });
-                clearTimeout(timer);
-                if (!resp.ok) {
-                  const ra = resp.headers.get('Retry-After');
-                  return { id, ok: false, status: resp.status, retryAfter: ra ? (parseInt(ra) || null) : null };
-                }
-                const blob = await resp.blob();
-                if (!blob.type.startsWith('image/')) return { id, ok: false, type: blob.type };
-                const buf = await blob.arrayBuffer();
-                const bytes = new Uint8Array(buf);
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                const dataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
-                return { id, ok: true, contentType: blob.type, size: blob.size, data: dataUrl };
-              } catch (e) {
-                clearTimeout(timer);
-                return { id, ok: false, error: String(e) };
+        const script = `(async () => {
+          const imageList = ${JSON.stringify(imageList)};
+          const TIMEOUT = 15000;
+          const results = await Promise.allSettled(imageList.map(async ([id, url]) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), TIMEOUT);
+            try {
+              const resp = await fetch(url, { signal: controller.signal, credentials: 'include' });
+              clearTimeout(timer);
+              if (!resp.ok) {
+                const ra = resp.headers.get('Retry-After');
+                return { id, ok: false, status: resp.status, retryAfter: ra ? (parseInt(ra) || null) : null };
               }
-            }));
-            return results.map(r => r.status === 'fulfilled' ? r.value : { id: null, ok: false, error: String(r.reason) });
-          }`,
-          imageList,
-        );
+              const blob = await resp.blob();
+              if (!blob.type.startsWith('image/')) return { id, ok: false, type: blob.type };
+              const buf = await blob.arrayBuffer();
+              const bytes = new Uint8Array(buf);
+              let binary = '';
+              for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+              const dataUrl = 'data:' + blob.type + ';base64,' + btoa(binary);
+              return { id, ok: true, contentType: blob.type, size: blob.size, data: dataUrl };
+            } catch (e) {
+              clearTimeout(timer);
+              return { id, ok: false, error: String(e && e.message ? e.message : e) };
+            }
+          }));
+          return results.map(r => r.status === 'fulfilled' ? r.value : { id: null, ok: false, error: String(r.reason) });
+        })()`;
+        const results = await page.evaluate<BatchImageResultJs[]>(script);
         const out: BatchImageResult[] = [];
         for (const r of results || []) {
           if (r && r.ok && r.data) {

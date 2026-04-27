@@ -154,14 +154,15 @@ interface StubPage {
 
 function makeStubPage(): StubPage {
   return {
-    async evaluate(fnSrc: string, arg: unknown): Promise<unknown> {
-      // The fn source we generate is `async (imageList) => { ... }`.
-      // Wrap it so `new Function` can produce a callable.
+    async evaluate(fnSrc: string, _arg?: unknown): Promise<unknown> {
+      // Production scripts are self-invoking IIFEs `(async () => {...})()`
+      // with values baked in via JSON.stringify (Playwright's string-form
+      // evaluate ignores a second arg, so the fix is to bake values
+      // directly into the script). Just `eval` the string and return.
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      const fn = new Function('arg', `return (${fnSrc})(arg);`) as (
-        a: unknown,
-      ) => Promise<unknown>;
-      return fn(arg);
+      const fn = new Function(`return (${fnSrc});`) as () => Promise<unknown>;
+      void _arg;
+      return fn();
     },
   };
 }
