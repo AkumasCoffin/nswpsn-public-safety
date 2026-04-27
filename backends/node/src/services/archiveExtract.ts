@@ -127,20 +127,66 @@ function extractSourceId(item: Record<string, unknown>): string | null {
 }
 
 /**
- * Choose `category` and `subcategory` from a feature's properties, with
- * a few common upstream synonyms baked in.
+ * Choose `category` and `subcategory` from a feature's properties or
+ * a power outage object, with synonyms covering every upstream we
+ * archive. Endeavour / Ausgrid / Essential outages carry an
+ * `outageType` ("Unplanned"/"Planned"); RFS features carry an
+ * `alertLevel`; BoM warnings carry `warningType`; etc.
  */
 function extractCategoryFields(props: Record<string, unknown>): {
   category: string | null;
   subcategory: string | null;
 } {
   const cat = asString(
-    props['category'] ?? props['alertLevel'] ?? props['type'] ?? props['warningType'],
+    props['category'] ??
+      props['alertLevel'] ??
+      props['outageType'] ??
+      props['type'] ??
+      props['warningType'] ??
+      props['eventType'] ??
+      props['eventCategory'],
   );
   const sub = asString(
-    props['subcategory'] ?? props['subType'] ?? props['fireType'],
+    props['subcategory'] ?? props['subType'] ?? props['fireType'] ?? props['cause'],
   );
   return { category: cat, subcategory: sub };
+}
+
+/**
+ * Apply title / location_text aliases to an object so the JSONB
+ * projection at /api/data/history finds usable values regardless of
+ * whether the upstream calls the field `title`, `name`, `headline`,
+ * `streets`, `suburb`, etc. Used by both the GeoJSON-feature path
+ * and the array-element path.
+ *
+ * Aliases (first match wins):
+ *   title         ← name | headline | displayName | streets | suburb | description
+ *   location_text ← location | streets | suburb | city | address | streetName
+ */
+function applyAliases(
+  out: Record<string, unknown>,
+  src: Record<string, unknown>,
+): void {
+  if (out['title'] === undefined) {
+    const aliasTitle =
+      asString(src['name']) ??
+      asString(src['headline']) ??
+      asString(src['displayName']) ??
+      asString(src['streets']) ??
+      asString(src['suburb']) ??
+      asString(src['description']);
+    if (aliasTitle) out['title'] = aliasTitle;
+  }
+  if (out['location_text'] === undefined) {
+    const aliasLocation =
+      asString(src['location']) ??
+      asString(src['streets']) ??
+      asString(src['suburb']) ??
+      asString(src['city']) ??
+      asString(src['address']) ??
+      asString(src['streetName']);
+    if (aliasLocation) out['location_text'] = aliasLocation;
+  }
 }
 
 /**
@@ -152,32 +198,28 @@ function extractCategoryFields(props: Record<string, unknown>): {
 function flatDataFromFeature(item: FeatureLike): Record<string, unknown> {
   const props = (item.properties ?? {}) as Record<string, unknown>;
   // Start with the properties (they already carry title/severity/etc.
-  // for most upstreams), then overlay a few normalised aliases so
-  // dataHistoryQuery's `data->>'title'` finds something even when an
-  // upstream uses a synonym (`name`, `headline`, etc.).
+  // for most upstreams), then overlay normalised aliases.
   const out: Record<string, unknown> = { ...props };
-  if (out['title'] === undefined) {
-    const aliasTitle =
-      asString(props['name']) ??
-      asString(props['headline']) ??
-      asString(props['displayName']);
-    if (aliasTitle) out['title'] = aliasTitle;
-  }
-  if (out['location_text'] === undefined) {
-    const aliasLocation =
-      asString(props['location']) ??
-      asString(props['streets']) ??
-      asString(props['suburb']) ??
-      asString(props['city']);
-    if (aliasLocation) out['location_text'] = aliasLocation;
-  }
-  // Also surface lat/lng inside data so callers that only read `data`
+  applyAliases(out, props);
+  // Surface lat/lng inside data so callers that only read `data`
   // (not the row's columns) can still find geometry.
   if (out['lat'] === undefined && out['lng'] === undefined) {
     const ll = extractLatLng(item as Record<string, unknown>);
     if (ll.lat !== null) out['lat'] = ll.lat;
     if (ll.lng !== null) out['lng'] = ll.lng;
   }
+  return out;
+}
+
+/**
+ * Build a flat data blob from an array element (e.g. an Endeavour
+ * outage object — no GeoJSON wrapping). Aliases are applied
+ * directly against the object's own keys so power outages with no
+ * `title` field still surface a readable label.
+ */
+function flatDataFromArrayItem(item: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...item };
+  applyAliases(out, item);
   return out;
 }
 
@@ -232,7 +274,11 @@ export function defaultArchiveItems(
         lng,
         category,
         subcategory,
-        data: obj,
+        // Apply the same aliases the Feature path uses. Without this,
+        // power outages (no `title`/`location_text` keys, just
+        // `suburb`/`streets`/`outageType`) ended up with null
+        // title/location/category in /api/data/history.
+        data: flatDataFromArrayItem(obj),
       });
     }
     return out;
