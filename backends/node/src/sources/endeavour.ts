@@ -145,7 +145,15 @@ export async function callSupabase(
   if (!base || !key) {
     throw new HttpError('endeavour: ENDEAVOUR_SUPABASE_URL/_KEY not configured', null, endpoint);
   }
-  const url = new URL(endpoint, base);
+  // Plain string concat (mirrors python's f"{base}{endpoint}"). The
+  // WHATWG `new URL(endpoint, base)` constructor treats a leading "/"
+  // in `endpoint` as origin-absolute, which strips any base path —
+  // e.g. base "https://x.supabase.co/rest/v1" + endpoint "/rpc/foo"
+  // resolves to ".../rpc/foo" not ".../rest/v1/rpc/foo". Endeavour's
+  // env URL ends in /rest/v1 so concat is what we want.
+  const trimmedBase = base.replace(/\/+$/, '');
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = new URL(`${trimmedBase}${path}`);
   if (init.query) {
     for (const [k, v] of Object.entries(init.query)) url.searchParams.set(k, v);
   }
