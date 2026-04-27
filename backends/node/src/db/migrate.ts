@@ -84,6 +84,14 @@ export async function runMigrations(): Promise<{
     log.info({ file: f, noTx }, 'applying migration');
     const client = await pool.connect();
     try {
+      // Migrations may build large indexes / scan multi-million-row
+      // tables. The pool's default 30s statement_timeout from
+      // db/pool.ts will kill them. Override here to "unlimited" so the
+      // migration runner doesn't fight its own infrastructure. We set
+      // session-level (not LOCAL) so it covers the noTx path too;
+      // tx-mode SET sticks for the BEGIN/COMMIT span only because the
+      // client is released immediately after.
+      await client.query('SET statement_timeout = 0');
       if (!noTx) await client.query('BEGIN');
       await client.query(sql);
       await client.query(

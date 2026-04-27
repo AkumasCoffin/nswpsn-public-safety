@@ -54,7 +54,7 @@ const PAGE_SESSION_TIMEOUT_SECS = 120;
 // ---------------------------------------------------------------------------
 
 interface StatsHistoryRow {
-  ts: Date;
+  timestamp: string | number;
   data: Record<string, unknown>;
 }
 
@@ -68,18 +68,18 @@ statsRouter.get('/api/stats/history', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json([]);
 
+  // Python schema: `timestamp BIGINT` ms epoch. See migration 009.
+  const cutoffMs = Date.now() - hours * 3_600_000;
   try {
     const result = await pool.query<StatsHistoryRow>(
-      `SELECT ts, data FROM stats_snapshots
-       WHERE ts >= NOW() - ($1 || ' hours')::interval
-       ORDER BY ts ASC`,
-      [String(hours)],
+      `SELECT "timestamp", data FROM stats_snapshots
+       WHERE "timestamp" >= $1
+       ORDER BY "timestamp" ASC`,
+      [cutoffMs],
     );
-    // Python emits `timestamp` in JS-compatible milliseconds; preserve
-    // that contract so the frontend chart code keeps working.
     return c.json(
       result.rows.map((r) => ({
-        timestamp: r.ts.getTime(),
+        timestamp: Number(r.timestamp),
         data: r.data,
       })),
     );
@@ -507,8 +507,8 @@ import { sydneyIsoFromDate } from '../lib/sydneyTime.js';
 interface ArchiveStatusRow {
   total: string | number;
   last_hour: string | number;
-  oldest: Date | null;
-  newest: Date | null;
+  oldest: string | number | null;
+  newest: string | number | null;
 }
 
 statsRouter.get('/api/stats/archive/status', async (c) => {
@@ -525,26 +525,28 @@ statsRouter.get('/api/stats/archive/status', async (c) => {
 
   let total_records = 0;
   let records_last_hour = 0;
-  let oldest: Date | null = null;
-  let newest: Date | null = null;
+  let oldestMs: number | null = null;
+  let newestMs: number | null = null;
 
   const pool = await getPool();
   if (pool) {
+    const cutoffMs = Date.now() - 3_600_000;
     try {
       const r = await pool.query<ArchiveStatusRow>(
         `SELECT
            COUNT(*)::bigint AS total,
-           COUNT(*) FILTER (WHERE ts >= NOW() - INTERVAL '1 hour')::bigint AS last_hour,
-           MIN(ts) AS oldest,
-           MAX(ts) AS newest
+           COUNT(*) FILTER (WHERE "timestamp" >= $1)::bigint AS last_hour,
+           MIN("timestamp") AS oldest,
+           MAX("timestamp") AS newest
          FROM stats_snapshots`,
+        [cutoffMs],
       );
       const row = r.rows[0];
       if (row) {
         total_records = Number(row.total ?? 0);
         records_last_hour = Number(row.last_hour ?? 0);
-        oldest = row.oldest;
-        newest = row.newest;
+        oldestMs = row.oldest != null ? Number(row.oldest) : null;
+        newestMs = row.newest != null ? Number(row.newest) : null;
       }
     } catch (err) {
       log.warn(
@@ -564,8 +566,8 @@ statsRouter.get('/api/stats/archive/status', async (c) => {
     active_sessions: sessions,
     total_records,
     records_last_hour,
-    oldest_record: sydneyIsoFromDate(oldest),
-    newest_record: sydneyIsoFromDate(newest),
+    oldest_record: oldestMs !== null ? sydneyIsoFromDate(new Date(oldestMs)) : null,
+    newest_record: newestMs !== null ? sydneyIsoFromDate(new Date(newestMs)) : null,
     db_path: 'postgres',
     // Node-only extras kept so older tooling that reads them still works.
     archive_writer: {
