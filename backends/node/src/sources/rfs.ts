@@ -164,7 +164,12 @@ export async function fetchRfs(): Promise<RfsSnapshot> {
     const desc = textOf(item, 'description');
     const guid = textOf(item, 'guid');
     const category = textOf(item, 'category');
-    const pointText = textOf(item, 'georss:point');
+    // The RFS feed declares the GeoRSS namespace inline on each <point> /
+    // <polygon> element (xmlns="http://www.georss.org/georss") rather than
+    // via a prefix on the root. fast-xml-parser strips the inline xmlns
+    // and exposes the elements under their bare local names, so we look
+    // up both `georss:point` (legacy / prefixed feeds) and `point`.
+    const pointText = textOf(item, 'georss:point') || textOf(item, 'point');
     if (!pointText) continue;
 
     const parts = pointText.trim().split(/\s+/);
@@ -173,8 +178,11 @@ export async function fetchRfs(): Promise<RfsSnapshot> {
     const lon = Number(parts[1]);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
 
-    // GeoRSS polygons live under georss:polygon — array per RFS feed.
-    const rawPolys = (item as Record<string, unknown>)['georss:polygon'];
+    // Polygon may live under either `georss:polygon` or bare `polygon`
+    // depending on whether the upstream uses a prefix or an inline xmlns.
+    const rawPolys =
+      (item as Record<string, unknown>)['georss:polygon'] ??
+      (item as Record<string, unknown>)['polygon'];
     const polygons: string[] = [];
     if (rawPolys !== undefined && rawPolys !== null) {
       const arr = asArray(rawPolys);
@@ -257,7 +265,10 @@ export async function fetchRfsRaw(): Promise<RfsRawSnapshot> {
   const items = asArray(channel['item']) as Array<Record<string, unknown>>;
 
   const out = items.map((item) => {
-    const pointText = textOf(item, 'georss:point').trim();
+    // Same dual-key lookup as fetchRfs — see comment there.
+    const pointText = (
+      textOf(item, 'georss:point') || textOf(item, 'point')
+    ).trim();
     return {
       title: textOf(item, 'title'),
       link: textOf(item, 'link'),
