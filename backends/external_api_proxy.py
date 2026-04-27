@@ -10932,7 +10932,7 @@ def health():
 # Thresholds for /api/status. Tunable via env so we can tighten/loosen
 # without a redeploy. Defaults are generous — they only fire when something
 # is genuinely wrong, not on transient hiccups.
-STATUS_DB_TIMEOUT_SECS         = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 3))
+STATUS_DB_TIMEOUT_SECS         = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 5))
 STATUS_WRITER_STALE_SECS       = int(os.environ.get('STATUS_WRITER_STALE_SECS', 300))    # 5 min
 STATUS_WAZE_STALE_SECS         = int(os.environ.get('STATUS_WAZE_STALE_SECS', 900))      # 15 min
 STATUS_BUFFER_WARN_RECORDS     = int(os.environ.get('STATUS_BUFFER_WARN_RECORDS', 10_000))
@@ -11020,6 +11020,15 @@ def status_endpoint():
     degraded = False
 
     # ---- 1. Database connectivity + pool occupancy ----------------------
+    # Three-tier classification so a stressed-but-reachable DB doesn't
+    # flap the whole backend to 503:
+    #   - Connection refused / pool exhausted / unknown error  →  DOWN
+    #   - SELECT 1 timed out (DB is up but slow)                →  DEGRADED
+    #   - SELECT 1 returned                                     →  OK
+    # A slow SELECT under archive/heatmap load is normal contention; the
+    # archive writer + heatmap RAM fallback are designed to absorb it,
+    # so 503-ing the status endpoint would just generate noise without
+    # signalling a real outage.
     db_ok = False
     db_latency_ms = None
     db_error = None
@@ -11033,7 +11042,19 @@ def status_endpoint():
         c.fetchone()
         db_ok = True
         db_latency_ms = int((time.time() - db_t0) * 1000)
+    except psycopg2.Error as e:
+        # SQLSTATE 57014 = query_canceled (statement_timeout). DB is
+        # reachable, just slow — treat as degraded.
+        db_error = str(e)[:200]
+        if getattr(e, 'pgcode', None) == '57014':
+            degraded = True
+            db_latency_ms = int((time.time() - db_t0) * 1000)
+        else:
+            critical_failed = True
     except Exception as e:
+        # Pool exhaustion (psycopg2.pool.PoolError) and any other
+        # non-DB exception falls here — these mean we can't even talk
+        # to the DB, so it's a real outage.
         db_error = str(e)[:200]
         critical_failed = True
     finally:
