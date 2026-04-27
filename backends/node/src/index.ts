@@ -42,6 +42,7 @@ import {
   startStatsArchiver,
   stopStatsArchiver,
 } from './services/statsArchiver.js';
+import { ensurePerfIndexes } from './services/indexBuilder.js';
 import {
   start as startActivityMode,
   stop as stopActivityMode,
@@ -80,6 +81,12 @@ async function preflight(): Promise<void> {
   startHeatmapRefreshLoop(); // 5-min background refresh of police heatmap RAM cache
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startPolling(); // walks the registry, schedules each source's setInterval
+
+  // Background perf-index build. Runs on its own connection with
+  // statement_timeout=0 so each CREATE INDEX can take as long as it
+  // needs without blocking startup. Idempotent — re-runs are cheap
+  // (pg_indexes lookup, then IF NOT EXISTS).
+  setTimeout(() => void ensurePerfIndexes(), 5_000).unref?.();
 
   // Best-effort warm of the rdio unit-label CSV. Routes call
   // ensureUnitLabelsLoaded() lazily but doing it here means the first
