@@ -53,10 +53,18 @@ export const WazeLocationSchema = z
   })
   .passthrough();
 
+// Waze upstream sometimes serialises uuid/id as integers (specifically
+// for jam objects). Coerce to string so dedup keys are type-stable
+// across the alert + jam collections.
+const idLike = z
+  .union([z.string(), z.number()])
+  .transform((v) => String(v))
+  .optional();
+
 export const WazeAlertSchema = z
   .object({
-    uuid: z.string().optional(),
-    id: z.string().optional(),
+    uuid: idLike,
+    id: idLike,
     type: z.string().optional(),
     subtype: z.string().optional(),
     location: WazeLocationSchema.optional(),
@@ -68,8 +76,8 @@ export type WazeAlert = z.infer<typeof WazeAlertSchema>;
 
 export const WazeJamSchema = z
   .object({
-    uuid: z.string().optional(),
-    id: z.string().optional(),
+    uuid: idLike,
+    id: idLike,
   })
   .passthrough();
 export type WazeJam = z.infer<typeof WazeJamSchema>;

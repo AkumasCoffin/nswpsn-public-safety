@@ -225,6 +225,14 @@ async function migrateFamily(pool, family, sources, unitDivisor) {
     return total;
   }
 
+  // Pre-create monthly partitions covering the full fetched_at range
+  // for this family. Without this the INSERTs blow up the moment they
+  // hit a row whose month doesn't have a partition yet (002_archive_
+  // partitions.sql only seeds current+next month). Calls the
+  // `ensure_archive_partition(parent, date)` plpgsql helper from
+  // migration 002.
+  await ensurePartitions(pool, family, sources, unitDivisor);
+
   console.log(`  ${family}: ${total} rows → copying in batches of ${flags.batch}…`);
 
   // Page by id ascending so resumed runs (after a crash) can start
@@ -258,6 +266,42 @@ async function migrateFamily(pool, family, sources, unitDivisor) {
   }
   console.log(`    ${family}: ${copied}/${total} done                          `);
   return copied;
+}
+
+async function ensurePartitions(pool, family, sources, unitDivisor) {
+  const ph = sources.map((_, i) => `$${i + 1}`).join(',');
+  const fetchedAtExpr =
+    unitDivisor === 1000
+      ? `to_timestamp(fetched_at::double precision / 1000.0)`
+      : `to_timestamp(fetched_at::double precision)`;
+
+  const r = await pool.query(
+    `SELECT MIN(${fetchedAtExpr}) AS min, MAX(${fetchedAtExpr}) AS max
+       FROM data_history WHERE source IN (${ph})`,
+    sources,
+  );
+  const row = r.rows[0];
+  if (!row || !row.min || !row.max) return;
+
+  // Walk first-of-each-month from min to max and call the helper for
+  // every covered month. Idempotent (the helper is IF NOT EXISTS).
+  const start = new Date(row.min);
+  const end = new Date(row.max);
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 1));
+  let created = 0;
+  while (cursor < stop) {
+    const ymd = cursor.toISOString().slice(0, 10);
+    await pool.query('SELECT ensure_archive_partition($1, $2::date)', [
+      family,
+      ymd,
+    ]);
+    created += 1;
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+  }
+  console.log(
+    `  ${family}: ensured ${created} monthly partition(s) covering ${row.min.toISOString().slice(0, 10)} → ${row.max.toISOString().slice(0, 10)}`,
+  );
 }
 
 function buildCountSql(sources) {
