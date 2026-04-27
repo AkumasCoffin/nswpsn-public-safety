@@ -20,6 +20,7 @@
 import { Hono } from 'hono';
 import { modeLabel } from '../config.js';
 import { liveStore } from '../store/live.js';
+import { activeViewerCount } from '../services/activityMode.js';
 
 export const healthRouter = new Hono();
 
@@ -27,12 +28,10 @@ healthRouter.get('/api/health', (c) =>
   c.json({
     status: 'ok',
     mode: modeLabel(),
-    // Real LiveStore keys now that W2 is wired up. Same shape Python
-    // returns via `cache.keys()` — list of source names currently
-    // holding a snapshot in memory.
+    // Real LiveStore keys — same shape Python returns via cache.keys()
+    // (list of source names currently holding a snapshot in memory).
     cache_keys: liveStore.keys(),
-    // Still a W4 stub; becomes the real heartbeat-tracker count when
-    // /api/heartbeat lands.
-    active_viewers: 0,
+    // Real heartbeat-driven viewer count from the activityMode service.
+    active_viewers: activeViewerCount(),
   }),
 );

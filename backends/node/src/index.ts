@@ -13,10 +13,17 @@ import { runMigrations } from './db/migrate.js';
 import { createApp } from './server.js';
 import { liveStore } from './store/live.js';
 import { archiveWriter } from './store/archive.js';
+import { startPolling, stopPolling } from './services/poller.js';
+import {
+  start as startActivityMode,
+  stop as stopActivityMode,
+} from './services/activityMode.js';
+import { registerAllSources } from './sources/registerAll.js';
+import { registerAllPowerSources } from './sources/registerPower.js';
 
-// Pre-flight: hydrate the live store so /api/waze/* serves something
-// useful immediately after restart, and run any pending DB migrations
-// before the server binds. Each step is best-effort and logged — a
+// Pre-flight: hydrate the live store, run migrations, register every
+// source, and start the persist + flush + poll + activity-mode loops
+// before binding the port. Each step is best-effort and logged — a
 // missing DATABASE_URL or empty STATE_DIR shouldn't block startup.
 async function preflight(): Promise<void> {
   try {
@@ -32,8 +39,16 @@ async function preflight(): Promise<void> {
     // retry; persistent failure shows up loudly in logs.
     log.error({ err }, 'migration failed');
   }
+
+  // Register every source with the source registry. The poller walks
+  // the registry; nothing happens until startPolling() fires.
+  registerAllSources(); // rfs, bom, traffic, beach, weather, pager
+  registerAllPowerSources(); // endeavour, ausgrid, essential
+
   liveStore.startPersistLoop();
   archiveWriter.startFlushLoop();
+  startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
+  startPolling(); // walks the registry, schedules each source's setInterval
 }
 
 await preflight();
@@ -60,7 +75,11 @@ async function shutdown(signal: string) {
   try {
     // Stop accepting new connections; finish in-flight ones.
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    // Drain LiveStore + ArchiveWriter so we don't lose buffered work.
+    // Stop background loops in dependency order: pollers first (so
+    // they don't enqueue more archive rows), then activity sweeper,
+    // then drain the LiveStore + ArchiveWriter, then close the pool.
+    stopPolling();
+    stopActivityMode();
     await liveStore.stopAndFlush();
     await archiveWriter.stopAndFlush();
     await closePool();

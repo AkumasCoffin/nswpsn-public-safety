@@ -1,0 +1,66 @@
+/**
+ * Registry of every upstream source the backend polls.
+ *
+ * Each entry declares:
+ *   - `name`: stable identifier (also the LiveStore key)
+ *   - `family`: maps to the archive table family (waze | traffic |
+ *               rfs | power | misc) for when we wire ArchiveWriter
+ *   - `intervalActiveMs` / `intervalIdleMs`: poll cadence in active vs
+ *                                            idle mode (page-active
+ *                                            heartbeat dictates which)
+ *   - `fetch`: async function that returns a snapshot (whatever shape
+ *              this source uses; LiveStore is opaque to it)
+ *
+ * services/poller.ts walks the registry and schedules each. The
+ * activity-mode service flips intervals between active/idle when the
+ * heartbeat tracker reports a state change.
+ */
+import type { ArchiveTable } from '../store/archive.js';
+
+export type SourceFamily = 'waze' | 'traffic' | 'rfs' | 'power' | 'misc';
+
+export interface SourceDefinition<T = unknown> {
+  /** LiveStore key + log identifier. */
+  name: string;
+  /** Which archive_<family> table archive rows from this source go to. */
+  family: SourceFamily;
+  /** Active mode (someone watching a page). Mirrors python's
+   *  PREWARM_ACTIVE_INTERVAL = 60s default. */
+  intervalActiveMs: number;
+  /** Idle mode (no active page). Mirrors PREWARM_IDLE_INTERVAL = 120s. */
+  intervalIdleMs: number;
+  /** Returns the snapshot to store in LiveStore. Throws on upstream
+   *  failure (poller catches, increments failure counter, applies
+   *  backoff). */
+  fetch: () => Promise<T>;
+}
+
+const _registry = new Map<string, SourceDefinition>();
+
+export function registerSource<T>(def: SourceDefinition<T>): void {
+  _registry.set(def.name, def as SourceDefinition);
+}
+
+export function getSource(name: string): SourceDefinition | undefined {
+  return _registry.get(name);
+}
+
+export function allSources(): SourceDefinition[] {
+  return Array.from(_registry.values());
+}
+
+/** Convenience for archive_<family> table name lookup. */
+export function familyTable(family: SourceFamily): ArchiveTable {
+  switch (family) {
+    case 'waze':
+      return 'archive_waze';
+    case 'traffic':
+      return 'archive_traffic';
+    case 'rfs':
+      return 'archive_rfs';
+    case 'power':
+      return 'archive_power';
+    case 'misc':
+      return 'archive_misc';
+  }
+}
