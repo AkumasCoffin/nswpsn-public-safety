@@ -10183,6 +10183,9 @@ def _hydrate_police_heatmap_ram_from_db():
         Log.startup(f"Police heatmap RAM hydrated from Postgres — {len(rows)} bins")
 
 
+_HEATMAP_CONSEC_FAILS = 0  # consecutive aggregation timeouts/errors
+
+
 def _refresh_police_heatmap_cache():
     """Rebuild the police heatmap cache from data_history.
 
@@ -10196,6 +10199,18 @@ def _refresh_police_heatmap_cache():
          disk cache survives a restart. If this fails, RAM still has
          the new data — the read path doesn't notice.
     """
+    global _HEATMAP_CONSEC_FAILS
+
+    # Circuit breaker: after 3 consecutive failures, skip the next 4 cycles
+    # (≈40 min at the default 10 min refresh). When data_history is bloated
+    # or under heavy archive load, the aggregation can't finish — retrying
+    # every cycle just keeps a pool slot blocked for 45s pointlessly.
+    if _HEATMAP_CONSEC_FAILS >= 3 and (_HEATMAP_CONSEC_FAILS % 5) != 4:
+        _HEATMAP_CONSEC_FAILS += 1
+        if DEV_MODE:
+            Log.info(f"Police heatmap aggregation skipped (consec_fails={_HEATMAP_CONSEC_FAILS}, RAM still fresh)")
+        return
+
     cutoff = int(time.time()) - (_POLICE_HEATMAP_WINDOW_DAYS * 86400)
     bin_deg = _POLICE_HEATMAP_BIN_DEG
 
@@ -10204,7 +10219,14 @@ def _refresh_police_heatmap_cache():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SET statement_timeout = '300s'")
+        # 45s instead of 300s — when this can't finish in 45s the table
+        # is bloated to the point where the aggregation will time out at
+        # 5 min anyway, just having held a connection that whole time
+        # blocking every other request from grabbing it. The RAM cache
+        # already has whatever was last successfully aggregated, so
+        # readers don't notice the failure. Use SET LOCAL so the timeout
+        # doesn't leak to the next caller of this pooled connection.
+        cur.execute("SET LOCAL statement_timeout = '45s'")
         cur.execute(
             '''
             SELECT
@@ -10228,6 +10250,7 @@ def _refresh_police_heatmap_cache():
         raw = cur.fetchall()
         cur.close()
     except Exception as e:
+        _HEATMAP_CONSEC_FAILS += 1
         Log.error(f"Police heatmap aggregation error: {e}")
         return
     finally:
@@ -10235,6 +10258,10 @@ def _refresh_police_heatmap_cache():
             conn.close()
         except Exception:
             pass
+
+    # Aggregation succeeded — clear the circuit breaker so future cycles
+    # try again immediately when the table calms down.
+    _HEATMAP_CONSEC_FAILS = 0
 
     # Normalise + ditch any rows that can't be coerced to numbers.
     rows = []
@@ -12485,14 +12512,31 @@ FILTER_CACHE_REFRESH_INTERVAL = int(os.environ.get('FILTER_CACHE_REFRESH_INTERVA
 _filter_cache_last_refresh_at = 0.0
 
 
+_FILTER_CACHE_CONSEC_FAILS = 0
+
+
 def _refresh_filter_cache():
     """Rebuild data_history_filter_cache from is_latest=1 rows.
 
     Does 5 small GROUP BY queries (one per dimension), collects results,
     and atomically swaps the cache contents in a single transaction. The
     whole thing is usually <1s because is_latest=1 is a tiny fraction of
-    data_history.
+    data_history — but under heavy archive UPDATE load the visibility
+    map gets dirty and the GROUP BYs can time out. When that happens
+    we keep the previous cache contents (clients see stale dropdown
+    values, which is invisible) and back off so we don't retry against
+    the same hot table every cycle.
     """
+    global _FILTER_CACHE_CONSEC_FAILS
+
+    # Circuit breaker: after 3 consecutive failures, skip 4 cycles
+    # (≈20 min at the default 5 min refresh interval).
+    if _FILTER_CACHE_CONSEC_FAILS >= 3 and (_FILTER_CACHE_CONSEC_FAILS % 5) != 4:
+        _FILTER_CACHE_CONSEC_FAILS += 1
+        if DEV_MODE:
+            Log.info(f"Filter cache refresh skipped (consec_fails={_FILTER_CACHE_CONSEC_FAILS}, serving stale)")
+        return
+
     try:
         deprecated = list(DEPRECATED_SOURCES) or ['__nothing__']
         dep_ph = ','.join(['%s'] * len(deprecated))
@@ -12502,12 +12546,12 @@ def _refresh_filter_cache():
         conn = get_conn()
         try:
             c = conn.cursor()
-            # Background task — give it a generous budget. The 5 GROUP BYs
-            # over is_latest=1 rows can run long when archive UPDATEs leave
-            # the visibility map dirty; failing the refresh just leaves the
-            # filter dropdown stale, so it's worth waiting longer rather
-            # than hammering retries.
-            c.execute("SET LOCAL statement_timeout = '180s'")
+            # 60s instead of 180s. If 5 small GROUP BYs can't finish in
+            # 60s, the table is in a state where 180s won't help either —
+            # the connection just sits blocked while every other request
+            # waits for a pool slot. Failure leaves the cache stale,
+            # which is fine.
+            c.execute("SET LOCAL statement_timeout = '60s'")
 
             # Sources (no source scope — top-level list)
             c.execute(f'''
@@ -12556,11 +12600,13 @@ def _refresh_filter_cache():
             conn.commit()
             global _filter_cache_last_refresh_at
             _filter_cache_last_refresh_at = time.time()
+            _FILTER_CACHE_CONSEC_FAILS = 0
             if DEV_MODE:
                 Log.cleanup(f"Filter cache refreshed — {len(rows_to_insert)} rows")
         finally:
             conn.close()
     except Exception as e:
+        _FILTER_CACHE_CONSEC_FAILS += 1
         Log.error(f"Filter cache refresh error: {e}")
 
 

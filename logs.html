@@ -1145,15 +1145,22 @@
     //     Last button, Prev from Last) used to send offset=189000+ which
     //     the backend caps at 10000.
     function applyPaginationParams(params, page) {
+      // Clamp `page` to the valid window. After a filter change
+      // totalPages can drop below currentPage before silentRefresh
+      // catches up, and an unclamped value here produced negative
+      // offsets that the server 500'd on every refresh tick.
+      if (!Number.isFinite(page) || page < 1) page = 1;
+      if (totalPages > 0 && page > totalPages) page = totalPages;
+
       const useCursor = (page === lastShownPage + 1) && !!nextCursor;
       if (useCursor) {
         params.set('cursor', nextCursor);
         params.set('order', 'desc');
         return { reverseDisplay: false };
       }
-      const offsetDesc = (page - 1) * pageSize;
+      const offsetDesc = Math.max(0, (page - 1) * pageSize);
       const offsetAsc = totalPages > 0
-        ? (totalPages - page) * pageSize
+        ? Math.max(0, (totalPages - page) * pageSize)
         : Number.POSITIVE_INFINITY;
       if (offsetAsc < offsetDesc) {
         params.set('offset', offsetAsc);
