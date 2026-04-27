@@ -28,6 +28,13 @@ wazeIngestRouter.post('/api/waze/ingest', requireIngestKey, async (c) => {
   }
   const parsed = WazeIngestPayloadSchema.safeParse(body);
   if (!parsed.success) {
+    // Surface the failure shape so userscript drift is greppable in
+    // the log instead of just a wall of `400` lines. Zod issues are
+    // small (path + message) so logging them at warn-once is cheap.
+    log.warn(
+      { issues: parsed.error.issues.slice(0, 3) },
+      'waze ingest 400 — schema rejected payload',
+    );
     return c.json(
       { error: 'bad payload', issues: parsed.error.issues },
       400,

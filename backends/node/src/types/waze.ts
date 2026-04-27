@@ -12,11 +12,18 @@
  */
 import { z } from 'zod';
 
+// Match python's permissive coercion: `float(bbox.get('top', 0))`.
+// The userscript occasionally posts bbox values as strings (Waze's own
+// /api/georss response carries them as strings sometimes), and a strict
+// `z.number()` would 400 every such ingest. `z.coerce.number()` accepts
+// numbers and numeric strings; `.default(0)` matches python's `or 0`
+// fallback when a field is missing entirely.
+const bboxCoord = z.coerce.number().catch(0).default(0);
 export const BboxSchema = z.object({
-  top: z.number(),
-  bottom: z.number(),
-  left: z.number(),
-  right: z.number(),
+  top: bboxCoord,
+  bottom: bboxCoord,
+  left: bboxCoord,
+  right: bboxCoord,
 });
 
 /** Bbox key tuple used for cache lookups, rounded to 3 decimal places. */
@@ -68,7 +75,10 @@ export const WazeJamSchema = z
 export type WazeJam = z.infer<typeof WazeJamSchema>;
 
 export const WazeIngestPayloadSchema = z.object({
-  bbox: BboxSchema,
+  // Default {} if missing: python does `payload.get('bbox') or {}` then
+  // coerces each field to float with a 0 default — same effective
+  // behaviour as missing-bbox-becomes-{0,0,0,0}.
+  bbox: BboxSchema.default({ top: 0, bottom: 0, left: 0, right: 0 }),
   alerts: z.array(WazeAlertSchema).optional().default([]),
   jams: z.array(WazeJamSchema).optional().default([]),
   users: z.array(z.unknown()).optional().default([]),

@@ -100,24 +100,49 @@ async function runOnce(src: SourceDefinition): Promise<void> {
       archiveWriter.push(tbl, row);
     }
 
+    const wasFailing = state.failureCount > 0;
     state.failureCount = 0;
     state.lastSuccessTs = fetchedAt;
     state.lastError = null;
-    log.debug(
-      { source: src.name, ms: Date.now() - startedAt },
-      'poll success',
-    );
+    if (wasFailing) {
+      log.info({ source: src.name }, 'poll recovered');
+    } else {
+      log.debug(
+        { source: src.name, ms: Date.now() - startedAt },
+        'poll success',
+      );
+    }
   } catch (err) {
     state.failureCount += 1;
-    state.lastError = (err as Error).message;
-    log.warn(
-      {
-        source: src.name,
-        consec_fails: state.failureCount,
-        err: state.lastError,
-      },
-      'poll failed',
-    );
+    const newErr = (err as Error).message;
+    const errChanged = newErr !== state.lastError;
+    state.lastError = newErr;
+    // Log policy: warn on the FIRST failure (transition) and on every
+    // 10th repeat thereafter — chatty upstreams (open-meteo 429,
+    // beachsafe 422) used to fire every poll cycle, drowning the log
+    // with no new signal. The poll itself still backs off via
+    // backoffSeconds(state.failureCount) so cadence drops naturally.
+    const shouldLogWarn =
+      state.failureCount === 1 || errChanged || state.failureCount % 10 === 0;
+    if (shouldLogWarn) {
+      log.warn(
+        {
+          source: src.name,
+          consec_fails: state.failureCount,
+          err: newErr,
+        },
+        'poll failed',
+      );
+    } else {
+      log.debug(
+        {
+          source: src.name,
+          consec_fails: state.failureCount,
+          err: newErr,
+        },
+        'poll failed (repeat)',
+      );
+    }
   }
 }
 
