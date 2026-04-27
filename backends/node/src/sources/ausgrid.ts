@@ -32,6 +32,7 @@
  */
 import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
+import type { ArchiveRow } from '../store/archive.js';
 
 // Bounding box covers Sydney + Central Coast + Hunter Valley — the full
 // Ausgrid distribution territory plus ~0.05deg buffer so border outages
@@ -219,6 +220,39 @@ export async function fetchAusgridStats(): Promise<unknown> {
   return fetchJson<unknown>(STATS_URL, { headers: BROWSER_HEADERS });
 }
 
+/**
+ * Per-outage archive fan-out. The default extractor only handles
+ * GeoJSON FeatureCollections / flat arrays, but the Ausgrid snapshot
+ * is `{ Markers, Polygons }` — without this every poll lands as a
+ * single "Unknown" wrapper row in archive_power. Each marker becomes
+ * its own row with title/category/lat/lng populated, mirroring
+ * python's per-outage write at external_api_proxy.py:4596-4604.
+ */
+function ausgridArchiveItems(
+  data: unknown,
+  fetched_at: number,
+  source: string,
+): ArchiveRow[] {
+  const snap = (data as AusgridOutagesPayload | null) ?? null;
+  if (!snap || !Array.isArray(snap.Markers)) return [];
+  const out: ArchiveRow[] = [];
+  for (const m of snap.Markers) {
+    if (!m || typeof m !== 'object') continue;
+    const title = m.Suburb || m.Cause || 'Outage';
+    out.push({
+      source,
+      source_id: m.OutageId !== null && m.OutageId !== undefined ? String(m.OutageId) : null,
+      fetched_at,
+      lat: typeof m.Latitude === 'number' && Number.isFinite(m.Latitude) ? m.Latitude : null,
+      lng: typeof m.Longitude === 'number' && Number.isFinite(m.Longitude) ? m.Longitude : null,
+      category: m.OutageType || null,
+      subcategory: m.Cause || null,
+      data: { ...m, title },
+    });
+  }
+  return out;
+}
+
 export function register(): void {
   registerSource<AusgridOutagesPayload>({
     name: 'ausgrid',
@@ -226,6 +260,7 @@ export function register(): void {
     intervalActiveMs: 120_000,
     intervalIdleMs: 300_000,
     fetch: fetchAusgridOutages,
+    archiveItems: ausgridArchiveItems,
   });
   registerSource<unknown>({
     name: 'ausgrid_stats',

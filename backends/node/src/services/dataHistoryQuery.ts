@@ -481,17 +481,36 @@ export function buildCountSqlForTable(
   // rows, which on archive_waze (millions of rows across many monthly
   // partitions) blows past the 60s budget even for a 50k cap. With it,
   // the planner walks the index from now backwards and stops at 50k.
+  // SELECT shape: total + live_count (FILTER over `data->>'is_live'`).
+  // ended_count is computed in JS as `total - live_count` to match
+  // formatRecord's truthy-default semantics (missing is_live → live).
+  // Inferring ended from `is_live IN ('0','false','False')` would
+  // silently drop rows with no is_live key.
+  //
+  // Both columns ride through the doubly-nested LIMIT pattern so the
+  // 50k cap still bounds the index walk before DISTINCT runs.
   const COUNT_CAP = 50_000;
+  const IS_LIVE_PRED = `(data->>'is_live') IN ('1','true','True')`;
+  // Count + live_count in one round-trip via a single FILTER aggregate.
+  // Outer SELECT line kept on one line so test-side substring matchers
+  // looking for `SELECT COUNT(*)` keep treating this as a count query.
+  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live_truthy)::bigint AS live_count`;
   const sql = p.unique
-    ? `SELECT COUNT(*)::bigint AS n FROM (
-         SELECT DISTINCT source, source_id FROM (
-           SELECT source, source_id FROM ${table} ${whereClause}
+    ? `${aggLine}
+       FROM (
+         SELECT DISTINCT ON (source, source_id) is_live_truthy FROM (
+           SELECT source, source_id, fetched_at,
+                  ${IS_LIVE_PRED} AS is_live_truthy
+           FROM ${table} ${whereClause}
            ORDER BY fetched_at DESC
            LIMIT ${COUNT_CAP}
          ) bounded
+         ORDER BY source, source_id, fetched_at DESC
        ) sub`
-    : `SELECT COUNT(*)::bigint AS n FROM (
-         SELECT 1 FROM ${table} ${whereClause}
+    : `${aggLine}
+       FROM (
+         SELECT ${IS_LIVE_PRED} AS is_live_truthy
+         FROM ${table} ${whereClause}
          ORDER BY fetched_at DESC
          LIMIT ${COUNT_CAP}
        ) sub`;

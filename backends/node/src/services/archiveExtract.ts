@@ -118,6 +118,11 @@ function extractSourceId(item: Record<string, unknown>): string | null {
     props['incidentId'],
     item['id'],
     item['uuid'],
+    // Essential's flat-array path puts incidentId at the top level
+    // (no `properties` wrapper), so per-feature dedup needs both
+    // top-level lookups too.
+    item['incident_id'],
+    item['incidentId'],
   ];
   for (const c of candidates) {
     const s = asString(c);

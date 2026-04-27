@@ -336,6 +336,11 @@ export function register(): void {
   registerSource<EndeavourOutage[]>({
     name: 'endeavour_maintenance',
     family: 'power',
+    // Fold maintenance rows into the same archive bucket python uses —
+    // python's source value is `endeavour_planned` for both planned and
+    // maintenance entries (external_api_proxy.py:4544-4545). Without this
+    // override, the logs page showed two synonym sources in the dropdown.
+    archiveSource: 'endeavour_planned',
     intervalActiveMs: 300_000,
     intervalIdleMs: 600_000,
     fetch: async () => (await getOrFetch()).current_maintenance,

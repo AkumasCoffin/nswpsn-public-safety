@@ -15,7 +15,7 @@
  * activity-mode service flips intervals between active/idle when the
  * heartbeat tracker reports a state change.
  */
-import type { ArchiveTable } from '../store/archive.js';
+import type { ArchiveRow, ArchiveTable } from '../store/archive.js';
 
 export type SourceFamily = 'waze' | 'traffic' | 'rfs' | 'power' | 'misc';
 
@@ -44,6 +44,15 @@ export interface SourceDefinition<T = unknown> {
    * rows because the new poller-written rows used the LiveStore key.
    */
   archiveSource?: string;
+  /**
+   * Optional override for the archive fan-out. When omitted, the poller
+   * uses `defaultArchiveItems` (which handles GeoJSON FeatureCollections
+   * and flat arrays). Sources whose snapshot shape is neither — e.g. the
+   * pager source returns `{ messages: [...], count: N }` — must provide
+   * this so each message becomes its own archive row instead of the
+   * whole snapshot landing as a single "Unknown" wrapper row.
+   */
+  archiveItems?: (data: unknown, fetched_at: number, source: string) => ArchiveRow[];
 }
 
 const _registry = new Map<string, SourceDefinition>();

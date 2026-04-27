@@ -39,6 +39,10 @@ import {
   stopHeatmapRefreshLoop,
 } from './api/waze.js';
 import {
+  startStatsArchiver,
+  stopStatsArchiver,
+} from './services/statsArchiver.js';
+import {
   start as startActivityMode,
   stop as stopActivityMode,
 } from './services/activityMode.js';
@@ -72,8 +76,9 @@ async function preflight(): Promise<void> {
   liveStore.startPersistLoop();
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
-  startFilterCacheRefresh(); // 60s in-memory facet refresh for /api/data/history/filters
+  startFilterCacheRefresh(); // 5-min archive-backed facet refresh for /api/data/history/filters
   startHeatmapRefreshLoop(); // 5-min background refresh of police heatmap RAM cache
+  startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Best-effort warm of the rdio unit-label CSV. Routes call
@@ -145,6 +150,7 @@ async function shutdown(signal: string) {
     stopActivityMode();
     stopFilterCacheRefresh();
     stopHeatmapRefreshLoop();
+    stopStatsArchiver();
     stopRdioSummaryScheduler();
     // Centralwatch: stop the loops first so they don't enqueue more
     // browser jobs, then close the browser worker.

@@ -353,6 +353,48 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
     return c.json(hit.result);
   }
 
+  // Fast path: when only a bbox is filter (no subtype), the unfiltered
+  // cache already has every bin we need — just pre-filter to the
+  // requested viewport instead of re-running the SQL. Eliminates the
+  // 6+ second heatmap latency for the common map-pan/zoom case where
+  // the front-end pings the heatmap with each viewport change. Subtype
+  // filtering requires a fresh aggregate (counts can't be split out
+  // of the merged bin) so it still falls through to buildHeatmap.
+  if (bbox && (!wanted || wanted.length === 0)) {
+    const baseKey = _heatmapCacheKey([], null);
+    const base = heatmapCache.get(baseKey);
+    if (base && now - base.ts < HEATMAP_CACHE_TTL_MS) {
+      const baseResult = base.result as {
+        points: [number, number, number][];
+        max_count: number;
+        days: number;
+        subtypes: string[];
+        cache_updated_at: string | null;
+      };
+      const [s, w, n, e] = bbox;
+      const filtered: [number, number, number][] = [];
+      for (const p of baseResult.points) {
+        const [lat, lng, cnt] = p;
+        if (lat >= s && lat <= n && lng >= w && lng <= e) {
+          filtered.push(p);
+          if (filtered.length >= HEATMAP_MAX_BINS) break;
+        }
+      }
+      const result = {
+        points: filtered,
+        total_records: filtered.reduce((acc, p) => acc + p[2], 0),
+        bin_size_deg: HEATMAP_BIN_DEG,
+        max_count: filtered.reduce((m, p) => (p[2] > m ? p[2] : m), 0),
+        days: baseResult.days,
+        subtypes: Array.from(POLICE_VALID_SUBTYPES).sort(),
+        cache_updated_at: baseResult.cache_updated_at,
+        cache_status: 'bbox-from-base',
+      };
+      heatmapCache.set(cacheKey, { result, ts: now });
+      return c.json(result);
+    }
+  }
+
   const aggregated = await buildHeatmapFromArchive(wanted, bbox).catch((err) => {
     log.warn({ err: (err as Error).message }, 'police-heatmap query failed');
     return null;

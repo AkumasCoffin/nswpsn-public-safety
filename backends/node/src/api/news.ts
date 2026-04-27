@@ -59,3 +59,9 @@ newsRouter.get('/api/news/sources', (c) =>
     categories: ['general', 'emergency', 'weather'],
   }),
 );
+
+/** Drop the RSS aggregate cache. Wired into /api/cache/clear. Also
+ *  used by tests to prevent bleed between runs. */
+export function _resetNewsCacheForTests(): void {
+  cache.clear();
+}

@@ -1,14 +1,18 @@
 /**
- * In-memory facet aggregation for /api/data/history/filters.
+ * Facet aggregation for /api/data/history/filters.
  *
  * Replaces Python's `data_history_filter_cache` table that was refreshed
- * every 5 min via 5×GROUP BY scans of `data_history`. The new schema is
- * append-only and partitioned, so a periodic GROUP BY against
- * `archive_*` tables would defeat the partitioning. Instead we build the
- * facet shape from `liveStore`: every source's *current* snapshot has
- * the dimension fields we need for the "live" filter dropdowns. A 60s
- * background timer recomputes; readers always see the previous snapshot
- * (no locking — JS is single-threaded).
+ * every 5 min via 5×GROUP BY scans of `data_history`. Hybrid model:
+ *
+ * 1. **Non-waze sources** (rfs / power / traffic / misc) come from a
+ *    GROUP BY scan over the small archive_* tables on a 5-min loop.
+ *    Bounded to the last 24h of rows so the dropdown reflects what the
+ *    user would actually see when filtering. archive_misc has hundreds
+ *    of pager hits per day; the LiveStore-only walk used to surface
+ *    just the latest poll's 100 messages and showed "Pager: 1".
+ * 2. **Waze** stays on the in-memory path — archive_waze is the only
+ *    multi-million-row table and waze categorisation is hardcoded
+ *    (`wazeAlertType()`) so the live snapshot is sufficient.
  *
  * Response shape exactly matches Python's `_build_filters_response`:
  *   {
@@ -19,14 +23,12 @@
  *     }],
  *     date_range: { oldest, newest, oldest_unix, newest_unix }
  *   }
- *
- * `oldest`/`newest` are derived from the LiveStore snapshot timestamps —
- * a reasonable proxy now that `data_history` no longer exists; if the
- * frontend needs the true archive bracket we can run an O(1) MIN/MAX
- * against archive_*_2025_xx partitions in a follow-up.
  */
 import { liveStore } from './live.js';
 import { log } from '../lib/log.js';
+import { getPool } from '../db/pool.js';
+import type { ArchiveTable } from './archive.js';
+import { sydneyIsoFromUnix } from '../lib/sydneyTime.js';
 
 // ---------------------------------------------------------------------------
 // Source / provider mapping — mirrors external_api_proxy.py:1114-1196
@@ -327,20 +329,27 @@ function wazeRecords(data: unknown): {
   return { alerts: Array.from(alertsById.values()), jams: Array.from(jamsById.values()) };
 }
 
-function computeFacets(): ComputedFacets {
+function dimSlotFor(
+  perTypeDims: DimMap,
+  alertType: string,
+): Record<string, Record<string, number>> {
+  return (perTypeDims[alertType] ??= {
+    category: {},
+    subcategory: {},
+    status: {},
+    severity: {},
+  });
+}
+
+/** Full sync LiveStore walk — counts every registered source's current
+ *  snapshot. Used as a synchronous fallback (cold start, tests without
+ *  DB). The async archive scan replaces the non-waze counts when it
+ *  completes. */
+function computeFacetsLive(): ComputedFacets {
   const typeCounts: Record<string, number> = {};
   const perTypeDims: DimMap = {};
   let oldestUnix: number | null = null;
   let newestUnix: number | null = null;
-
-  const dimSlotFor = (alertType: string): Record<string, Record<string, number>> => {
-    return (perTypeDims[alertType] ??= {
-      category: {},
-      subcategory: {},
-      status: {},
-      severity: {},
-    });
-  };
 
   for (const source of liveStore.keys()) {
     if (DEPRECATED_SOURCES.has(source)) continue;
@@ -349,23 +358,16 @@ function computeFacets(): ComputedFacets {
     if (oldestUnix === null || snap.ts < oldestUnix) oldestUnix = snap.ts;
     if (newestUnix === null || snap.ts > newestUnix) newestUnix = snap.ts;
 
-    // Special case: the 'waze' LiveStore entry is a bbox-keyed cache
-    // (WazeIngestCache shape) — one snapshot covers all four alert
-    // types. Unpack and categorise each alert/jam individually so the
-    // filter dropdown shows correct counts per (police/hazard/
-    // roadwork/jam). Without this branch, every waze alert_type
-    // returned 0 because the bbox-keyed object doesn't surface alerts
-    // through the generic recordsFromSnapshot() walker.
     if (source === 'waze') {
       const { alerts, jams } = wazeRecords(snap.data);
       for (const a of alerts) {
         const at = wazeAlertType(a);
         typeCounts[at] = (typeCounts[at] ?? 0) + 1;
-        const dimSlot = dimSlotFor(at);
+        const slot = dimSlotFor(perTypeDims, at);
         const sub = String(a['subtype'] ?? '').toUpperCase();
-        if (sub) bumpCount(dimSlot['subcategory'] as Record<string, number>, sub);
+        if (sub) bumpCount(slot['subcategory'] as Record<string, number>, sub);
         const cat = String(a['type'] ?? '').toUpperCase();
-        if (cat) bumpCount(dimSlot['category'] as Record<string, number>, cat);
+        if (cat) bumpCount(slot['category'] as Record<string, number>, cat);
       }
       typeCounts['waze_jam'] = (typeCounts['waze_jam'] ?? 0) + jams.length;
       continue;
@@ -378,23 +380,218 @@ function computeFacets(): ComputedFacets {
     const records = recordsFromSnapshot(snap.data);
     typeCounts[alertType] = (typeCounts[alertType] ?? 0) + records.length;
 
-    const dimSlot = dimSlotFor(alertType);
+    const slot = dimSlotFor(perTypeDims, alertType);
     for (const rec of records) {
       const dims = dimsFromRecord(rec);
-      if (dims.category) bumpCount(dimSlot['category'] as Record<string, number>, dims.category);
+      if (dims.category) bumpCount(slot['category'] as Record<string, number>, dims.category);
       if (dims.subcategory) {
         // Pager numeric capcodes are noise — drop just like Python's filter
         // cache refresh does (line 12635-12636).
         if (!/^\d+$/.test(dims.subcategory)) {
-          bumpCount(dimSlot['subcategory'] as Record<string, number>, dims.subcategory);
+          bumpCount(slot['subcategory'] as Record<string, number>, dims.subcategory);
         }
       }
-      if (dims.status) bumpCount(dimSlot['status'] as Record<string, number>, dims.status);
-      if (dims.severity) bumpCount(dimSlot['severity'] as Record<string, number>, dims.severity);
+      if (dims.status) bumpCount(slot['status'] as Record<string, number>, dims.status);
+      if (dims.severity) bumpCount(slot['severity'] as Record<string, number>, dims.severity);
     }
   }
 
   return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+}
+
+/** Waze-only LiveStore walk. Used during the archive merge: archive
+ *  scan covers non-waze; this fills the waze types from LiveStore. */
+function liveWazeFacets(): ComputedFacets {
+  const typeCounts: Record<string, number> = {};
+  const perTypeDims: DimMap = {};
+  let oldestUnix: number | null = null;
+  let newestUnix: number | null = null;
+
+  const snap = liveStore.get('waze');
+  if (!snap) return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+  oldestUnix = snap.ts;
+  newestUnix = snap.ts;
+
+  const { alerts, jams } = wazeRecords(snap.data);
+  for (const a of alerts) {
+    const at = wazeAlertType(a);
+    typeCounts[at] = (typeCounts[at] ?? 0) + 1;
+    const slot = dimSlotFor(perTypeDims, at);
+    const sub = String(a['subtype'] ?? '').toUpperCase();
+    if (sub) bumpCount(slot['subcategory'] as Record<string, number>, sub);
+    const cat = String(a['type'] ?? '').toUpperCase();
+    if (cat) bumpCount(slot['category'] as Record<string, number>, cat);
+  }
+  typeCounts['waze_jam'] = (typeCounts['waze_jam'] ?? 0) + jams.length;
+  return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+}
+
+/** Tables we GROUP BY for facet counts. archive_waze deliberately
+ *  excluded — too big to scan, and waze counts come from LiveStore. */
+const ARCHIVE_FACET_TABLES: ArchiveTable[] = [
+  'archive_misc',
+  'archive_traffic',
+  'archive_rfs',
+  'archive_power',
+];
+
+interface ArchiveFacetRow {
+  source: string;
+  category: string | null;
+  subcategory: string | null;
+  status: string | null;
+  severity: string | null;
+  cnt: string;
+  oldest: number | null;
+  newest: number | null;
+}
+
+/**
+ * GROUP BY scan over the small archive_* tables. Bounded to the last
+ * 24h so the dropdown matches what `?since=24h` filters would surface.
+ * One pass per table; statement timeout caps any single query at 30s
+ * (matches the data-history read path).
+ */
+async function archiveFacets(): Promise<{
+  typeCounts: Record<string, number>;
+  perTypeDims: DimMap;
+  oldestUnix: number | null;
+  newestUnix: number | null;
+}> {
+  const typeCounts: Record<string, number> = {};
+  const perTypeDims: DimMap = {};
+  let oldestUnix: number | null = null;
+  let newestUnix: number | null = null;
+
+  const pool = await getPool();
+  if (!pool) return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+
+  for (const table of ARCHIVE_FACET_TABLES) {
+    const sql = `
+      SELECT
+        source,
+        category,
+        subcategory,
+        data->>'status'   AS status,
+        data->>'severity' AS severity,
+        COUNT(*)::text    AS cnt,
+        EXTRACT(EPOCH FROM MIN(fetched_at))::bigint AS oldest,
+        EXTRACT(EPOCH FROM MAX(fetched_at))::bigint AS newest
+      FROM ${table}
+      WHERE fetched_at >= NOW() - INTERVAL '24 hours'
+      GROUP BY 1, 2, 3, 4, 5
+    `;
+    let client;
+    try {
+      client = await pool.connect();
+    } catch (err) {
+      log.warn({ err: (err as Error).message, table }, 'filterCache: pool acquire failed');
+      continue;
+    }
+    try {
+      await client.query('BEGIN');
+      try {
+        await client.query("SET LOCAL statement_timeout = '30s'");
+        const result = await client.query<ArchiveFacetRow>(sql);
+        await client.query('COMMIT');
+        for (const row of result.rows) {
+          const cnt = parseInt(row.cnt, 10);
+          if (!Number.isFinite(cnt) || cnt <= 0) continue;
+          if (DEPRECATED_SOURCES.has(row.source)) continue;
+          const alertType = canonicalAlertType(row.source);
+          if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
+          // Skip waze types — they come from LiveStore, including them
+          // here would double-count.
+          if (alertType.startsWith('waze_')) continue;
+
+          typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
+          const slot = dimSlotFor(perTypeDims, alertType);
+          if (row.category) {
+            slot['category']![row.category] = (slot['category']![row.category] ?? 0) + cnt;
+          }
+          if (row.subcategory && !/^\d+$/.test(row.subcategory)) {
+            slot['subcategory']![row.subcategory] =
+              (slot['subcategory']![row.subcategory] ?? 0) + cnt;
+          }
+          if (row.status) {
+            slot['status']![row.status] = (slot['status']![row.status] ?? 0) + cnt;
+          }
+          if (row.severity) {
+            slot['severity']![row.severity] = (slot['severity']![row.severity] ?? 0) + cnt;
+          }
+          if (typeof row.oldest === 'number') {
+            if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
+          }
+          if (typeof row.newest === 'number') {
+            if (newestUnix === null || row.newest > newestUnix) newestUnix = row.newest;
+          }
+        }
+      } catch (err) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        log.warn({ err: (err as Error).message, table }, 'filterCache: query failed');
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+}
+
+/** Merge two ComputedFacets into one. Counts add; date range widens. */
+function mergeFacets(a: ComputedFacets, b: ComputedFacets): ComputedFacets {
+  const typeCounts: Record<string, number> = { ...a.typeCounts };
+  for (const [k, v] of Object.entries(b.typeCounts)) {
+    typeCounts[k] = (typeCounts[k] ?? 0) + v;
+  }
+  const perTypeDims: DimMap = {};
+  for (const map of [a.perTypeDims, b.perTypeDims]) {
+    for (const [alertType, dims] of Object.entries(map)) {
+      const slot = (perTypeDims[alertType] ??= {
+        category: {},
+        subcategory: {},
+        status: {},
+        severity: {},
+      });
+      for (const dimName of ['category', 'subcategory', 'status', 'severity'] as const) {
+        const src = dims[dimName] ?? {};
+        const dst = slot[dimName]!;
+        for (const [val, n] of Object.entries(src)) {
+          dst[val] = (dst[val] ?? 0) + n;
+        }
+      }
+    }
+  }
+  const oldestUnix =
+    a.oldestUnix === null
+      ? b.oldestUnix
+      : b.oldestUnix === null
+        ? a.oldestUnix
+        : Math.min(a.oldestUnix, b.oldestUnix);
+  const newestUnix =
+    a.newestUnix === null
+      ? b.newestUnix
+      : b.newestUnix === null
+        ? a.newestUnix
+        : Math.max(a.newestUnix, b.newestUnix);
+  return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+}
+
+/** Sync entry point. Same behaviour as the original implementation —
+ *  walks LiveStore for every source. Tests rely on this. */
+function computeFacets(): ComputedFacets {
+  return computeFacetsLive();
+}
+
+/** Async entry point used by the periodic refresh: archive scan for
+ *  non-waze types + LiveStore for waze. The merged shape is what the
+ *  user sees in the dropdown. */
+async function computeFacetsAsync(): Promise<ComputedFacets> {
+  const [waze, archive] = await Promise.all([
+    Promise.resolve(liveWazeFacets()),
+    archiveFacets(),
+  ]);
+  return mergeFacets(waze, archive);
 }
 
 // ---------------------------------------------------------------------------
@@ -540,14 +737,12 @@ function buildResponse(
     }
   }
 
-  const isoOrNull = (unix: number | null): string | null =>
-    unix !== null ? new Date(unix * 1000).toISOString() : null;
-
+  // Naive Sydney to match python's filters_applied date_range.
   return {
     providers: providersOut,
     date_range: {
-      oldest: isoOrNull(oldestUnix),
-      newest: isoOrNull(newestUnix),
+      oldest: sydneyIsoFromUnix(oldestUnix),
+      newest: sydneyIsoFromUnix(newestUnix),
       oldest_unix: oldestUnix,
       newest_unix: newestUnix,
     },
@@ -561,26 +756,51 @@ function buildResponse(
 let cached: ComputedFacets | null = null;
 let lastRefreshAt: number = 0;
 let timer: NodeJS.Timeout | null = null;
+let refreshing = false;
 
-const DEFAULT_REFRESH_MS = 60_000;
+// 5 min: matches python's data_history_filter_cache cadence
+// (external_api_proxy.py:12568+). The DB-backed scan is too heavy
+// for the previous 60s cadence and the values don't change that
+// fast — the dropdown reflects 24h windows.
+const DEFAULT_REFRESH_MS = 5 * 60_000;
 
 /**
- * Force a recompute. Cheap (single pass over LiveStore) — call from
- * tests directly so they don't have to wait for the timer tick.
+ * Recompute facets. Returns sync (using a LiveStore-only walk so tests
+ * and cold reads see immediate results) AND fires off an async archive
+ * scan that will replace the non-waze counts when it completes. Idem-
+ * potent — concurrent archive scans collapse onto one in-flight call.
  */
 export function refreshFilterCache(): void {
   try {
     cached = computeFacets();
     lastRefreshAt = Math.floor(Date.now() / 1000);
   } catch (err) {
-    log.error({ err }, 'filterCache: refresh failed');
+    log.error({ err }, 'filterCache: live refresh failed');
+  }
+  // Fire-and-forget archive scan for the historical counts. When the
+  // promise resolves, `cached` is overwritten with the merged shape.
+  void refreshFromArchive();
+}
+
+async function refreshFromArchive(): Promise<void> {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const merged = await computeFacetsAsync();
+    cached = merged;
+    lastRefreshAt = Math.floor(Date.now() / 1000);
+  } catch (err) {
+    log.error({ err }, 'filterCache: archive refresh failed');
+  } finally {
+    refreshing = false;
   }
 }
 
 /**
  * Build and return the filter facets response, scoped (optionally) to a
- * single source. Lazily refreshes on first call so tests don't have to
- * remember to seed.
+ * single source. **Sync** — returns whatever's in the cache (or a
+ * waze-only in-memory fallback on cold start). The async refresh runs
+ * in the background and the response stays sub-millisecond.
  */
 export function getFilterFacets(sourceFilter?: string | null): FilterFacets {
   if (!cached) refreshFilterCache();
@@ -598,8 +818,8 @@ export function filterCacheLastRefreshAt(): number {
  */
 export function startFilterCacheRefresh(intervalMs: number = DEFAULT_REFRESH_MS): void {
   if (timer) return;
-  // First refresh immediately so the cache is hot before the first
-  // request lands; subsequent refreshes on interval.
+  // First refresh fires sync (LiveStore walk) + async (archive scan)
+  // so the cache is warming while the rest of boot continues.
   refreshFilterCache();
   timer = setInterval(() => refreshFilterCache(), intervalMs);
   timer.unref?.();

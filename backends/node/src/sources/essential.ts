@@ -29,6 +29,7 @@
 import { fetchText } from './shared/http.js';
 import { parseKmlPlacemarks } from './shared/kml.js';
 import { registerSource } from '../services/sourceRegistry.js';
+import type { ArchiveRow } from '../store/archive.js';
 
 const FEEDS = {
   current: 'https://www.essentialenergy.com.au/Assets/kmz/current.kml',
@@ -163,6 +164,38 @@ export async function fetchFeed(feedType: EssentialFeedType): Promise<EssentialO
   return parseEssentialKml(xml, feedType);
 }
 
+/**
+ * Per-outage archive fan-out that respects each row's own `source`
+ * field. The default extractor would tag every row from the
+ * `essential_current` LiveStore key as `essential_current`, but
+ * current.kml mixes planned + unplanned and python writes them under
+ * different source values (external_api_proxy.py:3940). Without this
+ * the logs page filter for "essential_planned" misses the planned-
+ * from-current rows entirely.
+ */
+function essentialArchiveItems(
+  data: unknown,
+  fetched_at: number,
+  _source: string,
+): ArchiveRow[] {
+  if (!Array.isArray(data)) return [];
+  const out: ArchiveRow[] = [];
+  for (const o of data as EssentialOutage[]) {
+    if (!o || typeof o !== 'object') continue;
+    out.push({
+      source: o.source,
+      source_id: o.incidentId || null,
+      fetched_at,
+      lat: o.latitude,
+      lng: o.longitude,
+      category: o.outageType,
+      subcategory: o.status,
+      data: { ...o, title: o.title || o.suburb || 'Outage' },
+    });
+  }
+  return out;
+}
+
 export function register(): void {
   registerSource<EssentialOutage[]>({
     name: 'essential_current',
@@ -170,6 +203,7 @@ export function register(): void {
     intervalActiveMs: 180_000,
     intervalIdleMs: 600_000,
     fetch: () => fetchFeed('current'),
+    archiveItems: essentialArchiveItems,
   });
   registerSource<EssentialOutage[]>({
     name: 'essential_future',
@@ -177,6 +211,7 @@ export function register(): void {
     intervalActiveMs: 180_000,
     intervalIdleMs: 600_000,
     fetch: () => fetchFeed('future'),
+    archiveItems: essentialArchiveItems,
   });
 }
 

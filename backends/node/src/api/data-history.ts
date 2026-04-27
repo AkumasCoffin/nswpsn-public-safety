@@ -40,6 +40,7 @@ import {
 } from '../services/cursorPagination.js';
 import { getFilterFacets } from '../store/filterCache.js';
 import type { ArchiveTable } from '../store/archive.js';
+import { sydneyIsoFromUnix, sydneyIsoFromDate } from '../lib/sydneyTime.js';
 
 export const dataHistoryRouter = new Hono();
 
@@ -187,8 +188,11 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   if (status) rawFilters['status'] = status;
   if (severity) rawFilters['severity'] = severity;
   if (params.search) rawFilters['search'] = params.search;
-  if (since !== null) rawFilters['since'] = new Date(since * 1000).toISOString();
-  if (until !== null) rawFilters['until'] = new Date(until * 1000).toISOString();
+  // Echo as naive Sydney to match python's filters_applied shape — see
+  // lib/sydneyTime for why UTC `Z` strings break date-bucketing in the
+  // frontend logs page.
+  if (since !== null) rawFilters['since'] = sydneyIsoFromUnix(since);
+  if (until !== null) rawFilters['until'] = sydneyIsoFromUnix(until);
   if (params.liveOnly) rawFilters['live_only'] = true;
   if (params.historicalOnly) rawFilters['historical_only'] = true;
   if (params.unique) rawFilters['unique'] = true;
@@ -345,21 +349,50 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
       }),
     );
+    // Per-family count returns total + live_count in one round-trip.
+    // ended is derived as `total - live` to match formatRecord's
+    // truthy-default semantics for missing is_live.
+    //
+    // 30s LRU cache: page-jumper clicks all hit the same WHERE clause
+    // (only LIMIT/OFFSET differ, and the count query strips both) so
+    // we re-use the previous result instead of re-running the
+    // 5-10s aggregate per page click.
+    const nowMs = Date.now();
     const countPromise = Promise.all(
       plan.queries.map(async (q) => {
+        const cq = buildCountSqlForTable(q.table, params);
+        const key = countCacheKey(q.table, cq.sql, cq.params);
+        const hit = countCache.get(key);
+        if (hit && nowMs - hit.ts < COUNT_CACHE_TTL_MS) {
+          return hit.count;
+        }
         try {
-          const cq = buildCountSqlForTable(q.table, params);
           const r = await runWithTimeout(pool, cq.sql, cq.params);
-          const n = r.rows[0] as { n?: string | number } | undefined;
-          return Number(n?.n ?? 0);
+          const row = r.rows[0] as
+            | { total?: string | number; live_count?: string | number }
+            | undefined;
+          const count = {
+            total: Number(row?.total ?? 0),
+            live: Number(row?.live_count ?? 0),
+          };
+          // Bound the cache: drop oldest when over capacity. Map's
+          // insertion order makes this O(1) per eviction.
+          if (countCache.size >= COUNT_CACHE_MAX) {
+            const oldestKey = countCache.keys().next().value;
+            if (oldestKey !== undefined) countCache.delete(oldestKey);
+          }
+          countCache.set(key, { count, ts: nowMs });
+          return count;
         } catch (err) {
           log.warn({ err, table: q.table }, 'data-history count query failed');
-          return 0;
+          return { total: 0, live: 0 };
         }
       }),
     );
     const [results, counts] = await Promise.all([dataPromise, countPromise]);
-    const total = counts.reduce((a, b) => a + b, 0);
+    const total = counts.reduce((a, b) => a + b.total, 0);
+    const liveCount = counts.reduce((a, b) => a + b.live, 0);
+    const endedCount = Math.max(0, total - liveCount);
 
     let merged: ArchiveQueryRow[];
     if (results.length === 1) {
@@ -388,12 +421,11 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     return c.json({
       records,
       total,
-      // Python tracked is_live/is_active separately; the new schema
-      // stores those in JSONB (data->>'is_live'). Splitting the count
-      // would mean a third query per family — punt unless the frontend
-      // actually displays both. Leave zeros for now.
-      live_count: 0,
-      ended_count: 0,
+      // Both numbers come out of the same single count query as `total`
+      // via FILTER (WHERE data->>'is_live' IN ('1','true','True')).
+      // Capped at the same 50k as `total` per family.
+      live_count: liveCount,
+      ended_count: endedCount,
       limit: params.limit,
       offset: params.offset,
       count: records.length,
@@ -464,7 +496,7 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     source: r.source,
     source_id: r.source_id,
     fetched_at: ts,
-    fetched_at_iso: ts ? new Date(ts * 1000).toISOString() : null,
+    fetched_at_iso: sydneyIsoFromUnix(ts),
     source_timestamp: pickStr(data, 'source_timestamp'),
     source_timestamp_unix: pickNum(data, 'source_timestamp_unix'),
     // Schema column is `lat`/`lng` but Python's response shape is
@@ -486,7 +518,7 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     // is effectively "still live". Default-true matches Python.
     is_live: pickBool(data, 'is_live', true),
     last_seen: lastSeen,
-    last_seen_iso: lastSeen ? new Date(lastSeen * 1000).toISOString() : null,
+    last_seen_iso: sydneyIsoFromUnix(lastSeen),
   };
 }
 
@@ -510,7 +542,42 @@ interface SourceCountRow extends QueryResultRow {
   newest: Date | string | null;
 }
 
+// 5-min response cache for /sources and /stats. Each runs an
+// unbounded COUNT(*) GROUP BY across every monthly partition of all
+// 5 archive tables — multi-second on archive_waze. The numbers don't
+// change much within 5 min so caching the response makes the dashboard
+// load instant on repeat hits. Cleared by /api/cache/clear.
+interface SourcesCacheEntry { body: unknown; ts: number; }
+let sourcesCache: SourcesCacheEntry | null = null;
+let statsCache: SourcesCacheEntry | null = null;
+const SOURCES_STATS_TTL_MS = 5 * 60_000;
+
+// 30s LRU-bounded cache for /api/data/history count queries. The page-
+// jumper on logs.html re-issues the same WHERE-clause for every page
+// click; counts are stable across those clicks so we don't need to
+// re-run the 5-10s COUNT(*) FILTER aggregate each time. Bounded at
+// 256 entries to avoid runaway growth from heavy filter-permutation
+// traffic.
+interface CountCacheEntry { count: { total: number; live: number }; ts: number; }
+const countCache = new Map<string, CountCacheEntry>();
+const COUNT_CACHE_TTL_MS = 30_000;
+const COUNT_CACHE_MAX = 256;
+
+function countCacheKey(table: string, sql: string, params: unknown[]): string {
+  return `${table}|${sql}|${JSON.stringify(params)}`;
+}
+
+export function _resetDataHistoryAggregateCache(): void {
+  sourcesCache = null;
+  statsCache = null;
+  countCache.clear();
+}
+
 dataHistoryRouter.get('/api/data/history/sources', async (c) => {
+  const now = Date.now();
+  if (sourcesCache && now - sourcesCache.ts < SOURCES_STATS_TTL_MS) {
+    return c.json(sourcesCache.body);
+  }
   const pool = await getPool();
   if (!pool) {
     return c.json({ sources: [] });
@@ -518,37 +585,48 @@ dataHistoryRouter.get('/api/data/history/sources', async (c) => {
 
   const aggregated: Map<string, { count: number; oldest: Date | null; newest: Date | null }> =
     new Map();
-  for (const table of ALL_ARCHIVE_TABLES) {
-    try {
-      const client = await pool.connect();
+  // One client across all 5 tables — previous revision did pool.connect()
+  // per iteration which burned 5 pool slots back-to-back. Each query is
+  // wrapped in its own BEGIN/COMMIT so SET LOCAL actually applies (the
+  // same fix the archive writer needed earlier).
+  const client = await pool.connect();
+  try {
+    for (const table of ALL_ARCHIVE_TABLES) {
       try {
-        await client.query("SET LOCAL statement_timeout = '25s'");
-        const r = await client.query<SourceCountRow>(
-          `SELECT source, COUNT(*)::bigint AS count,
-                  MIN(fetched_at) AS oldest, MAX(fetched_at) AS newest
-           FROM ${table} GROUP BY source`,
-        );
-        for (const row of r.rows) {
-          const cnt =
-            typeof row.count === 'string' ? Number.parseInt(row.count, 10) : row.count;
-          const old = row.oldest ? new Date(row.oldest) : null;
-          const recent = row.newest ? new Date(row.newest) : null;
-          const existing = aggregated.get(row.source);
-          if (!existing) {
-            aggregated.set(row.source, { count: cnt, oldest: old, newest: recent });
-          } else {
-            existing.count += cnt;
-            if (old && (!existing.oldest || old < existing.oldest)) existing.oldest = old;
-            if (recent && (!existing.newest || recent > existing.newest))
-              existing.newest = recent;
+        await client.query('BEGIN');
+        try {
+          await client.query("SET LOCAL statement_timeout = '25s'");
+          const r = await client.query<SourceCountRow>(
+            `SELECT source, COUNT(*)::bigint AS count,
+                    MIN(fetched_at) AS oldest, MAX(fetched_at) AS newest
+             FROM ${table} GROUP BY source`,
+          );
+          await client.query('COMMIT');
+          for (const row of r.rows) {
+            const cnt =
+              typeof row.count === 'string' ? Number.parseInt(row.count, 10) : row.count;
+            const old = row.oldest ? new Date(row.oldest) : null;
+            const recent = row.newest ? new Date(row.newest) : null;
+            const existing = aggregated.get(row.source);
+            if (!existing) {
+              aggregated.set(row.source, { count: cnt, oldest: old, newest: recent });
+            } else {
+              existing.count += cnt;
+              if (old && (!existing.oldest || old < existing.oldest)) existing.oldest = old;
+              if (recent && (!existing.newest || recent > existing.newest))
+                existing.newest = recent;
+            }
           }
+        } catch (err) {
+          try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+          throw err;
         }
-      } finally {
-        client.release();
+      } catch (err) {
+        log.error({ err, table }, 'data-history/sources query failed');
       }
-    } catch (err) {
-      log.error({ err, table }, 'data-history/sources query failed');
     }
+  } finally {
+    client.release();
   }
 
   const sources = Array.from(aggregated.entries())
@@ -556,12 +634,14 @@ dataHistoryRouter.get('/api/data/history/sources', async (c) => {
     .map(([source, info]) => ({
       source,
       count: info.count,
-      oldest: info.oldest ? info.oldest.toISOString() : null,
-      newest: info.newest ? info.newest.toISOString() : null,
+      oldest: sydneyIsoFromDate(info.oldest),
+      newest: sydneyIsoFromDate(info.newest),
     }))
     .sort((a, b) => b.count - a.count);
 
-  return c.json({ sources });
+  const body = { sources };
+  sourcesCache = { body, ts: now };
+  return c.json(body);
 });
 
 // ---------------------------------------------------------------------------
@@ -575,6 +655,10 @@ interface StatsRow extends QueryResultRow {
 }
 
 dataHistoryRouter.get('/api/data/history/stats', async (c) => {
+  const now = Date.now();
+  if (statsCache && now - statsCache.ts < SOURCES_STATS_TTL_MS) {
+    return c.json(statsCache.body);
+  }
   const pool = await getPool();
   if (!pool) {
     return c.json({
@@ -591,42 +675,53 @@ dataHistoryRouter.get('/api/data/history/stats', async (c) => {
   let oldestOverall: Date | null = null;
   let newestOverall: Date | null = null;
 
-  for (const table of ALL_ARCHIVE_TABLES) {
-    try {
-      const client = await pool.connect();
+  // Same one-client pattern as /sources above — the per-iteration
+  // pool.connect was claiming 5 slots in sequence under load.
+  const client = await pool.connect();
+  try {
+    for (const table of ALL_ARCHIVE_TABLES) {
       try {
-        await client.query("SET LOCAL statement_timeout = '25s'");
-        const r = await client.query<StatsRow>(
-          `SELECT COUNT(*)::bigint AS total, MIN(fetched_at) AS oldest, MAX(fetched_at) AS newest FROM ${table}`,
-        );
-        const row = r.rows[0];
-        if (!row) continue;
-        const cnt =
-          typeof row.total === 'string' ? Number.parseInt(row.total, 10) : row.total;
-        const old = row.oldest ? new Date(row.oldest) : null;
-        const recent = row.newest ? new Date(row.newest) : null;
-        perTable[table] = {
-          count: cnt,
-          oldest: old ? old.toISOString() : null,
-          newest: recent ? recent.toISOString() : null,
-        };
-        total += cnt;
-        if (old && (!oldestOverall || old < oldestOverall)) oldestOverall = old;
-        if (recent && (!newestOverall || recent > newestOverall)) newestOverall = recent;
-      } finally {
-        client.release();
+        await client.query('BEGIN');
+        try {
+          await client.query("SET LOCAL statement_timeout = '25s'");
+          const r = await client.query<StatsRow>(
+            `SELECT COUNT(*)::bigint AS total, MIN(fetched_at) AS oldest, MAX(fetched_at) AS newest FROM ${table}`,
+          );
+          await client.query('COMMIT');
+          const row = r.rows[0];
+          if (!row) continue;
+          const cnt =
+            typeof row.total === 'string' ? Number.parseInt(row.total, 10) : row.total;
+          const old = row.oldest ? new Date(row.oldest) : null;
+          const recent = row.newest ? new Date(row.newest) : null;
+          perTable[table] = {
+            count: cnt,
+            oldest: sydneyIsoFromDate(old),
+            newest: sydneyIsoFromDate(recent),
+          };
+          total += cnt;
+          if (old && (!oldestOverall || old < oldestOverall)) oldestOverall = old;
+          if (recent && (!newestOverall || recent > newestOverall)) newestOverall = recent;
+        } catch (err) {
+          try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+          throw err;
+        }
+      } catch (err) {
+        log.error({ err, table }, 'data-history/stats query failed');
       }
-    } catch (err) {
-      log.error({ err, table }, 'data-history/stats query failed');
     }
+  } finally {
+    client.release();
   }
 
-  return c.json({
+  const body = {
     total_records: total,
-    oldest: oldestOverall ? oldestOverall.toISOString() : null,
-    newest: newestOverall ? newestOverall.toISOString() : null,
+    oldest: sydneyIsoFromDate(oldestOverall),
+    newest: sydneyIsoFromDate(newestOverall),
     tables: perTable,
-  });
+  };
+  statsCache = { body, ts: now };
+  return c.json(body);
 });
 
 // ---------------------------------------------------------------------------
@@ -692,9 +787,7 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
     const history = rows.map((r) => ({
       id: r.id,
       fetched_at: r.fetched_at_epoch,
-      fetched_at_iso: r.fetched_at_epoch
-        ? new Date(r.fetched_at_epoch * 1000).toISOString()
-        : null,
+      fetched_at_iso: sydneyIsoFromUnix(r.fetched_at_epoch),
       source_timestamp: pickStr(r.data, 'source_timestamp'),
       source_timestamp_unix: pickNum(r.data, 'source_timestamp_unix'),
       latitude: r.lat,
@@ -709,10 +802,7 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       is_active: pickBool(r.data, 'is_active', false),
       is_live: pickBool(r.data, 'is_live', true),
       last_seen: pickNum(r.data, 'last_seen'),
-      last_seen_iso: (() => {
-        const ls = pickNum(r.data, 'last_seen');
-        return ls ? new Date(ls * 1000).toISOString() : null;
-      })(),
+      last_seen_iso: sydneyIsoFromUnix(pickNum(r.data, 'last_seen')),
     }));
 
     const isCurrentlyLive =
