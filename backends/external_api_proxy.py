@@ -2157,7 +2157,12 @@ def _store_incidents_batch_inner(incidents, source_type=None):
             if source_type in waze_sources:
                 pass
             elif source_type and all_source_ids_in_batch:
-                # Get all source_ids we know about for this source_type that are still marked as live
+                # Get all source_ids we know about for this source_type that are still marked as live.
+                # 30s timeout — this DISTINCT fires every 30s per source from the archive writer
+                # thread, and as data_history grows it becomes a candidate for the slow query
+                # that silently eats the connection pool. Without an explicit timeout Postgres'
+                # default would let it hang indefinitely.
+                c.execute("SET LOCAL statement_timeout = '30s'")
                 c.execute('''
                     SELECT DISTINCT source_id FROM data_history
                     WHERE source = %s AND is_live = 1 AND source_id IS NOT NULL
@@ -10933,6 +10938,18 @@ def health():
 # without a redeploy. Defaults are generous — they only fire when something
 # is genuinely wrong, not on transient hiccups.
 STATUS_DB_TIMEOUT_SECS         = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 5))
+STATUS_CACHE_TTL_SECS          = int(os.environ.get('STATUS_CACHE_TTL_SECS', 5))
+
+# Cached /api/status response. Multiple monitors + the in-page Dev tab
+# all hammer this endpoint, and each call costs at minimum one DB
+# round-trip (SELECT 1). A 5s TTL collapses ~20 callers/min down to
+# ~12/min and stops the endpoint from being a contributing factor when
+# the DB is already stressed. _STATUS_CACHE_INFLIGHT prevents the
+# thundering-herd case where the cache expires and 5 callers all build
+# the response simultaneously.
+_STATUS_CACHE = {'data': None, 'http_code': 200, 'ts': 0.0}
+_STATUS_CACHE_LOCK = threading.Lock()
+_STATUS_CACHE_INFLIGHT = threading.Lock()
 STATUS_WRITER_STALE_SECS       = int(os.environ.get('STATUS_WRITER_STALE_SECS', 300))    # 5 min
 STATUS_WAZE_STALE_SECS         = int(os.environ.get('STATUS_WAZE_STALE_SECS', 900))      # 15 min
 STATUS_BUFFER_WARN_RECORDS     = int(os.environ.get('STATUS_BUFFER_WARN_RECORDS', 10_000))
