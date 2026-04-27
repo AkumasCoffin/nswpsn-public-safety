@@ -1774,6 +1774,11 @@ _ARCHIVE_BUFFER_MAX_RECORDS = 50_000  # hard cap to bound RAM
 _archive_buffer = []  # list of (records, source_type) tuples
 _archive_buffer_records = 0  # running record count, kept in sync with the list
 _archive_buffer_lock = threading.Lock()
+# Wall-clock timestamps of the last successful archive-writer drain (any
+# records or zero) and process start, exposed by /api/status so external
+# monitors can detect a stuck writer thread.
+_archive_writer_last_flush_at = 0.0
+_PROCESS_START_TIME = time.time()
 
 # Friendly names for archive logging — also used by the writer thread.
 _ARCHIVE_NAMES = {
@@ -1923,6 +1928,7 @@ def _archive_writer_loop():
     ARCHIVE_FLUSH_INTERVAL seconds; one final drain on shutdown."""
     Log.startup(f"Archive writer started (flush every {ARCHIVE_FLUSH_INTERVAL}s, "
                 f"buffer cap {_ARCHIVE_BUFFER_MAX_RECORDS:,} records)")
+    global _archive_writer_last_flush_at
     while not _shutdown_event.is_set():
         # _shutdown_event.wait returns True when set — exit loop, but still
         # do one last drain below to flush any buffered records.
@@ -1930,6 +1936,9 @@ def _archive_writer_loop():
             break
         try:
             sources, total, elapsed = _archive_writer_drain_once()
+            # Stamp the heartbeat even on empty drains — the watchdog wants
+            # to know the thread is alive, not whether there was data.
+            _archive_writer_last_flush_at = time.time()
             if sources or total:
                 Log.data(f"📦 Archive flush: {sources} sources, {total} records [{elapsed}ms]")
         except Exception as e:
@@ -10857,11 +10866,134 @@ def get_config():
 @app.route('/api/health')
 def health():
     return jsonify({
-        'status': 'ok', 
+        'status': 'ok',
         'mode': 'dev' if DEV_MODE else 'production',
         'cache_keys': list(cache.keys()),
         'active_viewers': get_active_page_count()
     })
+
+
+# Thresholds for /api/status. Tunable via env so we can tighten/loosen
+# without a redeploy. Defaults are generous — they only fire when something
+# is genuinely wrong, not on transient hiccups.
+STATUS_DB_TIMEOUT_SECS       = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 3))
+STATUS_WRITER_STALE_SECS     = int(os.environ.get('STATUS_WRITER_STALE_SECS', 300))   # 5 min
+STATUS_WAZE_STALE_SECS       = int(os.environ.get('STATUS_WAZE_STALE_SECS', 900))     # 15 min
+STATUS_BUFFER_WARN_RECORDS   = int(os.environ.get('STATUS_BUFFER_WARN_RECORDS', 10_000))
+
+
+@app.route('/api/status')
+def status_endpoint():
+    """Health endpoint shaped for Uptime Kuma (or any HTTP/keyword monitor).
+
+    HTTP status reflects critical state:
+      - 200 when the backend is functional (DB reachable, writer thread alive)
+      - 503 when a critical subsystem is broken
+
+    JSON body has a finer-grained `status` of ok | degraded | down, and a
+    per-check breakdown so you can configure a Keyword monitor on
+    `"status":"ok"` for stricter alerting (e.g. fire on Waze ingest
+    staleness without taking the page red on a transient userscript hiccup).
+    """
+    now = time.time()
+    checks = {}
+    critical_failed = False
+    degraded = False
+
+    # 1. DB ping. Cheapest possible round-trip.
+    db_ok = False
+    db_latency_ms = None
+    db_error = None
+    db_t0 = time.time()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(f"SET LOCAL statement_timeout = '{STATUS_DB_TIMEOUT_SECS * 1000}ms'")
+        c.execute('SELECT 1')
+        c.fetchone()
+        db_ok = True
+        db_latency_ms = int((time.time() - db_t0) * 1000)
+    except Exception as e:
+        db_error = str(e)[:200]
+        critical_failed = True
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+    checks['database'] = {
+        'ok': db_ok,
+        'latency_ms': db_latency_ms,
+        'error': db_error,
+    }
+
+    # 2. Archive writer heartbeat. If the dedicated writer thread is wedged,
+    # archive flushes stop and incident history goes stale. _last_flush_at
+    # is bumped every ARCHIVE_FLUSH_INTERVAL even on empty drains, so a
+    # stale value means the thread itself is sick.
+    writer_age = now - _archive_writer_last_flush_at if _archive_writer_last_flush_at else None
+    writer_ok = writer_age is not None and writer_age <= STATUS_WRITER_STALE_SECS
+    # During the first ARCHIVE_FLUSH_INTERVAL after boot we haven't flushed
+    # yet — don't flag that as failed.
+    if writer_age is None and (now - _PROCESS_START_TIME) < (ARCHIVE_FLUSH_INTERVAL + 30):
+        writer_ok = True
+    if not writer_ok:
+        critical_failed = True
+    checks['archive_writer'] = {
+        'ok': writer_ok,
+        'last_flush_age_secs': int(writer_age) if writer_age is not None else None,
+        'threshold_secs': STATUS_WRITER_STALE_SECS,
+    }
+
+    # 3. Archive buffer occupancy. Growing means the writer can't keep up.
+    with _archive_buffer_lock:
+        buf_records = _archive_buffer_records
+    buffer_ok = buf_records <= STATUS_BUFFER_WARN_RECORDS
+    if not buffer_ok:
+        degraded = True
+    checks['archive_buffer'] = {
+        'ok': buffer_ok,
+        'records': buf_records,
+        'warn_threshold': STATUS_BUFFER_WARN_RECORDS,
+        'hard_cap': _ARCHIVE_BUFFER_MAX_RECORDS,
+    }
+
+    # 4. Waze ingest freshness. Userscript-driven, so a stale value can
+    # mean the operator's browser tab crashed — not a backend failure.
+    # Reported as degraded, not down, so an Uptime Kuma HTTP-status check
+    # doesn't page on it. Use a Keyword monitor on "status":"ok" to alert.
+    if WAZE_INGEST_ENABLED:
+        waze_age = now - _waze_last_ingest_at if _waze_last_ingest_at else None
+        waze_ok = waze_age is not None and waze_age <= STATUS_WAZE_STALE_SECS
+        if waze_age is None and (now - _PROCESS_START_TIME) < 120:
+            # Just-booted, hasn't received the first POST yet.
+            waze_ok = True
+        if not waze_ok:
+            degraded = True
+        checks['waze_ingest'] = {
+            'ok': waze_ok,
+            'last_ingest_age_secs': int(waze_age) if waze_age is not None else None,
+            'threshold_secs': STATUS_WAZE_STALE_SECS,
+        }
+    else:
+        checks['waze_ingest'] = {'ok': True, 'enabled': False}
+
+    if critical_failed:
+        overall = 'down'
+        http_code = 503
+    elif degraded:
+        overall = 'degraded'
+        http_code = 200
+    else:
+        overall = 'ok'
+        http_code = 200
+
+    return jsonify({
+        'status': overall,
+        'uptime_secs': int(now - _PROCESS_START_TIME),
+        'mode': 'dev' if DEV_MODE else 'production',
+        'checks': checks,
+    }), http_code
 
 @app.route('/api/cache/clear')
 def clear_cache():
