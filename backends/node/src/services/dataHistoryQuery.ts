@@ -339,18 +339,38 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   acc.params.push(fetchSize);
 
   if (p.unique) {
-    // DISTINCT ON requires its keys to be the leading ORDER BY columns.
-    // Inner query: pick the latest snapshot per (source, source_id).
-    // Outer query: re-sort by fetched_at and apply LIMIT.
+    // unique=1 path. DISTINCT ON over a partitioned, write-heavy
+    // archive table is O(N) in the WHERE-filtered row count — even
+    // with hours=24 narrowing the date range, archive_power and
+    // archive_traffic accumulate thousands of poll snapshots per day
+    // and the unbounded DISTINCT ON ran out of statement_timeout.
+    //
+    // Strategy: bound the inner scan to the most recent UNIQUE_INNER_CAP
+    // rows by fetched_at DESC. The (fetched_at DESC) index on every
+    // archive_* family makes that bounded scan a fast index-only walk.
+    // We then apply DISTINCT ON over that small set in memory. The cap
+    // is chosen well above any reasonable LIMIT * (snapshots-per-incident
+    // ratio) so callers asking for the latest 50 unique incidents always
+    // see them — the query effectively becomes "the latest 10k rows,
+    // deduped by (source, source_id)".
+    const UNIQUE_INNER_CAP = 10_000;
+    const bounded = `
+      SELECT id, source, source_id, fetched_at,
+             lat, lng, category, subcategory,
+             data
+      FROM ${table}
+      ${whereClause}
+      ORDER BY fetched_at DESC, id DESC
+      LIMIT ${UNIQUE_INNER_CAP}
+    `;
     const inner = `
       SELECT DISTINCT ON (source, source_id)
              id, source, source_id,
              extract(epoch FROM fetched_at)::bigint AS fetched_at_epoch,
              fetched_at,
              lat, lng, category, subcategory,
-             ${dataCol}
-      FROM ${table}
-      ${whereClause}
+             ${p.includeData ? 'data' : "'{}'::jsonb AS data"}
+      FROM (${bounded}) bounded
       ORDER BY source, source_id, fetched_at DESC
     `;
     const sql = `
