@@ -175,26 +175,50 @@
     .stat-card.rejected .stat-value { color: var(--danger); }
 
     /* === Dev tab — backend status panel === */
+    /* Hero strip showing overall backend state. Bigger badge + readable meta. */
     .dev-overall {
       display: flex;
       align-items: center;
-      gap: 1rem;
-      background: var(--bg-card);
+      gap: 1.25rem;
+      background:
+        radial-gradient(120% 240% at 0% 0%, rgba(34,197,94,0.08) 0%, transparent 60%),
+        var(--bg-card);
       border: 1px solid var(--border-subtle);
-      border-radius: 12px;
-      padding: 1.25rem 1.5rem;
-      margin-bottom: 1.5rem;
+      border-radius: 14px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 2rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .dev-overall.degraded {
+      background:
+        radial-gradient(120% 240% at 0% 0%, rgba(234,179,8,0.10) 0%, transparent 60%),
+        var(--bg-card);
+    }
+    .dev-overall.down {
+      background:
+        radial-gradient(120% 240% at 0% 0%, rgba(239,68,68,0.12) 0%, transparent 60%),
+        var(--bg-card);
     }
     .dev-overall-badge {
-      font-size: 1.4rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
-      padding: 0.4rem 0.9rem;
-      border-radius: 8px;
+      padding: 0.55rem 1.1rem;
+      border-radius: 10px;
       background: rgba(34, 197, 94, 0.18);
       color: var(--success);
       border: 1px solid rgba(34, 197, 94, 0.4);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    .dev-overall-badge::before {
+      content: '';
+      width: 10px; height: 10px; border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
     }
     .dev-overall-badge.degraded {
       background: rgba(234, 179, 8, 0.18);
@@ -206,54 +230,152 @@
       color: var(--danger);
       border-color: rgba(239, 68, 68, 0.4);
     }
-    .dev-overall-meta { color: var(--text-soft); font-size: 0.9rem; }
-
-    .dev-section-h {
+    .dev-overall-meta {
       color: var(--text-soft);
-      font-size: 0.8rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin: 1.5rem 0 0.75rem;
+      font-size: 0.95rem;
+      line-height: 1.6;
     }
+    .dev-overall-meta strong { color: var(--text-primary); font-weight: 600; }
+
+    /* Section dividers — small uppercase label + a hairline. */
+    .dev-section-h {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: var(--text-soft);
+      font-size: 0.78rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin: 2rem 0 1rem;
+      font-weight: 600;
+    }
+    .dev-section-h::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, var(--border-subtle), transparent);
+    }
+
+    /* Card grid — wider cards, more breathing room. */
     .dev-card-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 1rem;
     }
-    .dev-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-subtle);
-      border-left: 3px solid var(--success);
-      border-radius: 10px;
-      padding: 0.9rem 1rem;
-    }
-    .dev-card.degraded { border-left-color: var(--warning); }
-    .dev-card.down     { border-left-color: var(--danger); }
-    .dev-card.unknown  { border-left-color: var(--text-soft); }
-    .dev-card-name {
-      display: flex; justify-content: space-between; align-items: center;
-      font-weight: 600; color: var(--text-primary); margin-bottom: 0.4rem;
-    }
-    .dev-card-status {
-      font-size: 0.7rem;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
-      background: rgba(34, 197, 94, 0.18);
-      color: var(--success);
-    }
-    .dev-card-status.degraded { background: rgba(234, 179, 8, 0.18); color: var(--warning); }
-    .dev-card-status.down     { background: rgba(239, 68, 68, 0.18); color: var(--danger); }
-    .dev-card-status.unknown  { background: rgba(148, 163, 184, 0.18); color: var(--text-soft); }
-    .dev-card-meta {
-      font-size: 0.78rem;
-      color: var(--text-soft);
-      line-height: 1.5;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-    .dev-card-meta .k { display: inline-block; width: 6.5em; opacity: 0.7; }
 
+    /* Card itself — icon + name + dot up top, big primary metric in the
+       middle, secondary key/value row at the bottom. */
+    .dev-card {
+      position: relative;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), transparent 50%),
+        var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1.1rem 1.15rem 0.9rem;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .dev-card:hover {
+      transform: translateY(-1px);
+      border-color: rgba(34, 197, 94, 0.35);
+      box-shadow: 0 4px 18px rgba(0,0,0,0.25);
+    }
+    .dev-card.degraded:hover { border-color: rgba(234, 179, 8, 0.4); }
+    .dev-card.down:hover     { border-color: rgba(239, 68, 68, 0.4); }
+    .dev-card.unknown:hover  { border-color: rgba(148, 163, 184, 0.35); }
+
+    /* Status dot in top-right; the rest of the card uses neutral border. */
+    .dev-card-dot {
+      position: absolute;
+      top: 0.95rem;
+      right: 1.05rem;
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(34, 197, 94, 0.55);
+    }
+    .dev-card.degraded .dev-card-dot { background: var(--warning); box-shadow: 0 0 8px rgba(234, 179, 8, 0.55); }
+    .dev-card.down     .dev-card-dot { background: var(--danger);  box-shadow: 0 0 8px rgba(239, 68, 68, 0.55); }
+    .dev-card.unknown  .dev-card-dot { background: var(--text-soft); box-shadow: none; opacity: 0.5; }
+
+    /* Icon + name row */
+    .dev-card-head {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      margin-bottom: 0.85rem;
+      padding-right: 1.5rem; /* leave room for the dot */
+    }
+    .dev-card-icon {
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+      background: rgba(34, 197, 94, 0.12);
+      color: var(--success);
+      flex-shrink: 0;
+    }
+    .dev-card.degraded .dev-card-icon { background: rgba(234, 179, 8, 0.12); color: var(--warning); }
+    .dev-card.down     .dev-card-icon { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
+    .dev-card.unknown  .dev-card-icon { background: rgba(148, 163, 184, 0.10); color: var(--text-soft); }
+    .dev-card-icon i { font-size: 0.95rem; }
+    .dev-card-name {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Primary metric — the one number that matters most for this card. */
+    .dev-card-primary {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      margin-bottom: 0.65rem;
+    }
+    .dev-card-primary .value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1;
+      letter-spacing: -0.01em;
+    }
+    .dev-card.degraded .dev-card-primary .value { color: var(--warning); }
+    .dev-card.down     .dev-card-primary .value { color: var(--danger); }
+    .dev-card.unknown  .dev-card-primary .value { color: var(--text-soft); }
+    .dev-card-primary .label {
+      font-size: 0.72rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* Secondary metrics row — small key/value pills along the bottom. */
+    .dev-card-secondary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--text-soft);
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 0.65rem;
+    }
+    .dev-card-secondary span { white-space: nowrap; }
+    .dev-card-secondary strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .dev-card-error {
+      margin-top: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--danger);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-word;
+    }
+
+    /* Tab-button pill (mirrors overall status next to "Dev" label). */
     .dev-status-pill {
       display: inline-block;
       width: 8px; height: 8px;
@@ -261,9 +383,10 @@
       background: var(--success);
       margin-left: 0.5rem;
       vertical-align: middle;
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.55);
     }
-    .dev-status-pill.degraded { background: var(--warning); }
-    .dev-status-pill.down     { background: var(--danger); }
+    .dev-status-pill.degraded { background: var(--warning); box-shadow: 0 0 6px rgba(234, 179, 8, 0.55); }
+    .dev-status-pill.down     { background: var(--danger);  box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
     
     .filter-bar {
       display: flex;
@@ -1152,40 +1275,69 @@
       if (h > 0) return `${h}h ${m}m`;
       return `${m}m`;
     }
-    function _kv(k, v) {
-      return `<div><span class="k">${k}</span>${v == null ? '—' : v}</div>`;
-    }
-
-    function _checkCard(name, c, lines) {
-      const ok = c && c.ok !== false;
-      const cls = ok ? '' : 'down';
-      const status = ok ? 'OK' : 'ISSUE';
-      const statusCls = ok ? '' : 'down';
+    // Render a single card. `opts` is:
+    //   { name, icon, statusCls, primary: {value, label}, secondary: [{label, value}], error? }
+    function _renderCard(opts) {
+      const cls = opts.statusCls || '';
+      const secondary = (opts.secondary || [])
+        .filter(s => s && s.value != null && s.value !== '')
+        .map(s => `<span>${s.label} <strong>${s.value}</strong></span>`)
+        .join('');
+      const errorBlock = opts.error
+        ? `<div class="dev-card-error">${opts.error}</div>`
+        : '';
       return `
         <div class="dev-card ${cls}">
-          <div class="dev-card-name">
-            <span>${name}</span>
-            <span class="dev-card-status ${statusCls}">${status}</span>
+          <div class="dev-card-dot"></div>
+          <div class="dev-card-head">
+            <div class="dev-card-icon"><i class="fas fa-${opts.icon || 'circle'}"></i></div>
+            <div class="dev-card-name">${opts.name}</div>
           </div>
-          <div class="dev-card-meta">${lines.join('')}</div>
+          <div class="dev-card-primary">
+            <span class="value">${opts.primary.value}</span>
+            <span class="label">${opts.primary.label}</span>
+          </div>
+          ${secondary ? `<div class="dev-card-secondary">${secondary}</div>` : ''}
+          ${errorBlock}
         </div>`;
     }
+
+    // Per-source FontAwesome icons. Keep generic — no need to chase
+    // perfect metaphors, just visually distinguish at a glance.
+    const _sourceIcons = {
+      rfs:               'fire',
+      bom:               'cloud-bolt',
+      pager:             'pager',
+      traffic_incidents: 'triangle-exclamation',
+      traffic_roadwork:  'screwdriver-wrench',
+      traffic_flood:     'water',
+      traffic_fire:      'fire-flame-curved',
+      traffic_major:     'flag',
+      power_endeavour:   'plug-circle-bolt',
+      power_ausgrid:     'bolt',
+      waze:              'route',
+      rdio:              'walkie-talkie',
+    };
 
     function _sourceCard(name, s) {
       const status = (s && s.status) || 'unknown';
-      return `
-        <div class="dev-card ${status}">
-          <div class="dev-card-name">
-            <span>${s && s.label ? s.label : name}</span>
-            <span class="dev-card-status ${status}">${status}</span>
-          </div>
-          <div class="dev-card-meta">
-            ${_kv('last ok',     _fmtAge(s ? s.last_success_age_secs : null))}
-            ${_kv('last err',    _fmtAge(s ? s.last_error_age_secs : null))}
-            ${_kv('fails',       s ? s.consec_fails : '—')}
-            ${_kv('soft / hard', s ? `${_fmtAge(s.soft_threshold_secs)} / ${_fmtAge(s.hard_threshold_secs)}` : '—')}
-          </div>
-        </div>`;
+      const okLabel = status === 'unknown' ? 'no data yet' : 'since last ok';
+      return _renderCard({
+        name: (s && s.label) || name,
+        icon: _sourceIcons[name] || 'circle-nodes',
+        statusCls: status === 'ok' ? '' : status,
+        primary: {
+          value: _fmtAge(s ? s.last_success_age_secs : null),
+          label: okLabel,
+        },
+        secondary: [
+          { label: 'fails',     value: s ? s.consec_fails : null },
+          { label: 'thresh',    value: s ? `${_fmtAge(s.soft_threshold_secs)} / ${_fmtAge(s.hard_threshold_secs)}` : null },
+          (s && s.last_error_age_secs != null)
+            ? { label: 'last err', value: _fmtAge(s.last_error_age_secs) }
+            : null,
+        ].filter(Boolean),
+      });
     }
 
     function renderDevStatus(data) {
@@ -1212,7 +1364,9 @@
         pill.className = `dev-status-pill ${overall === 'ok' ? '' : overall}`;
       }
 
-      // Backend internals grid.
+      // Backend internals grid. Each card picks the *one* metric that
+      // tells you the most about that subsystem's health and shows it
+      // big; secondary stats sit underneath as small key/value pills.
       const checks = data.checks || {};
       const intGrid = document.getElementById('dev-internals-grid');
       const db = checks.database || {};
@@ -1222,43 +1376,68 @@
       const ph = checks.police_heatmap || {};
       const fc = checks.filter_cache || {};
       const rc = checks.ram_cache || {};
+
+      const _cls = (c) => (c && c.ok === false) ? 'down' : '';
+
       intGrid.innerHTML = [
-        _checkCard('Database', db, [
-          _kv('latency',  db.latency_ms != null ? `${db.latency_ms} ms` : '—'),
-          _kv('pool',     `${db.pool_in_use ?? '?'}/${db.pool_max ?? '?'} in use`),
-          db.error ? _kv('error', `<span style="color:var(--danger)">${db.error}</span>`) : '',
-        ]),
-        _checkCard('Archive Writer', aw, [
-          _kv('last flush', _fmtAge(aw.last_flush_age_secs)),
-          _kv('interval',   _fmtAge(aw.flush_interval_secs)),
-          _kv('threshold',  _fmtAge(aw.threshold_secs)),
-        ]),
-        _checkCard('Archive Buffer', ab, [
-          _kv('records', ab.records ?? '—'),
-          _kv('warn',    ab.warn_threshold ?? '—'),
-          _kv('cap',     ab.hard_cap ?? '—'),
-        ]),
-        _checkCard('Waze Ingest', wi, [
-          _kv('last',    _fmtAge(wi.last_ingest_age_secs)),
-          _kv('regions', wi.regions_cached ?? '—'),
-          _kv('block',   wi.block_rate_pct != null ? `${wi.block_rate_pct}%` : '—'),
-          _kv('gated',   wi.gate_active ? 'YES' : 'no'),
-        ]),
-        _checkCard('Police Heatmap', ph, [
-          _kv('bins',         ph.bins ?? '—'),
-          _kv('last refresh', _fmtAge(ph.last_refresh_age_secs)),
-          _kv('threshold',    _fmtAge(ph.threshold_secs)),
-        ]),
-        _checkCard('Filter Cache', fc, [
-          _kv('last refresh', _fmtAge(fc.last_refresh_age_secs)),
-          _kv('interval',     _fmtAge(fc.refresh_interval_secs)),
-          _kv('threshold',    _fmtAge(fc.threshold_secs)),
-        ]),
-        _checkCard('RAM Cache', { ok: true }, [
-          _kv('hit rate', rc.hit_rate_pct != null ? `${rc.hit_rate_pct}%` : '—'),
-          _kv('hits',     rc.hits ?? '—'),
-          _kv('misses',   rc.misses ?? '—'),
-        ]),
+        _renderCard({
+          name: 'Database', icon: 'database', statusCls: _cls(db),
+          primary: { value: db.latency_ms != null ? `${db.latency_ms}ms` : '—', label: 'select 1 latency' },
+          secondary: [
+            { label: 'pool',  value: `${db.pool_in_use ?? '?'}/${db.pool_max ?? '?'}` },
+            { label: 'idle',  value: db.pool_idle ?? null },
+          ],
+          error: db.error,
+        }),
+        _renderCard({
+          name: 'Archive Writer', icon: 'pen-to-square', statusCls: _cls(aw),
+          primary: { value: _fmtAge(aw.last_flush_age_secs), label: 'since last flush' },
+          secondary: [
+            { label: 'interval', value: _fmtAge(aw.flush_interval_secs) },
+            { label: 'thresh',   value: _fmtAge(aw.threshold_secs) },
+          ],
+        }),
+        _renderCard({
+          name: 'Archive Buffer', icon: 'layer-group', statusCls: _cls(ab),
+          primary: { value: ab.records ?? '—', label: 'records queued' },
+          secondary: [
+            { label: 'warn', value: ab.warn_threshold != null ? ab.warn_threshold.toLocaleString() : null },
+            { label: 'cap',  value: ab.hard_cap != null ? ab.hard_cap.toLocaleString() : null },
+          ],
+        }),
+        _renderCard({
+          name: 'Waze Ingest', icon: 'satellite-dish', statusCls: _cls(wi),
+          primary: { value: _fmtAge(wi.last_ingest_age_secs), label: 'since last ingest' },
+          secondary: [
+            { label: 'regions', value: wi.regions_cached ?? null },
+            { label: 'block',   value: wi.block_rate_pct != null ? `${wi.block_rate_pct}%` : null },
+            wi.gate_active ? { label: 'gated', value: 'YES' } : null,
+          ].filter(Boolean),
+        }),
+        _renderCard({
+          name: 'Police Heatmap', icon: 'shield-halved', statusCls: _cls(ph),
+          primary: { value: _fmtAge(ph.last_refresh_age_secs), label: 'since last refresh' },
+          secondary: [
+            { label: 'bins',   value: ph.bins != null ? ph.bins.toLocaleString() : null },
+            { label: 'thresh', value: _fmtAge(ph.threshold_secs) },
+          ],
+        }),
+        _renderCard({
+          name: 'Filter Cache', icon: 'filter', statusCls: _cls(fc),
+          primary: { value: _fmtAge(fc.last_refresh_age_secs), label: 'since last refresh' },
+          secondary: [
+            { label: 'interval', value: _fmtAge(fc.refresh_interval_secs) },
+            { label: 'thresh',   value: _fmtAge(fc.threshold_secs) },
+          ],
+        }),
+        _renderCard({
+          name: 'RAM Cache', icon: 'memory', statusCls: '',
+          primary: { value: rc.hit_rate_pct != null ? `${rc.hit_rate_pct}%` : '—', label: 'hit rate' },
+          secondary: [
+            { label: 'hits',   value: rc.hits != null ? rc.hits.toLocaleString() : null },
+            { label: 'misses', value: rc.misses != null ? rc.misses.toLocaleString() : null },
+          ],
+        }),
       ].join('');
 
       // Sources grid — render in a stable order so the layout doesn't
