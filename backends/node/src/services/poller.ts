@@ -35,7 +35,7 @@ const SKIP_ARCHIVE = new Set<string>([
   'aviation_cameras',
   'centralwatch_cameras',
   'weather_current',
-  'weather_radar',
+  'weather_radar', // tile metadata, not incidents — python never archived
   'ausgrid_stats',
   'beachsafe',
   'beachwatch',
@@ -115,7 +115,9 @@ async function runOnce(src: SourceDefinition): Promise<void> {
       // data_history source values and the SOURCE_TO_FAMILY lookup
       // in dataHistoryQuery resolves to the right archive table.
       const archiveSource = src.archiveSource ?? src.name;
-      const rows = defaultArchiveItems(archiveSource, data, fetchedAt);
+      const rows = src.archiveItems
+        ? src.archiveItems(data, fetchedAt, archiveSource)
+        : defaultArchiveItems(archiveSource, data, fetchedAt);
       const tbl = familyTable(src.family);
       for (const row of rows) {
         archiveWriter.push(tbl, row);

@@ -24,11 +24,13 @@ import type { Pool } from 'pg';
 import { config } from '../config.js';
 
 let _pool: Pool | null = null;
+let _writerPool: Pool | null = null;
 
 /**
- * Lazy-initialise the pool on first use. Returns null if DATABASE_URL
- * isn't configured — callers that genuinely need the DB should throw,
- * but health/config endpoints can degrade gracefully.
+ * Read pool. Sized for concurrent /api/data/history requests (each
+ * issues up to 10 queries — 5 families × {data, count}). Bumped from
+ * 20 to 40 in the perf pass since two simultaneous logs.html loads
+ * could exhaust the old cap.
  */
 export async function getPool(): Promise<Pool | null> {
   if (_pool) return _pool;
@@ -39,7 +41,7 @@ export async function getPool(): Promise<Pool | null> {
   const { Pool: PgPool } = await import('pg');
   _pool = new PgPool({
     connectionString: config.DATABASE_URL,
-    max: 20,
+    max: 40,
     // Each new connection gets a default statement_timeout. Individual
     // queries can override with SET LOCAL inside a transaction.
     statement_timeout: 30_000,
@@ -59,6 +61,33 @@ export async function getPool(): Promise<Pool | null> {
 }
 
 /**
+ * Dedicated pool for ArchiveWriter flushes. Splitting the writer onto
+ * its own pool prevents the periodic 5-table parallel flush from
+ * starving the read pool — previously a flush could hold 5+ slots for
+ * tens of seconds while users waited on /api/data/history.
+ *
+ * Sized at 8: enough headroom for concurrent per-table flush + a small
+ * margin for the stats archiver. Same statement_timeout default; the
+ * INSERT path overrides via SET LOCAL '60s' inside its own BEGIN/COMMIT.
+ */
+export async function getWriterPool(): Promise<Pool | null> {
+  if (_writerPool) return _writerPool;
+  if (!config.DATABASE_URL) return null;
+  const { Pool: PgPool } = await import('pg');
+  _writerPool = new PgPool({
+    connectionString: config.DATABASE_URL,
+    max: 8,
+    statement_timeout: 60_000,
+    idleTimeoutMillis: 60_000,
+  });
+  _writerPool.on('error', (err) => {
+    // eslint-disable-next-line no-console
+    console.error('pg writer pool error:', err);
+  });
+  return _writerPool;
+}
+
+/**
  * Graceful shutdown. Called from src/lib/shutdown.ts when the process
  * receives SIGTERM/SIGINT. Drains in-flight queries before closing.
  */
@@ -66,5 +95,9 @@ export async function closePool(): Promise<void> {
   if (_pool) {
     await _pool.end();
     _pool = null;
+  }
+  if (_writerPool) {
+    await _writerPool.end();
+    _writerPool = null;
   }
 }

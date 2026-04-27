@@ -28,6 +28,14 @@ import { fetchJson } from '../sources/shared/http.js';
 import { _resetStatusCacheForTests } from './status.js';
 import { _resetW3wCacheForTests } from './w3w.js';
 import { _resetEndeavourPostcodesCacheForTests } from './endeavour.js';
+import { _resetHeatmapCacheForTests } from './waze.js';
+import { _resetNewsCacheForTests } from './news.js';
+import { _resetDataHistoryAggregateCache } from './data-history.js';
+import { _resetCentralwatchCacheForTests } from '../sources/centralwatch.js';
+import {
+  _resetNonceCacheForTests as _resetAviationNonceForTests,
+  _resetDetailCacheForTests as _resetAviationDetailForTests,
+} from '../sources/aviation.js';
 import { log } from '../lib/log.js';
 
 export const systemRouter = new Hono();
@@ -40,21 +48,27 @@ systemRouter.get('/api/cache/clear', (c) => {
   // Each cache module exposes a *ForTests reset for unit-test bleed
   // prevention; we reuse them here as the production cache-clear path
   // since they do exactly what cache/clear is supposed to do.
-  try {
-    _resetStatusCacheForTests();
-  } catch {
-    // status route may not have been imported yet on a fresh process
-  }
-  try {
-    _resetW3wCacheForTests();
-  } catch {
-    // ditto
-  }
-  try {
-    _resetEndeavourPostcodesCacheForTests();
-  } catch {
-    // ditto
-  }
+  // tryEach swallows per-cache errors so one missing module doesn't
+  // leave the others uncleared (matches python's blanket cache.clear()
+  // semantics — best effort, not all-or-nothing).
+  const tryEach = (fn: () => void): void => {
+    try { fn(); } catch { /* module may not be loaded yet */ }
+  };
+  tryEach(_resetStatusCacheForTests);
+  tryEach(_resetW3wCacheForTests);
+  tryEach(_resetEndeavourPostcodesCacheForTests);
+  // Heatmap cache (5-min TTL on /api/waze/police-heatmap) — operators
+  // hitting cache/clear to force-refresh expect this to drop too.
+  tryEach(_resetHeatmapCacheForTests);
+  // News RSS aggregator (5-min cache).
+  tryEach(_resetNewsCacheForTests);
+  // Centralwatch file reader (1-min mtime-keyed cache).
+  tryEach(_resetCentralwatchCacheForTests);
+  // Aviation nonce + per-airport modal detail caches.
+  tryEach(_resetAviationNonceForTests);
+  tryEach(_resetAviationDetailForTests);
+  // /api/data/history/sources and /stats cached aggregates (5-min TTL)
+  tryEach(_resetDataHistoryAggregateCache);
   return c.json({
     status: 'ok',
     message: 'Response-side caches cleared (LiveStore retained)',
@@ -234,16 +248,36 @@ systemRouter.get('/api/admin/db/stats', async (c) => {
   ];
 
   const stats: Record<string, unknown> = {};
+  // archive_waze can be multi-million rows — an unbounded COUNT(*) can
+  // park a connection for tens of seconds and starve the writer pool.
+  // Wrap each query in BEGIN/SET LOCAL/COMMIT so it's bounded at 30s.
+  const client = await pool.connect();
   try {
+    const countWithTimeout = async <T extends Record<string, unknown>>(
+      sql: string,
+      params: unknown[] = [],
+    ): Promise<T[]> => {
+      await client.query('BEGIN');
+      try {
+        await client.query("SET LOCAL statement_timeout = '30s'");
+        const r = await client.query<T>(sql, params);
+        await client.query('COMMIT');
+        return r.rows;
+      } catch (err) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        throw err;
+      }
+    };
+
     for (const t of ARCHIVE_TABLES) {
       try {
-        const r = await pool.query<{ rows: number; bytes: number }>(
+        const rows = await countWithTimeout<{ rows: number; bytes: number }>(
           `SELECT COUNT(*)::bigint AS rows, ` +
             `pg_total_relation_size($1::regclass)::bigint AS bytes ` +
             `FROM ${t}`,
           [t],
         );
-        const row = r.rows[0];
+        const row = rows[0];
         stats[t] = {
           rows: Number(row?.rows ?? 0),
           size_mb: row?.bytes
@@ -256,10 +290,10 @@ systemRouter.get('/api/admin/db/stats', async (c) => {
     }
     for (const t of SUPPORT_TABLES) {
       try {
-        const r = await pool.query<{ rows: number }>(
+        const rows = await countWithTimeout<{ rows: number }>(
           `SELECT COUNT(*)::bigint AS rows FROM ${t}`,
         );
-        stats[t] = { rows: Number(r.rows[0]?.rows ?? 0) };
+        stats[t] = { rows: Number(rows[0]?.rows ?? 0) };
       } catch (err) {
         stats[t] = { error: (err as Error).message };
       }
@@ -267,6 +301,8 @@ systemRouter.get('/api/admin/db/stats', async (c) => {
     return c.json(stats);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 500);
+  } finally {
+    client.release();
   }
 });
 

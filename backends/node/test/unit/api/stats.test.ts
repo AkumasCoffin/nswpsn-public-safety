@@ -69,8 +69,11 @@ describe('stats router', () => {
     expect(power['endeavour']?.['current']).toBe(2);
     expect(power['endeavour']?.['current_maintenance']).toBe(1);
     expect(power['endeavour']?.['future']).toBe(1);
-    // 10+5+3+1.
-    expect(power['endeavour']?.['customers_affected']).toBe(19);
+    // 10 + 5 + 3 — current + current_maintenance only. Future planned
+    // outages aren't affecting anyone yet, so they're excluded from
+    // customers_affected (the previous all-three-buckets sum was the
+    // L4 audit finding, since fixed).
+    expect(power['endeavour']?.['customers_affected']).toBe(18);
 
     expect(power['ausgrid']?.['unplanned']).toBe(1);
     expect(power['ausgrid']?.['planned']).toBe(1);

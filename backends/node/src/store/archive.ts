@@ -24,7 +24,7 @@
 import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
-import { getPool } from '../db/pool.js';
+import { getWriterPool } from '../db/pool.js';
 
 export type ArchiveTable =
   | 'archive_waze'
@@ -119,7 +119,7 @@ export class ArchiveWriter {
     if (this.flushing) return { tables: 0, rows: 0, ms: 0 };
     if (this.queue.length === 0) return { tables: 0, rows: 0, ms: 0 };
 
-    const pool = await getPool();
+    const pool = await getWriterPool();
     if (!pool) {
       // No DB configured (yet) — keep queueing in RAM. Cap will kick in
       // if we go for a really long time without a target.
@@ -144,20 +144,35 @@ export class ArchiveWriter {
       }
     }
 
+    // Run per-table inserts in parallel — previously the for-of loop
+    // serialised them, so a slow archive_waze flush blocked the small
+    // archive_misc/rfs/power flushes behind it (production: 24s
+    // 5-table flushes). With the dedicated writer pool (8 slots) and
+    // chunk-sizes already tuned per family, parallel flush wallclock
+    // drops to max(per-table) instead of sum.
     let totalRows = 0;
-    for (const [table, rows] of buckets) {
-      try {
-        await this.insertBatch(pool, table, rows);
-        totalRows += rows.length;
-      } catch (err) {
-        log.error(
-          { err, table, count: rows.length },
-          'ArchiveWriter: insert failed; re-queueing',
-        );
-        // Re-queue so the next flush retries. Cap protects from
-        // infinite growth if the DB is permanently unhappy.
-        for (const row of rows) {
-          this.push(table, row);
+    const results = await Promise.all(
+      Array.from(buckets.entries()).map(async ([table, rows]) => {
+        try {
+          await this.insertBatch(pool, table, rows);
+          return { table, ok: true, rows: rows.length };
+        } catch (err) {
+          log.error(
+            { err, table, count: rows.length },
+            'ArchiveWriter: insert failed; re-queueing',
+          );
+          return { table, ok: false, rows: rows.length, requeue: rows };
+        }
+      }),
+    );
+    for (const r of results) {
+      if (r.ok) {
+        totalRows += r.rows;
+      } else if (r.requeue) {
+        // Re-queue failed batch so next flush retries it. HARD_CAP
+        // protects from runaway growth on persistent DB failure.
+        for (const row of r.requeue) {
+          this.push(r.table, row);
         }
       }
     }
@@ -166,14 +181,10 @@ export class ArchiveWriter {
     this.flushing = false;
     this.lastFlushAt = Math.floor(Date.now() / 1000);
     this.totalWritten += totalRows;
+    // Only log non-empty flushes at info — empty cycles fire every
+    // 30s and were drowning the log without adding any signal.
     if (totalRows > 0) {
-      // Only log non-empty flushes at info — empty cycles fire every
-      // 30s and were drowning the log without adding any signal.
-      if (totalRows > 0) {
-        log.info({ tables: buckets.size, rows: totalRows, ms }, 'archive flush');
-      } else {
-        log.debug({ ms }, 'archive flush idle');
-      }
+      log.info({ tables: buckets.size, rows: totalRows, ms }, 'archive flush');
     }
     return { tables: buckets.size, rows: totalRows, ms };
   }
@@ -195,7 +206,14 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    const INSERT_CHUNK_SIZE = 500;
+    // archive_waze has 4 indexes (source/ts/lat/lng + JSONB GIN-ish).
+    // Under heavy ingest with concurrent /api/waze/police-heatmap
+    // reads, a 500-row INSERT was hitting the 30s SET LOCAL timeout
+    // (production: 22:21:13 — 3200-row batch failed on its 500-row
+    // sub-chunk). Smaller chunks for waze keep each statement well
+    // under the timeout; other tables stay at 500 since they don't
+    // see the same write pressure.
+    const INSERT_CHUNK_SIZE = table === 'archive_waze' ? 250 : 500;
     // Reuse one connection across chunks — `SET LOCAL` only takes
     // effect inside an explicit transaction, so each chunk runs in
     // its own BEGIN/COMMIT pair. Holding one client for the whole
@@ -261,13 +279,17 @@ export class ArchiveWriter {
       placeholders.join(',');
 
     // SET LOCAL only applies inside an explicit transaction (pg
-    // semantics) — wrap in BEGIN/COMMIT so the 30s timeout actually
+    // semantics) — wrap in BEGIN/COMMIT so the timeout actually
     // overrides the global default. Earlier revisions used SET LOCAL
     // without a transaction, which silently inherited the database's
     // ~60s statement_timeout and caused 60s INSERT failures.
+    // 60s ceiling (was 30s) — production saw archive_waze 500-row
+    // chunks hit 30s under concurrent heatmap-read pressure even
+    // though the average insert is < 5s. With the chunk size halved
+    // for waze, this gives ample slack without removing the bound.
     await client.query('BEGIN');
     try {
-      await client.query("SET LOCAL statement_timeout = '30s'");
+      await client.query("SET LOCAL statement_timeout = '60s'");
       await client.query(sql, params);
       await client.query('COMMIT');
     } catch (err) {

@@ -10,6 +10,7 @@ import { fetchText } from './shared/http.js';
 import { asArray, parseXml, textOf } from './shared/xml.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
+import type { ArchiveRow } from '../store/archive.js';
 
 const BOM_URL = 'https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml';
 
@@ -165,16 +166,91 @@ function collectByTag(node: unknown, tag: string): Array<Record<string, unknown>
   return out;
 }
 
+/**
+ * Mirror python's `_extract_bom_warning_type` (external_api_proxy.py:5457)
+ * — pull a Wind/Flood/Thunderstorm/etc. label out of the warning title so
+ * archive_misc rows carry a meaningful subcategory value the logs page
+ * dropdown can group on. Order matters; specific patterns first.
+ */
+function extractBomWarningType(title: string): string {
+  const t = (title || '').toLowerCase();
+  if (!t) return 'Warning';
+  const patterns: Array<[string, string]> = [
+    ['thunderstorm', 'Thunderstorm'],
+    ['flood', 'Flood'],
+    ['heatwave', 'Heatwave'],
+    ['sheep graziers', 'Sheep Graziers'],
+    ['fire weather', 'Fire Weather'],
+    ['damaging wind', 'Damaging Winds'],
+    ['hazardous surf', 'Surf'],
+    ['surf warning', 'Surf'],
+    ['wind warning summary', 'Wind'],
+    ['marine wind', 'Wind'],
+    ['gale warning', 'Gale'],
+    ['storm warning', 'Storm'],
+    ['cyclone', 'Cyclone'],
+    ['tsunami', 'Tsunami'],
+    ['blizzard', 'Blizzard'],
+    ['frost', 'Frost'],
+    ['heat', 'Heat'],
+    ['dust', 'Dust'],
+    ['bushfire', 'Bushfire'],
+    ['avalanche', 'Avalanche'],
+    ['severe weather', 'Severe Weather'],
+    ['warning', 'Warning'],
+  ];
+  for (const [pat, label] of patterns) {
+    if (t.includes(pat)) return label;
+  }
+  return 'Warning';
+}
+
+/**
+ * Per-warning archive fan-out. The default extractor only handles
+ * GeoJSON FeatureCollections / flat arrays, but the BOM snapshot is
+ * `{ warnings, count, counts }` — without this override every poll
+ * lands as a single "Unknown" wrapper row in archive_misc. Each
+ * warning becomes its own row, with `source` split per-warning into
+ * `bom_land` / `bom_marine` to match python's data_history values
+ * (`external_api_proxy.py:4636`).
+ */
+function bomArchiveItems(
+  data: unknown,
+  fetched_at: number,
+  _source: string,
+): ArchiveRow[] {
+  const snap = (data as BomSnapshot | null) ?? null;
+  if (!snap || !Array.isArray(snap.warnings)) return [];
+  const out: ArchiveRow[] = [];
+  for (const w of snap.warnings) {
+    if (!w || typeof w !== 'object') continue;
+    const perRowSource = w.category === 'marine' ? 'bom_marine' : 'bom_land';
+    out.push({
+      source: perRowSource,
+      source_id: null,
+      fetched_at,
+      lat: null,
+      lng: null,
+      category: w.category,
+      subcategory: extractBomWarningType(w.title || ''),
+      data: { ...w, title: w.title || w.area || perRowSource },
+    });
+  }
+  return out;
+}
+
 export default function register(): void {
   registerSource<BomSnapshot>({
     name: 'bom_warnings',
-    // Match python's data_history source value so archive rows align
-    // with the SOURCE_TO_FAMILY map keyed under 'bom_warning'.
-    archiveSource: 'bom_warning',
+    // Per-row source split (bom_land vs bom_marine) is handled inside
+    // bomArchiveItems — no archiveSource override here. Python folds
+    // legacy `bom_warning` into `bom_land` at read time
+    // (external_api_proxy.py:1118), so older rows still surface.
     family: 'misc',
     intervalActiveMs: 60_000,
     intervalIdleMs: 120_000,
     fetch: fetchBom,
+    archiveItems: bomArchiveItems,
   });
 }
 

@@ -238,10 +238,19 @@ describe('GET /api/data/history', () => {
 
 describe('GET /api/data/history/sources', () => {
   it('aggregates source counts across all 5 tables', async () => {
-    let call = 0;
+    let selectCalls = 0;
     queryMock.mockImplementation((sql: string) => {
-      if (sql.includes('statement_timeout')) return { rows: [] };
-      call += 1;
+      // Skip transaction control + SET LOCAL — they're plumbing, not
+      // the per-table SELECT we're counting.
+      if (
+        sql === 'BEGIN' ||
+        sql === 'COMMIT' ||
+        sql === 'ROLLBACK' ||
+        sql.includes('statement_timeout')
+      ) {
+        return { rows: [] };
+      }
+      selectCalls += 1;
       // Return different counts for waze and rfs; empty for the rest.
       if (sql.includes('archive_waze')) {
         return {
@@ -269,7 +278,7 @@ describe('GET /api/data/history/sources', () => {
     // Sorted by count DESC.
     expect(sources[0]?.['source']).toBe('waze_police');
     expect(sources[0]?.['count']).toBe(10);
-    expect(call).toBe(5); // one query per table
+    expect(selectCalls).toBe(5); // one SELECT per table
   });
 });
 

@@ -146,7 +146,24 @@ describe('/api/debug/test-all', () => {
 describe('/api/admin/db/stats', () => {
   beforeEach(() => {
     queryMock.mockReset();
-    queryMock.mockResolvedValue({ rows: [{ rows: 100, bytes: 1024 * 1024 }] });
+    queryMock.mockImplementation((sql: string) => {
+      // Wrapped in BEGIN/SET LOCAL/COMMIT now that we wrap the COUNT(*)
+      // queries in a transaction so SET LOCAL statement_timeout applies.
+      if (
+        sql === 'BEGIN' ||
+        sql === 'COMMIT' ||
+        sql === 'ROLLBACK' ||
+        sql.includes('statement_timeout')
+      ) {
+        return { rows: [] };
+      }
+      return { rows: [{ rows: 100, bytes: 1024 * 1024 }] };
+    });
+    connectMock.mockReset();
+    connectMock.mockResolvedValue({
+      query: queryMock,
+      release: vi.fn(),
+    });
   });
 
   it('reports per-table row counts and sizes', async () => {

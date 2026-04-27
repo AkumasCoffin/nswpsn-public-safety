@@ -9,6 +9,7 @@
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
+import { compress } from 'hono/compress';
 // Core endpoints (W1).
 import { healthRouter } from './api/health.js';
 import { configRouter } from './api/config.js';
@@ -101,13 +102,70 @@ export function createApp() {
   // Custom request logger — see comment on requestLogger above.
   app.use('*', requestLogger);
 
-  // Permissive CORS for now. Locks down (origin allowlist) in W4 once
-  // the heartbeat + auth middleware lands and we know exactly which
-  // origins are real.
+  // Brotli/gzip compression. The /api/data/history full payloads and
+  // /api/waze/police-heatmap (~1-2 MB raw) compress ~10×. Cloudflare/
+  // Apache may also gzip in front; double-compression is detected by
+  // hono/compress (skips when Content-Encoding already set).
+  app.use('*', compress());
+
+  // Short-lived public cache for cheap GET reads. Browsers + CDNs can
+  // serve repeat hits without round-tripping to Node. 30s is short
+  // enough that live data stays "live", but covers rapid double-clicks
+  // and dashboard panel re-renders. SWR=300s lets stale responses tide
+  // a request over while we revalidate in the background.
+  // Skipped for auth-sensitive endpoints (/api/config, /api/dashboard/*),
+  // per-user state (/api/heartbeat), and POST/PUT/DELETE.
+  const CACHEABLE_PATHS = [
+    '/api/data/history',
+    '/api/data/history/filters',
+    '/api/data/history/sources',
+    '/api/data/history/stats',
+    '/api/waze/police-heatmap',
+    '/api/waze/police',
+    '/api/waze/hazards',
+    '/api/waze/roadwork',
+    '/api/news/rss',
+    '/api/news/sources',
+    '/api/stats/summary',
+    '/api/stats/history',
+    '/api/centralwatch/cameras',
+    '/api/centralwatch/sites',
+    '/api/aviation/cameras',
+    '/api/bom/warnings',
+    '/api/rfs/incidents',
+    '/api/traffic/incidents',
+    '/api/traffic/cameras',
+    '/api/beachwatch',
+    '/api/beachsafe',
+    '/api/pager/hits',
+  ];
+  app.use('*', async (c, next) => {
+    await next();
+    if (c.req.method !== 'GET') return;
+    const path = new URL(c.req.url).pathname;
+    if (!CACHEABLE_PATHS.includes(path)) return;
+    if (!c.res.headers.has('Cache-Control')) {
+      c.res.headers.set(
+        'Cache-Control',
+        'public, max-age=30, stale-while-revalidate=300',
+      );
+    }
+  });
+
+  // Origin allowlist. Wildcard `*` was unsafe — `/api/config` returns
+  // the API key in its body, so any cross-origin script could read it
+  // from a logged-in user's browser. Restrict to the production domain
+  // and its dev/preview subdomains. Local dev traffic comes through
+  // `null` Origin (file://) or localhost, both allowed below.
+  const ALLOWED_ORIGIN_RE =
+    /^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|([a-z0-9-]+\.)*forcequit\.xyz|([a-z0-9-]+\.)*nswpsn\.org)$/i;
   app.use(
     '*',
     cors({
-      origin: '*',
+      origin: (origin) => {
+        if (!origin) return '*'; // file://, curl, server-to-server
+        return ALLOWED_ORIGIN_RE.test(origin) ? origin : null;
+      },
       allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key'],
       maxAge: 600,
     }),
@@ -162,15 +220,79 @@ export function createApp() {
   // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
   app.route('/', systemRouter);
 
-  // Root route — useful for "is this the right backend?" smoke tests
-  // when both Python and Node are running side by side.
+  // Root route — endpoint catalogue. Mirrors python's `/` response at
+  // external_api_proxy.py:11431 so any monitoring / smoke-test relying
+  // on the catalogue shape keeps working.
   app.get('/', (c) =>
     c.json({
-      service: 'nswpsn-api-node',
-      // Surfaces "I'm the Node one" in case Apache routes the wrong
-      // backend during the strangler-fig cutover.
+      name: 'NSW Public Safety Network API',
+      version: '2.0',
       runtime: 'node',
-      docs: 'See backends/external_api_proxy.py for the live Python backend',
+      mode: process.env['NODE_ENV'] === 'production' ? 'production' : 'dev',
+      features: [
+        'live-data',
+        'data-history',
+        'pager-hits',
+        'police-heatmap',
+        'discord-dashboard',
+        'rdio-transcripts',
+        'editor-requests',
+      ],
+      endpoints: {
+        live: [
+          '/api/rfs/incidents',
+          '/api/bom/warnings',
+          '/api/traffic/{incidents,roadwork,flood,fire,majorevent,cameras}',
+          '/api/waze/{police,hazards,roadwork,alerts,police-heatmap}',
+          '/api/endeavour/{current,planned,future}',
+          '/api/ausgrid/outages',
+          '/api/essential/{outages,planned,future}',
+          '/api/beachwatch',
+          '/api/beachsafe',
+          '/api/aviation/cameras',
+          '/api/centralwatch/cameras',
+          '/api/news/rss',
+          '/api/pager/hits',
+        ],
+        history: [
+          '/api/data/history',
+          '/api/data/history/{filters,sources,stats}',
+          '/api/data/history/incident/{source}/{source_id}',
+          '/api/stats/{summary,history,archive/status}',
+        ],
+        admin: [
+          '/api/admin/db/{stats,vacuum}',
+          '/api/cache/{clear,status,stats}',
+          '/api/debug/{sessions,heartbeat-test,traffic-raw,test-all}',
+        ],
+        dashboard: [
+          '/api/dashboard/auth/{login,callback,logout}',
+          '/api/dashboard/me',
+          '/api/dashboard/guilds/{guildId}/{channels,roles,presets,mute-state}',
+          '/api/dashboard/admin/{overview,broadcast,cleanup,bot-actions}',
+        ],
+        editor: [
+          '/api/editor-requests',
+          '/api/editor-requests/{id}/{approve,reject}',
+          '/api/incidents',
+          '/api/users',
+          '/api/check-editor/{userId}',
+          '/api/check-admin/{userId}',
+        ],
+        rdio: [
+          '/api/rdio/transcripts/search',
+          '/api/rdio/calls/{callId}',
+          '/api/summaries/{latest,trigger}',
+        ],
+        utility: [
+          '/api/health',
+          '/api/config',
+          '/api/heartbeat',
+          '/api/status',
+          '/api/collection/status',
+          '/api/w3w/{convert-to-coordinates,convert-to-3wa,grid-section}',
+        ],
+      },
     }),
   );
 

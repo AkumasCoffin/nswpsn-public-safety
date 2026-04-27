@@ -17,7 +17,9 @@ import { fetchJson } from './shared/http.js';
 import { config } from '../config.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
+import type { ArchiveRow } from '../store/archive.js';
 import { log } from '../lib/log.js';
+import { formatSydneyNaive } from '../lib/sydneyTime.js';
 
 export interface PagerMessage {
   id: number | string;
@@ -36,22 +38,6 @@ export interface PagerMessage {
   /** Original upstream unix timestamp; preserved so the route handler
    *  can apply `?hours=` filtering without re-parsing the ISO string. */
   timestamp: number | null;
-}
-
-/** Format an epoch-millis as a naive Sydney-local datetime string
- *  (no offset suffix), matching python's `datetime.fromtimestamp(ts)
- *  .isoformat()` output. The dashboard parses these as local time. */
-function formatSydneyNaive(ms: number): string {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Australia/Sydney',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(new Date(ms));
-  const get = (t: string): string =>
-    parts.find((p) => p.type === t)?.value ?? '00';
-  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 export interface PagerSnapshot {
@@ -223,6 +209,42 @@ export async function fetchPager(): Promise<PagerSnapshot> {
 
 let _missingUrlLogged = false;
 
+/**
+ * Per-message archive fan-out. The pager snapshot is `{ messages, count }`
+ * — neither a GeoJSON FeatureCollection nor a flat array, so the default
+ * extractor would store the whole snapshot as a single wrapper row with
+ * null title / lat / lng / etc. (the "Unknown" entry at the top of the
+ * logs page dropdown). Emitting one row per PagerMessage gives each
+ * brigade a real title (alias) + agency category + capcode subcategory,
+ * matching what the python writer used to produce.
+ */
+function pagerArchiveItems(
+  data: unknown,
+  fetched_at: number,
+  source: string,
+): ArchiveRow[] {
+  const snap = (data as PagerSnapshot | null) ?? null;
+  if (!snap || !Array.isArray(snap.messages)) return [];
+  const out: ArchiveRow[] = [];
+  for (const msg of snap.messages) {
+    if (!msg || typeof msg !== 'object') continue;
+    out.push({
+      source,
+      source_id: msg.id !== undefined && msg.id !== null ? String(msg.id) : null,
+      fetched_at,
+      lat: typeof msg.lat === 'number' && Number.isFinite(msg.lat) ? msg.lat : null,
+      lng: typeof msg.lon === 'number' && Number.isFinite(msg.lon) ? msg.lon : null,
+      category: msg.agency || null,
+      subcategory: msg.capcode || null,
+      // `data->>'title'` projects to the row's title in /api/data/history;
+      // alias is the human-readable brigade/unit name. Without this the
+      // logs page renders every pager row as "Unknown".
+      data: { ...msg, title: msg.alias || msg.agency || '' },
+    });
+  }
+  return out;
+}
+
 export default function register(): void {
   if (!config.PAGERMON_URL) {
     if (!_missingUrlLogged) {
@@ -236,6 +258,7 @@ export default function register(): void {
     intervalActiveMs: 60_000,
     intervalIdleMs: 120_000,
     fetch: fetchPager,
+    archiveItems: pagerArchiveItems,
   });
 }
 
