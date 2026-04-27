@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "capture-fixtures": "tsx --env-file-if-exists=../.env scripts/capture-fixtures.ts",
-    "migrate": "tsx --env-file-if-exists=../.env src/db/migrate.ts"
+    "migrate": "tsx --env-file-if-exists=../.env src/db/migrate.ts",
+    "migrate-history": "node --env-file-if-exists=../.env scripts/migrate-history.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

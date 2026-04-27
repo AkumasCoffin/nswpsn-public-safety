@@ -242,7 +242,10 @@ export async function runBatchOnce(): Promise<{
   }
 
   const { evicted, remaining } = cleanup(activeIds);
-  log.info(
+  // Demoted to debug — 30 s cadence drowns the log otherwise. The
+  // info-level warning still fires on every fetch failure inside the
+  // browser worker, which is the only signal worth surfacing here.
+  log.debug(
     {
       attempted: inputs.length,
       cached,

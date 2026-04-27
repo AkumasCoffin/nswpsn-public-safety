@@ -167,7 +167,13 @@ export class ArchiveWriter {
     this.lastFlushAt = Math.floor(Date.now() / 1000);
     this.totalWritten += totalRows;
     if (totalRows > 0) {
-      log.info({ tables: buckets.size, rows: totalRows, ms }, 'archive flush');
+      // Only log non-empty flushes at info — empty cycles fire every
+      // 30s and were drowning the log without adding any signal.
+      if (totalRows > 0) {
+        log.info({ tables: buckets.size, rows: totalRows, ms }, 'archive flush');
+      } else {
+        log.debug({ ms }, 'archive flush idle');
+      }
     }
     return { tables: buckets.size, rows: totalRows, ms };
   }
