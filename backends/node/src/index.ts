@@ -17,6 +17,7 @@ import {
   startFilterCacheRefresh,
   stopFilterCacheRefresh,
 } from './store/filterCache.js';
+import { closeRdioPool, ensureUnitLabelsLoaded } from './services/rdio.js';
 import { startPolling, stopPolling } from './services/poller.js';
 import {
   start as startActivityMode,
@@ -54,6 +55,15 @@ async function preflight(): Promise<void> {
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
   startFilterCacheRefresh(); // 60s in-memory facet refresh for /api/data/history/filters
   startPolling(); // walks the registry, schedules each source's setInterval
+
+  // Best-effort warm of the rdio unit-label CSV. Routes call
+  // ensureUnitLabelsLoaded() lazily but doing it here means the first
+  // /api/rdio/transcripts/search request doesn't pay the disk read.
+  try {
+    await ensureUnitLabelsLoaded();
+  } catch (err) {
+    log.warn({ err }, 'rdio unit-labels preload failed (non-fatal)');
+  }
 }
 
 await preflight();
@@ -89,6 +99,7 @@ async function shutdown(signal: string) {
     await liveStore.stopAndFlush();
     await archiveWriter.stopAndFlush();
     await closePool();
+    await closeRdioPool();
     log.info('shutdown complete');
     process.exit(0);
   } catch (err) {

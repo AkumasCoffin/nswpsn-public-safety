@@ -118,6 +118,24 @@ const Schema = z.object({
   // — the JWT middleware reports 503 when unset so handlers don't
   // accidentally accept unverified tokens.
   SUPABASE_JWT_SECRET: z.string().optional(),
+
+  // rdio-scanner self-hosted Postgres URL. Required by /api/rdio/*
+  // routes (transcripts search + call detail). When unset those
+  // routes return 503 with a clear "not configured" body, matching
+  // python's _rdio_is_configured() check.
+  RDIO_DATABASE_URL: z.string().optional(),
+
+  // Timezone for rdio summary windows + transcripts/search day-bounds.
+  // Mirrors python's SUMMARY_TZ env var; default to Sydney since this
+  // is an NSW-focused service.
+  SUMMARY_TZ: z.string().default('Australia/Sydney'),
+
+  // Public URL prefix for rdio-scanner call links. Mirrors python's
+  // hardcoded https://radio.forcequit.xyz/?call= but exposed as env
+  // so dev/staging deployments can override without a code change.
+  RDIO_CALL_URL_BASE: z
+    .string()
+    .default('https://radio.forcequit.xyz/?call='),
 });
 
 const parsed = Schema.safeParse(process.env);
