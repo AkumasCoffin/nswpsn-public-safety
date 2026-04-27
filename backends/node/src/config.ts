@@ -12,13 +12,12 @@
 import { z } from 'zod';
 
 const Schema = z.object({
-  // Port the Node server binds. Defaults to 3001 so it sits next to the
-  // Python backend (which holds the real production port) during the
-  // migration. Apache routes per-path to whichever backend owns the
-  // endpoint.
+  // Port the Node server binds. Defaults to 3000, the same port the
+  // python service ran on — Cloudflare Tunnel fronts api.forcequit.xyz
+  // and points at this single port. Override via `PORT=` in the env.
   PORT: z
     .string()
-    .default('3001')
+    .default('3000')
     .transform((s) => Number.parseInt(s, 10))
     .refine((n) => Number.isFinite(n) && n > 0 && n < 65536, {
       message: 'PORT must be a valid port number',
