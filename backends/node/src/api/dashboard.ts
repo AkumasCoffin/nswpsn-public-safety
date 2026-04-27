@@ -56,7 +56,20 @@ import {
   refreshUserGuilds,
   type DiscordRawGuild,
 } from '../services/discordOauth.js';
-import { botGet, getBotToken, guildIconUrl, userAvatarUrl } from '../services/discordApi.js';
+import {
+  botGet,
+  getAppInstallCounts,
+  getBotToken,
+  getGuildMetaBulk,
+  guildIconUrl,
+  userAvatarUrl,
+} from '../services/discordApi.js';
+import { validateFilters, FilterValidationError } from '../services/dashboardFilterValidator.js';
+import {
+  clearSourceErrors,
+  getSourceHealthSnapshot,
+} from '../services/sourceHealth.js';
+import { SwrCache } from '../services/swrCache.js';
 
 export const dashboardRouter = new Hono();
 
@@ -728,14 +741,18 @@ dashboardRouter.post('/api/dashboard/guilds/:guildId/presets', async (c) => {
   const enabled = body['enabled'] === undefined ? true : Boolean(body['enabled']);
   const enabledPing = body['enabled_ping'] === undefined ? true : Boolean(body['enabled_ping']);
 
-  // Filters: leave validation light — just accept an object as-is. The
-  // python-side bespoke geofilter / severity / subtype validation is
-  // recreated as a punted TODO (see final report).
-  const filtersRaw = body['filters'];
-  if (filtersRaw != null && (typeof filtersRaw !== 'object' || Array.isArray(filtersRaw))) {
-    return dashErr(c, 'bad_filter', 'filters must be an object.', 400);
+  // Filters validation mirrors python's `_dash_validate_filters` —
+  // discriminated geofilter union, per-provider severity scales, subtype
+  // allow-list, etc. See services/dashboardFilterValidator.ts.
+  let filters: Record<string, unknown>;
+  try {
+    filters = validateFilters(body['filters']);
+  } catch (err) {
+    if (err instanceof FilterValidationError) {
+      return dashErr(c, 'invalid_filters', err.message, 400);
+    }
+    throw err;
   }
-  const filters = filtersRaw && typeof filtersRaw === 'object' ? filtersRaw : {};
 
   const pool = await getBotDbPool();
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
@@ -861,12 +878,17 @@ dashboardRouter.patch('/api/dashboard/guilds/:guildId/presets/:presetId', async 
     params.push(Boolean(body['enabled_ping']));
   }
   if ('filters' in body) {
-    const f = body['filters'];
-    if (f != null && (typeof f !== 'object' || Array.isArray(f))) {
-      return dashErr(c, 'bad_filter', 'filters must be an object.', 400);
+    let normalisedFilters: Record<string, unknown>;
+    try {
+      normalisedFilters = validateFilters(body['filters']);
+    } catch (err) {
+      if (err instanceof FilterValidationError) {
+        return dashErr(c, 'invalid_filters', err.message, 400);
+      }
+      throw err;
     }
     sets.push(`filters=$${params.length + 1}::jsonb`);
-    params.push(JSON.stringify(f && typeof f === 'object' ? f : {}));
+    params.push(JSON.stringify(normalisedFilters));
   }
 
   if (sets.length === 0) {
@@ -953,9 +975,10 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/presets/:presetId', async
 });
 
 // ---------------------------------------------------------------------------
-// Preset stats — simplified compared to python's stale-while-revalidate
-// pattern. We just run the query inline with a 60s in-memory cache;
-// statement_timeout on the pool keeps it bounded. See punted TODOs.
+// Preset stats — stale-while-revalidate. Fresh hits return immediately;
+// stale-but-still-valid hits return the cached value AND kick off a
+// background refresh; misses block on the DB query. Mirrors python's
+// SWR pattern around the same endpoint.
 // ---------------------------------------------------------------------------
 interface PresetStatsRow {
   preset_id: string | number;
@@ -963,8 +986,37 @@ interface PresetStatsRow {
   fires_30d: number | string | null;
   last_fire: Date | string | null;
 }
-const PRESET_STATS_TTL_MS = 60_000;
-const presetStatsCache = new Map<string, { ts: number; data: unknown[] }>();
+interface PresetStatRow {
+  preset_id: string;
+  fires_7d: number;
+  fires_30d: number;
+  last_fire: string | null;
+}
+const PRESET_STATS_FRESH_MS = 60_000;       // 60 s — return without refresh
+const PRESET_STATS_STALE_MS = 5 * 60_000;   // 5 min — return + bg refresh
+const presetStatsCache = new SwrCache<PresetStatRow[]>();
+
+async function fetchPresetStats(gid: bigint): Promise<PresetStatRow[]> {
+  const pool = await getBotDbPool();
+  if (!pool) throw new Error('BOT_DATA_DATABASE_URL is not configured.');
+  const r = await pool.query<PresetStatsRow>(
+    `SELECT p.id AS preset_id,
+            COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
+            COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
+            MAX(f.fired_at) AS last_fire
+       FROM alert_presets p
+       LEFT JOIN preset_fire_log f ON f.preset_id = p.id
+      WHERE p.guild_id = $1
+   GROUP BY p.id`,
+    [gid.toString()],
+  );
+  return r.rows.map((row) => ({
+    preset_id: String(row.preset_id),
+    fires_7d: Number(row.fires_7d ?? 0),
+    fires_30d: Number(row.fires_30d ?? 0),
+    last_fire: isoOrNull(row.last_fire),
+  }));
+}
 
 dashboardRouter.get('/api/dashboard/guilds/:guildId/preset-stats', async (c) => {
   const session = await requireSession(c);
@@ -980,34 +1032,25 @@ dashboardRouter.get('/api/dashboard/guilds/:guildId/preset-stats', async (c) => 
     return dashErr(c, 'bad_request', 'guild_id must be numeric.', 400);
   }
 
-  const cached = presetStatsCache.get(guildId);
-  if (cached && Date.now() - cached.ts < PRESET_STATS_TTL_MS) {
-    return c.json({ stats: cached.data, cache_age_seconds: Math.floor((Date.now() - cached.ts) / 1000) });
+  if (!(await getBotDbPool())) {
+    return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
   }
 
-  const pool = await getBotDbPool();
-  if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
-
   try {
-    const r = await pool.query<PresetStatsRow>(
-      `SELECT p.id AS preset_id,
-              COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
-              COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
-              MAX(f.fired_at) AS last_fire
-         FROM alert_presets p
-         LEFT JOIN preset_fire_log f ON f.preset_id = p.id
-        WHERE p.guild_id = $1
-     GROUP BY p.id`,
-      [gid.toString()],
+    const result = await presetStatsCache.get(
+      guildId,
+      () => fetchPresetStats(gid),
+      {
+        fresh: PRESET_STATS_FRESH_MS,
+        stale: PRESET_STATS_STALE_MS,
+        onError: (err) => log.warn({ err, guildId }, 'preset_stats refresh failed'),
+      },
     );
-    const out = r.rows.map((row) => ({
-      preset_id: String(row.preset_id),
-      fires_7d: Number(row.fires_7d ?? 0),
-      fires_30d: Number(row.fires_30d ?? 0),
-      last_fire: isoOrNull(row.last_fire),
-    }));
-    presetStatsCache.set(guildId, { ts: Date.now(), data: out });
-    return c.json({ stats: out, cache_age_seconds: 0 });
+    return c.json({
+      stats: result.value,
+      cache_age_seconds: Math.floor(result.ageMs / 1000),
+      ...(result.warming ? { warming: true } : {}),
+    });
   } catch (err) {
     log.warn({ err, guildId }, 'preset_stats query failed');
     // Empty stub matches python's first-call behaviour.
@@ -1307,16 +1350,25 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
     GROUP BY guild_id
     ORDER BY preset_count DESC
     `);
-    const guildsOut = guildsRes.rows.map((r) => ({
-      guild_id: String(r.guild_id),
-      name: '',
-      icon_url: '',
-      preset_count: Number(r.preset_count ?? 0),
-      channel_count: Number(r.channel_count ?? 0),
-      pager_presets: Number(r.pager_presets ?? 0),
-      muted_presets: Number(r.muted_presets ?? 0),
-      last_change: isoOrNull(r.last_change),
-    }));
+    // Pull guild names/icons via the bot token, batched. Returns blanks
+    // for any gid Discord couldn't resolve (bot left, transient API error)
+    // — admin UI just shows the gid in that case.
+    const guildIds = guildsRes.rows.map((r) => String(r.guild_id));
+    const metaMap = await getGuildMetaBulk(guildIds);
+    const guildsOut = guildsRes.rows.map((r) => {
+      const gid = String(r.guild_id);
+      const meta = metaMap.get(gid);
+      return {
+        guild_id: gid,
+        name: meta?.name ?? '',
+        icon_url: meta?.icon_url ?? '',
+        preset_count: Number(r.preset_count ?? 0),
+        channel_count: Number(r.channel_count ?? 0),
+        pager_presets: Number(r.pager_presets ?? 0),
+        muted_presets: Number(r.muted_presets ?? 0),
+        last_change: isoOrNull(r.last_change),
+      };
+    });
 
     let usersLifetime = 0;
     let historicalUsers: unknown[] = [];
@@ -1351,14 +1403,15 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
       log.warn({ err }, 'dashboard_users query failed');
     }
 
+    const installCounts = await getAppInstallCounts();
     const payload = {
       stats: {
         sessions_active: 0,
         dashboard_users: usersLifetime,
         users_active: 0,
         users_total: usersLifetime,
-        servers_total: null,
-        user_installs: null,
+        servers_total: installCounts.servers_total,
+        user_installs: installCounts.user_installs,
         guilds_with_presets: Number(ap.guilds_with_presets ?? 0),
         channels_configured: Number(ap.channels_configured ?? 0),
         presets_total: Number(ap.total ?? 0),
@@ -1402,18 +1455,22 @@ dashboardRouter.get('/api/dashboard/admin/broadcast/targets', async (c) => {
       'SELECT DISTINCT guild_id FROM alert_presets ORDER BY guild_id',
     );
     const guildIds = r.rows.map((row) => String(row.guild_id));
-    // Skip the heavy parallel Discord-fetch dance from python — we just
-    // return the guild ids so the admin UI can drive lookups separately.
-    // See punted TODOs in the final report for full parity.
-    const out = guildIds.map((gid) => ({
-      guild_id: gid,
-      guild_name: '',
-      guild_icon_url: '',
-      detected_channel_id: null,
-      detected_channel_name: '',
-      channels: [] as unknown[],
-      channels_error: 'channels_not_fetched',
-    }));
+    // Resolve guild names/icons via bot token (cached). Channel lookups
+    // remain a follow-up — the admin UI can call /channels separately if
+    // it needs the per-channel breakdown. See punted TODOs.
+    const metaMap = await getGuildMetaBulk(guildIds);
+    const out = guildIds.map((gid) => {
+      const meta = metaMap.get(gid);
+      return {
+        guild_id: gid,
+        guild_name: meta?.name ?? '',
+        guild_icon_url: meta?.icon_url ?? '',
+        detected_channel_id: null,
+        detected_channel_name: '',
+        channels: [] as unknown[],
+        channels_error: 'channels_not_fetched',
+      };
+    });
     bcastTargetsCache = { ts: Date.now(), data: out };
     return c.json({ targets: out });
   } catch (err) {
@@ -1524,17 +1581,21 @@ dashboardRouter.get('/api/dashboard/admin/cleanup/candidates', async (c) => {
         FROM alert_presets
     GROUP BY guild_id
     `);
-    const candidates = r.rows
-      .filter((row) => !liveIds.has(String(row.guild_id)))
-      .map((row) => ({
-        guild_id: String(row.guild_id),
-        name: '',
-        icon_url: '',
+    const candidateRows = r.rows.filter((row) => !liveIds.has(String(row.guild_id)));
+    const metaMap = await getGuildMetaBulk(candidateRows.map((row) => String(row.guild_id)));
+    const candidates = candidateRows.map((row) => {
+      const gid = String(row.guild_id);
+      const meta = metaMap.get(gid);
+      return {
+        guild_id: gid,
+        name: meta?.name ?? '',
+        icon_url: meta?.icon_url ?? '',
         preset_count: Number(row.preset_count ?? 0),
         channel_count: Number(row.channel_count ?? 0),
         pager_presets: Number(row.pager_presets ?? 0),
         last_change: isoOrNull(row.last_change),
-      }));
+      };
+    });
     return c.json({ candidates, bot_guild_count: liveIds.size });
   } catch (err) {
     log.error({ err }, 'dashboard cleanup_candidates error');
@@ -1647,30 +1708,41 @@ dashboardRouter.post('/api/dashboard/admin/bot-actions', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Admin: source health.
-//
-// Python reads from _SOURCE_HEALTH / _SOURCE_THRESHOLDS module-level
-// state. The Node backend doesn't (yet) have a single canonical source-
-// health record; the closest analogue is /api/status. We surface a
-// minimal payload here so the admin panel doesn't error out, and punt
-// the full parity to a follow-up.
+// Admin: source health. Driven by services/sourceHealth.ts which is a thin
+// wrapper over the poller's per-source metrics. No DB persistence — health
+// is a runtime view that resets on restart, like python's _SOURCE_HEALTH.
 // ---------------------------------------------------------------------------
 dashboardRouter.get('/api/dashboard/admin/sources', async (c) => {
   const session = await requireAdmin(c);
   if (session instanceof Response) return session;
-  return c.json({
-    sources: [],
-    server_time: Math.floor(Date.now() / 1000),
-    message:
-      'Source-health snapshot not yet wired in node backend; see /api/status for live checks.',
-  });
+  const now = Math.floor(Date.now() / 1000);
+  const rows = getSourceHealthSnapshot();
+  // Mirror python's response shape (external_api_proxy.py:19015-19026):
+  // existing admin frontends expect last_success/last_error timestamps
+  // (epoch) plus the derived `state` and `age_seconds`.
+  const sources = rows.map((r) => ({
+    name: r.name,
+    label: r.label,
+    last_success: r.last_ok_at,
+    last_error: r.last_error_at,
+    last_error_msg: r.last_error,
+    consec_fails: r.consec_fails,
+    // Node poller doesn't yet count totals — populate with 0 to keep the
+    // python response shape. Exposing real totals would require new
+    // counters in poller.ts that the existing exports don't track.
+    total_success: 0,
+    total_fail: 0,
+    age_seconds: r.age_seconds,
+    state: r.state,
+  }));
+  return c.json({ sources, server_time: now });
 });
 
 dashboardRouter.delete('/api/dashboard/admin/sources', async (c) => {
   const session = await requireAdmin(c);
   if (session instanceof Response) return session;
-  // No-op until source-health is wired up.
-  log.info('dashboard admin/sources DELETE — no-op (source-health not yet ported)');
+  clearSourceErrors();
+  log.info('source_health: cleared by admin');
   return c.json({ ok: true });
 });
 

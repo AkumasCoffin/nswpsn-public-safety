@@ -191,3 +191,78 @@ export function pollerHealth(): Record<
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Per-source metric getters used by the source-health module. These expose
+// the same in-memory state used by `pollerHealth()` but in a richer shape
+// (raw timestamps + family + last_error) — that lets the admin source-health
+// view compute its own derived state. NOT changing existing exports.
+// ---------------------------------------------------------------------------
+export interface SourceMetricSnapshot {
+  name: string;
+  family: string;
+  /** Epoch seconds. null = source has never succeeded since process start. */
+  last_ok_at: number | null;
+  /** Epoch seconds. null = source has never errored since process start. */
+  last_error_at: number | null;
+  /** Last error message, if any (cleared on next success). */
+  last_error: string | null;
+  consec_fails: number;
+}
+
+/** Returns one entry per registered source. Sources that have never been
+ *  polled still appear with all timestamps null and consec_fails 0. */
+export function getSourceMetrics(): SourceMetricSnapshot[] {
+  const out: SourceMetricSnapshot[] = [];
+  for (const src of allSources()) {
+    const s = _state.get(src.name);
+    out.push({
+      name: src.name,
+      family: src.family,
+      last_ok_at: s?.lastSuccessTs ?? null,
+      // The per-source state tracks last_attempt + last_error together;
+      // when lastError is set, lastAttemptTs is the failure timestamp.
+      last_error_at: s?.lastError ? (s.lastAttemptTs ?? null) : null,
+      last_error: s?.lastError ?? null,
+      consec_fails: s?.failureCount ?? 0,
+    });
+  }
+  return out;
+}
+
+/** Reset every (or just one) source's failure/error counters. Used by the
+ *  admin "Clear stats" button. Last-success timestamps are preserved so
+ *  recently-OK sources don't suddenly appear "unknown". */
+export function resetSourceMetrics(name?: string): void {
+  if (name) {
+    const s = _state.get(name);
+    if (s) {
+      s.failureCount = 0;
+      s.lastError = null;
+    }
+    return;
+  }
+  for (const s of _state.values()) {
+    s.failureCount = 0;
+    s.lastError = null;
+  }
+}
+
+/** TEST-ONLY: seed one source's state directly so source-health tests can
+ *  observe specific shapes without driving the full polling lifecycle. */
+export function _seedSourceStateForTests(
+  name: string,
+  patch: Partial<SourceState>,
+): void {
+  const s = ensureState(name);
+  Object.assign(s, patch);
+}
+
+/** TEST-ONLY: reset the in-memory map. */
+export function _resetPollerStateForTests(): void {
+  for (const s of _state.values()) {
+    if (s.timer) clearTimeout(s.timer);
+  }
+  _state.clear();
+  _running = false;
+}

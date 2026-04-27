@@ -366,6 +366,139 @@ class CentralwatchBrowser {
   }
 
   /**
+   * Batch fetch via DOM <img> elements.
+   *
+   * Mirrors python `_browser_dom_batch_fetch_images` (Phase 1 of the
+   * `_continuous_cw_image_worker` two-phase strategy). The point of this
+   * path is the request profile: an `<img>` element load sends
+   * `Sec-Fetch-Dest: image` while a page-context `fetch()` sends
+   * `Sec-Fetch-Dest: empty`. Most rate limiters / WAFs treat them
+   * differently, and the CW site itself loads images this way — so this
+   * profile cannot be rate-limited without breaking the site.
+   *
+   * Per-image flow (inside page.evaluate):
+   *   1. Append <img crossOrigin="anonymous" src=...> to the document.
+   *   2. Wait for load/error, 15s timeout, all images race in parallel
+   *      via Promise.allSettled.
+   *   3. On load: paint to a hidden <canvas> and toDataURL('image/jpeg')
+   *      to recover bytes back across the page boundary.
+   *   4. Clean up the <img> (and the shared canvas at the end) so DOM
+   *      state doesn't leak between calls.
+   *
+   * Failures don't throw — each image returns `{id, ok: false, error}`
+   * matching the python pattern. Status codes aren't available here
+   * (the browser only exposes load/error events for cross-origin
+   * <img>), so callers that need HTTP status must use fetchImagesBatch.
+   */
+  async fetchImagesBatchViaDom(
+    images: BatchImageInput[],
+    timeoutMs = 60000,
+  ): Promise<BatchImageResult[]> {
+    if (!this.isReady() || images.length === 0) return [];
+    return this.runExclusive(async () => {
+      const page = this.page as {
+        evaluate: <T>(fn: string, arg: unknown) => Promise<T>;
+      };
+      const imageList = images.map((i) => [i.id, i.url]);
+      try {
+        const results = await page.evaluate<BatchImageResultJs[]>(
+          `async (imageList) => {
+            const PER_IMAGE_TIMEOUT = 15000;
+            // Shared hidden canvas — created once, cleaned up at end.
+            const canvas = document.createElement('canvas');
+            canvas.style.display = 'none';
+            document.body.appendChild(canvas);
+            const ctx = canvas.getContext('2d');
+            const settled = await Promise.allSettled(imageList.map(([id, url]) => {
+              return new Promise((resolve) => {
+                const img = document.createElement('img');
+                img.crossOrigin = 'anonymous';
+                img.style.display = 'none';
+                let done = false;
+                const finish = (result) => {
+                  if (done) return;
+                  done = true;
+                  try { img.remove(); } catch (e) { /* ignore */ }
+                  resolve(result);
+                };
+                const timer = setTimeout(() => {
+                  finish({ id, ok: false, error: 'timeout' });
+                }, PER_IMAGE_TIMEOUT);
+                img.addEventListener('load', () => {
+                  clearTimeout(timer);
+                  try {
+                    canvas.width = img.naturalWidth || img.width;
+                    canvas.height = img.naturalHeight || img.height;
+                    if (!canvas.width || !canvas.height) {
+                      finish({ id, ok: false, error: 'zero-size image' });
+                      return;
+                    }
+                    ctx.drawImage(img, 0, 0);
+                    // toDataURL is sync and survives canvas re-use better
+                    // than toBlob's callback when images race.
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+                    finish({ id, ok: true, contentType: 'image/jpeg', data: dataUrl });
+                  } catch (e) {
+                    finish({ id, ok: false, error: 'canvas-tainted: ' + String(e) });
+                  }
+                });
+                img.addEventListener('error', () => {
+                  clearTimeout(timer);
+                  finish({ id, ok: false, error: 'load-error' });
+                });
+                document.body.appendChild(img);
+                img.src = url;
+              });
+            }));
+            try { canvas.remove(); } catch (e) { /* ignore */ }
+            return settled.map((r, i) => {
+              if (r.status === 'fulfilled') return r.value;
+              return { id: imageList[i] ? imageList[i][0] : null, ok: false, error: String(r.reason) };
+            });
+          }`,
+          imageList,
+        );
+        const out: BatchImageResult[] = [];
+        for (const r of results || []) {
+          if (r && r.ok && r.data) {
+            const commaIdx = r.data.indexOf(',');
+            if (commaIdx < 0) {
+              out.push({ id: r.id ?? null, ok: false });
+              continue;
+            }
+            const b64 = r.data.slice(commaIdx + 1);
+            const bytes = Buffer.from(b64, 'base64');
+            const result: BatchImageResult = {
+              id: r.id ?? null,
+              ok: true,
+              bytes,
+              contentType: r.contentType ?? 'image/jpeg',
+            };
+            if (r.size !== undefined) result.size = r.size;
+            out.push(result);
+          } else {
+            const result: BatchImageResult = {
+              id: r?.id ?? null,
+              ok: false,
+            };
+            if (r?.error !== undefined) result.error = r.error;
+            out.push(result);
+          }
+        }
+        // timeoutMs reserved for a future page.evaluate-level guard.
+        void timeoutMs;
+        return out;
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message, count: images.length },
+          'centralwatch browser DOM batch fetch threw',
+        );
+        return [];
+      }
+    });
+  }
+
+  /**
    * Batch fetch via fetch() — gives us HTTP status codes per item so
    * caller can implement retry/backoff. Mirrors python `batch_images`.
    */

@@ -104,3 +104,194 @@ export function guildIconUrl(guildId: string, iconHash: string | null | undefine
   const ext = String(iconHash).startsWith('a_') ? 'gif' : 'png';
   return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.${ext}`;
 }
+
+// ---------------------------------------------------------------------------
+// Guild metadata cache. Mirrors python's `_dash_guild_meta_lookup`
+// (external_api_proxy.py:18266-18370) — 10-minute TTL with eviction at
+// 2× TTL so guilds the bot has long since left don't accumulate forever.
+//
+// Concurrency: Node's event loop serialises map writes, but we still bound
+// in-flight fetches per gid so a burst of overview reloads doesn't fan out
+// N parallel requests for the same guild.
+// ---------------------------------------------------------------------------
+export interface GuildMeta {
+  name: string;
+  icon_url: string | null;
+  member_count: number | null;
+}
+
+const GUILD_META_TTL_MS = 10 * 60 * 1000;
+const GUILD_META_EVICT_AFTER_MS = GUILD_META_TTL_MS * 2;
+
+interface GuildMetaCacheEntry {
+  ts: number;
+  data: GuildMeta;
+}
+
+const guildMetaCache = new Map<string, GuildMetaCacheEntry>();
+const guildMetaInflight = new Map<string, Promise<GuildMeta | null>>();
+
+function evictStaleGuildMeta(now: number): void {
+  const cutoff = now - GUILD_META_EVICT_AFTER_MS;
+  for (const [k, v] of guildMetaCache) {
+    if (v.ts < cutoff) guildMetaCache.delete(k);
+  }
+}
+
+interface DiscordGuildBody {
+  id?: string;
+  name?: string;
+  icon?: string | null;
+  approximate_member_count?: number;
+  member_count?: number;
+}
+
+/**
+ * Fetch metadata for a single guild via the bot token. Returns null when
+ * BOT_TOKEN isn't configured or Discord errored — admin UI shows blank
+ * fields for those rows. Cached for 10 minutes.
+ */
+export async function getGuildMeta(guildId: string): Promise<GuildMeta | null> {
+  const gid = String(guildId);
+  if (!gid) return null;
+  const now = Date.now();
+  const cached = guildMetaCache.get(gid);
+  if (cached && now - cached.ts < GUILD_META_TTL_MS) {
+    return cached.data;
+  }
+  if (!getBotToken()) return null;
+
+  const inflight = guildMetaInflight.get(gid);
+  if (inflight) return inflight;
+
+  const p = (async (): Promise<GuildMeta | null> => {
+    try {
+      const res = await botGet<DiscordGuildBody>(`/guilds/${gid}?with_counts=true`);
+      if (res.status !== 200 || !res.body || typeof res.body !== 'object') {
+        return null;
+      }
+      const body = res.body as DiscordGuildBody;
+      const meta: GuildMeta = {
+        name: body.name ?? '',
+        icon_url: guildIconUrl(gid, body.icon),
+        member_count:
+          typeof body.approximate_member_count === 'number'
+            ? body.approximate_member_count
+            : typeof body.member_count === 'number'
+              ? body.member_count
+              : null,
+      };
+      const ts = Date.now();
+      guildMetaCache.set(gid, { ts, data: meta });
+      evictStaleGuildMeta(ts);
+      return meta;
+    } catch (err) {
+      log.warn({ err, gid }, 'getGuildMeta failed');
+      return null;
+    } finally {
+      guildMetaInflight.delete(gid);
+    }
+  })();
+  guildMetaInflight.set(gid, p);
+  return p;
+}
+
+/** Bulk variant — returns a map keyed by gid. Fetches missing entries in
+ *  parallel (capped) and falls through to per-gid cache. Mirrors the
+ *  `_dash_guild_meta_lookup` call site that hits N guilds at a time. */
+export async function getGuildMetaBulk(
+  guildIds: Iterable<string>,
+): Promise<Map<string, GuildMeta>> {
+  const out = new Map<string, GuildMeta>();
+  const ids = Array.from(new Set(Array.from(guildIds, (g) => String(g)))).filter(Boolean);
+  if (ids.length === 0) return out;
+  if (!getBotToken()) {
+    // Without a bot token we still serve any cached entries we happen to
+    // have. Caller treats missing entries as 'name unknown'.
+    const now = Date.now();
+    for (const gid of ids) {
+      const c = guildMetaCache.get(gid);
+      if (c && now - c.ts < GUILD_META_TTL_MS) out.set(gid, c.data);
+    }
+    return out;
+  }
+  // Cap at 8-way concurrency, same as python's ThreadPoolExecutor(8).
+  const MAX_CONCURRENT = 8;
+  let i = 0;
+  async function worker(): Promise<void> {
+    while (i < ids.length) {
+      const idx = i++;
+      const gid = ids[idx]!;
+      const meta = await getGuildMeta(gid);
+      if (meta) out.set(gid, meta);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT, ids.length) }, worker));
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Application install counts. Mirrors python's `_dash_app_install_counts`
+// (external_api_proxy.py:18290-18312). Cached 5 minutes — these are
+// "approximate" counts from Discord and don't churn.
+// ---------------------------------------------------------------------------
+export interface AppInstallCounts {
+  servers_total: number | null;
+  user_installs: number | null;
+}
+
+const APP_INFO_TTL_MS = 5 * 60 * 1000;
+let appInfoCache: { ts: number; data: AppInstallCounts } | null = null;
+let appInfoInflight: Promise<AppInstallCounts> | null = null;
+
+interface ApplicationsMeBody {
+  approximate_guild_count?: number;
+  approximate_user_install_count?: number;
+}
+
+export async function getAppInstallCounts(): Promise<AppInstallCounts> {
+  const now = Date.now();
+  if (appInfoCache && now - appInfoCache.ts < APP_INFO_TTL_MS) {
+    return appInfoCache.data;
+  }
+  if (appInfoInflight) return appInfoInflight;
+  const empty: AppInstallCounts = { servers_total: null, user_installs: null };
+  if (!getBotToken()) return empty;
+
+  appInfoInflight = (async () => {
+    try {
+      const res = await botGet<ApplicationsMeBody>('/applications/@me');
+      if (res.status === 200 && res.body && typeof res.body === 'object') {
+        const body = res.body as ApplicationsMeBody;
+        const data: AppInstallCounts = {
+          servers_total:
+            typeof body.approximate_guild_count === 'number' ? body.approximate_guild_count : null,
+          user_installs:
+            typeof body.approximate_user_install_count === 'number'
+              ? body.approximate_user_install_count
+              : null,
+        };
+        appInfoCache = { ts: Date.now(), data };
+        return data;
+      }
+      return empty;
+    } catch (err) {
+      log.warn({ err }, 'getAppInstallCounts failed');
+      return empty;
+    } finally {
+      appInfoInflight = null;
+    }
+  })();
+  return appInfoInflight;
+}
+
+// ---------------------------------------------------------------------------
+// TEST-ONLY helpers — wipe the module-level caches so individual tests can
+// observe the fetch behaviour deterministically.
+// ---------------------------------------------------------------------------
+export function _resetDiscordApiCachesForTests(): void {
+  guildMetaCache.clear();
+  guildMetaInflight.clear();
+  appInfoCache = null;
+  appInfoInflight = null;
+}

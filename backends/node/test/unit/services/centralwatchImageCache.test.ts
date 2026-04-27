@@ -7,12 +7,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const fetchImagesBatchMock = vi.fn();
+const fetchImagesBatchViaDomMock = vi.fn();
 const isReadyMock = vi.fn();
 
 vi.mock('../../../src/services/centralwatchBrowser.js', () => ({
   centralwatchBrowser: {
     isReady: () => isReadyMock() as boolean,
     fetchImagesBatch: (...args: unknown[]) => fetchImagesBatchMock(...args),
+    fetchImagesBatchViaDom: (...args: unknown[]) =>
+      fetchImagesBatchViaDomMock(...args),
     init: vi.fn(async () => undefined),
     shutdown: vi.fn(async () => undefined),
   },
@@ -26,9 +29,15 @@ vi.mock('../../../src/sources/centralwatch.js', () => ({
 describe('centralwatchImageCache', () => {
   beforeEach(async () => {
     fetchImagesBatchMock.mockReset();
+    fetchImagesBatchViaDomMock.mockReset();
     isReadyMock.mockReset();
     getCentralwatchCamerasMock.mockReset();
     isReadyMock.mockReturnValue(true);
+    // Default: DOM path returns nothing — older tests only configure the
+    // fetch path. Successful DOM (rate >= 40%) skips the fetch fallback,
+    // so we keep DOM "empty" by default and let the fetch path handle
+    // the inputs (success rate 0/N triggers fallback to fetch).
+    fetchImagesBatchViaDomMock.mockResolvedValue([]);
     const mod = await import('../../../src/services/centralwatchImageCache.js');
     mod._resetCentralwatchImageCacheForTests();
   });
@@ -138,6 +147,114 @@ describe('centralwatchImageCache', () => {
     expect(r.attempted).toBe(0);
     expect(r.cached).toBe(0);
     expect(fetchImagesBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('runBatchOnce uses DOM path when success rate >= 40% (no fetch fallback)', async () => {
+    getCentralwatchCamerasMock.mockResolvedValue([
+      { id: 'cam-1' },
+      { id: 'cam-2' },
+      { id: 'cam-3' },
+    ]);
+    // DOM gets all 3 — 100% >= 40%, fetch must NOT be called.
+    fetchImagesBatchViaDomMock.mockResolvedValue([
+      { id: 'cam-1', ok: true, bytes: Buffer.alloc(1024, 1), contentType: 'image/jpeg' },
+      { id: 'cam-2', ok: true, bytes: Buffer.alloc(1024, 2), contentType: 'image/jpeg' },
+      { id: 'cam-3', ok: true, bytes: Buffer.alloc(1024, 3), contentType: 'image/jpeg' },
+    ]);
+    const { runBatchOnce, _getStrategyStateForTests } = await import(
+      '../../../src/services/centralwatchImageCache.js'
+    );
+    const r = await runBatchOnce();
+    expect(r.cached).toBe(3);
+    expect(fetchImagesBatchViaDomMock).toHaveBeenCalledOnce();
+    expect(fetchImagesBatchMock).not.toHaveBeenCalled();
+    expect(_getStrategyStateForTests().lastStrategy).toBe('dom');
+  });
+
+  it('runBatchOnce falls back to fetch when DOM success rate < 40%', async () => {
+    getCentralwatchCamerasMock.mockResolvedValue([
+      { id: 'cam-1' },
+      { id: 'cam-2' },
+      { id: 'cam-3' },
+      { id: 'cam-4' },
+      { id: 'cam-5' },
+    ]);
+    // DOM gets 1/5 = 20% < 40%
+    fetchImagesBatchViaDomMock.mockResolvedValue([
+      { id: 'cam-1', ok: true, bytes: Buffer.alloc(1024, 1), contentType: 'image/jpeg' },
+      { id: 'cam-2', ok: false, error: 'load-error' },
+      { id: 'cam-3', ok: false, error: 'timeout' },
+      { id: 'cam-4', ok: false, error: 'load-error' },
+      { id: 'cam-5', ok: false, error: 'load-error' },
+    ]);
+    // Fetch picks up the rest
+    fetchImagesBatchMock.mockResolvedValue([
+      { id: 'cam-2', ok: true, bytes: Buffer.alloc(1024, 2), contentType: 'image/jpeg' },
+      { id: 'cam-3', ok: true, bytes: Buffer.alloc(1024, 3), contentType: 'image/jpeg' },
+      { id: 'cam-4', ok: false, status: 429 },
+      { id: 'cam-5', ok: false, status: 429 },
+    ]);
+    const { runBatchOnce, _getStrategyStateForTests } = await import(
+      '../../../src/services/centralwatchImageCache.js'
+    );
+    const r = await runBatchOnce();
+    expect(fetchImagesBatchViaDomMock).toHaveBeenCalledOnce();
+    expect(fetchImagesBatchMock).toHaveBeenCalledOnce();
+    // Fetch fallback should only be called for the failed cameras (4 of them)
+    const fetchInputs = fetchImagesBatchMock.mock.calls[0][0] as Array<{ id: string }>;
+    expect(fetchInputs.map((x) => x.id).sort()).toEqual(['cam-2', 'cam-3', 'cam-4', 'cam-5']);
+    expect(r.cached).toBe(3); // 1 from DOM + 2 from fetch
+    expect(_getStrategyStateForTests().lastStrategy).toBe('fetch');
+  });
+
+  it('runBatchOnce skips DOM and goes straight to fetch when last strategy was fetch and 5min not elapsed', async () => {
+    getCentralwatchCamerasMock.mockResolvedValue([{ id: 'cam-1' }]);
+    fetchImagesBatchMock.mockResolvedValue([
+      { id: 'cam-1', ok: true, bytes: Buffer.alloc(1024, 1), contentType: 'image/jpeg' },
+    ]);
+    const { runBatchOnce, _setStrategyStateForTests } = await import(
+      '../../../src/services/centralwatchImageCache.js'
+    );
+    // Pin strategy to fetch with retry timer just refreshed
+    _setStrategyStateForTests('fetch', Date.now());
+    const r = await runBatchOnce();
+    expect(fetchImagesBatchViaDomMock).not.toHaveBeenCalled();
+    expect(fetchImagesBatchMock).toHaveBeenCalledOnce();
+    expect(r.cached).toBe(1);
+  });
+
+  it('runBatchOnce retries DOM after the 5min strategy retry timer elapses', async () => {
+    getCentralwatchCamerasMock.mockResolvedValue([{ id: 'cam-1' }]);
+    fetchImagesBatchViaDomMock.mockResolvedValue([
+      { id: 'cam-1', ok: true, bytes: Buffer.alloc(1024, 1), contentType: 'image/jpeg' },
+    ]);
+    const { runBatchOnce, _setStrategyStateForTests, _getStrategyStateForTests } = await import(
+      '../../../src/services/centralwatchImageCache.js'
+    );
+    // Strategy is fetch, but retry timer was 6 minutes ago — so DOM is due.
+    _setStrategyStateForTests('fetch', Date.now() - 6 * 60 * 1000);
+    const r = await runBatchOnce();
+    expect(fetchImagesBatchViaDomMock).toHaveBeenCalledOnce();
+    expect(r.cached).toBe(1);
+    // 1/1 = 100% >= 40%, flip back to dom
+    expect(_getStrategyStateForTests().lastStrategy).toBe('dom');
+  });
+
+  it('runBatchOnce DOM-path filters sub-500-byte placeholders the same as fetch path', async () => {
+    getCentralwatchCamerasMock.mockResolvedValue([
+      { id: 'cam-1' },
+      { id: 'cam-2' },
+    ]);
+    fetchImagesBatchViaDomMock.mockResolvedValue([
+      { id: 'cam-1', ok: true, bytes: Buffer.alloc(1024, 1), contentType: 'image/jpeg' },
+      { id: 'cam-2', ok: true, bytes: Buffer.alloc(100), contentType: 'image/jpeg' }, // junk
+    ]);
+    const { runBatchOnce, hasImage } = await import(
+      '../../../src/services/centralwatchImageCache.js'
+    );
+    await runBatchOnce();
+    expect(hasImage('cam-1')).toBe(true);
+    expect(hasImage('cam-2')).toBe(false);
   });
 
   it('runBatchOnce evicts stale entries for cameras now absent from list', async () => {

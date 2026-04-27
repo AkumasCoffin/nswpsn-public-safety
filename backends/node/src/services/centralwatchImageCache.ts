@@ -30,6 +30,19 @@ const STALE_AFTER_MS = 2 * 60 * 1000; // 2 min — the X-Cache: HIT vs STALE thr
 const BATCH_INTERVAL_MS = 30 * 1000; // 30 s between batch passes
 const MIN_IMAGE_BYTES = 500; // python: anything smaller is treated as a 1x1/error pixel
 
+// Two-phase strategy state — mirrors python `use_dom` / `last_dom_retry`
+// (external_api_proxy.py:8763-8766). DOM-load via <img> sends
+// `Sec-Fetch-Dest: image` and is generally not rate-limited; page-context
+// fetch() sends `Sec-Fetch-Dest: empty` and is. Start optimistically with
+// DOM. If the success rate falls below 40% we switch to fetch, but we
+// retry the other path every 5 min in case the limiter has reset.
+const DOM_SUCCESS_THRESHOLD = 0.4; // python: _CW_DOM_SUCCESS_THRESHOLD
+const STRATEGY_RETRY_INTERVAL_MS = 5 * 60 * 1000; // python: 300s (last_dom_retry > 300)
+
+type Strategy = 'dom' | 'fetch';
+let lastStrategy: Strategy = 'dom';
+let lastStrategyRetryAt = 0;
+
 const cache = new Map<string, CachedImage>();
 
 let batchTimer: NodeJS.Timeout | null = null;
@@ -132,25 +145,100 @@ export async function runBatchOnce(): Promise<{
 
   const inputs = cameras.map((c) => ({ id: c.id, url: buildImageUrl(c.id) }));
   let cached = 0;
-  try {
-    const results = await centralwatchBrowser.fetchImagesBatch(inputs);
-    for (const r of results) {
-      if (
-        r.ok &&
-        r.id &&
-        r.bytes &&
-        r.bytes.length > MIN_IMAGE_BYTES &&
-        activeIds.has(r.id)
-      ) {
-        setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
-        cached++;
+
+  // Decide which path to try first. Python: start with DOM; once we've
+  // flipped to fetch, retry DOM every 5 min in case the limiter resets.
+  // Symmetrically, if we're on DOM, periodically reconsider — but DOM is
+  // the cheaper / less-rate-limited path so the bias is to stay on it.
+  const now = Date.now();
+  const dueForRetry = now - lastStrategyRetryAt > STRATEGY_RETRY_INTERVAL_MS;
+  const tryDomFirst = lastStrategy === 'dom' || dueForRetry;
+  let domPath: 'dom' | 'fetch' | null = null;
+  const cachedOk = new Set<string>();
+
+  if (tryDomFirst) {
+    domPath = 'dom';
+    try {
+      const results = await centralwatchBrowser.fetchImagesBatchViaDom(inputs);
+      for (const r of results) {
+        if (
+          r.ok &&
+          r.id &&
+          r.bytes &&
+          r.bytes.length > MIN_IMAGE_BYTES &&
+          activeIds.has(r.id)
+        ) {
+          setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
+          cached++;
+          cachedOk.add(r.id);
+        }
+      }
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'centralwatch image batch: fetchImagesBatchViaDom threw',
+      );
+    }
+
+    const successRate = inputs.length > 0 ? cached / inputs.length : 0;
+    if (successRate >= DOM_SUCCESS_THRESHOLD) {
+      lastStrategy = 'dom';
+    } else {
+      // DOM degraded — flip the next-pass default to fetch, and fall
+      // through *now* to retry the cameras DOM didn't get via fetch().
+      lastStrategy = 'fetch';
+      const failedInputs = inputs.filter((i) => !cachedOk.has(i.id));
+      if (failedInputs.length > 0) {
+        try {
+          const results = await centralwatchBrowser.fetchImagesBatch(failedInputs);
+          for (const r of results) {
+            if (
+              r.ok &&
+              r.id &&
+              r.bytes &&
+              r.bytes.length > MIN_IMAGE_BYTES &&
+              activeIds.has(r.id)
+            ) {
+              setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
+              cached++;
+              cachedOk.add(r.id);
+            }
+          }
+          domPath = 'fetch';
+        } catch (err) {
+          log.warn(
+            { err: (err as Error).message },
+            'centralwatch image batch: fetchImagesBatch fallback threw',
+          );
+        }
       }
     }
-  } catch (err) {
-    log.warn(
-      { err: (err as Error).message },
-      'centralwatch image batch: fetchImagesBatch threw',
-    );
+    lastStrategyRetryAt = now;
+  } else {
+    // Default-fetch mode (we're cooling on DOM); 5min retry timer hasn't
+    // come up yet, so go straight to the fetch() path.
+    domPath = 'fetch';
+    try {
+      const results = await centralwatchBrowser.fetchImagesBatch(inputs);
+      for (const r of results) {
+        if (
+          r.ok &&
+          r.id &&
+          r.bytes &&
+          r.bytes.length > MIN_IMAGE_BYTES &&
+          activeIds.has(r.id)
+        ) {
+          setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
+          cached++;
+          cachedOk.add(r.id);
+        }
+      }
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'centralwatch image batch: fetchImagesBatch threw',
+      );
+    }
   }
 
   const { evicted, remaining } = cleanup(activeIds);
@@ -160,6 +248,8 @@ export async function runBatchOnce(): Promise<{
       cached,
       evicted,
       cacheSize: remaining,
+      strategy: domPath,
+      lastStrategy,
     },
     'centralwatch image batch complete',
   );
@@ -213,4 +303,23 @@ export function _resetCentralwatchImageCacheForTests(): void {
   }
   batchInFlight = false;
   stopRequested = false;
+  lastStrategy = 'dom';
+  lastStrategyRetryAt = 0;
+}
+
+/** Test hook — peek at strategy state. */
+export function _getStrategyStateForTests(): {
+  lastStrategy: Strategy;
+  lastStrategyRetryAt: number;
+} {
+  return { lastStrategy, lastStrategyRetryAt };
+}
+
+/** Test hook — force-set the strategy state for retry-timer tests. */
+export function _setStrategyStateForTests(
+  s: Strategy,
+  retryAt = 0,
+): void {
+  lastStrategy = s;
+  lastStrategyRetryAt = retryAt;
 }

@@ -8,12 +8,12 @@
  *   - startRdioSummaryScheduler()  (gated by NODE_RDIO_SCHEDULER=true)
  *
  * Notes vs python:
- *   - The structured-output validator (NSWPF stripping, NATO filter,
- *     unit-label cleanup at python lines 14874-15164) is intentionally
- *     NOT ported. The LLM output is still saved as `summary` text and
- *     surfaced via /api/summaries/latest; the validator is a polish
- *     layer that can be ported later if frontends need the structured
- *     `details.structured` block to be hallucination-scrubbed.
+ *   - The structured-output validator at python lines 14874-15164 is
+ *     ported in `rdioValidator.ts` and wired into both summary
+ *     generators below as a best-effort cleanup. If validation throws,
+ *     we log and persist the un-validated structured object — matches
+ *     python's "best-effort cleanup" semantics so a validator bug never
+ *     blocks the summary save.
  *   - The transcript dedup pass (_dedupe_calls) is similarly skipped.
  *     Both backends may end up summarising slightly more verbose call
  *     lists than python; acceptable trade-off for keeping the port
@@ -29,6 +29,7 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { getRdioPool, resolveLabels, getUnitLabel, ensureUnitLabelsLoaded } from './rdio.js';
 import { getPool } from '../db/pool.js';
+import { validateStructuredAgainstTranscripts } from './rdioValidator.js';
 
 const LLM_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -554,6 +555,19 @@ export async function generateRdioHourlySummary(
     const parsed = parseSummaryOutput(raw);
     summaryText = parsed.overview;
     structured = parsed.structured;
+    if (structured) {
+      try {
+        structured = validateStructuredAgainstTranscripts(
+          structured,
+          calls,
+        ) as Record<string, unknown> | null;
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'rdio validator threw; persisting un-validated structured',
+        );
+      }
+    }
   }
   const details: Record<string, unknown> = {
     period_label: periodLabel,
@@ -610,6 +624,19 @@ export async function generateRdioRecentSummary(
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'recent llm error');
     return null;
+  }
+  if (structured) {
+    try {
+      structured = validateStructuredAgainstTranscripts(
+        structured,
+        calls,
+      ) as Record<string, unknown> | null;
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'rdio validator threw; persisting un-validated structured',
+      );
+    }
   }
   const nowUtc = new Date();
   const details: Record<string, unknown> = {
