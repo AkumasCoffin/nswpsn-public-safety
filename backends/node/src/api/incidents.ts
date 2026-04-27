@@ -90,6 +90,18 @@ function normaliseIncident(row: IncidentRow): Record<string, unknown> {
       }
     }
   }
+  // Compute is_live from expires_at — the python schema doesn't have
+  // an is_live column on the incidents table, but the frontend (live.html
+  // / map.html) expects every record to carry one. Derive it before the
+  // Date->isoformat coercion below so we still have the raw timestamp.
+  const expires = out['expires_at'];
+  let expiresMs: number | null = null;
+  if (expires instanceof Date) expiresMs = expires.getTime();
+  else if (typeof expires === 'string' && expires) {
+    const t = Date.parse(expires);
+    expiresMs = Number.isFinite(t) ? t : null;
+  }
+  out['is_live'] = expiresMs === null ? false : expiresMs > Date.now();
   for (const k of ['created_at', 'updated_at', 'expires_at']) {
     const v = out[k];
     if (v instanceof Date) {
