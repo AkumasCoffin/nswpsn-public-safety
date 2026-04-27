@@ -4938,7 +4938,12 @@ PUBLIC_ENDPOINTS = {'/api/health', '/', '/api/config', '/api/heartbeat', '/api/e
                     '/api/waze/ingest',
                     # Read-only filter catalogue — used by /logs and the dashboard to populate
                     # dropdowns. No PII, just aggregated category/source/severity counts.
-                    '/api/data/history/filters'}
+                    '/api/data/history/filters',
+                    # Backend health / status — surfaced as booleans + ages,
+                    # no incident contents. Public so external monitors
+                    # (Uptime Kuma) and the in-page admin dashboard can hit
+                    # it without juggling the API key.
+                    '/api/status'}
 # Endpoints that start with these prefixes are public (for dynamic routes like /api/check-editor/<user_id>)
 PUBLIC_ENDPOINT_PREFIXES = ['/api/check-editor/', '/api/centralwatch/image/', '/api/centralwatch/cameras',
                             # Dashboard endpoints use Discord OAuth2 session cookie auth
