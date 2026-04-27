@@ -975,6 +975,140 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/presets/:presetId', async
 });
 
 // ---------------------------------------------------------------------------
+// Per-alert-type override mutators on a preset's type_overrides JSONB.
+// PUT  sets enabled / enabled_ping for one alert_type.
+// DEL  removes the override entry for one alert_type entirely.
+// Mirrors python external_api_proxy.py:17800-17909.
+// ---------------------------------------------------------------------------
+dashboardRouter.put(
+  '/api/dashboard/guilds/:guildId/presets/:presetId/type-overrides/:alertType',
+  async (c) => {
+    const session = await requireSession(c);
+    if (session instanceof Response) return session;
+    const guildId = c.req.param('guildId');
+    const presetId = Number(c.req.param('presetId'));
+    const alertType = c.req.param('alertType');
+    if (!Number.isFinite(presetId)) {
+      return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
+    }
+    if (!ALERT_TYPES.includes(alertType)) {
+      return dashErr(
+        c,
+        'bad_request',
+        `alert_type must be one of ${ALERT_TYPES.join(',')}.`,
+        400,
+      );
+    }
+    const guard = await guildGuard(c, session, guildId);
+    if ('err' in guard) return guard.err;
+
+    let gid: bigint;
+    try {
+      gid = BigInt(guildId);
+    } catch {
+      return dashErr(c, 'bad_request', 'guild_id must be numeric.', 400);
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const hasEnabled = 'enabled' in body && body['enabled'] !== null;
+    const hasPing = 'enabled_ping' in body && body['enabled_ping'] !== null;
+    if (!hasEnabled && !hasPing) {
+      return dashErr(
+        c,
+        'bad_request',
+        'Supply at least one of enabled/enabled_ping; use DELETE to clear.',
+        400,
+      );
+    }
+    const enabled = hasEnabled ? Boolean(body['enabled']) : true;
+    const enabledPing = hasPing ? Boolean(body['enabled_ping']) : true;
+    const overrideValue = JSON.stringify({ enabled, enabled_ping: enabledPing });
+    // alertType is allow-list validated above, so it's safe to format
+    // into the jsonb path literal {key} that jsonb_set expects.
+    const pathLiteral = `{${alertType}}`;
+
+    const pool = await getBotDbPool();
+    if (!pool) {
+      return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
+    }
+    try {
+      const r = await pool.query<PresetRow>(
+        `UPDATE alert_presets
+            SET type_overrides = jsonb_set(
+                     COALESCE(type_overrides, '{}'::jsonb),
+                     $1::text[],
+                     $2::jsonb,
+                     true),
+                updated_at = now()
+          WHERE id=$3 AND guild_id=$4
+          RETURNING ${PRESET_COLS}`,
+        [pathLiteral, overrideValue, presetId, gid.toString()],
+      );
+      if (r.rows.length === 0) {
+        return dashErr(c, 'not_found', 'Preset not found.', 404);
+      }
+      return c.json({ preset: rowToPreset(r.rows[0]!) });
+    } catch (err) {
+      log.error({ err }, 'dashboard preset_override_put error');
+      return dashErr(c, 'db_error', String((err as Error).message), 500);
+    }
+  },
+);
+
+dashboardRouter.delete(
+  '/api/dashboard/guilds/:guildId/presets/:presetId/type-overrides/:alertType',
+  async (c) => {
+    const session = await requireSession(c);
+    if (session instanceof Response) return session;
+    const guildId = c.req.param('guildId');
+    const presetId = Number(c.req.param('presetId'));
+    const alertType = c.req.param('alertType');
+    if (!Number.isFinite(presetId)) {
+      return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
+    }
+    if (!ALERT_TYPES.includes(alertType)) {
+      return dashErr(
+        c,
+        'bad_request',
+        `alert_type must be one of ${ALERT_TYPES.join(',')}.`,
+        400,
+      );
+    }
+    const guard = await guildGuard(c, session, guildId);
+    if ('err' in guard) return guard.err;
+
+    let gid: bigint;
+    try {
+      gid = BigInt(guildId);
+    } catch {
+      return dashErr(c, 'bad_request', 'guild_id must be numeric.', 400);
+    }
+
+    const pool = await getBotDbPool();
+    if (!pool) {
+      return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
+    }
+    try {
+      const r = await pool.query<PresetRow>(
+        `UPDATE alert_presets
+            SET type_overrides = COALESCE(type_overrides, '{}'::jsonb) #- $1::text[],
+                updated_at = now()
+          WHERE id=$2 AND guild_id=$3
+          RETURNING ${PRESET_COLS}`,
+        [[alertType], presetId, gid.toString()],
+      );
+      if (r.rows.length === 0) {
+        return dashErr(c, 'not_found', 'Preset not found.', 404);
+      }
+      return c.json({ preset: rowToPreset(r.rows[0]!) });
+    } catch (err) {
+      log.error({ err }, 'dashboard preset_override_delete error');
+      return dashErr(c, 'db_error', String((err as Error).message), 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Preset stats — stale-while-revalidate. Fresh hits return immediately;
 // stale-but-still-valid hits return the cached value AND kick off a
 // background refresh; misses block on the DB query. Mirrors python's

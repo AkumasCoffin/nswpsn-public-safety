@@ -258,12 +258,49 @@ class CentralwatchBrowser {
     }
   }
 
+  /**
+   * Wrap a `page.evaluate` call so a Vercel-WAF navigation that destroys
+   * the JS context mid-evaluate doesn't lose the request. The error
+   * "Execution context was destroyed, most likely because of a navigation"
+   * is benign — the page has navigated to (or away from) the challenge,
+   * and the new context is usually ready in a second or two.
+   *
+   * Strategy: catch that specific error, give the page a beat to settle,
+   * and retry the same script once. Anything else propagates so the
+   * caller's existing `catch` keeps logging non-context errors normally.
+   */
+  private async evaluateWithRetry<T>(script: string): Promise<T> {
+    const page = this.page as {
+      evaluate: <R>(fn: string) => Promise<R>;
+      waitForLoadState?: (state: string, opts?: { timeout: number }) => Promise<void>;
+      waitForTimeout: (ms: number) => Promise<void>;
+    };
+    try {
+      return await page.evaluate<T>(script);
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      if (!msg.includes('Execution context was destroyed')) throw err;
+      log.warn(
+        'centralwatch: page navigated mid-evaluate (likely Vercel WAF) — retrying once after settle',
+      );
+      // Best-effort wait for the new doc to be ready. Both
+      // waitForLoadState and waitForTimeout are present on Playwright
+      // pages; we already cast loosely above.
+      try {
+        if (typeof page.waitForLoadState === 'function') {
+          await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+        }
+      } catch {
+        // ignore — fall through to the timed wait
+      }
+      await page.waitForTimeout(1000);
+      return page.evaluate<T>(script);
+    }
+  }
+
   async fetchJson(url: string, timeoutMs = 20000): Promise<unknown | null> {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
-      const page = this.page as {
-        evaluate: <T>(fn: string) => Promise<T>;
-      };
       // IIFE with values baked into the string. Playwright's
       // `page.evaluate(string, arg)` ignores the second argument when
       // the first is a string (it evaluates the string as an expression
@@ -299,7 +336,7 @@ class CentralwatchBrowser {
         }
       })()`;
       try {
-        const result = await page.evaluate<{
+        const result = await this.evaluateWithRetry<{
           ok: boolean;
           status?: number;
           contentType?: string;
@@ -335,9 +372,6 @@ class CentralwatchBrowser {
   ): Promise<{ bytes: Buffer; contentType: string } | null> {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
-      const page = this.page as {
-        evaluate: <T>(fn: string) => Promise<T>;
-      };
       try {
         // IIFE with baked values — see fetchJson for why string-form
         // evaluate's second-arg is ignored.
@@ -363,7 +397,7 @@ class CentralwatchBrowser {
             return { ok: false, error: String(e && e.message ? e.message : e) };
           }
         })()`;
-        const result = await page.evaluate<{
+        const result = await this.evaluateWithRetry<{
           ok: boolean;
           status?: number;
           contentType?: string;
@@ -424,9 +458,6 @@ class CentralwatchBrowser {
   ): Promise<BatchImageResult[]> {
     if (!this.isReady() || images.length === 0) return [];
     return this.runExclusive(async () => {
-      const page = this.page as {
-        evaluate: <T>(fn: string) => Promise<T>;
-      };
       const imageList = images.map((i) => [i.id, i.url]);
       try {
         const script = `(async () => {
@@ -486,7 +517,7 @@ class CentralwatchBrowser {
             });
           })(imageList);
         })()`;
-        const results = await page.evaluate<BatchImageResultJs[]>(script);
+        const results = await this.evaluateWithRetry<BatchImageResultJs[]>(script);
         const out: BatchImageResult[] = [];
         for (const r of results || []) {
           if (r && r.ok && r.data) {
@@ -537,9 +568,6 @@ class CentralwatchBrowser {
   ): Promise<BatchImageResult[]> {
     if (!this.isReady() || images.length === 0) return [];
     return this.runExclusive(async () => {
-      const page = this.page as {
-        evaluate: <T>(fn: string) => Promise<T>;
-      };
       const imageList = images.map((i) => [i.id, i.url]);
       try {
         const script = `(async () => {
@@ -570,7 +598,7 @@ class CentralwatchBrowser {
           }));
           return results.map(r => r.status === 'fulfilled' ? r.value : { id: null, ok: false, error: String(r.reason) });
         })()`;
-        const results = await page.evaluate<BatchImageResultJs[]>(script);
+        const results = await this.evaluateWithRetry<BatchImageResultJs[]>(script);
         const out: BatchImageResult[] = [];
         for (const r of results || []) {
           if (r && r.ok && r.data) {
