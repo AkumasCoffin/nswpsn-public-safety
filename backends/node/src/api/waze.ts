@@ -183,6 +183,16 @@ const POLICE_VALID_SUBTYPES = new Set([
   'POLICE_WITH_MOBILE_CAMERA',
 ]);
 
+// Periodic background refresh of the unfiltered (no subtype, no bbox)
+// heatmap so /api/status can report a meaningful bin count and the
+// first request after a cache eviction doesn't block on the SQL. Runs
+// every HEATMAP_REFRESH_INTERVAL_MS; result lives in the same
+// in-process cache we already use for request-scoped responses.
+const HEATMAP_REFRESH_INTERVAL_MS = 5 * 60_000; // 5 min
+let heatmapRefreshTimer: NodeJS.Timeout | null = null;
+let heatmapLastRefreshTs: number | null = null;
+let heatmapLastBinCount = 0;
+
 interface HeatmapBucket {
   result: unknown;
   ts: number;
@@ -375,4 +385,74 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
 
 export function _resetHeatmapCacheForTests(): void {
   heatmapCache.clear();
+  heatmapLastRefreshTs = null;
+  heatmapLastBinCount = 0;
+}
+
+/**
+ * Background refresh of the unfiltered (no subtype, no bbox) heatmap
+ * into the in-process cache. Surfaces two bits of state for /api/status:
+ * the timestamp of the last successful refresh and the resulting bin
+ * count. Runs periodically so the panel reflects reality without an
+ * on-demand DB query in the status check.
+ *
+ * Best-effort: failures are logged at warn-level, the previous cache
+ * entry is left in place, and the next interval tries again.
+ */
+async function refreshHeatmapCache(): Promise<void> {
+  try {
+    const aggregated = await buildHeatmapFromArchive(null, null);
+    if (!aggregated) return;
+    const result = {
+      points: aggregated.points,
+      total_records: aggregated.total_records,
+      bin_size_deg: HEATMAP_BIN_DEG,
+      max_count: aggregated.max_count,
+      days: HEATMAP_WINDOW_DAYS,
+      subtypes: Array.from(POLICE_VALID_SUBTYPES).sort(),
+      cache_updated_at: aggregated.cache_updated_at,
+      cache_status: 'ok',
+    };
+    heatmapCache.set(_heatmapCacheKey([], null), { result, ts: Date.now() });
+    heatmapLastRefreshTs = Math.floor(Date.now() / 1000);
+    heatmapLastBinCount = aggregated.points.length;
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'police-heatmap background refresh failed',
+    );
+  }
+}
+
+/** Start the periodic refresh loop. Idempotent — safe to call twice. */
+export function startHeatmapRefreshLoop(): void {
+  if (heatmapRefreshTimer) return;
+  // Kick once on boot so the cache is populated before the first
+  // dashboard refresh — the first user-facing request gets a hit
+  // instead of waiting on the SQL.
+  void refreshHeatmapCache();
+  heatmapRefreshTimer = setInterval(
+    () => void refreshHeatmapCache(),
+    HEATMAP_REFRESH_INTERVAL_MS,
+  );
+  heatmapRefreshTimer.unref?.();
+}
+
+export function stopHeatmapRefreshLoop(): void {
+  if (heatmapRefreshTimer) {
+    clearInterval(heatmapRefreshTimer);
+    heatmapRefreshTimer = null;
+  }
+}
+
+/** Snapshot of police-heatmap freshness for /api/status. */
+export function policeHeatmapStatus(): {
+  bins: number;
+  last_refresh_age_secs: number | null;
+} {
+  const age =
+    heatmapLastRefreshTs === null
+      ? null
+      : Math.floor(Date.now() / 1000) - heatmapLastRefreshTs;
+  return { bins: heatmapLastBinCount, last_refresh_age_secs: age };
 }

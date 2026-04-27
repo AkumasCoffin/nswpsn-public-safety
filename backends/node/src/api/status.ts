@@ -31,6 +31,7 @@ import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
 import { snapshot as wazeSnapshot } from '../store/wazeIngestCache.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
+import { policeHeatmapStatus } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
 import { activeViewerCount } from '../services/activityMode.js';
 import { config, modeLabel } from '../config.js';
@@ -287,14 +288,18 @@ function checkFilterCache(now: number): {
 // using sentinel values (null / 0) where there's no Node equivalent yet.
 // ---------------------------------------------------------------------------
 
-/** Police-heatmap freshness — Node serves this live, no separate cache. */
+/** Police-heatmap freshness. The Node backend runs a 5-min background
+ *  refresh into an in-process cache; this reads its last-known state. */
 function checkPoliceHeatmap(): Record<string, unknown> {
+  const s = policeHeatmapStatus();
+  const stale =
+    s.last_refresh_age_secs !== null &&
+    s.last_refresh_age_secs > STATUS_HEATMAP_STALE_SECS;
   return {
-    ok: true,
-    bins: 0,
-    last_refresh_age_secs: null,
+    ok: !stale,
+    bins: s.bins,
+    last_refresh_age_secs: s.last_refresh_age_secs,
     threshold_secs: STATUS_HEATMAP_STALE_SECS,
-    note: 'served live from waze ingest snapshot — no separate cache',
   };
 }
 
