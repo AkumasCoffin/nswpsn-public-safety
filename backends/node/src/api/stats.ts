@@ -258,6 +258,54 @@ statsRouter.get('/api/collection/status', (c) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// /api/stats/archive/status + /api/stats/archive/trigger — surface and
+// pulse the ArchiveWriter from the outside. Mirrors python lines
+// 6293-6345. Note: python's status reads stats_snapshots row counts;
+// we expose archive_writer metrics + LiveStore key counts because Node
+// archive metadata lives in those primitives.
+// ---------------------------------------------------------------------------
+
+statsRouter.get('/api/stats/archive/status', (c) => {
+  const m = archiveWriter.metrics();
+  const data_viewers = dataViewerCount();
+  return c.json({
+    status: 'running',
+    collection_mode: data_viewers > 0 ? 'active' : 'idle',
+    current_interval_seconds: data_viewers > 0
+      ? ACTIVE_INTERVAL_SECS
+      : IDLE_INTERVAL_SECS,
+    idle_interval_seconds: IDLE_INTERVAL_SECS,
+    active_interval_seconds: ACTIVE_INTERVAL_SECS,
+    active_pages: data_viewers,
+    queue_size: m.queue_size,
+    dropped: m.dropped,
+    total_written: m.total_written,
+    last_flush_age_secs: m.last_flush_age_secs,
+    live_keys: liveStore.keys().length,
+  });
+});
+
+// /api/stats/archive/trigger — kicks the archive writer to flush its
+// queue immediately. Returns the post-flush metrics so callers can
+// confirm the trigger actually drained data.
+statsRouter.get('/api/stats/archive/trigger', async (c) => {
+  try {
+    const result = await archiveWriter.flush();
+    return c.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      flushed: result,
+      after_flush: archiveWriter.metrics(),
+    });
+  } catch (err) {
+    return c.json(
+      { success: false, error: (err as Error).message },
+      500,
+    );
+  }
+});
+
 // TODO(stats-snapshots): Python's /api/stats/history reads pre-computed
 // 5-min snapshots from a `stats_snapshots` Postgres table. To bring
 // parity to Node we'd need an archiver that periodically writes the

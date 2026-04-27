@@ -154,7 +154,7 @@ export function parseEssentialKml(
   return out;
 }
 
-async function fetchFeed(feedType: EssentialFeedType): Promise<EssentialOutage[]> {
+export async function fetchFeed(feedType: EssentialFeedType): Promise<EssentialOutage[]> {
   const url = FEEDS[feedType];
   const xml = await fetchText(url, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
