@@ -1779,6 +1779,24 @@ _archive_buffer_lock = threading.Lock()
 # monitors can detect a stuck writer thread.
 _archive_writer_last_flush_at = 0.0
 _PROCESS_START_TIME = time.time()
+# Last-flush snapshot + cumulative ingest counters surfaced on the Dev
+# tab as the "Ingest" card. Populated by _archive_writer_drain_once.
+_archive_last_flush_records  = 0
+_archive_last_flush_sources  = 0
+_archive_last_flush_ms       = 0
+_archive_last_flush_at_data  = 0.0   # only set when a non-empty drain happened
+_archive_total_records       = 0     # cumulative since process start
+_archive_total_flushes       = 0
+# Cleanup-loop telemetry — populated by cleanup_old_data() and the
+# vacuum helper. Surfaced as the "Cleanup" card.
+_cleanup_last_run_at         = 0.0
+_cleanup_last_history_del    = 0
+_cleanup_last_stats_del      = 0
+_cleanup_last_pager_ended    = 0
+_cleanup_last_waze_ended     = 0
+_cleanup_total_history_del   = 0   # cumulative since process start
+_cleanup_last_vacuum_at      = 0.0
+_cleanup_last_vacuum_ms      = 0
 
 # Friendly names for archive logging — also used by the writer thread.
 _ARCHIVE_NAMES = {
@@ -1897,6 +1915,21 @@ def _archive_writer_drain_once():
             Log.error(f"Archive writer: {name} flush failed: {e}")
 
     elapsed_ms = int((time.time() - start) * 1000)
+
+    # Stamp the ingest-flow trackers used by /api/status. Only count
+    # non-empty drains for last_flush_at_data — empty drains are still
+    # heartbeats but they don't represent ingest activity.
+    global _archive_last_flush_records, _archive_last_flush_sources
+    global _archive_last_flush_ms, _archive_last_flush_at_data
+    global _archive_total_records, _archive_total_flushes
+    if total_records > 0:
+        _archive_last_flush_records = total_records
+        _archive_last_flush_sources = sources_written
+        _archive_last_flush_ms      = elapsed_ms
+        _archive_last_flush_at_data = time.time()
+        _archive_total_records      += total_records
+        _archive_total_flushes      += 1
+
     return (sources_written, total_records, elapsed_ms)
 
 
@@ -2176,6 +2209,7 @@ def cleanup_old_data():
     deleted_history = 0
     deleted_stats = 0
     pager_ended = 0
+    waze_ended = 0
     
     # Clean up history (single table in PostgreSQL)
     # Note: previously this whole block ran under _db_lock_history_waze
@@ -2251,7 +2285,20 @@ def cleanup_old_data():
     total = deleted_history + deleted_stats
     if total > 0:
         Log.cleanup(f"Deleted {deleted_history} history + {deleted_stats} stats (>{DATA_RETENTION_DAYS} days old)", force=True)
-    
+
+    # Stamp the cleanup trackers used by /api/status. last_run_at fires
+    # every cycle (so the Dev tab can show "ran X ago" even when nothing
+    # was deleted); the per-cycle counts only update when the cycle
+    # actually did work.
+    global _cleanup_last_run_at, _cleanup_last_history_del, _cleanup_last_stats_del
+    global _cleanup_last_pager_ended, _cleanup_last_waze_ended, _cleanup_total_history_del
+    _cleanup_last_run_at      = time.time()
+    _cleanup_last_history_del = deleted_history
+    _cleanup_last_stats_del   = deleted_stats
+    _cleanup_last_pager_ended = pager_ended
+    _cleanup_last_waze_ended  = waze_ended
+    _cleanup_total_history_del += deleted_history
+
     return total
 
 
@@ -2581,8 +2628,12 @@ def _vacuum_data_history():
             t0 = time.time()
             cur.execute('VACUUM (ANALYZE) data_history')
             cur.close()
+            elapsed_ms = int((time.time() - t0) * 1000)
+            global _cleanup_last_vacuum_at, _cleanup_last_vacuum_ms
+            _cleanup_last_vacuum_at = time.time()
+            _cleanup_last_vacuum_ms = elapsed_ms
             if DEV_MODE:
-                Log.cleanup(f"VACUUM (ANALYZE) data_history complete [{int((time.time()-t0)*1000)}ms]")
+                Log.cleanup(f"VACUUM (ANALYZE) data_history complete [{elapsed_ms}ms]")
         finally:
             conn.close()
     except Exception as e:
@@ -11100,6 +11151,46 @@ def status_endpoint():
         'last_refresh_age_secs': fc_age,
         'threshold_secs': STATUS_FILTER_CACHE_STALE_SECS,
         'refresh_interval_secs': FILTER_CACHE_REFRESH_INTERVAL,
+    }
+
+    # ---- 6b. Ingest activity (last archive flush + cumulative) ---------
+    # Informational only — `archive_writer` already covers liveness, this
+    # surfaces what's actually flowing through. last_flush_at_data is the
+    # most recent NON-EMPTY drain; flushes that drained zero records (idle
+    # cycle) bump archive_writer's heartbeat but not this one.
+    ingest_age = (
+        int(now - _archive_last_flush_at_data)
+        if _archive_last_flush_at_data else None
+    )
+    checks['ingest'] = {
+        'last_flush_age_secs':   ingest_age,
+        'last_flush_records':    int(_archive_last_flush_records),
+        'last_flush_sources':    int(_archive_last_flush_sources),
+        'last_flush_ms':         int(_archive_last_flush_ms),
+        'total_records_flushed': int(_archive_total_records),
+        'total_flushes':         int(_archive_total_flushes),
+    }
+
+    # ---- 6c. Cleanup loop telemetry ------------------------------------
+    cleanup_age = (
+        int(now - _cleanup_last_run_at)
+        if _cleanup_last_run_at else None
+    )
+    vacuum_age = (
+        int(now - _cleanup_last_vacuum_at)
+        if _cleanup_last_vacuum_at else None
+    )
+    checks['cleanup'] = {
+        'last_run_age_secs':       cleanup_age,
+        'last_history_deleted':    int(_cleanup_last_history_del),
+        'last_stats_deleted':      int(_cleanup_last_stats_del),
+        'last_pager_ended':        int(_cleanup_last_pager_ended),
+        'last_waze_ended':         int(_cleanup_last_waze_ended),
+        'total_history_deleted':   int(_cleanup_total_history_del),
+        'last_vacuum_age_secs':    vacuum_age,
+        'last_vacuum_ms':          int(_cleanup_last_vacuum_ms),
+        'retention_days':          DATA_RETENTION_DAYS,
+        'cleanup_interval_secs':   DATA_CLEANUP_INTERVAL,
     }
 
     # ---- 7. RAM cache layer hit rate (informational, no ok/fail) --------
