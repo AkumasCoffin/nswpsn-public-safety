@@ -109,7 +109,13 @@ async function runOnce(src: SourceDefinition): Promise<void> {
     // /api/data/history rows get title/severity/etc. projected from
     // JSONB the same way python's data_history did.
     if (!SKIP_ARCHIVE.has(src.name)) {
-      const rows = defaultArchiveItems(src.name, data, fetchedAt);
+      // Use archiveSource if the source overrides it (rfs_incidents
+      // -> rfs, bom_warnings -> bom_warning, traffic_incidents ->
+      // traffic_incident) so archive rows align with python's
+      // data_history source values and the SOURCE_TO_FAMILY lookup
+      // in dataHistoryQuery resolves to the right archive table.
+      const archiveSource = src.archiveSource ?? src.name;
+      const rows = defaultArchiveItems(archiveSource, data, fetchedAt);
       const tbl = familyTable(src.family);
       for (const row of rows) {
         archiveWriter.push(tbl, row);

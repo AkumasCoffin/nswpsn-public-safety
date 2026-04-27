@@ -254,11 +254,18 @@ export async function fetchWeatherRadar(): Promise<WeatherRadarSnapshot> {
 }
 
 export default function register(): void {
+  // Open-Meteo's free tier counts each (lat,lng) inside a multi-point
+  // request as a separate API call against a per-location daily limit
+  // (~10k/day). Polling every 5 min × 100 locations × 288 cycles =
+  // 28800 calls/location/day — guaranteed 429 within ~8 hours. The
+  // 30-min active / 60-min idle cadence below puts us at 4800/2400
+  // calls/location/day, comfortably under the ceiling. Surface weather
+  // for an emergency dashboard doesn't need sub-30-minute freshness.
   registerSource<WeatherSnapshot>({
     name: 'weather_current',
     family: 'misc',
-    intervalActiveMs: 300_000,
-    intervalIdleMs: 600_000,
+    intervalActiveMs: 30 * 60_000,
+    intervalIdleMs: 60 * 60_000,
     fetch: fetchWeatherCurrent,
   });
   registerSource<WeatherRadarSnapshot>({

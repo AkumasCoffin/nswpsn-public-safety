@@ -33,6 +33,17 @@ export interface SourceDefinition<T = unknown> {
    *  failure (poller catches, increments failure counter, applies
    *  backoff). */
   fetch: () => Promise<T>;
+  /**
+   * Override for the `source` value written to archive_* rows. Defaults
+   * to `name` when omitted. Use this when the LiveStore key (which other
+   * Node-side code reads) differs from the canonical python source value
+   * the migration backfilled with — e.g. the LiveStore key is
+   * `rfs_incidents` but archive rows must be tagged `rfs` to match
+   * historical data and the SOURCE_TO_FAMILY lookup the data-history
+   * route uses. Without this, /api/data/history?source=rfs returns 0
+   * rows because the new poller-written rows used the LiveStore key.
+   */
+  archiveSource?: string;
 }
 
 const _registry = new Map<string, SourceDefinition>();

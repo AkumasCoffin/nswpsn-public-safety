@@ -443,11 +443,20 @@ export function buildCountSqlForTable(
 
   const whereClause = acc.parts.length > 0 ? `WHERE ${acc.parts.join(' AND ')}` : '';
 
-  const sql = p.unique
-    ? `SELECT COUNT(*)::bigint AS n FROM (
-         SELECT DISTINCT source, source_id FROM ${table} ${whereClause}
-       ) sub`
-    : `SELECT COUNT(*)::bigint AS n FROM ${table} ${whereClause}`;
+  // Cap the count at COUNT_CAP rows so a billion-row archive_waze can't
+  // burn a 60s statement_timeout chasing a number the frontend doesn't
+  // need exact. The page-jumper on logs.html only navigates the first
+  // ~5000 pages anyway (page * limit > 100k is unusable). When the real
+  // count is below the cap we return it exactly; above the cap we
+  // return COUNT_CAP and the frontend treats it as "≥ that many". The
+  // bounded LIMIT inside the subquery makes the count Postgres-side
+  // bounded — the planner stops scanning at the cap regardless of how
+  // many rows could match.
+  const COUNT_CAP = 50_000;
+  const innerSelect = p.unique
+    ? `SELECT DISTINCT source, source_id FROM ${table} ${whereClause}`
+    : `SELECT 1 FROM ${table} ${whereClause}`;
+  const sql = `SELECT COUNT(*)::bigint AS n FROM (${innerSelect} LIMIT ${COUNT_CAP}) sub`;
 
   return { sql, params: acc.params, table };
 }
