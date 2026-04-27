@@ -130,6 +130,7 @@ describe('GET /api/data/history', () => {
   it('routes a waze_police query to archive_waze only', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
+      if (sql.includes('SELECT COUNT(*)')) return { rows: [{ n: 0 }] };
       return { rows: [] };
     });
 
@@ -137,7 +138,9 @@ describe('GET /api/data/history', () => {
     await app.request('/api/data/history?source=waze_police');
     const sqls = queryMock.mock.calls
       .map((call) => call[0] as string)
-      .filter((s) => !s.includes('statement_timeout'));
+      .filter(
+        (s) => !s.includes('statement_timeout') && !s.includes('SELECT COUNT(*)'),
+      );
     expect(sqls).toHaveLength(1);
     expect(sqls[0]).toContain('FROM archive_waze');
   });
@@ -145,6 +148,7 @@ describe('GET /api/data/history', () => {
   it('fans out across 5 family tables when no source filter is set', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
+      if (sql.includes('SELECT COUNT(*)')) return { rows: [{ n: 0 }] };
       return { rows: [] };
     });
 
@@ -152,7 +156,9 @@ describe('GET /api/data/history', () => {
     await app.request('/api/data/history');
     const sqls = queryMock.mock.calls
       .map((call) => call[0] as string)
-      .filter((s) => !s.includes('statement_timeout'));
+      .filter(
+        (s) => !s.includes('statement_timeout') && !s.includes('SELECT COUNT(*)'),
+      );
     expect(sqls).toHaveLength(5);
     const targets = sqls.map((s) => {
       // Skip the `FROM fetched_at` inside `extract(epoch FROM fetched_at)`

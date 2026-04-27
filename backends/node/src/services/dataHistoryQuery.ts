@@ -369,6 +369,90 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
 }
 
 /**
+ * Build a COUNT query for the same WHERE clauses as buildSqlForTable,
+ * but without LIMIT/OFFSET/ORDER BY and crucially without the cursor
+ * seek clause — `total` should reflect "how many rows match the user's
+ * filters", not "how many rows after this page". Returns a bigint
+ * column `n` as the only output.
+ *
+ * For unique=1 we count DISTINCT (source, source_id) to match the
+ * DISTINCT ON the data query applies, so the page-count math the
+ * frontend uses (Math.ceil(total/limit)) lines up with what's actually
+ * paginatable.
+ */
+export function buildCountSqlForTable(
+  table: ArchiveTable,
+  p: DataHistoryParams,
+): BuiltQuery {
+  // Same WHERE-builder as buildSqlForTable but skip the cursor clause.
+  const acc: ConditionAcc = { parts: [], params: [] };
+
+  if (p.sources && p.sources.length > 0) pushIn(acc, 'source', p.sources);
+
+  const explicitlyAskedForDeprecated =
+    p.sources && p.sources.some((s) => DEPRECATED_SOURCES.has(s));
+  if (!explicitlyAskedForDeprecated && DEPRECATED_SOURCES.size > 0) {
+    const dep = Array.from(DEPRECATED_SOURCES);
+    const placeholders = dep.map((_, i) => `$${acc.params.length + i + 1}`);
+    acc.parts.push(`source NOT IN (${placeholders.join(',')})`);
+    for (const d of dep) acc.params.push(d);
+  }
+
+  if (p.sourceId) {
+    acc.parts.push(`source_id = $${acc.params.length + 1}`);
+    acc.params.push(p.sourceId);
+  }
+  if (p.category && p.category.length > 0) pushIn(acc, 'category', p.category);
+  if (p.subcategory && p.subcategory.length > 0)
+    pushIn(acc, 'subcategory', p.subcategory);
+  if (p.status && p.status.length > 0) pushJsonbIn(acc, 'status', p.status);
+  if (p.severity && p.severity.length > 0)
+    pushJsonbIn(acc, 'severity', p.severity);
+
+  if (p.since !== null) {
+    acc.parts.push(`fetched_at >= to_timestamp($${acc.params.length + 1})`);
+    acc.params.push(p.since);
+  }
+  if (p.until !== null) {
+    acc.parts.push(`fetched_at <= to_timestamp($${acc.params.length + 1})`);
+    acc.params.push(p.until);
+  }
+  if (p.search) {
+    acc.parts.push(
+      `(data->>'title' ILIKE $${acc.params.length + 1} OR (data->>'location_text') ILIKE $${acc.params.length + 1})`,
+    );
+    acc.params.push(`%${p.search}%`);
+  }
+  if (p.title) {
+    acc.parts.push(`(data->>'title') ILIKE $${acc.params.length + 1}`);
+    acc.params.push(`%${p.title}%`);
+  }
+  if (p.location) {
+    acc.parts.push(`(data->>'location_text') ILIKE $${acc.params.length + 1}`);
+    acc.params.push(`%${p.location}%`);
+  }
+  if (p.lat !== null && p.lng !== null) {
+    const latDelta = p.radiusKm / 111.0;
+    const cosLat = Math.cos((p.lat * Math.PI) / 180);
+    const lonDelta = p.radiusKm / (111.0 * Math.max(0.0001, Math.abs(cosLat)));
+    const i = acc.params.length;
+    acc.parts.push(`lat BETWEEN $${i + 1} AND $${i + 2}`);
+    acc.parts.push(`lng BETWEEN $${i + 3} AND $${i + 4}`);
+    acc.params.push(p.lat - latDelta, p.lat + latDelta, p.lng - lonDelta, p.lng + lonDelta);
+  }
+
+  const whereClause = acc.parts.length > 0 ? `WHERE ${acc.parts.join(' AND ')}` : '';
+
+  const sql = p.unique
+    ? `SELECT COUNT(*)::bigint AS n FROM (
+         SELECT DISTINCT source, source_id FROM ${table} ${whereClause}
+       ) sub`
+    : `SELECT COUNT(*)::bigint AS n FROM ${table} ${whereClause}`;
+
+  return { sql, params: acc.params, table };
+}
+
+/**
  * Build the full query plan: per-family SQL + merge instructions. The
  * single-family case produces one query; multi-family fans out and the
  * caller merges rows in Node.

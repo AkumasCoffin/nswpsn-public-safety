@@ -24,6 +24,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import {
   ALL_ARCHIVE_TABLES,
+  buildCountSqlForTable,
   buildPlan,
   buildSqlForTable,
   mergeAndPaginate,
@@ -308,9 +309,12 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
   try {
     const plan = buildPlan(params);
 
-    // Execute every per-family query. Single-family is the fast path
-    // (one round-trip); multi-family runs in parallel and merges.
-    const results = await Promise.all(
+    // Execute the per-family data queries AND a parallel set of count
+    // queries against the same WHERE clauses (without LIMIT/cursor) so
+    // the response carries a real `total`. The frontend's logs.html
+    // pagination uses `total` to compute Math.ceil(total/limit) for
+    // the page-jumper; with total=0 it can't navigate to later pages.
+    const dataPromise = Promise.all(
       plan.queries.map(async (q) => {
         try {
           const r = await runWithTimeout(pool, q.sql, q.params);
@@ -321,6 +325,21 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
       }),
     );
+    const countPromise = Promise.all(
+      plan.queries.map(async (q) => {
+        try {
+          const cq = buildCountSqlForTable(q.table, params);
+          const r = await runWithTimeout(pool, cq.sql, cq.params);
+          const n = r.rows[0] as { n?: string | number } | undefined;
+          return Number(n?.n ?? 0);
+        } catch (err) {
+          log.warn({ err, table: q.table }, 'data-history count query failed');
+          return 0;
+        }
+      }),
+    );
+    const [results, counts] = await Promise.all([dataPromise, countPromise]);
+    const total = counts.reduce((a, b) => a + b, 0);
 
     let merged: ArchiveQueryRow[];
     if (results.length === 1) {
@@ -348,15 +367,11 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
 
     return c.json({
       records,
-      // We intentionally don't run a separate COUNT(*) here — Python
-      // had a complicated stale-while-revalidate cache around it because
-      // the old monolith couldn't COUNT in time. The new partitioned
-      // tables make a true COUNT no cheaper, and the value is only used
-      // for "X of Y" pagination text. Returning 0 keeps the response
-      // shape stable; the next_cursor + count fields drive real
-      // pagination. A future enhancement can wire reltuples-style
-      // estimates if the frontend needs the headline number.
-      total: 0,
+      total,
+      // Python tracked is_live/is_active separately; the new schema
+      // stores those in JSONB (data->>'is_live'). Splitting the count
+      // would mean a third query per family — punt unless the frontend
+      // actually displays both. Leave zeros for now.
       live_count: 0,
       ended_count: 0,
       limit: params.limit,
