@@ -139,7 +139,12 @@ describe('GET /api/data/history', () => {
     const sqls = queryMock.mock.calls
       .map((call) => call[0] as string)
       .filter(
-        (s) => !s.includes('statement_timeout') && !s.includes('SELECT COUNT(*)'),
+        (s) =>
+          !s.includes('statement_timeout') &&
+          !s.includes('SELECT COUNT(*)') &&
+          s !== 'BEGIN' &&
+          s !== 'COMMIT' &&
+          s !== 'ROLLBACK',
       );
     expect(sqls).toHaveLength(1);
     expect(sqls[0]).toContain('FROM archive_waze');
@@ -157,7 +162,12 @@ describe('GET /api/data/history', () => {
     const sqls = queryMock.mock.calls
       .map((call) => call[0] as string)
       .filter(
-        (s) => !s.includes('statement_timeout') && !s.includes('SELECT COUNT(*)'),
+        (s) =>
+          !s.includes('statement_timeout') &&
+          !s.includes('SELECT COUNT(*)') &&
+          s !== 'BEGIN' &&
+          s !== 'COMMIT' &&
+          s !== 'ROLLBACK',
       );
     expect(sqls).toHaveLength(5);
     const targets = sqls.map((s) => {
