@@ -35,6 +35,10 @@ import {
 } from './services/centralwatchImageCache.js';
 import { startPolling, stopPolling } from './services/poller.js';
 import {
+  startHeatmapRefreshLoop,
+  stopHeatmapRefreshLoop,
+} from './api/waze.js';
+import {
   start as startActivityMode,
   stop as stopActivityMode,
 } from './services/activityMode.js';
@@ -69,6 +73,7 @@ async function preflight(): Promise<void> {
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
   startFilterCacheRefresh(); // 60s in-memory facet refresh for /api/data/history/filters
+  startHeatmapRefreshLoop(); // 5-min background refresh of police heatmap RAM cache
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Best-effort warm of the rdio unit-label CSV. Routes call
@@ -139,6 +144,7 @@ async function shutdown(signal: string) {
     stopPolling();
     stopActivityMode();
     stopFilterCacheRefresh();
+    stopHeatmapRefreshLoop();
     stopRdioSummaryScheduler();
     // Centralwatch: stop the loops first so they don't enqueue more
     // browser jobs, then close the browser worker.
