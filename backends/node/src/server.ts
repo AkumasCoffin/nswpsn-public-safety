@@ -34,6 +34,11 @@ import { editorRouter } from './api/editor.js';
 import { usersRouter } from './api/users.js';
 // Data-history archive reads (W6).
 import { dataHistoryRouter } from './api/data-history.js';
+// Aviation / news / summaries / transcripts (W7).
+import { aviationRouter } from './api/aviation.js';
+import { newsRouter } from './api/news.js';
+import { summariesRouter } from './api/summaries.js';
+import { transcriptsRouter } from './api/transcripts.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { log } from './lib/log.js';
 
@@ -91,6 +96,11 @@ export function createApp() {
   app.route('/', usersRouter);
   // Data-history archive reads (W6)
   app.route('/', dataHistoryRouter);
+  // Aviation cameras + news RSS + summaries (W7)
+  app.route('/', aviationRouter);
+  app.route('/', newsRouter);
+  app.route('/', summariesRouter);
+  app.route('/', transcriptsRouter);
 
   // Root route — useful for "is this the right backend?" smoke tests
   // when both Python and Node are running side by side.

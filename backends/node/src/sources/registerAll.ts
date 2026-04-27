@@ -9,6 +9,7 @@ import registerTraffic from './traffic.js';
 import registerBeach from './beach.js';
 import registerWeather from './weather.js';
 import registerPager from './pager.js';
+import registerAviation from './aviation.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -17,4 +18,5 @@ export function registerAllSources(): void {
   registerBeach();
   registerWeather();
   registerPager();
+  registerAviation();
 }
