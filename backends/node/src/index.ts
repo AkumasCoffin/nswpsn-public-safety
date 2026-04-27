@@ -13,6 +13,10 @@ import { runMigrations } from './db/migrate.js';
 import { createApp } from './server.js';
 import { liveStore } from './store/live.js';
 import { archiveWriter } from './store/archive.js';
+import {
+  startFilterCacheRefresh,
+  stopFilterCacheRefresh,
+} from './store/filterCache.js';
 import { startPolling, stopPolling } from './services/poller.js';
 import {
   start as startActivityMode,
@@ -48,6 +52,7 @@ async function preflight(): Promise<void> {
   liveStore.startPersistLoop();
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
+  startFilterCacheRefresh(); // 60s in-memory facet refresh for /api/data/history/filters
   startPolling(); // walks the registry, schedules each source's setInterval
 }
 
@@ -80,6 +85,7 @@ async function shutdown(signal: string) {
     // then drain the LiveStore + ArchiveWriter, then close the pool.
     stopPolling();
     stopActivityMode();
+    stopFilterCacheRefresh();
     await liveStore.stopAndFlush();
     await archiveWriter.stopAndFlush();
     await closePool();

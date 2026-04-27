@@ -105,6 +105,19 @@ const Schema = z.object({
   // PAGERMON_API_KEY at external_api_proxy.py:791-792.
   PAGERMON_URL: z.string().optional(),
   PAGERMON_API_KEY: z.string().optional(),
+
+  // Supabase project URL — used by /api/users (Auth Admin API listing)
+  // and the JWT issuer-claim check. Mirrors Python's SUPABASE_URL.
+  SUPABASE_URL: z.string().url().optional(),
+  // Supabase service-role key — required by /api/users. Mirrors
+  // Python's SUPABASE_SERVICE_ROLE_KEY at external_api_proxy.py.
+  SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  // HS256 signing secret used to verify Supabase-issued JWTs on
+  // editor/admin routes (Authorization: Bearer <jwt>). Find it in
+  // Supabase Dashboard > Settings > API > JWT Secret. Optional in tests
+  // — the JWT middleware reports 503 when unset so handlers don't
+  // accidentally accept unverified tokens.
+  SUPABASE_JWT_SECRET: z.string().optional(),
 });
 
 const parsed = Schema.safeParse(process.env);
