@@ -39,6 +39,10 @@ import { aviationRouter } from './api/aviation.js';
 import { newsRouter } from './api/news.js';
 import { summariesRouter } from './api/summaries.js';
 import { transcriptsRouter } from './api/transcripts.js';
+// Centralwatch + dashboard (W8). Image proxy + dashboard endpoints
+// are 503 stubs — Apache routes those prefixes to python.
+import { centralwatchRouter } from './api/centralwatch.js';
+import { dashboardRouter } from './api/dashboard.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { log } from './lib/log.js';
 
@@ -101,6 +105,9 @@ export function createApp() {
   app.route('/', newsRouter);
   app.route('/', summariesRouter);
   app.route('/', transcriptsRouter);
+  // Centralwatch reads + dashboard 503 stubs (W8)
+  app.route('/', centralwatchRouter);
+  app.route('/', dashboardRouter);
 
   // Root route — useful for "is this the right backend?" smoke tests
   // when both Python and Node are running side by side.
