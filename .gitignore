@@ -55,6 +55,7 @@ backup/
 docs/*
 !docs/waze-userscript.user.js
 !docs/waze-userscript-manual.user.js
+!docs/uptime-kuma-monitors.md
 
 # Radio unit reference data (local operator data, not for the public repo).
 backends/reference/
