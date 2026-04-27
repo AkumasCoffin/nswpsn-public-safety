@@ -47,6 +47,39 @@ const Schema = z.object({
   LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
     .default('info'),
+
+  // Where LiveStore dumps its in-memory snapshots so a restart doesn't
+  // empty the live cache. One JSON file per source under this dir.
+  // Atomic writes via temp-file + rename, so the file on disk is always
+  // either the previous snapshot or a complete current one.
+  STATE_DIR: z.string().default('./state'),
+
+  // ArchiveWriter flush cadence — how often the in-RAM queue gets
+  // written to Postgres. Mirrors Python's ARCHIVE_FLUSH_INTERVAL.
+  ARCHIVE_FLUSH_INTERVAL_MS: z
+    .string()
+    .default('30000')
+    .transform((s) => Number.parseInt(s, 10)),
+
+  // LiveStore persist cadence — how often disk dumps happen for each
+  // source that has new data since the last dump.
+  LIVE_PERSIST_INTERVAL_MS: z
+    .string()
+    .default('30000')
+    .transform((s) => Number.parseInt(s, 10)),
+
+  // Waze userscript posts auth via X-Ingest-Key. Same value the Python
+  // backend uses; .env carries it.
+  WAZE_INGEST_KEY: z.string().min(1).optional(),
+
+  // How long an ingested Waze bbox snapshot stays "live" before it's
+  // pruned from the in-memory cache. Mirrors Python's
+  // WAZE_INGEST_MAX_AGE — defaults to 40 min so the userscript's
+  // ~16 min full rotation has 2x headroom.
+  WAZE_INGEST_MAX_AGE_SECS: z
+    .string()
+    .default('2400')
+    .transform((s) => Number.parseInt(s, 10)),
 });
 
 const parsed = Schema.safeParse(process.env);
