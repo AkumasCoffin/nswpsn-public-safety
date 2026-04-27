@@ -18,6 +18,7 @@ import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
 import { log } from '../lib/log.js';
 import { backoffSeconds } from '../sources/shared/backoff.js';
+import { defaultArchiveItems } from './archiveExtract.js';
 import {
   allSources,
   familyTable,
@@ -85,16 +86,19 @@ async function runOnce(src: SourceDefinition): Promise<void> {
   try {
     const data = await src.fetch();
     liveStore.set(src.name, data);
-    // Mirror to archive (append-only). Whether we actually want to
-    // archive is per-source policy — currently waze is skipped via
-    // its own fetcher returning a sentinel, but for everything else
-    // we record one row per poll snapshot.
+    // Mirror to archive (append-only). Each poll snapshot is fanned
+    // out into one row PER INCIDENT (FeatureCollection feature, array
+    // element, etc.) so /api/data/history rows get title/severity/etc.
+    // projected from JSONB the same way python's data_history did from
+    // its top-level columns. Sources can return an empty array to
+    // skip archiving entirely (waze does this — its own ingest layer
+    // owns the writes).
     const fetchedAt = Math.floor(Date.now() / 1000);
-    archiveWriter.push(familyTable(src.family), {
-      source: src.name,
-      fetched_at: fetchedAt,
-      data,
-    });
+    const rows = defaultArchiveItems(src.name, data, fetchedAt);
+    const tbl = familyTable(src.family);
+    for (const row of rows) {
+      archiveWriter.push(tbl, row);
+    }
 
     state.failureCount = 0;
     state.lastSuccessTs = fetchedAt;
