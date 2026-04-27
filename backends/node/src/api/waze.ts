@@ -403,6 +403,15 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
     cache_status: 'ok',
   };
   heatmapCache.set(cacheKey, { result, ts: now });
+  // If the user-facing request is the unfiltered shape (no subtype, no
+  // bbox), also feed the tracking counters that policeHeatmapStatus
+  // exposes. Without this, /api/status reports bins=0 until the
+  // background loop fires, even though we just answered a real
+  // unfiltered query — confusing to operators.
+  if ((wanted === null || wanted.length === 0) && bbox === null) {
+    heatmapLastRefreshTs = Math.floor(now / 1000);
+    heatmapLastBinCount = aggregated.points.length;
+  }
   return c.json(result);
 });
 
@@ -423,9 +432,15 @@ export function _resetHeatmapCacheForTests(): void {
  * entry is left in place, and the next interval tries again.
  */
 async function refreshHeatmapCache(): Promise<void> {
+  const startedAt = Date.now();
   try {
     const aggregated = await buildHeatmapFromArchive(null, null);
-    if (!aggregated) return;
+    if (!aggregated) {
+      // pool isn't ready yet (only happens during the first ~1s of
+      // boot). Log so we can tell apart "no data" from "couldn't ask."
+      log.debug('police-heatmap refresh: pool not ready, skipping tick');
+      return;
+    }
     const result = {
       points: aggregated.points,
       total_records: aggregated.total_records,
@@ -439,9 +454,20 @@ async function refreshHeatmapCache(): Promise<void> {
     heatmapCache.set(_heatmapCacheKey([], null), { result, ts: Date.now() });
     heatmapLastRefreshTs = Math.floor(Date.now() / 1000);
     heatmapLastBinCount = aggregated.points.length;
+    log.info(
+      {
+        bins: aggregated.points.length,
+        total_records: aggregated.total_records,
+        ms: Date.now() - startedAt,
+      },
+      'police-heatmap refreshed',
+    );
   } catch (err) {
     log.warn(
-      { err: (err as Error).message },
+      {
+        err: (err as Error).message,
+        ms: Date.now() - startedAt,
+      },
       'police-heatmap background refresh failed',
     );
   }
