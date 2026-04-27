@@ -235,10 +235,14 @@ async function migrateFamily(pool, family, sources, unitDivisor) {
 
   console.log(`  ${family}: ${total} rows → copying in batches of ${flags.batch}…`);
 
-  // Page by id ascending so resumed runs (after a crash) can start
-  // from the last id by checking MAX(id) in archive_*. We don't bake
-  // that resume into this script — for a clean re-run use --force on
-  // an empty archive_* table.
+  // Page by id ascending. Uses a CTE so the INSERT and the cursor
+  // advance run atomically against the same row set: the previous
+  // version did INSERT followed by a separate `MAX(id) WHERE id <=
+  // lastId + batch*5` which skipped rows when waze ids were sparsely
+  // interleaved with other-source rows. Multi-batch families
+  // (anything > batch_size in count) hit that, e.g. waze stopping at
+  // exactly 100_000 of 257k. The CTE form returns the genuine MAX(id)
+  // of the rows we just inserted.
   let copied = 0;
   let lastId = 0;
   for (;;) {
@@ -248,16 +252,11 @@ async function migrateFamily(pool, family, sources, unitDivisor) {
     params.push(flags.batch);
     const t0 = Date.now();
     const res = await pool.query(insertSql, params);
-    const inserted = res.rowCount ?? 0;
-    if (inserted === 0) break;
+    const row = res.rows[0] ?? {};
+    const inserted = Number(row.inserted ?? 0);
+    const newLast = Number(row.new_last ?? 0);
+    if (inserted === 0 || newLast <= lastId) break;
     copied += inserted;
-    // Find the highest id we just touched to advance the cursor.
-    const lastRes = await pool.query(
-      `SELECT MAX(id) AS m FROM data_history WHERE id > $1 AND id <= $2`,
-      [lastId, lastId + flags.batch * 5], // safety cap
-    );
-    const newLast = Number(lastRes.rows[0]?.m ?? 0);
-    if (newLast <= lastId) break;
     lastId = newLast;
     const ms = Date.now() - t0;
     process.stdout.write(
@@ -333,34 +332,49 @@ function buildInsertSql(family, sources, unitDivisor) {
   // python `data` text is parsed and merged on top; if it carries its
   // own title/severity/etc. those win, matching python's behaviour
   // where the data field was the source of truth.
+  //
+  // Single round-trip via CTE: the `src` CTE selects the next batch,
+  // the `ins` CTE writes them into the archive table, and the final
+  // SELECT returns the count + max id of the rows we just inserted.
+  // No second-step "find the new cursor" query — that one had a bug
+  // (advance past sparse rows of unrelated sources).
   return `
-    INSERT INTO ${family} (
-      source, source_id, fetched_at, lat, lng, category, subcategory, data
+    WITH src AS (
+      SELECT id, source, source_id, ${fetchedAtExpr} AS fetched_at_ts,
+             latitude, longitude, category, subcategory,
+             title, location_text, status, severity,
+             source_timestamp, source_timestamp_unix,
+             is_active, is_live, last_seen, data
+      FROM data_history
+      WHERE source IN (${ph})
+        AND id > $${idParam}${sinceClause}
+      ORDER BY id ASC
+      LIMIT $${limitParam}
+    ),
+    ins AS (
+      INSERT INTO ${family} (
+        source, source_id, fetched_at, lat, lng, category, subcategory, data
+      )
+      SELECT
+        source, source_id, fetched_at_ts,
+        latitude, longitude, category, subcategory,
+        jsonb_strip_nulls(jsonb_build_object(
+          'title', title,
+          'location_text', location_text,
+          'status', status,
+          'severity', severity,
+          'source_timestamp', source_timestamp,
+          'source_timestamp_unix', source_timestamp_unix,
+          'is_active', CASE WHEN is_active = 1 THEN true WHEN is_active = 0 THEN false END,
+          'is_live', CASE WHEN is_live = 1 THEN true WHEN is_live = 0 THEN false END,
+          'last_seen', last_seen
+        )) || COALESCE(NULLIF(data, '')::jsonb, '{}'::jsonb)
+      FROM src
+      RETURNING 1
     )
     SELECT
-      source,
-      source_id,
-      ${fetchedAtExpr} AS fetched_at,
-      latitude AS lat,
-      longitude AS lng,
-      category,
-      subcategory,
-      jsonb_strip_nulls(jsonb_build_object(
-        'title', title,
-        'location_text', location_text,
-        'status', status,
-        'severity', severity,
-        'source_timestamp', source_timestamp,
-        'source_timestamp_unix', source_timestamp_unix,
-        'is_active', CASE WHEN is_active = 1 THEN true WHEN is_active = 0 THEN false END,
-        'is_live', CASE WHEN is_live = 1 THEN true WHEN is_live = 0 THEN false END,
-        'last_seen', last_seen
-      )) || COALESCE(NULLIF(data, '')::jsonb, '{}'::jsonb)
-    FROM data_history
-    WHERE source IN (${ph})
-      AND id > $${idParam}${sinceClause}
-    ORDER BY id ASC
-    LIMIT $${limitParam}
+      (SELECT COUNT(*) FROM ins)::bigint AS inserted,
+      COALESCE((SELECT MAX(id) FROM src), 0)::bigint AS new_last
   `;
 }
 
