@@ -172,13 +172,21 @@ wazeRouter.get('/api/waze/debug', (c) => {
 // over a rolling 30-day window. Reads from archive_waze (the
 // partitioned table the poller + migration script populate). Cached
 // in-process for 60s so dashboard refreshes don't hammer the DB.
-const HEATMAP_BIN_DEG = 0.05; // ~5km at NSW latitudes
-const HEATMAP_MAX_BINS = 1500;
+//
+// Bin/cap sized to match python's settings at external_api_proxy.py:
+// 10102-10110. Earlier revisions used a 5 km / 1500-bin grid which
+// silently dropped count=1 suburban bins — a pin would render without
+// any hex underneath. With BIN_DEG=0.001 (~110 m) and MAX_BINS=60000
+// the cache holds the full live picture; bbox filtering still keeps
+// per-request payloads small on tight zooms.
+const HEATMAP_BIN_DEG = 0.001; // ~110 m at NSW latitudes (matches python)
+const HEATMAP_MAX_BINS = 60_000;
 const HEATMAP_WINDOW_DAYS = 30;
 const HEATMAP_CACHE_TTL_MS = 60_000;
+// Python ships POLICE_HIDDEN in the live snapshot but the canonical
+// validator set has 3 subtypes — mirror that for query-string parity.
 const POLICE_VALID_SUBTYPES = new Set([
   'POLICE_VISIBLE',
-  'POLICE_HIDDEN',
   'POLICE_HIDING',
   'POLICE_WITH_MOBILE_CAMERA',
 ]);

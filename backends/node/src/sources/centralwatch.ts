@@ -30,8 +30,8 @@ const API_ENDPOINT = 'https://centralwatch.watchtowers.io/au/api/cameras';
 
 export interface CentralwatchSite {
   name: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
   altitude: number | null;
   state: string;
 }
@@ -93,16 +93,17 @@ function joinCameras(raw: RawJson): CentralwatchCamera[] {
     if (!cam || typeof cam !== 'object') continue;
     const site = sites[cam.siteId];
     if (!site) continue;
-    if (typeof site.latitude !== 'number' || typeof site.longitude !== 'number') {
-      continue;
-    }
+    // Don't drop cameras whose site is missing coordinates — python
+    // emits them with `latitude: null` / `longitude: null` and the
+    // dashboard tolerates it. Earlier revisions silently filtered
+    // these out, hiding rural towers from /api/centralwatch/cameras.
     out.push({
       id: cam.id,
       name: cam.name || 'Fire Watch Camera',
       siteName: site.name || '',
       siteId: cam.siteId,
-      latitude: site.latitude,
-      longitude: site.longitude,
+      latitude: typeof site.latitude === 'number' ? site.latitude : null,
+      longitude: typeof site.longitude === 'number' ? site.longitude : null,
       altitude: site.altitude ?? null,
       state: site.state || '',
       imageUrl: `/api/centralwatch/image/${cam.id}`,

@@ -252,8 +252,12 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
         : 'Future Maintenance';
 
     const statusRaw = (area.incident_status ?? 'Active').toUpperCase();
+    // Match python's status_raw.title() — capitalise each word, not just
+    // the first character. e.g. "REPAIR CONTROL ROOM" should render as
+    // "Repair Control Room", not "Repair control room".
     const status =
-      STATUS_MAP[statusRaw] ?? statusRaw.charAt(0) + statusRaw.slice(1).toLowerCase();
+      STATUS_MAP[statusRaw] ??
+      statusRaw.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 
     const suburb = enrich.cityname ? titleCase(enrich.cityname) : 'Unknown';
     const causePlannedDefault = isPlanned ? 'Planned maintenance' : '';

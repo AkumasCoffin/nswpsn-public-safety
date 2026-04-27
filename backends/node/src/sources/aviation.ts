@@ -46,15 +46,27 @@ export interface AviationSnapshot {
 }
 
 export interface AviationCameraAngle {
+  /** Capitalised label ("North"/"East"/...). Mirrors python's
+   *  `direction_labels[direction]` value at line 7718. */
   direction: string;
-  label: string;
-  imageUrl: string;
-  thumbnailUrl: string;
   angle: string;
+  imageUrl: string;
+  /** Field name matches python's modal output. Earlier revisions
+   *  emitted `thumbnailUrl` and broke the gallery thumbnail layout. */
+  thumbnail: string;
+  /** Per-direction capture timestamp from the modal. */
+  timestamp: string;
 }
 
 export interface AviationDetail {
   airport: string;
+  /** Wrapper-level fields that mirror python lines 7725-7731. The
+   *  modal endpoint exposes a friendlier title and the camera-site
+   *  state alongside the per-angle list; the dashboard's airport
+   *  popup uses them for the header. */
+  title: string;
+  state: string;
+  name: string;
   cameras: AviationCameraAngle[];
   count: number;
 }
@@ -232,21 +244,26 @@ export async function fetchAviationCameraDetail(
     const imageKey = `${direction}_image`;
     const thumbKey = `${direction}_thumbnail`;
     const angleKey = `${direction}_angle`;
+    const timestampKey = `${direction}_timestamp`;
     const imageUrl = String(modal[imageKey] ?? '');
-    const thumbnailUrl = String(modal[thumbKey] ?? '');
+    const thumbnail = String(modal[thumbKey] ?? '');
     const angle = String(modal[angleKey] ?? '');
+    const timestamp = String(modal[timestampKey] ?? '');
     if (!imageUrl) continue;
     cameras.push({
-      direction,
-      label: DIRECTION_LABELS[direction],
-      imageUrl,
-      thumbnailUrl,
+      direction: DIRECTION_LABELS[direction] ?? direction,
       angle,
+      imageUrl,
+      thumbnail,
+      timestamp,
     });
   }
 
   const detail: AviationDetail = {
     airport,
+    title: String(modal['title'] ?? airport),
+    state: String(modal['state'] ?? ''),
+    name: String(modal['name'] ?? airport),
     cameras,
     count: cameras.length,
   };
