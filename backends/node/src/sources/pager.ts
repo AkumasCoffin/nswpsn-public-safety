@@ -29,11 +29,29 @@ export interface PagerMessage {
   message: string;
   lat: number;
   lon: number;
-  /** ISO 8601 string built from upstream `timestamp` (unix seconds). */
+  /** Naive Sydney-local datetime string (YYYY-MM-DDTHH:mm:ss) built
+   *  from upstream `timestamp` (unix seconds). Matches python's
+   *  `datetime.fromtimestamp(ts).isoformat()` output exactly. */
   incident_time: string | null;
   /** Original upstream unix timestamp; preserved so the route handler
    *  can apply `?hours=` filtering without re-parsing the ISO string. */
   timestamp: number | null;
+}
+
+/** Format an epoch-millis as a naive Sydney-local datetime string
+ *  (no offset suffix), matching python's `datetime.fromtimestamp(ts)
+ *  .isoformat()` output. The dashboard parses these as local time. */
+function formatSydneyNaive(ms: number): string {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date(ms));
+  const get = (t: string): string =>
+    parts.find((p) => p.type === t)?.value ?? '00';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 export interface PagerSnapshot {
@@ -173,8 +191,13 @@ export async function fetchPager(): Promise<PagerSnapshot> {
       let tsNum: number | null = null;
       if (typeof tsRaw === 'number' && Number.isFinite(tsRaw)) {
         tsNum = tsRaw;
+        // Mirror python's `datetime.fromtimestamp(int(ts)).isoformat()`
+        // (line 4363): naive Sydney-local-time string with no offset.
+        // Earlier revisions emitted `.toISOString()` which produced a
+        // UTC `Z` string; consumers reading it as wall-clock then
+        // displayed the Sydney time 10–11h in the future.
         try {
-          incidentTime = new Date(tsRaw * 1000).toISOString();
+          incidentTime = formatSydneyNaive(tsRaw * 1000);
         } catch {
           incidentTime = null;
         }

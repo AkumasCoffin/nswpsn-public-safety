@@ -156,10 +156,14 @@ export function detectCategory(title: string, description: string): string {
 // _rss_feed_backoff/_rss_feed_fail_counts dict + lock).
 // ---------------------------------------------------------------------------
 
-const BACKOFF_THRESHOLD = 3;
+// Match python's _RSS_BACKOFF_THRESHOLD/_RSS_BACKOFF_STEPS exactly:
+// park after 2 consecutive failures with 10/30/60/240-minute steps.
+// Earlier revisions used 3 / [5,15,60,240] which let permanently-403'd
+// feeds (NSW Police, F&RNSW) hammer upstream more than python did.
+const BACKOFF_THRESHOLD = 2;
 const BACKOFF_STEPS_MS = [
-  5 * 60_000,
-  15 * 60_000,
+  10 * 60_000,
+  30 * 60_000,
   60 * 60_000,
   4 * 60 * 60_000,
 ] as const;

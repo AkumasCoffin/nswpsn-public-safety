@@ -65,23 +65,27 @@ describe('centralwatch source', () => {
     mod._resetCentralwatchCacheForTests();
   });
 
-  it('joins cameras with sites and drops ones without coords', async () => {
+  it('joins cameras with sites — preserves nullish coords (python parity)', async () => {
     stat.mockResolvedValue({ mtimeMs: 1 });
     readFile.mockResolvedValue(FIXTURE);
     const { getCentralwatchCameras } = await import(
       '../../../src/sources/centralwatch.js'
     );
     const cams = await getCentralwatchCameras();
-    expect(cams.length).toBe(1);
-    const cam = cams[0];
-    if (!cam) throw new Error('no cam');
-    expect(cam.id).toBe('cam-1');
-    expect(cam.siteName).toBe('Mt Wereboldera');
-    expect(cam.latitude).toBe(-35.36);
-    expect(cam.imageUrl).toBe('/api/centralwatch/image/cam-1');
-    // Timestamp was normalised to Z form (matches python).
-    expect(cam.time).toBe('2026-04-25T16:48:03.000Z');
-    expect(cam.source).toBe('centralwatch');
+    // Both cameras returned — python emits site.latitude/longitude as
+    // null rather than dropping the camera entirely.
+    expect(cams.length).toBe(2);
+    const good = cams.find((c) => c.id === 'cam-1');
+    if (!good) throw new Error('no good cam');
+    expect(good.siteName).toBe('Mt Wereboldera');
+    expect(good.latitude).toBe(-35.36);
+    expect(good.imageUrl).toBe('/api/centralwatch/image/cam-1');
+    expect(good.time).toBe('2026-04-25T16:48:03.000Z');
+    expect(good.source).toBe('centralwatch');
+    const bad = cams.find((c) => c.id === 'cam-bad-site');
+    if (!bad) throw new Error('no bad cam');
+    expect(bad.latitude).toBeNull();
+    expect(bad.longitude).toBeNull();
   });
 
   it('groups cameras by site for /sites', async () => {
@@ -91,10 +95,10 @@ describe('centralwatch source', () => {
       '../../../src/sources/centralwatch.js'
     );
     const sites = await getCentralwatchSites();
-    expect(sites.length).toBe(1);
-    const s = sites[0];
+    // Both sites — site-2 has null coords but its camera still surfaces.
+    expect(sites.length).toBe(2);
+    const s = sites.find((x) => x.siteId === 'site-1');
     if (!s) throw new Error('no site');
-    expect(s.siteId).toBe('site-1');
     expect(s.cameras.length).toBe(1);
     expect(s.cameras[0]?.id).toBe('cam-1');
   });

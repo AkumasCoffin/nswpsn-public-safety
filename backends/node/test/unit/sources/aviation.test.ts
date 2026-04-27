@@ -140,8 +140,9 @@ describe('aviation.fetchAviationCameraDetail', () => {
     const out = await fetchAviationCameraDetail('sydney');
     expect(out.airport).toBe('sydney');
     expect(out.count).toBe(2);
-    expect(out.cameras.map((c) => c.direction)).toEqual(['north', 'east']);
-    expect(out.cameras[0]?.label).toBe('North');
+    // Direction is the labelled form (matches python's
+    // direction_labels[direction] at external_api_proxy.py:7718).
+    expect(out.cameras.map((c) => c.direction)).toEqual(['North', 'East']);
     expect(out.cameras[1]?.angle).toBe('90');
   });
 

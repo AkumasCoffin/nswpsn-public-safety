@@ -61,12 +61,36 @@ interface ParsedDescription {
 
 /**
  * Convert a free-text RFS local time like "7 Jan 2026 13:35" to an ISO
- * string with the Sydney timezone offset. Mirrors python's
- * parse_rfs_local_time. We don't carry the zoneinfo dance — the Sydney
- * offset is +11:00 (AEDT) Oct-Apr and +10:00 (AEST) the rest of the
- * year. That's a coarse approximation but matches the Python output's
- * intent (give frontends a parseable timestamp).
+ * string with the actual Australia/Sydney offset for that wall-clock
+ * minute. Mirrors python's `parse_rfs_local_time` which uses
+ * `zoneinfo('Australia/Sydney')`.
+ *
+ * Earlier revisions used a month-bucketed approximation (Apr–Oct →
+ * +10:00, otherwise +11:00) — that's wrong for the ~14 days each year
+ * around the DST boundary (1st Sunday in October / 1st Sunday in
+ * April). Use Intl.DateTimeFormat with timeZone='Australia/Sydney'
+ * to derive the actual offset Postgres / consumers expect.
  */
+function sydneyOffset(year: number, month: number, day: number, hour: number, minute: number): string {
+  // Build a Date that represents the *wall-clock* moment in Sydney by
+  // first parsing it as UTC, then asking Intl what offset Sydney would
+  // emit for that instant. The 1-tick correction handles DST gap minutes
+  // (Sydney has none in spring-forward — 02:00 jumps to 03:00 — but
+  // formatToParts is well-defined for any input).
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const fmt = new Intl.DateTimeFormat('en-AU', {
+    timeZone: 'Australia/Sydney',
+    timeZoneName: 'longOffset',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(utcGuess);
+  const tzName = parts.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT+10:00';
+  // longOffset emits like "GMT+10:00" or "GMT+11:00".
+  const m = /GMT([+-]\d{2}:\d{2})/.exec(tzName);
+  return m ? (m[1] ?? '+10:00') : '+10:00';
+}
+
 function parseRfsLocalTime(s: string): string {
   if (!s) return '';
   const m = s.trim().match(/^(\d{1,2})\s+(\w{3})\s+(\d{4})\s+(\d{1,2}):(\d{2})$/);
@@ -83,11 +107,7 @@ function parseRfsLocalTime(s: string): string {
   const year = Number(yStr);
   const hour = Number(hStr);
   const minute = Number(miStr);
-  // AEDT (Apr/Oct boundary, approximate). Python uses zoneinfo which is
-  // exact; for our purposes the dashboard only displays the time, so
-  // an off-by-one-hour edge case at DST transitions is acceptable.
-  const isAEDT = month >= 10 || month <= 3;
-  const offset = isAEDT ? '+11:00' : '+10:00';
+  const offset = sydneyOffset(year, month, day, hour, minute);
   const pad = (n: number): string => String(n).padStart(2, '0');
   return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:00${offset}`;
 }
