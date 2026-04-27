@@ -18,6 +18,10 @@ import {
   stopFilterCacheRefresh,
 } from './store/filterCache.js';
 import { closeRdioPool, ensureUnitLabelsLoaded } from './services/rdio.js';
+import {
+  startRdioSummaryScheduler,
+  stopRdioSummaryScheduler,
+} from './services/llm.js';
 import { startPolling, stopPolling } from './services/poller.js';
 import {
   start as startActivityMode,
@@ -64,6 +68,12 @@ async function preflight(): Promise<void> {
   } catch (err) {
     log.warn({ err }, 'rdio unit-labels preload failed (non-fatal)');
   }
+
+  // Optional in-process hourly summary scheduler. Default OFF so a Node
+  // restart on a host that already runs python's scheduler doesn't
+  // double-spend Gemini quota. Flip NODE_RDIO_SCHEDULER=true once the
+  // python scheduler thread is stopped.
+  startRdioSummaryScheduler();
 }
 
 await preflight();
@@ -96,6 +106,7 @@ async function shutdown(signal: string) {
     stopPolling();
     stopActivityMode();
     stopFilterCacheRefresh();
+    stopRdioSummaryScheduler();
     await liveStore.stopAndFlush();
     await archiveWriter.stopAndFlush();
     await closePool();
