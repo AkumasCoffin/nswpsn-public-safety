@@ -11006,30 +11006,13 @@ def _status_source_summary(now):
     return out, counts
 
 
-@app.route('/api/status')
-def status_endpoint():
-    """Health endpoint shaped for Uptime Kuma JSON-Query (JSONata) monitors.
+def _compute_status_dict():
+    """Build the /api/status payload + http_code.
 
-    HTTP status reflects critical backend state only:
-      - 200 when the backend is functional (DB reachable, writer thread alive)
-      - 503 when a critical subsystem is broken
-
-    The JSON body has a finer-grained status of ok | degraded | down plus a
-    per-check breakdown and per-source roll-up. The tree is shaped so
-    common JSONata expressions stay short:
-
-        status                                      → 'ok' | 'degraded' | 'down'
-        checks.database.ok                          → true / false
-        checks.database.latency_ms < 200            → boolean
-        checks.archive_writer.ok                    → true / false
-        checks.waze_ingest.regions_cached >= 150    → boolean
-        sources.rfs.ok                              → true / false
-        sources.rfs.consec_fails < 5                → boolean
-        summary.sources_down                        → number
-        summary.sources_down + summary.sources_degraded   → number
-
-    Sources that have never reported are exposed with status='unknown' so
-    a "is RFS healthy" monitor doesn't silently pass right after a restart.
+    Separated from the route handler so a short-lived cache can wrap
+    this function without nesting the whole 250-line check body inside
+    a try/finally — the route does the cache dance, this builds the
+    truth.
     """
     now = time.time()
     checks = {}
@@ -11276,7 +11259,7 @@ def status_endpoint():
         overall = 'ok'
         http_code = 200
 
-    return jsonify({
+    return ({
         'status': overall,
         'uptime_secs': int(now - _PROCESS_START_TIME),
         'started_at': int(_PROCESS_START_TIME),
@@ -11285,7 +11268,79 @@ def status_endpoint():
         'summary': summary,
         'checks': checks,
         'sources': sources,
-    }), http_code
+    }, http_code)
+
+
+@app.route('/api/status')
+def status_endpoint():
+    """Health endpoint shaped for Uptime Kuma JSON-Query (JSONata) monitors.
+
+    HTTP status reflects critical backend state only:
+      - 200 when the backend is functional (DB reachable, writer thread alive)
+      - 503 when a critical subsystem is broken
+
+    The JSON body has a finer-grained status of ok | degraded | down plus a
+    per-check breakdown and per-source roll-up. The tree is shaped so
+    common JSONata expressions stay short:
+
+        status                                      → 'ok' | 'degraded' | 'down'
+        checks.database.ok                          → true / false
+        checks.database.latency_ms < 200            → boolean
+        checks.archive_writer.ok                    → true / false
+        checks.waze_ingest.regions_cached >= 150    → boolean
+        sources.rfs.ok                              → true / false
+        sources.rfs.consec_fails < 5                → boolean
+        summary.sources_down                        → number
+        summary.sources_down + summary.sources_degraded   → number
+
+    Sources that have never reported are exposed with status='unknown' so
+    a "is RFS healthy" monitor doesn't silently pass right after a restart.
+
+    Response is cached in-process for STATUS_CACHE_TTL_SECS (default 5s)
+    to absorb the multi-monitor + Dev-tab refresh storm — at minimum one
+    SELECT 1 + a handful of dict reads per call, so without caching every
+    monitor hitting at the same minute boundary would each cost a DB
+    round-trip even though their results would be identical.
+    """
+    now = time.time()
+
+    # Cache hit — fast path. Re-stamp `now` and `uptime_secs` so cached
+    # responses don't visibly drift during the TTL window.
+    with _STATUS_CACHE_LOCK:
+        cached = _STATUS_CACHE
+        if cached['data'] is not None and (now - cached['ts']) < STATUS_CACHE_TTL_SECS:
+            payload = dict(cached['data'])
+            payload['now'] = int(now)
+            payload['uptime_secs'] = int(now - _PROCESS_START_TIME)
+            return jsonify(payload), cached['http_code']
+
+    # Cache miss — gate concurrent rebuilds behind an inflight lock so a
+    # request flood doesn't trigger N parallel SELECT 1s on a stressed
+    # DB. Wait up to 2s for the in-flight rebuild; if it took longer
+    # we'll proceed and run our own (better than waiting forever).
+    got_lock = _STATUS_CACHE_INFLIGHT.acquire(timeout=2)
+    try:
+        if got_lock:
+            # Double-check: another caller may have populated the cache
+            # while we were blocked on the inflight lock.
+            with _STATUS_CACHE_LOCK:
+                cached = _STATUS_CACHE
+                if cached['data'] is not None and (time.time() - cached['ts']) < STATUS_CACHE_TTL_SECS:
+                    payload = dict(cached['data'])
+                    payload['now'] = int(time.time())
+                    payload['uptime_secs'] = int(time.time() - _PROCESS_START_TIME)
+                    return jsonify(payload), cached['http_code']
+
+        payload, http_code = _compute_status_dict()
+        with _STATUS_CACHE_LOCK:
+            _STATUS_CACHE['data'] = payload
+            _STATUS_CACHE['http_code'] = http_code
+            _STATUS_CACHE['ts'] = time.time()
+        return jsonify(payload), http_code
+    finally:
+        if got_lock:
+            _STATUS_CACHE_INFLIGHT.release()
+
 
 @app.route('/api/cache/clear')
 def clear_cache():
