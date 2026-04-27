@@ -19,7 +19,9 @@ carries the finer ok/degraded/down detail used by these expressions.
 
 | Monitor | Expression | Expected |
 |---|---|---|
-| Backend healthy | `status` | `ok` |
+| Backend ok | `status` | `ok` |
+| Backend not down | `status != "down"` | `true` |
+| Uptime > 60s | `uptime_secs > 60` | `true` |
 
 ## Backend internals
 
