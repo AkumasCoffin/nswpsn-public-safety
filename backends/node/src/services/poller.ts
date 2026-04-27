@@ -25,6 +25,22 @@ import {
   type SourceDefinition,
 } from './sourceRegistry.js';
 
+// Sources that go to LiveStore for live serving but are NEVER archived
+// to the per-family archive_* tables. Mirrors python's `skip_keys` at
+// external_api_proxy.py:4424. These are reference / static data that
+// don't represent incidents — including them would flood the logs
+// page with camera locations and clog the archive tables.
+const SKIP_ARCHIVE = new Set<string>([
+  'traffic_cameras',
+  'aviation_cameras',
+  'centralwatch_cameras',
+  'weather_current',
+  'weather_radar',
+  'ausgrid_stats',
+  'beachsafe',
+  'beachwatch',
+]);
+
 interface SourceState {
   timer: NodeJS.Timeout | null;
   failureCount: number;
@@ -86,18 +102,18 @@ async function runOnce(src: SourceDefinition): Promise<void> {
   try {
     const data = await src.fetch();
     liveStore.set(src.name, data);
-    // Mirror to archive (append-only). Each poll snapshot is fanned
-    // out into one row PER INCIDENT (FeatureCollection feature, array
-    // element, etc.) so /api/data/history rows get title/severity/etc.
-    // projected from JSONB the same way python's data_history did from
-    // its top-level columns. Sources can return an empty array to
-    // skip archiving entirely (waze does this — its own ingest layer
-    // owns the writes).
     const fetchedAt = Math.floor(Date.now() / 1000);
-    const rows = defaultArchiveItems(src.name, data, fetchedAt);
-    const tbl = familyTable(src.family);
-    for (const row of rows) {
-      archiveWriter.push(tbl, row);
+    // Mirror to archive (append-only) UNLESS this source is in the
+    // skip list (cameras, static metadata, etc.). Each archived poll
+    // snapshot is fanned out into one row PER INCIDENT so
+    // /api/data/history rows get title/severity/etc. projected from
+    // JSONB the same way python's data_history did.
+    if (!SKIP_ARCHIVE.has(src.name)) {
+      const rows = defaultArchiveItems(src.name, data, fetchedAt);
+      const tbl = familyTable(src.family);
+      for (const row of rows) {
+        archiveWriter.push(tbl, row);
+      }
     }
 
     const wasFailing = state.failureCount > 0;
