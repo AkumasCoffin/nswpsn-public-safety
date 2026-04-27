@@ -136,6 +136,23 @@ const Schema = z.object({
   RDIO_CALL_URL_BASE: z
     .string()
     .default('https://radio.forcequit.xyz/?call='),
+
+  // Gemini API key for /api/summaries/trigger and the optional hourly
+  // scheduler. Mirrors python's GEMINI_API_KEY. When unset, the
+  // trigger endpoint returns 503 and the scheduler refuses to start.
+  GEMINI_API_KEY: z.string().optional(),
+
+  // Gemini model id. Default matches python's _LLM_DEFAULT_MODEL.
+  LLM_MODEL: z.string().default('gemini-2.5-flash'),
+
+  // Gate the in-process hourly summary scheduler. Default OFF so a
+  // Node restart on a host that already runs python's scheduler
+  // doesn't double-spend Gemini quota. Flip to 'true' once python's
+  // rdio-summary thread is stopped.
+  NODE_RDIO_SCHEDULER: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
 });
 
 const parsed = Schema.safeParse(process.env);

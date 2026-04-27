@@ -14,9 +14,16 @@
  * python, /api/summaries/* (read) to whichever backend is preferred.
  */
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { QueryResultRow } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { config } from '../config.js';
+import { isRdioConfigured } from '../services/rdio.js';
+import {
+  generateRdioHourlySummary,
+  generateRdioRecentSummary,
+} from '../services/llm.js';
 
 interface SummaryRow extends QueryResultRow {
   id: number;
@@ -176,15 +183,120 @@ summariesRouter.get('/api/summaries', async (c) => {
   }
 });
 
-summariesRouter.post('/api/summaries/trigger', (c) =>
-  c.json(
-    {
-      error: 'summary generation not yet ported to node backend',
-      message:
-        'The Gemini-driven summary generation loop still runs on the python ' +
-        'backend. Route /api/summaries/trigger to the python service via Apache ' +
-        'until W8 lands the LLM port.',
-    },
-    503,
-  ),
-);
+// /api/summaries/trigger — manual summary generation. Both POST (json
+// body) and GET (query params) are accepted, matching python's dual-
+// method handler. Recent triggers run synchronously by default for
+// short N; longer Ns can opt into a background queue with `?sync=0`
+// (kept for python-cli parity but the response shape stays the same).
+async function handleTrigger(c: Context): Promise<Response> {
+  if (!isRdioConfigured()) {
+    return c.json({ error: 'RDIO_DATABASE_URL not configured' }, 503);
+  }
+  if (!config.GEMINI_API_KEY) {
+    return c.json({ error: 'GEMINI_API_KEY not configured' }, 503);
+  }
+  let body: Record<string, unknown> = {};
+  try {
+    if (c.req.method === 'POST') {
+      const parsed = await c.req.json();
+      if (parsed && typeof parsed === 'object') {
+        body = parsed as Record<string, unknown>;
+      }
+    }
+  } catch {
+    body = {};
+  }
+  const url = new URL(c.req.url);
+  const pick = (k: string, d: string | null = null): string | null => {
+    const fromBody = body[k];
+    if (typeof fromBody === 'string' || typeof fromBody === 'number') {
+      return String(fromBody);
+    }
+    return url.searchParams.get(k) ?? d;
+  };
+
+  const stype = pick('type', 'hourly') ?? 'hourly';
+
+  if (stype === 'hourly') {
+    let hourStartUtc: Date;
+    const hs = pick('hour_start');
+    if (hs) {
+      const ms = Date.parse(hs);
+      if (!Number.isFinite(ms)) {
+        return c.json({ error: 'hour_start must be ISO8601' }, 400);
+      }
+      // Snap to top-of-hour in UTC to match python's
+      // .replace(minute=0, second=0, microsecond=0) behaviour.
+      const d = new Date(ms);
+      d.setUTCMinutes(0, 0, 0);
+      hourStartUtc = d;
+    } else {
+      // Default: previous hour, top-of-hour UTC. Python uses the local
+      // tz then converts; for the trigger this matches because
+      // top-of-hour-local is also top-of-hour-UTC for any whole-hour
+      // offset like Australia/Sydney.
+      const now = new Date();
+      now.setUTCHours(now.getUTCHours() - 1);
+      now.setUTCMinutes(0, 0, 0);
+      hourStartUtc = now;
+    }
+    try {
+      const result = await generateRdioHourlySummary({
+        hourStartUtc,
+        force: true,
+      });
+      return c.json({
+        ok: true,
+        type: 'hourly',
+        period_start: hourStartUtc.toISOString(),
+        result,
+      });
+    } catch (err) {
+      log.error({ err }, '/api/summaries/trigger hourly error');
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  }
+
+  if (stype === 'recent') {
+    const rawN = pick('last_n', '500') ?? '500';
+    const n = Number.parseInt(rawN, 10);
+    if (!Number.isFinite(n)) {
+      return c.json({ error: 'last_n must be an integer' }, 400);
+    }
+    if (n < 1 || n > 5000) {
+      return c.json({ error: 'last_n must be between 1 and 5000' }, 400);
+    }
+    const sync = (pick('sync', '') ?? '').toLowerCase() === '1' || (pick('sync', '') ?? '').toLowerCase() === 'true';
+    if (!sync) {
+      // Background queue: kick off the work and return immediately so
+      // edge timeouts (Cloudflare 100s) don't kill long Gemini calls.
+      void (async () => {
+        try {
+          await generateRdioRecentSummary({ n, force: true });
+        } catch (err) {
+          log.warn({ err: (err as Error).message }, 'background recent summary failed');
+        }
+      })();
+      return c.json({
+        ok: true,
+        queued: true,
+        requested_n: n,
+        message:
+          'Summary is running in the background. Poll /api/summaries/latest ' +
+          'to see it when ready (typically 30–120s for large N).',
+      });
+    }
+    try {
+      const result = await generateRdioRecentSummary({ n, force: true });
+      return c.json({ ok: true, type: 'recent', result });
+    } catch (err) {
+      log.error({ err }, '/api/summaries/trigger recent error');
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  }
+
+  return c.json({ error: "type must be 'hourly' or 'recent'" }, 400);
+}
+
+summariesRouter.post('/api/summaries/trigger', handleTrigger);
+summariesRouter.get('/api/summaries/trigger', handleTrigger);
