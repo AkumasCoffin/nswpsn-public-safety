@@ -57,6 +57,8 @@ vi.mock('../../../src/services/discordOauth.js', () => ({
 }));
 
 const botGetMock = vi.fn();
+const getGuildMetaBulkMock = vi.fn(async () => new Map());
+const getAppInstallCountsMock = vi.fn(async () => ({ servers_total: null, user_installs: null }));
 vi.mock('../../../src/services/discordApi.js', () => ({
   getBotToken: () => 'test-bot-token',
   botGet: (...a: unknown[]) => botGetMock(...a),
@@ -64,6 +66,9 @@ vi.mock('../../../src/services/discordApi.js', () => ({
     hash ? `https://cdn.discordapp.com/icons/${gid}/${hash}.png` : null,
   userAvatarUrl: (uid: string | undefined, hash: string | null) =>
     uid && hash ? `https://cdn.discordapp.com/avatars/${uid}/${hash}.png` : null,
+  getGuildMetaBulk: (...a: unknown[]) => getGuildMetaBulkMock(...a),
+  getAppInstallCounts: (...a: unknown[]) => getAppInstallCountsMock(...a),
+  _resetDiscordApiCachesForTests: vi.fn(),
 }));
 
 const { dashboardRouter, _resetDashboardCachesForTests } = await import('../../../src/api/dashboard.js');
