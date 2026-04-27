@@ -243,6 +243,10 @@ export function parseTrafficItem(item: unknown, hazardType: string): TrafficFeat
 
 interface HazardKind {
   storeKey: string;
+  /** Source value written to archive_traffic rows. Mirrors python's
+   *  data_history source value (singular) — keep distinct from the
+   *  LiveStore key (plural) so we don't break /api/traffic/incidents. */
+  archiveSource: string;
   endpoint: string; // 'incident', 'roadwork', etc.
   label: string;    // 'Incident', 'Roadwork', etc.
   active: number;
@@ -250,11 +254,11 @@ interface HazardKind {
 }
 
 const HAZARD_KINDS: HazardKind[] = [
-  { storeKey: 'traffic_incidents', endpoint: 'incident', label: 'Incident', active: 60_000, idle: 120_000 },
-  { storeKey: 'traffic_roadwork', endpoint: 'roadwork', label: 'Roadwork', active: 300_000, idle: 600_000 },
-  { storeKey: 'traffic_flood', endpoint: 'flood', label: 'Flood', active: 300_000, idle: 600_000 },
-  { storeKey: 'traffic_fire', endpoint: 'fire', label: 'Fire', active: 300_000, idle: 600_000 },
-  { storeKey: 'traffic_majorevent', endpoint: 'majorevent', label: 'Major Event', active: 300_000, idle: 600_000 },
+  { storeKey: 'traffic_incidents', archiveSource: 'traffic_incident', endpoint: 'incident', label: 'Incident', active: 60_000, idle: 120_000 },
+  { storeKey: 'traffic_roadwork', archiveSource: 'traffic_roadwork', endpoint: 'roadwork', label: 'Roadwork', active: 300_000, idle: 600_000 },
+  { storeKey: 'traffic_flood', archiveSource: 'traffic_flood', endpoint: 'flood', label: 'Flood', active: 300_000, idle: 600_000 },
+  { storeKey: 'traffic_fire', archiveSource: 'traffic_fire', endpoint: 'fire', label: 'Fire', active: 300_000, idle: 600_000 },
+  { storeKey: 'traffic_majorevent', archiveSource: 'traffic_majorevent', endpoint: 'majorevent', label: 'Major Event', active: 300_000, idle: 600_000 },
 ];
 
 async function fetchHazard(kind: HazardKind): Promise<TrafficSnapshot> {
@@ -354,6 +358,7 @@ export default function register(): void {
   for (const k of HAZARD_KINDS) {
     registerSource<TrafficSnapshot>({
       name: k.storeKey,
+      archiveSource: k.archiveSource,
       family: 'traffic',
       intervalActiveMs: k.active,
       intervalIdleMs: k.idle,

@@ -168,6 +168,9 @@ function collectByTag(node: unknown, tag: string): Array<Record<string, unknown>
 export default function register(): void {
   registerSource<BomSnapshot>({
     name: 'bom_warnings',
+    // Match python's data_history source value so archive rows align
+    // with the SOURCE_TO_FAMILY map keyed under 'bom_warning'.
+    archiveSource: 'bom_warning',
     family: 'misc',
     intervalActiveMs: 60_000,
     intervalIdleMs: 120_000,

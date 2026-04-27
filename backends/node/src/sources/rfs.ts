@@ -294,6 +294,9 @@ export async function fetchRfsRaw(): Promise<RfsRawSnapshot> {
 export default function register(): void {
   registerSource<RfsSnapshot>({
     name: 'rfs_incidents',
+    // Archive rows under the canonical python source name so historical
+    // data + this poller's output share the same `source` value.
+    archiveSource: 'rfs',
     family: 'rfs',
     intervalActiveMs: 60_000,
     intervalIdleMs: 120_000,

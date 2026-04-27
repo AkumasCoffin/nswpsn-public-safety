@@ -70,10 +70,15 @@ export async function fetchBeachwatch(): Promise<BeachwatchSnapshot> {
 }
 
 export async function fetchBeachsafe(): Promise<BeachsafeBeach[]> {
+  // Upstream rejects integer-valued bbox params with HTTP 422. JS's
+  // string coercion drops the trailing zero (`-28.0` → `-28`), so we
+  // use `.toFixed(1)` to force a decimal point. Verified against the
+  // python implementation which sends `-28.0` / `154.0` literally.
+  const fmt = (n: number): string => n.toFixed(1);
   const url =
     `https://beachsafe.org.au/api/v4/map/beaches` +
-    `?neCoords[]=${NSW_NE.lat}&neCoords[]=${NSW_NE.lon}` +
-    `&swCoords[]=${NSW_SW.lat}&swCoords[]=${NSW_SW.lon}`;
+    `?neCoords[]=${fmt(NSW_NE.lat)}&neCoords[]=${fmt(NSW_NE.lon)}` +
+    `&swCoords[]=${fmt(NSW_SW.lat)}&swCoords[]=${fmt(NSW_SW.lon)}`;
   const data = await fetchJson<unknown>(url, { headers: BEACHSAFE_HEADERS });
 
   let beaches: unknown[] = [];
