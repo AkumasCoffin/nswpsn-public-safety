@@ -2,7 +2,7 @@
 
 Node/TypeScript rewrite of the NSW PSN backend, replacing
 `backends/external_api_proxy.py`. Migration is strangler-fig — this
-service runs alongside the Python backend on a different port (3001)
+service runs alongside the Python backend on a different port (3000)
 and Apache routes per-endpoint to whichever backend currently owns it.
 
 ## Status: W1 (scaffolding)
@@ -24,8 +24,8 @@ cd backends/node
 npm install
 npm run dev              # tsx watch on src/index.ts, reloads on save
 # new terminal:
-curl http://localhost:3001/api/health | jq
-curl http://localhost:3001/api/config | jq
+curl http://localhost:3000/api/health | jq
+curl http://localhost:3000/api/config | jq
 ```
 
 Run tests:
@@ -42,7 +42,7 @@ defaults so a single `.env` can drive both backends.
 
 | Var | Default | Notes |
 |---|---|---|
-| `PORT` | `3001` | Bind port |
+| `PORT` | `3000` | Bind port |
 | `NODE_ENV` | `dev` | `dev` \| `production` |
 | `NSWPSN_API_KEY` | `nswpsn-live-2024-secure` | Same key Python uses |
 | `DATABASE_URL` | _(unset)_ | Required from W2 onward |
