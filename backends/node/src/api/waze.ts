@@ -233,24 +233,47 @@ async function buildHeatmapFromArchive(
     subtypeClause = `AND (data->>'subtype') IN (${placeholders})`;
     for (const s of subtypes) params.push(s);
   }
-  let bboxClause = '';
+  // Bbox filter applies to the COALESCE-resolved coords (lat_v/lng_v),
+  // not the raw column, so we don't drop rows whose lat is in the
+  // JSONB blob. Built here as a placeholder string and interpolated
+  // into the outer WHERE further down.
+  let bboxOuterClause = '';
   if (bbox) {
     const i = params.length;
-    bboxClause = `AND lat BETWEEN $${i + 1} AND $${i + 2} AND lng BETWEEN $${i + 3} AND $${i + 4}`;
+    bboxOuterClause = `AND lat_v BETWEEN $${i + 1} AND $${i + 2} AND lng_v BETWEEN $${i + 3} AND $${i + 4}`;
     params.push(bbox[0], bbox[2], bbox[1], bbox[3]);
   }
 
+  // COALESCE the dedicated lat/lng columns with the JSONB
+  // location.y/.x — python's data_history populated the dedicated
+  // columns inconsistently (mostly NULL on historical rows) and the
+  // migration faithfully copied those NULLs into archive_waze. The
+  // 007 backfill migration patches existing rows; the COALESCE here
+  // is the safety net so any future-written row that lands without a
+  // lat/lng column but with a usable JSONB coordinate still feeds
+  // the heatmap. Only valid numeric strings are accepted (the regex
+  // mirrors python's float() coercion).
   const sql = `
+    WITH coords AS (
+      SELECT
+        COALESCE(lat,
+          CASE WHEN (data->'location'->>'y') ~ '^-?[0-9.]+$'
+               THEN (data->'location'->>'y')::float8 END) AS lat_v,
+        COALESCE(lng,
+          CASE WHEN (data->'location'->>'x') ~ '^-?[0-9.]+$'
+               THEN (data->'location'->>'x')::float8 END) AS lng_v
+      FROM archive_waze
+      WHERE source = $1
+        AND fetched_at >= now() - ($2 || ' days')::interval
+        ${subtypeClause}
+    )
     SELECT
-      (FLOOR(lat / ${HEATMAP_BIN_DEG}) * ${HEATMAP_BIN_DEG})::float8 AS lat_bin,
-      (FLOOR(lng / ${HEATMAP_BIN_DEG}) * ${HEATMAP_BIN_DEG})::float8 AS lng_bin,
+      (FLOOR(lat_v / ${HEATMAP_BIN_DEG}) * ${HEATMAP_BIN_DEG})::float8 AS lat_bin,
+      (FLOOR(lng_v / ${HEATMAP_BIN_DEG}) * ${HEATMAP_BIN_DEG})::float8 AS lng_bin,
       COUNT(*)::int AS cnt
-    FROM archive_waze
-    WHERE source = $1
-      AND fetched_at >= now() - ($2 || ' days')::interval
-      AND lat IS NOT NULL AND lng IS NOT NULL
-      ${subtypeClause}
-      ${bboxClause}
+    FROM coords
+    WHERE lat_v IS NOT NULL AND lng_v IS NOT NULL
+      ${bboxOuterClause}
     GROUP BY lat_bin, lng_bin
     ORDER BY cnt DESC
     LIMIT ${HEATMAP_MAX_BINS}
