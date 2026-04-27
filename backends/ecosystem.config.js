@@ -11,6 +11,11 @@ module.exports = {
       script: 'dist/index.js',
       cwd: __dirname + '/node',
       interpreter: 'node',
+      // Pass --env-file-if-exists to Node so it loads backends/.env
+      // (one level above cwd). Same flag the `npm start` script uses;
+      // pm2 spawns the interpreter directly so we have to pass it
+      // here instead. Without this Node never sees DATABASE_URL et al.
+      interpreter_args: '--env-file-if-exists=../.env',
       env: {
         NODE_ENV: 'production',
         PORT: '3000'
