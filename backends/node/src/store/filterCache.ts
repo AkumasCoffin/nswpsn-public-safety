@@ -33,6 +33,8 @@ import { log } from '../lib/log.js';
 // ---------------------------------------------------------------------------
 
 const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
+  // python canonical source names (also what migration 006 + the
+  // archiveSource overrides write into archive_*).
   rfs: 'rfs',
   bom_marine: 'bom_marine',
   bom_land: 'bom_land',
@@ -57,6 +59,18 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   waze_police: 'waze_police',
   waze_roadwork: 'waze_roadwork',
   pager: 'pager',
+  // LiveStore keys (the Node poller's source name) → alert_type. Without
+  // these, the filter facet computation walks liveStore.keys() and
+  // returns 0 for RFS, BoM, traffic_incidents because their LiveStore
+  // keys don't match any alert_type. Symptom: logs.html dropdown shows
+  // 0 incidents even when those tables are receiving fresh data.
+  rfs_incidents: 'rfs',
+  bom_warnings: 'bom_land',
+  traffic_incidents: 'traffic_incident',
+  // Single-key 'waze' is the WazeIngestCache shape — handled specially
+  // in computeFacets() because its bbox-keyed snapshot needs to be
+  // unpacked into per-type counts (police/hazard/roadwork/jam).
+  waze: 'waze_hazard',
 };
 
 const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
@@ -267,33 +281,104 @@ interface ComputedFacets {
   newestUnix: number | null;
 }
 
+/**
+ * Categorise a single waze alert into one of the four alert_types we
+ * surface in the filter dropdown. Mirrors the isPoliceAlert /
+ * isRoadworkAlert / isHazardAlert helpers in services/wazeAlerts —
+ * duplicated here to avoid a cross-module cycle (filterCache shouldn't
+ * import from a route's service layer).
+ */
+function wazeAlertType(rec: Record<string, unknown>): string {
+  const t = String(rec['type'] ?? '').toUpperCase();
+  const s = String(rec['subtype'] ?? '').toUpperCase();
+  if (t === 'POLICE' || s.includes('POLICE')) return 'waze_police';
+  if (t === 'CONSTRUCTION' || s.includes('CONSTRUCTION')) return 'waze_roadwork';
+  return 'waze_hazard';
+}
+
+/** Pull all alerts + jams from the bbox-keyed waze LiveStore snapshot,
+ *  deduplicated by uuid/id. Mirrors store/wazeIngestCache.snapshot(). */
+function wazeRecords(data: unknown): {
+  alerts: Record<string, unknown>[];
+  jams: Record<string, unknown>[];
+} {
+  if (!isPlainObject(data)) return { alerts: [], jams: [] };
+  const bboxes = (data['bboxes'] as Record<string, unknown> | undefined) ?? {};
+  if (!isPlainObject(bboxes)) return { alerts: [], jams: [] };
+  const alertsById = new Map<string, Record<string, unknown>>();
+  const jamsById = new Map<string, Record<string, unknown>>();
+  for (const snap of Object.values(bboxes)) {
+    if (!isPlainObject(snap)) continue;
+    const a = Array.isArray(snap['alerts']) ? (snap['alerts'] as unknown[]) : [];
+    for (const rec of a) {
+      if (!isPlainObject(rec)) continue;
+      const id = String(rec['uuid'] ?? rec['id'] ?? '');
+      if (!id || alertsById.has(id)) continue;
+      alertsById.set(id, rec);
+    }
+    const j = Array.isArray(snap['jams']) ? (snap['jams'] as unknown[]) : [];
+    for (const rec of j) {
+      if (!isPlainObject(rec)) continue;
+      const id = String(rec['uuid'] ?? rec['id'] ?? '');
+      if (!id || jamsById.has(id)) continue;
+      jamsById.set(id, rec);
+    }
+  }
+  return { alerts: Array.from(alertsById.values()), jams: Array.from(jamsById.values()) };
+}
+
 function computeFacets(): ComputedFacets {
   const typeCounts: Record<string, number> = {};
   const perTypeDims: DimMap = {};
   let oldestUnix: number | null = null;
   let newestUnix: number | null = null;
 
-  for (const source of liveStore.keys()) {
-    if (DEPRECATED_SOURCES.has(source)) continue;
-    const snap = liveStore.get(source);
-    if (!snap) continue;
-
-    const alertType = canonicalAlertType(source);
-    if (!alertType) continue;
-    if (!ALERT_TYPE_PROVIDER[alertType]) continue;
-
-    if (oldestUnix === null || snap.ts < oldestUnix) oldestUnix = snap.ts;
-    if (newestUnix === null || snap.ts > newestUnix) newestUnix = snap.ts;
-
-    const records = recordsFromSnapshot(snap.data);
-    typeCounts[alertType] = (typeCounts[alertType] ?? 0) + records.length;
-
-    const dimSlot = (perTypeDims[alertType] ??= {
+  const dimSlotFor = (alertType: string): Record<string, Record<string, number>> => {
+    return (perTypeDims[alertType] ??= {
       category: {},
       subcategory: {},
       status: {},
       severity: {},
     });
+  };
+
+  for (const source of liveStore.keys()) {
+    if (DEPRECATED_SOURCES.has(source)) continue;
+    const snap = liveStore.get(source);
+    if (!snap) continue;
+    if (oldestUnix === null || snap.ts < oldestUnix) oldestUnix = snap.ts;
+    if (newestUnix === null || snap.ts > newestUnix) newestUnix = snap.ts;
+
+    // Special case: the 'waze' LiveStore entry is a bbox-keyed cache
+    // (WazeIngestCache shape) — one snapshot covers all four alert
+    // types. Unpack and categorise each alert/jam individually so the
+    // filter dropdown shows correct counts per (police/hazard/
+    // roadwork/jam). Without this branch, every waze alert_type
+    // returned 0 because the bbox-keyed object doesn't surface alerts
+    // through the generic recordsFromSnapshot() walker.
+    if (source === 'waze') {
+      const { alerts, jams } = wazeRecords(snap.data);
+      for (const a of alerts) {
+        const at = wazeAlertType(a);
+        typeCounts[at] = (typeCounts[at] ?? 0) + 1;
+        const dimSlot = dimSlotFor(at);
+        const sub = String(a['subtype'] ?? '').toUpperCase();
+        if (sub) bumpCount(dimSlot['subcategory'] as Record<string, number>, sub);
+        const cat = String(a['type'] ?? '').toUpperCase();
+        if (cat) bumpCount(dimSlot['category'] as Record<string, number>, cat);
+      }
+      typeCounts['waze_jam'] = (typeCounts['waze_jam'] ?? 0) + jams.length;
+      continue;
+    }
+
+    const alertType = canonicalAlertType(source);
+    if (!alertType) continue;
+    if (!ALERT_TYPE_PROVIDER[alertType]) continue;
+
+    const records = recordsFromSnapshot(snap.data);
+    typeCounts[alertType] = (typeCounts[alertType] ?? 0) + records.length;
+
+    const dimSlot = dimSlotFor(alertType);
     for (const rec of records) {
       const dims = dimsFromRecord(rec);
       if (dims.category) bumpCount(dimSlot['category'] as Record<string, number>, dims.category);

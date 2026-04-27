@@ -471,19 +471,28 @@ export function buildCountSqlForTable(
   // CRITICAL: for the unique=1 path the LIMIT must be applied BEFORE
   // DISTINCT — `SELECT DISTINCT ... LIMIT N` evaluates DISTINCT first
   // and only then truncates, so the cap doesn't bound the scan. Use a
-  // doubly-nested subquery so the LIMIT operates on raw rows (which
-  // the planner can answer with the (fetched_at DESC) index) and
-  // DISTINCT runs over the bounded set.
+  // doubly-nested subquery so the LIMIT operates on raw rows.
+  //
+  // The `ORDER BY fetched_at DESC` in the inner SELECT is what makes
+  // the LIMIT actually fast: it forces Postgres to use the
+  // idx_archive_*_ts (fetched_at DESC) index instead of doing a
+  // partition-by-partition sequential scan. Without it, the planner
+  // may walk every partition in storage order looking for matching
+  // rows, which on archive_waze (millions of rows across many monthly
+  // partitions) blows past the 60s budget even for a 50k cap. With it,
+  // the planner walks the index from now backwards and stops at 50k.
   const COUNT_CAP = 50_000;
   const sql = p.unique
     ? `SELECT COUNT(*)::bigint AS n FROM (
          SELECT DISTINCT source, source_id FROM (
            SELECT source, source_id FROM ${table} ${whereClause}
+           ORDER BY fetched_at DESC
            LIMIT ${COUNT_CAP}
          ) bounded
        ) sub`
     : `SELECT COUNT(*)::bigint AS n FROM (
          SELECT 1 FROM ${table} ${whereClause}
+         ORDER BY fetched_at DESC
          LIMIT ${COUNT_CAP}
        ) sub`;
 
