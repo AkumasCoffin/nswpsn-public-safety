@@ -230,7 +230,14 @@ async function buildHeatmapFromArchive(
     const placeholders = subtypes
       .map((_, i) => `$${params.length + i + 1}`)
       .join(',');
-    subtypeClause = `AND (data->>'subtype') IN (${placeholders})`;
+    // COALESCE to 'POLICE_VISIBLE' so rows with NULL/missing subtype
+    // (Waze sometimes ships bare type='POLICE' with no subtype) still
+    // count when the caller asks for POLICE_VISIBLE. Mirrors python's
+    // _waze_police_heatmap loop which does `eff = sub or 'POLICE_VISIBLE'`
+    // before the filter check (external_api_proxy.py:10166-10169).
+    // Without this the bbox-aware heatmap dropped roughly 90% of pings
+    // and showed ~6k where it should have shown ~90k+.
+    subtypeClause = `AND COALESCE(data->>'subtype', 'POLICE_VISIBLE') IN (${placeholders})`;
     for (const s of subtypes) params.push(s);
   }
   // Bbox filter applies to the COALESCE-resolved coords (lat_v/lng_v),
