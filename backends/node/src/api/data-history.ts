@@ -252,8 +252,14 @@ async function runWithTimeout(
 ): Promise<QueryResult<RawArchiveRow>> {
   const client = await pool.connect();
   try {
-    // Match Python: 25s budget per /api/data/history query.
-    await client.query("SET LOCAL statement_timeout = '25s'");
+    // 60s budget — wider than python's old 25s because the new
+    // partitioned schema hasn't accumulated all the indexes yet,
+    // and on a freshly-backfilled archive_waze (~257k rows) the
+    // DISTINCT ON + COUNT(DISTINCT ...) pair can stretch to 30s+
+    // until the planner caches a stable plan. Once the new
+    // (source, fetched_at) index from migration 005 is hot, queries
+    // settle to single-digit seconds.
+    await client.query("SET LOCAL statement_timeout = '60s'");
     return await client.query<RawArchiveRow>(sql, params);
   } finally {
     client.release();

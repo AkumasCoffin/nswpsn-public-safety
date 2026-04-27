@@ -132,8 +132,17 @@ function extractSourceId(item: Record<string, unknown>): string | null {
  * archive. Endeavour / Ausgrid / Essential outages carry an
  * `outageType` ("Unplanned"/"Planned"); RFS features carry an
  * `alertLevel`; BoM warnings carry `warningType`; etc.
+ *
+ * `source` is consulted so waze-specific fallbacks apply only to
+ * waze rows: when a waze alert has a `type` but no `subtype`, the
+ * subcategory defaults to the category. Mirrors what the legacy
+ * frontend rendered when subtype was absent — pins fall back to the
+ * category icon/colour rather than rendering as "Unknown".
  */
-function extractCategoryFields(props: Record<string, unknown>): {
+function extractCategoryFields(
+  props: Record<string, unknown>,
+  source?: string,
+): {
   category: string | null;
   subcategory: string | null;
 } {
@@ -146,9 +155,24 @@ function extractCategoryFields(props: Record<string, unknown>): {
       props['eventType'] ??
       props['eventCategory'],
   );
-  const sub = asString(
-    props['subcategory'] ?? props['subType'] ?? props['fireType'] ?? props['cause'],
+  let sub = asString(
+    props['subcategory'] ??
+      // Waze alerts carry `subtype` lowercase ("POLICE_VISIBLE",
+      // "HAZARD_ON_ROAD_OBJECT", etc.). Live-polled rows missed it
+      // because the previous code only looked at camelCase `subType`.
+      props['subtype'] ??
+      props['subType'] ??
+      props['fireType'] ??
+      props['cause'],
   );
+  // For waze pins specifically: when the upstream alert has a type
+  // but no subtype (e.g. a bare type='POLICE' with no further detail),
+  // surface the category as the subcategory so the frontend's
+  // pin-renderer doesn't show "Unknown" or fall through to a default
+  // icon. User-requested behaviour.
+  if (sub === null && cat !== null && source && source.startsWith('waze_')) {
+    sub = cat;
+  }
   return { category: cat, subcategory: sub };
 }
 
@@ -244,7 +268,7 @@ export function defaultArchiveItems(
       if (!isFeature(f)) continue;
       const props = (f.properties ?? {}) as Record<string, unknown>;
       const { lat, lng } = extractLatLng(f as Record<string, unknown>);
-      const { category, subcategory } = extractCategoryFields(props);
+      const { category, subcategory } = extractCategoryFields(props, source);
       out.push({
         source,
         source_id: extractSourceId(f as Record<string, unknown>),
@@ -265,7 +289,7 @@ export function defaultArchiveItems(
       if (item === null || typeof item !== 'object') continue;
       const obj = item as Record<string, unknown>;
       const { lat, lng } = extractLatLng(obj);
-      const { category, subcategory } = extractCategoryFields(obj);
+      const { category, subcategory } = extractCategoryFields(obj, source);
       out.push({
         source,
         source_id: extractSourceId(obj),

@@ -7,6 +7,8 @@
  */
 import { Hono } from 'hono';
 import { snapshot } from '../store/wazeIngestCache.js';
+import { getPool } from '../db/pool.js';
+import { log } from '../lib/log.js';
 import {
   isHazardAlert,
   isPoliceAlert,
@@ -166,30 +168,118 @@ wazeRouter.get('/api/waze/debug', (c) => {
   });
 });
 
-// /api/waze/police-heatmap — bbox-binned police alert aggregation. The
-// python implementation reads a 30-day window from data_history; we
-// don't have that table anymore (replaced by partitioned archive_*),
-// so this serves the LIVE in-memory snapshot only. That's a fidelity
-// reduction (no historical trend), documented here so callers know
-// what they're getting.
+// /api/waze/police-heatmap — bbox-binned police alert aggregation
+// over a rolling 30-day window. Reads from archive_waze (the
+// partitioned table the poller + migration script populate). Cached
+// in-process for 60s so dashboard refreshes don't hammer the DB.
 const HEATMAP_BIN_DEG = 0.05; // ~5km at NSW latitudes
 const HEATMAP_MAX_BINS = 1500;
+const HEATMAP_WINDOW_DAYS = 30;
+const HEATMAP_CACHE_TTL_MS = 60_000;
 const POLICE_VALID_SUBTYPES = new Set([
   'POLICE_VISIBLE',
   'POLICE_HIDDEN',
+  'POLICE_HIDING',
+  'POLICE_WITH_MOBILE_CAMERA',
 ]);
 
-wazeRouter.get('/api/waze/police-heatmap', (c) => {
+interface HeatmapBucket {
+  result: unknown;
+  ts: number;
+}
+const heatmapCache = new Map<string, HeatmapBucket>();
+
+function _heatmapCacheKey(
+  subtypes: string[],
+  bbox: [number, number, number, number] | null,
+): string {
+  return JSON.stringify({ s: subtypes, b: bbox });
+}
+
+interface HeatmapRow {
+  lat_bin: number;
+  lng_bin: number;
+  cnt: number;
+}
+
+async function buildHeatmapFromArchive(
+  subtypes: string[] | null,
+  bbox: [number, number, number, number] | null,
+): Promise<{
+  points: [number, number, number][];
+  total_records: number;
+  max_count: number;
+  cache_updated_at: string;
+} | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+
+  const params: unknown[] = ['waze_police', HEATMAP_WINDOW_DAYS];
+  let subtypeClause = '';
+  if (subtypes && subtypes.length > 0) {
+    const placeholders = subtypes
+      .map((_, i) => `$${params.length + i + 1}`)
+      .join(',');
+    subtypeClause = `AND (data->>'subtype') IN (${placeholders})`;
+    for (const s of subtypes) params.push(s);
+  }
+  let bboxClause = '';
+  if (bbox) {
+    const i = params.length;
+    bboxClause = `AND lat BETWEEN $${i + 1} AND $${i + 2} AND lng BETWEEN $${i + 3} AND $${i + 4}`;
+    params.push(bbox[0], bbox[2], bbox[1], bbox[3]);
+  }
+
+  const sql = `
+    SELECT
+      (FLOOR(lat / ${HEATMAP_BIN_DEG}) * ${HEATMAP_BIN_DEG})::float8 AS lat_bin,
+      (FLOOR(lng / ${HEATMAP_BIN_DEG}) * ${HEATMAP_BIN_DEG})::float8 AS lng_bin,
+      COUNT(*)::int AS cnt
+    FROM archive_waze
+    WHERE source = $1
+      AND fetched_at >= now() - ($2 || ' days')::interval
+      AND lat IS NOT NULL AND lng IS NOT NULL
+      ${subtypeClause}
+      ${bboxClause}
+    GROUP BY lat_bin, lng_bin
+    ORDER BY cnt DESC
+    LIMIT ${HEATMAP_MAX_BINS}
+  `;
+
+  const client = await pool.connect();
+  try {
+    // Generous timeout — the aggregation is a single GroupAgg over the
+    // 30d window using the new (source, fetched_at) index from
+    // migration 005. Should be sub-second once the index lands.
+    await client.query("SET LOCAL statement_timeout = '20s'");
+    const r = await client.query<HeatmapRow>(sql, params);
+    const points: [number, number, number][] = r.rows.map((row) => [
+      Number(row.lat_bin.toFixed(5)),
+      Number(row.lng_bin.toFixed(5)),
+      row.cnt,
+    ]);
+    const max_count = points.length > 0 ? (points[0]?.[2] ?? 0) : 0;
+    const total_records = points.reduce((n, p) => n + p[2], 0);
+    return {
+      points,
+      total_records,
+      max_count,
+      cache_updated_at: new Date().toISOString(),
+    };
+  } finally {
+    client.release();
+  }
+}
+
+wazeRouter.get('/api/waze/police-heatmap', async (c) => {
   const url = new URL(c.req.url);
   const rawSubtypes = (url.searchParams.get('subtypes') ?? '').trim();
-  let wanted: Set<string> | null = null;
+  let wanted: string[] | null = null;
   if (rawSubtypes) {
-    wanted = new Set(
-      rawSubtypes
-        .split(',')
-        .map((s) => s.trim().toUpperCase())
-        .filter((s) => POLICE_VALID_SUBTYPES.has(s)),
-    );
+    wanted = rawSubtypes
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter((s) => POLICE_VALID_SUBTYPES.has(s));
   }
   const rawBbox = (url.searchParams.get('bbox') ?? '').trim();
   let bbox: [number, number, number, number] | null = null;
@@ -201,45 +291,81 @@ wazeRouter.get('/api/waze/police-heatmap', (c) => {
     }
   }
 
-  const { alerts } = snapshot();
-  const bins = new Map<string, { lat: number; lng: number; count: number }>();
-  for (const a of alerts) {
-    if (!isPoliceAlert(a)) continue;
-    const raw = a as Record<string, unknown>;
-    const sub = String(raw['subtype'] ?? '').toUpperCase();
-    const eff = sub || 'POLICE_VISIBLE';
-    if (wanted !== null && !wanted.has(eff)) continue;
-    const loc = (raw['location'] ?? {}) as Record<string, unknown>;
-    const lat = typeof loc['y'] === 'number' ? loc['y'] : null;
-    const lng = typeof loc['x'] === 'number' ? loc['x'] : null;
-    if (lat === null || lng === null) continue;
-    if (bbox && (lat < bbox[0] || lat > bbox[2] || lng < bbox[1] || lng > bbox[3])) continue;
-    const latBin = Math.round(lat / HEATMAP_BIN_DEG) * HEATMAP_BIN_DEG;
-    const lngBin = Math.round(lng / HEATMAP_BIN_DEG) * HEATMAP_BIN_DEG;
-    const key = `${latBin.toFixed(5)}|${lngBin.toFixed(5)}`;
-    const existing = bins.get(key);
-    if (existing) existing.count += 1;
-    else bins.set(key, { lat: latBin, lng: lngBin, count: 1 });
+  const cacheKey = _heatmapCacheKey(wanted ?? [], bbox);
+  const now = Date.now();
+  const hit = heatmapCache.get(cacheKey);
+  if (hit && now - hit.ts < HEATMAP_CACHE_TTL_MS) {
+    return c.json(hit.result);
   }
-  const sorted = Array.from(bins.values())
-    .sort((a, b) => b.count - a.count)
-    .slice(0, HEATMAP_MAX_BINS);
-  const points = sorted.map((b) => [
-    Number(b.lat.toFixed(5)),
-    Number(b.lng.toFixed(5)),
-    b.count,
-  ]);
-  const max_count = sorted[0]?.count ?? 0;
-  const total_records = sorted.reduce((n, b) => n + b.count, 0);
-  return c.json({
-    points,
-    total_records,
-    bin_size_deg: HEATMAP_BIN_DEG,
-    max_count,
-    days: 0,
-    subtypes: wanted ? Array.from(wanted).sort() : Array.from(POLICE_VALID_SUBTYPES).sort(),
-    cache_updated_at: null,
-    cache_status: 'live',
-    note: 'Node backend serves live snapshot only; historical 30d window stays on python.',
+
+  const aggregated = await buildHeatmapFromArchive(wanted, bbox).catch((err) => {
+    log.warn({ err: (err as Error).message }, 'police-heatmap query failed');
+    return null;
   });
+
+  // Fallback to the live in-memory snapshot if the archive query failed
+  // (DB down, statement timeout, etc.) — same behaviour python had when
+  // its data_history-backed cache was warming up.
+  if (!aggregated) {
+    const { alerts } = snapshot();
+    const bins = new Map<string, { lat: number; lng: number; count: number }>();
+    const wantedSet = wanted ? new Set(wanted) : null;
+    for (const a of alerts) {
+      if (!isPoliceAlert(a)) continue;
+      const raw = a as Record<string, unknown>;
+      const sub = String(raw['subtype'] ?? '').toUpperCase();
+      const eff = sub || 'POLICE_VISIBLE';
+      if (wantedSet !== null && !wantedSet.has(eff)) continue;
+      const loc = (raw['location'] ?? {}) as Record<string, unknown>;
+      const lat = typeof loc['y'] === 'number' ? loc['y'] : null;
+      const lng = typeof loc['x'] === 'number' ? loc['x'] : null;
+      if (lat === null || lng === null) continue;
+      if (bbox && (lat < bbox[0] || lat > bbox[2] || lng < bbox[1] || lng > bbox[3])) continue;
+      const latBin = Math.round(lat / HEATMAP_BIN_DEG) * HEATMAP_BIN_DEG;
+      const lngBin = Math.round(lng / HEATMAP_BIN_DEG) * HEATMAP_BIN_DEG;
+      const key = `${latBin.toFixed(5)}|${lngBin.toFixed(5)}`;
+      const existing = bins.get(key);
+      if (existing) existing.count += 1;
+      else bins.set(key, { lat: latBin, lng: lngBin, count: 1 });
+    }
+    const sorted = Array.from(bins.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, HEATMAP_MAX_BINS);
+    const points = sorted.map(
+      (b): [number, number, number] => [
+        Number(b.lat.toFixed(5)),
+        Number(b.lng.toFixed(5)),
+        b.count,
+      ],
+    );
+    const result = {
+      points,
+      total_records: sorted.reduce((n, b) => n + b.count, 0),
+      bin_size_deg: HEATMAP_BIN_DEG,
+      max_count: sorted[0]?.count ?? 0,
+      days: 0,
+      subtypes: wanted ?? Array.from(POLICE_VALID_SUBTYPES).sort(),
+      cache_updated_at: null,
+      cache_status: 'live-fallback',
+      note: 'archive query unavailable — serving live snapshot',
+    };
+    return c.json(result);
+  }
+
+  const result = {
+    points: aggregated.points,
+    total_records: aggregated.total_records,
+    bin_size_deg: HEATMAP_BIN_DEG,
+    max_count: aggregated.max_count,
+    days: HEATMAP_WINDOW_DAYS,
+    subtypes: wanted ?? Array.from(POLICE_VALID_SUBTYPES).sort(),
+    cache_updated_at: aggregated.cache_updated_at,
+    cache_status: 'ok',
+  };
+  heatmapCache.set(cacheKey, { result, ts: now });
+  return c.json(result);
 });
+
+export function _resetHeatmapCacheForTests(): void {
+  heatmapCache.clear();
+}

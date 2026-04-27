@@ -191,7 +191,7 @@ describe('GET /api/data/history', () => {
     expect(sqls.some((s) => s.includes('DISTINCT ON (source, source_id)'))).toBe(true);
   });
 
-  it('always sets statement_timeout = 25s before each query', async () => {
+  it('always sets statement_timeout = 60s before each query', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
       return { rows: [] };
@@ -203,7 +203,7 @@ describe('GET /api/data/history', () => {
       String(c[0]).includes('statement_timeout'),
     );
     expect(timeoutCalls.length).toBeGreaterThan(0);
-    expect(String(timeoutCalls[0]?.[0])).toContain("'25s'");
+    expect(String(timeoutCalls[0]?.[0])).toContain("'60s'");
   });
 
   it('echoes since/until as ISO strings in filters_applied', async () => {
