@@ -2227,7 +2227,8 @@ def cleanup_old_data():
         try:
             c = conn.cursor()
 
-            # Mark pager hits as ended if older than 1 hour
+            # Mark pager hits as ended if older than 1 hour. Small set
+            # (~100 rows/cycle), one transaction is fine.
             c.execute('''
                 UPDATE data_history
                 SET is_live = 0
@@ -2235,6 +2236,7 @@ def cleanup_old_data():
                 AND COALESCE(source_timestamp_unix, fetched_at) < %s
             ''', (pager_cutoff,))
             pager_ended = c.rowcount
+            conn.commit()  # release pager locks before any heavier work
             if pager_ended > 0:
                 Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
 
@@ -2242,15 +2244,32 @@ def cleanup_old_data():
             # Per-batch diffing is disabled for Waze (incomplete rotations would
             # flip everything off), so this is the only path that clears stale
             # Waze records from the live set.
+            #
+            # Batched in chunks of 1000 with a commit between each. Without
+            # batching, a 5000-row UPDATE would hold row locks for 2+ minutes
+            # under contention, blocking the archive writer + reconcile worker
+            # the entire time and producing the cascade we hit on 2026-04-27.
+            # 1000 rows takes <1s under normal load, so other writers get
+            # frequent lock-windows.
             waze_cutoff = int(time.time()) - 3600
-            c.execute('''
-                UPDATE data_history
-                SET is_live = 0
-                WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
-                AND is_live = 1
-                AND COALESCE(last_seen, fetched_at) < %s
-            ''', (waze_cutoff,))
-            waze_ended = c.rowcount
+            waze_ended = 0
+            while True:
+                c.execute('''
+                    UPDATE data_history SET is_live = 0
+                    WHERE id IN (
+                        SELECT id FROM data_history
+                        WHERE source IN ('waze_hazard', 'waze_police',
+                                         'waze_roadwork', 'waze_jam')
+                          AND is_live = 1
+                          AND COALESCE(last_seen, fetched_at) < %s
+                        LIMIT 1000
+                    )
+                ''', (waze_cutoff,))
+                chunk = c.rowcount
+                waze_ended += chunk
+                conn.commit()  # release locks between batches
+                if chunk < 1000:
+                    break
             if waze_ended > 0:
                 Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
 
@@ -11693,9 +11712,13 @@ _DATA_HISTORY_COUNT_INFLIGHT_LOCK = threading.Lock()
 
 
 # Cap concurrent refresh workers. Each runs a 90s COUNT(*) and holds
-# a pooled connection — without this cap, a traffic spike can spawn
-# dozens of parallel refreshes and exhaust the connection pool.
-_DATA_HISTORY_COUNT_INFLIGHT_MAX = 4
+# a pooled connection — and the count is the SAME number whether one
+# worker computes it or four do. Multiple in-flight refreshes just
+# multiply the pool/lock pressure without giving us a different answer.
+# Hard cap: 1. Spillover requests get the cached value (which is still
+# fresh enough); the next request after the in-flight one finishes
+# triggers the next refresh.
+_DATA_HISTORY_COUNT_INFLIGHT_MAX = 1
 
 
 def _async_refresh_data_history_count(cache_key, actual_where, params,
