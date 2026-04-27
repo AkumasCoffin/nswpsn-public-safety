@@ -11,6 +11,8 @@ import { cors } from 'hono/cors';
 import { logger as honoLogger } from 'hono/logger';
 import { healthRouter } from './api/health.js';
 import { configRouter } from './api/config.js';
+import { wazeRouter } from './api/waze.js';
+import { wazeIngestRouter } from './api/waze-ingest.js';
 import { log } from './lib/log.js';
 
 export function createApp() {
@@ -38,6 +40,8 @@ export function createApp() {
   // the Python equivalents.
   app.route('/', healthRouter);
   app.route('/', configRouter);
+  app.route('/', wazeRouter);
+  app.route('/', wazeIngestRouter);
 
   // Root route — useful for "is this the right backend?" smoke tests
   // when both Python and Node are running side by side.
