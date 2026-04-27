@@ -105,3 +105,26 @@ def get_conn_dict():
     conn.autocommit = False
     conn.cursor_factory = RealDictCursor
     return _PooledConn(conn)
+
+
+def pool_stats():
+    """Return current pool occupancy as {'in_use', 'idle', 'max'}.
+
+    Reads the psycopg2 pool's private members (`_used`, `_pool`) under a
+    try/except so an internals change can't break the status endpoint —
+    we just return None for any field we couldn't read.
+    """
+    in_use = idle = None
+    try:
+        in_use = len(getattr(_pool, '_used', {}) or {})
+    except Exception:
+        pass
+    try:
+        idle = len(getattr(_pool, '_pool', []) or [])
+    except Exception:
+        pass
+    return {
+        'in_use': in_use,
+        'idle': idle,
+        'max': getattr(_pool, 'maxconn', None),
+    }
