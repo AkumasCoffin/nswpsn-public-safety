@@ -154,6 +154,53 @@ const BACKFILLS: BackfillSpec[] = [
                    AND COALESCE(subcategory, '') = ''
                    AND NULLIF(data->>'subtype', '') IS NOT NULL`,
   },
+  // is_live backfill — derive from JSONB. New writes set the column
+  // directly so this only runs once per archive table after migration
+  // 012 lands. Truthy convention matches formatRecord at
+  // data-history.ts:487 ('1','true','True'); legacy rows with empty
+  // jsonb default to true (matches python's behaviour).
+  ...['archive_waze','archive_traffic','archive_rfs','archive_power','archive_misc'].map(
+    (table): BackfillSpec => ({
+      name: `${table}.is_live ← data->>is_live (one-shot)`,
+      countSql: `SELECT COUNT(*)::bigint AS n FROM ${table}
+                 WHERE is_live = true
+                   AND data ? 'is_live'
+                   AND (data->>'is_live') NOT IN ('1','true','True')`,
+      updateSql: `UPDATE ${table}
+                     SET is_live = false
+                   WHERE is_live = true
+                     AND data ? 'is_live'
+                     AND (data->>'is_live') NOT IN ('1','true','True')`,
+    }),
+  ),
+  // is_latest backfill — mark the most recent row per (source, source_id)
+  // as is_latest=true. Default after migration 012 was false; this
+  // pass sets it correctly for historical data. Subsequent inserts
+  // from the writer maintain it.
+  //
+  // The CTE pattern below (DISTINCT ON + UPDATE FROM) is the standard
+  // postgres approach. statement_timeout=0 is set on the indexBuilder
+  // connection so the heavy UPDATE on archive_waze can take as long
+  // as it needs.
+  ...['archive_waze','archive_traffic','archive_rfs','archive_power','archive_misc'].map(
+    (table): BackfillSpec => ({
+      name: `${table}.is_latest ← latest per source_id (one-shot)`,
+      countSql: `SELECT COUNT(*)::bigint AS n FROM ${table}
+                 WHERE is_latest = false AND source_id IS NOT NULL`,
+      updateSql: `WITH latest_ids AS (
+                    SELECT DISTINCT ON (source, source_id) id, fetched_at
+                    FROM ${table}
+                    WHERE source_id IS NOT NULL
+                    ORDER BY source, source_id, fetched_at DESC
+                  )
+                  UPDATE ${table}
+                     SET is_latest = true
+                  FROM latest_ids
+                  WHERE ${table}.id = latest_ids.id
+                    AND ${table}.fetched_at = latest_ids.fetched_at
+                    AND ${table}.is_latest = false`,
+    }),
+  ),
 ];
 
 let inFlight: Promise<void> | null = null;

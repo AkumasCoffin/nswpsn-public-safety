@@ -253,7 +253,11 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // Build $1, $2, ... placeholders for 8 columns per row.
+    // is_live + is_latest derivation. Migration 012 added these as
+    // real columns. New rows default to is_latest=true (the row IS
+    // the latest snapshot for its source_id at insertion time); the
+    // UPDATE below flips previous rows' is_latest=false. is_live is
+    // pulled from the JSONB blob if present, else default true.
     const cols = [
       'source',
       'source_id',
@@ -263,9 +267,15 @@ export class ArchiveWriter {
       'category',
       'subcategory',
       'data',
+      'is_live',
+      'is_latest',
     ];
     const placeholders: string[] = [];
     const params: unknown[] = [];
+    // Track (source, source_id) tuples we're inserting so the post-
+    // INSERT UPDATE can flip is_latest=false on previous rows for the
+    // same incidents.
+    const sourceIds: Array<[string, string]> = [];
     let i = 0;
     for (const r of rows) {
       const tuple: string[] = [];
@@ -274,36 +284,83 @@ export class ArchiveWriter {
         tuple.push(`$${i}`);
       }
       placeholders.push(`(${tuple.join(',')})`);
+      // is_live: read from data->>'is_live' truthy convention; default true.
+      const dataObj = r.data as Record<string, unknown> | null;
+      const liveRaw = dataObj?.['is_live'];
+      const isLive =
+        liveRaw === undefined || liveRaw === null
+          ? true
+          : liveRaw === true ||
+            liveRaw === 1 ||
+            liveRaw === '1' ||
+            liveRaw === 'true' ||
+            liveRaw === 'True';
       params.push(
         r.source,
         r.source_id ?? null,
-        // Postgres `fetched_at` column is TIMESTAMPTZ; pass an ISO string.
         new Date(r.fetched_at * 1000).toISOString(),
         r.lat ?? null,
         r.lng ?? null,
         r.category ?? null,
         r.subcategory ?? null,
         JSON.stringify(r.data),
+        isLive,
+        true, // is_latest — flipped to false on prior rows below
       );
+      if (r.source_id) {
+        sourceIds.push([r.source, r.source_id]);
+      }
     }
 
-    const sql =
+    const insertSql =
       `INSERT INTO ${table} (${cols.join(',')}) VALUES ` +
       placeholders.join(',');
 
-    // SET LOCAL only applies inside an explicit transaction (pg
-    // semantics) — wrap in BEGIN/COMMIT so the timeout actually
-    // overrides the global default. Earlier revisions used SET LOCAL
-    // without a transaction, which silently inherited the database's
-    // ~60s statement_timeout and caused 60s INSERT failures.
-    // 60s ceiling (was 30s) — production saw archive_waze 500-row
-    // chunks hit 30s under concurrent heatmap-read pressure even
-    // though the average insert is < 5s. With the chunk size halved
-    // for waze, this gives ample slack without removing the bound.
     await client.query('BEGIN');
     try {
       await client.query("SET LOCAL statement_timeout = '60s'");
-      await client.query(sql, params);
+      await client.query(insertSql, params);
+      // Flip previous rows for these (source, source_id) pairs to
+      // is_latest=false. Done as a SECOND statement inside the same
+      // transaction so the new row already exists when we look at
+      // "is this the newest?" — we exclude the just-inserted ids by
+      // matching `is_latest = true AND id NOT IN (newest)` per group.
+      // Simpler: just flip every is_latest=true row whose source_id
+      // matches our new batch but whose id is less than the newest
+      // id we just inserted. Since we just INSERTed with is_latest=true,
+      // there are now multiple is_latest=true rows for any source_id
+      // in the batch — we keep the highest id, flip the rest.
+      if (sourceIds.length > 0) {
+        const dedupKeys = Array.from(
+          new Set(sourceIds.map((p) => `${p[0]}|${p[1]}`)),
+        ).map((k) => k.split('|') as [string, string]);
+        // Build a VALUES clause for the (source, source_id) tuples we
+        // just inserted. Then UPDATE the older rows for each tuple.
+        const valuesParts: string[] = [];
+        const updParams: unknown[] = [];
+        let pi = 0;
+        for (const [s, sid] of dedupKeys) {
+          updParams.push(s, sid);
+          valuesParts.push(`($${++pi}, $${++pi})`);
+        }
+        const updSql = `
+          WITH newest AS (
+            SELECT source, source_id, MAX(id) AS keep_id
+            FROM ${table}
+            WHERE (source, source_id) IN (VALUES ${valuesParts.join(',')})
+              AND is_latest = true
+            GROUP BY source, source_id
+          )
+          UPDATE ${table} t
+             SET is_latest = false
+            FROM newest n
+           WHERE t.source = n.source
+             AND t.source_id = n.source_id
+             AND t.is_latest = true
+             AND t.id < n.keep_id
+        `;
+        await client.query(updSql, updParams);
+      }
       await client.query('COMMIT');
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch { /* ignore */ }
