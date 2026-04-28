@@ -671,6 +671,34 @@ export async function generateRdioRecentSummary(
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 let schedulerStopped = false;
+// Diagnostics surface: every fire updates these so /api/status can show
+// "scheduler armed: yes, next fire 13:55Z, last fire 12:55Z (42 calls)".
+// Without this we had to grep logs to confirm the scheduler was even
+// running — and recent deploys went without a fire-line for hours.
+interface SchedulerStats {
+  enabled: boolean;
+  reason: string | null;
+  next_fire_at: number | null; // epoch seconds
+  last_fire_at: number | null; // epoch seconds
+  last_run_ms: number | null;
+  last_result: { hour_slot: number; call_count: number } | null;
+  last_error: string | null;
+  total_fires: number;
+}
+const schedulerStats: SchedulerStats = {
+  enabled: false,
+  reason: null,
+  next_fire_at: null,
+  last_fire_at: null,
+  last_run_ms: null,
+  last_result: null,
+  last_error: null,
+  total_fires: 0,
+};
+
+export function rdioSchedulerStats(): SchedulerStats {
+  return { ...schedulerStats };
+}
 
 function localMinute(d: Date): number {
   const fmt = new Intl.DateTimeFormat('en-GB', {
@@ -699,46 +727,79 @@ async function runHourlyJob(): Promise<void> {
   const ms = now.getTime();
   const hourStartUtc = new Date(ms - (ms % (60 * 60_000)));
   const releaseAtUtc = new Date(hourStartUtc.getTime() + 60 * 60_000);
+  schedulerStats.last_fire_at = Math.floor(ms / 1000);
+  schedulerStats.total_fires += 1;
+  schedulerStats.last_error = null;
+  log.info(
+    { hour_start: hourStartUtc.toISOString() },
+    'rdio hourly: firing',
+  );
+  const t0 = Date.now();
   try {
-    await generateRdioHourlySummary({
+    const result = await generateRdioHourlySummary({
       hourStartUtc,
       force: true,
       releaseAt: releaseAtUtc,
     });
+    schedulerStats.last_result = result;
+    schedulerStats.last_run_ms = Date.now() - t0;
+    log.info(
+      { ms: schedulerStats.last_run_ms, result },
+      'rdio hourly: complete',
+    );
   } catch (err) {
-    log.warn({ err: (err as Error).message }, 'hourly scheduler job error');
+    const msg = (err as Error).message;
+    schedulerStats.last_error = msg;
+    schedulerStats.last_run_ms = Date.now() - t0;
+    log.warn({ err: msg }, 'hourly scheduler job error');
   }
 }
 
 export function startRdioSummaryScheduler(): void {
   if (!config.NODE_RDIO_SCHEDULER) {
+    schedulerStats.enabled = false;
+    schedulerStats.reason = 'NODE_RDIO_SCHEDULER=false';
     log.info('rdio summary scheduler disabled (NODE_RDIO_SCHEDULER=false)');
     return;
   }
   if (!config.RDIO_DATABASE_URL) {
+    schedulerStats.enabled = false;
+    schedulerStats.reason = 'RDIO_DATABASE_URL not set';
     log.info('rdio scheduler skipped: RDIO_DATABASE_URL not set');
     return;
   }
   if (!config.GEMINI_API_KEY) {
+    schedulerStats.enabled = false;
+    schedulerStats.reason = 'GEMINI_API_KEY not set';
     log.info('rdio scheduler skipped: GEMINI_API_KEY not set');
     return;
   }
   schedulerStopped = false;
+  schedulerStats.enabled = true;
+  schedulerStats.reason = null;
+  const arm = (waitMs: number): void => {
+    schedulerStats.next_fire_at = Math.floor((Date.now() + waitMs) / 1000);
+    schedulerTimer = setTimeout(fire, waitMs);
+  };
   const fire = (): void => {
     if (schedulerStopped) return;
     void runHourlyJob().finally(() => {
       if (schedulerStopped) return;
-      const wait = nextFireTimeMs() - Date.now();
-      schedulerTimer = setTimeout(fire, Math.max(60_000, wait));
+      const wait = Math.max(60_000, nextFireTimeMs() - Date.now());
+      arm(wait);
     });
   };
-  const wait = nextFireTimeMs() - Date.now();
-  schedulerTimer = setTimeout(fire, Math.max(60_000, wait));
-  log.info('rdio summary scheduler started');
+  const wait = Math.max(60_000, nextFireTimeMs() - Date.now());
+  arm(wait);
+  const nextIso = new Date(Date.now() + wait).toISOString();
+  log.info({ next_fire: nextIso, wait_ms: wait }, 'rdio summary scheduler started');
 }
 
 export function stopRdioSummaryScheduler(): void {
   schedulerStopped = true;
+  schedulerStats.enabled = false;
+  schedulerStats.reason = 'stopped';
+  schedulerStats.next_fire_at = null;
   if (schedulerTimer) {
     clearTimeout(schedulerTimer);
     schedulerTimer = null;
