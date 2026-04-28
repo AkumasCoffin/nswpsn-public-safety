@@ -244,7 +244,9 @@ export async function ensurePerfIndexes(): Promise<void> {
       // One-shot data backfills. Each is gated on a cheap COUNT first
       // so on a clean DB this whole pass costs ~5 ms. On the first
       // boot after deploying this code, may UPDATE tens of thousands
-      // of rows; subsequent boots are no-ops.
+      // of rows; subsequent boots are no-ops. Track which tables had
+      // a non-trivial UPDATE so we know which to VACUUM after.
+      const tablesNeedingVacuum = new Set<string>();
       for (const bf of BACKFILLS) {
         try {
           const cnt = await client.query<{ n: string }>(bf.countSql);
@@ -257,6 +259,10 @@ export async function ensurePerfIndexes(): Promise<void> {
             { backfill: bf.name, updated: r.rowCount, ms: Date.now() - t0 },
             'indexBuilder: backfill done',
           );
+          // Heuristic: any backfill name starting with "archive_<table>"
+          // implies that table needs VACUUM after.
+          const m = /^archive_(\w+)\./.exec(bf.name);
+          if (m) tablesNeedingVacuum.add(`archive_${m[1]}`);
         } catch (err) {
           log.warn(
             { err: (err as Error).message, backfill: bf.name },
@@ -265,12 +271,16 @@ export async function ensurePerfIndexes(): Promise<void> {
         }
       }
 
-      // ANALYZE the archive tables. After bulk migrations / heavy ingest,
-      // the planner's row-count statistics are stale and it picks plans
-      // that ignore the indexes (e.g. seq-scanning a 5M-row partition
-      // because it thinks the table has 100k rows). ANALYZE samples each
-      // table and refreshes pg_statistic; queries that were timing out at
-      // 30s+ should pick the indexed plan after this. Cheap (~seconds).
+      // VACUUM ANALYZE the archive tables. Two reasons:
+      //   1. ANALYZE refreshes pg_statistic so the planner picks the new
+      //      indexes instead of seq-scanning.
+      //   2. VACUUM (non-FULL) reclaims dead tuples — critical after a
+      //      bulk UPDATE like the POLICE_VISIBLE backfill which can
+      //      leave tens of thousands of dead rows that bloat scans
+      //      until autovacuum catches up. Plain VACUUM doesn't take
+      //      ACCESS EXCLUSIVE so reads and writes still flow.
+      // We only run VACUUM ANALYZE on tables a backfill touched; for
+      // the rest, plain ANALYZE is enough.
       const tables = [
         'archive_waze',
         'archive_traffic',
@@ -280,13 +290,17 @@ export async function ensurePerfIndexes(): Promise<void> {
       ];
       for (const t of tables) {
         const t0 = Date.now();
+        const cmd = tablesNeedingVacuum.has(t) ? `VACUUM (ANALYZE) ${t}` : `ANALYZE ${t}`;
         try {
-          await client.query(`ANALYZE ${t}`);
-          log.info({ table: t, ms: Date.now() - t0 }, 'indexBuilder: ANALYZE');
+          await client.query(cmd);
+          log.info(
+            { table: t, ms: Date.now() - t0, op: tablesNeedingVacuum.has(t) ? 'vacuum-analyze' : 'analyze' },
+            'indexBuilder: stats refresh',
+          );
         } catch (err) {
           log.warn(
-            { err: (err as Error).message, table: t },
-            'indexBuilder: ANALYZE failed',
+            { err: (err as Error).message, table: t, cmd },
+            'indexBuilder: stats refresh failed',
           );
         }
       }

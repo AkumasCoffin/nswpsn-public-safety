@@ -162,14 +162,19 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         }
       }
 
-      // 2. VACUUM ANALYZE the archive tables so pg_statistic reflects
-      // the new row counts.
+      // 2. VACUUM (non-FULL) + ANALYZE the archive tables. VACUUM
+      // reclaims dead tuples from prior UPDATEs without taking
+      // ACCESS EXCLUSIVE, so reads and writes keep flowing. ANALYZE
+      // refreshes pg_statistic so the planner stays current.
       const vacStart = Date.now();
       for (const t of ARCHIVE_TABLES) {
         try {
-          await client.query(`ANALYZE ${t}`);
+          await client.query(`VACUUM (ANALYZE) ${t}`);
         } catch (err) {
-          log.warn({ err: (err as Error).message, table: t }, 'cleanup: ANALYZE failed');
+          log.warn(
+            { err: (err as Error).message, table: t },
+            'cleanup: VACUUM ANALYZE failed',
+          );
         }
       }
       vacuumMs = Date.now() - vacStart;
