@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.18
+// @version      1.19
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -309,53 +309,82 @@
     let _lastIngestSuccess = Date.now();
 
     // Anti-bot state — when Waze 403s/429s the georss endpoint, we go
-    // into a cooldown: pause rotation, clear cookies (so Waze treats
-    // the next request as a new visitor), and reload after a delay so
-    // the next session starts fresh. Without this the regular reload
-    // (every 30 min) doesn't help because Waze's block is cookie-based
-    // and persists across reloads.
-    let _wazeBlockedUntil = 0;
-    let _wazeBlockCount = 0;
+    // into a cooldown that PERSISTS across page reloads (in localStorage).
+    // We deliberately do NOT reload on 403 unless we successfully cleared
+    // Waze's session cookies (which requires GM_cookie permission, since
+    // Waze's session cookies are HttpOnly and document.cookie can't touch
+    // them). Reloading without clearing cookies just hits another 403 and
+    // wastes the cooldown.
+    const LS_BLOCK_UNTIL = 'nswpsn_waze_block_until';
+    const LS_BLOCK_COUNT = 'nswpsn_waze_block_count';
     const COOLDOWN_BASE_MS = 5 * 60 * 1000;   // 5 min for first 403
     const COOLDOWN_MAX_MS  = 30 * 60 * 1000;  // cap at 30 min after repeats
 
+    function loadCooldown() {
+        try {
+            const until = parseInt(pageWin.localStorage.getItem(LS_BLOCK_UNTIL) || '0', 10);
+            const count = parseInt(pageWin.localStorage.getItem(LS_BLOCK_COUNT) || '0', 10);
+            // Reset counter once the cooldown has fully elapsed AND we've
+            // had a quiet hour — if we've been clean for an hour the
+            // backoff history is no longer relevant.
+            if (Number.isFinite(until) && Date.now() > until + 60 * 60 * 1000) {
+                pageWin.localStorage.setItem(LS_BLOCK_COUNT, '0');
+                return { until: 0, count: 0 };
+            }
+            return {
+                until: Number.isFinite(until) ? until : 0,
+                count: Number.isFinite(count) ? count : 0,
+            };
+        } catch (e) { return { until: 0, count: 0 }; }
+    }
+
+    function saveCooldown(until, count) {
+        try {
+            pageWin.localStorage.setItem(LS_BLOCK_UNTIL, String(until));
+            pageWin.localStorage.setItem(LS_BLOCK_COUNT, String(count));
+        } catch (e) {}
+    }
+
     function isInCooldown() {
-        return Date.now() < _wazeBlockedUntil;
+        return Date.now() < loadCooldown().until;
+    }
+
+    function cooldownRemainingMs() {
+        return Math.max(0, loadCooldown().until - Date.now());
     }
 
     function noteWazeBlock(status) {
-        _wazeBlockCount += 1;
+        const { count: prevCount } = loadCooldown();
+        const newCount = prevCount + 1;
         // Exponential backoff: 5min, 10min, 20min, 30min (capped).
         const delay = Math.min(
-            COOLDOWN_BASE_MS * Math.pow(2, _wazeBlockCount - 1),
+            COOLDOWN_BASE_MS * Math.pow(2, newCount - 1),
             COOLDOWN_MAX_MS,
         );
-        _wazeBlockedUntil = Date.now() + delay;
-        log(`Waze ${status} — cooldown ${Math.round(delay / 60000)}m (count ${_wazeBlockCount})`);
-        // Clear waze.com cookies so the next session looks like a fresh
-        // visitor. GM_cookie is a privileged API; if not granted we
-        // fall back to document.cookie (only clears non-HttpOnly).
-        try {
-            if (typeof GM_cookie !== 'undefined' && GM_cookie.list && GM_cookie.delete) {
+        const until = Date.now() + delay;
+        saveCooldown(until, newCount);
+        log(`Waze ${status} — cooldown ${Math.round(delay / 60000)}m (count ${newCount}, persisted)`);
+
+        // Try to clear cookies. If GM_cookie is granted we can hit
+        // HttpOnly cookies and reloading might genuinely refresh the
+        // session. Otherwise stay on the current page — the cooldown
+        // will run down naturally and rotation resumes after.
+        if (typeof GM_cookie !== 'undefined' && GM_cookie.list && GM_cookie.delete) {
+            try {
                 GM_cookie.list({ domain: '.waze.com' }, (cookies) => {
+                    let n = 0;
                     for (const ck of cookies || []) {
-                        try { GM_cookie.delete({ name: ck.name, url: 'https://www.waze.com/' }); } catch (e) {}
+                        try { GM_cookie.delete({ name: ck.name, url: 'https://www.waze.com/' }); n += 1; } catch (e) {}
                     }
-                    log(`cleared ${cookies?.length ?? 0} waze.com cookies`);
+                    log(`cleared ${n} waze.com cookies — reloading in 5s`);
+                    setTimeout(() => forceReload(`waze ${status} cookie-clear`), 5_000);
                 });
-            } else {
-                // Fallback: expire what we can via document.cookie.
-                const all = document.cookie.split(';');
-                for (const c of all) {
-                    const eq = c.indexOf('=');
-                    const name = eq > -1 ? c.slice(0, eq).trim() : c.trim();
-                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/`;
-                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; domain=.waze.com`;
-                }
+            } catch (e) {
+                log('GM_cookie clear failed — staying on page:', e);
             }
-        } catch (e) { log('cookie clear fail:', e); }
-        // Reload after a short pause so cookies take effect.
-        setTimeout(() => forceReload(`waze ${status} cooldown`), 5_000);
+        } else {
+            log('GM_cookie not granted — pausing rotation, no reload (HttpOnly cookies survive document.cookie clears)');
+        }
     }
 
     function forward(payload) {
@@ -733,8 +762,22 @@
     }
 
     function startRotation() {
-        // Wait ~15s for Waze's map JS to initialise before first pan attempt
+        // Honour persisted cooldown across page reloads — if we just
+        // came back from a 403 reload, the cooldown is still ticking
+        // and panning immediately would just earn us another 403.
+        const remainingMs = cooldownRemainingMs();
+        if (remainingMs > 0) {
+            log(`startRotation: cooldown active, waiting ${Math.round(remainingMs / 60000)}m before first pan`);
+            setTimeout(startRotation, remainingMs + 1000);
+            return;
+        }
+        // Wait ~15s for Waze's map JS to initialise before first pan attempt.
         setTimeout(() => {
+            if (isInCooldown()) {
+                // Race: a 403 hit in the 15s warm-up. Re-arm.
+                startRotation();
+                return;
+            }
             rotateToNextRegion();
             scheduleNextPan();
         }, 15_000);
@@ -823,9 +866,16 @@
         pageWin.addEventListener('focus', checkStuck);
     } catch (e) { log('visibility hook fail:', e); }
 
-    log('NSWPSN Waze Forwarder v1.18 loaded — backend:', BACKEND_URL,
-        `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
-        `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
-        `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
-        `· 403/429 cooldown ${COOLDOWN_BASE_MS / 60000}-${COOLDOWN_MAX_MS / 60000}m`);
+    {
+        const _cd = loadCooldown();
+        const _remMin = Math.round(Math.max(0, _cd.until - Date.now()) / 60000);
+        log('NSWPSN Waze Forwarder v1.19 loaded — backend:', BACKEND_URL,
+            `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
+            `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
+            `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
+            `· 403/429 cooldown ${COOLDOWN_BASE_MS / 60000}-${COOLDOWN_MAX_MS / 60000}m`,
+            _cd.until > 0
+                ? `· COOLDOWN ACTIVE ${_remMin}m left (count ${_cd.count})`
+                : '· no active cooldown');
+    }
 })();
