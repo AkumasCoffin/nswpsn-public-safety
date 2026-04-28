@@ -33,6 +33,7 @@ import { snapshot as wazeSnapshot } from '../store/wazeIngestCache.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
 import { policeHeatmapStatus } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
+import { getSourceMetrics } from '../services/poller.js';
 import { activeViewerCount } from '../services/activityMode.js';
 import { cleanupStatsForStatus } from '../services/cleanup.js';
 import { rdioSchedulerStats } from '../services/llm.js';
@@ -356,22 +357,40 @@ function checkRdioScheduler(nowMs: number): Record<string, unknown> {
   };
 }
 
-function summariseSources(): {
-  block: Record<string, { ok: boolean; status: string }>;
+function summariseSources(nowMs: number): {
+  block: Record<string, Record<string, unknown>>;
   counts: { ok: number; unknown: number; total: number };
 } {
   const sources = allSources();
-  const block: Record<string, { ok: boolean; status: string }> = {};
+  const metrics = new Map(getSourceMetrics().map((m) => [m.name, m]));
+  const nowSec = Math.floor(nowMs / 1000);
+  const block: Record<string, Record<string, unknown>> = {};
   const counts = { ok: 0, unknown: 0, total: sources.length };
   for (const s of sources) {
+    const m = metrics.get(s.name);
     const has = liveStore.getData(s.name) !== undefined;
-    if (has) {
-      block[s.name] = { ok: true, status: 'ok' };
-      counts.ok += 1;
-    } else {
-      block[s.name] = { ok: false, status: 'unknown' };
-      counts.unknown += 1;
-    }
+    const status = has ? 'ok' : 'unknown';
+    // Active poll cadence in seconds (matches what editor-requests
+    // shows under `thresh`). intervalIdleMs gives the soft threshold
+    // we tolerate before the source looks stale; intervalActiveMs is
+    // the active-mode polling target so the UI can compare the two.
+    const softSec = Math.round(s.intervalActiveMs / 1000);
+    const hardSec = Math.round(s.intervalIdleMs / 1000);
+    block[s.name] = {
+      ok: has,
+      status,
+      family: s.family,
+      last_success_age_secs:
+        m?.last_ok_at != null ? nowSec - m.last_ok_at : null,
+      last_error_age_secs:
+        m?.last_error_at != null ? nowSec - m.last_error_at : null,
+      last_error: m?.last_error ?? null,
+      consec_fails: m?.consec_fails ?? 0,
+      soft_threshold_secs: softSec,
+      hard_threshold_secs: hardSec,
+    };
+    if (has) counts.ok += 1;
+    else counts.unknown += 1;
   }
   return { block, counts };
 }
@@ -414,7 +433,7 @@ async function computeStatus(): Promise<{
   checks['ram_cache'] = checkRamCache();
   checks['rdio_scheduler'] = checkRdioScheduler(nowMs);
 
-  const sources = summariseSources();
+  const sources = summariseSources(nowMs);
   checks['sources'] = sources.block as unknown as Record<string, unknown>;
   if (sources.counts.unknown > 0 && sources.counts.total > 0) {
     // Boot grace handled per-source via the 'unknown' status; not flipped

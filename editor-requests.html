@@ -1303,20 +1303,32 @@
     }
 
     // Per-source FontAwesome icons. Keep generic — no need to chase
-    // perfect metaphors, just visually distinguish at a glance.
+    // perfect metaphors, just visually distinguish at a glance. Keys
+    // match the actual source names returned by /api/status →
+    // checks.sources (Node backend uses fully-qualified names like
+    // rfs_incidents, traffic_majorevent, endeavour_current, etc.).
     const _sourceIcons = {
-      rfs:               'fire',
-      bom:               'cloud-bolt',
-      pager:             'pager',
-      traffic_incidents: 'triangle-exclamation',
-      traffic_roadwork:  'screwdriver-wrench',
-      traffic_flood:     'water',
-      traffic_fire:      'fire-flame-curved',
-      traffic_major:     'flag',
-      power_endeavour:   'plug-circle-bolt',
-      power_ausgrid:     'bolt',
-      waze:              'route',
-      rdio:              'walkie-talkie',
+      rfs_incidents:        'fire',
+      bom_warnings:         'cloud-bolt',
+      pager:                'pager',
+      traffic_incidents:    'triangle-exclamation',
+      traffic_roadwork:     'screwdriver-wrench',
+      traffic_flood:        'water',
+      traffic_fire:         'fire-flame-curved',
+      traffic_majorevent:   'flag',
+      traffic_cameras:      'video',
+      beachwatch:           'umbrella-beach',
+      beachsafe:            'water-ladder',
+      weather_current:      'temperature-half',
+      weather_radar:        'satellite',
+      aviation_cameras:     'plane',
+      endeavour_current:    'plug-circle-bolt',
+      endeavour_planned:    'calendar-day',
+      endeavour_maintenance:'screwdriver-wrench',
+      ausgrid:              'bolt',
+      ausgrid_stats:        'chart-line',
+      essential_current:    'plug',
+      essential_future:     'clock',
     };
 
     function _sourceCard(name, s) {
@@ -1473,17 +1485,28 @@
       ].join('');
 
       // Sources grid — render in a stable order so the layout doesn't
-      // jiggle on every refresh.
-      const sources = data.sources || {};
+      // jiggle on every refresh. Sources live at checks.sources in the
+      // Node /api/status response (was top-level on python, hence the
+      // earlier `data.sources` lookup which always returned {}).
+      const sources = (data.checks && data.checks.sources) || {};
       const order = [
-        'rfs', 'bom', 'pager',
+        'rfs_incidents', 'bom_warnings', 'pager',
         'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
-        'traffic_fire', 'traffic_major',
-        'power_endeavour', 'power_ausgrid',
-        'waze', 'rdio',
+        'traffic_fire', 'traffic_majorevent', 'traffic_cameras',
+        'beachwatch', 'beachsafe',
+        'weather_current', 'weather_radar',
+        'aviation_cameras',
+        'endeavour_current', 'endeavour_planned', 'endeavour_maintenance',
+        'ausgrid', 'ausgrid_stats',
+        'essential_current', 'essential_future',
       ];
+      // Stable known sources first, then any unknown ones the backend
+      // gained without a UI update — appended in alphabetical order so
+      // the grid still renders new sources without code changes.
+      const known = new Set(order);
+      const extras = Object.keys(sources).filter(n => !known.has(n)).sort();
       const srcGrid = document.getElementById('dev-sources-grid');
-      srcGrid.innerHTML = order
+      srcGrid.innerHTML = [...order, ...extras]
         .filter(name => sources[name])
         .map(name => _sourceCard(name, sources[name]))
         .join('');
