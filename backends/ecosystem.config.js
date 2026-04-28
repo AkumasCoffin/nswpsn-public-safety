@@ -8,14 +8,14 @@ module.exports = {
     // Start: `pm2 start ecosystem.config.js`
     {
       name: 'nswpsn-api-node',
-      script: 'dist/index.js',
+      // Run via `npm start` so the prestart hook (npm run build) fires
+      // automatically on every PM2 restart. Previously `script:
+      // 'dist/index.js'` skipped the build and deploys carried stale
+      // compiled code across multiple restarts (recurring "008 still
+      // in skipped list" issue).
+      script: 'npm',
+      args: 'start',
       cwd: __dirname + '/node',
-      interpreter: 'node',
-      // Pass --env-file-if-exists to Node so it loads backends/.env
-      // (one level above cwd). Same flag the `npm start` script uses;
-      // pm2 spawns the interpreter directly so we have to pass it
-      // here instead. Without this Node never sees DATABASE_URL et al.
-      interpreter_args: '--env-file-if-exists=../.env',
       env: {
         NODE_ENV: 'production',
         PORT: '3000'
