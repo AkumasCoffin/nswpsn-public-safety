@@ -29,7 +29,7 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
-import { snapshot as wazeSnapshot } from '../store/wazeIngestCache.js';
+import { snapshot as wazeSnapshot, ingestStats as wazeIngestStats } from '../store/wazeIngestCache.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
 import { policeHeatmapStatus } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
@@ -236,6 +236,7 @@ function checkWazeIngest(now: number): {
     };
   }
   const s = wazeSnapshot();
+  const stats = wazeIngestStats();
   const upSecs = (now - PROCESS_START_MS) / 1000;
   const age = s.last_ingest_age_secs;
   const inGrace = age === null && upSecs < WAZE_BOOT_GRACE_SECS;
@@ -248,6 +249,11 @@ function checkWazeIngest(now: number): {
       last_ingest_age_secs: age,
       threshold_secs: STATUS_WAZE_STALE_SECS,
       regions_cached: s.regions_cached,
+      // Total + 60s rate are more useful than age alone — the userscript
+      // ingests every ~5s so age is always near zero. Showing rate makes
+      // a frozen vs healthy ingest immediately visible on the dev panel.
+      total_ingests: stats.total_ingests,
+      ingests_per_min: stats.ingests_per_min,
       // Node doesn't track userscript block-rate yet (no equivalent of
       // python's _waze_metrics_snapshot rolling counter). Surface as
       // null so the panel renders "—" rather than 0% (which would be

@@ -35,6 +35,14 @@ function emptyShape(): WazeStoreShape {
   return { bboxes: {}, last_ingest_ts: 0 };
 }
 
+// Process-lifetime counters (not persisted — these are diagnostic only).
+// last_ingest_age_secs alone is uninformative because the userscript
+// hits /api/waze/ingest every ~5s, so age is always near zero. Total
+// + 60s rate make the dev panel actually convey activity.
+let totalIngests = 0;
+const recentIngestTs: number[] = [];
+const RATE_WINDOW_SECS = 60;
+
 function readShape(): WazeStoreShape {
   return liveStore.getData<WazeStoreShape>('waze') ?? emptyShape();
 }
@@ -62,11 +70,37 @@ export function ingest(payload: WazeIngestPayload): {
   };
   shape.last_ingest_ts = ts;
   writeShape(shape);
+  // Update counters. Trim the rate window so the last_60s computation
+  // doesn't grow unbounded on a process that's been up for days.
+  totalIngests += 1;
+  recentIngestTs.push(ts);
+  const cutoff = ts - RATE_WINDOW_SECS;
+  while (recentIngestTs.length > 0 && recentIngestTs[0]! < cutoff) {
+    recentIngestTs.shift();
+  }
   return {
     bboxKey: key,
     regions: Object.keys(shape.bboxes).length,
     alerts: payload.alerts.length,
     jams: payload.jams.length,
+  };
+}
+
+/** Diagnostic counters surfaced via /api/status → checks.waze_ingest. */
+export function ingestStats(): {
+  total_ingests: number;
+  ingests_per_min: number;
+} {
+  // recentIngestTs is trimmed on push, but trim again here in case
+  // ingest stopped firing — otherwise the rate would lag behind reality.
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - RATE_WINDOW_SECS;
+  while (recentIngestTs.length > 0 && recentIngestTs[0]! < cutoff) {
+    recentIngestTs.shift();
+  }
+  return {
+    total_ingests: totalIngests,
+    ingests_per_min: recentIngestTs.length,
   };
 }
 
