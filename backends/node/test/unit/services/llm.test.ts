@@ -274,6 +274,66 @@ describe('localHourStartUtc', () => {
   });
 });
 
+describe('nextFireTimeMs', () => {
+  // The function reads system time directly via Date.now()/new Date().
+  // Use vi.setSystemTime to make it deterministic, then verify the
+  // computed fire-time lands on the next :55:00 in SUMMARY_TZ
+  // (Australia/Sydney → UTC+10 in April).
+  it('lands on the next :55:00 mid-hour', async () => {
+    vi.useFakeTimers();
+    try {
+      // 13:30:15 AEST = 03:30:15 UTC. Next :55:00 = 13:55:00 AEST = 03:55:00 UTC.
+      vi.setSystemTime(new Date('2026-04-29T03:30:15Z'));
+      const { _testHooks } = await import('../../../src/services/llm.js');
+      const fire = new Date(_testHooks.nextFireTimeMs());
+      expect(fire.toISOString()).toBe('2026-04-29T03:55:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips to the next hour when called exactly at :55:00', async () => {
+    vi.useFakeTimers();
+    try {
+      // 13:55:00 AEST. Next fire should be 14:55:00 AEST (one hour ahead)
+      // — the existing one fires now, scheduler arms the next.
+      vi.setSystemTime(new Date('2026-04-29T03:55:00Z'));
+      const { _testHooks } = await import('../../../src/services/llm.js');
+      const fire = new Date(_testHooks.nextFireTimeMs());
+      expect(fire.toISOString()).toBe('2026-04-29T04:55:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lands on the next :55:00 just after the previous fire', async () => {
+    vi.useFakeTimers();
+    try {
+      // 13:55:30 — 30s past the previous fire. Next = 14:55:00.
+      vi.setSystemTime(new Date('2026-04-29T03:55:30Z'));
+      const { _testHooks } = await import('../../../src/services/llm.js');
+      const fire = new Date(_testHooks.nextFireTimeMs());
+      expect(fire.toISOString()).toBe('2026-04-29T04:55:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('strips sub-second drift', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-04-29T03:30:15.789Z'));
+      const { _testHooks } = await import('../../../src/services/llm.js');
+      const fire = new Date(_testHooks.nextFireTimeMs());
+      // No millisecond residual.
+      expect(fire.getUTCMilliseconds()).toBe(0);
+      expect(fire.toISOString()).toBe('2026-04-29T03:55:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('/api/summaries/trigger', () => {
   it('503s when GEMINI_API_KEY is unset', async () => {
     const { createApp } = await import('../../../src/server.js');

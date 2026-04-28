@@ -50,6 +50,12 @@ interface SourceState {
   /** Wall-clock of last attempt (success or failure). */
   lastAttemptTs: number | null;
   lastError: string | null;
+  /** Promise of an in-progress runOnce, or null when idle. Used to
+   *  coalesce concurrent calls — without this, prewarmAll's timeout
+   *  could leave a slow fetch running while startPolling fires
+   *  another runOnce for the same source via armOne, doubling the
+   *  upstream traffic and racing the LiveStore write. */
+  inFlight: Promise<void> | null;
 }
 
 let activeMode = true; // true = active interval, false = idle
@@ -94,6 +100,7 @@ function ensureState(name: string): SourceState {
       lastSuccessTs: null,
       lastAttemptTs: null,
       lastError: null,
+      inFlight: null,
     };
     _state.set(name, s);
   }
@@ -119,6 +126,22 @@ function countItems(data: unknown): string {
 }
 
 async function runOnce(src: SourceDefinition): Promise<void> {
+  const state = ensureState(src.name);
+  // Coalesce concurrent invocations. If a previous runOnce is still
+  // running (e.g. prewarmAll timed out before its slowest fetch
+  // returned, but the regular interval has now armed another), await
+  // the in-flight promise instead of starting a parallel fetch.
+  if (state.inFlight) return state.inFlight;
+  const promise = runOnceInner(src);
+  state.inFlight = promise;
+  try {
+    await promise;
+  } finally {
+    state.inFlight = null;
+  }
+}
+
+async function runOnceInner(src: SourceDefinition): Promise<void> {
   const state = ensureState(src.name);
   const startedAt = Date.now();
   state.lastAttemptTs = Math.floor(startedAt / 1000);

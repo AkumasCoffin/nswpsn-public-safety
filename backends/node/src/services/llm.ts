@@ -920,13 +920,23 @@ function localMinute(d: Date): number {
 }
 
 function nextFireTimeMs(): number {
-  // Next HH:55 in SUMMARY_TZ. Use a rolling-minute approach: get the
-  // current minute in tz, compute how many minutes until :55, schedule.
+  // Next HH:55:00 in SUMMARY_TZ. Compute the local-tz minute, derive
+  // how many full minutes until :55, then SUBTRACT the elapsed
+  // seconds + millis of the current minute so the timer lands on
+  // :55:00 exactly. Previous version added `(60 - seconds) * 1000`
+  // which fired 0-60s past the intended boundary on every cycle —
+  // e.g. now=12:30:15 produced 12:56:00 instead of 12:55:00.
   const now = Date.now();
-  const minute = localMinute(new Date(now));
+  const nowDate = new Date(now);
+  const minute = localMinute(nowDate);
   let waitMin = 55 - minute;
   if (waitMin <= 0) waitMin += 60;
-  return now + waitMin * 60_000 + (60 - new Date().getSeconds()) * 1000;
+  return (
+    now +
+    waitMin * 60_000 -
+    nowDate.getSeconds() * 1000 -
+    nowDate.getMilliseconds()
+  );
 }
 
 async function runHourlyJob(): Promise<void> {
@@ -1027,6 +1037,7 @@ export const _testHooks = {
   fetchCallsBetween,
   fetchLastNCalls,
   localHourStartUtc,
+  nextFireTimeMs,
   setPoolForTests: (_: Pool): void => {
     // Tests should mock getRdioPool / getPool from the modules; this
     // helper is a placeholder to discourage direct pool injection.
