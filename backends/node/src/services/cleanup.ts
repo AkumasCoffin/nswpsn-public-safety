@@ -26,6 +26,7 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
+import { sweepStaleAsEnded } from './archiveLiveness.js';
 
 const DEFAULT_INTERVAL_SECS = Number.parseInt(
   process.env['DATA_CLEANUP_INTERVAL_SECS'] ?? '3600',
@@ -48,6 +49,7 @@ interface CleanupStats {
   lastRunAt: number;
   lastHistoryDeleted: number;
   lastStatsDeleted: number;
+  lastStaleSwept: number;
   totalHistoryDeleted: number;
   lastVacuumAt: number;
   lastVacuumMs: number;
@@ -57,6 +59,7 @@ const stats: CleanupStats = {
   lastRunAt: 0,
   lastHistoryDeleted: 0,
   lastStatsDeleted: 0,
+  lastStaleSwept: 0,
   totalHistoryDeleted: 0,
   lastVacuumAt: 0,
   lastVacuumMs: 0,
@@ -117,10 +120,11 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
   partitions_dropped: number;
   rows_deleted: number;
   stats_pruned: number;
+  stale_swept: number;
   vacuum_ms: number;
 }> {
   if (running) {
-    return { partitions_dropped: 0, rows_deleted: 0, stats_pruned: 0, vacuum_ms: 0 };
+    return { partitions_dropped: 0, rows_deleted: 0, stats_pruned: 0, stale_swept: 0, vacuum_ms: 0 };
   }
   running = true;
   const startMs = Date.now();
@@ -130,7 +134,7 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
   let vacuumMs = 0;
   try {
     const pool = await getPool();
-    if (!pool) return { partitions_dropped: 0, rows_deleted: 0, stats_pruned: 0, vacuum_ms: 0 };
+    if (!pool) return { partitions_dropped: 0, rows_deleted: 0, stats_pruned: 0, stale_swept: 0, vacuum_ms: 0 };
     const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
     const client = await pool.connect();
     try {
@@ -190,9 +194,25 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
     // already knows the retention policy for that table).
     statsPruned = await pruneOldSnapshots();
 
+    // 4. Tombstone any source_id whose latest live archive row is
+    // >1h old. Catches the case where a poller has been failing for
+    // an hour+ (so the per-poll diff hasn't run) and disappeared
+    // incidents would otherwise stay live until partition drop.
+    let staleSwept = 0;
+    try {
+      const pool = await getPool();
+      if (pool) staleSwept = await sweepStaleAsEnded(pool);
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'cleanup: stale-as-ended sweep failed (non-fatal)',
+      );
+    }
+
     stats.lastRunAt = Math.floor(Date.now() / 1000);
     stats.lastHistoryDeleted = rowsDeleted;
     stats.lastStatsDeleted = statsPruned;
+    stats.lastStaleSwept = staleSwept;
     stats.totalHistoryDeleted += rowsDeleted;
     if (vacuumMs > 0) {
       stats.lastVacuumAt = Math.floor(Date.now() / 1000);
@@ -204,6 +224,7 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         partitions_dropped: partitionsDropped,
         rows_deleted: rowsDeleted,
         stats_pruned: statsPruned,
+        stale_swept: staleSwept,
         ms: Date.now() - startMs,
       },
       'cleanup: done',
@@ -212,11 +233,12 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       partitions_dropped: partitionsDropped,
       rows_deleted: rowsDeleted,
       stats_pruned: statsPruned,
+      stale_swept: staleSwept,
       vacuum_ms: vacuumMs,
     };
   } catch (err) {
     log.error({ err: (err as Error).message }, 'cleanup: failed');
-    return { partitions_dropped: 0, rows_deleted: 0, stats_pruned: 0, vacuum_ms: 0 };
+    return { partitions_dropped: 0, rows_deleted: 0, stats_pruned: 0, stale_swept: 0, vacuum_ms: 0 };
   } finally {
     running = false;
   }
@@ -229,6 +251,7 @@ export function cleanupStatsForStatus(): {
   last_stats_deleted: number;
   last_pager_ended: number;
   last_waze_ended: number;
+  last_stale_swept: number;
   total_history_deleted: number;
   last_vacuum_age_secs: number | null;
   last_vacuum_ms: number;
@@ -245,6 +268,10 @@ export function cleanupStatsForStatus(): {
     // drop) so report 0 — keeps the response shape stable.
     last_pager_ended: 0,
     last_waze_ended: 0,
+    // Number of "stale-as-ended" tombstones inserted in the most
+    // recent cleanup pass — counts source_ids that the per-poll diff
+    // missed because the poller was failing.
+    last_stale_swept: stats.lastStaleSwept,
     total_history_deleted: stats.totalHistoryDeleted,
     last_vacuum_age_secs: stats.lastVacuumAt ? now - stats.lastVacuumAt : null,
     last_vacuum_ms: stats.lastVacuumMs,

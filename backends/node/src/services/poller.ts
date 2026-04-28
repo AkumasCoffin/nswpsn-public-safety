@@ -20,6 +20,11 @@ import { log } from '../lib/log.js';
 import { backoffSeconds } from '../sources/shared/backoff.js';
 import { defaultArchiveItems } from './archiveExtract.js';
 import {
+  computeDisappearedTombstones,
+  stampLiveRow,
+} from './archiveLiveness.js';
+import { getPool } from '../db/pool.js';
+import {
   allSources,
   familyTable,
   type SourceDefinition,
@@ -137,10 +142,39 @@ async function runOnce(src: SourceDefinition): Promise<void> {
       // data_history source values and the SOURCE_TO_FAMILY lookup
       // in dataHistoryQuery resolves to the right archive table.
       const archiveSource = src.archiveSource ?? src.name;
-      const rows = src.archiveItems
+      const rawRows = src.archiveItems
         ? src.archiveItems(data, fetchedAt, archiveSource)
         : defaultArchiveItems(archiveSource, data, fetchedAt);
+      // Stamp is_live=true on every live row so the count query at
+      // /api/data/history sees them — and so a tombstone in the next
+      // cycle has something to compare against.
+      const rows = rawRows.map(stampLiveRow);
       const tbl = familyTable(src.family);
+
+      // Per-poll diff: tombstone source_ids that were live before
+      // this poll but aren't in the new snapshot. Skipped for
+      // empty snapshots (upstream blip protection) and waze_*
+      // sources (rotation-based ingest) inside the helper.
+      try {
+        const pool = await getPool();
+        if (pool) {
+          const tombstones = await computeDisappearedTombstones({
+            pool,
+            table: tbl,
+            source: archiveSource,
+            newRows: rows,
+            fetchedAt,
+          });
+          for (const t of tombstones) archiveWriter.push(tbl, t);
+        }
+      } catch (err) {
+        // Don't let tombstone failure block the live INSERT.
+        log.warn(
+          { err: (err as Error).message, source: archiveSource },
+          'archiveLiveness diff failed (non-fatal)',
+        );
+      }
+
       for (const row of rows) {
         archiveWriter.push(tbl, row);
       }
