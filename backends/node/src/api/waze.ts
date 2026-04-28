@@ -238,14 +238,26 @@ async function buildHeatmapFromArchive(
     const placeholders = subtypes
       .map((_, i) => `$${params.length + i + 1}`)
       .join(',');
-    // COALESCE to 'POLICE_VISIBLE' so rows with NULL/missing subtype
-    // (Waze sometimes ships bare type='POLICE' with no subtype) still
-    // count when the caller asks for POLICE_VISIBLE. Mirrors python's
-    // _waze_police_heatmap loop which does `eff = sub or 'POLICE_VISIBLE'`
-    // before the filter check (external_api_proxy.py:10166-10169).
-    // Without this the bbox-aware heatmap dropped roughly 90% of pings
-    // and showed ~6k where it should have shown ~90k+.
-    subtypeClause = `AND COALESCE(data->>'subtype', 'POLICE_VISIBLE') IN (${placeholders})`;
+    // Read subtype from the `subcategory` column first, then fall
+    // back to the JSONB blob, then default to POLICE_VISIBLE.
+    //
+    // Why this order: python wrote subtype into the `subcategory`
+    // column on data_history, NOT into the `data` text field. The
+    // migration (migrate-history.mjs) preserved that — subcategory
+    // column has the value, JSONB doesn't. Reading only `data->>
+    // 'subtype'` made every migrated row look NULL → defaulted to
+    // POLICE_VISIBLE → speed cameras (POLICE_WITH_MOBILE_CAMERA)
+    // got bucketed under visible police, leaving the speed-camera
+    // filter showing ~2k pings instead of tens of thousands.
+    //
+    // Node-written rows (api/waze-ingest.ts) populate BOTH the
+    // subcategory column and the data JSONB so either order works
+    // for them. Migrated rows only have subcategory.
+    //
+    // Mirrors python's _waze_police_heatmap loop which does
+    // `eff = sub or 'POLICE_VISIBLE'` before the filter check
+    // (external_api_proxy.py:10166-10169).
+    subtypeClause = `AND COALESCE(NULLIF(subcategory, ''), data->>'subtype', 'POLICE_VISIBLE') IN (${placeholders})`;
     for (const s of subtypes) params.push(s);
   }
   // Bbox filter applies to the COALESCE-resolved coords (lat_v/lng_v),
