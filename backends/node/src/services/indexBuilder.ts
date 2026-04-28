@@ -68,43 +68,6 @@ const INDEXES: IndexSpec[] = [
           ON archive_waze (source, fetched_at DESC)
           WHERE lat IS NOT NULL AND lng IS NOT NULL`,
   },
-  // Writer-side lookup: the archive writer's post-INSERT UPDATE flips
-  // prior is_latest=true rows for the (source, source_id) tuples it
-  // just inserted. The migration-012 partial index is keyed on
-  // (source, fetched_at) which matches reads but not the writer's
-  // (source, source_id) lookup. This tighter partial index has one
-  // row per (source, source_id) after the backfill — sub-millisecond
-  // per UPDATE instead of scanning the whole is_latest=true slice.
-  {
-    name: 'idx_archive_waze_src_sid_latest',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_waze_src_sid_latest
-          ON archive_waze (source, source_id)
-          WHERE is_latest = true AND source_id IS NOT NULL`,
-  },
-  {
-    name: 'idx_archive_traffic_src_sid_latest',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_traffic_src_sid_latest
-          ON archive_traffic (source, source_id)
-          WHERE is_latest = true AND source_id IS NOT NULL`,
-  },
-  {
-    name: 'idx_archive_rfs_src_sid_latest',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_rfs_src_sid_latest
-          ON archive_rfs (source, source_id)
-          WHERE is_latest = true AND source_id IS NOT NULL`,
-  },
-  {
-    name: 'idx_archive_power_src_sid_latest',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_power_src_sid_latest
-          ON archive_power (source, source_id)
-          WHERE is_latest = true AND source_id IS NOT NULL`,
-  },
-  {
-    name: 'idx_archive_misc_src_sid_latest',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_misc_src_sid_latest
-          ON archive_misc (source, source_id)
-          WHERE is_latest = true AND source_id IS NOT NULL`,
-  },
 ];
 
 /**
@@ -123,6 +86,19 @@ const DROP_INDEXES = [
   'idx_archive_power_live',
   'idx_archive_misc_live',
   'idx_archive_rfs_live',
+  // is_latest experiment fallout — migration 013 drops the columns,
+  // but defensively drop the indexes too in case a partition kept
+  // them after the column removal cascaded.
+  'idx_archive_waze_src_sid_latest',
+  'idx_archive_traffic_src_sid_latest',
+  'idx_archive_rfs_src_sid_latest',
+  'idx_archive_power_src_sid_latest',
+  'idx_archive_misc_src_sid_latest',
+  'idx_archive_waze_latest',
+  'idx_archive_traffic_latest',
+  'idx_archive_rfs_latest',
+  'idx_archive_power_latest',
+  'idx_archive_misc_latest',
 ];
 
 /**
