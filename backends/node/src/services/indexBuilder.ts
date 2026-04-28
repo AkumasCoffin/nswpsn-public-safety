@@ -88,6 +88,74 @@ const DROP_INDEXES = [
   'idx_archive_rfs_live',
 ];
 
+/**
+ * One-shot backfills. Each runs after index work, only if the target
+ * row count is non-zero. Idempotent — re-running on a clean table is
+ * a no-op (each WHERE clause matches zero rows).
+ */
+interface BackfillSpec {
+  name: string;
+  // Cheap COUNT(*) to decide whether to run the heavier UPDATE.
+  countSql: string;
+  // The actual UPDATE.
+  updateSql: string;
+}
+
+const BACKFILLS: BackfillSpec[] = [
+  // waze_police: rows where subcategory is empty/null but data carries
+  // the subtype in the JSONB blob → promote it into the column. Mirrors
+  // python's normaliser which sometimes left subcategory empty even
+  // when the subtype was right there in `data->>'subtype'`.
+  {
+    name: 'archive_waze.subcategory ← data->>subtype (waze_police)',
+    countSql: `SELECT COUNT(*)::bigint AS n FROM archive_waze
+               WHERE source = 'waze_police'
+                 AND COALESCE(subcategory, '') = ''
+                 AND NULLIF(data->>'subtype', '') IS NOT NULL`,
+    updateSql: `UPDATE archive_waze
+                   SET subcategory = data->>'subtype'
+                 WHERE source = 'waze_police'
+                   AND COALESCE(subcategory, '') = ''
+                   AND NULLIF(data->>'subtype', '') IS NOT NULL`,
+  },
+  // waze_police: ALL remaining empty-subcategory rows default to
+  // POLICE_VISIBLE. Mirrors python's `eff = sub or 'POLICE_VISIBLE'`
+  // (external_api_proxy.py:10167) — Waze police alerts without an
+  // explicit subtype are treated as visible. User-confirmed policy
+  // ("any police without a subtype should be counted as visible
+  // police"). After this, every waze_police row has a non-empty
+  // subcategory and downstream filters (/api/data/history,
+  // filterCache, heatmap) all see the same value without needing
+  // COALESCE chains.
+  {
+    name: 'archive_waze.subcategory = POLICE_VISIBLE (waze_police default)',
+    countSql: `SELECT COUNT(*)::bigint AS n FROM archive_waze
+               WHERE source = 'waze_police'
+                 AND COALESCE(subcategory, '') = ''`,
+    updateSql: `UPDATE archive_waze
+                   SET subcategory = 'POLICE_VISIBLE'
+                 WHERE source = 'waze_police'
+                   AND COALESCE(subcategory, '') = ''`,
+  },
+  // Other waze types (hazard/roadwork/jam): promote data->>'subtype'
+  // into subcategory where the column is empty but JSONB has it. No
+  // default for these — leave subcategory empty when nothing is
+  // available, since hazard subtypes are too varied to assign a
+  // generic one.
+  {
+    name: 'archive_waze.subcategory ← data->>subtype (other waze)',
+    countSql: `SELECT COUNT(*)::bigint AS n FROM archive_waze
+               WHERE source IN ('waze_hazard','waze_roadwork','waze_jam')
+                 AND COALESCE(subcategory, '') = ''
+                 AND NULLIF(data->>'subtype', '') IS NOT NULL`,
+    updateSql: `UPDATE archive_waze
+                   SET subcategory = data->>'subtype'
+                 WHERE source IN ('waze_hazard','waze_roadwork','waze_jam')
+                   AND COALESCE(subcategory, '') = ''
+                   AND NULLIF(data->>'subtype', '') IS NOT NULL`,
+  },
+];
+
 let inFlight: Promise<void> | null = null;
 
 /**
@@ -172,6 +240,30 @@ export async function ensurePerfIndexes(): Promise<void> {
         }
       }
       log.info({ built, skipped, failed }, 'indexBuilder: done');
+
+      // One-shot data backfills. Each is gated on a cheap COUNT first
+      // so on a clean DB this whole pass costs ~5 ms. On the first
+      // boot after deploying this code, may UPDATE tens of thousands
+      // of rows; subsequent boots are no-ops.
+      for (const bf of BACKFILLS) {
+        try {
+          const cnt = await client.query<{ n: string }>(bf.countSql);
+          const n = Number(cnt.rows[0]?.n ?? 0);
+          if (n === 0) continue;
+          const t0 = Date.now();
+          log.info({ backfill: bf.name, candidates: n }, 'indexBuilder: backfilling');
+          const r = await client.query(bf.updateSql);
+          log.info(
+            { backfill: bf.name, updated: r.rowCount, ms: Date.now() - t0 },
+            'indexBuilder: backfill done',
+          );
+        } catch (err) {
+          log.warn(
+            { err: (err as Error).message, backfill: bf.name },
+            'indexBuilder: backfill failed',
+          );
+        }
+      }
 
       // ANALYZE the archive tables. After bulk migrations / heavy ingest,
       // the planner's row-count statistics are stale and it picks plans

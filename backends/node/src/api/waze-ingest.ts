@@ -86,8 +86,22 @@ function archiveAlertsAndJams(alerts: WazeAlert[], jams: WazeJam[]): number {
     const { lat, lng } = alertLatLng(a);
     if (lat === null || lng === null) continue;
     const raw = a as Record<string, unknown>;
-    const subtype = typeof raw['subtype'] === 'string' ? (raw['subtype'] as string) : null;
+    const rawSubtype = typeof raw['subtype'] === 'string' ? (raw['subtype'] as string).trim() : '';
     const type = typeof raw['type'] === 'string' ? (raw['type'] as string) : null;
+    // Default-to-POLICE_VISIBLE policy: Waze sometimes ships bare
+    // type='POLICE' alerts with no subtype. Python's heatmap and the
+    // user-confirmed convention treat these as visible police, not
+    // unclassified. Apply the default at write time so every
+    // downstream read (filters, heatmap, /api/data/history) sees a
+    // consistent value without needing per-query COALESCE chains.
+    let subcategory: string | null;
+    if (rawSubtype) {
+      subcategory = rawSubtype;
+    } else if (source === 'waze_police') {
+      subcategory = 'POLICE_VISIBLE';
+    } else {
+      subcategory = type ?? null;
+    }
     const row: ArchiveRow = {
       source,
       source_id: String(a.uuid ?? a.id ?? '') || null,
@@ -95,7 +109,7 @@ function archiveAlertsAndJams(alerts: WazeAlert[], jams: WazeJam[]): number {
       lat,
       lng,
       category: type ?? null,
-      subcategory: subtype ?? type ?? null,
+      subcategory,
       // The data blob mirrors what defaultArchiveItems would produce
       // for a GeoJSON Feature.properties: top-level title/subtype/etc
       // so dataHistoryQuery's JSONB projection finds them.
