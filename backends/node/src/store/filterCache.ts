@@ -439,8 +439,6 @@ interface ArchiveFacetRow {
   source: string;
   category: string | null;
   subcategory: string | null;
-  status: string | null;
-  severity: string | null;
   cnt: string;
   oldest: number | null;
   newest: number | null;
@@ -449,8 +447,14 @@ interface ArchiveFacetRow {
 /**
  * GROUP BY scan over the small archive_* tables. Bounded to the last
  * 24h so the dropdown matches what `?since=24h` filters would surface.
- * One pass per table; statement timeout caps any single query at 30s
- * (matches the data-history read path).
+ *
+ * Earlier revisions GROUPED BY status + severity (extracted from
+ * `data->>` JSONB), which forced per-row JSONB parses for every row in
+ * the 24h window — on heavily-loaded archive_traffic that timed out at
+ * 30s. Now we only GROUP BY the indexed columns (source, category,
+ * subcategory) and skip status/severity facets in the dropdown. Worth
+ * the trade: the dropdown's primary use is per-source + per-category
+ * filtering; status/severity were nice-to-have.
  */
 async function archiveFacets(): Promise<{
   typeCounts: Record<string, number>;
@@ -472,14 +476,12 @@ async function archiveFacets(): Promise<{
         source,
         category,
         subcategory,
-        data->>'status'   AS status,
-        data->>'severity' AS severity,
-        COUNT(*)::text    AS cnt,
+        COUNT(*)::text AS cnt,
         EXTRACT(EPOCH FROM MIN(fetched_at))::bigint AS oldest,
         EXTRACT(EPOCH FROM MAX(fetched_at))::bigint AS newest
       FROM ${table}
       WHERE fetched_at >= NOW() - INTERVAL '24 hours'
-      GROUP BY 1, 2, 3, 4, 5
+      GROUP BY 1, 2, 3
     `;
     let client;
     try {
@@ -491,7 +493,11 @@ async function archiveFacets(): Promise<{
     try {
       await client.query('BEGIN');
       try {
-        await client.query("SET LOCAL statement_timeout = '30s'");
+        // 60s — bumped from 30s after seeing the 24h GROUP BY exceed
+        // 30s on heavily-loaded archive_traffic. The refresh runs every
+        // 5 min; long-tail single failures are tolerable but timing out
+        // every cycle is not.
+        await client.query("SET LOCAL statement_timeout = '60s'");
         const result = await client.query<ArchiveFacetRow>(sql);
         await client.query('COMMIT');
         for (const row of result.rows) {
@@ -513,12 +519,7 @@ async function archiveFacets(): Promise<{
             slot['subcategory']![row.subcategory] =
               (slot['subcategory']![row.subcategory] ?? 0) + cnt;
           }
-          if (row.status) {
-            slot['status']![row.status] = (slot['status']![row.status] ?? 0) + cnt;
-          }
-          if (row.severity) {
-            slot['severity']![row.severity] = (slot['severity']![row.severity] ?? 0) + cnt;
-          }
+          // status/severity facets dropped — see archiveFacets() docstring.
           if (typeof row.oldest === 'number') {
             if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
           }
