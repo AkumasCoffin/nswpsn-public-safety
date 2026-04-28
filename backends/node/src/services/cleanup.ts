@@ -162,18 +162,22 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         }
       }
 
-      // 2. VACUUM (non-FULL) + ANALYZE the archive tables. VACUUM
-      // reclaims dead tuples from prior UPDATEs without taking
-      // ACCESS EXCLUSIVE, so reads and writes keep flowing. ANALYZE
-      // refreshes pg_statistic so the planner stays current.
+      // 2. ANALYZE the archive tables — refreshes pg_statistic so the
+      // planner stays current after partition drops above. We do NOT
+      // VACUUM here: postgres' autovacuum already handles dead-tuple
+      // cleanup automatically, and running a second VACUUM in parallel
+      // saturates disk I/O. Production saw archive_rfs queries (tiny
+      // table) time out at 60s when our hourly VACUUM competed with
+      // autovacuum on archive_waze. Manual one-shot VACUUM is still
+      // available via /api/admin/db/vacuum when needed.
       const vacStart = Date.now();
       for (const t of ARCHIVE_TABLES) {
         try {
-          await client.query(`VACUUM (ANALYZE) ${t}`);
+          await client.query(`ANALYZE ${t}`);
         } catch (err) {
           log.warn(
             { err: (err as Error).message, table: t },
-            'cleanup: VACUUM ANALYZE failed',
+            'cleanup: ANALYZE failed',
           );
         }
       }
