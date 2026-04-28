@@ -66,17 +66,35 @@ async function main() {
   try {
     for (const parent of PARENTS) {
       console.log(`\n=== ${parent} ===`);
+      // Confirm the table exists and report its partition kind so we
+      // know whether to recurse. relkind 'p' = partitioned table,
+      // 'r' = ordinary, 'I' = partitioned index, etc.
+      const meta = await pool.query(
+        `SELECT relkind::text AS relkind FROM pg_class
+         WHERE relname = $1 AND relnamespace = 'public'::regnamespace`,
+        [parent],
+      );
+      if (meta.rows.length === 0) {
+        console.log(`  (table not found — skipping)`);
+        continue;
+      }
+      const relkind = meta.rows[0].relkind;
+      // pg_inherits via regclass — driving from the parent's OID rather
+      // than name-matching catches partitions even when names collide.
       const parts = await pool.query(
-        `SELECT child.relname::text AS partition
-         FROM pg_inherits
-         JOIN pg_class child ON child.oid = pg_inherits.inhrelid
-         JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-         WHERE parent.relname = $1
-         ORDER BY child.relname`,
+        `SELECT c.relname::text AS partition
+         FROM pg_inherits i
+         JOIN pg_class c ON c.oid = i.inhrelid
+         WHERE i.inhparent = $1::regclass
+         ORDER BY c.relname`,
         [parent],
       );
       if (parts.rows.length === 0) {
-        console.log(`  (no partitions found — treating as plain table)`);
+        if (relkind === 'p') {
+          console.log(`  (relkind=p but no partitions registered — vacuuming parent directly)`);
+        } else {
+          console.log(`  (relkind=${relkind}, treating as plain table)`);
+        }
         await runOne(pool, parent);
       } else {
         console.log(`  ${parts.rows.length} partition(s)`);
@@ -98,10 +116,13 @@ async function main() {
 
 async function runOne(pool, table) {
   console.log(`\n  [${table}]`);
+  // Two parameter slots — using $1 in both `::regclass` and a `name`
+  // comparison made postgres infer $1 as regclass globally and the
+  // `relname = $1` clause failed with `name = regclass`.
   const before = await pool.query(
     `SELECT n_live_tup, n_dead_tup, pg_size_pretty(pg_total_relation_size($1::regclass)) AS size
-     FROM pg_stat_user_tables WHERE relname = $1`,
-    [table],
+     FROM pg_stat_user_tables WHERE relname = $2`,
+    [table, table],
   );
   const b = before.rows[0];
   if (b) {
@@ -128,8 +149,8 @@ async function runOne(pool, table) {
 
   const after = await pool.query(
     `SELECT n_live_tup, n_dead_tup, pg_size_pretty(pg_total_relation_size($1::regclass)) AS size
-     FROM pg_stat_user_tables WHERE relname = $1`,
-    [table],
+     FROM pg_stat_user_tables WHERE relname = $2`,
+    [table, table],
   );
   const a = after.rows[0];
   if (a) {
