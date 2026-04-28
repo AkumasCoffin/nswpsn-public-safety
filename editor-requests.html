@@ -1451,9 +1451,17 @@
         }),
         _renderCard({
           name: 'Waze Ingest', icon: 'satellite-dish', statusCls: _cls(wi),
-          primary: { value: _fmtAge(wi.last_ingest_age_secs), label: 'since last ingest' },
+          // Show ingests/min as the headline — the userscript hits
+          // /api/waze/ingest every ~5s so age is always near zero,
+          // making the rate the meaningful health signal.
+          primary: {
+            value: wi.ingests_per_min != null ? `${wi.ingests_per_min}/min` : '—',
+            label: 'ingest rate',
+          },
           secondary: [
             { label: 'regions', value: wi.regions_cached ?? null },
+            { label: 'last',    value: _fmtAge(wi.last_ingest_age_secs) },
+            { label: 'total',   value: wi.total_ingests != null ? wi.total_ingests.toLocaleString() : null },
             { label: 'block',   value: wi.block_rate_pct != null ? `${wi.block_rate_pct}%` : null },
             wi.gate_active ? { label: 'gated', value: 'YES' } : null,
           ].filter(Boolean),
@@ -1489,12 +1497,16 @@
       // Node /api/status response (was top-level on python, hence the
       // earlier `data.sources` lookup which always returned {}).
       const sources = (data.checks && data.checks.sources) || {};
+      // Sources we never want on the dev panel even though the backend
+      // registers them. weather_radar is RainViewer tile metadata, not
+      // an incident feed — its freshness is uninteresting for ops.
+      const HIDDEN_SOURCES = new Set(['weather_radar']);
       const order = [
         'rfs_incidents', 'bom_warnings', 'pager',
         'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
         'traffic_fire', 'traffic_majorevent', 'traffic_cameras',
         'beachwatch', 'beachsafe',
-        'weather_current', 'weather_radar',
+        'weather_current',
         'aviation_cameras',
         'endeavour_current', 'endeavour_planned', 'endeavour_maintenance',
         'ausgrid', 'ausgrid_stats',
@@ -1504,10 +1516,10 @@
       // gained without a UI update — appended in alphabetical order so
       // the grid still renders new sources without code changes.
       const known = new Set(order);
-      const extras = Object.keys(sources).filter(n => !known.has(n)).sort();
+      const extras = Object.keys(sources).filter(n => !known.has(n) && !HIDDEN_SOURCES.has(n)).sort();
       const srcGrid = document.getElementById('dev-sources-grid');
       srcGrid.innerHTML = [...order, ...extras]
-        .filter(name => sources[name])
+        .filter(name => sources[name] && !HIDDEN_SOURCES.has(name))
         .map(name => _sourceCard(name, sources[name]))
         .join('');
     }
