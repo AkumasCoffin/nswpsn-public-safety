@@ -16,6 +16,10 @@ import {
   parseWazeAlert,
   parseWazeJam,
 } from '../services/wazeAlerts.js';
+import {
+  readPoliceHeatmapCache,
+  policeHeatmapCacheStats,
+} from '../services/policeHeatmapCache.js';
 
 export const wazeRouter = new Hono();
 
@@ -369,48 +373,44 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
     return c.json(hit.result);
   }
 
-  // Fast path: when only a bbox is filter (no subtype), the unfiltered
-  // cache already has every bin we need — just pre-filter to the
-  // requested viewport instead of re-running the SQL. Eliminates the
-  // 6+ second heatmap latency for the common map-pan/zoom case where
-  // the front-end pings the heatmap with each viewport change. Subtype
-  // filtering requires a fresh aggregate (counts can't be split out
-  // of the merged bin) so it still falls through to buildHeatmap.
-  if (bbox && (!wanted || wanted.length === 0)) {
-    const baseKey = _heatmapCacheKey([], null);
-    const base = heatmapCache.get(baseKey);
-    if (base && now - base.ts < HEATMAP_CACHE_TTL_MS) {
-      const baseResult = base.result as {
-        points: [number, number, number][];
-        max_count: number;
-        days: number;
-        subtypes: string[];
-        cache_updated_at: string | null;
-      };
-      const [s, w, n, e] = bbox;
-      const filtered: [number, number, number][] = [];
-      for (const p of baseResult.points) {
-        const [lat, lng, cnt] = p;
-        if (lat >= s && lat <= n && lng >= w && lng <= e) {
-          filtered.push(p);
-          if (filtered.length >= HEATMAP_MAX_BINS) break;
-        }
-      }
-      const result = {
-        points: filtered,
-        total_records: filtered.reduce((acc, p) => acc + p[2], 0),
-        bin_size_deg: HEATMAP_BIN_DEG,
-        max_count: filtered.reduce((m, p) => (p[2] > m ? p[2] : m), 0),
-        days: baseResult.days,
-        subtypes: Array.from(POLICE_VALID_SUBTYPES).sort(),
-        cache_updated_at: baseResult.cache_updated_at,
-        cache_status: 'bbox-from-base',
-      };
-      heatmapCache.set(cacheKey, { result, ts: now });
-      return c.json(result);
+  // PRIMARY PATH: read from the materialised police_heatmap_cache
+  // table. Refreshed every 10 min in background by services/
+  // policeHeatmapCache.ts. Sub-millisecond on the cache hit because
+  // it's a tiny indexed table (~40k rows max). Mirrors python's
+  // _refresh_police_heatmap_cache pattern (external_api_proxy.py:10208).
+  // Avoids the live-aggregation-against-archive_waze path entirely
+  // unless the cache table is empty (cold start).
+  const cacheRead = await readPoliceHeatmapCache(wanted, bbox).catch((err) => {
+    log.warn({ err: (err as Error).message }, 'police-heatmap cache read failed');
+    return null;
+  });
+  if (cacheRead && cacheRead.points.length > 0) {
+    const cacheStats = policeHeatmapCacheStats();
+    const result = {
+      points: cacheRead.points.slice(0, HEATMAP_MAX_BINS),
+      total_records: cacheRead.total,
+      bin_size_deg: HEATMAP_BIN_DEG,
+      max_count: cacheRead.max,
+      days: HEATMAP_WINDOW_DAYS,
+      subtypes: wanted ?? Array.from(POLICE_VALID_SUBTYPES).sort(),
+      cache_updated_at: cacheStats.last_refresh_age_secs !== null
+        ? new Date(Date.now() - cacheStats.last_refresh_age_secs * 1000).toISOString()
+        : null,
+      cache_status: 'materialised',
+    };
+    heatmapCache.set(cacheKey, { result, ts: now });
+    if ((wanted === null || wanted.length === 0) && bbox === null) {
+      heatmapLastRefreshTs = Math.floor(now / 1000);
+      heatmapLastBinCount = cacheRead.points.length;
     }
+    return c.json(result);
   }
 
+  // FALLBACK: cache table empty (first deploy, before initial refresh
+  // completed). Run the live aggregation. This will be slow but only
+  // happens for the first ~30s after a fresh boot, then the cache
+  // table is populated and subsequent requests are sub-ms.
+  log.info('police-heatmap cache empty, falling back to live aggregation');
   const aggregated = await buildHeatmapFromArchive(wanted, bbox).catch((err) => {
     log.warn({ err: (err as Error).message }, 'police-heatmap query failed');
     return null;

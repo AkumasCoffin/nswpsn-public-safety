@@ -45,6 +45,10 @@ import {
 import { ensurePerfIndexes } from './services/indexBuilder.js';
 import { startCleanupLoop, stopCleanupLoop } from './services/cleanup.js';
 import {
+  startPoliceHeatmapCacheRefresh,
+  stopPoliceHeatmapCacheRefresh,
+} from './services/policeHeatmapCache.js';
+import {
   start as startActivityMode,
   stop as stopActivityMode,
 } from './services/activityMode.js';
@@ -82,6 +86,7 @@ async function preflight(): Promise<void> {
   startHeatmapRefreshLoop(); // 5-min background refresh of police heatmap RAM cache
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
+  startPoliceHeatmapCacheRefresh(); // 10-min materialised heatmap (mirrors python)
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Background perf-index build. Runs on its own connection with
@@ -159,6 +164,7 @@ async function shutdown(signal: string) {
     stopActivityMode();
     stopFilterCacheRefresh();
     stopHeatmapRefreshLoop();
+    stopPoliceHeatmapCacheRefresh();
     stopStatsArchiver();
     stopCleanupLoop();
     stopRdioSummaryScheduler();
