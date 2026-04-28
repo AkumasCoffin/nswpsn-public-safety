@@ -411,6 +411,72 @@ systemRouter.get('/api/admin/db/waze-subtypes-sample', async (c) => {
   }
 });
 
+// /api/admin/db/waze-coords-stats — count waze_police rows by whether
+// lat/lng columns are populated and whether the data JSONB carries
+// coords in any of several known paths. Helps diagnose how many
+// mobile-camera pings are reachable by the heatmap.
+systemRouter.get('/api/admin/db/waze-coords-stats', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database not configured' }, 503);
+  try {
+    const r = await pool.query<{
+      subcategory_grp: string;
+      total: string;
+      cols_ok: string;
+      jsonb_xy: string;
+      jsonb_latlng: string;
+      jsonb_geom: string;
+    }>(
+      `SELECT
+         COALESCE(NULLIF(subcategory, ''), '<empty>') AS subcategory_grp,
+         COUNT(*)::text AS total,
+         COUNT(*) FILTER (WHERE lat IS NOT NULL AND lng IS NOT NULL)::text AS cols_ok,
+         COUNT(*) FILTER (
+           WHERE jsonb_typeof(data->'location') = 'object'
+             AND (data->'location'->>'y') ~ '^-?[0-9.]+$'
+             AND (data->'location'->>'x') ~ '^-?[0-9.]+$'
+         )::text AS jsonb_xy,
+         COUNT(*) FILTER (
+           WHERE (data->>'lat') ~ '^-?[0-9.]+$'
+             AND (data->>'lng') ~ '^-?[0-9.]+$'
+         )::text AS jsonb_latlng,
+         COUNT(*) FILTER (
+           WHERE jsonb_typeof(data->'geometry') = 'object'
+             AND jsonb_typeof(data->'geometry'->'coordinates') = 'array'
+         )::text AS jsonb_geom
+       FROM archive_waze
+       WHERE source = 'waze_police'
+         AND fetched_at >= NOW() - INTERVAL '30 days'
+       GROUP BY 1
+       ORDER BY COUNT(*) DESC`,
+    );
+    // Also dump 3 sample data blobs from rows with NULL lat/lng to see
+    // what shape they actually have.
+    const samples = await pool.query<{ data: Record<string, unknown> | null }>(
+      `SELECT data
+       FROM archive_waze
+       WHERE source = 'waze_police'
+         AND subcategory = 'POLICE_WITH_MOBILE_CAMERA'
+         AND lat IS NULL
+         AND fetched_at >= NOW() - INTERVAL '30 days'
+       LIMIT 3`,
+    );
+    return c.json({
+      groups: r.rows.map((row) => ({
+        subcategory: row.subcategory_grp,
+        total: Number(row.total),
+        cols_ok: Number(row.cols_ok),
+        jsonb_xy_object: Number(row.jsonb_xy),
+        jsonb_latlng: Number(row.jsonb_latlng),
+        jsonb_geometry: Number(row.jsonb_geom),
+      })),
+      camera_null_lat_samples: samples.rows.map((row) => row.data),
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 // /api/admin/db/cleanup-duplicates — python's implementation worked on
 // the deprecated `data_history` table (which is_live=1 dedup needed).
 // The new partitioned archive_* schema is append-only with no
