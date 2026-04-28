@@ -21,6 +21,15 @@
  *     sees a fraction of the live state. The 1h staleness sweep
  *     (`sweepStaleAsEnded`) handles waze instead. (python: line
  *     2174-2176).
+ *   - Future-scheduled power outages (`endeavour_planned`,
+ *     `essential_future`) → skip the diff. Planned outages can be
+ *     scheduled days in advance and rotate in/out of the upstream
+ *     feed as the schedule shifts; tombstoning them on the first
+ *     missing poll would mark genuinely-still-scheduled outages as
+ *     ended. Note: `endeavour_planned` doubles as the archive bucket
+ *     for `endeavour_maintenance` (currently-active planned
+ *     maintenance) — that's the same fold python uses at
+ *     external_api_proxy.py:4544-4545. They share the exemption.
  *
  * The fallback sweep at the bottom catches the case where polling
  * gets stuck for a source — without it, an archive row's last live
@@ -45,8 +54,14 @@ const LIVE_LOOKBACK_DAYS = 7;
 const STALE_LIVE_AGE_SECS = 3600;
 
 /** Sources for which the per-poll diff is unsafe — see file header. */
+const FUTURE_DATED_SOURCES = new Set<string>([
+  'endeavour_planned',
+  'essential_future',
+]);
 function isDiffExempt(source: string): boolean {
-  return source.startsWith('waze_');
+  if (source.startsWith('waze_')) return true;
+  if (FUTURE_DATED_SOURCES.has(source)) return true;
+  return false;
 }
 
 /**
