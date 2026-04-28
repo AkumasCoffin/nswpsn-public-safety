@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs",
     "prestart": "npm run build",
     "start": "node --env-file-if-exists=../.env dist/index.js",
+    "deploy": "bash scripts/deploy.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
