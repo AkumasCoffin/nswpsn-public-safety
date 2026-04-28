@@ -445,11 +445,22 @@ async function fetchCallsBetween(
 ): Promise<RdioCallRow[]> {
   const rdio = await getRdioPool();
   if (!rdio) throw new Error('RDIO_DATABASE_URL not configured');
+  // rdio-scanner's `dateTime` column is `timestamp WITHOUT time zone`
+  // holding UTC values. pg-node sends a JS Date as `timestamptz`, so a
+  // naked `WHERE "dateTime" >= $1` makes Postgres convert the param to
+  // the session's local time (e.g. Australia/Sydney) before comparing
+  // to the naive column — which silently shifts the whole window by
+  // ~10 hours and the query returns 0 calls. Mirrors python's
+  // `_rdio_fetch_calls_between` which strips tz-info before passing
+  // the bounds (psycopg2 → naive `timestamp`). Force-cast to
+  // `timestamptz AT TIME ZONE 'UTC'` so the param is treated as UTC
+  // regardless of session timezone.
   const res = await rdio.query<RdioCallRow>(
     `SELECT "id" AS call_id, "dateTime" AS date_time, "system", "talkgroup",
             "transcript", "source", "sources"
        FROM "rdioScannerCalls"
-      WHERE "dateTime" >= $1 AND "dateTime" < $2
+      WHERE "dateTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+        AND "dateTime" <  ($2::timestamptz AT TIME ZONE 'UTC')
         AND "transcript" IS NOT NULL
         AND length(btrim("transcript")) >= $3
       ORDER BY "dateTime" ASC`,

@@ -12,10 +12,26 @@
  * 503 when it's false rather than letting the pool builder throw.
  */
 import type { Pool } from 'pg';
+import pgPkg from 'pg';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+
+// rdio-scanner stores its dateTime column as `timestamp WITHOUT time
+// zone` holding UTC values. By default pg-node parses OID 1114
+// (TIMESTAMP) using the *Node process* local timezone — so on a server
+// not running in UTC the Date object comes back ~hours off from the
+// real wall time. Mirrors python's explicit `dt.replace(tzinfo=UTC)`
+// at external_api_proxy.py:14766. Set the parser globally so every
+// pool sees the same behaviour. OID 1184 (TIMESTAMPTZ, used by our
+// archive_* tables) is unaffected.
+const TIMESTAMP_OID = 1114;
+pgPkg.types.setTypeParser(TIMESTAMP_OID, (str: string) =>
+  // Treat the naive value as UTC by appending 'Z' before Date.parse.
+  // null-safe: pg-node only invokes the parser for non-null cells.
+  new Date(str + 'Z'),
+);
 
 let _pool: Pool | null = null;
 
