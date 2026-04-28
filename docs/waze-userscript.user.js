@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.19
+// @version      1.20
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -363,28 +363,13 @@
         );
         const until = Date.now() + delay;
         saveCooldown(until, newCount);
-        log(`Waze ${status} — cooldown ${Math.round(delay / 60000)}m (count ${newCount}, persisted)`);
-
-        // Try to clear cookies. If GM_cookie is granted we can hit
-        // HttpOnly cookies and reloading might genuinely refresh the
-        // session. Otherwise stay on the current page — the cooldown
-        // will run down naturally and rotation resumes after.
-        if (typeof GM_cookie !== 'undefined' && GM_cookie.list && GM_cookie.delete) {
-            try {
-                GM_cookie.list({ domain: '.waze.com' }, (cookies) => {
-                    let n = 0;
-                    for (const ck of cookies || []) {
-                        try { GM_cookie.delete({ name: ck.name, url: 'https://www.waze.com/' }); n += 1; } catch (e) {}
-                    }
-                    log(`cleared ${n} waze.com cookies — reloading in 5s`);
-                    setTimeout(() => forceReload(`waze ${status} cookie-clear`), 5_000);
-                });
-            } catch (e) {
-                log('GM_cookie clear failed — staying on page:', e);
-            }
-        } else {
-            log('GM_cookie not granted — pausing rotation, no reload (HttpOnly cookies survive document.cookie clears)');
-        }
+        log(`Waze ${status} — pausing rotation for ${Math.round(delay / 60000)}m (count ${newCount})`);
+        // No reload — reloading was the bug. Waze's block is IP/session
+        // based and reloading just re-triggers the watchdog/scheduled-
+        // reload loop. Instead: pause rotation in place. The page stays
+        // loaded, Waze keeps doing whatever it does, and after the
+        // cooldown elapses we silently resume panning. If the block was
+        // tied to our cookie, time alone usually clears it.
     }
 
     function forward(payload) {
@@ -819,8 +804,14 @@
     // Scheduled reload — fires once per page load. After reload, the script
     // re-runs and schedules a fresh timer, so this naturally repeats.
     // Region index is persisted in localStorage (LS_KEY) so we resume mid-rotation.
-    setTimeout(() => forceReload(`scheduled ${RELOAD_INTERVAL_MS / 60000}m`),
-        RELOAD_INTERVAL_MS);
+    // Skipped during cooldown — reloading mid-block earns more 403s.
+    setTimeout(() => {
+        if (isInCooldown()) {
+            log(`scheduled ${RELOAD_INTERVAL_MS / 60000}m reload — skipped (cooldown active)`);
+            return;
+        }
+        forceReload(`scheduled ${RELOAD_INTERVAL_MS / 60000}m`);
+    }, RELOAD_INTERVAL_MS);
 
     // Watchdog — runs on every check tick AND every visibility change.
     // The visibility hook is the important one: backgrounded tabs get
@@ -869,7 +860,7 @@
     {
         const _cd = loadCooldown();
         const _remMin = Math.round(Math.max(0, _cd.until - Date.now()) / 60000);
-        log('NSWPSN Waze Forwarder v1.19 loaded — backend:', BACKEND_URL,
+        log('NSWPSN Waze Forwarder v1.20 loaded — backend:', BACKEND_URL,
             `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
             `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
             `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
