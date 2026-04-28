@@ -339,43 +339,30 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   acc.params.push(fetchSize);
 
   if (p.unique) {
-    // unique=1 path. DISTINCT ON over a partitioned, write-heavy
-    // archive table is O(N) in the WHERE-filtered row count — even
-    // with hours=24 narrowing the date range, archive_power and
-    // archive_traffic accumulate thousands of poll snapshots per day
-    // and the unbounded DISTINCT ON ran out of statement_timeout.
+    // unique=1 path. With migration 012 every archive table has an
+    // `is_latest` boolean column populated by the writer + a partial
+    // index `WHERE is_latest = true`. Filtering on that column turns
+    // the unique=1 path into a partial-index scan over a row set
+    // ~1% the size of the table — sub-millisecond regardless of how
+    // big the archive grows.
     //
-    // Strategy: bound the inner scan to the most recent UNIQUE_INNER_CAP
-    // rows by fetched_at DESC. The (fetched_at DESC) index on every
-    // archive_* family makes that bounded scan a fast index-only walk.
-    // We then apply DISTINCT ON over that small set in memory. The cap
-    // is chosen well above any reasonable LIMIT * (snapshots-per-incident
-    // ratio) so callers asking for the latest 50 unique incidents always
-    // see them — the query effectively becomes "the latest 10k rows,
-    // deduped by (source, source_id)".
-    const UNIQUE_INNER_CAP = 10_000;
-    const bounded = `
-      SELECT id, source, source_id, fetched_at,
-             lat, lng, category, subcategory,
-             data
-      FROM ${table}
-      ${whereClause}
-      ORDER BY fetched_at DESC, id DESC
-      LIMIT ${UNIQUE_INNER_CAP}
-    `;
-    const inner = `
-      SELECT DISTINCT ON (source, source_id)
-             id, source, source_id,
+    // Mirrors python's `WHERE is_latest = 1` pattern
+    // (external_api_proxy.py:12199). Replaces the previous DISTINCT ON
+    // approach which had to scan the most recent 10k rows and dedupe
+    // in-memory — that worked but didn't scale with table size and
+    // hit statement_timeout under bloat pressure.
+    const isLatestClause = acc.parts.length > 0
+      ? `${whereClause} AND is_latest = true`
+      : `WHERE is_latest = true`;
+    const sql = `
+      SELECT id, source, source_id,
              extract(epoch FROM fetched_at)::bigint AS fetched_at_epoch,
              fetched_at,
              lat, lng, category, subcategory,
              ${p.includeData ? 'data' : "'{}'::jsonb AS data"}
-      FROM (${bounded}) bounded
-      ORDER BY source, source_id, fetched_at DESC
-    `;
-    const sql = `
-      SELECT * FROM (${inner}) AS u
-      ORDER BY fetched_at_epoch ${p.order}, id ${p.order}
+      FROM ${table}
+      ${isLatestClause}
+      ${orderClause}
       ${limitClause}
     `;
     return { sql, params: acc.params, table };
@@ -490,27 +477,16 @@ export function buildCountSqlForTable(
   // Both columns ride through the doubly-nested LIMIT pattern so the
   // 50k cap still bounds the index walk before DISTINCT runs.
   const COUNT_CAP = 50_000;
-  const IS_LIVE_PRED = `(data->>'is_live') IN ('1','true','True')`;
-  // Count + live_count in one round-trip via a single FILTER aggregate.
-  // Outer SELECT line kept on one line so test-side substring matchers
-  // looking for `SELECT COUNT(*)` keep treating this as a count query.
-  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live_truthy)::bigint AS live_count`;
+  // is_live is now a real boolean column (migration 012). No more
+  // per-row JSONB extraction — direct column read, planner-friendly.
+  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live)::bigint AS live_count`;
   const sql = p.unique
     ? `${aggLine}
-       FROM (
-         SELECT DISTINCT ON (source, source_id) is_live_truthy FROM (
-           SELECT source, source_id, fetched_at,
-                  ${IS_LIVE_PRED} AS is_live_truthy
-           FROM ${table} ${whereClause}
-           ORDER BY fetched_at DESC
-           LIMIT ${COUNT_CAP}
-         ) bounded
-         ORDER BY source, source_id, fetched_at DESC
-       ) sub`
+       FROM ${table}
+       ${whereClause ? whereClause + ' AND is_latest = true' : 'WHERE is_latest = true'}`
     : `${aggLine}
        FROM (
-         SELECT ${IS_LIVE_PRED} AS is_live_truthy
-         FROM ${table} ${whereClause}
+         SELECT is_live FROM ${table} ${whereClause}
          ORDER BY fetched_at DESC
          LIMIT ${COUNT_CAP}
        ) sub`;

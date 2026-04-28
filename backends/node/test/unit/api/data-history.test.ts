@@ -187,7 +187,7 @@ describe('GET /api/data/history', () => {
     );
   });
 
-  it('threads unique=1 through to a DISTINCT ON query', async () => {
+  it('threads unique=1 through to an is_latest filter', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
       return { rows: [] };
@@ -198,7 +198,7 @@ describe('GET /api/data/history', () => {
     const sqls = queryMock.mock.calls
       .map((call) => call[0] as string)
       .filter((s) => !s.includes('statement_timeout'));
-    expect(sqls.some((s) => s.includes('DISTINCT ON (source, source_id)'))).toBe(true);
+    expect(sqls.some((s) => s.includes('is_latest = true'))).toBe(true);
   });
 
   it('always sets statement_timeout = 60s before each query', async () => {
