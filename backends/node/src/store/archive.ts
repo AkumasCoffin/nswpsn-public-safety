@@ -60,6 +60,12 @@ export class ArchiveWriter {
   private flushing = false;
   private lastFlushAt = 0;
   private totalWritten = 0;
+  // Per-flush stats so /api/status can report what the last flush did.
+  // Updated atomically at the end of each flush() call.
+  private lastFlushRecords = 0;
+  private lastFlushTables = 0;
+  private lastFlushMs = 0;
+  private totalFlushes = 0;
 
   /**
    * Push a single record onto the queue. Non-blocking. Drops oldest
@@ -181,6 +187,13 @@ export class ArchiveWriter {
     this.flushing = false;
     this.lastFlushAt = Math.floor(Date.now() / 1000);
     this.totalWritten += totalRows;
+    // Track per-flush stats for /api/status. Even empty flushes count
+    // toward totalFlushes so the panel can show "last 0 records, X
+    // total flushes" if the writer is idle.
+    this.lastFlushRecords = totalRows;
+    this.lastFlushTables = buckets.size;
+    this.lastFlushMs = ms;
+    this.totalFlushes += 1;
     // Only log non-empty flushes at info — empty cycles fire every
     // 30s and were drowning the log without adding any signal.
     if (totalRows > 0) {
@@ -304,6 +317,10 @@ export class ArchiveWriter {
     dropped: number;
     last_flush_age_secs: number | null;
     total_written: number;
+    last_flush_records: number;
+    last_flush_tables: number;
+    last_flush_ms: number;
+    total_flushes: number;
   } {
     return {
       queue_size: this.queue.length,
@@ -312,6 +329,10 @@ export class ArchiveWriter {
         ? Math.floor(Date.now() / 1000) - this.lastFlushAt
         : null,
       total_written: this.totalWritten,
+      last_flush_records: this.lastFlushRecords,
+      last_flush_tables: this.lastFlushTables,
+      last_flush_ms: this.lastFlushMs,
+      total_flushes: this.totalFlushes,
     };
   }
 }

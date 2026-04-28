@@ -144,13 +144,15 @@ const Schema = z.object({
   // Gemini model id. Default matches python's _LLM_DEFAULT_MODEL.
   LLM_MODEL: z.string().default('gemini-2.5-flash'),
 
-  // Gate the in-process hourly summary scheduler. Default OFF so a
-  // Node restart on a host that already runs python's scheduler
-  // doesn't double-spend Gemini quota. Flip to 'true' once python's
-  // rdio-summary thread is stopped.
+  // Gate the in-process hourly summary scheduler. Defaulted OFF
+  // during the python→Node cutover to avoid double-spending Gemini
+  // quota with two schedulers running. Now defaults ON since python
+  // is stopped — host operators can still set NODE_RDIO_SCHEDULER=false
+  // explicitly to keep it disabled (e.g. on a node serving as a
+  // read-only mirror).
   NODE_RDIO_SCHEDULER: z
     .enum(['true', 'false'])
-    .default('false')
+    .default('true')
     .transform((s) => s === 'true'),
 
   // Discord OAuth dashboard. All optional — when unset the dashboard
