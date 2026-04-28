@@ -73,6 +73,52 @@ describe('computeDisappearedTombstones', () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
 
+  it('returns empty list for endeavour_planned (future-dated outages)', async () => {
+    const out = await computeDisappearedTombstones({
+      pool: fakePool,
+      table: 'archive_power',
+      source: 'endeavour_planned',
+      newRows: [mkRow('a')],
+      fetchedAt: 1700000000,
+    });
+    expect(out).toEqual([]);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it('returns empty list for essential_future (future-dated outages)', async () => {
+    const out = await computeDisappearedTombstones({
+      pool: fakePool,
+      table: 'archive_power',
+      source: 'essential_future',
+      newRows: [mkRow('a')],
+      fetchedAt: 1700000000,
+    });
+    expect(out).toEqual([]);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it('still runs diff for unplanned power outages (essential_current, endeavour_current)', async () => {
+    queryMock.mockResolvedValue({ rows: [], rowCount: 0 });
+    await computeDisappearedTombstones({
+      pool: fakePool,
+      table: 'archive_power',
+      source: 'essential_current',
+      newRows: [mkRow('a')],
+      fetchedAt: 1700000000,
+    });
+    expect(queryMock).toHaveBeenCalledOnce();
+    queryMock.mockReset();
+    queryMock.mockResolvedValue({ rows: [], rowCount: 0 });
+    await computeDisappearedTombstones({
+      pool: fakePool,
+      table: 'archive_power',
+      source: 'endeavour_current',
+      newRows: [mkRow('a')],
+      fetchedAt: 1700000000,
+    });
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
   it('returns empty list when newRows have no source_ids', async () => {
     const out = await computeDisappearedTombstones({
       pool: fakePool,
