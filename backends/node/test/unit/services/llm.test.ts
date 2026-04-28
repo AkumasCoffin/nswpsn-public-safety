@@ -124,6 +124,156 @@ describe('formatRdioPrompt', () => {
   });
 });
 
+describe('dedupeCalls', () => {
+  type Row = Parameters<
+    typeof import('../../../src/services/llm.js').dedupeCalls
+  >[0][number];
+  const mkRow = (overrides: Partial<Row>): Row => ({
+    call_id: 0,
+    date_time: new Date('2026-04-29T01:00:00Z'),
+    system: 1,
+    talkgroup: 50,
+    transcript: '',
+    source: null,
+    sources: null,
+    ...overrides,
+  });
+
+  it('drops a literal repeat with same talkgroup + RID within window', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({
+        call_id: 1,
+        transcript: 'Pumper 7 on scene',
+        source: 999,
+        date_time: new Date('2026-04-29T01:00:00Z'),
+      }),
+      mkRow({
+        call_id: 2,
+        transcript: 'pumper 7 on scene',
+        source: 999,
+        date_time: new Date('2026-04-29T01:00:30Z'),
+      }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([1]);
+  });
+
+  it('keeps the longer (richer) row when one is a prefix of the other', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({
+        call_id: 1,
+        transcript: 'Pumper 7 on scene',
+        source: 999,
+        date_time: new Date('2026-04-29T01:00:00Z'),
+      }),
+      mkRow({
+        call_id: 2,
+        transcript: 'Pumper 7 on scene, BA crew committing',
+        source: 999,
+        date_time: new Date('2026-04-29T01:00:30Z'),
+      }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([2]);
+    expect(out[0]?.transcript).toContain('BA crew committing');
+  });
+
+  it('keeps both rows when RIDs differ', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({ call_id: 1, transcript: 'on scene', source: 100 }),
+      mkRow({ call_id: 2, transcript: 'on scene', source: 200 }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([1, 2]);
+  });
+
+  it('keeps both rows when talkgroups differ', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({ call_id: 1, transcript: 'on scene', talkgroup: 50, source: 999 }),
+      mkRow({ call_id: 2, transcript: 'on scene', talkgroup: 60, source: 999 }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([1, 2]);
+  });
+
+  it('keeps both rows when timestamps are >180s apart', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({
+        call_id: 1,
+        transcript: 'on scene',
+        source: 999,
+        date_time: new Date('2026-04-29T01:00:00Z'),
+      }),
+      mkRow({
+        call_id: 2,
+        transcript: 'on scene',
+        source: 999,
+        date_time: new Date('2026-04-29T01:05:00Z'),
+      }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([1, 2]);
+  });
+
+  it('dedups on talkgroup+text alone when one side is missing an RID', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({ call_id: 1, transcript: 'on scene', source: 999 }),
+      mkRow({ call_id: 2, transcript: 'on scene', source: null }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([1]);
+  });
+
+  it('passes through empty/whitespace transcripts unchanged', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({ call_id: 1, transcript: '   ' }),
+      mkRow({ call_id: 2, transcript: '' }),
+      mkRow({ call_id: 3, transcript: 'real traffic' }),
+    ]);
+    expect(out.map((r) => r.call_id)).toEqual([1, 2, 3]);
+  });
+
+  it('treats punctuation/casing as the same text for prefix matching', async () => {
+    const { dedupeCalls } = await import('../../../src/services/llm.js');
+    const out = dedupeCalls([
+      mkRow({ call_id: 1, transcript: 'Pumper 7, on scene.', source: 999 }),
+      mkRow({ call_id: 2, transcript: 'pumper 7 on scene', source: 999 }),
+    ]);
+    expect(out).toHaveLength(1);
+  });
+});
+
+describe('localHourStartUtc', () => {
+  it('rounds to top-of-hour for whole-hour offset (Australia/Sydney)', async () => {
+    const { _testHooks } = await import('../../../src/services/llm.js');
+    // 2026-04-29 13:55 AEST is 2026-04-29 03:55 UTC. AEST is UTC+10
+    // (April is post-DST in Sydney). Top of local hour = 13:00 AEST =
+    // 03:00 UTC.
+    const now = new Date('2026-04-29T03:55:00Z');
+    const top = _testHooks.localHourStartUtc(now, 'Australia/Sydney');
+    expect(top.toISOString()).toBe('2026-04-29T03:00:00.000Z');
+  });
+
+  it('rounds to top-of-hour for half-hour offset (Australia/Adelaide)', async () => {
+    const { _testHooks } = await import('../../../src/services/llm.js');
+    // ACST is UTC+9:30 (April is post-DST in Adelaide). 2026-04-29
+    // 13:55 ACST is 04:25 UTC. Top of local hour = 13:00 ACST = 03:30 UTC.
+    // A naive UTC-rounding would have produced 04:00 UTC which is
+    // 13:30 ACST — half an hour off the local clock.
+    const now = new Date('2026-04-29T04:25:00Z');
+    const top = _testHooks.localHourStartUtc(now, 'Australia/Adelaide');
+    expect(top.toISOString()).toBe('2026-04-29T03:30:00.000Z');
+  });
+
+  it('is idempotent when called on a top-of-hour instant', async () => {
+    const { _testHooks } = await import('../../../src/services/llm.js');
+    const now = new Date('2026-04-29T03:00:00Z'); // = 13:00 AEST
+    const top = _testHooks.localHourStartUtc(now, 'Australia/Sydney');
+    expect(top.toISOString()).toBe('2026-04-29T03:00:00.000Z');
+  });
+});
+
 describe('/api/summaries/trigger', () => {
   it('503s when GEMINI_API_KEY is unset', async () => {
     const { createApp } = await import('../../../src/server.js');
