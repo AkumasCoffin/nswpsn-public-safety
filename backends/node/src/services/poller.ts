@@ -54,6 +54,10 @@ interface SourceState {
 let activeMode = true; // true = active interval, false = idle
 const _state = new Map<string, SourceState>();
 let _running = false;
+// Set by prewarmAll() so startPolling() knows to skip its initial-tick
+// scheduling and just arm the regular intervals — the prewarm already
+// did the first round.
+let _prewarmDone = false;
 
 /**
  * Toggle activity mode. Causes every source's next tick to use the
@@ -210,11 +214,89 @@ function armOne(src: SourceDefinition): void {
   state.timer.unref?.();
 }
 
+/**
+ * Fire every registered source's first poll in parallel and await all
+ * of them with a bounded timeout. After this returns, LiveStore has at
+ * least one snapshot per source that succeeded — so the very first
+ * /api/* request after boot serves real data instead of an empty cache.
+ *
+ * Mirrors python's `prewarm_loop` initial pass at external_api_proxy.py
+ * lines 4858-4899 (ThreadPoolExecutor over 6 workers, awaited before
+ * the loop body starts iterating).
+ *
+ * The `timeoutMs` cap is a hard ceiling on how long boot will block.
+ * Sources whose first fetch is still running when the timeout hits
+ * keep running in the background — their state is updated when they
+ * complete, just not in time to be reflected in the returned summary.
+ */
+export async function prewarmAll(timeoutMs: number = 30_000): Promise<{
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  pending: number;
+  durationMs: number;
+}> {
+  const t0 = Date.now();
+  const sources = allSources();
+  // runOnce never rejects (it catches internally and updates state),
+  // so Promise.all is enough — but use allSettled for symmetry / future-
+  // proofing if the contract ever changes.
+  const all = Promise.allSettled(sources.map((src) => runOnce(src)));
+  let timedOut = false;
+  await Promise.race([
+    all,
+    new Promise<void>((resolve) =>
+      setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs).unref?.(),
+    ),
+  ]);
+  _prewarmDone = true;
+
+  // Summarise by inspecting state. lastSuccessTs >= t0/1000 = succeeded
+  // during this prewarm; lastError set + lastAttemptTs >= t0/1000 = failed;
+  // anything else = still pending (timed out).
+  const tStartSec = Math.floor(t0 / 1000);
+  let succeeded = 0;
+  let failed = 0;
+  let pending = 0;
+  for (const src of sources) {
+    const s = _state.get(src.name);
+    if (s?.lastSuccessTs && s.lastSuccessTs >= tStartSec) {
+      succeeded += 1;
+    } else if (s?.lastError && s.lastAttemptTs && s.lastAttemptTs >= tStartSec) {
+      failed += 1;
+    } else {
+      pending += 1;
+    }
+  }
+  const durationMs = Date.now() - t0;
+  log.info(
+    { attempted: sources.length, succeeded, failed, pending, durationMs, timedOut },
+    'pollers prewarmed',
+  );
+  return {
+    attempted: sources.length,
+    succeeded,
+    failed,
+    pending,
+    durationMs,
+  };
+}
+
 /** Start polling every registered source on its own interval. */
 export function startPolling(initialDelayMs: number = 0): void {
   if (_running) return;
   _running = true;
   for (const src of allSources()) {
+    if (_prewarmDone) {
+      // prewarmAll already fired the first tick. Just arm the regular
+      // interval timer; no need for the stagger since each source's
+      // own armOne() handles its own timing from here.
+      armOne(src);
+      continue;
+    }
     // Stagger the first tick of each source so a fleet of pollers
     // doesn't all hit the DB / network at the same instant after boot.
     const stagger = Math.floor(Math.random() * 2000);
@@ -226,7 +308,7 @@ export function startPolling(initialDelayMs: number = 0): void {
       });
     }, delay).unref?.();
   }
-  log.info({ count: allSources().length }, 'pollers started');
+  log.info({ count: allSources().length, prewarmed: _prewarmDone }, 'pollers started');
 }
 
 export function stopPolling(): void {
@@ -339,4 +421,5 @@ export function _resetPollerStateForTests(): void {
   }
   _state.clear();
   _running = false;
+  _prewarmDone = false;
 }

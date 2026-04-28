@@ -21,22 +21,22 @@
  * block — dashboard.html and editor-requests.html key off it. See the
  * test suite for the exact assertions.
  *
- * Approval flow: python optionally creates a Supabase auth user via the
- * Admin API and inserts the granted roles. We port the role-insert step
- * (it's a DB write) but defer the Supabase user-creation HTTP call —
- * that path is rarely hit in practice (`create_account: true` is
- * opt-in) and faithfully porting it pulls in the Supabase Admin
- * Authorization headers, password generation, and conditional
- * Discord-notification logic. Documented as a TODO at the bottom; the
- * approve handler returns `supabase_account_created: false` plus an
- * explanatory `supabase_error` string when the caller asked for
- * account creation but the Node backend can't oblige yet, so the UI
- * still renders a useful message.
+ * Approval flow: when `create_account: true`, python POSTs to the
+ * Supabase Auth Admin API to create an auth user with a temporary
+ * password (`Changeme-XXXXXX`), then inserts the granted roles into
+ * `user_roles` keyed by the returned Supabase user id. We mirror that
+ * here. The 15s upstream timeout, response-body shape (`temp_password`,
+ * `supabase_account_created`, `supabase_error`), and notes-column
+ * format (`Roles: a,b | Temp password: ... | Supabase account created`)
+ * are kept byte-compatible with python so the admin UI sees identical
+ * behaviour from either backend.
  */
 import { Hono } from 'hono';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
+import { randomBytes } from 'node:crypto';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { config } from '../config.js';
 import {
   getUserRoles,
   invalidateUserRolesCache,
@@ -224,6 +224,20 @@ async function fetchRequest(pool: Pool, requestId: number): Promise<EditorReques
   return r.rows[0] ?? null;
 }
 
+// Mirror of python's `Changeme-` + 6 chars from secrets.choice over
+// `string.ascii_lowercase + string.digits`. There's a slight modulo bias
+// here (4 of 36 chars are ~1.4% more likely) — fine for a one-time temp
+// password that the user is forced to change on first login.
+const TEMP_PASSWORD_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+function generateTempPassword(): string {
+  const bytes = randomBytes(6);
+  let suffix = '';
+  for (let i = 0; i < 6; i++) {
+    suffix += TEMP_PASSWORD_ALPHABET[bytes[i]! % TEMP_PASSWORD_ALPHABET.length];
+  }
+  return `Changeme-${suffix}`;
+}
+
 editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
   const requestIdRaw = c.req.param('id');
   const requestId = Number.parseInt(requestIdRaw, 10);
@@ -244,27 +258,102 @@ editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
       return c.json({ error: `Request is already ${req.status}` }, 400);
     }
 
-    // Supabase user creation is not yet ported (see file header). When the
-    // caller opted in but the Node backend can't oblige, surface the same
-    // shape python uses for the "Supabase not configured" branch so the
-    // admin UI displays a meaningful message.
+    let tempPassword: string | null = null;
+    let supabaseAccountCreated = false;
     let supabaseError: string | null = null;
-    if (createAccount) {
-      supabaseError = 'Supabase user creation not implemented in Node backend yet';
-    }
+    let supabaseUserId: string | null = null;
 
-    // Insert the granted roles for the user identified by email lookup —
-    // python looks them up via the Supabase Auth Admin API after creating
-    // the account. We can't do that without the admin client, so we skip
-    // role insertion here unless we actually have a user_id, which python
-    // also does (`if supabase_user_id and roles`). Net effect: the roles
-    // are recorded in the request `notes` column for audit; the admin
-    // can manually assign them via /api/users/<uid>/roles afterwards.
+    if (createAccount) {
+      tempPassword = generateTempPassword();
+      if (config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY) {
+        try {
+          const createUrl = `${config.SUPABASE_URL}/auth/v1/admin/users`;
+          const res = await fetch(createUrl, {
+            method: 'POST',
+            headers: {
+              apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+              Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              email: req.email,
+              password: tempPassword,
+              email_confirm: true,
+              user_metadata: {
+                discord_id: req.discord_id,
+                approved_request_id: requestId,
+                roles,
+                force_password_change: true,
+              },
+            }),
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (res.status === 200 || res.status === 201) {
+            const body = (await res.json().catch(() => ({}))) as { id?: string };
+            supabaseUserId = body.id ?? null;
+            supabaseAccountCreated = true;
+            log.info(
+              { email: req.email, userId: supabaseUserId },
+              'Created Supabase account',
+            );
+            // Best-effort role insert. Mirrors python's nested try/except
+            // — a failure here doesn't roll back the account creation,
+            // it just logs and lets the admin assign roles manually via
+            // /api/users/<uid>/roles afterwards.
+            if (supabaseUserId && roles.length > 0) {
+              try {
+                for (const role of roles) {
+                  await pool.query(
+                    `INSERT INTO user_roles (user_id, role, granted_by, request_id)
+                     VALUES ($1, $2, 'system', $3)
+                     ON CONFLICT (user_id, role) DO NOTHING`,
+                    [supabaseUserId, role, requestId],
+                  );
+                }
+                invalidateUserRolesCache(supabaseUserId);
+                log.info({ userId: supabaseUserId, roles }, 'Assigned roles to user');
+              } catch (roleErr) {
+                log.warn(
+                  { err: (roleErr as Error).message },
+                  'Error inserting roles (non-fatal)',
+                );
+              }
+            }
+          } else {
+            const errText = await res.text().catch(() => '');
+            try {
+              const errBody = JSON.parse(errText) as { message?: string; msg?: string };
+              supabaseError =
+                errBody.message ?? errBody.msg ?? `Status ${res.status}`;
+            } catch {
+              supabaseError = `Status ${res.status}`;
+            }
+            log.error(
+              { status: res.status, supabaseError },
+              'Failed to create Supabase account',
+            );
+          }
+        } catch (err) {
+          supabaseError = (err as Error).message;
+          log.error(
+            { err: (err as Error).message },
+            'Error creating Supabase account',
+          );
+        }
+      }
+    }
 
     const reviewedAt = Math.floor(Date.now() / 1000);
     const rolesStr = roles.join(',');
     let notes = `Roles: ${rolesStr}`;
-    if (supabaseError) notes += ` | Supabase error: ${supabaseError}`;
+    if (tempPassword) notes += ` | Temp password: ${tempPassword}`;
+    if (supabaseAccountCreated) {
+      notes += ' | Supabase account created';
+    } else if (supabaseError) {
+      notes += ` | Supabase error: ${supabaseError}`;
+    } else if (createAccount && !config.SUPABASE_SERVICE_ROLE_KEY) {
+      notes += ' | Supabase not configured';
+    }
 
     await pool.query(
       `UPDATE editor_requests
@@ -280,8 +369,9 @@ editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
       email: req.email,
       discord_id: req.discord_id,
       roles,
-      supabase_account_created: false,
+      supabase_account_created: supabaseAccountCreated,
     };
+    if (tempPassword) result['temp_password'] = tempPassword;
     if (supabaseError) result['supabase_error'] = supabaseError;
     return c.json(result);
   } catch (err) {
@@ -411,7 +501,3 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
 
 // Re-exported only so the test for invalidation helpers can call it.
 export { invalidateUserRolesCache };
-// Suppress "imported but unused" — `PoolClient` is reserved for the
-// Supabase-creation TODO path that runs role-inserts in a transaction.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _ReservedPoolClient = PoolClient;
