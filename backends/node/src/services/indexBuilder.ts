@@ -68,6 +68,43 @@ const INDEXES: IndexSpec[] = [
           ON archive_waze (source, fetched_at DESC)
           WHERE lat IS NOT NULL AND lng IS NOT NULL`,
   },
+  // Writer-side lookup: the archive writer's post-INSERT UPDATE flips
+  // prior is_latest=true rows for the (source, source_id) tuples it
+  // just inserted. The migration-012 partial index is keyed on
+  // (source, fetched_at) which matches reads but not the writer's
+  // (source, source_id) lookup. This tighter partial index has one
+  // row per (source, source_id) after the backfill — sub-millisecond
+  // per UPDATE instead of scanning the whole is_latest=true slice.
+  {
+    name: 'idx_archive_waze_src_sid_latest',
+    sql: `CREATE INDEX IF NOT EXISTS idx_archive_waze_src_sid_latest
+          ON archive_waze (source, source_id)
+          WHERE is_latest = true AND source_id IS NOT NULL`,
+  },
+  {
+    name: 'idx_archive_traffic_src_sid_latest',
+    sql: `CREATE INDEX IF NOT EXISTS idx_archive_traffic_src_sid_latest
+          ON archive_traffic (source, source_id)
+          WHERE is_latest = true AND source_id IS NOT NULL`,
+  },
+  {
+    name: 'idx_archive_rfs_src_sid_latest',
+    sql: `CREATE INDEX IF NOT EXISTS idx_archive_rfs_src_sid_latest
+          ON archive_rfs (source, source_id)
+          WHERE is_latest = true AND source_id IS NOT NULL`,
+  },
+  {
+    name: 'idx_archive_power_src_sid_latest',
+    sql: `CREATE INDEX IF NOT EXISTS idx_archive_power_src_sid_latest
+          ON archive_power (source, source_id)
+          WHERE is_latest = true AND source_id IS NOT NULL`,
+  },
+  {
+    name: 'idx_archive_misc_src_sid_latest',
+    sql: `CREATE INDEX IF NOT EXISTS idx_archive_misc_src_sid_latest
+          ON archive_misc (source, source_id)
+          WHERE is_latest = true AND source_id IS NOT NULL`,
+  },
 ];
 
 /**
@@ -156,20 +193,28 @@ const BACKFILLS: BackfillSpec[] = [
   },
   // is_live backfill — derive from JSONB. New writes set the column
   // directly so this only runs once per archive table after migration
-  // 012 lands. Truthy convention matches formatRecord at
-  // data-history.ts:487 ('1','true','True'); legacy rows with empty
-  // jsonb default to true (matches python's behaviour).
+  // 012 lands; the schema_migrations marker stops it re-running.
+  // Truthy convention matches formatRecord at data-history.ts:487
+  // ('1','true','True'); rows where data has no is_live key keep the
+  // default true (matches python's behaviour).
+  //
+  // Predicate uses `(data->>'is_live') IS NOT NULL` instead of the
+  // `data ? 'is_live'` JSONB containment check — the latter forces a
+  // sequential scan because no GIN index on data exists, producing
+  // 50s+ scan times on archive_waze. The IS NOT NULL form is
+  // equivalent (->>'key' returns NULL when absent) and the planner
+  // can avoid the JSON parse for indexed scans where possible.
   ...['archive_waze','archive_traffic','archive_rfs','archive_power','archive_misc'].map(
     (table): BackfillSpec => ({
       name: `${table}.is_live ← data->>is_live (one-shot)`,
       countSql: `SELECT COUNT(*)::bigint AS n FROM ${table}
                  WHERE is_live = true
-                   AND data ? 'is_live'
+                   AND (data->>'is_live') IS NOT NULL
                    AND (data->>'is_live') NOT IN ('1','true','True')`,
       updateSql: `UPDATE ${table}
                      SET is_live = false
                    WHERE is_live = true
-                     AND data ? 'is_live'
+                     AND (data->>'is_live') IS NOT NULL
                      AND (data->>'is_live') NOT IN ('1','true','True')`,
     }),
   ),
@@ -288,23 +333,56 @@ export async function ensurePerfIndexes(): Promise<void> {
       }
       log.info({ built, skipped, failed }, 'indexBuilder: done');
 
-      // One-shot data backfills. Each is gated on a cheap COUNT first
-      // so on a clean DB this whole pass costs ~5 ms. On the first
-      // boot after deploying this code, may UPDATE tens of thousands
-      // of rows; subsequent boots are no-ops. Track which tables had
-      // a non-trivial UPDATE so we know which to VACUUM after.
+      // One-shot data backfills. Track completion in schema_migrations
+      // so subsequent restarts skip the heavy pre-check entirely. The
+      // COUNT scans that gate each backfill can be slow on large tables
+      // when they involve JSONB extraction or full-table predicates;
+      // running them every restart is wasteful when the backfill has
+      // already happened.
       const tablesNeedingVacuum = new Set<string>();
+      // Ensure the marker table exists (migrate.ts creates it but be
+      // defensive in case indexBuilder runs first).
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          filename TEXT PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `);
+      const completed = await client.query<{ filename: string }>(
+        `SELECT filename FROM schema_migrations
+         WHERE filename LIKE '_backfill_%'`,
+      );
+      const done = new Set(completed.rows.map((r) => r.filename));
+
       for (const bf of BACKFILLS) {
+        const marker = `_backfill_${bf.name}`;
+        if (done.has(marker)) continue;
         try {
           const cnt = await client.query<{ n: string }>(bf.countSql);
           const n = Number(cnt.rows[0]?.n ?? 0);
-          if (n === 0) continue;
+          if (n === 0) {
+            // No work to do — record completion so we never run the
+            // expensive COUNT again.
+            await client.query(
+              `INSERT INTO schema_migrations (filename) VALUES ($1)
+               ON CONFLICT (filename) DO NOTHING`,
+              [marker],
+            );
+            continue;
+          }
           const t0 = Date.now();
           log.info({ backfill: bf.name, candidates: n }, 'indexBuilder: backfilling');
           const r = await client.query(bf.updateSql);
           log.info(
             { backfill: bf.name, updated: r.rowCount, ms: Date.now() - t0 },
             'indexBuilder: backfill done',
+          );
+          // Mark complete only after a SUCCESSFUL run. Failed runs
+          // re-attempt next boot.
+          await client.query(
+            `INSERT INTO schema_migrations (filename) VALUES ($1)
+             ON CONFLICT (filename) DO NOTHING`,
+            [marker],
           );
           // Heuristic: any backfill name starting with "archive_<table>"
           // implies that table needs VACUUM after.
