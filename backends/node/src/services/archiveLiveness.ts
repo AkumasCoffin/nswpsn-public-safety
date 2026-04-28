@@ -1,33 +1,43 @@
 /**
- * Per-poll "disappeared from upstream" tracking — Node port of python's
- * `store_incidents_batch` diff at external_api_proxy.py:2165-2204.
+ * Flush-time "disappeared from upstream" tracking — Node port of
+ * python's `store_incidents_batch` diff at external_api_proxy.py:
+ * 2165-2204.
  *
- * After each successful poll, we want any source_id that was live in
- * the previous cycle but isn't in the current snapshot to be flagged
- * `is_live: false`. Node's archive is append-only, so instead of an
- * UPDATE we INSERT a tombstone row with the previous row's data
- * fields preserved + `is_live: false` overlaid. DISTINCT ON
+ * Once per archive flush (not once per poll — too chatty), we look at
+ * the rows queued for each archive_* table, group them by source, and
+ * for each non-exempt source compute the set of source_ids that were
+ * live in the previous flush window but aren't in the current
+ * snapshot. Each disappeared source_id gets a tombstone row appended
+ * to the flush — same source_id, fetched_at=now, prior `data` fields
+ * preserved with `is_live: false` overlaid. DISTINCT ON
  * (source, source_id) ORDER BY fetched_at DESC at read time then
  * surfaces the tombstone, so logs.html / data-history see the
  * incident as ended.
  *
+ * Doing the diff at flush time means **one SELECT per archive table
+ * per flush window** instead of one per source per poll — the
+ * archive writer's natural batching applies to liveness queries too.
+ * On a typical deploy this drops the per-poll DB chatter from ~21
+ * SELECT/min down to ~5 SELECT/30s.
+ *
  * Edge cases mirrored from python:
- *   - Empty snapshot → skip the diff entirely. An upstream that
- *     briefly returns zero incidents shouldn't tombstone everything
- *     that was live a minute ago. (python: line 2177 — `if
- *     source_type and all_source_ids_in_batch`).
+ *   - Empty snapshot for a source → skip the diff for that source.
+ *     An upstream that briefly returns zero incidents shouldn't
+ *     tombstone everything that was live a minute ago. (python: line
+ *     2177 — `if source_type and all_source_ids_in_batch`).
  *   - Waze sources (`waze_*`) → skip the diff. Userscript ingest
  *     rotates through ~190 bbox regions, so any single ingest only
  *     sees a fraction of the live state. The 1h staleness sweep
  *     (`sweepStaleAsEnded`) handles waze instead. (python: line
  *     2174-2176).
  *   - Future-scheduled power outages (`endeavour_planned`,
- *     `essential_future`) → skip the diff. Planned outages can be
- *     scheduled days in advance and rotate in/out of the upstream
- *     feed as the schedule shifts; tombstoning them on the first
- *     missing poll would mark genuinely-still-scheduled outages as
- *     ended. Note: `endeavour_planned` doubles as the archive bucket
- *     for `endeavour_maintenance` (currently-active planned
+ *     `essential_planned`, `essential_future`) → skip the diff.
+ *     Planned outages can be scheduled days in advance and rotate
+ *     in/out of the upstream feed as the schedule shifts;
+ *     tombstoning them on the first missing poll would mark
+ *     genuinely-still-scheduled outages as ended. Note:
+ *     `endeavour_planned` doubles as the archive bucket for
+ *     `endeavour_maintenance` (currently-active planned
  *     maintenance) — that's the same fold python uses at
  *     external_api_proxy.py:4544-4545. They share the exemption.
  *
@@ -56,6 +66,7 @@ const STALE_LIVE_AGE_SECS = 3600;
 /** Sources for which the per-poll diff is unsafe — see file header. */
 const FUTURE_DATED_SOURCES = new Set<string>([
   'endeavour_planned',
+  'essential_planned',
   'essential_future',
 ]);
 function isDiffExempt(source: string): boolean {
@@ -66,9 +77,10 @@ function isDiffExempt(source: string): boolean {
 
 /**
  * Latest-live row info needed to build a tombstone that preserves the
- * incident's display fields. Returned by getLiveRowsForSource.
+ * incident's display fields. Returned by getLiveRowsForSources.
  */
 interface LiveRow {
+  source: string;
   source_id: string;
   lat: number | null;
   lng: number | null;
@@ -78,110 +90,124 @@ interface LiveRow {
 }
 
 /**
- * Fetch source_ids whose CURRENT latest archive row is "live" — meaning
- * `data->>'is_live'` is missing OR truthy. Bounded to the last
- * LIVE_LOOKBACK_DAYS so the query stays fast on partitioned tables.
+ * Single batched SELECT for every (source, source_id) pair that is
+ * currently live in the given archive table, scoped to a list of
+ * sources. Bounded to LIVE_LOOKBACK_DAYS so the query stays fast on
+ * partitioned tables.
  *
- * Returns the latest row's display fields (lat/lng/category/subcategory/data)
- * so a tombstone insert can preserve them.
+ * Result map is keyed by source so the caller can compute the diff
+ * per-source against its own incoming batch.
  */
-async function getLiveRowsForSource(
+async function getLiveRowsForSources(
   pool: Pool,
   table: ArchiveTable,
-  source: string,
-): Promise<Map<string, LiveRow>> {
+  sources: string[],
+): Promise<Map<string, Map<string, LiveRow>>> {
+  if (sources.length === 0) return new Map();
   const sql = `
-    SELECT source_id, lat, lng, category, subcategory, data
+    SELECT source, source_id, lat, lng, category, subcategory, data
       FROM (
-        SELECT DISTINCT ON (source_id)
-               source_id, lat, lng, category, subcategory, data, fetched_at
+        SELECT DISTINCT ON (source, source_id)
+               source, source_id, lat, lng, category, subcategory, data, fetched_at
           FROM ${table}
-         WHERE source = $1
+         WHERE source = ANY($1::text[])
            AND source_id IS NOT NULL
            AND fetched_at >= now() - ($2 || ' days')::interval
-         ORDER BY source_id, fetched_at DESC
+         ORDER BY source, source_id, fetched_at DESC
       ) latest
      WHERE COALESCE(data->>'is_live', 'true') NOT IN ('0','false','False')
   `;
-  const r = await pool.query<{
-    source_id: string;
-    lat: number | null;
-    lng: number | null;
-    category: string | null;
-    subcategory: string | null;
-    data: Record<string, unknown> | null;
-  }>(sql, [source, String(LIVE_LOOKBACK_DAYS)]);
-  const out = new Map<string, LiveRow>();
+  const r = await pool.query<LiveRow>(sql, [sources, String(LIVE_LOOKBACK_DAYS)]);
+  const out = new Map<string, Map<string, LiveRow>>();
   for (const row of r.rows) {
-    out.set(row.source_id, row);
+    let bucket = out.get(row.source);
+    if (!bucket) {
+      bucket = new Map();
+      out.set(row.source, bucket);
+    }
+    bucket.set(row.source_id, row);
   }
   return out;
 }
 
 /**
- * Build tombstone rows for source_ids that were live before this poll
- * but aren't in the new snapshot. Returns an array (possibly empty);
- * the caller pushes them through ArchiveWriter alongside the live rows.
+ * Build tombstone rows for the queued contents of one archive table.
+ * Called from the archive writer's flush() once per table per flush —
+ * a single SELECT covers every non-exempt source in the bucket.
  *
- * Does NOT consult the DB if `newRows` is empty (upstream blip
- * protection — matches python). Does NOT consult the DB for waze
- * sources (rotation problem — matches python).
+ * Per source, tombstones cover source_ids that were live in DB but
+ * aren't in this flush's incoming rows. Same edge cases as python:
+ * empty incoming batch for a source skips the diff for that source,
+ * waze_* + future-dated sources skip entirely.
  */
-export async function computeDisappearedTombstones(opts: {
+export async function computeFlushTimeTombstones(opts: {
   pool: Pool;
   table: ArchiveTable;
-  source: string;
-  newRows: ArchiveRow[];
+  rows: ArchiveRow[];
   fetchedAt: number;
 }): Promise<ArchiveRow[]> {
-  const { pool, table, source, newRows, fetchedAt } = opts;
-  if (newRows.length === 0) return []; // upstream blip
-  if (isDiffExempt(source)) return [];
+  const { pool, table, rows, fetchedAt } = opts;
+  if (rows.length === 0) return [];
 
-  const newIds = new Set<string>();
-  for (const r of newRows) {
-    if (r.source_id !== null && r.source_id !== undefined && r.source_id !== '') {
-      newIds.add(String(r.source_id));
+  // Group incoming source_ids by source. Skip exempt sources and
+  // sources whose batch has no source_ids (can't anchor a diff).
+  const newIdsBySource = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (isDiffExempt(r.source)) continue;
+    const sid = r.source_id;
+    if (sid === null || sid === undefined || sid === '') continue;
+    let ids = newIdsBySource.get(r.source);
+    if (!ids) {
+      ids = new Set();
+      newIdsBySource.set(r.source, ids);
     }
+    ids.add(String(sid));
   }
-  // If the snapshot has data but no source_ids at all (sources without
-  // stable ids), the diff has no anchor — skip rather than tombstone
-  // everything.
-  if (newIds.size === 0) return [];
+  if (newIdsBySource.size === 0) return [];
 
-  let liveBefore: Map<string, LiveRow>;
+  const sources = Array.from(newIdsBySource.keys());
+  let liveBefore: Map<string, Map<string, LiveRow>>;
   try {
-    liveBefore = await getLiveRowsForSource(pool, table, source);
+    liveBefore = await getLiveRowsForSources(pool, table, sources);
   } catch (err) {
-    // Don't let a transient DB error block the live INSERT. Log and
-    // skip the diff for this cycle — next cycle will re-run.
     log.warn(
-      { err: (err as Error).message, source, table },
-      'archiveLiveness: live-row fetch failed; skipping diff',
+      { err: (err as Error).message, table, sources },
+      'archiveLiveness: live-rows fetch failed; skipping diff this flush',
     );
     return [];
   }
+
   const tombstones: ArchiveRow[] = [];
-  for (const [sid, prev] of liveBefore) {
-    if (newIds.has(sid)) continue;
-    // Preserve display fields so logs.html still renders title/etc. on
-    // an ended incident. Overlay is_live=false on top of the previous
-    // data blob.
-    const prevData = (prev.data ?? {}) as Record<string, unknown>;
-    tombstones.push({
-      source,
-      source_id: sid,
-      fetched_at: fetchedAt,
-      lat: prev.lat,
-      lng: prev.lng,
-      category: prev.category,
-      subcategory: prev.subcategory,
-      data: { ...prevData, is_live: false },
-    });
+  for (const [source, newIds] of newIdsBySource) {
+    const live = liveBefore.get(source);
+    if (!live) continue;
+    for (const [sid, prev] of live) {
+      if (newIds.has(sid)) continue;
+      // Preserve display fields so logs.html still renders title/etc.
+      // on an ended incident. Overlay is_live=false on top of the
+      // previous data blob.
+      const prevData = (prev.data ?? {}) as Record<string, unknown>;
+      tombstones.push({
+        source,
+        source_id: sid,
+        fetched_at: fetchedAt,
+        lat: prev.lat,
+        lng: prev.lng,
+        category: prev.category,
+        subcategory: prev.subcategory,
+        data: { ...prevData, is_live: false },
+      });
+    }
   }
   if (tombstones.length > 0) {
+    // Log per-source counts so it's clear in the logs which sources
+    // saw activity even though it's one flush-time call.
+    const bySource: Record<string, number> = {};
+    for (const t of tombstones) {
+      bySource[t.source] = (bySource[t.source] ?? 0) + 1;
+    }
     log.info(
-      { source, table, count: tombstones.length },
+      { table, count: tombstones.length, by_source: bySource },
       'archiveLiveness: tombstoning disappeared incidents',
     );
   }
