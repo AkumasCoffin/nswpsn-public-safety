@@ -343,6 +343,111 @@ systemRouter.post('/api/admin/db/vacuum', async (c) => {
   }
 });
 
+// /api/admin/db/active-queries — surface pg_stat_activity for in-flight
+// queries. Useful when /api/data/history or other endpoints are
+// timing out and we need to know what postgres is actually doing
+// (autovacuum running? long-held locks? blocked on a backend?).
+systemRouter.get('/api/admin/db/active-queries', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database not configured' }, 503);
+  try {
+    const r = await pool.query<{
+      pid: number;
+      usename: string | null;
+      application_name: string | null;
+      state: string | null;
+      wait_event_type: string | null;
+      wait_event: string | null;
+      backend_type: string | null;
+      query_start: Date | null;
+      runtime_secs: string | null;
+      query: string | null;
+    }>(
+      `SELECT
+         pid,
+         usename,
+         application_name,
+         state,
+         wait_event_type,
+         wait_event,
+         backend_type,
+         query_start,
+         EXTRACT(EPOCH FROM (now() - query_start))::text AS runtime_secs,
+         CASE
+           WHEN length(query) > 200 THEN left(query, 200) || '…'
+           ELSE query
+         END AS query
+       FROM pg_stat_activity
+       WHERE datname = current_database()
+         AND pid <> pg_backend_pid()
+         AND state != 'idle'
+       ORDER BY query_start ASC NULLS LAST`,
+    );
+    // Also surface table-level vacuum stats — useful to confirm whether
+    // autovacuum is keeping up with archive_waze.
+    const vacstats = await pool.query<{
+      relname: string;
+      n_live_tup: string;
+      n_dead_tup: string;
+      last_vacuum: Date | null;
+      last_autovacuum: Date | null;
+      last_analyze: Date | null;
+      last_autoanalyze: Date | null;
+      vacuum_count: string;
+      autovacuum_count: string;
+    }>(
+      `SELECT
+         relname,
+         n_live_tup::text,
+         n_dead_tup::text,
+         last_vacuum,
+         last_autovacuum,
+         last_analyze,
+         last_autoanalyze,
+         vacuum_count::text,
+         autovacuum_count::text
+       FROM pg_stat_user_tables
+       WHERE relname LIKE 'archive_%'
+       ORDER BY n_dead_tup::bigint DESC NULLS LAST`,
+    );
+    return c.json({
+      active: r.rows.map((row) => ({
+        pid: row.pid,
+        user: row.usename,
+        app: row.application_name,
+        state: row.state,
+        waiting_on: row.wait_event_type
+          ? `${row.wait_event_type}/${row.wait_event}`
+          : null,
+        backend_type: row.backend_type,
+        runtime_secs: row.runtime_secs ? Number(row.runtime_secs) : null,
+        query: row.query,
+      })),
+      table_stats: vacstats.rows.map((row) => ({
+        table: row.relname,
+        live_rows: Number(row.n_live_tup),
+        dead_rows: Number(row.n_dead_tup),
+        bloat_pct:
+          Number(row.n_live_tup) > 0
+            ? Math.round(
+                (Number(row.n_dead_tup) /
+                  (Number(row.n_live_tup) + Number(row.n_dead_tup))) *
+                  1000,
+              ) / 10
+            : null,
+        last_vacuum: row.last_vacuum,
+        last_autovacuum: row.last_autovacuum,
+        last_analyze: row.last_analyze,
+        last_autoanalyze: row.last_autoanalyze,
+        vacuum_count: Number(row.vacuum_count),
+        autovacuum_count: Number(row.autovacuum_count),
+      })),
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 // /api/admin/db/cleanup-duplicates — python's implementation worked on
 // the deprecated `data_history` table (which is_live=1 dedup needed).
 // The new partitioned archive_* schema is append-only with no
