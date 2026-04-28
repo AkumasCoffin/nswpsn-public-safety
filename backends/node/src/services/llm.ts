@@ -14,10 +14,11 @@
  *     we log and persist the un-validated structured object — matches
  *     python's "best-effort cleanup" semantics so a validator bug never
  *     blocks the summary save.
- *   - The transcript dedup pass (_dedupe_calls) is similarly skipped.
- *     Both backends may end up summarising slightly more verbose call
- *     lists than python; acceptable trade-off for keeping the port
- *     bounded.
+ *   - The transcript dedup pass (_dedupe_calls) is ported as
+ *     `dedupeCalls` below — required because the hourly prompt at
+ *     prompts/rdio_hourly.txt explicitly tells Gemini "BACKEND HAS
+ *     ALREADY DEDUPED", and skipping the pass meant the prompt was
+ *     lying to the model on the Node path.
  *   - JSON-mode parsing uses the same lenient strategy: fenced code,
  *     brace-extraction, double-quote typo scrub.
  */
@@ -107,6 +108,82 @@ function extractRadioId(row: RdioCallRow): number | null {
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Pre-LLM dedup — mirror of python's _dedupe_calls (external_api_proxy.py
+// lines 14661-14733). A call is a duplicate of a previously-kept one when:
+//   - same talkgroup, AND
+//   - same RID (when both have one — if either is missing, talkgroup +
+//     text is enough), AND
+//   - timestamps within 180s, AND
+//   - the shorter normalized transcript is a prefix of the longer.
+// The longer/more-informative row wins. Order is preserved.
+// ---------------------------------------------------------------------------
+
+const DEDUP_TEXT_RE = /[^a-z0-9 ]+/g;
+
+function normalizeTranscript(text: string | null | undefined): string {
+  const lowered = (text ?? '').toLowerCase().replace(DEDUP_TEXT_RE, ' ');
+  return lowered.replace(/\s+/g, ' ').trim();
+}
+
+interface DedupSlot {
+  row: RdioCallRow;
+  ts: number | null;
+  textNorm: string;
+  rid: number | null;
+  tg: number | null;
+}
+
+export function dedupeCalls(
+  calls: RdioCallRow[],
+  windowSeconds = 180,
+): RdioCallRow[] {
+  const kept: DedupSlot[] = [];
+  const skipped = new Set<number>();
+  for (const row of calls) {
+    const textNorm = normalizeTranscript(row.transcript);
+    if (!textNorm) {
+      // Empty / whitespace-only transcripts can't dedup; carry through.
+      kept.push({ row, ts: null, textNorm: '', rid: null, tg: null });
+      continue;
+    }
+    const ts = row.date_time ? row.date_time.getTime() / 1000 : null;
+    const rid = extractRadioId(row);
+    const tg = row.talkgroup;
+
+    let replaced = false;
+    for (let idx = 0; idx < kept.length; idx++) {
+      const k = kept[idx]!;
+      if (!k.textNorm) continue;
+      if (k.tg !== tg) continue;
+      // Both sides have RIDs → must match. Either side missing → still
+      // allow dedup on talkgroup + text alone (mirrors python behaviour).
+      if (rid !== null && k.rid !== null && rid !== k.rid) continue;
+      if (ts !== null && k.ts !== null && Math.abs(ts - k.ts) > windowSeconds) continue;
+      const a = k.textNorm;
+      const b = textNorm;
+      const [shortText, longText] = a.length <= b.length ? [a, b] : [b, a];
+      if (longText.startsWith(shortText)) {
+        if (textNorm.length > k.textNorm.length) {
+          if (typeof k.row.call_id === 'number') skipped.add(k.row.call_id);
+          kept[idx] = { row, ts, textNorm, rid, tg };
+        } else {
+          if (typeof row.call_id === 'number') skipped.add(row.call_id);
+        }
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      kept.push({ row, ts, textNorm, rid, tg });
+    }
+  }
+  if (skipped.size > 0) {
+    log.info({ dropped: skipped.size }, 'rdio: pre-LLM dedup');
+  }
+  return kept.map((k) => k.row);
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +567,48 @@ async function fetchLastNCalls(n: number): Promise<RdioCallRow[]> {
 // Hourly summary
 // ---------------------------------------------------------------------------
 
+/**
+ * Round `now` down to the top of its containing hour in `tz`, returned as
+ * the UTC instant that wall-clock corresponds to. Mirrors python's
+ * `datetime.now(local_tz).replace(minute=0, second=0, microsecond=0)`
+ * followed by `.astimezone(timezone.utc)`.
+ *
+ * Doing this in UTC (`ms - ms % 3_600_000`) is equivalent for whole-hour
+ * zones like Australia/Sydney, but drifts ~30 min for half-hour zones
+ * (Australia/Adelaide UTC+9:30/+10:30). The Intl-based round is robust
+ * across both kinds.
+ */
+function localHourStartUtc(now: Date, tz: string): Date {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(now);
+  const get = (t: string): number =>
+    Number(parts.find((p) => p.type === t)?.value ?? '0');
+  const y = get('year');
+  const mo = get('month');
+  const d = get('day');
+  const h = get('hour');
+  const mn = get('minute');
+  const s = get('second');
+  // Re-read the tz wall-clock as if it were UTC. The difference between
+  // that and the actual instant gives the tz offset for `now`. We then
+  // apply that same offset to the top-of-hour wall-clock to get the
+  // matching UTC instant. (DST transitions inside the rounding window
+  // would still be off — fine for a once-per-hour scheduler that fires
+  // ~5 minutes before the boundary.)
+  const nowAsIfUtcMs = Date.UTC(y, mo - 1, d, h, mn, s);
+  const topAsIfUtcMs = Date.UTC(y, mo - 1, d, h, 0, 0);
+  const offsetMs = nowAsIfUtcMs - now.getTime();
+  return new Date(topAsIfUtcMs - offsetMs);
+}
+
 function localDayString(d: Date): string {
   // YYYY-MM-DD in SUMMARY_TZ. Used for `day_date` column.
   const fmt = new Intl.DateTimeFormat('en-CA', {
@@ -548,7 +667,7 @@ export async function generateRdioHourlySummary(
   const model = config.LLM_MODEL;
   const start = p.hourStartUtc;
   const end = new Date(start.getTime() + 60 * 60_000);
-  const calls = await fetchCallsBetween(start, end);
+  const calls = dedupeCalls(await fetchCallsBetween(start, end));
   if (calls.length === 0 && !p.force && !p.releaseAt) {
     log.info({ start: start.toISOString() }, 'hourly: no transcripts, skipping');
     return null;
@@ -615,7 +734,7 @@ export async function generateRdioRecentSummary(
 ): Promise<{ call_count: number; requested_n: number } | null> {
   const n = Math.max(1, Math.min(5000, Math.floor(p.n)));
   const model = config.LLM_MODEL;
-  const calls = await fetchLastNCalls(n);
+  const calls = dedupeCalls(await fetchLastNCalls(n));
   if (calls.length === 0 && !p.force) {
     log.info({ n }, 'recent: no transcripts, skipping');
     return null;
@@ -677,6 +796,86 @@ export async function generateRdioRecentSummary(
 }
 
 // ---------------------------------------------------------------------------
+// Startup catch-up — fill in any missing hourly summary rows that were
+// dropped while this process was down. Mirrors python's
+// _rdio_summary_catchup (external_api_proxy.py:15466-15512).
+// ---------------------------------------------------------------------------
+
+async function rdioSummaryRowExists(periodStart: Date): Promise<boolean> {
+  const pool = await getPool();
+  if (!pool) return false;
+  const res = await pool.query(
+    `SELECT 1 FROM rdio_summaries
+      WHERE summary_type = 'hourly' AND period_start = $1
+      LIMIT 1`,
+    [periodStart],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * On boot:
+ *  - Always try the previous local-clock hour. force=true so an empty
+ *    hour writes a "no traffic" stub instead of silently skipping —
+ *    /api/summaries/latest must never show a gap for a completed hour.
+ *  - If `now` is past HH:55 in SUMMARY_TZ, also kick off the current
+ *    hour with the same release_at gating the scheduler would have used,
+ *    so a restart inside the prefetch window doesn't lose the prefetch.
+ *
+ * Both calls swallow errors so a transient LLM/DB failure can't block
+ * the scheduler from arming. The unique constraint on
+ * (summary_type, period_start) keeps this idempotent against a race
+ * with a normal scheduled fire.
+ */
+export async function runRdioSummaryCatchup(): Promise<void> {
+  const now = new Date();
+  const tz = config.SUMMARY_TZ;
+  const currentHourStart = localHourStartUtc(now, tz);
+  const prevHourStart = new Date(currentHourStart.getTime() - 60 * 60_000);
+  try {
+    if (!(await rdioSummaryRowExists(prevHourStart))) {
+      log.info(
+        { hour_start: prevHourStart.toISOString() },
+        'rdio catchup: filling missing previous hour',
+      );
+      await generateRdioHourlySummary({
+        hourStartUtc: prevHourStart,
+        force: true,
+      });
+    }
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'rdio catchup prev-hour error',
+    );
+  }
+  if (localMinute(now) >= 55) {
+    const releaseAtUtc = new Date(currentHourStart.getTime() + 60 * 60_000);
+    try {
+      if (!(await rdioSummaryRowExists(currentHourStart))) {
+        log.info(
+          {
+            hour_start: currentHourStart.toISOString(),
+            release_at: releaseAtUtc.toISOString(),
+          },
+          'rdio catchup: prefetching current hour',
+        );
+        await generateRdioHourlySummary({
+          hourStartUtc: currentHourStart,
+          force: true,
+          releaseAt: releaseAtUtc,
+        });
+      }
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'rdio catchup current-hour error',
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Hourly scheduler — fires at HH:55 each hour, releases at HH+1:00.
 // ---------------------------------------------------------------------------
 
@@ -731,12 +930,13 @@ function nextFireTimeMs(): number {
 }
 
 async function runHourlyJob(): Promise<void> {
-  // Fire-time minute is :55; the hour we summarise starts at the top of
-  // the in-progress hour. Compute hourStartUtc as "the most recent
-  // top-of-hour in UTC strictly before now".
+  // Fire-time minute is :55 in SUMMARY_TZ; the hour we summarise starts
+  // at the top of the in-progress LOCAL hour. Rounding in UTC works for
+  // whole-hour zones but breaks for half-hour zones (Adelaide), so we
+  // compute the top of the local hour and convert to UTC.
   const now = new Date();
   const ms = now.getTime();
-  const hourStartUtc = new Date(ms - (ms % (60 * 60_000)));
+  const hourStartUtc = localHourStartUtc(now, config.SUMMARY_TZ);
   const releaseAtUtc = new Date(hourStartUtc.getTime() + 60 * 60_000);
   schedulerStats.last_fire_at = Math.floor(ms / 1000);
   schedulerStats.total_fires += 1;
@@ -804,6 +1004,10 @@ export function startRdioSummaryScheduler(): void {
   arm(wait);
   const nextIso = new Date(Date.now() + wait).toISOString();
   log.info({ next_fire: nextIso, wait_ms: wait }, 'rdio summary scheduler started');
+  // Fire catch-up async so a slow LLM call here doesn't delay the
+  // scheduler arming. The unique constraint on (summary_type,
+  // period_start) keeps it safe even if a fire races with us.
+  void runRdioSummaryCatchup();
 }
 
 export function stopRdioSummaryScheduler(): void {
@@ -822,6 +1026,7 @@ export function stopRdioSummaryScheduler(): void {
 export const _testHooks = {
   fetchCallsBetween,
   fetchLastNCalls,
+  localHourStartUtc,
   setPoolForTests: (_: Pool): void => {
     // Tests should mock getRdioPool / getPool from the modules; this
     // helper is a placeholder to discourage direct pool injection.
