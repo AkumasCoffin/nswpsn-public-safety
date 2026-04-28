@@ -117,4 +117,45 @@ describe('prewarmAll', () => {
     expect(health['test_fail']?.failure_count).toBe(1);
     expect(health['test_fail']?.last_error).toBe('upstream-broke');
   });
+
+  it('coalesces a second runOnce into the in-flight one when prewarm timed out', async () => {
+    // Hold-open source: resolves only when we call `release`. Lets us
+    // simulate the prewarm-timeout-then-armOne race.
+    let release!: () => void;
+    const heldSource = {
+      name: 'test_held',
+      family: 'misc' as const,
+      intervalActiveMs: 60_000,
+      intervalIdleMs: 120_000,
+      fetch: vi.fn(
+        () =>
+          new Promise<{ ok: true }>((resolve) => {
+            release = () => resolve({ ok: true });
+          }),
+      ),
+    };
+    activeSources = [heldSource];
+
+    // Kick off a prewarm but don't await — the fetch is still in
+    // flight, blocked on `release`.
+    const prewarmPromise = prewarmAll(50); // tight timeout so it returns
+    await prewarmPromise;
+    expect(heldSource.fetch).toHaveBeenCalledOnce();
+
+    // While the original prewarm fetch is still in flight, simulate
+    // armOne firing by calling runOnce again via startPolling's path.
+    // We call _internal_ runOnce by triggering a second prewarmAll —
+    // which iterates allSources() and fires runOnce per source. With
+    // the in-flight mutex, the second invocation should NOT trigger
+    // another upstream fetch.
+    const secondPass = prewarmAll(200);
+    // No second fetch attempt yet — the mutex coalesced it.
+    expect(heldSource.fetch).toHaveBeenCalledOnce();
+
+    // Release the original. Both prewarm invocations resolve.
+    release();
+    await secondPass;
+    // Still only one fetch ever happened.
+    expect(heldSource.fetch).toHaveBeenCalledOnce();
+  });
 });
