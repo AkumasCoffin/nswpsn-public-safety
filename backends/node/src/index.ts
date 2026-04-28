@@ -43,6 +43,7 @@ import {
   stopStatsArchiver,
 } from './services/statsArchiver.js';
 import { ensurePerfIndexes } from './services/indexBuilder.js';
+import { startCleanupLoop, stopCleanupLoop } from './services/cleanup.js';
 import {
   start as startActivityMode,
   stop as stopActivityMode,
@@ -80,6 +81,7 @@ async function preflight(): Promise<void> {
   startFilterCacheRefresh(); // 5-min archive-backed facet refresh for /api/data/history/filters
   startHeatmapRefreshLoop(); // 5-min background refresh of police heatmap RAM cache
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
+  startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Background perf-index build. Runs on its own connection with
@@ -158,6 +160,7 @@ async function shutdown(signal: string) {
     stopFilterCacheRefresh();
     stopHeatmapRefreshLoop();
     stopStatsArchiver();
+    stopCleanupLoop();
     stopRdioSummaryScheduler();
     // Centralwatch: stop the loops first so they don't enqueue more
     // browser jobs, then close the browser worker.

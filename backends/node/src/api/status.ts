@@ -34,6 +34,7 @@ import { filterCacheLastRefreshAt } from '../store/filterCache.js';
 import { policeHeatmapStatus } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
 import { activeViewerCount } from '../services/activityMode.js';
+import { cleanupStatsForStatus } from '../services/cleanup.js';
 import { config, modeLabel } from '../config.js';
 import { log } from '../lib/log.js';
 
@@ -308,42 +309,24 @@ function checkIngest(): Record<string, unknown> {
   const m = archiveWriter.metrics();
   return {
     last_flush_age_secs: m.last_flush_age_secs,
-    // Node doesn't yet expose per-flush rows/sources/ms separately; the
-    // archive writer tracks aggregate total_written. The fields are
-    // present (with nulls where the data isn't tracked) so dashboard
-    // panels render without missing-key gaps.
-    last_flush_records: null,
-    last_flush_sources: null,
-    last_flush_ms: null,
+    last_flush_records: m.last_flush_records,
+    last_flush_sources: m.last_flush_tables,
+    last_flush_ms: m.last_flush_ms,
     total_records_flushed: m.total_written,
-    total_flushes: null,
+    total_flushes: m.total_flushes,
   };
 }
 
-/** Cleanup loop — Node doesn't have one yet (archive_* uses partition
- *  drops, not row-level prunes). Emit zeroed shape so the panel renders. */
+/** Cleanup loop — partition drops + stats_snapshots prune. Real
+ *  values from services/cleanup.ts. */
 function checkCleanup(): Record<string, unknown> {
-  return {
-    last_run_age_secs: null,
-    last_history_deleted: 0,
-    last_stats_deleted: 0,
-    last_pager_ended: 0,
-    last_waze_ended: 0,
-    total_history_deleted: 0,
-    last_vacuum_age_secs: null,
-    last_vacuum_ms: 0,
-    retention_days: DATA_RETENTION_DAYS,
-    cleanup_interval_secs: DATA_CLEANUP_INTERVAL_SECS,
-  };
+  return cleanupStatsForStatus();
 }
 
-/** RAM-cache hit-rate — Node's LiveStore doesn't track hit/miss yet. */
+/** RAM-cache hit-rate — LiveStore tracks hits/misses across the
+ *  process lifetime. */
 function checkRamCache(): Record<string, unknown> {
-  return {
-    hits: 0,
-    misses: 0,
-    hit_rate_pct: null,
-  };
+  return liveStore.cacheStats();
 }
 
 function summariseSources(): {

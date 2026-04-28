@@ -34,6 +34,11 @@ export class LiveStore {
   private dirty = new Set<string>();
   private persistTimer: NodeJS.Timeout | null = null;
   private dir: string;
+  // Hit/miss counters for /api/status. A "hit" is a get() that found
+  // a snapshot; "miss" is a get() returning null. Excludes internal
+  // walks (keys() iteration, etc.). Reset on process restart.
+  private hits = 0;
+  private misses = 0;
 
   constructor(dir: string = config.STATE_DIR) {
     this.dir = dir;
@@ -87,9 +92,23 @@ export class LiveStore {
     this.dirty.add(source);
   }
 
-  /** Read the current snapshot for a source, or null if never set. */
+  /** Read the current snapshot for a source, or null if never set.
+   *  Tracks hit/miss for /api/status ram_cache panel. */
   get<T = unknown>(source: string): LiveSnapshot<T> | null {
-    return (this.map.get(source) as LiveSnapshot<T> | undefined) ?? null;
+    const snap = this.map.get(source) as LiveSnapshot<T> | undefined;
+    if (snap) this.hits += 1;
+    else this.misses += 1;
+    return snap ?? null;
+  }
+
+  /** Hit/miss counters for /api/status. Reset on process restart. */
+  cacheStats(): { hits: number; misses: number; hit_rate_pct: number | null } {
+    const total = this.hits + this.misses;
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      hit_rate_pct: total > 0 ? Math.round((this.hits / total) * 1000) / 10 : null,
+    };
   }
 
   /** Just the data payload, or null. Convenience for handlers. */
