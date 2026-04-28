@@ -35,6 +35,7 @@ import { policeHeatmapStatus } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
 import { activeViewerCount } from '../services/activityMode.js';
 import { cleanupStatsForStatus } from '../services/cleanup.js';
+import { rdioSchedulerStats } from '../services/llm.js';
 import { config, modeLabel } from '../config.js';
 import { log } from '../lib/log.js';
 
@@ -329,6 +330,32 @@ function checkRamCache(): Record<string, unknown> {
   return liveStore.cacheStats();
 }
 
+/** Hourly rdio summary scheduler. Surfaces enabled/reason/next-fire/
+ *  last-fire so the dashboard can show whether the scheduler is alive
+ *  without grepping logs. ok=false when enabled but the next fire is
+ *  more than 75 min away (means the chain dropped) or the last run
+ *  recorded an error. */
+function checkRdioScheduler(nowMs: number): Record<string, unknown> {
+  const s = rdioSchedulerStats();
+  const nowSec = Math.floor(nowMs / 1000);
+  const nextAge = s.next_fire_at != null ? s.next_fire_at - nowSec : null;
+  // 75 min = one full hour + the worst case where last fire just landed.
+  const armedOk = s.next_fire_at == null ? false : nextAge != null && nextAge < 75 * 60;
+  return {
+    ok: s.enabled ? armedOk && !s.last_error : true, // disabled = informational, not failing
+    enabled: s.enabled,
+    reason: s.reason,
+    next_fire_at: s.next_fire_at,
+    next_fire_in_secs: nextAge,
+    last_fire_at: s.last_fire_at,
+    last_fire_age_secs: s.last_fire_at != null ? nowSec - s.last_fire_at : null,
+    last_run_ms: s.last_run_ms,
+    last_result: s.last_result,
+    last_error: s.last_error,
+    total_fires: s.total_fires,
+  };
+}
+
 function summariseSources(): {
   block: Record<string, { ok: boolean; status: string }>;
   counts: { ok: number; unknown: number; total: number };
@@ -385,6 +412,7 @@ async function computeStatus(): Promise<{
   checks['ingest'] = checkIngest();
   checks['cleanup'] = checkCleanup();
   checks['ram_cache'] = checkRamCache();
+  checks['rdio_scheduler'] = checkRdioScheduler(nowMs);
 
   const sources = summariseSources();
   checks['sources'] = sources.block as unknown as Record<string, unknown>;
