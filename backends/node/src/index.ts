@@ -33,7 +33,7 @@ import {
   startCentralwatchImageBatchLoop,
   stopCentralwatchImageBatchLoop,
 } from './services/centralwatchImageCache.js';
-import { startPolling, stopPolling } from './services/poller.js';
+import { prewarmAll, startPolling, stopPolling } from './services/poller.js';
 import {
   startHeatmapRefreshLoop,
   stopHeatmapRefreshLoop,
@@ -87,6 +87,18 @@ async function preflight(): Promise<void> {
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
   startPoliceHeatmapCacheRefresh(); // 10-min materialised heatmap (mirrors python)
+
+  // Prewarm: fire every source's first poll in parallel and await with
+  // a bounded timeout. Mirrors python's `prewarm_loop` initial pass —
+  // without this, the first request after a restart can serve an empty
+  // LiveStore for whatever interval the slowest source takes to fetch
+  // for the first time. 30s cap means a hung upstream can't block boot
+  // beyond that — its first tick keeps running in the background.
+  try {
+    await prewarmAll(30_000);
+  } catch (err) {
+    log.warn({ err }, 'prewarm failed (non-fatal — pollers will still arm)');
+  }
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Background perf-index build. Runs on its own connection with
