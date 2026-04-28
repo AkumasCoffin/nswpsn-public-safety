@@ -340,8 +340,8 @@ systemRouter.post('/api/admin/db/vacuum', async (c) => {
 
 // /api/admin/db/waze-subtypes — diagnostic for the heatmap subtype
 // filter. Shows where waze_police rows store their subtype (column vs
-// JSONB) and how many of each. Useful when the heatmap shows
-// suspicious counts (e.g. speed-camera filter returning very few rows).
+// JSONB at multiple paths) and how many of each. Useful when the
+// heatmap shows suspicious counts.
 systemRouter.get('/api/admin/db/waze-subtypes', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database not configured' }, 503);
@@ -351,16 +351,22 @@ systemRouter.get('/api/admin/db/waze-subtypes', async (c) => {
     const r = await pool.query<{
       subcategory: string | null;
       jsonb_subtype: string | null;
+      jsonb_wazesubtype: string | null;
+      jsonb_props_wazesubtype: string | null;
+      jsonb_type: string | null;
       cnt: string;
     }>(
       `SELECT
          subcategory,
          data->>'subtype' AS jsonb_subtype,
+         data->>'wazeSubtype' AS jsonb_wazesubtype,
+         data->'properties'->>'wazeSubtype' AS jsonb_props_wazesubtype,
+         data->>'type' AS jsonb_type,
          COUNT(*)::text AS cnt
        FROM archive_waze
        WHERE source = 'waze_police'
          AND fetched_at >= NOW() - ($1 || ' days')::interval
-       GROUP BY 1, 2
+       GROUP BY 1, 2, 3, 4, 5
        ORDER BY COUNT(*) DESC
        LIMIT 50`,
       [String(days)],
@@ -371,9 +377,35 @@ systemRouter.get('/api/admin/db/waze-subtypes', async (c) => {
       rows: r.rows.map((row) => ({
         subcategory: row.subcategory,
         jsonb_subtype: row.jsonb_subtype,
+        jsonb_wazesubtype: row.jsonb_wazesubtype,
+        jsonb_props_wazesubtype: row.jsonb_props_wazesubtype,
+        jsonb_type: row.jsonb_type,
         count: Number(row.cnt),
       })),
     });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// /api/admin/db/waze-subtypes-sample — for the empty-subtype rows
+// specifically, dump a few full data blobs so we can see what fields
+// they actually carry. Primary use: confirm whether the migration
+// preserved enough metadata to recover the subtype.
+systemRouter.get('/api/admin/db/waze-subtypes-sample', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database not configured' }, 503);
+  try {
+    const r = await pool.query<{ data: Record<string, unknown> | null }>(
+      `SELECT data
+       FROM archive_waze
+       WHERE source = 'waze_police'
+         AND fetched_at >= NOW() - INTERVAL '30 days'
+         AND COALESCE(subcategory, '') = ''
+         AND data->>'subtype' IS NULL
+       LIMIT 5`,
+    );
+    return c.json({ samples: r.rows.map((row) => row.data) });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 500);
   }
