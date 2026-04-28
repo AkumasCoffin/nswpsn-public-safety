@@ -338,6 +338,47 @@ systemRouter.post('/api/admin/db/vacuum', async (c) => {
   }
 });
 
+// /api/admin/db/waze-subtypes — diagnostic for the heatmap subtype
+// filter. Shows where waze_police rows store their subtype (column vs
+// JSONB) and how many of each. Useful when the heatmap shows
+// suspicious counts (e.g. speed-camera filter returning very few rows).
+systemRouter.get('/api/admin/db/waze-subtypes', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database not configured' }, 503);
+  const url = new URL(c.req.url);
+  const days = Math.max(1, Math.min(90, Number.parseInt(url.searchParams.get('days') ?? '30', 10) || 30));
+  try {
+    const r = await pool.query<{
+      subcategory: string | null;
+      jsonb_subtype: string | null;
+      cnt: string;
+    }>(
+      `SELECT
+         subcategory,
+         data->>'subtype' AS jsonb_subtype,
+         COUNT(*)::text AS cnt
+       FROM archive_waze
+       WHERE source = 'waze_police'
+         AND fetched_at >= NOW() - ($1 || ' days')::interval
+       GROUP BY 1, 2
+       ORDER BY COUNT(*) DESC
+       LIMIT 50`,
+      [String(days)],
+    );
+    return c.json({
+      window_days: days,
+      total_groups: r.rows.length,
+      rows: r.rows.map((row) => ({
+        subcategory: row.subcategory,
+        jsonb_subtype: row.jsonb_subtype,
+        count: Number(row.cnt),
+      })),
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 // /api/admin/db/cleanup-duplicates — python's implementation worked on
 // the deprecated `data_history` table (which is_live=1 dedup needed).
 // The new partitioned archive_* schema is append-only with no
