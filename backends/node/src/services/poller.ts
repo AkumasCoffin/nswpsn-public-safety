@@ -95,6 +95,24 @@ function ensureState(name: string): SourceState {
   return s;
 }
 
+/** Best-effort row-count for log output. Looks for the common shapes
+ *  every source returns — arrays, GeoJSON FeatureCollections, the
+ *  pager `{messages}` blob, BOM `{warnings}`. Falls back to "ok" so
+ *  the log line still says SOMETHING useful. */
+function countItems(data: unknown): string {
+  if (Array.isArray(data)) return `${data.length}`;
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    if (Array.isArray(o['features'])) return `${(o['features'] as unknown[]).length}`;
+    if (Array.isArray(o['messages'])) return `${(o['messages'] as unknown[]).length}`;
+    if (Array.isArray(o['warnings'])) return `${(o['warnings'] as unknown[]).length}`;
+    if (Array.isArray(o['alerts'])) return `${(o['alerts'] as unknown[]).length}`;
+    if (Array.isArray(o['Markers'])) return `${(o['Markers'] as unknown[]).length}`;
+    if (typeof o['count'] === 'number') return `${o['count']}`;
+  }
+  return 'ok';
+}
+
 async function runOnce(src: SourceDefinition): Promise<void> {
   const state = ensureState(src.name);
   const startedAt = Date.now();
@@ -128,13 +146,16 @@ async function runOnce(src: SourceDefinition): Promise<void> {
     state.failureCount = 0;
     state.lastSuccessTs = fetchedAt;
     state.lastError = null;
+    const ms = Date.now() - startedAt;
+    const count = countItems(data);
     if (wasFailing) {
-      log.info({ source: src.name }, 'poll recovered');
+      log.info({ source: src.name, count, ms }, 'poll recovered');
     } else {
-      log.debug(
-        { source: src.name, ms: Date.now() - startedAt },
-        'poll success',
-      );
+      // Bumped from debug → info so per-source poll activity is
+      // visible by default. Matches python's `🔥 RFS refreshed: 47`
+      // style. With ~21 sources × 60-300s intervals this is ~5-20
+      // lines/min — manageable.
+      log.info({ source: src.name, count, ms }, 'poll ok');
     }
   } catch (err) {
     state.failureCount += 1;
