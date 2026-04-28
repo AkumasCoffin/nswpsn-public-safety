@@ -253,25 +253,31 @@ async function runWithTimeout(
   pool: Pool,
   sql: string,
   params: unknown[],
+  timeoutSecs: number = 60,
 ): Promise<QueryResult<RawArchiveRow>> {
   const client = await pool.connect();
   try {
-    // 60s budget — wider than python's old 25s because the new
-    // partitioned schema hasn't accumulated all the indexes yet,
-    // and on a freshly-backfilled archive_waze (~257k rows) the
-    // DISTINCT ON + COUNT(DISTINCT ...) pair can stretch to 30s+
-    // until the planner caches a stable plan.
+    // Default 60s budget for the data query — wider than python's old
+    // 25s because the new partitioned schema hasn't accumulated all
+    // the indexes yet, and on a freshly-backfilled archive_waze
+    // (~257k rows) the DISTINCT ON + COUNT(DISTINCT ...) pair can
+    // stretch to 30s+ until the planner caches a stable plan.
+    //
+    // Count queries override to 15s — they're best-effort (failure
+    // returns total=0 to the caller), so a stuck count shouldn't
+    // hold the route's connection for 60s. The data query carries
+    // the page even when count is unavailable.
     //
     // CRITICAL: SET LOCAL is a no-op outside an explicit transaction
     // block (the pg docs are explicit on this). Earlier revisions
     // skipped the BEGIN/COMMIT pair and the statement_timeout never
     // applied — Postgres fell back to the global default (~30s) and
-    // queries hit that ceiling instead of the 60s we intended. Wrap
-    // in BEGIN/COMMIT so SET LOCAL actually scopes to this query and
-    // gets reset before the connection returns to the pool.
+    // queries hit that ceiling instead of the budget we intended.
+    // Wrap in BEGIN/COMMIT so SET LOCAL actually scopes to this
+    // query and gets reset before the connection returns to the pool.
     await client.query('BEGIN');
     try {
-      await client.query("SET LOCAL statement_timeout = '60s'");
+      await client.query(`SET LOCAL statement_timeout = '${timeoutSecs}s'`);
       const r = await client.query<RawArchiveRow>(sql, params);
       await client.query('COMMIT');
       return r;
@@ -353,10 +359,16 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     // ended is derived as `total - live` to match formatRecord's
     // truthy-default semantics for missing is_live.
     //
-    // 30s LRU cache: page-jumper clicks all hit the same WHERE clause
-    // (only LIMIT/OFFSET differ, and the count query strips both) so
-    // we re-use the previous result instead of re-running the
-    // 5-10s aggregate per page click.
+    // 2-min LRU cache: page-jumper clicks all hit the same WHERE
+    // clause (only LIMIT/OFFSET differ, and the count query strips
+    // both) so we re-use the previous result instead of re-running
+    // the 5-10s aggregate per page click. 30s was too short to span
+    // a typical paginating session; bumped to 120s.
+    //
+    // Count uses a 15s timeout (vs 60s for the data query) so a
+    // stuck count never blocks the route. On timeout the route
+    // returns the data with total=0; logs.html falls back to "+"
+    // pagination instead of jump-to-page.
     const nowMs = Date.now();
     const countPromise = Promise.all(
       plan.queries.map(async (q) => {
@@ -367,7 +379,7 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           return hit.count;
         }
         try {
-          const r = await runWithTimeout(pool, cq.sql, cq.params);
+          const r = await runWithTimeout(pool, cq.sql, cq.params, 15);
           const row = r.rows[0] as
             | { total?: string | number; live_count?: string | number }
             | undefined;
@@ -384,7 +396,20 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           countCache.set(key, { count, ts: nowMs });
           return count;
         } catch (err) {
-          log.warn({ err, table: q.table }, 'data-history count query failed');
+          log.warn(
+            { err: (err as Error).message, table: q.table },
+            'data-history count query failed (returning 0)',
+          );
+          // Negative-cache for 30s so a hot page-load loop doesn't
+          // re-run the failing 15s query on every refresh.
+          if (countCache.size >= COUNT_CACHE_MAX) {
+            const oldestKey = countCache.keys().next().value;
+            if (oldestKey !== undefined) countCache.delete(oldestKey);
+          }
+          countCache.set(key, {
+            count: { total: 0, live: 0 },
+            ts: nowMs - (COUNT_CACHE_TTL_MS - 30_000),
+          });
           return { total: 0, live: 0 };
         }
       }),
@@ -560,7 +585,7 @@ const SOURCES_STATS_TTL_MS = 5 * 60_000;
 // traffic.
 interface CountCacheEntry { count: { total: number; live: number }; ts: number; }
 const countCache = new Map<string, CountCacheEntry>();
-const COUNT_CACHE_TTL_MS = 30_000;
+const COUNT_CACHE_TTL_MS = 120_000;
 const COUNT_CACHE_MAX = 256;
 
 function countCacheKey(table: string, sql: string, params: unknown[]): string {

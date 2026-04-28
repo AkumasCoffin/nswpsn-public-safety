@@ -446,11 +446,14 @@ interface ArchiveFacetRow {
 
 /**
  * GROUP BY scan over the small archive_* tables. Bounded to the last
- * 24h so the dropdown matches what `?since=24h` filters would surface.
+ * 7d so quiet sources (BOM warnings can go days without firing,
+ * Ausgrid maintenance is sparse) still surface category options in
+ * the dropdown. 24h was too tight — BOM in particular regularly
+ * showed `count: 0` with empty categories.
  *
  * Earlier revisions GROUPED BY status + severity (extracted from
- * `data->>` JSONB), which forced per-row JSONB parses for every row in
- * the 24h window — on heavily-loaded archive_traffic that timed out at
+ * `data->>` JSONB), which forced per-row JSONB parses for every row
+ * in the window — on heavily-loaded archive_traffic that timed out at
  * 30s. Now we only GROUP BY the indexed columns (source, category,
  * subcategory) and skip status/severity facets in the dropdown. Worth
  * the trade: the dropdown's primary use is per-source + per-category
@@ -480,7 +483,7 @@ async function archiveFacets(): Promise<{
         EXTRACT(EPOCH FROM MIN(fetched_at))::bigint AS oldest,
         EXTRACT(EPOCH FROM MAX(fetched_at))::bigint AS newest
       FROM ${table}
-      WHERE fetched_at >= NOW() - INTERVAL '24 hours'
+      WHERE fetched_at >= NOW() - INTERVAL '7 days'
       GROUP BY 1, 2, 3
     `;
     let client;
