@@ -59,47 +59,33 @@ const INDEXES: IndexSpec[] = [
     sql: `CREATE INDEX IF NOT EXISTS idx_archive_rfs_src_sid_ts
           ON archive_rfs (source, source_id, fetched_at DESC)`,
   },
-  // Partial index on is_live-truthy rows. Halves the row set for the
-  // count query's COUNT(*) FILTER aggregate on the default logs.html
-  // "live only" filter.
-  {
-    name: 'idx_archive_waze_live',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_waze_live
-          ON archive_waze (source, fetched_at DESC)
-          WHERE (data->>'is_live') IN ('1','true','True')`,
-  },
-  {
-    name: 'idx_archive_traffic_live',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_traffic_live
-          ON archive_traffic (source, fetched_at DESC)
-          WHERE (data->>'is_live') IN ('1','true','True')`,
-  },
-  {
-    name: 'idx_archive_power_live',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_power_live
-          ON archive_power (source, fetched_at DESC)
-          WHERE (data->>'is_live') IN ('1','true','True')`,
-  },
-  {
-    name: 'idx_archive_misc_live',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_misc_live
-          ON archive_misc (source, fetched_at DESC)
-          WHERE (data->>'is_live') IN ('1','true','True')`,
-  },
-  {
-    name: 'idx_archive_rfs_live',
-    sql: `CREATE INDEX IF NOT EXISTS idx_archive_rfs_live
-          ON archive_rfs (source, fetched_at DESC)
-          WHERE (data->>'is_live') IN ('1','true','True')`,
-  },
   // archive_waze heatmap helper: only index rows with non-null coords
-  // so the heatmap query's WHERE filter becomes implicit.
+  // so the heatmap query's WHERE filter becomes implicit. Cheap WHERE
+  // (column null check) so write overhead is negligible.
   {
     name: 'idx_archive_waze_heatmap',
     sql: `CREATE INDEX IF NOT EXISTS idx_archive_waze_heatmap
           ON archive_waze (source, fetched_at DESC)
           WHERE lat IS NOT NULL AND lng IS NOT NULL`,
   },
+];
+
+/**
+ * Indexes to actively DROP. Earlier revisions added partial indexes on
+ * `(data->>'is_live') IN ('1','true','True')` to speed up the live-only
+ * filter, but the JSONB extraction inside the WHERE clause forced
+ * per-row JSON parsing during every INSERT — production showed
+ * archive_power INSERTs of 1.3k rows taking 60s+. The indexes weren't
+ * pulling their weight on read-side either (the planner often picked
+ * the regular `(source, fetched_at DESC)` index with a Filter step
+ * anyway). Dropping them frees up write throughput.
+ */
+const DROP_INDEXES = [
+  'idx_archive_waze_live',
+  'idx_archive_traffic_live',
+  'idx_archive_power_live',
+  'idx_archive_misc_live',
+  'idx_archive_rfs_live',
 ];
 
 let inFlight: Promise<void> | null = null;
@@ -128,6 +114,30 @@ export async function ensurePerfIndexes(): Promise<void> {
       // Unlimit timeout for this connection — index builds can take
       // minutes per index on large archive_waze partitions.
       await client.query('SET statement_timeout = 0');
+
+      // Drop indexes that are hurting us before building the desired set.
+      // The partial-live indexes were causing INSERT timeouts via JSONB
+      // parse-on-write (see DROP_INDEXES docstring above).
+      let dropped = 0;
+      for (const name of DROP_INDEXES) {
+        try {
+          const before = await client.query<{ indexname: string }>(
+            `SELECT indexname FROM pg_indexes WHERE indexname = $1`,
+            [name],
+          );
+          if (before.rowCount === 0) continue;
+          await client.query(`DROP INDEX IF EXISTS ${name}`);
+          dropped += 1;
+          log.info({ index: name }, 'indexBuilder: dropped (write-overhead)');
+        } catch (err) {
+          log.warn(
+            { err: (err as Error).message, index: name },
+            'indexBuilder: drop failed',
+          );
+        }
+      }
+      if (dropped > 0) log.info({ dropped }, 'indexBuilder: drops complete');
+
       // Skip already-existing indexes cheaply via pg_indexes lookup.
       const existing = await client.query<{ indexname: string }>(
         `SELECT indexname FROM pg_indexes
