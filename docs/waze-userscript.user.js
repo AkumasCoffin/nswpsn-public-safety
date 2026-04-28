@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.17
+// @version      1.18
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
+// @grant        GM_cookie
+// @grant        GM.cookie
 // @grant        unsafeWindow
 // @connect      *
 // @run-at       document-start
@@ -242,8 +244,15 @@
     // After panning, wait up to this long for Waze to fire georss for the
     // new viewport. As soon as a georss response arrives we accelerate the
     // next pan — no point waiting if the data is already in.
-    const PAN_INTERVAL_MS        = 5_000;  // fallback max wait per region (dead zones)
-    const PAN_AFTER_INGEST_MS    = 1_000;  // how long to wait after georss before panning
+    //
+    // Bumped 5s → 7s in v1.18 after seeing Waze 403 the georss endpoint
+    // after several hours of running. The 5s cadence × 190 regions = ~38
+    // requests/min from one IP/cookie pair, which trips Waze's bot
+    // heuristics. 7s averages ~27/min and adds a 0-2s jitter per pan
+    // so the timing isn't perfectly regular (also a fingerprint).
+    const PAN_INTERVAL_MS        = 7_000;  // fallback max wait per region (dead zones)
+    const PAN_INTERVAL_JITTER_MS = 2_000;  // random extra 0..N per pan
+    const PAN_AFTER_INGEST_MS    = 1_500;  // how long to wait after georss before panning
     // Reload the page every 30 min as a recovery for stuck states. Waze
     // occasionally stops emitting georss responses after long sessions —
     // backend warns "Waze ingest stale: no POST in 15m" when this happens.
@@ -299,6 +308,56 @@
     // proactively before the 30-min absolute timer fires.
     let _lastIngestSuccess = Date.now();
 
+    // Anti-bot state — when Waze 403s/429s the georss endpoint, we go
+    // into a cooldown: pause rotation, clear cookies (so Waze treats
+    // the next request as a new visitor), and reload after a delay so
+    // the next session starts fresh. Without this the regular reload
+    // (every 30 min) doesn't help because Waze's block is cookie-based
+    // and persists across reloads.
+    let _wazeBlockedUntil = 0;
+    let _wazeBlockCount = 0;
+    const COOLDOWN_BASE_MS = 5 * 60 * 1000;   // 5 min for first 403
+    const COOLDOWN_MAX_MS  = 30 * 60 * 1000;  // cap at 30 min after repeats
+
+    function isInCooldown() {
+        return Date.now() < _wazeBlockedUntil;
+    }
+
+    function noteWazeBlock(status) {
+        _wazeBlockCount += 1;
+        // Exponential backoff: 5min, 10min, 20min, 30min (capped).
+        const delay = Math.min(
+            COOLDOWN_BASE_MS * Math.pow(2, _wazeBlockCount - 1),
+            COOLDOWN_MAX_MS,
+        );
+        _wazeBlockedUntil = Date.now() + delay;
+        log(`Waze ${status} — cooldown ${Math.round(delay / 60000)}m (count ${_wazeBlockCount})`);
+        // Clear waze.com cookies so the next session looks like a fresh
+        // visitor. GM_cookie is a privileged API; if not granted we
+        // fall back to document.cookie (only clears non-HttpOnly).
+        try {
+            if (typeof GM_cookie !== 'undefined' && GM_cookie.list && GM_cookie.delete) {
+                GM_cookie.list({ domain: '.waze.com' }, (cookies) => {
+                    for (const ck of cookies || []) {
+                        try { GM_cookie.delete({ name: ck.name, url: 'https://www.waze.com/' }); } catch (e) {}
+                    }
+                    log(`cleared ${cookies?.length ?? 0} waze.com cookies`);
+                });
+            } else {
+                // Fallback: expire what we can via document.cookie.
+                const all = document.cookie.split(';');
+                for (const c of all) {
+                    const eq = c.indexOf('=');
+                    const name = eq > -1 ? c.slice(0, eq).trim() : c.trim();
+                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/`;
+                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; domain=.waze.com`;
+                }
+            }
+        } catch (e) { log('cookie clear fail:', e); }
+        // Reload after a short pause so cookies take effect.
+        setTimeout(() => forceReload(`waze ${status} cooldown`), 5_000);
+    }
+
     function forward(payload) {
         const xhr = (typeof GM_xmlhttpRequest !== 'undefined') ? GM_xmlhttpRequest
                   : (typeof GM !== 'undefined' && GM.xmlHttpRequest) ? GM.xmlHttpRequest
@@ -333,8 +392,13 @@
                     if (typeof input === 'string') urlStr = input;
                     else if (input && input.href) urlStr = input.href;
                     else if (input && input.url) urlStr = input.url;
-                    if (urlStr && urlStr.indexOf('/api/georss') !== -1 && response.ok) {
-                        response.clone().json().then(d => handleGeorss(urlStr, d)).catch(() => {});
+                    if (urlStr && urlStr.indexOf('/api/georss') !== -1) {
+                        if (response.ok) {
+                            response.clone().json().then(d => handleGeorss(urlStr, d)).catch(() => {});
+                        } else if (response.status === 403 || response.status === 429) {
+                            // Waze rate-limited / blocked us. Trigger cooldown.
+                            noteWazeBlock(response.status);
+                        }
                     }
                 } catch (e) {}
                 return response;
@@ -359,8 +423,11 @@
                     const self = this;
                     this.addEventListener('load', function () {
                         try {
-                            if (self.readyState === 4 && self.status === 200 && self.responseText) {
+                            if (self.readyState !== 4) return;
+                            if (self.status === 200 && self.responseText) {
                                 handleGeorss(String(url), JSON.parse(self.responseText));
+                            } else if (self.status === 403 || self.status === 429) {
+                                noteWazeBlock(self.status);
                             }
                         } catch (e) {}
                     });
@@ -635,11 +702,22 @@
         clearTimeout(rotationTimer);
         clearTimeout(ingestWaitTimer);
         ingestArmedForCurrent = true;
+        // Add 0..PAN_INTERVAL_JITTER_MS so the timing isn't a perfect
+        // 7s metronome — Waze's bot heuristics can fingerprint regular
+        // intervals.
+        const jitter = Math.floor(Math.random() * PAN_INTERVAL_JITTER_MS);
         rotationTimer = setTimeout(() => {
             ingestArmedForCurrent = false;
+            // Skip the pan during cooldown — every request just earns
+            // another 403 and resets the cookie clock.
+            if (isInCooldown()) {
+                log(`cooldown active, skipping pan (${Math.round((_wazeBlockedUntil - Date.now()) / 60000)}m left)`);
+                scheduleNextPan();
+                return;
+            }
             rotateToNextRegion();
             scheduleNextPan();
-        }, PAN_INTERVAL_MS);
+        }, PAN_INTERVAL_MS + jitter);
     }
 
     // Called by handleGeorss on successful ingest — bumps up the pan schedule
@@ -707,6 +785,10 @@
     // when the user comes back to check on the tab we re-evaluate state
     // immediately instead of waiting for the next throttled tick.
     function checkStuck() {
+        // During cooldown, the cooldown handler already manages the reload.
+        // Don't fight it — that would just rapid-fire reloads and prevent
+        // the cooldown from elapsing.
+        if (isInCooldown()) return;
         const idleMs = Date.now() - _lastIngestSuccess;
         if (idleMs > STUCK_RELOAD_AFTER_MS) {
             forceReload(`watchdog ${Math.round(idleMs / 1000)}s idle`);
@@ -741,8 +823,9 @@
         pageWin.addEventListener('focus', checkStuck);
     } catch (e) { log('visibility hook fail:', e); }
 
-    log('NSWPSN Waze Forwarder v1.17 loaded — backend:', BACKEND_URL,
+    log('NSWPSN Waze Forwarder v1.18 loaded — backend:', BACKEND_URL,
+        `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
         `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
         `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
-        `· check every ${STUCK_CHECK_INTERVAL_MS / 1000}s + on visibility`);
+        `· 403/429 cooldown ${COOLDOWN_BASE_MS / 60000}-${COOLDOWN_MAX_MS / 60000}m`);
 })();
