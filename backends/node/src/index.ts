@@ -91,7 +91,11 @@ async function preflight(): Promise<void> {
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
   startPoliceHeatmapCacheRefresh(); // 10-min materialised heatmap (mirrors python)
-  startIsLatestRefresher(); // 5-min is_latest column maintenance (eventually consistent)
+  // isLatestRefresher disabled — created I/O contention that killed
+  // archive_waze writes. Reads use bounded DISTINCT ON instead of
+  // is_latest filtering. Schema columns still exist (migration 012)
+  // but no maintenance is happening on them.
+  // startIsLatestRefresher();
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Background perf-index build. Runs on its own connection with
