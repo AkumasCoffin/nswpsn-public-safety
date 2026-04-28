@@ -162,6 +162,32 @@ export async function ensurePerfIndexes(): Promise<void> {
         }
       }
       log.info({ built, skipped, failed }, 'indexBuilder: done');
+
+      // ANALYZE the archive tables. After bulk migrations / heavy ingest,
+      // the planner's row-count statistics are stale and it picks plans
+      // that ignore the indexes (e.g. seq-scanning a 5M-row partition
+      // because it thinks the table has 100k rows). ANALYZE samples each
+      // table and refreshes pg_statistic; queries that were timing out at
+      // 30s+ should pick the indexed plan after this. Cheap (~seconds).
+      const tables = [
+        'archive_waze',
+        'archive_traffic',
+        'archive_rfs',
+        'archive_power',
+        'archive_misc',
+      ];
+      for (const t of tables) {
+        const t0 = Date.now();
+        try {
+          await client.query(`ANALYZE ${t}`);
+          log.info({ table: t, ms: Date.now() - t0 }, 'indexBuilder: ANALYZE');
+        } catch (err) {
+          log.warn(
+            { err: (err as Error).message, table: t },
+            'indexBuilder: ANALYZE failed',
+          );
+        }
+      }
     } finally {
       client.release();
     }

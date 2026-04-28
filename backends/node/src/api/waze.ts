@@ -297,11 +297,15 @@ async function buildHeatmapFromArchive(
   const client = await pool.connect();
   try {
     // SET LOCAL is a no-op outside a transaction (pg semantics) — wrap
-    // the query in BEGIN/COMMIT so the 20s timeout actually applies.
+    // the query in BEGIN/COMMIT so the timeout actually applies.
+    // Bumped 20s → 60s after seeing background refresh fail on heavily-
+    // loaded archive_waze (continuous ingest + duplicated rows). 60s is
+    // generous; the cache refresh runs every 5 min anyway, so a
+    // long-tail one-off is acceptable.
     await client.query('BEGIN');
     let r: { rows: HeatmapRow[] };
     try {
-      await client.query("SET LOCAL statement_timeout = '20s'");
+      await client.query("SET LOCAL statement_timeout = '60s'");
       r = await client.query<HeatmapRow>(sql, params);
       await client.query('COMMIT');
     } catch (err) {
