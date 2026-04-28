@@ -253,18 +253,10 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // APPEND-ONLY writes. Earlier revisions did INSERT + UPDATE-old-
-    // rows-to-is_latest=false in the same transaction, but the UPDATE
-    // (with up to 500 (source, source_id) tuples in a VALUES clause)
-    // hit 60s timeouts on every essential_future poll cycle (1025
-    // outages × INSERT+UPDATE). Reverted to pure INSERT — the
-    // is_latest column is now maintained by services/isLatestRefresher.ts
-    // every 5 min, eventually-consistent. Reads use DISTINCT ON over
-    // the partial index to dedupe the small in-flight window between
-    // refreshes.
-    //
-    // is_live: derived from the JSONB blob at insert time. is_latest:
-    // always true on insert (the row IS the latest at the moment).
+    // APPEND-ONLY writes — pure INSERT, no UPDATE. is_latest and
+    // is_live columns dropped in migration 013 after they caused
+    // chronic I/O contention and write timeouts. is_live truthy
+    // semantics are now derived from JSONB at read time only.
     const cols = [
       'source',
       'source_id',
@@ -274,8 +266,6 @@ export class ArchiveWriter {
       'category',
       'subcategory',
       'data',
-      'is_live',
-      'is_latest',
     ];
     const placeholders: string[] = [];
     const params: unknown[] = [];
@@ -287,16 +277,6 @@ export class ArchiveWriter {
         tuple.push(`$${i}`);
       }
       placeholders.push(`(${tuple.join(',')})`);
-      const dataObj = r.data as Record<string, unknown> | null;
-      const liveRaw = dataObj?.['is_live'];
-      const isLive =
-        liveRaw === undefined || liveRaw === null
-          ? true
-          : liveRaw === true ||
-            liveRaw === 1 ||
-            liveRaw === '1' ||
-            liveRaw === 'true' ||
-            liveRaw === 'True';
       params.push(
         r.source,
         r.source_id ?? null,
@@ -306,8 +286,6 @@ export class ArchiveWriter {
         r.category ?? null,
         r.subcategory ?? null,
         JSON.stringify(r.data),
-        isLive,
-        true, // is_latest — eventually flipped by isLatestRefresher
       );
     }
 
