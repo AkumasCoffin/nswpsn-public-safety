@@ -339,30 +339,35 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   acc.params.push(fetchSize);
 
   if (p.unique) {
-    // unique=1 path. With migration 012 every archive table has an
-    // `is_latest` boolean column populated by the writer + a partial
-    // index `WHERE is_latest = true`. Filtering on that column turns
-    // the unique=1 path into a partial-index scan over a row set
-    // ~1% the size of the table — sub-millisecond regardless of how
-    // big the archive grows.
+    // unique=1 path. Filter on the is_latest partial index, then
+    // DISTINCT ON to dedupe within the small lag window. Writes are
+    // append-only (is_latest=true on insert); services/isLatestRefresher
+    // periodically flips superseded rows to false. Between refreshes
+    // there can be 2-3 is_latest=true rows for the same source_id —
+    // DISTINCT ON keeps only the newest.
     //
-    // Mirrors python's `WHERE is_latest = 1` pattern
-    // (external_api_proxy.py:12199). Replaces the previous DISTINCT ON
-    // approach which had to scan the most recent 10k rows and dedupe
-    // in-memory — that worked but didn't scale with table size and
-    // hit statement_timeout under bloat pressure.
+    // The partial index `idx_<table>_src_sid_latest (source, source_id)
+    // WHERE is_latest = true AND source_id IS NOT NULL` makes this
+    // sub-ms regardless of table size — only ~one row per source_id
+    // qualifies for the partial index, so scanning + DISTINCT ON over
+    // that small set is essentially instant.
     const isLatestClause = acc.parts.length > 0
       ? `${whereClause} AND is_latest = true`
       : `WHERE is_latest = true`;
-    const sql = `
-      SELECT id, source, source_id,
+    const inner = `
+      SELECT DISTINCT ON (source, source_id)
+             id, source, source_id,
              extract(epoch FROM fetched_at)::bigint AS fetched_at_epoch,
              fetched_at,
              lat, lng, category, subcategory,
              ${p.includeData ? 'data' : "'{}'::jsonb AS data"}
       FROM ${table}
       ${isLatestClause}
-      ${orderClause}
+      ORDER BY source, source_id, fetched_at DESC, id DESC
+    `;
+    const sql = `
+      SELECT * FROM (${inner}) AS u
+      ORDER BY fetched_at_epoch ${p.order}, id ${p.order}
       ${limitClause}
     `;
     return { sql, params: acc.params, table };

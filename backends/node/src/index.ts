@@ -49,6 +49,10 @@ import {
   stopPoliceHeatmapCacheRefresh,
 } from './services/policeHeatmapCache.js';
 import {
+  startIsLatestRefresher,
+  stopIsLatestRefresher,
+} from './services/isLatestRefresher.js';
+import {
   start as startActivityMode,
   stop as stopActivityMode,
 } from './services/activityMode.js';
@@ -87,6 +91,7 @@ async function preflight(): Promise<void> {
   startStatsArchiver(); // 5-min snapshots into stats_snapshots for /api/stats/history
   startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
   startPoliceHeatmapCacheRefresh(); // 10-min materialised heatmap (mirrors python)
+  startIsLatestRefresher(); // 5-min is_latest column maintenance (eventually consistent)
   startPolling(); // walks the registry, schedules each source's setInterval
 
   // Background perf-index build. Runs on its own connection with
@@ -165,6 +170,7 @@ async function shutdown(signal: string) {
     stopFilterCacheRefresh();
     stopHeatmapRefreshLoop();
     stopPoliceHeatmapCacheRefresh();
+    stopIsLatestRefresher();
     stopStatsArchiver();
     stopCleanupLoop();
     stopRdioSummaryScheduler();
