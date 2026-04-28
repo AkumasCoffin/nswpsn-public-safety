@@ -323,6 +323,11 @@ systemRouter.post('/api/admin/db/vacuum', async (c) => {
   const out: Record<string, { ok: boolean; ms: number; error?: string }> = {};
   const client = await pool.connect();
   try {
+    // Unlimit statement_timeout for VACUUM — the pool default 30s
+    // kills VACUUM on multi-million-row archive_waze (production
+    // confirmed: 30563ms timeout). VACUUM doesn't take ACCESS
+    // EXCLUSIVE so this is safe to run for as long as it needs.
+    await client.query('SET statement_timeout = 0');
     for (const t of tables) {
       const t0 = Date.now();
       try {
