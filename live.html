@@ -1943,7 +1943,7 @@
             </div>
           </div>
           <div class="breakdown-item">
-            <div class="breakdown-dot" style="background: #f97316;"></div>
+            <div class="breakdown-dot" style="background: #f59e0b;"></div>
             <div class="breakdown-info">
               <div class="breakdown-label">Maintenance</div>
               <div class="breakdown-value" id="bd-endeavour-maintenance">--</div>
@@ -2008,14 +2008,14 @@
         </div>
         <div class="stats-breakdown" id="traffic-breakdown">
           <div class="breakdown-item">
-            <div class="breakdown-dot" style="background: #ef4444;"></div>
+            <div class="breakdown-dot" style="background: #dc2626;"></div>
             <div class="breakdown-info">
-              <div class="breakdown-label">All Incidents</div>
+              <div class="breakdown-label">Crashes &amp; Hazards</div>
               <div class="breakdown-value" id="bd-traffic-incidents">--</div>
             </div>
           </div>
           <div class="breakdown-item">
-            <div class="breakdown-dot" style="background: #f97316;"></div>
+            <div class="breakdown-dot" style="background: #f59e0b;"></div>
             <div class="breakdown-info">
               <div class="breakdown-label">Roadwork</div>
               <div class="breakdown-value" id="bd-traffic-roadwork">--</div>
@@ -2029,7 +2029,7 @@
             </div>
           </div>
           <div class="breakdown-item">
-            <div class="breakdown-dot" style="background: #dc2626;"></div>
+            <div class="breakdown-dot" style="background: #f97316;"></div>
             <div class="breakdown-info">
               <div class="breakdown-label">Fires</div>
               <div class="breakdown-value" id="bd-traffic-fires">--</div>
@@ -2725,6 +2725,33 @@
     Chart.defaults.borderColor = 'rgba(148, 163, 184, 0.15)';
     Chart.defaults.font.family = 'system-ui, -apple-system, BlinkMacSystemFont, "Inter", sans-serif';
 
+    // Center-text plugin — draws total count + label inside the donut
+    // hole. Activated per-chart via `options.plugins.centerText`. Without
+    // this the donut centers were dead space.
+    Chart.register({
+      id: 'centerText',
+      afterDatasetsDraw(chart) {
+        const cfg = chart.options.plugins?.centerText;
+        if (!cfg) return;
+        const { ctx, chartArea } = chart;
+        if (!chartArea) return;
+        const data = chart.data.datasets[0]?.data ?? [];
+        const total = data.reduce((a, b) => a + (Number(b) || 0), 0);
+        const cx = (chartArea.left + chartArea.right) / 2;
+        const cy = (chartArea.top + chartArea.bottom) / 2;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `700 ${cfg.numberSize ?? 28}px ${Chart.defaults.font.family}`;
+        ctx.fillStyle = cfg.numberColor ?? '#f1f5f9';
+        ctx.fillText(total.toLocaleString(), cx, cy - 8);
+        ctx.font = `500 ${cfg.labelSize ?? 11}px ${Chart.defaults.font.family}`;
+        ctx.fillStyle = cfg.labelColor ?? '#64748b';
+        ctx.fillText(String(cfg.label ?? 'Total').toUpperCase(), cx, cy + 14);
+        ctx.restore();
+      },
+    });
+
     function toggleSidebar() {
       const sidebar = document.getElementById('sidebar');
       const overlay = document.querySelector('.menu-overlay');
@@ -3418,6 +3445,62 @@
       // Check if mobile for responsive chart options
       const isMobile = window.innerWidth < 768;
       
+      // Shared options for all four breakdown doughnuts. Centralises
+      // the look (cutout, legend position+style, tooltip theme, center
+      // text) so every donut on the page renders identically. Per-chart
+      // overrides only need to set `plugins.centerText.label` and the
+      // tooltip's unit suffix (outages vs hazards).
+      function donutOptions({ centerLabel, unit }) {
+        return {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: isMobile ? '62%' : '68%',
+          layout: { padding: { top: 4, bottom: 4 } },
+          plugins: {
+            centerText: { label: centerLabel },
+            legend: {
+              position: 'bottom',
+              labels: {
+                boxWidth: isMobile ? 10 : 12,
+                boxHeight: isMobile ? 10 : 12,
+                padding: isMobile ? 8 : 12,
+                usePointStyle: true,
+                pointStyle: 'circle',
+                font: { size: isMobile ? 10 : 11, weight: '500' },
+                color: '#94a3b8',
+              },
+            },
+            tooltip: {
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
+              titleFont: { size: 13, weight: 'bold' },
+              bodyFont: { size: 12 },
+              padding: 12,
+              cornerRadius: 8,
+              borderColor: 'rgba(148, 163, 184, 0.2)',
+              borderWidth: 1,
+              callbacks: {
+                label: (ctx) => {
+                  const total = ctx.dataset.data.reduce((a, b) => a + (Number(b) || 0), 0);
+                  const pct = total > 0 ? Math.round((ctx.parsed / total) * 100) : 0;
+                  return `${ctx.label}: ${ctx.parsed.toLocaleString()} ${unit} (${pct}%)`;
+                },
+              },
+            },
+          },
+          // Slice styling — thin segment border in the card-bg colour
+          // creates a subtle inset between segments without the gaps
+          // the old `spacing: 2/3` produced on tiny slivers (which
+          // grew the slivers visually larger than they should be).
+          elements: {
+            arc: {
+              borderColor: '#0f172a',
+              borderWidth: 2,
+              hoverOffset: 6,
+            },
+          },
+        };
+      }
+
       // Ausgrid Power Outages Chart
       const ausgridCtx = document.getElementById('ausgrid-chart')?.getContext('2d');
       if (ausgridCtx) {
@@ -3428,44 +3511,12 @@
             datasets: [{
               data: [0, 0],
               backgroundColor: ['#ef4444', '#3b82f6'],
-              borderWidth: 0,
-              spacing: 2,
-              hoverOffset: 6
-            }]
+            }],
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: isMobile ? '45%' : '55%',
-            plugins: {
-              legend: {
-                position: 'bottom',
-                labels: { 
-                  boxWidth: isMobile ? 10 : 12, 
-                  padding: isMobile ? 5 : 8,
-                  font: { size: isMobile ? 9 : 11 },
-                  color: '#94a3b8'
-                }
-              },
-              tooltip: {
-                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                titleFont: { size: 13, weight: 'bold' },
-                bodyFont: { size: 12 },
-                padding: 12,
-                cornerRadius: 8,
-                callbacks: {
-                  label: (ctx) => {
-                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                    const pct = total > 0 ? Math.round((ctx.parsed / total) * 100) : 0;
-                    return `${ctx.label}: ${ctx.parsed} outages (${pct}%)`;
-                  }
-                }
-              }
-            }
-          }
+          options: donutOptions({ centerLabel: 'Outages', unit: 'outages' }),
         });
       }
-      
+
       // Endeavour Energy Power Outages Chart
       const endeavourCtx = document.getElementById('endeavour-chart')?.getContext('2d');
       if (endeavourCtx) {
@@ -3475,45 +3526,13 @@
             labels: ['Unplanned', 'Maintenance', 'Planned'],
             datasets: [{
               data: [0, 0, 0],
-              backgroundColor: ['#ef4444', '#f97316', '#a855f7'],
-              borderWidth: 0,
-              spacing: 2,
-              hoverOffset: 6
-            }]
+              backgroundColor: ['#ef4444', '#f59e0b', '#a855f7'],
+            }],
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: isMobile ? '45%' : '55%',
-            plugins: {
-              legend: {
-                position: 'bottom',
-                labels: { 
-                  boxWidth: isMobile ? 10 : 12, 
-                  padding: isMobile ? 5 : 8,
-                  font: { size: isMobile ? 9 : 11 },
-                  color: '#94a3b8'
-                }
-              },
-              tooltip: {
-                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                titleFont: { size: 13, weight: 'bold' },
-                bodyFont: { size: 12 },
-                padding: 12,
-                cornerRadius: 8,
-                callbacks: {
-                  label: (ctx) => {
-                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                    const pct = total > 0 ? Math.round((ctx.parsed / total) * 100) : 0;
-                    return `${ctx.label}: ${ctx.parsed} outages (${pct}%)`;
-                  }
-                }
-              }
-            }
-          }
+          options: donutOptions({ centerLabel: 'Outages', unit: 'outages' }),
         });
       }
-      
+
       // Essential Energy Power Outages Chart
       const essentialCtx = document.getElementById('essential-chart')?.getContext('2d');
       if (essentialCtx) {
@@ -3524,88 +3543,28 @@
             datasets: [{
               data: [0, 0],
               backgroundColor: ['#06b6d4', '#8b5cf6'],
-              borderWidth: 0,
-              spacing: 2,
-              hoverOffset: 6
-            }]
+            }],
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: isMobile ? '45%' : '55%',
-            plugins: {
-              legend: {
-                position: 'bottom',
-                labels: { 
-                  boxWidth: isMobile ? 10 : 12, 
-                  padding: isMobile ? 5 : 8,
-                  font: { size: isMobile ? 9 : 11 },
-                  color: '#94a3b8'
-                }
-              },
-              tooltip: {
-                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                titleFont: { size: 13, weight: 'bold' },
-                bodyFont: { size: 12 },
-                padding: 12,
-                cornerRadius: 8,
-                callbacks: {
-                  label: (ctx) => {
-                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                    const pct = total > 0 ? Math.round((ctx.parsed / total) * 100) : 0;
-                    return `${ctx.label}: ${ctx.parsed} outages (${pct}%)`;
-                  }
-                }
-              }
-            }
-          }
+          options: donutOptions({ centerLabel: 'Outages', unit: 'outages' }),
         });
       }
-      
-      // Traffic Hazards Doughnut - with detailed tooltips
+
+      // Traffic Hazards Doughnut. Palette retuned: Crashes deep red
+      // (danger), Fires orange (fire), Roadwork amber (caution cones).
+      // Previous Crashes #ef4444 + Fires #dc2626 were near-identical and
+      // unreadable in the legend.
       const trafficCtx = document.getElementById('traffic-chart')?.getContext('2d');
       if (trafficCtx) {
         charts.traffic = new Chart(trafficCtx, {
           type: 'doughnut',
           data: {
-            labels: ['Crashes/Hazards', 'Roadwork', 'Floods', 'Fires', 'Major Events'],
+            labels: ['Crashes & Hazards', 'Roadwork', 'Floods', 'Fires', 'Major Events'],
             datasets: [{
               data: [0, 0, 0, 0, 0],
-              backgroundColor: ['#ef4444', '#f97316', '#3b82f6', '#dc2626', '#a855f7'],
-              borderWidth: 0,
-              spacing: 3,
-              hoverOffset: 8
-            }]
+              backgroundColor: ['#dc2626', '#f59e0b', '#3b82f6', '#f97316', '#a855f7'],
+            }],
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: isMobile ? '50%' : '60%',
-            plugins: {
-              legend: {
-                position: isMobile ? 'bottom' : 'right',
-                labels: { 
-                  boxWidth: isMobile ? 10 : 14, 
-                  padding: isMobile ? 6 : 10,
-                  font: { size: isMobile ? 9 : 11 }
-                }
-              },
-              tooltip: {
-                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                titleFont: { size: 13, weight: 'bold' },
-                bodyFont: { size: 12 },
-                padding: 12,
-                cornerRadius: 8,
-                callbacks: {
-                  label: (ctx) => {
-                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                    const pct = total > 0 ? Math.round((ctx.parsed / total) * 100) : 0;
-                    return `${ctx.label}: ${ctx.parsed} (${pct}%)`;
-                  }
-                }
-              }
-            }
-          }
+          options: donutOptions({ centerLabel: 'Hazards', unit: 'hazards' }),
         });
       }
       
