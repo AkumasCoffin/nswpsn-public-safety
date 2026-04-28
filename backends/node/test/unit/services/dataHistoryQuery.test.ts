@@ -227,21 +227,21 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 });
 
 describe('buildSqlForTable — unique=1', () => {
-  it('uses is_latest=true partial-index filter when unique=1', () => {
-    // Migration 012 added the is_latest column + partial index. The
-    // unique=1 path now filters that column directly instead of doing
-    // an in-memory DISTINCT ON over a bounded scan — much faster on
-    // large tables.
+  it('uses bounded DISTINCT ON when unique=1', () => {
+    // Rolled back from is_latest filter (which created I/O contention
+    // killing writes). The unique=1 path now bounds the inner scan
+    // by fetched_at DESC LIMIT 50000, then DISTINCT ON in-memory.
     const q = buildSqlForTable(
       'archive_waze',
       defaultParams({ unique: true, sources: ['waze_police'] }),
     );
-    expect(q.sql).toContain('is_latest = true');
+    expect(q.sql).toContain('DISTINCT ON (source, source_id)');
+    expect(q.sql).toContain('LIMIT 50000');
   });
 
-  it('non-unique queries do NOT filter on is_latest', () => {
+  it('non-unique queries do NOT use DISTINCT ON', () => {
     const q = buildSqlForTable('archive_waze', defaultParams());
-    expect(q.sql).not.toContain('is_latest = true');
+    expect(q.sql).not.toContain('DISTINCT ON');
   });
 });
 

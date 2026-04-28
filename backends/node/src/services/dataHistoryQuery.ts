@@ -339,21 +339,25 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   acc.params.push(fetchSize);
 
   if (p.unique) {
-    // unique=1 path. Filter on the is_latest partial index, then
-    // DISTINCT ON to dedupe within the small lag window. Writes are
-    // append-only (is_latest=true on insert); services/isLatestRefresher
-    // periodically flips superseded rows to false. Between refreshes
-    // there can be 2-3 is_latest=true rows for the same source_id —
-    // DISTINCT ON keeps only the newest.
+    // unique=1 path. ROLLED BACK from is_latest filter — that approach
+    // required ongoing maintenance (writer UPDATE OR background flipper)
+    // both of which created I/O contention killing INSERTs.
     //
-    // The partial index `idx_<table>_src_sid_latest (source, source_id)
-    // WHERE is_latest = true AND source_id IS NOT NULL` makes this
-    // sub-ms regardless of table size — only ~one row per source_id
-    // qualifies for the partial index, so scanning + DISTINCT ON over
-    // that small set is essentially instant.
-    const isLatestClause = acc.parts.length > 0
-      ? `${whereClause} AND is_latest = true`
-      : `WHERE is_latest = true`;
+    // Back to the bounded DISTINCT ON pattern: walk the most recent
+    // UNIQUE_INNER_CAP rows by fetched_at DESC (the (fetched_at DESC)
+    // index makes this an index walk), then DISTINCT ON in memory.
+    // Cap raised from 10k → 50k so larger waze pollings still capture
+    // every unique incident.
+    const UNIQUE_INNER_CAP = 50_000;
+    const bounded = `
+      SELECT id, source, source_id, fetched_at,
+             lat, lng, category, subcategory,
+             data
+      FROM ${table}
+      ${whereClause}
+      ORDER BY fetched_at DESC, id DESC
+      LIMIT ${UNIQUE_INNER_CAP}
+    `;
     const inner = `
       SELECT DISTINCT ON (source, source_id)
              id, source, source_id,
@@ -361,9 +365,8 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
              fetched_at,
              lat, lng, category, subcategory,
              ${p.includeData ? 'data' : "'{}'::jsonb AS data"}
-      FROM ${table}
-      ${isLatestClause}
-      ORDER BY source, source_id, fetched_at DESC, id DESC
+      FROM (${bounded}) bounded
+      ORDER BY source, source_id, fetched_at DESC
     `;
     const sql = `
       SELECT * FROM (${inner}) AS u
@@ -482,16 +485,28 @@ export function buildCountSqlForTable(
   // Both columns ride through the doubly-nested LIMIT pattern so the
   // 50k cap still bounds the index walk before DISTINCT runs.
   const COUNT_CAP = 50_000;
-  // is_live is now a real boolean column (migration 012). No more
-  // per-row JSONB extraction — direct column read, planner-friendly.
-  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live)::bigint AS live_count`;
+  // ROLLED BACK from is_live/is_latest filtering — see buildSqlForTable
+  // for context. Back to bounded count using the (fetched_at DESC)
+  // index. live_count derived from JSONB at extract time; per-row
+  // overhead is fine because the LIMIT bounds the scan.
+  const IS_LIVE_PRED = `(data->>'is_live') IN ('1','true','True')`;
+  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live_truthy)::bigint AS live_count`;
   const sql = p.unique
     ? `${aggLine}
-       FROM ${table}
-       ${whereClause ? whereClause + ' AND is_latest = true' : 'WHERE is_latest = true'}`
+       FROM (
+         SELECT DISTINCT ON (source, source_id) is_live_truthy FROM (
+           SELECT source, source_id, fetched_at,
+                  ${IS_LIVE_PRED} AS is_live_truthy
+           FROM ${table} ${whereClause}
+           ORDER BY fetched_at DESC
+           LIMIT ${COUNT_CAP}
+         ) bounded
+         ORDER BY source, source_id, fetched_at DESC
+       ) sub`
     : `${aggLine}
        FROM (
-         SELECT is_live FROM ${table} ${whereClause}
+         SELECT ${IS_LIVE_PRED} AS is_live_truthy
+         FROM ${table} ${whereClause}
          ORDER BY fetched_at DESC
          LIMIT ${COUNT_CAP}
        ) sub`;
