@@ -457,6 +457,13 @@ interface ArchiveFacetRow {
   newest: number | null;
 }
 
+/** Window for the incremental facets read. Mirrors the legacy
+ *  ARCHIVE_FACET_TABLES windows but applies a single bound to the
+ *  pre-aggregated read. 7 days is the wider of the two legacy bounds;
+ *  the smaller (1d) was only there to keep the live GROUP BY scan
+ *  fast on large partitions. The pre-aggregated table makes that moot. */
+const FACETS_WINDOW_DAYS = 7;
+
 /**
  * GROUP BY scan over the small archive_* tables. Bounded to the last
  * 7d so quiet sources (BOM warnings can go days without firing,
@@ -472,12 +479,87 @@ interface ArchiveFacetRow {
  * the trade: the dropdown's primary use is per-source + per-category
  * filtering; status/severity were nice-to-have.
  */
+/**
+ * Fast read path: aggregate filter_facets_daily over the 7-day window.
+ * Replaces the per-table GROUP BY scans that timed out at 60s. Returns
+ * null if the table is empty (i.e. backfill hasn't run yet) so the
+ * caller can fall back to the legacy archiveFacetsLegacy() path.
+ */
+async function archiveFacetsFromDaily(): Promise<{
+  typeCounts: Record<string, number>;
+  perTypeDims: DimMap;
+  oldestUnix: number | null;
+  newestUnix: number | null;
+} | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  const sql = `
+    SELECT source,
+           category,
+           subcategory,
+           SUM(count)::bigint AS cnt,
+           EXTRACT(EPOCH FROM MIN(day))::bigint AS oldest,
+           EXTRACT(EPOCH FROM MAX(day) + INTERVAL '1 day')::bigint AS newest
+      FROM filter_facets_daily
+     WHERE day >= (NOW() - ($1 || ' days')::interval)::date
+     GROUP BY 1, 2, 3
+  `;
+  let rows: ArchiveFacetRow[];
+  try {
+    const r = await pool.query<ArchiveFacetRow>(sql, [String(FACETS_WINDOW_DAYS)]);
+    rows = r.rows;
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'filterCache: facets-daily query failed; falling back to legacy scan',
+    );
+    return null;
+  }
+  if (rows.length === 0) return null;
+
+  const typeCounts: Record<string, number> = {};
+  const perTypeDims: DimMap = {};
+  let oldestUnix: number | null = null;
+  let newestUnix: number | null = null;
+  for (const row of rows) {
+    const cnt = parseInt(row.cnt, 10);
+    if (!Number.isFinite(cnt) || cnt <= 0) continue;
+    if (DEPRECATED_SOURCES.has(row.source)) continue;
+    const alertType = canonicalAlertType(row.source);
+    if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
+    if (alertType.startsWith('waze_')) continue;
+
+    typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
+    const slot = dimSlotFor(perTypeDims, alertType);
+    if (row.category && row.category !== '') {
+      slot['category']![row.category] = (slot['category']![row.category] ?? 0) + cnt;
+    }
+    if (row.subcategory && row.subcategory !== '' && !/^\d+$/.test(row.subcategory)) {
+      slot['subcategory']![row.subcategory] =
+        (slot['subcategory']![row.subcategory] ?? 0) + cnt;
+    }
+    if (typeof row.oldest === 'number') {
+      if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
+    }
+    if (typeof row.newest === 'number') {
+      if (newestUnix === null || row.newest > newestUnix) newestUnix = row.newest;
+    }
+  }
+  return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+}
+
 async function archiveFacets(): Promise<{
   typeCounts: Record<string, number>;
   perTypeDims: DimMap;
   oldestUnix: number | null;
   newestUnix: number | null;
 }> {
+  // Try the fast pre-aggregated path first. If it returns null (table
+  // empty / query errored), fall through to the legacy GROUP BY scan
+  // so the dropdown stays populated while the backfill is running.
+  const fast = await archiveFacetsFromDaily();
+  if (fast) return fast;
+
   const typeCounts: Record<string, number> = {};
   const perTypeDims: DimMap = {};
   let oldestUnix: number | null = null;
