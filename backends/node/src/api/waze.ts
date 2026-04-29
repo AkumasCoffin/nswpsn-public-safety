@@ -501,37 +501,56 @@ export function _resetHeatmapCacheForTests(): void {
  * count. Runs periodically so the panel reflects reality without an
  * on-demand DB query in the status check.
  *
+ * Reads from the materialised `police_heatmap_cache` table — refreshed
+ * every 10 min by services/policeHeatmapCache.ts. That's a tiny
+ * indexed read (~40k rows max), sub-millisecond. Avoids running the
+ * live aggregation against archive_waze every 5 min, which previously
+ * hit the 60s statement_timeout under heavy ingest pressure and
+ * routinely took 86–165s when it did succeed.
+ *
+ * If the materialised cache is empty (cold boot before its first
+ * refresh fires at +30s), we skip this tick — the in-process cache
+ * stays whatever it was, and the next interval picks up. Better than
+ * a 60s+ live aggregation just to populate the warmup cache.
+ *
  * Best-effort: failures are logged at warn-level, the previous cache
  * entry is left in place, and the next interval tries again.
  */
 async function refreshHeatmapCache(): Promise<void> {
   const startedAt = Date.now();
   try {
-    const aggregated = await buildHeatmapFromArchive(null, null);
-    if (!aggregated) {
-      // pool isn't ready yet (only happens during the first ~1s of
-      // boot). Log so we can tell apart "no data" from "couldn't ask."
-      log.debug('police-heatmap refresh: pool not ready, skipping tick');
+    const cacheRead = await readPoliceHeatmapCache(null, null);
+    if (!cacheRead || cacheRead.points.length === 0) {
+      // Either the pool isn't ready (early boot) or the materialised
+      // cache hasn't run its first refresh yet. The materialised
+      // refresher fires at +30s after boot, so this skip is a few
+      // intervals at most.
+      log.debug('police-heatmap refresh: materialised cache empty, skipping tick');
       return;
     }
+    const cacheStats = policeHeatmapCacheStats();
     const result = {
-      points: aggregated.points,
-      total_records: aggregated.total_records,
+      points: cacheRead.points.slice(0, HEATMAP_MAX_BINS),
+      total_records: cacheRead.total,
       bin_size_deg: HEATMAP_BIN_DEG,
-      max_count: aggregated.max_count,
+      max_count: cacheRead.max,
       days: HEATMAP_WINDOW_DAYS,
       subtypes: Array.from(POLICE_VALID_SUBTYPES).sort(),
-      cache_updated_at: aggregated.cache_updated_at,
-      cache_status: 'ok',
+      cache_updated_at:
+        cacheStats.last_refresh_age_secs !== null
+          ? new Date(Date.now() - cacheStats.last_refresh_age_secs * 1000).toISOString()
+          : null,
+      cache_status: 'materialised',
     };
     heatmapCache.set(_heatmapCacheKey([], null), { result, ts: Date.now() });
     heatmapLastRefreshTs = Math.floor(Date.now() / 1000);
-    heatmapLastBinCount = aggregated.points.length;
+    heatmapLastBinCount = cacheRead.points.length;
     log.info(
       {
-        bins: aggregated.points.length,
-        total_records: aggregated.total_records,
+        bins: cacheRead.points.length,
+        total_records: cacheRead.total,
         ms: Date.now() - startedAt,
+        source: 'materialised',
       },
       'police-heatmap refreshed',
     );
