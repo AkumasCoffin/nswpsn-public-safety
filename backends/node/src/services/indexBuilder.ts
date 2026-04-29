@@ -167,6 +167,45 @@ const BACKFILLS: BackfillSpec[] = [
                    AND COALESCE(subcategory, '') = ''
                    AND NULLIF(data->>'subtype', '') IS NOT NULL`,
   },
+  // One-shot population of police_heatmap_bin_daily from existing
+  // archive_waze rows. The migration creates the table empty; this
+  // backfills the trailing 30 days so the heatmap refresh has data
+  // to read from on the next cycle. Scoped to fetched_at::date <
+  // CURRENT_DATE so it never overlaps with today — the writer is
+  // already incrementing today's rows in real time, and overlapping
+  // would either double-count or clobber depending on which side
+  // ran last. ON CONFLICT DO NOTHING keeps the rerun safe even
+  // without the marker (defence-in-depth).
+  //
+  // Long-running on a slow host (the previous heatmap aggregation
+  // sat in IO/AioIoCompletion for 30+ min). indexBuilder runs with
+  // statement_timeout=0 so this is allowed to take as long as it
+  // needs without blocking startup. The marker ensures re-deploys
+  // don't pay the cost twice.
+  {
+    name: 'archive_waze.police_heatmap_bin_daily backfill',
+    countSql: `SELECT COUNT(*)::bigint AS n
+                 FROM archive_waze
+                WHERE source = 'waze_police'
+                  AND lat IS NOT NULL AND lng IS NOT NULL
+                  AND fetched_at >= NOW() - INTERVAL '30 days'
+                  AND (fetched_at AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date`,
+    updateSql: `INSERT INTO police_heatmap_bin_daily
+                  (day, lat_bin, lng_bin, subcategory, count)
+                SELECT
+                  (fetched_at AT TIME ZONE 'UTC')::date AS day,
+                  (FLOOR(lat / 0.001) * 0.001)::float8 AS lat_bin,
+                  (FLOOR(lng / 0.001) * 0.001)::float8 AS lng_bin,
+                  COALESCE(NULLIF(subcategory, ''), data->>'subtype', 'POLICE_VISIBLE') AS subcategory,
+                  COUNT(*)::int AS count
+                FROM archive_waze
+                WHERE source = 'waze_police'
+                  AND lat IS NOT NULL AND lng IS NOT NULL
+                  AND fetched_at >= NOW() - INTERVAL '30 days'
+                  AND (fetched_at AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date
+                GROUP BY 1, 2, 3, 4
+                ON CONFLICT (day, lat_bin, lng_bin, subcategory) DO NOTHING`,
+  },
   // NOTE: is_live and is_latest backfills disabled. The is_latest
   // approach created untenable I/O contention — the bulk UPDATE
   // creating ~366k dead tuples on archive_waze made every query
