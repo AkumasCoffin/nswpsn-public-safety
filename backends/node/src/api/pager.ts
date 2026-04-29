@@ -13,8 +13,31 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pagerSnapshot, type PagerMessage } from '../sources/pager.js';
+import { SwrCache } from '../services/swrCache.js';
 
 export const pagerRouter = new Hono();
+
+// SWR cache for the archive_misc-backed query. archive_misc is a heavy
+// partitioned table and the JSON-extract WHERE clause regularly takes
+// 30 s+ — without this cache the discord-bot polling the route once a
+// minute kept the DB pegged AND every other archive_misc consumer
+// (archiveLiveness, filterCache) saw cascading statement_timeouts.
+//
+// Sizing:
+//   - fresh = 60 s   → bot poll cadence; almost every call is a hit.
+//   - stale = 10 min → background refresh keeps the cache warm; if the
+//                       DB times out for ten minutes the entry expires
+//                       and the cold path falls back to the snapshot.
+const PAGER_HITS_FRESH_MS = 60_000;
+const PAGER_HITS_STALE_MS = 10 * 60_000;
+const pagerHitsCache = new SwrCache<PagerHitsBody>();
+
+interface PagerHitsBody {
+  type: 'FeatureCollection';
+  features: PagerFeature[];
+  count: number;
+  hours: number;
+}
 
 interface PagerFeature {
   type: 'Feature';
@@ -86,33 +109,23 @@ function snapshotFallback(
   return out;
 }
 
-pagerRouter.get('/api/pager/hits', async (c) => {
-  const url = new URL(c.req.url);
-  const hoursParam = url.searchParams.get('hours');
-  const limitParam = url.searchParams.get('limit');
-  const capcode = url.searchParams.get('capcode');
-  const incidentId = url.searchParams.get('incident_id');
-
-  let hours = Number.parseInt(hoursParam ?? '24', 10);
-  if (!Number.isFinite(hours) || hours <= 0) hours = 24;
-  hours = Math.min(hours, 168); // 7-day cap, matches python.
-
-  let limit = Number.parseInt(limitParam ?? '500', 10);
-  if (!Number.isFinite(limit) || limit <= 0) limit = 500;
-  limit = Math.min(limit, 2000);
-
+/**
+ * The DB read itself, factored out so SwrCache can call it. Builds the
+ * WHERE clause, runs the DISTINCT-ON query against archive_misc, and
+ * marshals rows into PagerFeatures. Throws on DB failure so SwrCache
+ * keeps the previous (stale) value instead of caching a fallback.
+ */
+async function fetchPagerHitsFromDb(opts: {
+  hours: number;
+  limit: number;
+  capcode: string | null;
+  incidentId: string | null;
+}): Promise<PagerHitsBody> {
+  const { hours, limit, capcode, incidentId } = opts;
   const cutoff = Math.floor(Date.now() / 1000) - hours * 3600;
 
   const pool = await getPool();
-  if (!pool) {
-    const features = snapshotFallback(hours, limit, capcode, incidentId);
-    return c.json({
-      type: 'FeatureCollection',
-      features,
-      count: features.length,
-      hours,
-    });
-  }
+  if (!pool) throw new Error('no DB pool');
 
   // Build the WHERE clause incrementally so optional filters slot in
   // with stable parameter indexes. Filter on `data->>'timestamp'`
@@ -155,35 +168,21 @@ pagerRouter.get('/api/pager/hits', async (c) => {
     LIMIT $${limitIdx}
   `;
 
-  let rows: PagerArchiveRow[] = [];
+  const client = await pool.connect();
+  let rows: PagerArchiveRow[];
   try {
-    const client = await pool.connect();
+    await client.query('BEGIN');
     try {
-      await client.query('BEGIN');
-      try {
-        await client.query("SET LOCAL statement_timeout = '30s'");
-        const result = await client.query<PagerArchiveRow>(sql, params);
-        rows = result.rows;
-        await client.query('COMMIT');
-      } catch (err) {
-        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
-        throw err;
-      }
-    } finally {
-      client.release();
+      await client.query("SET LOCAL statement_timeout = '30s'");
+      const result = await client.query<PagerArchiveRow>(sql, params);
+      rows = result.rows;
+      await client.query('COMMIT');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
     }
-  } catch (err) {
-    log.warn(
-      { err: (err as Error).message },
-      'pager/hits: archive_misc query failed; falling back to snapshot',
-    );
-    const features = snapshotFallback(hours, limit, capcode, incidentId);
-    return c.json({
-      type: 'FeatureCollection',
-      features,
-      count: features.length,
-      hours,
-    });
+  } finally {
+    client.release();
   }
 
   const features: PagerFeature[] = [];
@@ -214,11 +213,86 @@ pagerRouter.get('/api/pager/hits', async (c) => {
       },
     });
   }
+  return { type: 'FeatureCollection', features, count: features.length, hours };
+}
 
-  return c.json({
-    type: 'FeatureCollection',
-    features,
-    count: features.length,
-    hours,
-  });
+pagerRouter.get('/api/pager/hits', async (c) => {
+  const url = new URL(c.req.url);
+  const hoursParam = url.searchParams.get('hours');
+  const limitParam = url.searchParams.get('limit');
+  const capcode = url.searchParams.get('capcode');
+  const incidentId = url.searchParams.get('incident_id');
+
+  let hours = Number.parseInt(hoursParam ?? '24', 10);
+  if (!Number.isFinite(hours) || hours <= 0) hours = 24;
+  hours = Math.min(hours, 168); // 7-day cap, matches python.
+
+  let limit = Number.parseInt(limitParam ?? '500', 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 500;
+  limit = Math.min(limit, 2000);
+
+  // Cache key — same combination of params returns the same body, so
+  // the bot's repeated calls coalesce onto a single DB read per minute.
+  const key = `h${hours}|l${limit}|c${capcode ?? ''}|i${incidentId ?? ''}`;
+
+  // Cold path: cache empty. Serve the live snapshot immediately and
+  // fire a single background refresh — we don't want every cold caller
+  // to block on a 30 s archive_misc scan.
+  if (!pagerHitsCache.has(key)) {
+    pagerHitsCache
+      .refresh(
+        key,
+        () => fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }),
+        {
+          fresh: PAGER_HITS_FRESH_MS,
+          stale: PAGER_HITS_STALE_MS,
+          onError: (err) =>
+            log.warn(
+              { err: (err as Error).message },
+              'pager/hits: archive_misc refresh failed (background)',
+            ),
+        },
+      )
+      .catch(() => {});
+    const features = snapshotFallback(hours, limit, capcode, incidentId);
+    return c.json({
+      type: 'FeatureCollection',
+      features,
+      count: features.length,
+      hours,
+    });
+  }
+
+  // Warm path: cache has a value. SwrCache returns it instantly (and
+  // kicks off a background refresh if past `fresh`). If the entry has
+  // gone fully stale and the refetch fails, the .catch() below falls
+  // back to the snapshot rather than 500ing.
+  try {
+    const { value } = await pagerHitsCache.get(
+      key,
+      () => fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }),
+      {
+        fresh: PAGER_HITS_FRESH_MS,
+        stale: PAGER_HITS_STALE_MS,
+        onError: (err) =>
+          log.warn(
+            { err: (err as Error).message },
+            'pager/hits: archive_misc refresh failed (background)',
+          ),
+      },
+    );
+    return c.json(value);
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message },
+      'pager/hits: cache miss + DB refetch failed; falling back to snapshot',
+    );
+    const features = snapshotFallback(hours, limit, capcode, incidentId);
+    return c.json({
+      type: 'FeatureCollection',
+      features,
+      count: features.length,
+      hours,
+    });
+  }
 });

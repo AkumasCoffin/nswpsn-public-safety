@@ -135,10 +135,12 @@ interface PgClient {
 }
 
 interface BinRow {
-  lat_bin: number;
-  lng_bin: number;
+  // pg returns DOUBLE PRECISION as string by default (no parseFloat
+  // type-cast configured). We coerce to number when reading rows.
+  lat_bin: number | string;
+  lng_bin: number | string;
   subcategory: string;
-  count: number;
+  count: number | string;
 }
 
 /**
@@ -167,14 +169,20 @@ async function buildPreRendered(
   }
   const r = await client.query(sql, params);
 
-  // Group by (lat_bin, lng_bin), summing across subcategories.
+  // Group by (lat_bin, lng_bin), summing across subcategories. Coerce
+  // every numeric pg column up front — DOUBLE PRECISION arrives as a
+  // string under the default pg type parsers, so subsequent .toFixed()
+  // would throw without this.
   const merged = new Map<string, [number, number, number]>();
   for (const raw of r.rows) {
     const row = raw as BinRow;
-    const key = `${row.lat_bin}|${row.lng_bin}`;
+    const lat = Number(row.lat_bin);
+    const lng = Number(row.lng_bin);
+    const cnt = Number(row.count);
+    const key = `${lat}|${lng}`;
     const existing = merged.get(key);
-    if (existing) existing[2] += row.count;
-    else merged.set(key, [row.lat_bin, row.lng_bin, row.count]);
+    if (existing) existing[2] += cnt;
+    else merged.set(key, [lat, lng, cnt]);
   }
   const sorted = Array.from(merged.values()).sort((a, b) => b[2] - a[2]);
   const points = sorted.slice(0, HEATMAP_MAX_BINS).map(
@@ -354,10 +362,11 @@ export async function refreshPoliceHeatmapCache(): Promise<{ ok: boolean; bins: 
 }
 
 interface CacheRow {
-  lat_bin: number;
-  lng_bin: number;
+  // DOUBLE PRECISION columns arrive as strings under default pg parsers.
+  lat_bin: number | string;
+  lng_bin: number | string;
   subcategory: string;
-  count: number;
+  count: number | string;
 }
 
 /**
@@ -401,10 +410,13 @@ export async function readPoliceHeatmapCache(
     // bin location, we sum.
     const merged = new Map<string, [number, number, number]>();
     for (const row of r.rows) {
-      const key = `${row.lat_bin}|${row.lng_bin}`;
+      const lat = Number(row.lat_bin);
+      const lng = Number(row.lng_bin);
+      const cnt = Number(row.count);
+      const key = `${lat}|${lng}`;
       const existing = merged.get(key);
-      if (existing) existing[2] += row.count;
-      else merged.set(key, [row.lat_bin, row.lng_bin, row.count]);
+      if (existing) existing[2] += cnt;
+      else merged.set(key, [lat, lng, cnt]);
     }
     const points = Array.from(merged.values()).sort((a, b) => b[2] - a[2]);
     return {
