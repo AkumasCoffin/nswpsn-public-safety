@@ -334,6 +334,7 @@
     .btn-toggle.active#btn-roadwork { border: 1px solid #eab308; color: #fde047; }
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
+    .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
     .btn-toggle.active#btn-beaches { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-weather { border: 1px solid #38bdf8; color: #7dd3fc; }
 
@@ -1454,6 +1455,7 @@
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()"><span class="dot-indicator" style="background:#8b5cf6;"></span> Cameras</button>
         <button id="btn-beaches" class="btn-toggle" onclick="toggleBeachesPanel()"><span class="dot-indicator" style="background:#06b6d4;"></span> Beaches</button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()"><span class="dot-indicator" style="background:#38bdf8;"></span> Weather</button>
+        <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
       </div>
 
       <!-- Mobile settings backdrop -->
@@ -1963,6 +1965,8 @@
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachLayer = L.layerGroup();
+    // NASA FIRMS fire-hotspot polygons (off by default).
+    const firmsLayer = L.layerGroup();
     
     // What3Words grid layer
     const w3wGridLayer = L.layerGroup();
@@ -3446,21 +3450,23 @@ async function loadPagerData() {
     }
 
     function toggleMapLayer(target) {
-      const layerMap = { 
+      const layerMap = {
         hazards: hazardsLayer,
         police: policeLayer,
         roadwork: roadworkLayer,
         floods: floodsLayer,
         cameras: camerasLayer,
-        beaches: beachLayer
+        beaches: beachLayer,
+        firms: firmsLayer
       };
-      const btnMap = { 
+      const btnMap = {
         hazards: 'btn-hazards',
         police: 'btn-police',
         roadwork: 'btn-roadwork',
         floods: 'btn-floods',
         cameras: 'btn-cameras',
-        beaches: 'btn-beaches'
+        beaches: 'btn-beaches',
+        firms: 'btn-firms'
       };
 
       const layer = layerMap[target];
@@ -3489,6 +3495,7 @@ async function loadPagerData() {
           startCameraRefresh(); // Start live refresh when cameras enabled
         }
         if (target === 'beaches' && beachLayer.getLayers().length === 0) loadBeachData();
+        if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
       }
     }
 
@@ -6206,6 +6213,77 @@ async function loadPagerData() {
       }
       
       console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
+    }
+
+    // NASA FIRMS fire-hotspot polygons. Each feature is a satellite-pixel
+    // footprint over the last 24h, coloured by FRP (fire radiative power)
+    // and confidence. See loadFirmsHotspots in map.html for the reference
+    // implementation.
+    function firmsFillFor(props) {
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return '#dc2626';
+      if (frp >= 50)  return '#f97316';
+      if (frp >= 10)  return '#facc15';
+      return '#fde047';
+    }
+    function firmsOpacityFor(props) {
+      const conf = String(props.confidence || '').toLowerCase();
+      if (conf === 'high' || conf === 'h') return 0.65;
+      if (conf === 'low'  || conf === 'l') return 0.25;
+      const num = Number(conf);
+      if (Number.isFinite(num)) return num >= 50 ? 0.50 : 0.30;
+      return 0.50;
+    }
+    function firmsTooltip(props) {
+      const acq = props.acq_datetime || `${props.acq_date} ${props.acq_time}`;
+      const frpTxt = props.frp != null ? `${Number(props.frp).toFixed(1)} MW` : '—';
+      const brightTxt = props.brightness != null ? `${Number(props.brightness).toFixed(0)} K` : '—';
+      const conf = String(props.confidence || '—');
+      const sat = props.satellite || '—';
+      const dn = props.daynight === 'D' ? 'Day' : props.daynight === 'N' ? 'Night' : '—';
+      return `<div style="font-size:11px;line-height:1.45;">
+        <div style="font-weight:600;color:#fdba74;margin-bottom:3px;">
+          🔥 NASA FIRMS Hotspot
+        </div>
+        <div><b>Detected:</b> ${acq} UTC (${dn})</div>
+        <div><b>FRP:</b> ${frpTxt} &nbsp;<b>Bright:</b> ${brightTxt}</div>
+        <div><b>Satellite:</b> ${sat} &nbsp;<b>Conf:</b> ${conf}</div>
+        <div style="color:#9ca3af;font-size:10px;margin-top:3px;">
+          Pixel footprint ~${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km
+        </div>
+      </div>`;
+    }
+    async function loadFirmsHotspots() {
+      firmsLayer.clearLayers();
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/firms/hotspots`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data || !Array.isArray(data.features)) return;
+        let count = 0;
+        for (const feature of data.features) {
+          if (!feature || !feature.geometry || feature.geometry.type !== 'Polygon') continue;
+          const ring = feature.geometry.coordinates && feature.geometry.coordinates[0];
+          if (!Array.isArray(ring) || ring.length < 3) continue;
+          const latlngs = ring.map(([lon, lat]) => [lat, lon]);
+          const props = feature.properties || {};
+          const fill = firmsFillFor(props);
+          const op = firmsOpacityFor(props);
+          const poly = L.polygon(latlngs, {
+            color: fill,
+            weight: 1,
+            opacity: 0.9,
+            fillColor: fill,
+            fillOpacity: op,
+            interactive: true
+          }).addTo(firmsLayer);
+          poly.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
+          count++;
+        }
+        console.log(`Loaded ${count} FIRMS fire-hotspot polygons`);
+      } catch (e) {
+        console.error('FIRMS hotspots error', e);
+      }
     }
 
     // Traffic Cameras + Airport Weather Cameras + Central Watch Fire Tower Cameras

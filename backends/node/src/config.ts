@@ -175,6 +175,12 @@ const Schema = z.object({
   // Public base URL of the API itself (used in OAuth redirect_uri).
   PUBLIC_BASE_URL: z.string().optional(),
 
+  // NASA FIRMS fire-hotspot API key. Free key from
+  // https://firms.modaps.eosdis.nasa.gov/api/area/. Optional — when
+  // unset the firms_hotspots source stays empty and /api/firms/hotspots
+  // returns an empty FeatureCollection.
+  MAP_KEY: z.string().optional(),
+
   // Kill switch for the centralwatch Playwright browser worker. When
   // true, the worker doesn't init, the JSON refresh loop is skipped,
   // and the image batch loop stays idle. Reads use the last-good JSON

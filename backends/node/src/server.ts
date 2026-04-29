@@ -23,6 +23,7 @@ import { trafficRouter } from './api/traffic.js';
 import { beachRouter } from './api/beach.js';
 import { weatherRouter } from './api/weather.js';
 import { pagerRouter } from './api/pager.js';
+import { firmsRouter } from './api/firms.js';
 // Power sources + heartbeat + stats (W4).
 import { endeavourRouter } from './api/endeavour.js';
 import { ausgridRouter } from './api/ausgrid.js';
@@ -168,6 +169,7 @@ export function createApp() {
     '/api/beachwatch',
     '/api/beachsafe',
     '/api/pager/hits',
+    '/api/firms/hotspots',
   ];
   app.use('*', async (c, next) => {
     await next();
@@ -237,6 +239,7 @@ export function createApp() {
   app.route('/', beachRouter);
   app.route('/', weatherRouter);
   app.route('/', pagerRouter);
+  app.route('/', firmsRouter);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
   app.route('/', ausgridRouter);
