@@ -27,10 +27,27 @@ import { log } from '../lib/log.js';
 // state line still render. Order: WEST,SOUTH,EAST,NORTH (matches FIRMS).
 const NSW_BBOX = '140.0,-38.0,154.0,-28.0';
 
-// VIIRS NOAA-20 is 375m, well-suited to wildfire mapping. NRT lag is
-// typically 3 hours from satellite pass. The free MAP_KEY allows up
-// to 5000 transactions per 10 minutes — way under our 1-poll-per-15-min.
-const FIRMS_SOURCE = 'VIIRS_NOAA20_NRT';
+// VIIRS sensor flies on three platforms (S-NPP, NOAA-20, NOAA-21), each
+// gives a separate ~12 h orbital pass over NSW. Polling all three
+// roughly doubles the temporal coverage versus NOAA-20 alone, which is
+// the difference between catching a fire flare-up at hour 0 vs hour 12.
+// Each detection gets tagged with `source` so the frontend can offer
+// a per-satellite toggle.
+//
+// All 375 m resolution NRT. Free MAP_KEY allows ~5000 calls per 10 min
+// — three sources at our 15 min cadence is 12 calls/h, comfortably
+// under the limit.
+interface FirmsSource {
+  id: string;          // FIRMS source slug used in the URL
+  label: string;       // human label for the frontend
+  satellite: string;   // canonical satellite tag in our properties
+}
+const FIRMS_SOURCES: readonly FirmsSource[] = [
+  { id: 'VIIRS_SNPP_NRT',   label: 'VIIRS Suomi-NPP', satellite: 'S-NPP' },
+  { id: 'VIIRS_NOAA20_NRT', label: 'VIIRS NOAA-20',   satellite: 'NOAA-20' },
+  { id: 'VIIRS_NOAA21_NRT', label: 'VIIRS NOAA-21',   satellite: 'NOAA-21' },
+] as const;
+
 const DAY_RANGE = 1; // last 24 hours
 const FIRMS_API_BASE = 'https://firms.modaps.eosdis.nasa.gov/api/area/csv';
 
@@ -60,7 +77,8 @@ export interface FirmsHotspotProperties {
   bright_t31: number | null; // bright_ti5 for VIIRS (named bright_t31 in MODIS)
   frp: number | null; // fire radiative power (MW)
   daynight: 'D' | 'N' | string;
-  source: string;
+  source: string;       // FIRMS source slug (e.g. VIIRS_NOAA20_NRT)
+  satellite_tag: string; // canonical platform label (S-NPP / NOAA-20 / NOAA-21)
 }
 
 export interface FirmsFeature {
@@ -73,7 +91,18 @@ export interface FirmsSnapshot {
   type: 'FeatureCollection';
   features: FirmsFeature[];
   count: number;
-  source: string;
+  /** Comma-joined list of FIRMS source slugs that contributed. */
+  sources: string[];
+  /** Per-source success / count breakdown so the admin / status panel
+   *  can see at a glance which platforms returned data. */
+  source_status: Array<{
+    source: string;
+    satellite: string;
+    label: string;
+    ok: boolean;
+    count: number;
+    error?: string;
+  }>;
   bbox: string;
   fetched_at: string;
 }
@@ -82,7 +111,14 @@ const EMPTY_SNAPSHOT: FirmsSnapshot = {
   type: 'FeatureCollection',
   features: [],
   count: 0,
-  source: FIRMS_SOURCE,
+  sources: FIRMS_SOURCES.map((s) => s.id),
+  source_status: FIRMS_SOURCES.map((s) => ({
+    source: s.id,
+    satellite: s.satellite,
+    label: s.label,
+    ok: false,
+    count: 0,
+  })),
   bbox: NSW_BBOX,
   fetched_at: new Date(0).toISOString(),
 };
@@ -118,7 +154,10 @@ function buildPixelPolygon(
  * rows even on a busy day) and well-formed; a hand-rolled splitter avoids
  * pulling in a CSV library.
  */
-export function parseFirmsCsv(csv: string): FirmsFeature[] {
+export function parseFirmsCsv(
+  csv: string,
+  src: FirmsSource = FIRMS_SOURCES[0] as FirmsSource,
+): FirmsFeature[] {
   const text = csv.replace(/^﻿/, '').trim();
   if (!text) return [];
   const lines = text.split(/\r?\n/);
@@ -192,7 +231,8 @@ export function parseFirmsCsv(csv: string): FirmsFeature[] {
       bright_t31: numOrNull(iBrightT31),
       frp: numOrNull(iFrp),
       daynight: strOrEmpty(iDayNight) as 'D' | 'N' | string,
-      source: FIRMS_SOURCE,
+      source: src.id,
+      satellite_tag: src.satellite,
     };
 
     out.push({
@@ -207,46 +247,88 @@ export function parseFirmsCsv(csv: string): FirmsFeature[] {
   return out;
 }
 
+/**
+ * Fetch one FIRMS source. Bounded retry on transient errors (US-hosted
+ * gateway flakes from AU). On hard failure returns `{ ok: false, error }`
+ * so the parent fetcher can mark just that source down without losing
+ * the other satellites.
+ */
+async function fetchOneFirmsSource(
+  key: string,
+  src: FirmsSource,
+): Promise<{ ok: true; features: FirmsFeature[] } | { ok: false; error: string }> {
+  const url = `${FIRMS_API_BASE}/${encodeURIComponent(key)}/${src.id}/${NSW_BBOX}/${DAY_RANGE}`;
+  let csv: string;
+  try {
+    try {
+      csv = await fetchText(url, { timeoutMs: 60_000 });
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      const transient =
+        /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(msg);
+      if (!transient) throw err;
+      log.warn({ err: msg, source: src.id }, 'firms: upstream timed out, retrying once');
+      await new Promise((r) => setTimeout(r, 5_000));
+      csv = await fetchText(url, { timeoutMs: 90_000 });
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message ?? 'unknown error' };
+  }
+  const features = parseFirmsCsv(csv, src);
+  if (features.length === 0 && csv.length > 0 && !csv.toLowerCase().includes('latitude')) {
+    log.warn(
+      { source: src.id, head: csv.slice(0, 200) },
+      'firms: upstream returned non-CSV body',
+    );
+  }
+  return { ok: true, features };
+}
+
 export async function fetchFirmsHotspots(): Promise<FirmsSnapshot> {
   const key = config.MAP_KEY;
   if (!key) {
     // No key — return empty so the frontend just shows nothing.
     return { ...EMPTY_SNAPSHOT, fetched_at: new Date().toISOString() };
   }
-  const url = `${FIRMS_API_BASE}/${encodeURIComponent(key)}/${FIRMS_SOURCE}/${NSW_BBOX}/${DAY_RANGE}`;
-  // The FIRMS gateway is US-hosted and chronically slow (30-90 s when the
-  // backend is queueing) and the route from AU sometimes drops connections
-  // mid-handshake. Try once at 60s; on ETIMEDOUT/ECONNRESET wait 5s and
-  // retry once at 90s. After that, surface the failure so the source
-  // shows down in the admin panel rather than masking the issue.
-  let csv: string;
-  try {
-    csv = await fetchText(url, { timeoutMs: 60_000 });
-  } catch (err) {
-    const msg = (err as Error).message ?? '';
-    const transient =
-      /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(msg);
-    if (!transient) throw err;
-    log.warn({ err: msg }, 'firms: upstream timed out, retrying once');
-    await new Promise((r) => setTimeout(r, 5_000));
-    csv = await fetchText(url, { timeoutMs: 90_000 });
-  }
-  // FIRMS returns plain text on rate-limit or auth error too — they look
-  // like "Invalid MAP_KEY" or "No fire data" rather than a CSV header.
-  // parseFirmsCsv defends against this by returning [] when the lat/lon
-  // columns aren't found.
-  const features = parseFirmsCsv(csv);
-  if (features.length === 0 && csv.length > 0 && !csv.toLowerCase().includes('latitude')) {
-    log.warn(
-      { head: csv.slice(0, 200) },
-      'firms: upstream returned non-CSV body',
-    );
+  // Fan out to every VIIRS platform in parallel. Per-source failures
+  // don't fail the whole snapshot — operators get a partial result
+  // (e.g. NOAA-20 timed out but S-NPP + NOAA-21 returned) which is
+  // strictly more useful than 0 detections.
+  const results = await Promise.all(
+    FIRMS_SOURCES.map((src) => fetchOneFirmsSource(key, src)),
+  );
+  const features: FirmsFeature[] = [];
+  const sourceStatus: FirmsSnapshot['source_status'] = [];
+  for (let i = 0; i < FIRMS_SOURCES.length; i++) {
+    const src = FIRMS_SOURCES[i];
+    const r = results[i];
+    if (!src || !r) continue;
+    if (r.ok) {
+      features.push(...r.features);
+      sourceStatus.push({
+        source: src.id,
+        satellite: src.satellite,
+        label: src.label,
+        ok: true,
+        count: r.features.length,
+      });
+    } else {
+      sourceStatus.push({
+        source: src.id,
+        satellite: src.satellite,
+        label: src.label,
+        ok: false,
+        count: 0,
+        error: r.error,
+      });
+    }
   }
   return {
     type: 'FeatureCollection',
     features,
     count: features.length,
-    source: FIRMS_SOURCE,
+    sources: FIRMS_SOURCES.map((s) => s.id),
+    source_status: sourceStatus,
     bbox: NSW_BBOX,
     fetched_at: new Date().toISOString(),
   };
