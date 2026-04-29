@@ -115,6 +115,13 @@ export class SwrCache<T> {
     this.entries.delete(key);
   }
 
+  /** Whether `key` has any cached value (regardless of fresh/stale state).
+   *  Used by callers that want to skip the blocking cold-start fetch and
+   *  return a stub immediately when there's nothing yet. */
+  has(key: string): boolean {
+    return this.entries.has(key);
+  }
+
   /** Wipe everything. Mostly for tests. */
   clear(): void {
     this.entries.clear();
