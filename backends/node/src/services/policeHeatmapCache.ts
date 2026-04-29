@@ -293,10 +293,13 @@ export async function refreshPoliceHeatmapCache(): Promise<{ ok: boolean; bins: 
       // empty (i.e. the indexBuilder backfill hasn't completed yet).
       // Keeps the heatmap warm during the first hour or so after deploy.
       let aggMs = 0;
-      const dailyCheck = await client.query<{ n: string }>(
-        `SELECT COUNT(*)::text AS n FROM police_heatmap_bin_daily LIMIT 1`,
+      // SELECT 1 ... LIMIT 1 stops at the first row found — O(1)
+      // existence check. The earlier COUNT(*) version full-scanned
+      // the table just to know if it had any rows.
+      const dailyCheck = await client.query<{ n: number }>(
+        `SELECT 1 AS n FROM police_heatmap_bin_daily LIMIT 1`,
       );
-      const dailyHasRows = Number(dailyCheck.rows[0]?.n ?? 0) > 0;
+      const dailyHasRows = (dailyCheck.rowCount ?? 0) > 0;
       if (dailyHasRows) {
         await client.query(
           `INSERT INTO police_heatmap_cache_new (lat_bin, lng_bin, subcategory, count)

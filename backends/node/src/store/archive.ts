@@ -257,17 +257,28 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // archive_waze has 3 compound indexes plus the partition's own
-    // primary key — under concurrent userscript ingest a 500-row
-    // INSERT was hitting the 30s SET LOCAL timeout. 250-row chunks
-    // keep each statement well under the timeout; other tables stay
-    // at 500 since they don't see the same write pressure.
-    const INSERT_CHUNK_SIZE = table === 'archive_waze' ? 250 : 500;
+    // archive_waze: 3 compound indexes + partition PK; large chunks
+    // hit timeouts under userscript ingest pressure.
+    // archive_power: essential_future polls produce 1000+ rows in a
+    // single bucket; on disk-saturated hosts a 500-row chunk has been
+    // hitting the 60s timeout (~22 rows/sec sustained insert rate).
+    // archive_traffic: similar story for traffic_roadwork (391 rows).
+    // archive_misc + archive_rfs stay at 500 — small per-flush volumes.
+    const INSERT_CHUNK_SIZE =
+      table === 'archive_waze'
+        ? 250
+        : table === 'archive_power' || table === 'archive_traffic'
+          ? 200
+          : 500;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       try {
-        await client.query("SET LOCAL statement_timeout = '60s'");
+        // 90s per-statement budget. Postgres applies statement_timeout
+      // per-statement (not per-transaction), so each chunk INSERT plus
+      // the heatmap and facets upserts each get their own clock — this
+      // is just defensive headroom for a single chunk on a slow host.
+      await client.query("SET LOCAL statement_timeout = '90s'");
         for (let start = 0; start < rows.length; start += INSERT_CHUNK_SIZE) {
           const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
           await this.insertChunk(client, table, slice);
