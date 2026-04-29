@@ -335,6 +335,75 @@
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
     .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
+
+    .floating-filter-sidebar {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 800;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .floating-filter-sidebar > * { pointer-events: auto; }
+    @media (max-width: 900px) {
+      .floating-filter-sidebar { display: none; }
+      .floating-filter-panel { display: none !important; }
+    }
+    .floating-filter-btn {
+      width: 42px; height: 42px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      font-size: 17px;
+      transition: background-color 0.15s, border-color 0.15s, transform 0.15s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn:hover { background: rgba(30, 41, 59, 0.96); transform: translateX(2px); }
+    .floating-filter-btn.active { box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4); }
+    .floating-filter-panel {
+      position: absolute;
+      left: 64px; bottom: 12px;
+      z-index: 800;
+      min-width: 220px; max-width: 300px;
+      max-height: calc(100vh - 80px); overflow-y: auto;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: #e2e8f0;
+      display: none;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    .floating-filter-panel.open { display: block; }
+    .floating-filter-panel h4 { margin: 0 0 10px 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .floating-filter-panel .ff-section-label { font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px 0; font-weight: 600; }
+    .floating-filter-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+    .floating-filter-pill {
+      padding: 5px 11px; border-radius: 14px;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: #94a3b8;
+      font-size: 11px; font-weight: 500;
+      cursor: pointer; user-select: none;
+      transition: all 0.12s;
+    }
+    .floating-filter-pill:hover { border-color: #94a3b8; color: #cbd5e1; }
+    .floating-filter-pill.active { background: rgba(249, 115, 22, 0.28); border-color: #f97316; color: #fed7aa; }
+    .floating-filter-status { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(148, 163, 184, 0.18); font-size: 10px; color: #94a3b8; line-height: 1.5; }
+    @media (min-width: 901px) {
+      #firms-controls,
+      #weather-panel,
+      #hazards-panel,
+      #police-panel,
+      #cameras-panel,
+      #outages-panel,
+      #beaches-panel { display: none !important; }
+    }
     .btn-toggle.active#btn-beaches { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-weather { border: 1px solid #38bdf8; color: #7dd3fc; }
 
@@ -1435,7 +1504,12 @@
   <main class="main" id="editor-layout-root">
     <div class="map-container">
       <div id="map"></div>
-      
+
+      <!-- Desktop floating filter sidebar (hidden on mobile via media
+           query). See map.html for the full pattern. -->
+      <div class="floating-filter-sidebar" id="floating-filter-sidebar"></div>
+      <div class="floating-filter-panel" id="floating-filter-panel"></div>
+
       <!-- Refresh Timer -->
       <div class="refresh-timer" id="refresh-timer" onclick="manualRefresh()" title="Click to refresh now">
         <i class="fas fa-sync-alt"></i>
@@ -3513,8 +3587,11 @@ async function loadPagerData() {
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
       }
       if (target === 'firms') {
+        const enabled = map.hasLayer(firmsLayer);
         const ctl = document.getElementById('firms-controls');
-        if (ctl) ctl.style.display = map.hasLayer(firmsLayer) ? 'block' : 'none';
+        if (ctl) ctl.style.display = enabled ? 'block' : 'none';
+        if (enabled) addFilterButton('firms');
+        else removeFilterButton('firms');
       }
     }
 
@@ -4248,11 +4325,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(outagesLayer);
+        removeFilterButton('outages');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(outagesLayer);
         if (outagesLayer.getLayers().length === 0) loadOutageData();
+        addFilterButton('outages');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4289,11 +4368,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(hazardsLayer);
+        removeFilterButton('hazards');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(hazardsLayer);
         if (hazardsLayer.getLayers().length === 0) loadHazardsData();
+        addFilterButton('hazards');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4317,6 +4398,7 @@ async function loadPagerData() {
         if (heatCtl) heatCtl.style.display = 'none';
         const pinChk = document.getElementById('chk-police-pins');
         if (pinChk) pinChk.checked = true;
+        removeFilterButton('police');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
@@ -4325,6 +4407,7 @@ async function loadPagerData() {
           if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
           if (policeLayer.getLayers().length === 0) loadPoliceData();
         }
+        addFilterButton('police');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4584,12 +4667,14 @@ async function loadPagerData() {
         map.removeLayer(camerasLayer);
         stopCameraRefresh();
         clearCameraSelection();
+        removeFilterButton('cameras');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(camerasLayer);
         if (camerasLayer.getLayers().length === 0) loadCamerasData();
         startCameraRefresh();
+        addFilterButton('cameras');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4616,11 +4701,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(beachLayer);
+        removeFilterButton('beaches');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(beachLayer);
         if (beachLayer.getLayers().length === 0) loadBeachData();
+        addFilterButton('beaches');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -6409,13 +6496,281 @@ async function loadPagerData() {
       return base;
     }
 
+    // Floating filter sidebar (desktop). Shared infra: layers register
+    // themselves into FILTER_REGISTRY; the sidebar shows one button per
+    // enabled layer with filters; only one panel open at a time.
+    const FILTER_REGISTRY = {};
+    let _activeFilterKey = null;
+    function _renderFilterPanel(key) {
+      const panel = document.getElementById('floating-filter-panel');
+      const cfg = FILTER_REGISTRY[key];
+      if (!panel || !cfg) return;
+      panel.innerHTML = cfg.render();
+      panel.classList.add('open');
+      document.querySelectorAll('#floating-filter-sidebar .floating-filter-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.key === key);
+      });
+      _activeFilterKey = key;
+    }
+    function hideFilterPanel() {
+      const panel = document.getElementById('floating-filter-panel');
+      if (panel) panel.classList.remove('open');
+      document.querySelectorAll('#floating-filter-sidebar .floating-filter-btn').forEach((b) => b.classList.remove('active'));
+      _activeFilterKey = null;
+    }
+    function _toggleFilterButton(key) {
+      if (_activeFilterKey === key) hideFilterPanel();
+      else _renderFilterPanel(key);
+    }
+    function addFilterButton(key) {
+      const cfg = FILTER_REGISTRY[key];
+      if (!cfg) return;
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!sidebar) return;
+      if (sidebar.querySelector(`[data-key="${key}"]`)) return;
+      const btn = document.createElement('button');
+      btn.className = 'floating-filter-btn';
+      btn.dataset.key = key;
+      btn.title = cfg.label;
+      btn.innerHTML = `<i class="fa-solid ${cfg.icon}" style="color:${cfg.color || '#e2e8f0'};"></i>`;
+      btn.onclick = () => _toggleFilterButton(key);
+      sidebar.appendChild(btn);
+    }
+    function removeFilterButton(key) {
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!sidebar) return;
+      const btn = sidebar.querySelector(`[data-key="${key}"]`);
+      if (btn) btn.remove();
+      if (_activeFilterKey === key) hideFilterPanel();
+    }
+    function refreshActiveFilterPanel() {
+      if (_activeFilterKey) _renderFilterPanel(_activeFilterKey);
+    }
+    document.addEventListener('click', (e) => {
+      if (!_activeFilterKey) return;
+      const panel = document.getElementById('floating-filter-panel');
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!panel || !sidebar) return;
+      if (panel.contains(e.target) || sidebar.contains(e.target)) return;
+      hideFilterPanel();
+    });
+
     let _firmsFeatures = [];
     let _firmsZoomHandlerWired = false;
+    let _firmsLastSourceStatus = [];
     const _firmsSelectedSats = new Set(['S-NPP', 'NOAA-20', 'NOAA-21']);
     window.toggleFirmsSatellite = function (sat, checked) {
       if (checked) _firmsSelectedSats.add(sat);
       else _firmsSelectedSats.delete(sat);
       _renderFirmsLayer();
+      refreshActiveFilterPanel();
+    };
+    window.toggleFirmsSatellitePill = function (sat) {
+      if (_firmsSelectedSats.has(sat)) _firmsSelectedSats.delete(sat);
+      else _firmsSelectedSats.add(sat);
+      const id = sat === 'S-NPP' ? 'chk-firms-snpp'
+        : sat === 'NOAA-20' ? 'chk-firms-noaa20'
+        : sat === 'NOAA-21' ? 'chk-firms-noaa21' : '';
+      const el = id && document.getElementById(id);
+      if (el) el.checked = _firmsSelectedSats.has(sat);
+      _renderFirmsLayer();
+      refreshActiveFilterPanel();
+    };
+    function _ffSetCheckbox(id, on) {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!on;
+    }
+    function _ffPill(active, label, onclickJs) {
+      return `<button class="floating-filter-pill ${active ? 'active' : ''}" onclick="${onclickJs}">${label}</button>`;
+    }
+
+    FILTER_REGISTRY.firms = {
+      icon: 'fa-fire',
+      label: 'Fire Hotspots',
+      color: '#fdba74',
+      render() {
+        const sats = [
+          { key: 'S-NPP',   label: 'S-NPP' },
+          { key: 'NOAA-20', label: 'NOAA-20' },
+          { key: 'NOAA-21', label: 'NOAA-21' },
+        ];
+        const pills = sats.map((s) => {
+          const on = _firmsSelectedSats.has(s.key);
+          return `<button class="floating-filter-pill ${on ? 'active' : ''}" onclick="toggleFirmsSatellitePill('${s.key}')">${s.label}</button>`;
+        }).join('');
+        const status = (_firmsLastSourceStatus || []).map((s) => {
+          const ok = !!s.ok;
+          const color = ok ? '#34d399' : '#f87171';
+          const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
+          return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-fire" style="color:#fdba74;"></i> Fire Hotspots</h4>
+          <div class="ff-section-label"><i class="fa-solid fa-satellite" style="margin-right:5px;"></i>VIIRS satellite</div>
+          <div class="floating-filter-pills">${pills}</div>
+          <div class="floating-filter-status">${status || '<em>Loading…</em>'}</div>
+        `;
+      },
+    };
+
+    window.toggleHazardPill = function (key) {
+      hazardFilters[key] = !hazardFilters[key];
+      _ffSetCheckbox(`chk-hazards-${key}`, hazardFilters[key]);
+      toggleHazardFilter(key, hazardFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.hazards = {
+      icon: 'fa-triangle-exclamation', label: 'Traffic Hazards', color: '#ef4444',
+      render() {
+        const items = [
+          { key: 'accident', label: 'Crashes' },
+          { key: 'hazard',   label: 'Hazards' },
+          { key: 'closures', label: 'Closures / Jams' },
+        ];
+        const pills = items.map((it) =>
+          _ffPill(hazardFilters[it.key], it.label, `toggleHazardPill('${it.key}')`)
+        ).join('');
+        return `<h4><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> Traffic Hazards</h4>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${pills}</div>`;
+      },
+    };
+
+    window.togglePolicePinsPill = function () {
+      const chk = document.getElementById('chk-police-pins');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-police-pins', next);
+      if (typeof togglePolicePinsMode === 'function') togglePolicePinsMode(next);
+      refreshActiveFilterPanel();
+    };
+    window.togglePoliceTypePill = function (key) {
+      policeFilters[key] = !policeFilters[key];
+      _ffSetCheckbox(`chk-police-${key}`, policeFilters[key]);
+      togglePoliceFilter(key, policeFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    window.togglePoliceHeatmapPill = function () {
+      const chk = document.getElementById('chk-police-heatmap');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-police-heatmap', next);
+      if (typeof togglePoliceHeatmapMode === 'function') togglePoliceHeatmapMode(next);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.police = {
+      icon: 'fa-shield-halved', label: 'Police Reports', color: '#3b82f6',
+      render() {
+        const pinsOn = document.getElementById('chk-police-pins')?.checked ?? true;
+        const heatOn = document.getElementById('chk-police-heatmap')?.checked ?? false;
+        const types = [
+          { key: 'visible', label: 'Visible' },
+          { key: 'hidden',  label: 'Hidden' },
+          { key: 'camera',  label: 'Speed Camera' },
+        ];
+        const typePills = types.map((t) =>
+          _ffPill(policeFilters[t.key], t.label, `togglePoliceTypePill('${t.key}')`)
+        ).join('');
+        return `<h4><i class="fa-solid fa-shield-halved" style="color:#3b82f6;"></i> Police Reports</h4>
+          <div class="floating-filter-pills">
+            ${_ffPill(pinsOn, '<i class="fa-solid fa-map-pin"></i> Pins', 'togglePolicePinsPill()')}
+            ${_ffPill(heatOn, '<i class="fa-solid fa-fire"></i> Heatmap', 'togglePoliceHeatmapPill()')}
+          </div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>`;
+      },
+    };
+
+    window.toggleCameraPill = function (key) {
+      cameraFilters[key] = !cameraFilters[key];
+      _ffSetCheckbox(`chk-cam-${key}`, cameraFilters[key]);
+      toggleCameraFilter(key, cameraFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.cameras = {
+      icon: 'fa-video', label: 'Cameras', color: '#8b5cf6',
+      render() {
+        const items = [
+          { key: 'traffic',   label: 'Traffic' },
+          { key: 'aviation',  label: 'Airport Weather' },
+          { key: 'firetower', label: 'Fire Towers' },
+        ];
+        const pills = items.map((it) =>
+          _ffPill(cameraFilters[it.key], it.label, `toggleCameraPill('${it.key}')`)
+        ).join('');
+        return `<h4><i class="fa-solid fa-video" style="color:#8b5cf6;"></i> Cameras</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${pills}</div>`;
+      },
+    };
+
+    window.toggleBeachPill = function (key) {
+      const chkId = key === 'beachwatch' ? 'chk-beachwatch' : 'chk-beachsafe';
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      if (typeof onBeachFilterChange === 'function') onBeachFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.beaches = {
+      icon: 'fa-umbrella-beach', label: 'Beaches', color: '#06b6d4',
+      render() {
+        const bw = document.getElementById('chk-beachwatch')?.checked ?? true;
+        const bs = document.getElementById('chk-beachsafe')?.checked ?? true;
+        return `<h4><i class="fa-solid fa-umbrella-beach" style="color:#06b6d4;"></i> Beaches</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(bw, 'Beachwatch (water quality)', "toggleBeachPill('beachwatch')")}
+            ${_ffPill(bs, 'BeachSafe (patrol + hazards)', "toggleBeachPill('beachsafe')")}
+          </div>`;
+      },
+    };
+
+    window.toggleOutagePill = function (key) {
+      const chkId = `chk-outages-${key}`;
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      if (typeof onOutageFilterChange === 'function') onOutageFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.outages = {
+      icon: 'fa-bolt', label: 'Outages', color: '#f97316',
+      render() {
+        const u = document.getElementById('chk-outages-unplanned')?.checked ?? true;
+        const m = document.getElementById('chk-outages-maintenance')?.checked ?? true;
+        const f = document.getElementById('chk-outages-future')?.checked ?? true;
+        return `<h4><i class="fa-solid fa-bolt" style="color:#f97316;"></i> Outages</h4>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(u, 'Unplanned',           "toggleOutagePill('unplanned')")}
+            ${_ffPill(m, 'Current maintenance', "toggleOutagePill('maintenance')")}
+            ${_ffPill(f, 'Future maintenance',  "toggleOutagePill('future')")}
+          </div>`;
+      },
+    };
+
+    window.toggleRadarPill = function () {
+      const chk = document.getElementById('chk-radar');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-radar', next);
+      if (typeof toggleRadar === 'function') toggleRadar(next);
+      refreshActiveFilterPanel();
+    };
+    window.toggleWeatherPinsPill = function () {
+      const chk = document.getElementById('chk-weather-pins');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-weather-pins', next);
+      if (typeof toggleWeatherPins === 'function') toggleWeatherPins(next);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.weather = {
+      icon: 'fa-cloud-sun', label: 'Weather', color: '#38bdf8',
+      render() {
+        const radarOn = document.getElementById('chk-radar')?.checked ?? false;
+        const pinsOn  = document.getElementById('chk-weather-pins')?.checked ?? false;
+        return `<h4><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i> Weather</h4>
+          <div class="floating-filter-pills">
+            ${_ffPill(radarOn, '<i class="fa-solid fa-cloud-rain"></i> Rain Radar', 'toggleRadarPill()')}
+            ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
+          </div>`;
+      },
     };
     function _renderFirmsLayer() {
       firmsLayer.clearLayers();
@@ -6490,16 +6845,17 @@ async function loadPagerData() {
           });
           _firmsZoomHandlerWired = true;
         }
+        _firmsLastSourceStatus = (data && Array.isArray(data.source_status)) ? data.source_status : [];
         const statusEl = document.getElementById('firms-source-status');
         if (statusEl) {
-          const status = (data && Array.isArray(data.source_status)) ? data.source_status : [];
-          statusEl.innerHTML = status.map((s) => {
+          statusEl.innerHTML = _firmsLastSourceStatus.map((s) => {
             const ok = s.ok;
             const color = ok ? '#34d399' : '#f87171';
             const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
             return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
           }).join('');
         }
+        if (_activeFilterKey === 'firms') refreshActiveFilterPanel();
         _renderFirmsLayer();
         console.log(`Loaded ${_firmsFeatures.length} FIRMS detections (rendered as clusters)`);
       } catch (e) {
@@ -7524,8 +7880,11 @@ async function loadPagerData() {
         document.getElementById('chk-weather-pins').checked = false;
         toggleRadar(false);
         toggleWeatherPins(false);
+        removeFilterButton('weather');
+      } else {
+        addFilterButton('weather');
       }
-      
+
       panel.classList.toggle('open');
       btn.classList.toggle('active', !isOpen);
       updateFilterPanelPositions();

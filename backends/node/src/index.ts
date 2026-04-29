@@ -5,6 +5,15 @@
  * and logs a banner so it's obvious in pm2 logs that the Node backend
  * came up.
  */
+import { setDefaultResultOrder } from 'node:dns';
+// Prefer IPv4 DNS results. Node 17+ defaults to 'verbatim' (IPv6 first
+// when the OS returns it), but several upstream sources are US-hosted
+// (RainViewer, NASA FIRMS) and the IPv6 route from this AU host has
+// been timing out at the SYN stage — every poll dies with ETIMEDOUT.
+// Forcing IPv4 makes those endpoints reachable. Has no effect on
+// IPv4-only or AU-local upstreams.
+setDefaultResultOrder('ipv4first');
+
 import { serve } from '@hono/node-server';
 import { config } from './config.js';
 import { log } from './lib/log.js';
