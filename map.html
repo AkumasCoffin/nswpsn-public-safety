@@ -8576,14 +8576,21 @@ function initPagerHoursFromStorage() {
           { key: 'hazard',   label: 'Hazards',         color: '#f97316' },
           { key: 'closures', label: 'Closures / Jams', color: '#a855f7' },
         ];
-        const typePills = items.map((it) =>
-          _ffPill(hazardFilters[it.key], it.label, `toggleHazardPill('${it.key}')`)
-        ).join('');
+        // Per-type and per-source counts — only count markers from
+        // sources that are currently selected so the type counts reflect
+        // what's actually visible on the map.
+        const typeCounts = { accident: 0, hazard: 0, closures: 0 };
         let ltCount = 0, wzCount = 0;
         for (const m of _hazardMarkers) {
           if (m.source === 'livetraffic') ltCount++;
           else if (m.source === 'waze') wzCount++;
+          if (!_hazardSelectedSources.has(m.source)) continue;
+          if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
         }
+        const typePills = items.map((it) => {
+          const n = typeCounts[it.key] || 0;
+          return _ffPill(hazardFilters[it.key], `${it.label} (${n.toLocaleString()})`, `toggleHazardPill('${it.key}')`);
+        }).join('');
         const sourcePills = `
           ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
           ${_ffPill(_hazardSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleHazardSourcePill('waze')")}
