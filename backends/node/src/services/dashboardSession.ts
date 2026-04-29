@@ -233,6 +233,21 @@ export function _getSessionsForTests(): Map<string, DashSession> {
   return SESSIONS;
 }
 
+/**
+ * Snapshot of every currently-valid session (exp > now). Used by the
+ * admin overview to mark users as online and to count concurrent
+ * sessions. Returns plain DashSession objects; access tokens stay
+ * inside the snapshot so callers can choose how much to expose.
+ */
+export function listActiveSessions(): DashSession[] {
+  const now = Math.floor(Date.now() / 1000);
+  const out: DashSession[] = [];
+  for (const s of SESSIONS.values()) {
+    if (s.exp > now) out.push(s);
+  }
+  return out;
+}
+
 /** TEST-ONLY: mark the DB-init flag without running CREATE TABLE etc. */
 export function _markDbReadyForTests(): void {
   dbReady = true;

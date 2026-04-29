@@ -65,6 +65,12 @@ export interface BatchImageResult {
 }
 
 const VERCEL_LANDING_URL = 'https://centralwatch.watchtowers.io/au';
+// Pre-warm path: visiting the JSON endpoint via page.goto causes the
+// browser to solve the WAF challenge for that URL, which the in-page
+// fetch() reuses on every refresh tick. Without this step the landing
+// page solve doesn't transfer to /au/api/cameras and every refresh
+// gets a 429 with a Vercel Security Checkpoint HTML body.
+const API_PREWARM_URL = 'https://centralwatch.watchtowers.io/au/api/cameras';
 const CHALLENGE_REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 min
 const CDP_CACHE_CLEAR_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
@@ -191,6 +197,34 @@ class CentralwatchBrowser {
         log.warn({ title }, 'centralwatch: vercel challenge timeout');
       }
       await page.waitForTimeout(2000);
+      // Pre-warm the API endpoint: navigate the page to /au/api/cameras
+      // so the browser solves the WAF challenge for the JSON path. The
+      // landing-page solve doesn't transfer to the API path on its own,
+      // and every fetchJson call inside the page would otherwise get a
+      // 429 + Vercel Security Checkpoint HTML body. After this navigate,
+      // page.evaluate fetch() to the same URL reuses the WAF-passed
+      // browser context.
+      try {
+        await page.goto(API_PREWARM_URL, { timeout: 30000 });
+        try {
+          await page.waitForFunction(
+            '() => !document.title.includes("Vercel") && !document.title.includes("Security")',
+            undefined,
+            { timeout: 20000 },
+          );
+        } catch {
+          // If the API URL doesn't render a non-challenge document.title
+          // (it's JSON, browsers may set the title to the URL), don't
+          // treat that as a failure — the WAF cookie is still set.
+        }
+        await page.waitForTimeout(1000);
+        log.info('centralwatch: api endpoint prewarmed');
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'centralwatch: api prewarm failed (will retry on first fetch)',
+        );
+      }
       const cookies = await context.cookies('https://centralwatch.watchtowers.io');
       log.info(
         { cookieCount: cookies.length },
@@ -663,6 +697,13 @@ class CentralwatchBrowser {
           { timeout: 30000 },
         );
         await page.waitForTimeout(2000);
+        // Re-prewarm the API path so /au/api/cameras stays WAF-solved.
+        try {
+          await page.goto(API_PREWARM_URL, { timeout: 30000 });
+          await page.waitForTimeout(1000);
+        } catch {
+          // best-effort
+        }
         log.info('centralwatch: browser session refreshed');
       } catch (err) {
         log.warn(
