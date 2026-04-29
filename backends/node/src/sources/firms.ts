@@ -214,7 +214,23 @@ export async function fetchFirmsHotspots(): Promise<FirmsSnapshot> {
     return { ...EMPTY_SNAPSHOT, fetched_at: new Date().toISOString() };
   }
   const url = `${FIRMS_API_BASE}/${encodeURIComponent(key)}/${FIRMS_SOURCE}/${NSW_BBOX}/${DAY_RANGE}`;
-  const csv = await fetchText(url, { timeoutMs: 30_000 });
+  // The FIRMS gateway is US-hosted and chronically slow (30-90 s when the
+  // backend is queueing) and the route from AU sometimes drops connections
+  // mid-handshake. Try once at 60s; on ETIMEDOUT/ECONNRESET wait 5s and
+  // retry once at 90s. After that, surface the failure so the source
+  // shows down in the admin panel rather than masking the issue.
+  let csv: string;
+  try {
+    csv = await fetchText(url, { timeoutMs: 60_000 });
+  } catch (err) {
+    const msg = (err as Error).message ?? '';
+    const transient =
+      /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(msg);
+    if (!transient) throw err;
+    log.warn({ err: msg }, 'firms: upstream timed out, retrying once');
+    await new Promise((r) => setTimeout(r, 5_000));
+    csv = await fetchText(url, { timeoutMs: 90_000 });
+  }
   // FIRMS returns plain text on rate-limit or auth error too — they look
   // like "Invalid MAP_KEY" or "No fire data" rather than a CSV header.
   // parseFirmsCsv defends against this by returning [] when the lat/lon
