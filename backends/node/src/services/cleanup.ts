@@ -166,24 +166,51 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         }
       }
 
-      // 2. ANALYZE the archive tables — refreshes pg_statistic so the
-      // planner stays current after partition drops above. We do NOT
-      // VACUUM here: postgres' autovacuum already handles dead-tuple
-      // cleanup automatically, and running a second VACUUM in parallel
-      // saturates disk I/O. Production saw archive_rfs queries (tiny
-      // table) time out at 60s when our hourly VACUUM competed with
-      // autovacuum on archive_waze. Manual one-shot VACUUM is still
-      // available via /api/admin/db/vacuum when needed.
+      // 2. ANALYZE only tables whose stats have actually drifted. Was:
+      // unconditional ANALYZE on every archive_* table per cleanup run.
+      // On disk-saturated hosts this kept hammering archive_waze for 7+
+      // minutes per hour, starving every other consumer of IO.
+      // autovacuum_analyze (migration 010 tuned its thresholds aggressively)
+      // already handles routine stat refreshes; we only need a manual
+      // ANALYZE when partition drops above just changed the table shape
+      // OR when last_autoanalyze is so old the planner might have gone
+      // stale. 24h staleness threshold is generous — autovacuum should
+      // hit it well before then under any non-idle load.
       const vacStart = Date.now();
-      for (const t of ARCHIVE_TABLES) {
-        try {
-          await client.query(`ANALYZE ${t}`);
-        } catch (err) {
-          log.warn(
-            { err: (err as Error).message, table: t },
-            'cleanup: ANALYZE failed',
-          );
+      try {
+        const stale = await client.query<{ relname: string }>(
+          `SELECT s.relname
+             FROM pg_stat_user_tables s
+            WHERE s.relname = ANY($1::text[])
+              AND (
+                s.last_autoanalyze IS NULL
+                OR s.last_autoanalyze < NOW() - INTERVAL '24 hours'
+              )
+              AND (
+                s.last_analyze IS NULL
+                OR s.last_analyze < NOW() - INTERVAL '24 hours'
+              )`,
+          [ARCHIVE_TABLES],
+        );
+        const tablesToAnalyze = partitionsDropped > 0
+          ? ARCHIVE_TABLES // partition drops invalidate stats; refresh all.
+          : stale.rows.map((r) => r.relname);
+        for (const t of tablesToAnalyze) {
+          try {
+            await client.query(`ANALYZE ${t}`);
+            log.info({ table: t }, 'cleanup: ANALYZE done');
+          } catch (err) {
+            log.warn(
+              { err: (err as Error).message, table: t },
+              'cleanup: ANALYZE failed',
+            );
+          }
         }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'cleanup: stat-staleness probe failed',
+        );
       }
       vacuumMs = Date.now() - vacStart;
 

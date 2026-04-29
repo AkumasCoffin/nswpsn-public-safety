@@ -32,6 +32,18 @@ const PAGER_HITS_FRESH_MS = 60_000;
 const PAGER_HITS_STALE_MS = 10 * 60_000;
 const pagerHitsCache = new SwrCache<PagerHitsBody>();
 
+// Circuit breaker for the archive_misc refresh. On disk-saturated
+// hosts the (data->>'timestamp')::bigint Seq Scan reliably hits the
+// statement timeout. Without this, every cold cache request fires a
+// new DB refresh attempt that will fail the same way — flooding the
+// logs with `pager/hits: archive_misc refresh failed` warnings and
+// burning a connection on each one. After a failure we back off for
+// 5 minutes before trying the DB again; in the meantime cold callers
+// just get the LiveStore snapshot, which is what the SwrCache fallback
+// path already serves them.
+let pagerHitsDbBackoffUntil = 0;
+const PAGER_HITS_DB_BACKOFF_MS = 5 * 60_000;
+
 interface PagerHitsBody {
   type: 'FeatureCollection';
   features: PagerFeature[];
@@ -234,26 +246,33 @@ pagerRouter.get('/api/pager/hits', async (c) => {
   // Cache key — same combination of params returns the same body, so
   // the bot's repeated calls coalesce onto a single DB read per minute.
   const key = `h${hours}|l${limit}|c${capcode ?? ''}|i${incidentId ?? ''}`;
+  const inDbBackoff = Date.now() < pagerHitsDbBackoffUntil;
 
-  // Cold path: cache empty. Serve the live snapshot immediately and
-  // fire a single background refresh — we don't want every cold caller
-  // to block on a 30 s archive_misc scan.
+  // Try-DB wrapper that tracks failures so we can back off.
+  const tryRefresh = (): Promise<PagerHitsBody> => {
+    return fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }).catch((err) => {
+      pagerHitsDbBackoffUntil = Date.now() + PAGER_HITS_DB_BACKOFF_MS;
+      throw err;
+    });
+  };
+  const swrOpts = {
+    fresh: PAGER_HITS_FRESH_MS,
+    stale: PAGER_HITS_STALE_MS,
+    onError: (err: unknown) =>
+      log.warn(
+        { err: (err as Error).message },
+        'pager/hits: archive_misc refresh failed; backing off 5 min',
+      ),
+  };
+
+  // Cold path: cache empty. Serve the live snapshot immediately. Only
+  // attempt a DB refresh if we're not in the post-failure backoff
+  // window — otherwise the bot's per-minute polls would each kick off
+  // a doomed 30 s query.
   if (!pagerHitsCache.has(key)) {
-    pagerHitsCache
-      .refresh(
-        key,
-        () => fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }),
-        {
-          fresh: PAGER_HITS_FRESH_MS,
-          stale: PAGER_HITS_STALE_MS,
-          onError: (err) =>
-            log.warn(
-              { err: (err as Error).message },
-              'pager/hits: archive_misc refresh failed (background)',
-            ),
-        },
-      )
-      .catch(() => {});
+    if (!inDbBackoff) {
+      pagerHitsCache.refresh(key, tryRefresh, swrOpts).catch(() => {});
+    }
     const features = snapshotFallback(hours, limit, capcode, incidentId);
     return c.json({
       type: 'FeatureCollection',
@@ -263,24 +282,16 @@ pagerRouter.get('/api/pager/hits', async (c) => {
     });
   }
 
-  // Warm path: cache has a value. SwrCache returns it instantly (and
-  // kicks off a background refresh if past `fresh`). If the entry has
-  // gone fully stale and the refetch fails, the .catch() below falls
-  // back to the snapshot rather than 500ing.
+  // Warm path: cache has a value. If we're in DB backoff, skip the
+  // SwrCache.get() (which would trigger a background refresh past
+  // `fresh`) and read the cached body directly. Otherwise let SwrCache
+  // do its normal stale-while-revalidate dance.
+  if (inDbBackoff) {
+    const peeked = pagerHitsCache._peek(key);
+    if (peeked) return c.json(peeked.value);
+  }
   try {
-    const { value } = await pagerHitsCache.get(
-      key,
-      () => fetchPagerHitsFromDb({ hours, limit, capcode, incidentId }),
-      {
-        fresh: PAGER_HITS_FRESH_MS,
-        stale: PAGER_HITS_STALE_MS,
-        onError: (err) =>
-          log.warn(
-            { err: (err as Error).message },
-            'pager/hits: archive_misc refresh failed (background)',
-          ),
-      },
-    );
+    const { value } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
     return c.json(value);
   } catch (err) {
     log.warn(
