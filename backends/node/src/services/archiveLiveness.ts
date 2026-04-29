@@ -297,7 +297,7 @@ export async function sweepStaleAsEnded(pool: Pool): Promise<number> {
         )
         INSERT INTO ${table} (source, source_id, fetched_at,
                               lat, lng, category, subcategory, data)
-        SELECT source, source_id, EXTRACT(EPOCH FROM now())::bigint,
+        SELECT source, source_id, now(),
                lat, lng, category, subcategory,
                COALESCE(data, '{}'::jsonb) || '{"is_live": false}'::jsonb
           FROM stale
