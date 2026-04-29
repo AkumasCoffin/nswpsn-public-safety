@@ -313,19 +313,34 @@ class AlertPoller:
             items = self._extract_items(alert_type, data)
             original_count = len(items)
 
-            # Filter Waze items to only very recent ones (prevents flooding)
-            # Waze has thousands of reports - only alert on last 15 min, max 5 per cycle
-            if alert_type.startswith('waze_'):
-                # On first poll, mark all Waze items as seen without alerting (bootstrap)
-                if self._first_poll:
-                    logger.info(f"  → {alert_type}: Bootstrapping {original_count} items (marking as seen, no alerts)")
-                    # Use batch operation in executor to avoid blocking the event loop
-                    batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-                    await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
-                    items = []  # Don't alert on any
-                else:
-                    items = self._filter_recent_waze(items, max_age_minutes=15, max_items=5)
-                    logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} recent (last 15min, max 5)")
+            # On the first poll cycle after bot startup, bootstrap EVERY
+            # source: mark every currently-active item as seen without
+            # firing an alert. Without this, a restart after downtime
+            # surfaces every active outage / incident / pager hit as
+            # "new" — the bot then tries to send thousands of messages
+            # at once, saturates the 500-message queue, and drops a
+            # bunch of them as "Message queue full". Production saw
+            # 2126 alerts on a single restart cycle.
+            #
+            # Previously this was waze-only because waze ingest is
+            # high-volume and the bootstrap was framed as "anti-flood
+            # for waze". The same flood happens for every other source
+            # the moment the bot's been offline for any non-trivial
+            # window, so it gets the same bootstrap treatment.
+            if self._first_poll:
+                logger.info(
+                    f"  → {alert_type}: Bootstrapping {original_count} items "
+                    "(marking as seen, no alerts)"
+                )
+                batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
+                await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
+                items = []
+            elif alert_type.startswith('waze_'):
+                # Steady-state waze still has anti-flood: only alert on
+                # last 15 min, max 5 per cycle. Waze has thousands of
+                # reports; without this it'd dominate every channel.
+                items = self._filter_recent_waze(items, max_age_minutes=15, max_items=5)
+                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} recent (last 15min, max 5)")
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
 
@@ -381,7 +396,7 @@ class AlertPoller:
         # Mark first poll as complete
         if self._first_poll:
             self._first_poll = False
-            logger.info("First poll cycle complete - Waze alerts now active")
+            logger.info("First poll cycle complete — alerts active for all sources")
         
         # Sort all alerts by source timestamp (oldest first) for chronological posting
         if new_alerts:
@@ -407,6 +422,24 @@ class AlertPoller:
 
         # Fetch user incidents from backend API
         incidents = await self._fetch_user_incidents()
+
+        # Bootstrap on first poll — mark currently-ready incidents as seen
+        # without firing alerts. Same anti-flood reasoning as check_alerts:
+        # restart after downtime would otherwise re-emit every active user
+        # incident as new.
+        if self._first_poll:
+            ready = [i for i in incidents if self._is_incident_ready(i)]
+            for incident in ready:
+                alert_id = self._get_alert_id('user_incident', incident)
+                await loop.run_in_executor(
+                    None, self.db.mark_alert_seen, 'user_incident', alert_id
+                )
+            if ready:
+                logger.info(
+                    f"  → user_incident: Bootstrapping {len(ready)} items "
+                    "(marking as seen, no alerts)"
+                )
+            return new_alerts
 
         for incident in incidents:
             # Skip incidents that don't have minimum required data
@@ -472,6 +505,20 @@ class AlertPoller:
             None, self.db.is_alert_seen, 'radio_summary', alert_id
         )
         if seen:
+            return []
+
+        # Bootstrap on first poll — the latest summary the bot inherits at
+        # startup may already be hours old; firing it as "new" once the
+        # bot reconnects is misleading (and noisy if downtime spanned
+        # multiple summary boundaries; a quiet hour summary then a
+        # backlog of new alerts is the typical stack).
+        if self._first_poll:
+            await loop.run_in_executor(
+                None, self.db.mark_alert_seen, 'radio_summary', alert_id
+            )
+            logger.info(
+                f"  → radio_summary: Bootstrapping {alert_id} (marking as seen, no alert)"
+            )
             return []
 
         # Prefer created_at for chronological ordering alongside other alerts

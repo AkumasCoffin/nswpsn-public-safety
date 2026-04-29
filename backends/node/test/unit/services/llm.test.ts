@@ -56,11 +56,27 @@ describe('parseSummaryOutput', () => {
     expect(out.overview).toContain('Quiet hour');
   });
 
-  it('returns the raw text on total parse failure', async () => {
+  it('returns empty overview on total parse failure (avoids raw-JSON leak into embed)', async () => {
     const { parseSummaryOutput } = await import('../../../src/services/llm.js');
     const out = parseSummaryOutput('not json at all');
     expect(out.structured).toBeNull();
-    expect(out.overview).toBe('not json at all');
+    // Empty overview lets the embed fall through to the incidents
+    // builder or a placeholder. Returning the raw response here would
+    // dump raw LLM text (often half-broken JSON) into the discord
+    // embed verbatim.
+    expect(out.overview).toBe('');
+  });
+
+  it('coerces non-string overview to empty (rejects object/array values)', async () => {
+    const { parseSummaryOutput } = await import('../../../src/services/llm.js');
+    // Gemini occasionally emits {"overview": {...}} or {"overview": [...]}.
+    // Without the type-guard those would render as [object Object] in
+    // the embed.
+    const obj = parseSummaryOutput('{"overview": {"text":"oops"}, "x":1}');
+    expect(obj.overview).toBe('');
+    expect(obj.structured).toEqual({ overview: { text: 'oops' }, x: 1 });
+    const arr = parseSummaryOutput('{"overview": ["a","b"]}');
+    expect(arr.overview).toBe('');
   });
 });
 

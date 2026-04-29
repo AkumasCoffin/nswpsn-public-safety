@@ -433,7 +433,11 @@ export function parseSummaryOutput(text: string): ParsedSummary {
       const data = JSON.parse(candidate);
       if (data && typeof data === 'object' && !Array.isArray(data)) {
         const obj = data as Record<string, unknown>;
-        let overview = (obj['overview'] as string | undefined) ?? '';
+        // Coerce overview to string. Gemini occasionally returns
+        // non-string values (object, array) under "overview"; without
+        // the type guard those leaked into the embed as raw JSON.
+        const ov = obj['overview'];
+        let overview = typeof ov === 'string' ? ov : '';
         if (!overview && obj['quiet_hour']) {
           overview = 'Quiet hour — no significant incidents detected.';
         }
@@ -447,6 +451,13 @@ export function parseSummaryOutput(text: string): ParsedSummary {
     }
   }
 
+  // Parse fully failed. Returning the raw LLM body as overview puts
+  // raw JSON into the rdio_summaries.summary column, which the discord
+  // embed then renders verbatim. Return an empty overview instead so
+  // the embed falls through to the incidents-from-details path or to
+  // its "(no summary)" placeholder. The raw text is logged here for
+  // debugging — operators can grep for `summary parse failed` to see
+  // the head/tail of the offending response.
   log.warn(
     {
       len: text.length,
@@ -455,7 +466,7 @@ export function parseSummaryOutput(text: string): ParsedSummary {
     },
     'summary parse failed',
   );
-  return { overview: text, structured: null };
+  return { overview: '', structured: null };
 }
 
 // ---------------------------------------------------------------------------
