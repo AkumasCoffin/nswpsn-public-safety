@@ -234,11 +234,19 @@ export function stampLiveRow(row: ArchiveRow): ArchiveRow {
  * insert tombstones. Runs from the cleanup loop so a stuck poller
  * doesn't leave records reporting is_live=true forever.
  *
+ * archive_waze is deliberately excluded:
+ *   - waze_* sources are exempt from the per-flush diff (rotation
+ *     can't see all regions per cycle), AND
+ *   - the table holds millions of rows, so the DISTINCT ON over a
+ *     7-day window contended with userscript ingest and stretched
+ *     a single cleanup pass to 4+ minutes in production.
+ * Waze records age out via the partition-drop strategy in cleanup.ts
+ * — that's enough to prevent overflow, even without per-row tombstones.
+ *
  * Returns the number of tombstones inserted across all tables.
  */
 export async function sweepStaleAsEnded(pool: Pool): Promise<number> {
   const tables: ArchiveTable[] = [
-    'archive_waze',
     'archive_traffic',
     'archive_rfs',
     'archive_power',
