@@ -282,21 +282,49 @@ export async function refreshPoliceHeatmapCache(): Promise<{ ok: boolean; bins: 
         )
       `);
       const t0 = Date.now();
-      await client.query(
-        `INSERT INTO police_heatmap_cache_new (lat_bin, lng_bin, subcategory, count)
-         SELECT
-           (FLOOR(lat / $1) * $1)::float8 AS lat_bin,
-           (FLOOR(lng / $1) * $1)::float8 AS lng_bin,
-           COALESCE(NULLIF(subcategory, ''), data->>'subtype', 'POLICE_VISIBLE') AS subcategory,
-           COUNT(*)::int AS count
-         FROM archive_waze
-         WHERE source = 'waze_police'
-           AND fetched_at >= NOW() - ($2 || ' days')::interval
-           AND lat IS NOT NULL AND lng IS NOT NULL
-         GROUP BY 1, 2, 3`,
-        [BIN_DEG, String(WINDOW_DAYS)],
+      // Aggregate from the day-bucketed table written incrementally by
+      // the archive writer (see store/archive.ts:upsertPoliceHeatmapBin
+      // Daily). Replaces the 30-day GROUP BY scan over archive_waze that
+      // sat in IO/AioIoCompletion for 30+ minutes per refresh — the
+      // pre-aggregated source means each refresh sums at most ~30 ×
+      // (cells per day) rows, typically <100k rows total.
+      //
+      // Fall back to the legacy archive_waze scan if the daily table is
+      // empty (i.e. the indexBuilder backfill hasn't completed yet).
+      // Keeps the heatmap warm during the first hour or so after deploy.
+      let aggMs = 0;
+      const dailyCheck = await client.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM police_heatmap_bin_daily LIMIT 1`,
       );
-      const aggMs = Date.now() - t0;
+      const dailyHasRows = Number(dailyCheck.rows[0]?.n ?? 0) > 0;
+      if (dailyHasRows) {
+        await client.query(
+          `INSERT INTO police_heatmap_cache_new (lat_bin, lng_bin, subcategory, count)
+           SELECT lat_bin, lng_bin, subcategory, SUM(count)::int AS count
+             FROM police_heatmap_bin_daily
+            WHERE day >= (NOW() - ($1 || ' days')::interval)::date
+            GROUP BY 1, 2, 3`,
+          [String(WINDOW_DAYS)],
+        );
+        aggMs = Date.now() - t0;
+      } else {
+        log.warn('police_heatmap_bin_daily empty; falling back to archive_waze scan');
+        await client.query(
+          `INSERT INTO police_heatmap_cache_new (lat_bin, lng_bin, subcategory, count)
+           SELECT
+             (FLOOR(lat / $1) * $1)::float8 AS lat_bin,
+             (FLOOR(lng / $1) * $1)::float8 AS lng_bin,
+             COALESCE(NULLIF(subcategory, ''), data->>'subtype', 'POLICE_VISIBLE') AS subcategory,
+             COUNT(*)::int AS count
+           FROM archive_waze
+           WHERE source = 'waze_police'
+             AND fetched_at >= NOW() - ($2 || ' days')::interval
+             AND lat IS NOT NULL AND lng IS NOT NULL
+           GROUP BY 1, 2, 3`,
+          [BIN_DEG, String(WINDOW_DAYS)],
+        );
+        aggMs = Date.now() - t0;
+      }
 
       // Atomic swap: TRUNCATE + INSERT inside a single transaction so
       // readers either see the old data or the new — never partial.

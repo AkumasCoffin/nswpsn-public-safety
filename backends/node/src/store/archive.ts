@@ -272,6 +272,15 @@ export class ArchiveWriter {
           const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
           await this.insertChunk(client, table, slice);
         }
+        // Incremental heatmap aggregation. Done in the same transaction
+        // as the archive_waze INSERTs so a row in archive_waze always
+        // has its bin counted (or, on error, neither happens). Only
+        // aggregates waze_police rows with non-null lat/lng — same
+        // filter as the historical archive_waze GROUP BY scan that
+        // this hook replaces.
+        if (table === 'archive_waze') {
+          await this.upsertPoliceHeatmapBinDaily(client, rows);
+        }
         await client.query('COMMIT');
       } catch (err) {
         try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -280,6 +289,69 @@ export class ArchiveWriter {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Aggregate the waze_police rows in this batch by
+   * (day, lat_bin, lng_bin, subcategory) and UPSERT one VALUES tuple
+   * per distinct cell into police_heatmap_bin_daily. Replaces the
+   * 30-day GROUP BY scan that ran every 10 min from the heatmap
+   * refresher and stalled the disk for half an hour at a time.
+   *
+   * subcategory normalisation mirrors the SQL the previous refresh
+   * used: COALESCE(NULLIF(subcategory, ''), data->>'subtype',
+   * 'POLICE_VISIBLE'). The indexBuilder backfills already populate the
+   * subcategory column on existing rows; this is the in-flight equivalent.
+   *
+   * UTC for the day-bucket so ISO date strings match what the
+   * indexBuilder backfill writes (which uses fetched_at AT TIME
+   * ZONE 'UTC'::date).
+   */
+  private async upsertPoliceHeatmapBinDaily(
+    client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    rows: ArchiveRow[],
+  ): Promise<void> {
+    const BIN_DEG = 0.001;
+    type Cell = { day: string; lat_bin: number; lng_bin: number; sub: string; count: number };
+    const cells = new Map<string, Cell>();
+    for (const r of rows) {
+      if (r.source !== 'waze_police') continue;
+      if (r.lat == null || r.lng == null) continue;
+      const data = (r.data ?? {}) as Record<string, unknown>;
+      const sub =
+        r.subcategory && r.subcategory !== ''
+          ? r.subcategory
+          : typeof data['subtype'] === 'string' && data['subtype'] !== ''
+            ? (data['subtype'] as string)
+            : 'POLICE_VISIBLE';
+      const lat_bin = Math.floor(r.lat / BIN_DEG) * BIN_DEG;
+      const lng_bin = Math.floor(r.lng / BIN_DEG) * BIN_DEG;
+      const day = new Date(r.fetched_at * 1000).toISOString().slice(0, 10);
+      const key = `${day}|${lat_bin}|${lng_bin}|${sub}`;
+      const existing = cells.get(key);
+      if (existing) existing.count += 1;
+      else cells.set(key, { day, lat_bin, lng_bin, sub, count: 1 });
+    }
+    if (cells.size === 0) return;
+
+    // Multi-VALUES upsert. ON CONFLICT updates by adding incoming count
+    // to existing — additive semantics so multiple flushes per day
+    // accumulate correctly.
+    const placeholders: string[] = [];
+    const params: unknown[] = [];
+    let i = 0;
+    for (const c of cells.values()) {
+      placeholders.push(`($${i + 1}::date, $${i + 2}::float8, $${i + 3}::float8, $${i + 4}::text, $${i + 5}::int)`);
+      params.push(c.day, c.lat_bin, c.lng_bin, c.sub, c.count);
+      i += 5;
+    }
+    const sql = `
+      INSERT INTO police_heatmap_bin_daily (day, lat_bin, lng_bin, subcategory, count)
+      VALUES ${placeholders.join(',')}
+      ON CONFLICT (day, lat_bin, lng_bin, subcategory)
+      DO UPDATE SET count = police_heatmap_bin_daily.count + EXCLUDED.count
+    `;
+    await client.query(sql, params);
   }
 
   private async insertChunk(
