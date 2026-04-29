@@ -1133,13 +1133,27 @@ const presetStatsCache = new SwrCache<PresetStatRow[]>();
 async function fetchPresetStats(gid: bigint): Promise<PresetStatRow[]> {
   const pool = await getBotDbPool();
   if (!pool) throw new Error('BOT_DATA_DATABASE_URL is not configured.');
+  // Push the 30-day filter into the JOIN ON clause so the planner uses
+  // the (preset_id, fired_at DESC) partial scan via idx_pfl_preset_fired_at
+  // instead of an all-time scan per preset. Production saw a 23s cold
+  // call against a guild with ~10 presets and a preset_fire_log that
+  // hadn't been cleaned up — the FILTER (...) projection was applied
+  // AFTER the join, so every historical fire was read.
+  //
+  // last_fire is the most recent fire WITHIN 30 days. The cleanup job
+  // (cleanup_preset_fire_log at discord-bot/database.py:678) deletes
+  // anything older than 30 days anyway, so this matches steady-state
+  // behaviour. fires_30d is now COUNT(f.fired_at) since the JOIN
+  // already constrained the rows.
   const r = await pool.query<PresetStatsRow>(
     `SELECT p.id AS preset_id,
             COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '7 days')  AS fires_7d,
-            COUNT(*) FILTER (WHERE f.fired_at > NOW() - INTERVAL '30 days') AS fires_30d,
-            MAX(f.fired_at) AS last_fire
+            COUNT(f.fired_at)                                                AS fires_30d,
+            MAX(f.fired_at)                                                  AS last_fire
        FROM alert_presets p
-       LEFT JOIN preset_fire_log f ON f.preset_id = p.id
+       LEFT JOIN preset_fire_log f
+              ON f.preset_id = p.id
+             AND f.fired_at > NOW() - INTERVAL '30 days'
       WHERE p.guild_id = $1
    GROUP BY p.id`,
     [gid.toString()],
@@ -1170,15 +1184,27 @@ dashboardRouter.get('/api/dashboard/guilds/:guildId/preset-stats', async (c) => 
     return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
   }
 
+  // Cold-start stub: if there's no cached value yet, kick off a
+  // background refresh and return an empty stub immediately. Without
+  // this, the first call after process boot blocks on the
+  // preset_fire_log aggregation — production saw a 23s wait while
+  // the dashboard spinner sat there. Mirrors python's first-call
+  // behaviour the comment below was already describing.
+  const swrOpts = {
+    fresh: PRESET_STATS_FRESH_MS,
+    stale: PRESET_STATS_STALE_MS,
+    onError: (err: unknown) => log.warn({ err, guildId }, 'preset_stats refresh failed'),
+  };
+  if (!presetStatsCache.has(guildId)) {
+    presetStatsCache.refresh(guildId, () => fetchPresetStats(gid), swrOpts).catch(() => {});
+    return c.json({ stats: [], cache_age_seconds: null, warming: true });
+  }
+
   try {
     const result = await presetStatsCache.get(
       guildId,
       () => fetchPresetStats(gid),
-      {
-        fresh: PRESET_STATS_FRESH_MS,
-        stale: PRESET_STATS_STALE_MS,
-        onError: (err) => log.warn({ err, guildId }, 'preset_stats refresh failed'),
-      },
+      swrOpts,
     );
     return c.json({
       stats: result.value,
@@ -1187,7 +1213,8 @@ dashboardRouter.get('/api/dashboard/guilds/:guildId/preset-stats', async (c) => 
     });
   } catch (err) {
     log.warn({ err, guildId }, 'preset_stats query failed');
-    // Empty stub matches python's first-call behaviour.
+    // Empty stub on hard failure too — frontend renders "warming…"
+    // and retries on the next poll.
     return c.json({ stats: [], cache_age_seconds: null, warming: true });
   }
 });
