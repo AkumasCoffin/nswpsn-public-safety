@@ -239,6 +239,16 @@ export class ArchiveWriter {
    * per flush window, and a single INSERT of that size with 4 indexes
    * + JSONB blobs reliably hit 60s. Chunking keeps each insert in the
    * single-digit-second range.
+   *
+   * Single transaction across all chunks: previously each chunk had
+   * its own BEGIN/SET LOCAL/COMMIT, costing 3 round-trips per chunk
+   * (so a 10-chunk waze flush burnt 40 round trips — measured ~150ms
+   * pure overhead per flush in production). Now BEGIN once, SET LOCAL
+   * once, INSERT each chunk, COMMIT once → 13 round trips for the
+   * same flush. Failure semantics unchanged: any chunk error rolls
+   * back the whole batch and the caller re-queues — same all-or-
+   * nothing the previous insertChunk-per-tx code already had via
+   * flush()'s requeue path.
    */
   private async insertBatch(
     pool: Pool,
@@ -247,27 +257,25 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // archive_waze has 4 indexes (source/ts/lat/lng + JSONB GIN-ish).
-    // Under heavy ingest with concurrent /api/waze/police-heatmap
-    // reads, a 500-row INSERT was hitting the 30s SET LOCAL timeout
-    // (production: 22:21:13 — 3200-row batch failed on its 500-row
-    // sub-chunk). Smaller chunks for waze keep each statement well
-    // under the timeout; other tables stay at 500 since they don't
-    // see the same write pressure.
+    // archive_waze has 3 compound indexes plus the partition's own
+    // primary key — under concurrent userscript ingest a 500-row
+    // INSERT was hitting the 30s SET LOCAL timeout. 250-row chunks
+    // keep each statement well under the timeout; other tables stay
+    // at 500 since they don't see the same write pressure.
     const INSERT_CHUNK_SIZE = table === 'archive_waze' ? 250 : 500;
-    // Reuse one connection across chunks — `SET LOCAL` only takes
-    // effect inside an explicit transaction, so each chunk runs in
-    // its own BEGIN/COMMIT pair. Holding one client for the whole
-    // batch avoids burning pool slots while archive_waze ingest is
-    // hot. Failure on any chunk surfaces to the caller, which
-    // re-queues the entire input batch (the writer-side dedup catches
-    // duplicates the next round-trip — there is no UNIQUE constraint
-    // on archive_*).
     const client = await pool.connect();
     try {
-      for (let start = 0; start < rows.length; start += INSERT_CHUNK_SIZE) {
-        const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
-        await this.insertChunk(client, table, slice);
+      await client.query('BEGIN');
+      try {
+        await client.query("SET LOCAL statement_timeout = '60s'");
+        for (let start = 0; start < rows.length; start += INSERT_CHUNK_SIZE) {
+          const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
+          await this.insertChunk(client, table, slice);
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        throw err;
       }
     } finally {
       client.release();
@@ -321,15 +329,10 @@ export class ArchiveWriter {
       `INSERT INTO ${table} (${cols.join(',')}) VALUES ` +
       placeholders.join(',');
 
-    await client.query('BEGIN');
-    try {
-      await client.query("SET LOCAL statement_timeout = '60s'");
-      await client.query(insertSql, params);
-      await client.query('COMMIT');
-    } catch (err) {
-      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
-      throw err;
-    }
+    // BEGIN/SET LOCAL/COMMIT lifted to insertBatch — this method now
+    // assumes the caller already holds an open transaction with the
+    // statement_timeout set.
+    await client.query(insertSql, params);
   }
 
   /** Snapshot of writer state for /api/status. */
