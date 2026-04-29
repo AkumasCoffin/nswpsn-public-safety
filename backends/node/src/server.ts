@@ -157,6 +157,19 @@ export function createApp() {
   // from a logged-in user's browser. Restrict to the production domain
   // and its dev/preview subdomains. Local dev traffic comes through
   // `null` Origin (file://) or localhost, both allowed below.
+  //
+  // credentials:true is required because dashboard.html uses
+  // `fetch(..., { credentials: 'include' })` to send the
+  // nswpsn_dash_sess cookie cross-origin (frontend at
+  // nswpsn.forcequit.xyz, API at api.forcequit.xyz). Without
+  // `Access-Control-Allow-Credentials: true` in the response, the
+  // browser drops the response and the dashboard can't sign in.
+  // The `Access-Control-Allow-Origin: *` + credentials combination
+  // is forbidden by the CORS spec, but the origin callback only
+  // returns '*' for null Origin (curl, file://, server-to-server)
+  // where CORS isn't enforced anyway — browsers always send an
+  // Origin on cross-origin requests, so the regex-matched specific
+  // origin is what flows back to them.
   const ALLOWED_ORIGIN_RE =
     /^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|([a-z0-9-]+\.)*forcequit\.xyz|([a-z0-9-]+\.)*nswpsn\.org)$/i;
   app.use(
@@ -166,7 +179,8 @@ export function createApp() {
         if (!origin) return '*'; // file://, curl, server-to-server
         return ALLOWED_ORIGIN_RE.test(origin) ? origin : null;
       },
-      allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key'],
+      credentials: true,
+      allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key', 'Accept'],
       maxAge: 600,
     }),
   );
