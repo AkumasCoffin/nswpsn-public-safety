@@ -10130,6 +10130,14 @@ function initPagerHoursFromStorage() {
     (async () => {
       await loadApiConfig();
       initPagerHoursFromStorage();
+      // Layers that come up enabled by default still need their filter
+      // button registered with the floating sidebar — the toggle
+      // functions only fire on user click. RFS has no filter so it's
+      // skipped; only Pager + any other default-on filterable layer
+      // needs this on boot.
+      if (typeof addFilterButton === 'function' && map.hasLayer(pagerLayer)) {
+        addFilterButton('pager');
+      }
       loadAllData();
       setupRealtimeSubscription();
       
