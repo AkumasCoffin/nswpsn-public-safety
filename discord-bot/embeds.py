@@ -601,15 +601,17 @@ class EmbedBuilder:
         if link:
             embed.add_field(name="ℹ️ More Info", value=f"[View Details]({link})", inline=True)
         
-        # Link to previous message for this incident (for tracking updates)
+        # Link to previous message for this incident (for tracking updates).
+        # Points at the immediately-prior update, so the user can walk the
+        # incident history hop-by-hop instead of jumping back to the original.
         if previous_message and previous_message.get('message_url'):
-            prev_status = previous_message.get('status', 'initial')
+            prev_status = previous_message.get('status') or 'previous'
             embed.add_field(
                 name="📜 Previous Update",
-                value=f"[View original alert ({prev_status})]({previous_message['message_url']})",
+                value=f"[Jump to previous update ({prev_status})]({previous_message['message_url']})",
                 inline=False
             )
-        
+
         embed.set_footer(text="NSW RFS • Rural Fire Service")
         return embed
     
@@ -1222,15 +1224,17 @@ class EmbedBuilder:
         if footer_parts:
             embed.add_field(name="\u200b", value=" • ".join(footer_parts), inline=False)
         
-        # Link to previous message for this incident (for tracking updates)
+        # Link to previous message for this incident (for tracking updates).
+        # Points at the immediately-prior update so users can hop through the
+        # incident history one step at a time.
         if previous_message and previous_message.get('message_url'):
-            prev_status = previous_message.get('status', 'initial')
+            prev_status = previous_message.get('status') or 'previous'
             embed.add_field(
                 name="📜 Previous Update",
-                value=f"[View original alert ({prev_status})]({previous_message['message_url']})",
+                value=f"[Jump to previous update ({prev_status})]({previous_message['message_url']})",
                 inline=False
             )
-        
+
         embed.set_footer(text="NSW PSN • User Submitted Incident")
         return embed
     

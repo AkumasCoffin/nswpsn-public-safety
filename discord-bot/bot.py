@@ -1263,12 +1263,16 @@ class NSWPSNBot(commands.Bot):
                     continue
                 fires.append((preset['id'], alert_type))
 
-                # Previous-message lookup for incident tracking (RFS / user_incident)
+                # Previous-message lookup for incident tracking (RFS / user_incident).
+                # Use get_previous_incident_message so the link points to the
+                # most recent prior update of THIS incident, not the very first
+                # one — when an incident has 4-5 updates the "first" message
+                # has scrolled far up the channel and looks random.
                 previous_message = None
                 if incident_guid:
                     previous_message = await loop.run_in_executor(
                         None,
-                        self.db.get_first_incident_message,
+                        self.db.get_previous_incident_message,
                         incident_guid,
                         channel_id,
                     )
