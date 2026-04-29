@@ -1601,6 +1601,92 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
 const BCAST_TARGETS_TTL_MS = 60_000;
 let bcastTargetsCache: { ts: number; data: unknown } | null = null;
 
+// Keyword preference for the "detected" broadcast channel guess. Mirrors
+// python's _BCAST_CHANNEL_KEYWORDS at external_api_proxy.py:18600.
+const BCAST_CHANNEL_KEYWORDS = [
+  'staff-alert', 'staff-alerts', 'bot-alerts', 'bot-log', 'bot-logs',
+  'staff', 'admin', 'mods', 'mod', 'dev', 'ops', 'announce', 'team',
+];
+
+interface BcastChannel { id: string; name: string; type: number; position: number }
+
+async function fetchBroadcastChannels(
+  guildId: string,
+): Promise<{ channels: BcastChannel[]; error: string | null }> {
+  const cached = cacheGet<BcastChannel[]>('bcast_channels', guildId);
+  if (cached) return { channels: cached, error: null };
+  const res = await botGet<DiscordChannel[]>(`/guilds/${guildId}/channels`);
+  if (res.status !== 200 || !Array.isArray(res.body)) {
+    return { channels: [], error: `discord ${res.status}` };
+  }
+  // Type 0 = GUILD_TEXT, 5 = GUILD_ANNOUNCEMENT
+  const out = res.body
+    .filter((c) => c && (c.type === 0 || c.type === 5))
+    .map<BcastChannel>((c) => ({
+      id: String(c.id),
+      name: c.name ?? '',
+      type: c.type ?? 0,
+      position: c.position ?? 0,
+    }));
+  out.sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+  cacheSet('bcast_channels', guildId, out);
+  return { channels: out, error: null };
+}
+
+async function guessBroadcastChannel(
+  guildId: string,
+  channels: BcastChannel[],
+): Promise<BcastChannel | null> {
+  if (channels.length === 0) return null;
+  for (const kw of BCAST_CHANNEL_KEYWORDS) {
+    for (const c of channels) {
+      if (c.name.toLowerCase().includes(kw)) return c;
+    }
+  }
+  // Fallback: most-used channel for this guild's alert_presets.
+  const pool = await getBotDbPool();
+  if (pool) {
+    try {
+      const r = await pool.query<{ channel_id: string | number }>(
+        'SELECT channel_id FROM alert_presets ' +
+          'WHERE guild_id = $1 ' +
+          'GROUP BY channel_id ORDER BY COUNT(*) DESC LIMIT 1',
+        [guildId],
+      );
+      const cid = r.rows[0]?.channel_id;
+      if (cid !== undefined && cid !== null) {
+        const cs = String(cid);
+        const match = channels.find((c) => c.id === cs);
+        if (match) return match;
+      }
+    } catch {
+      // fall through to first-channel default
+    }
+  }
+  return channels[0] ?? null;
+}
+
+// Bounded-concurrency map to avoid hammering Discord with N parallel
+// channel-list calls. 8 matches python's ThreadPoolExecutor sizing.
+async function mapWithConcurrency<I, O>(
+  items: I[],
+  limit: number,
+  fn: (item: I) => Promise<O>,
+): Promise<O[]> {
+  const out: O[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      const item = items[i] as I;
+      out[i] = await fn(item);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 dashboardRouter.get('/api/dashboard/admin/broadcast/targets', async (c) => {
   const session = await requireAdmin(c);
   if (session instanceof Response) return session;
@@ -1616,22 +1702,26 @@ dashboardRouter.get('/api/dashboard/admin/broadcast/targets', async (c) => {
       'SELECT DISTINCT guild_id FROM alert_presets ORDER BY guild_id',
     );
     const guildIds = r.rows.map((row) => String(row.guild_id));
-    // Resolve guild names/icons via bot token (cached). Channel lookups
-    // remain a follow-up — the admin UI can call /channels separately if
-    // it needs the per-channel breakdown. See punted TODOs.
-    const metaMap = await getGuildMetaBulk(guildIds);
-    const out = guildIds.map((gid) => {
-      const meta = metaMap.get(gid);
-      return {
-        guild_id: gid,
-        guild_name: meta?.name ?? '',
-        guild_icon_url: meta?.icon_url ?? '',
-        detected_channel_id: null,
-        detected_channel_name: '',
-        channels: [] as unknown[],
-        channels_error: 'channels_not_fetched',
-      };
-    });
+    const [metaMap, channelResults] = await Promise.all([
+      getGuildMetaBulk(guildIds),
+      mapWithConcurrency(guildIds, 8, fetchBroadcastChannels),
+    ]);
+    const out = await Promise.all(
+      guildIds.map(async (gid, i) => {
+        const meta = metaMap.get(gid);
+        const cr = channelResults[i] ?? { channels: [], error: 'fetch_failed' };
+        const guess = await guessBroadcastChannel(gid, cr.channels);
+        return {
+          guild_id: gid,
+          guild_name: meta?.name ?? '',
+          guild_icon_url: meta?.icon_url ?? '',
+          detected_channel_id: guess?.id ?? null,
+          detected_channel_name: guess?.name ?? '',
+          channels: cr.channels,
+          channels_error: cr.error,
+        };
+      }),
+    );
     bcastTargetsCache = { ts: Date.now(), data: out };
     return c.json({ targets: out });
   } catch (err) {

@@ -79,11 +79,21 @@ async function doFetch(
     if ((err as Error).name === 'AbortError') {
       throw new HttpError(`timeout after ${timeoutMs}ms`, null, url);
     }
-    throw new HttpError(
-      `fetch failed: ${(err as Error).message}`,
-      null,
-      url,
-    );
+    // undici wraps the real cause (DNS fail, ECONNREFUSED, TLS error, etc.)
+    // in `err.cause`; the top-level message is just "fetch failed". Walk
+    // the chain so health checks show ENOTFOUND / EAI_AGAIN / ECONNRESET
+    // instead of a useless tautology.
+    const e = err as Error & { cause?: unknown };
+    const parts: string[] = [];
+    let cause: unknown = e;
+    for (let i = 0; i < 4 && cause; i += 1) {
+      const c = cause as { code?: string; message?: string; cause?: unknown };
+      const bit = [c.code, c.message].filter(Boolean).join(' ');
+      if (bit && !parts.includes(bit)) parts.push(bit);
+      cause = c.cause;
+    }
+    const detail = parts.join(' | ') || 'unknown';
+    throw new HttpError(`fetch failed: ${detail}`, null, url);
   } finally {
     clearTimeout(t);
   }
