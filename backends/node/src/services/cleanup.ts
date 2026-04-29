@@ -166,22 +166,39 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         }
       }
 
-      // 2. ANALYZE only tables whose stats have actually drifted. Was:
-      // unconditional ANALYZE on every archive_* table per cleanup run.
-      // On disk-saturated hosts this kept hammering archive_waze for 7+
-      // minutes per hour, starving every other consumer of IO.
-      // autovacuum_analyze (migration 010 tuned its thresholds aggressively)
-      // already handles routine stat refreshes; we only need a manual
-      // ANALYZE when partition drops above just changed the table shape
-      // OR when last_autoanalyze is so old the planner might have gone
-      // stale. 24h staleness threshold is generous — autovacuum should
-      // hit it well before then under any non-idle load.
+      // 2. ANALYZE only tables whose partitions are actually stale.
+      // pg_stat_user_tables on a partitioned PARENT always reports NULL
+      // last_autoanalyze (only the leaf partitions get autovacuum'd) —
+      // an earlier version of this check therefore thought every parent
+      // needed re-ANALYZE on every cleanup pass, which is what was
+      // burning 22 minutes per hour on archive_waze.
+      //
+      // The fix: look at the LATEST PARTITION per parent (the one
+      // currently receiving writes; older partitions don't change
+      // anymore so their stats can't drift). If that partition's
+      // autoanalyze is fresh (<24h), skip the parent. autovacuum
+      // handles routine stat refresh; we only step in when partitions
+      // were just dropped or when staleness clearly exceeds the
+      // autovacuum cadence.
       const vacStart = Date.now();
       try {
-        const stale = await client.query<{ relname: string }>(
-          `SELECT s.relname
-             FROM pg_stat_user_tables s
-            WHERE s.relname = ANY($1::text[])
+        const stale = await client.query<{ parent: string; partition: string }>(
+          `WITH latest_partition AS (
+             SELECT parent.relname AS parent,
+                    child.relname  AS partition,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY parent.relname
+                      ORDER BY child.relname DESC
+                    ) AS rn
+               FROM pg_inherits
+               JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
+               JOIN pg_class child  ON child.oid  = pg_inherits.inhrelid
+              WHERE parent.relname = ANY($1::text[])
+           )
+           SELECT lp.parent, lp.partition
+             FROM latest_partition lp
+             JOIN pg_stat_user_tables s ON s.relname = lp.partition
+            WHERE lp.rn = 1
               AND (
                 s.last_autoanalyze IS NULL
                 OR s.last_autoanalyze < NOW() - INTERVAL '24 hours'
@@ -194,7 +211,7 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         );
         const tablesToAnalyze = partitionsDropped > 0
           ? ARCHIVE_TABLES // partition drops invalidate stats; refresh all.
-          : stale.rows.map((r) => r.relname);
+          : stale.rows.map((r) => r.parent);
         for (const t of tablesToAnalyze) {
           try {
             await client.query(`ANALYZE ${t}`);

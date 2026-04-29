@@ -393,30 +393,23 @@ export async function ensurePerfIndexes(): Promise<void> {
         }
       }
 
-      // VACUUM ANALYZE the archive tables. Two reasons:
-      //   1. ANALYZE refreshes pg_statistic so the planner picks the new
-      //      indexes instead of seq-scanning.
-      //   2. VACUUM (non-FULL) reclaims dead tuples — critical after a
-      //      bulk UPDATE like the POLICE_VISIBLE backfill which can
-      //      leave tens of thousands of dead rows that bloat scans
-      //      until autovacuum catches up. Plain VACUUM doesn't take
-      //      ACCESS EXCLUSIVE so reads and writes still flow.
-      // We only run VACUUM ANALYZE on tables a backfill touched; for
-      // the rest, plain ANALYZE is enough.
-      const tables = [
-        'archive_waze',
-        'archive_traffic',
-        'archive_rfs',
-        'archive_power',
-        'archive_misc',
-      ];
-      for (const t of tables) {
+      // VACUUM ANALYZE the archive tables a backfill TOUCHED. Was:
+      // unconditional ANALYZE on every archive_* table on every boot.
+      // ANALYZE on a partitioned parent recurses into every partition,
+      // so on archive_waze that's ~22 minutes of disk hammering at
+      // every restart on a saturated host. autovacuum keeps each
+      // partition's stats fresh on its own threshold; we only need to
+      // step in here when a backfill just rewrote a meaningful chunk of
+      // rows (like the POLICE_VISIBLE backfill that creates dead
+      // tuples). Tables NOT in tablesNeedingVacuum are now skipped
+      // entirely and rely on autovacuum.
+      for (const t of tablesNeedingVacuum) {
         const t0 = Date.now();
-        const cmd = tablesNeedingVacuum.has(t) ? `VACUUM (ANALYZE) ${t}` : `ANALYZE ${t}`;
+        const cmd = `VACUUM (ANALYZE) ${t}`;
         try {
           await client.query(cmd);
           log.info(
-            { table: t, ms: Date.now() - t0, op: tablesNeedingVacuum.has(t) ? 'vacuum-analyze' : 'analyze' },
+            { table: t, ms: Date.now() - t0, op: 'vacuum-analyze' },
             'indexBuilder: stats refresh',
           );
         } catch (err) {
