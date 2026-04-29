@@ -5959,7 +5959,11 @@ async function loadPagerData() {
           if (sub.toUpperCase() === 'NONE' || !sub) return 'Construction';
           return titleCaseLocal(sub);
         }
-        const t = norm(props.subCategoryB) || norm(props.mainCategory) || norm(props.displayType);
+        const t = norm(props.subCategory)
+          || norm(props.mainCategory)
+          || norm(props.incidentKind)
+          || norm(props.displayType)
+          || norm(props.headline);
         if (!t) return 'Roadwork';
         return titleCaseLocal(t);
       };
@@ -6624,13 +6628,14 @@ async function loadPagerData() {
     function refreshActiveFilterPanel() {
       if (_activeFilterKey) _renderFilterPanel(_activeFilterKey);
     }
-    document.addEventListener('click', (e) => {
-      if (!_activeFilterKey) return;
+    (function () {
       const panel = document.getElementById('floating-filter-panel');
       const sidebar = document.getElementById('floating-filter-sidebar');
-      if (!panel || !sidebar) return;
-      if (panel.contains(e.target) || sidebar.contains(e.target)) return;
-      hideFilterPanel();
+      if (panel) panel.addEventListener('click', (e) => e.stopPropagation());
+      if (sidebar) sidebar.addEventListener('click', (e) => e.stopPropagation());
+    })();
+    document.addEventListener('click', () => {
+      if (_activeFilterKey) hideFilterPanel();
     });
 
     let _firmsFeatures = [];

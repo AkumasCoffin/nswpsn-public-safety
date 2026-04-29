@@ -7618,8 +7618,16 @@ function initPagerHoursFromStorage() {
           if (sub.toUpperCase() === 'NONE' || !sub) return 'Construction';
           return titleCaseLocal(sub);
         }
-        // Live Traffic: prefer subCategoryB (more specific), then mainCategory.
-        const t = norm(props.subCategoryB) || norm(props.mainCategory) || norm(props.displayType);
+        // Live Traffic: try subCategory (the backend doesn't expose
+        // subCategoryB), then mainCategory, then incidentKind, then
+        // displayType. Some incidents only have a headline like
+        // "Pavement maintenance" so fall through to that as a final
+        // resort before the generic "Roadwork" bucket.
+        const t = norm(props.subCategory)
+          || norm(props.mainCategory)
+          || norm(props.incidentKind)
+          || norm(props.displayType)
+          || norm(props.headline);
         if (!t) return 'Roadwork';
         return titleCaseLocal(t);
       };
@@ -8340,14 +8348,23 @@ function initPagerHoursFromStorage() {
     function refreshActiveFilterPanel() {
       if (_activeFilterKey) _renderFilterPanel(_activeFilterKey);
     }
-    // Click outside the panel/sidebar to close.
-    document.addEventListener('click', (e) => {
-      if (!_activeFilterKey) return;
+    // Stop clicks inside the panel from bubbling to the document-level
+    // outside-click listener. Without this, a pill click (which calls
+    // refreshActiveFilterPanel and replaces the panel's innerHTML)
+    // detaches the click target before the document handler runs, so
+    // panel.contains(e.target) returns false and the panel closes
+    // unexpectedly. Same for clicks on the sidebar buttons themselves.
+    (function () {
       const panel = document.getElementById('floating-filter-panel');
       const sidebar = document.getElementById('floating-filter-sidebar');
-      if (!panel || !sidebar) return;
-      if (panel.contains(e.target) || sidebar.contains(e.target)) return;
-      hideFilterPanel();
+      if (panel) panel.addEventListener('click', (e) => e.stopPropagation());
+      if (sidebar) sidebar.addEventListener('click', (e) => e.stopPropagation());
+    })();
+    // Click anywhere on the document outside the panel/sidebar closes
+    // the active panel. Pills handle their own state inside, so this
+    // never fires for in-panel clicks (see the stopPropagation above).
+    document.addEventListener('click', () => {
+      if (_activeFilterKey) hideFilterPanel();
     });
 
     let _firmsFeatures = [];           // last fetched raw features
@@ -10281,12 +10298,26 @@ function initPagerHoursFromStorage() {
       await loadApiConfig();
       initPagerHoursFromStorage();
       // Layers that come up enabled by default still need their filter
-      // button registered with the floating sidebar — the toggle
-      // functions only fire on user click. RFS has no filter so it's
-      // skipped; only Pager + any other default-on filterable layer
-      // needs this on boot.
-      if (typeof addFilterButton === 'function' && map.hasLayer(pagerLayer)) {
-        addFilterButton('pager');
+      // button registered with the floating sidebar — toggle functions
+      // only fire on user click. Sweep every known layer and register a
+      // button for whichever ones are already on. Catches default-on
+      // pager + any layer whose toggle path didn't reach addFilterButton
+      // (e.g. URL deep-link restoration paths).
+      if (typeof addFilterButton === 'function') {
+        const _layerByKey = {
+          firms: typeof firmsLayer !== 'undefined' ? firmsLayer : null,
+          hazards: typeof hazardsLayer !== 'undefined' ? hazardsLayer : null,
+          police: typeof policeLayer !== 'undefined' ? policeLayer : null,
+          cameras: typeof camerasLayer !== 'undefined' ? camerasLayer : null,
+          beaches: typeof beachwatchLayer !== 'undefined' ? beachwatchLayer : null,
+          outages: typeof outagesLayer !== 'undefined' ? outagesLayer : null,
+          weather: typeof weatherLayer !== 'undefined' ? weatherLayer : null,
+          pager: typeof pagerLayer !== 'undefined' ? pagerLayer : null,
+          roadwork: typeof roadworkLayer !== 'undefined' ? roadworkLayer : null,
+        };
+        for (const [key, layer] of Object.entries(_layerByKey)) {
+          if (layer && map.hasLayer(layer)) addFilterButton(key);
+        }
       }
       loadAllData();
       setupRealtimeSubscription();
