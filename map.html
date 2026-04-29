@@ -849,6 +849,7 @@
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
     .btn-toggle.active#btn-beachwatch { border: 1px solid #06b6d4; color: #67e8f9; }
+    .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
     .btn-toggle.active#btn-repeaters { border: 1px solid #22c55e; color: #86efac; }
     .btn-toggle.active#btn-towers { border: 1px solid #ec4899; color: #f9a8d4; }
     .btn-toggle.active#btn-weather { border: 1px solid #38bdf8; color: #7dd3fc; }
@@ -1671,6 +1672,7 @@
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()"><span class="dot-indicator" style="background:#8b5cf6;"></span> Cameras</button>
         <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()"><span class="dot-indicator" style="background:#06b6d4;"></span> Beaches</button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()"><span class="dot-indicator" style="background:#38bdf8;"></span> Weather</button>
+        <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
@@ -2302,7 +2304,9 @@
       endeavour_current: { data: null, timestamp: 0 },
       endeavour_maintenance: { data: null, timestamp: 0 },
       endeavour_future: { data: null, timestamp: 0 },
-      essential_energy: { data: null, timestamp: 0 }
+      essential_energy: { data: null, timestamp: 0 },
+      // NASA FIRMS fire-hotspot polygons
+      firms_hotspots: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -2373,6 +2377,9 @@
     let cameraSubLayers = {};
     
     const floodsLayer = L.layerGroup();
+    // NASA FIRMS fire-hotspot polygons (off by default — niche layer that
+    // only matters when bushfires are active).
+    const firmsLayer = L.layerGroup();
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
@@ -3033,26 +3040,28 @@
     function toggleMapLayer(target) {
       if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: target });
       const layerMap = {
-        user: userLayer, 
-        rfs: rfsLayer, 
+        user: userLayer,
+        rfs: rfsLayer,
         pager: pagerLayer,
         hazards: hazardsLayer,
         police: policeLayer,
         roadwork: roadworkLayer,
         floods: floodsLayer,
         cameras: camerasLayer,
-        beachwatch: beachwatchLayer
+        beachwatch: beachwatchLayer,
+        firms: firmsLayer
       };
-      const btnMap = { 
-        user: 'btn-user', 
-        rfs: 'btn-rfs', 
+      const btnMap = {
+        user: 'btn-user',
+        rfs: 'btn-rfs',
         pager: 'btn-pager',
         hazards: 'btn-hazards',
         police: 'btn-police',
         roadwork: 'btn-roadwork',
         floods: 'btn-floods',
         cameras: 'btn-cameras',
-        beachwatch: 'btn-beachwatch'
+        beachwatch: 'btn-beachwatch',
+        firms: 'btn-firms'
       };
 
       const layer = layerMap[target];
@@ -3087,6 +3096,7 @@
           startCameraRefresh(); // Start live refresh when cameras enabled
         }
         if (target === 'beachwatch' && beachwatchLayer.getLayers().length === 0) loadBeachwatchData();
+        if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
       }
       refreshMapAndList();
     }
@@ -7780,6 +7790,94 @@ function initPagerHoursFromStorage() {
       }
       
       console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
+    }
+
+    // NASA FIRMS fire-hotspot polygons. Each feature is the satellite
+    // pixel footprint (375m × 375m for VIIRS) so the polygon represents
+    // the actual area the satellite flagged as actively burning over the
+    // last 24h. Confidence + FRP (fire radiative power, in MW) drive
+    // colour and opacity so a smouldering 1MW pixel doesn't render the
+    // same as a 1000MW running fire.
+    function firmsFillFor(props) {
+      // FRP-based intensity ramp. NASA classes >100MW as a major
+      // detection. Anything past 200MW gets the brightest colour.
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return '#dc2626';   // intense red
+      if (frp >= 50)  return '#f97316';   // orange
+      if (frp >= 10)  return '#facc15';   // yellow
+      return '#fde047';                   // pale yellow (low FRP / smoulder)
+    }
+    function firmsOpacityFor(props) {
+      // Low-confidence VIIRS detections + tiny daytime pixels can be
+      // hot-roof / industrial false positives; render them more
+      // transparent so the user instinctively trusts the bright ones.
+      const conf = String(props.confidence || '').toLowerCase();
+      if (conf === 'high' || conf === 'h') return 0.65;
+      if (conf === 'low'  || conf === 'l') return 0.25;
+      // "nominal" or numeric MODIS confidence — split on >50 for MODIS.
+      const num = Number(conf);
+      if (Number.isFinite(num)) return num >= 50 ? 0.50 : 0.30;
+      return 0.50;
+    }
+    function firmsTooltip(props) {
+      const acq = props.acq_datetime || `${props.acq_date} ${props.acq_time}`;
+      const frpTxt = props.frp != null ? `${Number(props.frp).toFixed(1)} MW` : '—';
+      const brightTxt = props.brightness != null ? `${Number(props.brightness).toFixed(0)} K` : '—';
+      const conf = String(props.confidence || '—');
+      const sat = props.satellite || '—';
+      const dn = props.daynight === 'D' ? 'Day' : props.daynight === 'N' ? 'Night' : '—';
+      return `<div style="font-size:11px;line-height:1.45;">
+        <div style="font-weight:600;color:#fdba74;margin-bottom:3px;">
+          🔥 NASA FIRMS Hotspot
+        </div>
+        <div><b>Detected:</b> ${acq} UTC (${dn})</div>
+        <div><b>FRP:</b> ${frpTxt} &nbsp;<b>Bright:</b> ${brightTxt}</div>
+        <div><b>Satellite:</b> ${sat} &nbsp;<b>Conf:</b> ${conf}</div>
+        <div style="color:#9ca3af;font-size:10px;margin-top:3px;">
+          Pixel footprint ~${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km
+        </div>
+      </div>`;
+    }
+    async function loadFirmsHotspots() {
+      firmsLayer.clearLayers();
+      try {
+        let data;
+        const cached = layerCache.firms_hotspots;
+        if (cached && cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
+          data = cached.data;
+        } else {
+          const res = await apiFetch(`${PROXY_BASE}/api/firms/hotspots`);
+          data = await res.json();
+          if (!layerCache.firms_hotspots) layerCache.firms_hotspots = { data: null, timestamp: 0 };
+          layerCache.firms_hotspots.data = data;
+          layerCache.firms_hotspots.timestamp = Date.now();
+        }
+        if (!data || !Array.isArray(data.features)) return;
+        let count = 0;
+        for (const feature of data.features) {
+          if (!feature || !feature.geometry || feature.geometry.type !== 'Polygon') continue;
+          const ring = feature.geometry.coordinates && feature.geometry.coordinates[0];
+          if (!Array.isArray(ring) || ring.length < 3) continue;
+          // Leaflet expects [lat, lon]; GeoJSON gives [lon, lat]. Flip.
+          const latlngs = ring.map(([lon, lat]) => [lat, lon]);
+          const props = feature.properties || {};
+          const fill = firmsFillFor(props);
+          const op = firmsOpacityFor(props);
+          const poly = L.polygon(latlngs, {
+            color: fill,
+            weight: 1,
+            opacity: 0.9,
+            fillColor: fill,
+            fillOpacity: op,
+            interactive: true
+          }).addTo(firmsLayer);
+          poly.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
+          count++;
+        }
+        console.log(`Loaded ${count} FIRMS fire-hotspot polygons`);
+      } catch (e) {
+        console.error('FIRMS hotspots error', e);
+      }
     }
 
     // Traffic Cameras + Airport Weather Cameras + Central Watch Fire Tower Cameras
