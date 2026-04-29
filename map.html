@@ -859,7 +859,10 @@
     .floating-filter-sidebar {
       position: absolute;
       left: 12px;
-      bottom: 12px;
+      /* Stacked above the map-type controls (Dark/Sat/Topo) which sit at
+         bottom: 20px / ~40px tall. Any closer and the filter buttons
+         render under the type-control pill. */
+      bottom: 76px;
       z-index: 800;
       display: flex;
       flex-direction: column-reverse;
@@ -896,11 +899,14 @@
     .floating-filter-panel {
       position: absolute;
       left: 64px;
-      bottom: 12px;
+      /* Anchored to the same bottom as the sidebar so it opens flush
+         with the bottom-most filter button instead of overlapping the
+         map-type pill. */
+      bottom: 76px;
       z-index: 800;
       min-width: 220px;
       max-width: 300px;
-      max-height: calc(100vh - 80px);
+      max-height: calc(100vh - 160px);
       overflow-y: auto;
       background: rgba(15, 23, 42, 0.96);
       border: 1px solid rgba(148, 163, 184, 0.3);
