@@ -6226,13 +6226,20 @@ async function loadPagerData() {
       if (frp >= 10)  return '#facc15';
       return '#fde047';
     }
+    function firmsRadiusFor(props) {
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return 11;
+      if (frp >= 50)  return 9;
+      if (frp >= 10)  return 7;
+      return 5;
+    }
     function firmsOpacityFor(props) {
       const conf = String(props.confidence || '').toLowerCase();
-      if (conf === 'high' || conf === 'h') return 0.65;
-      if (conf === 'low'  || conf === 'l') return 0.25;
+      if (conf === 'high' || conf === 'h') return 0.85;
+      if (conf === 'low'  || conf === 'l') return 0.45;
       const num = Number(conf);
-      if (Number.isFinite(num)) return num >= 50 ? 0.50 : 0.30;
-      return 0.50;
+      if (Number.isFinite(num)) return num >= 50 ? 0.70 : 0.50;
+      return 0.70;
     }
     function firmsTooltip(props) {
       const acq = props.acq_datetime || `${props.acq_date} ${props.acq_time}`;
@@ -6262,25 +6269,38 @@ async function loadPagerData() {
         if (!data || !Array.isArray(data.features)) return;
         let count = 0;
         for (const feature of data.features) {
-          if (!feature || !feature.geometry || feature.geometry.type !== 'Polygon') continue;
-          const ring = feature.geometry.coordinates && feature.geometry.coordinates[0];
-          if (!Array.isArray(ring) || ring.length < 3) continue;
-          const latlngs = ring.map(([lon, lat]) => [lat, lon]);
+          if (!feature || !feature.geometry) continue;
           const props = feature.properties || {};
+          let lat = Number(props.latitude);
+          let lng = Number(props.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            const ring = feature.geometry.coordinates && feature.geometry.coordinates[0];
+            if (!Array.isArray(ring) || ring.length === 0) continue;
+            let sx = 0, sy = 0, n = 0;
+            for (let i = 0; i < ring.length - 1; i++) {
+              const pt = ring[i];
+              if (!Array.isArray(pt)) continue;
+              sx += Number(pt[0]); sy += Number(pt[1]); n++;
+            }
+            if (n === 0) continue;
+            lng = sx / n; lat = sy / n;
+          }
           const fill = firmsFillFor(props);
           const op = firmsOpacityFor(props);
-          const poly = L.polygon(latlngs, {
-            color: fill,
+          const radius = firmsRadiusFor(props);
+          const dot = L.circleMarker([lat, lng], {
+            radius,
+            color: '#7f1d1d',
             weight: 1,
             opacity: 0.9,
             fillColor: fill,
             fillOpacity: op,
             interactive: true
           }).addTo(firmsLayer);
-          poly.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
+          dot.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
           count++;
         }
-        console.log(`Loaded ${count} FIRMS fire-hotspot polygons`);
+        console.log(`Loaded ${count} FIRMS fire-hotspot markers`);
       } catch (e) {
         console.error('FIRMS hotspots error', e);
       }
