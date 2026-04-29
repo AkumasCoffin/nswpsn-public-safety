@@ -45,6 +45,12 @@ const SKIP_ARCHIVE = new Set<string>([
 interface SourceState {
   timer: NodeJS.Timeout | null;
   failureCount: number;
+  /** Cumulative successful fetches since last reset / process start.
+   *  Surfaced in /api/dashboard/admin/sources as `total_success`. */
+  totalSuccess: number;
+  /** Cumulative failed fetches since last reset / process start.
+   *  Surfaced as `total_fail`. */
+  totalFail: number;
   /** Wall-clock of last successful fetch (epoch seconds). */
   lastSuccessTs: number | null;
   /** Wall-clock of last attempt (success or failure). */
@@ -74,7 +80,7 @@ let _prewarmDone = false;
 export function setActivityMode(active: boolean): void {
   if (active === activeMode) return;
   activeMode = active;
-  log.info({ active }, 'activity mode changed; rearming pollers');
+  log.info(`activity mode → ${active ? 'active' : 'idle'}; rearming pollers`);
   if (_running) {
     // Re-arm immediately so cadence reflects the new mode.
     for (const src of allSources()) {
@@ -97,6 +103,8 @@ function ensureState(name: string): SourceState {
     s = {
       timer: null,
       failureCount: 0,
+      totalSuccess: 0,
+      totalFail: 0,
       lastSuccessTs: null,
       lastAttemptTs: null,
       lastError: null,
@@ -180,6 +188,7 @@ async function runOnceInner(src: SourceDefinition): Promise<void> {
 
     const wasFailing = state.failureCount > 0;
     state.failureCount = 0;
+    state.totalSuccess += 1;
     state.lastSuccessTs = fetchedAt;
     state.lastError = null;
     const ms = Date.now() - startedAt;
@@ -195,6 +204,7 @@ async function runOnceInner(src: SourceDefinition): Promise<void> {
     }
   } catch (err) {
     state.failureCount += 1;
+    state.totalFail += 1;
     const newErr = (err as Error).message;
     const errChanged = newErr !== state.lastError;
     state.lastError = newErr;
@@ -396,6 +406,10 @@ export interface SourceMetricSnapshot {
   /** Last error message, if any (cleared on next success). */
   last_error: string | null;
   consec_fails: number;
+  /** Cumulative successful fetches since last reset. */
+  total_success: number;
+  /** Cumulative failed fetches since last reset. */
+  total_fail: number;
 }
 
 /** Returns one entry per registered source. Sources that have never been
@@ -413,6 +427,8 @@ export function getSourceMetrics(): SourceMetricSnapshot[] {
       last_error_at: s?.lastError ? (s.lastAttemptTs ?? null) : null,
       last_error: s?.lastError ?? null,
       consec_fails: s?.failureCount ?? 0,
+      total_success: s?.totalSuccess ?? 0,
+      total_fail: s?.totalFail ?? 0,
     });
   }
   return out;
@@ -426,12 +442,16 @@ export function resetSourceMetrics(name?: string): void {
     const s = _state.get(name);
     if (s) {
       s.failureCount = 0;
+      s.totalSuccess = 0;
+      s.totalFail = 0;
       s.lastError = null;
     }
     return;
   }
   for (const s of _state.values()) {
     s.failureCount = 0;
+    s.totalSuccess = 0;
+    s.totalFail = 0;
     s.lastError = null;
   }
 }

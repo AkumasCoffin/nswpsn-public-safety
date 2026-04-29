@@ -25,6 +25,8 @@
  * data rather than nothing. Better than the in-memory cache which
  * empties on process restart.
  */
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 
@@ -32,6 +34,13 @@ import { log } from '../lib/log.js';
 const BIN_DEG = 0.001;
 const WINDOW_DAYS = 30;
 const REFRESH_INTERVAL_MS = 10 * 60_000; // 10 min, matches python
+const HEATMAP_MAX_BINS = 60_000;
+
+const POLICE_SUBTYPES_SORTED = [
+  'POLICE_HIDING',
+  'POLICE_VISIBLE',
+  'POLICE_WITH_MOBILE_CAMERA',
+] as const;
 
 let timer: NodeJS.Timeout | null = null;
 let refreshing = false;
@@ -39,6 +48,31 @@ let lastRefreshAt = 0;
 let lastRefreshOk = false;
 let lastRefreshMs = 0;
 let lastBinCount = 0;
+
+// Pre-rendered buffers per common subtype combo. Built at refresh time
+// so the route handler can ship a body + Content-Encoding: br straight
+// to the client without doing JSON.stringify or Brotli on every GET.
+// `null` (any-subtype) maps to the 'ALL' key; explicit combos use the
+// sorted-comma-joined subtype list. Stored as ArrayBuffer (not Buffer)
+// because Hono's c.body() accepts ArrayBuffer / ReadableStream / string,
+// not the Node-flavoured Uint8Array that Buffer is.
+export interface PreRenderedHeatmap {
+  jsonAB: ArrayBuffer;
+  brAB: ArrayBuffer;
+  etag: string;
+  updatedAt: Date;
+  binCount: number;
+}
+let preRenderedCache: Map<string, PreRenderedHeatmap> = new Map();
+
+function toArrayBuffer(buf: Buffer): ArrayBuffer {
+  // Buffers from brotliCompressSync / Buffer.from share their backing
+  // ArrayBuffer with the Node Buffer pool — slicing gives us a clean
+  // standalone copy that's safe to hand to a web Response.
+  const out = new ArrayBuffer(buf.byteLength);
+  new Uint8Array(out).set(buf);
+  return out;
+}
 
 export interface PoliceHeatmapStats {
   last_refresh_age_secs: number | null;
@@ -56,6 +90,153 @@ export function policeHeatmapCacheStats(): PoliceHeatmapStats {
     last_refresh_ok: lastRefreshOk,
     bins: lastBinCount,
   };
+}
+
+/**
+ * Cache key for the pre-rendered heatmap. `null`/empty subtypes and the
+ * full canonical 3-subtype combo both map to 'ALL' — they're functionally
+ * identical reads since the subcategory column only ever holds those
+ * three values.
+ */
+export function preRenderKey(subtypes: string[] | null | undefined): string {
+  if (!subtypes || subtypes.length === 0) return 'ALL';
+  const sorted = [...subtypes].sort();
+  if (
+    sorted.length === POLICE_SUBTYPES_SORTED.length &&
+    sorted.every((s, i) => s === POLICE_SUBTYPES_SORTED[i])
+  ) {
+    return 'ALL';
+  }
+  return sorted.join(',');
+}
+
+/**
+ * Look up a pre-rendered heatmap by subtype combo. Returns null for
+ * combos that weren't pre-rendered (e.g. unusual subtype permutations
+ * or any bbox-filtered request). Bbox queries always fall through to
+ * the live read path — pre-rendering them would multiply the cache
+ * size by every possible bbox.
+ */
+export function getPreRenderedHeatmap(
+  subtypes: string[] | null,
+  bbox: [number, number, number, number] | null,
+): PreRenderedHeatmap | null {
+  if (bbox !== null) return null;
+  return preRenderedCache.get(preRenderKey(subtypes)) ?? null;
+}
+
+// Minimal pg-client shape. Mirrors the bits of pg.PoolClient we touch
+// without pulling the whole type tree into this module.
+interface PgClient {
+  query: (
+    sql: string,
+    params?: unknown[],
+  ) => Promise<{ rows: unknown[]; rowCount: number | null }>;
+}
+
+interface BinRow {
+  lat_bin: number;
+  lng_bin: number;
+  subcategory: string;
+  count: number;
+}
+
+/**
+ * Build the response body + ETag + Brotli payload for one subtype combo.
+ * Reads from the just-populated `police_heatmap_cache` table (still on
+ * the same client/transaction the refresh used). The result mirrors the
+ * shape served by the route handler.
+ */
+async function buildPreRendered(
+  client: PgClient,
+  subtypes: readonly string[] | null,
+  updatedAt: Date,
+): Promise<PreRenderedHeatmap> {
+  let sql: string;
+  let params: unknown[];
+  if (subtypes && subtypes.length > 0) {
+    const placeholders = subtypes.map((_, i) => `$${i + 1}`).join(',');
+    sql = `SELECT lat_bin, lng_bin, subcategory, count
+             FROM police_heatmap_cache
+            WHERE subcategory IN (${placeholders})`;
+    params = [...subtypes];
+  } else {
+    sql = `SELECT lat_bin, lng_bin, subcategory, count
+             FROM police_heatmap_cache`;
+    params = [];
+  }
+  const r = await client.query(sql, params);
+
+  // Group by (lat_bin, lng_bin), summing across subcategories.
+  const merged = new Map<string, [number, number, number]>();
+  for (const raw of r.rows) {
+    const row = raw as BinRow;
+    const key = `${row.lat_bin}|${row.lng_bin}`;
+    const existing = merged.get(key);
+    if (existing) existing[2] += row.count;
+    else merged.set(key, [row.lat_bin, row.lng_bin, row.count]);
+  }
+  const sorted = Array.from(merged.values()).sort((a, b) => b[2] - a[2]);
+  const points = sorted.slice(0, HEATMAP_MAX_BINS).map(
+    ([lat, lng, cnt]): [number, number, number] => [
+      Number(lat.toFixed(5)),
+      Number(lng.toFixed(5)),
+      cnt,
+    ],
+  );
+  const total_records = sorted.reduce((acc, p) => acc + p[2], 0);
+  const max_count = points.length > 0 ? (points[0]?.[2] ?? 0) : 0;
+
+  const responseSubtypes = subtypes
+    ? [...subtypes].sort()
+    : [...POLICE_SUBTYPES_SORTED];
+  const body = {
+    points,
+    total_records,
+    bin_size_deg: BIN_DEG,
+    max_count,
+    days: WINDOW_DAYS,
+    subtypes: responseSubtypes,
+    cache_updated_at: updatedAt.toISOString(),
+    cache_status: 'materialised' as const,
+  };
+  const json = JSON.stringify(body);
+  const jsonBuf = Buffer.from(json, 'utf8');
+  // Brotli quality 6 — good size for the ~10 min refresh budget; q=11
+  // is ~3× slower for ~5% smaller output, not worth it.
+  const brBuf = brotliCompressSync(jsonBuf, {
+    params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 6 },
+  });
+  const etag = `"${createHash('sha1').update(jsonBuf).digest('hex').slice(0, 16)}"`;
+  return {
+    jsonAB: toArrayBuffer(jsonBuf),
+    brAB: toArrayBuffer(brBuf),
+    etag,
+    updatedAt,
+    binCount: points.length,
+  };
+}
+
+/**
+ * Rebuild the pre-rendered map for every common subtype combo. Built
+ * atomically — readers either see the entire previous snapshot or the
+ * entire new one, never a partial mix.
+ */
+async function rebuildPreRenderedCache(
+  client: PgClient,
+  updatedAt: Date,
+): Promise<void> {
+  const next = new Map<string, PreRenderedHeatmap>();
+  const combos: Array<{ key: string; subtypes: readonly string[] | null }> = [
+    { key: 'ALL', subtypes: null },
+    { key: 'POLICE_HIDING', subtypes: ['POLICE_HIDING'] },
+    { key: 'POLICE_VISIBLE', subtypes: ['POLICE_VISIBLE'] },
+    { key: 'POLICE_WITH_MOBILE_CAMERA', subtypes: ['POLICE_WITH_MOBILE_CAMERA'] },
+  ];
+  for (const combo of combos) {
+    next.set(combo.key, await buildPreRendered(client, combo.subtypes, updatedAt));
+  }
+  preRenderedCache = next;
 }
 
 /**
@@ -112,31 +293,49 @@ export async function refreshPoliceHeatmapCache(): Promise<{ ok: boolean; bins: 
       // Atomic swap: TRUNCATE + INSERT inside a single transaction so
       // readers either see the old data or the new — never partial.
       await client.query('BEGIN');
+      let bins = 0;
+      const updatedAt = new Date();
       try {
         await client.query('TRUNCATE police_heatmap_cache');
-        const r = await client.query<{ n: string }>(
+        const ins = await client.query(
           `INSERT INTO police_heatmap_cache (lat_bin, lng_bin, subcategory, count, updated_at)
-           SELECT lat_bin, lng_bin, subcategory, count, NOW()
-           FROM police_heatmap_cache_new
-           RETURNING 1`,
+           SELECT lat_bin, lng_bin, subcategory, count, $1
+           FROM police_heatmap_cache_new`,
+          [updatedAt],
         );
-        const bins = r.rowCount ?? 0;
+        bins = ins.rowCount ?? 0;
         await client.query('COMMIT');
-        await client.query('DROP TABLE IF EXISTS police_heatmap_cache_new');
-        const ms = Date.now() - startedAt;
-        lastRefreshAt = Math.floor(Date.now() / 1000);
-        lastRefreshOk = true;
-        lastRefreshMs = ms;
-        lastBinCount = bins;
-        log.info(
-          { bins, agg_ms: aggMs, total_ms: ms },
-          'police-heatmap cache refreshed',
-        );
-        return { ok: true, bins, ms };
       } catch (err) {
         try { await client.query('ROLLBACK'); } catch { /* ignore */ }
         throw err;
       }
+      await client.query('DROP TABLE IF EXISTS police_heatmap_cache_new');
+
+      // Build pre-rendered Buffers for the common subtype combos.
+      // Reads against the just-populated cache table, so this is cheap
+      // (~tens of ms total). Failures here don't roll back the swap —
+      // readers fall back to readPoliceHeatmapCache for any combo we
+      // couldn't pre-render.
+      const preT0 = Date.now();
+      try {
+        await rebuildPreRenderedCache(client, updatedAt);
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'police-heatmap pre-render rebuild failed (cache table still updated)',
+        );
+      }
+      const preMs = Date.now() - preT0;
+
+      const ms = Date.now() - startedAt;
+      lastRefreshAt = Math.floor(Date.now() / 1000);
+      lastRefreshOk = true;
+      lastRefreshMs = ms;
+      lastBinCount = bins;
+      log.info(
+        `police-heatmap cache refreshed: ${bins} bins, agg=${aggMs}ms, prerender=${preMs}ms, total=${ms}ms`,
+      );
+      return { ok: true, bins, ms };
     } finally {
       client.release();
     }

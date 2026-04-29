@@ -246,15 +246,7 @@ export async function runBatchOnce(): Promise<{
   // info-level warning still fires on every fetch failure inside the
   // browser worker, which is the only signal worth surfacing here.
   log.debug(
-    {
-      attempted: inputs.length,
-      cached,
-      evicted,
-      cacheSize: remaining,
-      strategy: domPath,
-      lastStrategy,
-    },
-    'centralwatch image batch complete',
+    `centralwatch image batch: ${cached}/${inputs.length} cached, ${evicted} evicted, size=${remaining} (${domPath}/${lastStrategy})`,
   );
   return { attempted: inputs.length, cached, evicted };
 }
