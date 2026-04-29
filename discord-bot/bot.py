@@ -43,7 +43,7 @@ if LOG_LEVEL != 'DEBUG':
 
 # Bot configuration
 DISCORD_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:8000')
+API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:8000').rstrip('/')
 API_KEY = os.getenv('NSWPSN_API_KEY', '')
 BOT_OWNER_ID = os.getenv('BOT_OWNER_ID', '')  # Discord User ID for admin commands
 
