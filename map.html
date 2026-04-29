@@ -6247,6 +6247,16 @@ function initPagerHoursFromStorage() {
 
     async function loadPoliceHeatmap(forceRefresh = false) {
       const stats = document.getElementById('heat-stats');
+      // The floating filter panel reads #heat-stats at render time; if
+      // we mutate it without re-rendering, the panel keeps showing
+      // whatever was there at panel-open time (typically "Loading…"
+      // until the first network round-trip lands).
+      const setStats = (text) => {
+        if (stats) stats.textContent = text;
+        if (typeof refreshActiveFilterPanel === 'function') {
+          refreshActiveFilterPanel();
+        }
+      };
       try {
         const subs = _heatmapSelectedSubtypes();
         // If user unchecks all three, render nothing (no points to show).
@@ -6256,11 +6266,11 @@ function initPagerHoursFromStorage() {
           }
           policeHeatmapLayer = null;
           _policeHeatmapData = null;
-          if (stats) stats.textContent = 'Pick at least one type.';
+          setStats('Pick at least one type.');
           return;
         }
         const url = `${PROXY_BASE}/api/waze/police-heatmap?subtypes=${encodeURIComponent(subs.join(','))}`;
-        if (stats) stats.textContent = 'Loading…';
+        setStats('Loading…');
         const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -6274,11 +6284,11 @@ function initPagerHoursFromStorage() {
             map.removeLayer(policeHeatmapLayer);
           }
           policeHeatmapLayer = null;
-          if (stats) {
-            stats.textContent = data.cache_status === 'warming'
+          setStats(
+            data.cache_status === 'warming'
               ? 'Cache warming up… retrying in 10s'
-              : 'Cache busy — retrying in 5s';
-          }
+              : 'Cache busy — retrying in 5s',
+          );
           const delay = data.cache_status === 'warming' ? 10000 : 5000;
           setTimeout(() => {
             if (document.getElementById('chk-police-heatmap')?.checked) {
@@ -6298,15 +6308,15 @@ function initPagerHoursFromStorage() {
         if (!map.hasLayer(policeHeatmapLayer)) map.addLayer(policeHeatmapLayer);
         _ensureHexViewportListeners();
         _renderPoliceHexGrid();
-        if (stats) {
-          stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
-        }
+        setStats(
+          `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`,
+        );
         // Legend min/max are set inside _renderPoliceHexGrid using the
         // actual hex-max (which can be larger than data.max_count after
         // multiple bins collapse into one hex at low zooms).
       } catch (e) {
         console.error('Police heatmap load failed', e);
-        if (stats) stats.textContent = 'Failed to load. Retry.';
+        setStats('Failed to load. Retry.');
       }
     }
 
