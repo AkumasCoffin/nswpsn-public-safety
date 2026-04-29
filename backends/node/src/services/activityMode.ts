@@ -84,7 +84,9 @@ function reevaluate(): void {
   if (_lastReportedActive !== active) {
     _lastReportedActive = active;
     setActivityMode(active);
-    log.debug({ active, sessions: _sessions.size }, 'activityMode: state change');
+    log.debug(
+      `activityMode: ${active ? 'active' : 'idle'} (sessions=${_sessions.size})`,
+    );
   }
 }
 

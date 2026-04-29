@@ -17,6 +17,7 @@ import {
   parseWazeJam,
 } from '../services/wazeAlerts.js';
 import {
+  getPreRenderedHeatmap,
   readPoliceHeatmapCache,
   policeHeatmapCacheStats,
 } from '../services/policeHeatmapCache.js';
@@ -364,6 +365,33 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
       const [s, w, n, e] = parts as [number, number, number, number];
       if (s < n && w < e) bbox = [s, w, n, e];
     }
+  }
+
+  // FAST PATH: pre-rendered Buffer + Brotli + ETag. Built once per
+  // 10-min refresh in services/policeHeatmapCache.ts. Sends a Buffer
+  // straight to the wire — no JSON.stringify, no Brotli, no DB read.
+  // Covers the common no-bbox combos (unfiltered + each single subtype);
+  // bbox queries fall through to the existing read-then-cache path.
+  const prerendered = getPreRenderedHeatmap(wanted, bbox);
+  if (prerendered) {
+    const ifNoneMatch = c.req.header('If-None-Match');
+    c.header('ETag', prerendered.etag);
+    c.header('Last-Modified', prerendered.updatedAt.toUTCString());
+    c.header('Cache-Control', 'public, max-age=30, stale-while-revalidate=300');
+    // Bearer token + Accept-Encoding both vary the response — without
+    // these, a CDN could hand a logged-out browser a logged-in body or
+    // serve gzip to a client that asked for br only.
+    c.header('Vary', 'Authorization, Accept-Encoding');
+    if (ifNoneMatch && ifNoneMatch === prerendered.etag) {
+      return c.body(null, 304);
+    }
+    c.header('Content-Type', 'application/json; charset=utf-8');
+    const accept = c.req.header('Accept-Encoding') ?? '';
+    if (/\bbr\b/.test(accept)) {
+      c.header('Content-Encoding', 'br');
+      return c.body(prerendered.brAB);
+    }
+    return c.body(prerendered.jsonAB);
   }
 
   const cacheKey = _heatmapCacheKey(wanted ?? [], bbox);

@@ -102,20 +102,28 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
   const xClient = c.req.header('X-Client-Type') ?? '';
   const client = classifyClient(ua, xClient);
 
+  // One-line human-readable format. Earlier versions passed the fields as
+  // a structured object so pino-pretty would render them inline, but
+  // `singleLine: true` stringified them as JSON, drowning the actual
+  // signal under {"method":"GET",…} on every line. Embed everything in
+  // the message string instead — production ndjson keeps it grep-able,
+  // dev pretty-print shows the same clean line.
+  const line = `${method} ${path} → ${status} ${ms}ms [${client}]`;
+
   if (status >= 500) {
-    log.warn({ method, path, status, ms, client }, 'request 5xx');
+    log.warn(`5xx ${line}`);
     return;
   }
   if (status >= 400) {
-    log.info({ method, path, status, ms, client }, 'request 4xx');
+    log.info(`4xx ${line}`);
     return;
   }
   if (QUIET_PATHS_RE.test(path)) return;
   if (ms >= SLOW_REQUEST_MS) {
-    log.info({ method, path, status, ms, client }, 'slow request');
+    log.info(`slow ${line}`);
     return;
   }
-  log.debug({ method, path, status, ms, client }, 'request');
+  log.debug(line);
 };
 
 export function createApp() {

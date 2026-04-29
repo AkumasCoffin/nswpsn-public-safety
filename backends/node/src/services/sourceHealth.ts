@@ -63,6 +63,8 @@ export interface SourceHealthRow {
   last_error_at: number | null;
   last_error: string | null;
   consec_fails: number;
+  total_success: number;
+  total_fail: number;
   /** Seconds since last success, or null if never successful. */
   age_seconds: number | null;
   state: SourceState;
@@ -110,6 +112,8 @@ export function getSourceHealthSnapshot(): SourceHealthRow[] {
       last_error_at: m.last_error_at,
       last_error: m.last_error,
       consec_fails: m.consec_fails,
+      total_success: m.total_success,
+      total_fail: m.total_fail,
       age_seconds: age,
       state: deriveState(m, age, cfg),
     });

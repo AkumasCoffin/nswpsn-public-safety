@@ -1454,66 +1454,106 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
 
   try {
-    // Aggregate alert_presets stats in one round-trip.
-    const apRes = await pool.query<{
+    // Run every independent SQL query + the Discord install-counts call
+    // in parallel. Previously these ran sequentially, and the per-query
+    // round-trip latency stacked up to a 13s cold miss against a remote
+    // Postgres + a Discord API call. Each connection in the pool can
+    // serve one query at a time, so 7 concurrent queries hits 7
+    // connections — well under the pg pool's 10-connection default.
+    type APRow = {
       total: number | string | null;
       pager: number | string | null;
       muted: number | string | null;
       guilds_with_presets: number | string | null;
       channels_configured: number | string | null;
-    }>(`
-      SELECT
-        COUNT(*)                                AS total,
-        COUNT(*) FILTER (WHERE pager_enabled)   AS pager,
-        COUNT(*) FILTER (WHERE NOT enabled)     AS muted,
-        COUNT(DISTINCT guild_id)                AS guilds_with_presets,
-        COUNT(DISTINCT (guild_id, channel_id))  AS channels_configured
-      FROM alert_presets
-    `);
-    const ap = apRes.rows[0] ?? {
-      total: 0, pager: 0, muted: 0, guilds_with_presets: 0, channels_configured: 0,
     };
-
-    const msRes = await pool.query<{
+    type MSRow = {
       guilds_muted: number | string | null;
       channels_muted: number | string | null;
-    }>(`
-      SELECT
-        (SELECT COUNT(*) FROM guild_mute_state   WHERE NOT enabled) AS guilds_muted,
-        (SELECT COUNT(*) FROM channel_mute_state WHERE NOT enabled) AS channels_muted
-    `);
-    const ms = msRes.rows[0] ?? { guilds_muted: 0, channels_muted: 0 };
-
-    const typeCounts: Record<string, number> = {};
-    for (const t of ALERT_TYPES) typeCounts[t] = 0;
-    const tcRes = await pool.query<{ t: string; n: number | string | null }>(
-      'SELECT unnest(alert_types) AS t, COUNT(*) AS n FROM alert_presets GROUP BY t',
-    );
-    for (const r of tcRes.rows) {
-      if (r.t in typeCounts) typeCounts[r.t] = Number(r.n ?? 0);
-    }
-
-    const guildsRes = await pool.query<{
+    };
+    type TCRow = { t: string; n: number | string | null };
+    type GuildRow = {
       guild_id: string | number;
       preset_count: number | string | null;
       channel_count: number | string | null;
       pager_presets: number | string | null;
       muted_presets: number | string | null;
       last_change: Date | string | null;
-    }>(`
-      SELECT guild_id,
-             COUNT(*) AS preset_count,
-             COUNT(DISTINCT channel_id) AS channel_count,
-             SUM(CASE WHEN pager_enabled THEN 1 ELSE 0 END) AS pager_presets,
-             SUM(CASE WHEN NOT enabled THEN 1 ELSE 0 END) AS muted_presets,
-             MAX(updated_at) AS last_change
-        FROM alert_presets
-    GROUP BY guild_id
-    ORDER BY preset_count DESC
-    `);
+    };
+    type HURow = {
+      uid: string;
+      username: string | null;
+      avatar: string | null;
+      last_seen: number | string | null;
+      login_count: number | string | null;
+    };
+    type CntRow = { n: number | string | null };
+    const huEmpty: { rows: HURow[] } = { rows: [] };
+    const cntEmpty: { rows: CntRow[] } = { rows: [{ n: 0 }] };
+    const [apRes, msRes, tcRes, guildsRes, huRes, cntRes, installCounts] =
+      await Promise.all([
+        pool.query<APRow>(`
+          SELECT
+            COUNT(*)                                AS total,
+            COUNT(*) FILTER (WHERE pager_enabled)   AS pager,
+            COUNT(*) FILTER (WHERE NOT enabled)     AS muted,
+            COUNT(DISTINCT guild_id)                AS guilds_with_presets,
+            COUNT(DISTINCT (guild_id, channel_id))  AS channels_configured
+          FROM alert_presets
+        `),
+        pool.query<MSRow>(`
+          SELECT
+            (SELECT COUNT(*) FROM guild_mute_state   WHERE NOT enabled) AS guilds_muted,
+            (SELECT COUNT(*) FROM channel_mute_state WHERE NOT enabled) AS channels_muted
+        `),
+        pool.query<TCRow>(
+          'SELECT unnest(alert_types) AS t, COUNT(*) AS n FROM alert_presets GROUP BY t',
+        ),
+        pool.query<GuildRow>(`
+          SELECT guild_id,
+                 COUNT(*) AS preset_count,
+                 COUNT(DISTINCT channel_id) AS channel_count,
+                 SUM(CASE WHEN pager_enabled THEN 1 ELSE 0 END) AS pager_presets,
+                 SUM(CASE WHEN NOT enabled THEN 1 ELSE 0 END) AS muted_presets,
+                 MAX(updated_at) AS last_change
+            FROM alert_presets
+        GROUP BY guild_id
+        ORDER BY preset_count DESC
+        `),
+        pool
+          .query<HURow>(
+            'SELECT uid, username, avatar, ' +
+              'EXTRACT(EPOCH FROM last_seen)::bigint AS last_seen, ' +
+              'login_count FROM dashboard_users ORDER BY last_seen DESC',
+          )
+          .catch((err) => {
+            log.warn({ err }, 'dashboard_users history query failed');
+            return huEmpty;
+          }),
+        pool
+          .query<CntRow>('SELECT COUNT(*) AS n FROM dashboard_users')
+          .catch((err) => {
+            log.warn({ err }, 'dashboard_users count query failed');
+            return cntEmpty;
+          }),
+        getAppInstallCounts(),
+      ]);
+
+    const ap = apRes.rows[0] ?? {
+      total: 0, pager: 0, muted: 0, guilds_with_presets: 0, channels_configured: 0,
+    };
+    const ms = msRes.rows[0] ?? { guilds_muted: 0, channels_muted: 0 };
+
+    const typeCounts: Record<string, number> = {};
+    for (const t of ALERT_TYPES) typeCounts[t] = 0;
+    for (const r of tcRes.rows) {
+      if (r.t in typeCounts) typeCounts[r.t] = Number(r.n ?? 0);
+    }
+
     // Pull guild names/icons via the bot token, batched. Returns blanks
     // for any gid Discord couldn't resolve (bot left, transient API error)
-    // — admin UI just shows the gid in that case.
+    // — admin UI just shows the gid in that case. Has to wait on
+    // guildsRes to know which gids to look up.
     const guildIds = guildsRes.rows.map((r) => String(r.guild_id));
     const metaMap = await getGuildMetaBulk(guildIds);
     const guildsOut = guildsRes.rows.map((r) => {
@@ -1531,40 +1571,18 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
       };
     });
 
-    let usersLifetime = 0;
-    let historicalUsers: unknown[] = [];
-    try {
-      const huRes = await pool.query<{
-        uid: string;
-        username: string | null;
-        avatar: string | null;
-        last_seen: number | string | null;
-        login_count: number | string | null;
-      }>(
-        'SELECT uid, username, avatar, ' +
-          'EXTRACT(EPOCH FROM last_seen)::bigint AS last_seen, ' +
-          'login_count FROM dashboard_users ORDER BY last_seen DESC',
-      );
-      historicalUsers = huRes.rows.map((r) => ({
-        uid: String(r.uid),
-        username: r.username ?? '',
-        avatar_url: userAvatarUrl(String(r.uid), r.avatar),
-        guild_count: 0,
-        age_seconds: Math.max(0, now - Number(r.last_seen ?? 0)),
-        session_age_seconds: Math.max(0, now - Number(r.last_seen ?? 0)),
-        is_admin: getAdminIds().has(String(r.uid)),
-        is_active: false,
-        login_count: Number(r.login_count ?? 0),
-      }));
-      const cntRes = await pool.query<{ n: number | string | null }>(
-        'SELECT COUNT(*) AS n FROM dashboard_users',
-      );
-      usersLifetime = Number(cntRes.rows[0]?.n ?? 0);
-    } catch (err) {
-      log.warn({ err }, 'dashboard_users query failed');
-    }
-
-    const installCounts = await getAppInstallCounts();
+    const historicalUsers: unknown[] = huRes.rows.map((r) => ({
+      uid: String(r.uid),
+      username: r.username ?? '',
+      avatar_url: userAvatarUrl(String(r.uid), r.avatar),
+      guild_count: 0,
+      age_seconds: Math.max(0, now - Number(r.last_seen ?? 0)),
+      session_age_seconds: Math.max(0, now - Number(r.last_seen ?? 0)),
+      is_admin: getAdminIds().has(String(r.uid)),
+      is_active: false,
+      login_count: Number(r.login_count ?? 0),
+    }));
+    const usersLifetime = Number(cntRes.rows[0]?.n ?? 0);
     const payload = {
       stats: {
         sessions_active: 0,
@@ -1866,10 +1884,16 @@ dashboardRouter.get('/api/dashboard/admin/bot-actions', async (c) => {
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
 
   try {
+    // Don't ship the full `params` blob in the listing — broadcast actions
+    // store the entire announcement description (3-5 KB markdown each), so
+    // 30 rows = ~100-150 KB serialised + JSON-stringified per request. Project
+    // out the heavy fields and let the UI fetch the full row on demand if it
+    // ever needs one. Result column is a small JSON object, kept inline.
     const r = await pool.query<{
       id: number | string;
       action: string;
       params: Record<string, unknown> | null;
+      params_size: number | null;
       status: string;
       requested_by: string | null;
       requested_at: Date | string | null;
@@ -1878,9 +1902,24 @@ dashboardRouter.get('/api/dashboard/admin/bot-actions', async (c) => {
       result: string | null;
       error: string | null;
     }>(
-      'SELECT id, action, params, status, requested_by, ' +
-        'requested_at, claimed_at, completed_at, result, error ' +
-        'FROM pending_bot_actions ORDER BY requested_at DESC LIMIT 30',
+      `SELECT id, action,
+              CASE
+                WHEN action = 'broadcast'
+                  THEN jsonb_build_object(
+                         'title', params->'title',
+                         'color', params->'color',
+                         'footer', params->'footer',
+                         'url', params->'url',
+                         'targets', params->'targets',
+                         'description_chars', length(COALESCE(params->>'description', ''))
+                       )
+                ELSE params
+              END AS params,
+              status, requested_by,
+              requested_at, claimed_at, completed_at, result, error
+         FROM pending_bot_actions
+     ORDER BY requested_at DESC
+        LIMIT 30`,
     );
     const out = r.rows.map((row) => ({
       id: Number(row.id),
@@ -1978,11 +2017,8 @@ dashboardRouter.get('/api/dashboard/admin/sources', async (c) => {
     last_error: r.last_error_at,
     last_error_msg: r.last_error,
     consec_fails: r.consec_fails,
-    // Node poller doesn't yet count totals — populate with 0 to keep the
-    // python response shape. Exposing real totals would require new
-    // counters in poller.ts that the existing exports don't track.
-    total_success: 0,
-    total_fail: 0,
+    total_success: r.total_success,
+    total_fail: r.total_fail,
     age_seconds: r.age_seconds,
     state: r.state,
   }));
