@@ -4636,6 +4636,14 @@ async function loadPagerData() {
 
     async function loadPoliceHeatmap(forceRefresh = false) {
       const stats = document.getElementById('heat-stats');
+      // Floating filter panel snapshots #heat-stats at render time;
+      // mutate-and-refresh keeps the panel in sync after the data lands.
+      const setStats = (text) => {
+        if (stats) stats.textContent = text;
+        if (typeof refreshActiveFilterPanel === 'function') {
+          refreshActiveFilterPanel();
+        }
+      };
       try {
         const subs = _heatmapSelectedSubtypes();
         if (subs.length === 0) {
@@ -4644,11 +4652,11 @@ async function loadPagerData() {
           }
           policeHeatmapLayer = null;
           _policeHeatmapData = null;
-          if (stats) stats.textContent = 'Pick at least one type.';
+          setStats('Pick at least one type.');
           return;
         }
         const url = `${PROXY_BASE}/api/waze/police-heatmap?subtypes=${encodeURIComponent(subs.join(','))}`;
-        if (stats) stats.textContent = 'Loading…';
+        setStats('Loading…');
         const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -4659,11 +4667,11 @@ async function loadPagerData() {
             map.removeLayer(policeHeatmapLayer);
           }
           policeHeatmapLayer = null;
-          if (stats) {
-            stats.textContent = data.cache_status === 'warming'
+          setStats(
+            data.cache_status === 'warming'
               ? 'Cache warming up… retrying in 10s'
-              : 'Cache busy — retrying in 5s';
-          }
+              : 'Cache busy — retrying in 5s',
+          );
           const delay = data.cache_status === 'warming' ? 10000 : 5000;
           setTimeout(() => {
             if (document.getElementById('chk-police-heatmap')?.checked) {
@@ -4681,14 +4689,14 @@ async function loadPagerData() {
         if (!map.hasLayer(policeHeatmapLayer)) map.addLayer(policeHeatmapLayer);
         _ensureHexViewportListeners();
         _renderPoliceHexGrid();
-        if (stats) {
-          stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
-        }
+        setStats(
+          `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`,
+        );
         // Legend labels are set inside _renderPoliceHexGrid using the
         // actual hex-max after client-side rebinning.
       } catch (e) {
         console.error('Police heatmap load failed', e);
-        if (stats) stats.textContent = 'Failed to load. Retry.';
+        setStats('Failed to load. Retry.');
       }
     }
 
