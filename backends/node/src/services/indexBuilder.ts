@@ -206,6 +206,37 @@ const BACKFILLS: BackfillSpec[] = [
                 GROUP BY 1, 2, 3, 4
                 ON CONFLICT (day, lat_bin, lng_bin, subcategory) DO NOTHING`,
   },
+  // One-shot population of filter_facets_daily from each archive_*
+  // table (skipping archive_waze — see migration 016 header). Same
+  // race-avoidance pattern as the police heatmap backfill: scope to
+  // days < today so the writer's same-day increments never collide.
+  // ON CONFLICT DO NOTHING for re-run safety. One spec per archive
+  // table because aggregating all four in one query would force the
+  // single statement_timeout=0 connection to hold its lock for the
+  // duration of every scan.
+  ...(['archive_misc', 'archive_traffic', 'archive_rfs', 'archive_power'] as const).map(
+    (tbl): BackfillSpec => ({
+      name: `${tbl}.filter_facets_daily backfill`,
+      countSql: `SELECT COUNT(*)::bigint AS n
+                   FROM ${tbl}
+                  WHERE fetched_at >= NOW() - INTERVAL '7 days'
+                    AND (fetched_at AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date`,
+      updateSql: `INSERT INTO filter_facets_daily
+                    (day, archive, source, category, subcategory, count)
+                  SELECT
+                    (fetched_at AT TIME ZONE 'UTC')::date AS day,
+                    '${tbl}' AS archive,
+                    source,
+                    COALESCE(category, '') AS category,
+                    COALESCE(subcategory, '') AS subcategory,
+                    COUNT(*)::int AS count
+                  FROM ${tbl}
+                  WHERE fetched_at >= NOW() - INTERVAL '7 days'
+                    AND (fetched_at AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date
+                  GROUP BY 1, 2, 3, 4, 5
+                  ON CONFLICT (day, archive, source, category, subcategory) DO NOTHING`,
+    }),
+  ),
   // NOTE: is_live and is_latest backfills disabled. The is_latest
   // approach created untenable I/O contention — the bulk UPDATE
   // creating ~366k dead tuples on archive_waze made every query

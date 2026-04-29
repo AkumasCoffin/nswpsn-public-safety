@@ -51,11 +51,12 @@ import { log } from '../lib/log.js';
 import type { ArchiveRow, ArchiveTable } from '../store/archive.js';
 
 /** Bound on how far back the diff query searches for "previously live"
- *  rows. 7 days is a generous window — anything older than that we
- *  assume has long since aged out via partition drop or staleness sweep
- *  and isn't worth tombstoning. The bound also keeps the DISTINCT ON
- *  query fast on large archive tables. */
-const LIVE_LOOKBACK_DAYS = 7;
+ *  rows. 1 day is enough — incidents that have been gone from upstream
+ *  for more than a day are picked up by the hourly sweepStaleAsEnded
+ *  fallback regardless. Was 7 days; on production hosts under disk
+ *  pressure the 7-day DISTINCT ON reliably hit the 30s
+ *  statement_timeout, blocking every archive flush for 30s × 4 tables. */
+const LIVE_LOOKBACK_DAYS = 1;
 
 /** Fallback staleness threshold: a source_id whose latest live row's
  *  fetched_at is older than this gets tombstoned by sweepStaleAsEnded.
@@ -69,9 +70,18 @@ const FUTURE_DATED_SOURCES = new Set<string>([
   'essential_planned',
   'essential_future',
 ]);
+/** Sources where source_id is unique per row (one row = one event), so
+ *  DISTINCT ON returns the entire table and the diff is meaningless
+ *  work. Pager: every message is fired once and that's it; "disappeared
+ *  from upstream" doesn't apply. Skipping pager here is a pure perf
+ *  win — the table only contains pager rows, so the per-flush
+ *  archive_misc DISTINCT ON over thousands of rows is now skipped
+ *  entirely. */
+const UNIQUE_SOURCE_ID_SOURCES = new Set<string>(['pager']);
 function isDiffExempt(source: string): boolean {
   if (source.startsWith('waze_')) return true;
   if (FUTURE_DATED_SOURCES.has(source)) return true;
+  if (UNIQUE_SOURCE_ID_SOURCES.has(source)) return true;
   return false;
 }
 
@@ -117,17 +127,32 @@ async function getLiveRowsForSources(
       ) latest
      WHERE COALESCE(data->>'is_live', 'true') NOT IN ('0','false','False')
   `;
-  const r = await pool.query<LiveRow>(sql, [sources, String(LIVE_LOOKBACK_DAYS)]);
-  const out = new Map<string, Map<string, LiveRow>>();
-  for (const row of r.rows) {
-    let bucket = out.get(row.source);
-    if (!bucket) {
-      bucket = new Map();
-      out.set(row.source, bucket);
+  // Tight 5s timeout so a slow miss can't drag the archive flush down
+  // to 30s. The hourly sweepStaleAsEnded covers anything we miss here.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    try {
+      await client.query("SET LOCAL statement_timeout = '5s'");
+      const r = await client.query<LiveRow>(sql, [sources, String(LIVE_LOOKBACK_DAYS)]);
+      await client.query('COMMIT');
+      const out = new Map<string, Map<string, LiveRow>>();
+      for (const row of r.rows) {
+        let bucket = out.get(row.source);
+        if (!bucket) {
+          bucket = new Map();
+          out.set(row.source, bucket);
+        }
+        bucket.set(row.source_id, row);
+      }
+      return out;
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
     }
-    bucket.set(row.source_id, row);
+  } finally {
+    client.release();
   }
-  return out;
 }
 
 /**

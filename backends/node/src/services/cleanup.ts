@@ -209,6 +209,28 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
           'cleanup: heatmap-daily prune failed',
         );
       }
+
+      // 2c. Prune filter_facets_daily down to 14 days. filterCache reads
+      // a 7-day window, so 14 days gives plenty of headroom for window
+      // expansions or backfill replays without keeping rows that no
+      // reader will ever sum.
+      try {
+        const r = await client.query(
+          `DELETE FROM filter_facets_daily
+            WHERE day < (NOW() - INTERVAL '14 days')::date`,
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          log.info(
+            { rows: r.rowCount },
+            'cleanup: pruned filter_facets_daily',
+          );
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'cleanup: facets-daily prune failed',
+        );
+      }
     } finally {
       client.release();
     }

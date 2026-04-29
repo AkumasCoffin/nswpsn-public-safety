@@ -281,6 +281,13 @@ export class ArchiveWriter {
         if (table === 'archive_waze') {
           await this.upsertPoliceHeatmapBinDaily(client, rows);
         }
+        // Incremental filter-facets aggregation. Skipped for archive_waze
+        // because waze facets come from the LiveStore in-memory snapshot
+        // (the wazeIngestCache), not the archive. Including archive_waze
+        // here would double-count waze types in the dropdown.
+        if (table !== 'archive_waze') {
+          await this.upsertFilterFacetsDaily(client, table, rows);
+        }
         await client.query('COMMIT');
       } catch (err) {
         try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -350,6 +357,71 @@ export class ArchiveWriter {
       VALUES ${placeholders.join(',')}
       ON CONFLICT (day, lat_bin, lng_bin, subcategory)
       DO UPDATE SET count = police_heatmap_bin_daily.count + EXCLUDED.count
+    `;
+    await client.query(sql, params);
+  }
+
+  /**
+   * Aggregate this batch by (day, archive, source, category, subcategory)
+   * and UPSERT into filter_facets_daily. Replaces the 5-min GROUP BY
+   * scans that filterCache used to run over each archive_* partition,
+   * which were timing out at 60s under disk pressure. Stored values
+   * preserve raw category/subcategory; the read side does its own
+   * filtering (numeric capcodes, empty strings).
+   *
+   * NULL category/subcategory are coerced to '' because the PRIMARY KEY
+   * can't match NULLs under ON CONFLICT — Postgres treats NULL as never
+   * equal to NULL.
+   */
+  private async upsertFilterFacetsDaily(
+    client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    table: ArchiveTable,
+    rows: ArchiveRow[],
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    type Cell = {
+      day: string;
+      archive: string;
+      source: string;
+      category: string;
+      subcategory: string;
+      count: number;
+    };
+    const cells = new Map<string, Cell>();
+    for (const r of rows) {
+      const day = new Date(r.fetched_at * 1000).toISOString().slice(0, 10);
+      const category = r.category ?? '';
+      const subcategory = r.subcategory ?? '';
+      const key = `${day}|${table}|${r.source}|${category}|${subcategory}`;
+      const existing = cells.get(key);
+      if (existing) existing.count += 1;
+      else
+        cells.set(key, {
+          day,
+          archive: table,
+          source: r.source,
+          category,
+          subcategory,
+          count: 1,
+        });
+    }
+    if (cells.size === 0) return;
+
+    const placeholders: string[] = [];
+    const params: unknown[] = [];
+    let i = 0;
+    for (const c of cells.values()) {
+      placeholders.push(
+        `($${i + 1}::date, $${i + 2}::text, $${i + 3}::text, $${i + 4}::text, $${i + 5}::text, $${i + 6}::int)`,
+      );
+      params.push(c.day, c.archive, c.source, c.category, c.subcategory, c.count);
+      i += 6;
+    }
+    const sql = `
+      INSERT INTO filter_facets_daily (day, archive, source, category, subcategory, count)
+      VALUES ${placeholders.join(',')}
+      ON CONFLICT (day, archive, source, category, subcategory)
+      DO UPDATE SET count = filter_facets_daily.count + EXCLUDED.count
     `;
     await client.query(sql, params);
   }
