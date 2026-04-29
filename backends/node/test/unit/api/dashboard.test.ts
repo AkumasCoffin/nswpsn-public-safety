@@ -405,11 +405,23 @@ describe('admin gate', () => {
     queryQueue.push({ rows: [{ n: 0 }] });
 
     const app = makeApp();
-    const res = await app.request('/api/dashboard/admin/overview', {
+    // First call: cold cache, returns a warming stub immediately.
+    const r1 = await app.request('/api/dashboard/admin/overview', {
       headers: { Cookie: cookie },
     });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
+    expect(r1.status).toBe(200);
+    const stub = (await r1.json()) as { warming?: boolean };
+    expect(stub.warming).toBe(true);
+    // Let the background refresh resolve so the next call gets the
+    // populated payload. Two await ticks lets the SwrCache promise
+    // chain settle (DB query + .set into the cache map).
+    await Promise.resolve();
+    await Promise.resolve();
+    const r2 = await app.request('/api/dashboard/admin/overview', {
+      headers: { Cookie: cookie },
+    });
+    expect(r2.status).toBe(200);
+    const body = (await r2.json()) as {
       stats: { presets_total: number };
       admin_ids: string[];
     };

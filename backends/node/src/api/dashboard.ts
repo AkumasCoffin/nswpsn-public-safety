@@ -1436,24 +1436,21 @@ dashboardRouter.delete(
 );
 
 // ---------------------------------------------------------------------------
-// Admin: overview.
+// Admin: overview. SwrCache'd because the underlying work — 7 SQL round-
+// trips + a Discord API call — can take 5-15s on a contested DB, which
+// stalls the dashboard load. SWR semantics: fresh hits return instantly,
+// stale hits serve immediately + refresh in the background, cold miss
+// returns a `warming:true` stub immediately so the UI never blocks.
 // ---------------------------------------------------------------------------
-const ADMIN_OVERVIEW_TTL_MS = 30_000;
-let adminOverviewCache: { ts: number; data: unknown } | null = null;
+const ADMIN_OVERVIEW_FRESH_MS = 30_000;
+const ADMIN_OVERVIEW_STALE_MS = 5 * 60_000;
+const adminOverviewCache = new SwrCache<unknown>();
+const ADMIN_OVERVIEW_KEY = 'global';
 
-dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
-  const session = await requireAdmin(c);
-  if (session instanceof Response) return session;
-
+async function buildAdminOverview(): Promise<unknown> {
   const now = Math.floor(Date.now() / 1000);
-  if (adminOverviewCache && Date.now() - adminOverviewCache.ts < ADMIN_OVERVIEW_TTL_MS) {
-    return c.json(adminOverviewCache.data);
-  }
-
   const pool = await getBotDbPool();
-  if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
-
-  try {
+  if (!pool) throw new Error('bot db not configured');
     // Run every independent SQL query + the Discord install-counts call
     // in parallel. Previously these ran sequentially, and the per-query
     // round-trip latency stacked up to a 13s cold miss against a remote
@@ -1605,8 +1602,27 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
       admin_ids: Array.from(getAdminIds()).sort(),
       server_time: now,
     };
-    adminOverviewCache = { ts: Date.now(), data: payload };
-    return c.json(payload);
+    return payload;
+}
+
+dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
+  const session = await requireAdmin(c);
+  if (session instanceof Response) return session;
+  if (!(await getBotDbPool())) {
+    return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
+  }
+  const swrOpts = {
+    fresh: ADMIN_OVERVIEW_FRESH_MS,
+    stale: ADMIN_OVERVIEW_STALE_MS,
+    onError: (err: unknown) => log.warn({ err }, 'admin_overview refresh failed'),
+  };
+  if (!adminOverviewCache.has(ADMIN_OVERVIEW_KEY)) {
+    adminOverviewCache.refresh(ADMIN_OVERVIEW_KEY, buildAdminOverview, swrOpts).catch(() => {});
+    return c.json({ warming: true, server_time: Math.floor(Date.now() / 1000) });
+  }
+  try {
+    const r = await adminOverviewCache.get(ADMIN_OVERVIEW_KEY, buildAdminOverview, swrOpts);
+    return c.json(r.value);
   } catch (err) {
     log.error({ err }, 'dashboard admin_overview error');
     return dashErr(c, 'db_error', String((err as Error).message), 500);
@@ -1616,9 +1632,6 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
 // ---------------------------------------------------------------------------
 // Admin: broadcast targets + broadcast enqueue.
 // ---------------------------------------------------------------------------
-const BCAST_TARGETS_TTL_MS = 60_000;
-let bcastTargetsCache: { ts: number; data: unknown } | null = null;
-
 // Keyword preference for the "detected" broadcast channel guess. Mirrors
 // python's _BCAST_CHANNEL_KEYWORDS at external_api_proxy.py:18600.
 const BCAST_CHANNEL_KEYWORDS = [
@@ -1705,43 +1718,64 @@ async function mapWithConcurrency<I, O>(
   return out;
 }
 
+async function fetchBroadcastTargets(): Promise<unknown[]> {
+  const pool = await getBotDbPool();
+  if (!pool) throw new Error('bot db not configured');
+  const r = await pool.query<{ guild_id: string | number }>(
+    'SELECT DISTINCT guild_id FROM alert_presets ORDER BY guild_id',
+  );
+  const guildIds = r.rows.map((row) => String(row.guild_id));
+  const [metaMap, channelResults] = await Promise.all([
+    getGuildMetaBulk(guildIds),
+    mapWithConcurrency(guildIds, 8, fetchBroadcastChannels),
+  ]);
+  return Promise.all(
+    guildIds.map(async (gid, i) => {
+      const meta = metaMap.get(gid);
+      const cr = channelResults[i] ?? { channels: [], error: 'fetch_failed' };
+      const guess = await guessBroadcastChannel(gid, cr.channels);
+      return {
+        guild_id: gid,
+        guild_name: meta?.name ?? '',
+        guild_icon_url: meta?.icon_url ?? '',
+        detected_channel_id: guess?.id ?? null,
+        detected_channel_name: guess?.name ?? '',
+        channels: cr.channels,
+        channels_error: cr.error,
+      };
+    }),
+  );
+}
+
+const BCAST_TARGETS_FRESH_MS = 60_000;
+const BCAST_TARGETS_STALE_MS = 10 * 60_000;
+const bcastTargetsSwrCache = new SwrCache<unknown[]>();
+const BCAST_TARGETS_KEY = 'global';
+
 dashboardRouter.get('/api/dashboard/admin/broadcast/targets', async (c) => {
   const session = await requireAdmin(c);
   if (session instanceof Response) return session;
-  if (bcastTargetsCache && Date.now() - bcastTargetsCache.ts < BCAST_TARGETS_TTL_MS) {
-    return c.json({ targets: bcastTargetsCache.data });
+  if (!(await getBotDbPool())) {
+    return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
   }
-
-  const pool = await getBotDbPool();
-  if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
-
+  const swrOpts = {
+    fresh: BCAST_TARGETS_FRESH_MS,
+    stale: BCAST_TARGETS_STALE_MS,
+    onError: (err: unknown) => log.warn({ err }, 'broadcast_targets refresh failed'),
+  };
+  if (!bcastTargetsSwrCache.has(BCAST_TARGETS_KEY)) {
+    bcastTargetsSwrCache
+      .refresh(BCAST_TARGETS_KEY, fetchBroadcastTargets, swrOpts)
+      .catch(() => {});
+    return c.json({ targets: [], warming: true });
+  }
   try {
-    const r = await pool.query<{ guild_id: string | number }>(
-      'SELECT DISTINCT guild_id FROM alert_presets ORDER BY guild_id',
+    const r = await bcastTargetsSwrCache.get(
+      BCAST_TARGETS_KEY,
+      fetchBroadcastTargets,
+      swrOpts,
     );
-    const guildIds = r.rows.map((row) => String(row.guild_id));
-    const [metaMap, channelResults] = await Promise.all([
-      getGuildMetaBulk(guildIds),
-      mapWithConcurrency(guildIds, 8, fetchBroadcastChannels),
-    ]);
-    const out = await Promise.all(
-      guildIds.map(async (gid, i) => {
-        const meta = metaMap.get(gid);
-        const cr = channelResults[i] ?? { channels: [], error: 'fetch_failed' };
-        const guess = await guessBroadcastChannel(gid, cr.channels);
-        return {
-          guild_id: gid,
-          guild_name: meta?.name ?? '',
-          guild_icon_url: meta?.icon_url ?? '',
-          detected_channel_id: guess?.id ?? null,
-          detected_channel_name: guess?.name ?? '',
-          channels: cr.channels,
-          channels_error: cr.error,
-        };
-      }),
-    );
-    bcastTargetsCache = { ts: Date.now(), data: out };
-    return c.json({ targets: out });
+    return c.json({ targets: r.value });
   } catch (err) {
     log.error({ err }, 'dashboard broadcast_targets error');
     return dashErr(c, 'db_error', String((err as Error).message), 500);
@@ -1877,63 +1911,80 @@ dashboardRouter.get('/api/dashboard/admin/cleanup/candidates', async (c) => {
 // ---------------------------------------------------------------------------
 const ALLOWED_BOT_ACTIONS = new Set(['sync', 'test', 'cleanup', 'broadcast']);
 
+const BOT_ACTIONS_FRESH_MS = 15_000;
+const BOT_ACTIONS_STALE_MS = 5 * 60_000;
+const botActionsCache = new SwrCache<unknown[]>();
+const BOT_ACTIONS_KEY = 'global';
+
+async function fetchBotActions(): Promise<unknown[]> {
+  const pool = await getBotDbPool();
+  if (!pool) throw new Error('bot db not configured');
+  // Project the heavy `params` JSONB out of the listing — broadcast actions
+  // each store ~3-5 KB of markdown description, and 30 rows worth ships ~100
+  // KB per request. The UI only needs the small fields here.
+  const r = await pool.query<{
+    id: number | string;
+    action: string;
+    params: Record<string, unknown> | null;
+    status: string;
+    requested_by: string | null;
+    requested_at: Date | string | null;
+    claimed_at: Date | string | null;
+    completed_at: Date | string | null;
+    result: string | null;
+    error: string | null;
+  }>(
+    `SELECT id, action,
+            CASE
+              WHEN action = 'broadcast'
+                THEN jsonb_build_object(
+                       'title', params->'title',
+                       'color', params->'color',
+                       'footer', params->'footer',
+                       'url', params->'url',
+                       'targets', params->'targets',
+                       'description_chars', length(COALESCE(params->>'description', ''))
+                     )
+              ELSE params
+            END AS params,
+            status, requested_by,
+            requested_at, claimed_at, completed_at, result, error
+       FROM pending_bot_actions
+   ORDER BY requested_at DESC
+      LIMIT 30`,
+  );
+  return r.rows.map((row) => ({
+    id: Number(row.id),
+    action: row.action,
+    params: row.params ?? {},
+    status: row.status,
+    requested_by: row.requested_by,
+    requested_at: isoOrNull(row.requested_at),
+    claimed_at: isoOrNull(row.claimed_at),
+    completed_at: isoOrNull(row.completed_at),
+    result: row.result,
+    error: row.error,
+  }));
+}
+
 dashboardRouter.get('/api/dashboard/admin/bot-actions', async (c) => {
   const session = await requireAdmin(c);
   if (session instanceof Response) return session;
-  const pool = await getBotDbPool();
-  if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
-
+  if (!(await getBotDbPool())) {
+    return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
+  }
+  const swrOpts = {
+    fresh: BOT_ACTIONS_FRESH_MS,
+    stale: BOT_ACTIONS_STALE_MS,
+    onError: (err: unknown) => log.warn({ err }, 'bot_actions refresh failed'),
+  };
+  if (!botActionsCache.has(BOT_ACTIONS_KEY)) {
+    botActionsCache.refresh(BOT_ACTIONS_KEY, fetchBotActions, swrOpts).catch(() => {});
+    return c.json({ actions: [], warming: true });
+  }
   try {
-    // Don't ship the full `params` blob in the listing — broadcast actions
-    // store the entire announcement description (3-5 KB markdown each), so
-    // 30 rows = ~100-150 KB serialised + JSON-stringified per request. Project
-    // out the heavy fields and let the UI fetch the full row on demand if it
-    // ever needs one. Result column is a small JSON object, kept inline.
-    const r = await pool.query<{
-      id: number | string;
-      action: string;
-      params: Record<string, unknown> | null;
-      params_size: number | null;
-      status: string;
-      requested_by: string | null;
-      requested_at: Date | string | null;
-      claimed_at: Date | string | null;
-      completed_at: Date | string | null;
-      result: string | null;
-      error: string | null;
-    }>(
-      `SELECT id, action,
-              CASE
-                WHEN action = 'broadcast'
-                  THEN jsonb_build_object(
-                         'title', params->'title',
-                         'color', params->'color',
-                         'footer', params->'footer',
-                         'url', params->'url',
-                         'targets', params->'targets',
-                         'description_chars', length(COALESCE(params->>'description', ''))
-                       )
-                ELSE params
-              END AS params,
-              status, requested_by,
-              requested_at, claimed_at, completed_at, result, error
-         FROM pending_bot_actions
-     ORDER BY requested_at DESC
-        LIMIT 30`,
-    );
-    const out = r.rows.map((row) => ({
-      id: Number(row.id),
-      action: row.action,
-      params: row.params ?? {},
-      status: row.status,
-      requested_by: row.requested_by,
-      requested_at: isoOrNull(row.requested_at),
-      claimed_at: isoOrNull(row.claimed_at),
-      completed_at: isoOrNull(row.completed_at),
-      result: row.result,
-      error: row.error,
-    }));
-    return c.json({ actions: out });
+    const r = await botActionsCache.get(BOT_ACTIONS_KEY, fetchBotActions, swrOpts);
+    return c.json({ actions: r.value });
   } catch (err) {
     log.error({ err }, 'dashboard bot_actions_list error');
     return dashErr(c, 'db_error', String((err as Error).message), 500);
@@ -2039,8 +2090,9 @@ dashboardRouter.delete('/api/dashboard/admin/sources', async (c) => {
 export function _resetDashboardCachesForTests(): void {
   discordCache.clear();
   presetStatsCache.clear();
-  adminOverviewCache = null;
-  bcastTargetsCache = null;
+  adminOverviewCache.clear();
+  bcastTargetsSwrCache.clear();
+  botActionsCache.clear();
 }
 
 // Ensure unused-import lint doesn't strip these — they're used inside
