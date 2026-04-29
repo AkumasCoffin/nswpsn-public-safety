@@ -2064,11 +2064,14 @@
     // Sub-layers for filtered data
     let hazardSubLayers = {};
     let policeSubLayers = {};
+    const _hazardMarkers = [];
+    const _hazardSelectedSources = new Set(['livetraffic', 'waze']);
 
     // Roadwork — type-based filtering (see map.html for the pattern).
     const _roadworkMarkers = [];
     const _roadworkAvailableTypes = [];
     const _roadworkSelectedTypes = new Set();
+    const _roadworkSelectedSources = new Set(['livetraffic', 'waze']);
 
     // Camera filter states and sub-layers
     const cameraFilters = {
@@ -4799,6 +4802,21 @@ async function loadPagerData() {
         }
       }
     }
+    function _rebuildHazardSubLayers() {
+      Object.values(hazardSubLayers).forEach((sl) => sl.clearLayers());
+      for (const m of _hazardMarkers) {
+        if (!_hazardSelectedSources.has(m.source)) continue;
+        const sl = hazardSubLayers[m.type];
+        if (sl) sl.addLayer(m.marker);
+      }
+    }
+    function toggleHazardSourcePill(src) {
+      if (_hazardSelectedSources.has(src)) _hazardSelectedSources.delete(src);
+      else _hazardSelectedSources.add(src);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    }
+    window.toggleHazardSourcePill = toggleHazardSourcePill;
     
     function togglePoliceFilter(type, checked) {
       policeFilters[type] = checked;
@@ -5238,14 +5256,15 @@ async function loadPagerData() {
       }
       
       hazardsLayer.clearLayers();
-      
+
       // Create sub-layers for each filter type
       hazardSubLayers = {
         accident: L.layerGroup(),
         hazard: L.layerGroup(),
-        closures: L.layerGroup()  // Combines road closures + traffic jams
+        closures: L.layerGroup()
       };
-      
+      _hazardMarkers.length = 0;
+
       let totalCount = 0;
       let jamCount = 0;
       
@@ -5658,17 +5677,18 @@ async function loadPagerData() {
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             });
-            const marker = L.marker([lat, lon], { icon }).addTo(hazardSubLayers[category]);
+            const marker = L.marker([lat, lon], { icon });
             marker.bindTooltip(buildHazardTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+            _hazardMarkers.push({ marker, type: category, source: 'livetraffic' });
             totalCount++;
           }
         });
       }
-      
+
       // Process Waze hazards from cached data
       // Add point hazards (accidents, road closures, hazards)
       // Note: Waze flood items (FLOOD subtype) are excluded here and shown on the Floods layer instead
@@ -5690,17 +5710,18 @@ async function loadPagerData() {
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             });
-            const marker = L.marker([lat, lon], { icon }).addTo(hazardSubLayers[category]);
+            const marker = L.marker([lat, lon], { icon });
             marker.bindTooltip(buildHazardTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+            _hazardMarkers.push({ marker, type: category, source: 'waze' });
             totalCount++;
           }
         });
       }
-      
+
       // Add jam polylines (traffic slowdowns)
       if (wazeData && wazeData.jams) {
         wazeData.jams.forEach(jam => {
@@ -5718,17 +5739,20 @@ async function loadPagerData() {
               opacity: 0.8,
               lineCap: 'round',
               lineJoin: 'round'
-            }).addTo(hazardSubLayers.closures);
-            
+            });
+
             polyline.bindTooltip(buildJamTooltip(props), {
               sticky: true,
               opacity: 0.95
             });
+            _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze' });
             jamCount++;
           }
         });
       }
-      
+
+      _rebuildHazardSubLayers();
+
       // Add sub-layers to main layer based on filter state
       Object.keys(hazardSubLayers).forEach(type => {
         if (hazardFilters[type]) {
@@ -6237,9 +6261,18 @@ async function loadPagerData() {
     function _renderRoadworkVisible() {
       roadworkLayer.clearLayers();
       for (const m of _roadworkMarkers) {
-        if (_roadworkSelectedTypes.has(m.type)) roadworkLayer.addLayer(m.marker);
+        if (!_roadworkSelectedTypes.has(m.type)) continue;
+        if (!_roadworkSelectedSources.has(m.source)) continue;
+        roadworkLayer.addLayer(m.marker);
       }
     }
+    function toggleRoadworkSourcePill(src) {
+      if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
+      else _roadworkSelectedSources.add(src);
+      _renderRoadworkVisible();
+      refreshActiveFilterPanel();
+    }
+    window.toggleRoadworkSourcePill = toggleRoadworkSourcePill;
 
     function toggleRoadworkType(t) {
       if (_roadworkSelectedTypes.has(t)) {
@@ -6778,12 +6811,23 @@ async function loadPagerData() {
           { key: 'hazard',   label: 'Hazards' },
           { key: 'closures', label: 'Closures / Jams' },
         ];
-        const pills = items.map((it) =>
+        const typePills = items.map((it) =>
           _ffPill(hazardFilters[it.key], it.label, `toggleHazardPill('${it.key}')`)
         ).join('');
+        let ltCount = 0, wzCount = 0;
+        for (const m of _hazardMarkers) {
+          if (m.source === 'livetraffic') ltCount++;
+          else if (m.source === 'waze') wzCount++;
+        }
+        const sourcePills = `
+          ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
+          ${_ffPill(_hazardSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleHazardSourcePill('waze')")}
+        `;
         return `<h4><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> Traffic Hazards</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${sourcePills}</div>
           <div class="ff-section-label">Type</div>
-          <div class="floating-filter-pills">${pills}</div>`;
+          <div class="floating-filter-pills">${typePills}</div>`;
       },
     };
 
@@ -6922,16 +6966,27 @@ async function loadPagerData() {
           return `<h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
             <div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading roadwork data…</div>`;
         }
-        const counts = {};
-        for (const m of _roadworkMarkers) counts[m.type] = (counts[m.type] || 0) + 1;
-        const pills = _roadworkAvailableTypes.map((t) => {
+        const typeCounts = {};
+        let ltCount = 0, wzCount = 0;
+        for (const m of _roadworkMarkers) {
+          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+          if (m.source === 'livetraffic') ltCount++;
+          else if (m.source === 'waze') wzCount++;
+        }
+        const typePills = _roadworkAvailableTypes.map((t) => {
           const on = _roadworkSelectedTypes.has(t);
           const safe = String(t).replace(/'/g, "\\'");
-          return _ffPill(on, `${t} (${(counts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
+          return _ffPill(on, `${t} (${(typeCounts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
         }).join('');
+        const sourcePills = `
+          ${_ffPill(_roadworkSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkSourcePill('livetraffic')")}
+          ${_ffPill(_roadworkSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleRoadworkSourcePill('waze')")}
+        `;
         return `<h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${sourcePills}</div>
           <div class="ff-section-label">Type</div>
-          <div class="floating-filter-pills">${pills}</div>`;
+          <div class="floating-filter-pills">${typePills}</div>`;
       },
     };
 
