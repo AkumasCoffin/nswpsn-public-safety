@@ -37,6 +37,7 @@ import {
   getSessionSecret,
   isAdmin,
   isSecureRequest,
+  listActiveSessions,
   loadSession,
   makeCookie,
   newSid,
@@ -1568,23 +1569,73 @@ async function buildAdminOverview(): Promise<unknown> {
       };
     });
 
-    const historicalUsers: unknown[] = huRes.rows.map((r) => ({
-      uid: String(r.uid),
-      username: r.username ?? '',
-      avatar_url: userAvatarUrl(String(r.uid), r.avatar),
-      guild_count: 0,
-      age_seconds: Math.max(0, now - Number(r.last_seen ?? 0)),
-      session_age_seconds: Math.max(0, now - Number(r.last_seen ?? 0)),
-      is_admin: getAdminIds().has(String(r.uid)),
-      is_active: false,
-      login_count: Number(r.login_count ?? 0),
-    }));
-    const usersLifetime = Number(cntRes.rows[0]?.n ?? 0);
+    // Snapshot live sessions before building the user list. A user is
+    // "active" if any unexpired session in the in-memory map names them.
+    // Track the freshest session per uid so the row's session_age_seconds
+    // reflects the current visit, not the historical last_seen.
+    const activeSessions = listActiveSessions();
+    const sessionsByUid = new Map<string, { iat: number; exp: number; lastSeen: number; sessionCount: number }>();
+    for (const s of activeSessions) {
+      const uid = String(s.uid);
+      const lastSeen = s.last_seen ?? s.iat;
+      const existing = sessionsByUid.get(uid);
+      if (!existing) {
+        sessionsByUid.set(uid, { iat: s.iat, exp: s.exp, lastSeen, sessionCount: 1 });
+      } else {
+        existing.sessionCount += 1;
+        if (lastSeen > existing.lastSeen) existing.lastSeen = lastSeen;
+        if (s.iat < existing.iat) existing.iat = s.iat;
+      }
+    }
+    const activeUidSet = new Set(sessionsByUid.keys());
+
+    const seenUids = new Set<string>();
+    const historicalUsers: unknown[] = huRes.rows.map((r) => {
+      const uid = String(r.uid);
+      seenUids.add(uid);
+      const live = sessionsByUid.get(uid);
+      const lastSeenTs = live ? live.lastSeen : Number(r.last_seen ?? 0);
+      const sessionStart = live ? live.iat : Number(r.last_seen ?? 0);
+      return {
+        uid,
+        username: r.username ?? '',
+        avatar_url: userAvatarUrl(uid, r.avatar),
+        guild_count: 0,
+        age_seconds: Math.max(0, now - lastSeenTs),
+        session_age_seconds: Math.max(0, now - sessionStart),
+        is_admin: getAdminIds().has(uid),
+        is_active: activeUidSet.has(uid),
+        login_count: Number(r.login_count ?? 0),
+      };
+    });
+    // Merge any live-session users that don't yet have a dashboard_users
+    // row — happens when a user's persisted row was wiped or the table
+    // was truncated, but the in-memory session is still valid. Without
+    // this they'd show as offline / missing in the admin panel.
+    for (const s of activeSessions) {
+      const uid = String(s.uid);
+      if (seenUids.has(uid)) continue;
+      seenUids.add(uid);
+      historicalUsers.push({
+        uid,
+        username: s.username,
+        avatar_url: userAvatarUrl(uid, s.avatar),
+        guild_count: s.guilds.length,
+        age_seconds: Math.max(0, now - (s.last_seen ?? s.iat)),
+        session_age_seconds: Math.max(0, now - s.iat),
+        is_admin: getAdminIds().has(uid),
+        is_active: true,
+        login_count: 1,
+      });
+    }
+    const usersLifetime = Math.max(Number(cntRes.rows[0]?.n ?? 0), seenUids.size);
+    const sessionsActive = activeSessions.length;
+    const usersActive = activeUidSet.size;
     const payload = {
       stats: {
-        sessions_active: 0,
+        sessions_active: sessionsActive,
         dashboard_users: usersLifetime,
-        users_active: 0,
+        users_active: usersActive,
         users_total: usersLifetime,
         servers_total: installCounts.servers_total,
         user_installs: installCounts.user_installs,
