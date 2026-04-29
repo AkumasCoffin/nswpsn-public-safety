@@ -6476,33 +6476,52 @@ async function loadPagerData() {
       const h = hours % 24;
       return h > 0 ? `${days}d ${h}h ago` : `${days}d ago`;
     }
+    function firmsIntensityLabel(frp) {
+      const n = Number(frp);
+      if (!Number.isFinite(n) || n <= 0) return 'unknown';
+      if (n >= 200) return 'extreme';
+      if (n >= 50)  return 'high';
+      if (n >= 10)  return 'moderate';
+      if (n >= 1)   return 'low';
+      return 'very low';
+    }
+    function firmsConfidenceTitleCase(conf) {
+      const s = firmsConfidenceLabel(conf);
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    function firmsSatelliteLine(props) {
+      const sat = props.satellite_tag || props.satellite || '—';
+      const inst = props.instrument || '';
+      const dn = props.daynight === 'D' ? 'Daytime'
+        : props.daynight === 'N' ? 'Nighttime' : '';
+      const left = inst ? `${sat} (${inst})` : sat;
+      return dn ? `${left} · ${dn}` : left;
+    }
     function firmsTooltip(props) {
       const clusterCount = Number(props._clusterCount) || 1;
       const detectedAt = firmsFormatTime(props);
       const ago = firmsFormatAgo(props.acq_datetime);
       const totalFrp = Number(props._totalFrp);
       const maxFrp = Number(props.frp);
-      const frpTxt = clusterCount > 1
-        ? `${Number.isFinite(totalFrp) ? totalFrp.toFixed(1) : '—'} MW total · max ${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW`
-        : (Number.isFinite(maxFrp) ? `${maxFrp.toFixed(1)} MW` : '—');
-      const brightTxt = props.brightness != null ? `${Number(props.brightness).toFixed(0)} K` : '—';
-      const conf = firmsConfidenceLabel(props.confidence);
-      const sat = props.satellite || '—';
-      const dn = props.daynight === 'D' ? 'Day' : props.daynight === 'N' ? 'Night' : '—';
+      const intensityLabel = firmsIntensityLabel(clusterCount > 1 ? totalFrp : maxFrp);
+      const intensityLine = clusterCount > 1
+        ? `${Number.isFinite(totalFrp) ? totalFrp.toFixed(1) : '—'} MW total <span style="color:#94a3b8;">(${intensityLabel}, max ${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW per pixel)</span>`
+        : `${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW <span style="color:#94a3b8;">(${intensityLabel})</span>`;
+      const conf = firmsConfidenceTitleCase(props.confidence);
       const headline = clusterCount > 1
         ? `🔥 ${clusterCount} fire detections nearby`
         : `🔥 NASA FIRMS Hotspot`;
-      const sizeLine = clusterCount > 1
-        ? `<div style="color:#9ca3af;font-size:10px;margin-top:3px;">Zoom in to see individual pixels</div>`
-        : `<div style="color:#9ca3af;font-size:10px;margin-top:3px;">Pixel footprint ~${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km</div>`;
-      const agoTag = ago ? `<span style="color:#94a3b8;font-size:10px;">&nbsp;(${ago})</span>` : '';
-      return `<div style="font-size:11px;line-height:1.45;">
-        <div style="font-weight:600;color:#fdba74;margin-bottom:3px;">${headline}</div>
+      const footnote = clusterCount > 1
+        ? `Zoom in for individual detections.`
+        : `Pixel footprint ${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km.`;
+      const agoTag = ago ? ` <span style="color:#94a3b8;font-size:10px;">(${ago})</span>` : '';
+      return `<div style="font-size:11px;line-height:1.5;">
+        <div style="font-weight:600;color:#fdba74;margin-bottom:4px;">${headline}</div>
         <div><b>Detected:</b> ${detectedAt}${agoTag}</div>
-        <div><b>Period:</b> ${dn} &nbsp;<b>FRP:</b> ${frpTxt}</div>
-        <div><b>Brightness:</b> ${brightTxt} &nbsp;<b>Conf:</b> ${conf}</div>
-        <div><b>Satellite:</b> ${sat}</div>
-        ${sizeLine}
+        <div><b>Fire intensity:</b> ${intensityLine}</div>
+        <div><b>Confidence:</b> ${conf}</div>
+        <div><b>Satellite:</b> ${firmsSatelliteLine(props)}</div>
+        <div style="color:#9ca3af;font-size:10px;margin-top:4px;">${footnote}</div>
       </div>`;
     }
 
@@ -6529,6 +6548,8 @@ async function loadPagerData() {
             confidence: p.confidence,
             acq_datetime: p.acq_datetime,
             satellite: p.satellite,
+            satellite_tag: p.satellite_tag,
+            instrument: p.instrument,
             daynight: p.daynight,
             brightness: p.brightness,
             scan_km: p.scan_km,
@@ -6561,7 +6582,8 @@ async function loadPagerData() {
             totalFrp: 0, maxFrp: 0,
             confidence: '', _confRank: -1,
             acq_datetime: '',
-            satellite: '', daynight: '', brightness: null,
+            satellite: '', satellite_tag: '', instrument: '',
+            daynight: '', brightness: null,
             scan_km: null, track_km: null,
           };
           buckets.set(key, b);
@@ -6574,6 +6596,8 @@ async function loadPagerData() {
         if (frp > b.maxFrp) {
           b.maxFrp = frp;
           b.satellite = p.satellite || b.satellite;
+          b.satellite_tag = p.satellite_tag || b.satellite_tag;
+          b.instrument = p.instrument || b.instrument;
           b.daynight = p.daynight || b.daynight;
           b.brightness = p.brightness ?? b.brightness;
           b.scan_km = p.scan_km ?? b.scan_km;
@@ -6598,6 +6622,8 @@ async function loadPagerData() {
           confidence: b.confidence,
           acq_datetime: b.acq_datetime,
           satellite: b.satellite,
+          satellite_tag: b.satellite_tag,
+          instrument: b.instrument,
           daynight: b.daynight,
           brightness: b.brightness,
           scan_km: b.scan_km,
@@ -6944,6 +6970,8 @@ async function loadPagerData() {
           confidence: c.confidence,
           acq_datetime: c.acq_datetime,
           satellite: c.satellite,
+          satellite_tag: c.satellite_tag,
+          instrument: c.instrument,
           daynight: c.daynight,
           brightness: c.brightness,
           scan_km: c.scan_km,
