@@ -1126,10 +1126,16 @@ export function startRdioSummaryScheduler(): void {
   arm(wait);
   const nextIso = new Date(Date.now() + wait).toISOString();
   log.info({ next_fire: nextIso, wait_ms: wait }, 'rdio summary scheduler started');
-  // Fire catch-up async so a slow LLM call here doesn't delay the
-  // scheduler arming. The unique constraint on (summary_type,
-  // period_start) keeps it safe even if a fire races with us.
-  void runRdioSummaryCatchup();
+  // Boot-time catchup is intentionally disabled. Every restart was
+  // calling Gemini to backfill the previous hour, which (a) burned
+  // boot CPU + Gemini quota every time pm2 cycled, and (b) ran the
+  // pre-LLM dedup pass at boot regardless of whether the row
+  // already existed. The scheduler's HH:55 fire is now the only
+  // path that talks to Gemini — missed hours stay missed. Set
+  // NODE_RDIO_CATCHUP=true to re-enable.
+  if (process.env['NODE_RDIO_CATCHUP'] === 'true') {
+    void runRdioSummaryCatchup();
+  }
 }
 
 export function stopRdioSummaryScheduler(): void {
