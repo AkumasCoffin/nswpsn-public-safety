@@ -426,13 +426,26 @@ function liveWazeFacets(): ComputedFacets {
   return { typeCounts, perTypeDims, oldestUnix, newestUnix };
 }
 
-/** Tables we GROUP BY for facet counts. archive_waze deliberately
- *  excluded — too big to scan, and waze counts come from LiveStore. */
-const ARCHIVE_FACET_TABLES: ArchiveTable[] = [
-  'archive_misc',
-  'archive_traffic',
-  'archive_rfs',
-  'archive_power',
+/**
+ * Tables we GROUP BY for facet counts and the per-table lookback
+ * window. archive_waze is deliberately excluded — too big to scan,
+ * and waze counts come from LiveStore.
+ *
+ * Per-table windows: archive_traffic + archive_rfs see ~140k+
+ * rows/24h; a 7d GROUP BY scan times out at 60s. archive_misc +
+ * archive_power are smaller AND host the sparse sources (BOM in
+ * particular can go days between warnings) so they get the wider
+ * window so their dropdown categories stay populated.
+ */
+interface FacetTable {
+  table: ArchiveTable;
+  windowDays: number;
+}
+const ARCHIVE_FACET_TABLES: FacetTable[] = [
+  { table: 'archive_misc', windowDays: 7 },
+  { table: 'archive_power', windowDays: 7 },
+  { table: 'archive_traffic', windowDays: 1 },
+  { table: 'archive_rfs', windowDays: 1 },
 ];
 
 interface ArchiveFacetRow {
@@ -473,7 +486,7 @@ async function archiveFacets(): Promise<{
   const pool = await getPool();
   if (!pool) return { typeCounts, perTypeDims, oldestUnix, newestUnix };
 
-  for (const table of ARCHIVE_FACET_TABLES) {
+  for (const { table, windowDays } of ARCHIVE_FACET_TABLES) {
     const sql = `
       SELECT
         source,
@@ -483,7 +496,7 @@ async function archiveFacets(): Promise<{
         EXTRACT(EPOCH FROM MIN(fetched_at))::bigint AS oldest,
         EXTRACT(EPOCH FROM MAX(fetched_at))::bigint AS newest
       FROM ${table}
-      WHERE fetched_at >= NOW() - INTERVAL '7 days'
+      WHERE fetched_at >= NOW() - ($1 || ' days')::interval
       GROUP BY 1, 2, 3
     `;
     let client;
@@ -501,7 +514,7 @@ async function archiveFacets(): Promise<{
         // 5 min; long-tail single failures are tolerable but timing out
         // every cycle is not.
         await client.query("SET LOCAL statement_timeout = '60s'");
-        const result = await client.query<ArchiveFacetRow>(sql);
+        const result = await client.query<ArchiveFacetRow>(sql, [String(windowDays)]);
         await client.query('COMMIT');
         for (const row of result.rows) {
           const cnt = parseInt(row.cnt, 10);

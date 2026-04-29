@@ -200,14 +200,16 @@ describe('computeFlushTimeTombstones', () => {
 });
 
 describe('sweepStaleAsEnded', () => {
-  it('runs an INSERT…SELECT against every archive table', async () => {
+  it('runs an INSERT…SELECT against every non-waze archive table', async () => {
     queryMock.mockResolvedValue({ rows: [], rowCount: 0 });
     const inserted = await sweepStaleAsEnded(fakePool);
     expect(inserted).toBe(0);
-    expect(queryMock).toHaveBeenCalledTimes(5);
+    // 4 tables — archive_waze is deliberately excluded.
+    expect(queryMock).toHaveBeenCalledTimes(4);
     for (const call of queryMock.mock.calls) {
       const sql = String(call[0]);
-      expect(sql).toMatch(/INSERT INTO archive_(waze|traffic|rfs|power|misc)/);
+      expect(sql).toMatch(/INSERT INTO archive_(traffic|rfs|power|misc)/);
+      expect(sql).not.toContain('INSERT INTO archive_waze');
       expect(sql).toContain("'{\"is_live\": false}'::jsonb");
     }
   });
@@ -215,7 +217,6 @@ describe('sweepStaleAsEnded', () => {
   it('totals the rowCount across tables', async () => {
     queryMock
       .mockResolvedValueOnce({ rows: [], rowCount: 3 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 7 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 });
@@ -228,8 +229,7 @@ describe('sweepStaleAsEnded', () => {
       .mockResolvedValueOnce({ rows: [], rowCount: 2 })
       .mockRejectedValueOnce(new Error('lock timeout'))
       .mockResolvedValueOnce({ rows: [], rowCount: 4 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
     const inserted = await sweepStaleAsEnded(fakePool);
     expect(inserted).toBe(7);
   });
