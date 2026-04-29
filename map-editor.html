@@ -365,6 +365,29 @@
     }
     .floating-filter-btn:hover { background: rgba(30, 41, 59, 0.96); transform: translateX(2px); }
     .floating-filter-btn.active { box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4); }
+    .floating-filter-btn[data-tooltip] { position: relative; }
+    .floating-filter-btn[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: calc(100% + 10px); top: 50%;
+      transform: translateY(-50%) translateX(-4px);
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      font-size: 12px; font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s, transform 0.15s;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn[data-tooltip]:hover::after {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
     .floating-filter-panel {
       position: absolute;
       left: 64px; bottom: 76px;
@@ -3593,6 +3616,11 @@ async function loadPagerData() {
         if (enabled) addFilterButton('firms');
         else removeFilterButton('firms');
       }
+      if (target === 'roadwork') {
+        const enabled = map.hasLayer(roadworkLayer);
+        if (enabled) addFilterButton('roadwork');
+        else removeFilterButton('roadwork');
+      }
     }
 
     async function loadRfsData() {
@@ -6531,6 +6559,7 @@ async function loadPagerData() {
       const btn = document.createElement('button');
       btn.className = 'floating-filter-btn';
       btn.dataset.key = key;
+      btn.setAttribute('data-tooltip', cfg.label);
       btn.title = cfg.label;
       btn.innerHTML = `<i class="fa-solid ${cfg.icon}" style="color:${cfg.color || '#e2e8f0'};"></i>`;
       btn.onclick = () => _toggleFilterButton(key);
@@ -6760,6 +6789,20 @@ async function loadPagerData() {
       if (typeof toggleWeatherPins === 'function') toggleWeatherPins(next);
       refreshActiveFilterPanel();
     };
+    FILTER_REGISTRY.roadwork = {
+      icon: 'fa-road', label: 'Roadwork', color: '#eab308',
+      render() {
+        const count = roadworkLayer ? roadworkLayer.getLayers().length : 0;
+        return `<h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+          <div style="font-size:11px;color:#cbd5e1;line-height:1.5;">
+            ${count.toLocaleString()} active roadwork item${count === 1 ? '' : 's'} from NSW Live Traffic.
+          </div>
+          <div style="font-size:10px;color:#64748b;margin-top:8px;">
+            No additional filters available for this layer.
+          </div>`;
+      },
+    };
+
     FILTER_REGISTRY.weather = {
       icon: 'fa-cloud-sun', label: 'Weather', color: '#38bdf8',
       render() {

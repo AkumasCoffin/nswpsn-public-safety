@@ -896,6 +896,36 @@
     .floating-filter-btn.active {
       box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4);
     }
+    /* Hover tooltip — appears to the right of the button. Uses
+       data-tooltip rather than the native title attribute so it shows
+       instantly without the OS-level delay and matches the panel style. */
+    .floating-filter-btn[data-tooltip] {
+      position: relative;
+    }
+    .floating-filter-btn[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%) translateX(-4px);
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s, transform 0.15s;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn[data-tooltip]:hover::after {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
     .floating-filter-panel {
       position: absolute;
       left: 64px;
@@ -3255,6 +3285,14 @@
         // the column on mobile so this is harmless there.
         if (enabled) addFilterButton('firms');
         else removeFilterButton('firms');
+      }
+      // Roadwork has no per-source filters but still gets a sidebar
+      // button (purely informational panel) so users can see at a
+      // glance which layers are on.
+      if (target === 'roadwork') {
+        const enabled = map.hasLayer(roadworkLayer);
+        if (enabled) addFilterButton('roadwork');
+        else removeFilterButton('roadwork');
       }
       refreshMapAndList();
     }
@@ -8207,6 +8245,10 @@ function initPagerHoursFromStorage() {
       const btn = document.createElement('button');
       btn.className = 'floating-filter-btn';
       btn.dataset.key = key;
+      // data-tooltip drives the CSS hover label (instant, styled to
+      // match the panel). Native title kept as a fallback for screen
+      // readers and the rare environment where ::after is suppressed.
+      btn.setAttribute('data-tooltip', cfg.label);
       btn.title = cfg.label;
       btn.innerHTML = `<i class="fa-solid ${cfg.icon}" style="color:${cfg.color || '#e2e8f0'};"></i>`;
       btn.onclick = () => _toggleFilterButton(key);
@@ -8516,6 +8558,27 @@ function initPagerHoursFromStorage() {
             <span id="ff-pager-hours-val" style="font-size:11px;color:#cbd5e1;width:36px;text-align:right;">${v}h</span>
           </div>
           <div style="font-size:10px;color:#64748b;margin-top:6px;">Pager hits over the last N hours.</div>
+        `;
+      },
+    };
+
+    // Roadwork — no filters, but registered so the layer gets a visible
+    // sidebar button when enabled. Panel shows item count + a brief
+    // info note rather than tickboxes.
+    FILTER_REGISTRY.roadwork = {
+      icon: 'fa-road',
+      label: 'Roadwork',
+      color: '#eab308',
+      render() {
+        const count = roadworkLayer ? roadworkLayer.getLayers().length : 0;
+        return `
+          <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+          <div style="font-size:11px;color:#cbd5e1;line-height:1.5;">
+            ${count.toLocaleString()} active roadwork item${count === 1 ? '' : 's'} from NSW Live Traffic.
+          </div>
+          <div style="font-size:10px;color:#64748b;margin-top:8px;">
+            No additional filters available for this layer.
+          </div>
         `;
       },
     };
