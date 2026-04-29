@@ -2545,7 +2545,18 @@
     // Sub-layers for filtered data
     let hazardSubLayers = {};
     let policeSubLayers = {};
-    
+
+    // Roadwork sources — Live Traffic and Waze. Each goes into its own
+    // layerGroup so the filter pills can toggle them independently.
+    const roadworkFilters = {
+      liveTraffic: true,
+      waze: true,
+    };
+    const roadworkSubLayers = {
+      liveTraffic: L.layerGroup(),
+      waze: L.layerGroup(),
+    };
+
     // Camera filter states and sub-layers
     const cameraFilters = {
       traffic: true,
@@ -7589,7 +7600,12 @@ function initPagerHoursFromStorage() {
         return;
       }
       
+      // Clear both the main layer and the per-source sub-layers — we
+      // rebuild them from scratch each load so source counts in the
+      // filter pills stay accurate.
       roadworkLayer.clearLayers();
+      roadworkSubLayers.liveTraffic.clearLayers();
+      roadworkSubLayers.waze.clearLayers();
       let totalCount = 0;
       
       // Build tooltip for roadwork (Waze or LiveTraffic) - styled like outage tooltips
@@ -7810,12 +7826,13 @@ function initPagerHoursFromStorage() {
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
-              const marker = L.marker([lat, lon], { icon }).addTo(roadworkLayer);
+              const marker = L.marker([lat, lon], { icon });
               marker.bindTooltip(buildRoadworkTooltip(props), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
               });
+              roadworkSubLayers.liveTraffic.addLayer(marker);
               totalCount++;
             }
           });
@@ -7823,7 +7840,7 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Traffic roadwork error', e);
       }
-      
+
       try {
         // Use the waze data already fetched at the start of the function
         if (wazeData && wazeData.features) {
@@ -7837,12 +7854,13 @@ function initPagerHoursFromStorage() {
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
-              const marker = L.marker([lat, lon], { icon }).addTo(roadworkLayer);
+              const marker = L.marker([lat, lon], { icon });
               marker.bindTooltip(buildRoadworkTooltip(props), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
               });
+              roadworkSubLayers.waze.addLayer(marker);
               totalCount++;
             }
           });
@@ -7850,8 +7868,24 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Waze roadwork error', e);
       }
-      
+
+      // Apply the current filter state to the visible layer.
+      if (roadworkFilters.liveTraffic) roadworkLayer.addLayer(roadworkSubLayers.liveTraffic);
+      if (roadworkFilters.waze)        roadworkLayer.addLayer(roadworkSubLayers.waze);
+
       console.log(`Loaded ${totalCount} roadwork pins (Live Traffic + Waze)`);
+      // Keep the floating panel pill counts current.
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    }
+
+    /** Toggle a roadwork source on/off. Mirrors the cameras pattern —
+     *  flips the filter flag and adds/removes the source's sub-layer. */
+    function toggleRoadworkFilter(src, on) {
+      roadworkFilters[src] = !!on;
+      const sub = roadworkSubLayers[src];
+      if (!sub) return;
+      if (on) roadworkLayer.addLayer(sub);
+      else roadworkLayer.removeLayer(sub);
     }
 
     // Floods
@@ -8562,22 +8596,30 @@ function initPagerHoursFromStorage() {
       },
     };
 
-    // Roadwork — no filters, but registered so the layer gets a visible
-    // sidebar button when enabled. Panel shows item count + a brief
-    // info note rather than tickboxes.
+    // Roadwork (Live Traffic + Waze). Each source goes into its own
+    // sub-layer; the pills toggle them independently and surface the
+    // per-source count beside the label so users can see at a glance
+    // how many items each source contributed.
+    window.toggleRoadworkPill = function (src) {
+      const next = !roadworkFilters[src];
+      toggleRoadworkFilter(src, next);
+      refreshActiveFilterPanel();
+    };
     FILTER_REGISTRY.roadwork = {
       icon: 'fa-road',
       label: 'Roadwork',
       color: '#eab308',
       render() {
-        const count = roadworkLayer ? roadworkLayer.getLayers().length : 0;
+        const ltOn = roadworkFilters.liveTraffic;
+        const wzOn = roadworkFilters.waze;
+        const ltCount = roadworkSubLayers.liveTraffic.getLayers().length;
+        const wzCount = roadworkSubLayers.waze.getLayers().length;
         return `
           <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
-          <div style="font-size:11px;color:#cbd5e1;line-height:1.5;">
-            ${count.toLocaleString()} active roadwork item${count === 1 ? '' : 's'} from NSW Live Traffic.
-          </div>
-          <div style="font-size:10px;color:#64748b;margin-top:8px;">
-            No additional filters available for this layer.
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(ltOn, `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkPill('liveTraffic')")}
+            ${_ffPill(wzOn, `Waze (${wzCount.toLocaleString()})`, "toggleRoadworkPill('waze')")}
           </div>
         `;
       },
