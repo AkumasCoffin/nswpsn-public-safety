@@ -62,6 +62,21 @@ const QUIET_PATHS_RE =
 const SLOW_REQUEST_MS = 500;
 
 /**
+ * Classify the request origin from headers. The discord bot sets
+ * `User-Agent: NSWPSNBot/1.0` (and sometimes `X-Client-Type: discord-bot`)
+ * on every API call (see discord-bot/bot.py + alert_poller.py). Browsers
+ * always carry a Mozilla/Chrome/Safari UA. Everything else is grouped
+ * under "other" — curl, monitoring probes, server-to-server callers.
+ */
+function classifyClient(ua: string, xClient: string): 'bot' | 'browser' | 'other' {
+  if (xClient.toLowerCase() === 'discord-bot') return 'bot';
+  if (!ua) return 'other';
+  if (/^NSWPSNBot/i.test(ua) || /\bdiscord(?:bot)?\b/i.test(ua)) return 'bot';
+  if (/Mozilla\/|Chrome\/|Safari\/|Firefox\/|Edge\/|Edg\//.test(ua)) return 'browser';
+  return 'other';
+}
+
+/**
  * Replacement for Hono's built-in logger. Differences:
  *   - 2xx + 3xx on QUIET_PATHS_RE are silent
  *   - 2xx + 3xx slower than SLOW_REQUEST_MS log at info ("slow")
@@ -69,6 +84,9 @@ const SLOW_REQUEST_MS = 500;
  *   - 4xx logs at info ("client error")
  *   - 5xx logs at warn ("server error")
  *   - OPTIONS preflights are silent (huge volume, no signal)
+ *   - every line tags `client` as bot|browser|other so log readers
+ *     can tell the discord bot's pollers apart from dashboard / map
+ *     traffic at a glance
  */
 const requestLogger: MiddlewareHandler = async (c, next) => {
   const start = Date.now();
@@ -80,20 +98,24 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
 
   if (method === 'OPTIONS') return;
 
+  const ua = c.req.header('User-Agent') ?? '';
+  const xClient = c.req.header('X-Client-Type') ?? '';
+  const client = classifyClient(ua, xClient);
+
   if (status >= 500) {
-    log.warn({ method, path, status, ms }, 'request 5xx');
+    log.warn({ method, path, status, ms, client }, 'request 5xx');
     return;
   }
   if (status >= 400) {
-    log.info({ method, path, status, ms }, 'request 4xx');
+    log.info({ method, path, status, ms, client }, 'request 4xx');
     return;
   }
   if (QUIET_PATHS_RE.test(path)) return;
   if (ms >= SLOW_REQUEST_MS) {
-    log.info({ method, path, status, ms }, 'slow request');
+    log.info({ method, path, status, ms, client }, 'slow request');
     return;
   }
-  log.debug({ method, path, status, ms }, 'request');
+  log.debug({ method, path, status, ms, client }, 'request');
 };
 
 export function createApp() {

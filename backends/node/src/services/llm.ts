@@ -111,6 +111,32 @@ function extractRadioId(row: RdioCallRow): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Transcript text extraction. rdio-scanner stores the transcript column as
+// either plain text (older / simpler setups) or as a JSON blob like
+// `{"text": "Sydney from Pumper 7", "words": [...]}` when AI / Whisper
+// transcription is wired through their pipeline. The prompt expects plain
+// readable speech, so unwrap the JSON shape here. Falls back to the raw
+// string if the JSON parse fails or the field isn't where we expect — safer
+// to send Gemini a slightly-noisy line than to drop content.
+// ---------------------------------------------------------------------------
+
+export function extractTranscriptText(
+  transcript: string | null | undefined,
+): string {
+  const raw = (transcript ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('{') && raw.includes('"text"')) {
+    try {
+      const obj = JSON.parse(raw) as { text?: unknown };
+      if (typeof obj.text === 'string') return obj.text.trim();
+    } catch {
+      // fall through to raw
+    }
+  }
+  return raw;
+}
+
+// ---------------------------------------------------------------------------
 // Pre-LLM dedup — mirror of python's _dedupe_calls (external_api_proxy.py
 // lines 14661-14733). A call is a duplicate of a previously-kept one when:
 //   - same talkgroup, AND
@@ -124,7 +150,8 @@ function extractRadioId(row: RdioCallRow): number | null {
 const DEDUP_TEXT_RE = /[^a-z0-9 ]+/g;
 
 function normalizeTranscript(text: string | null | undefined): string {
-  const lowered = (text ?? '').toLowerCase().replace(DEDUP_TEXT_RE, ' ');
+  const raw = extractTranscriptText(text);
+  const lowered = raw.toLowerCase().replace(DEDUP_TEXT_RE, ' ');
   return lowered.replace(/\s+/g, ' ').trim();
 }
 
@@ -229,8 +256,25 @@ export async function formatRdioPrompt(
     }
   >();
   let totalChars = 0;
+  let sampleLogged = false;
   for (const row of calls) {
-    const text = (row.transcript ?? '').trim();
+    if (!sampleLogged && row.transcript) {
+      // One-shot per fire: surface the actual shape of the transcript
+      // column. If rdio-scanner is storing JSON blobs and we're failing
+      // to unwrap them, this is where it shows up — useful when an
+      // hour produces an empty summary despite a healthy call count.
+      const t = row.transcript;
+      log.info(
+        {
+          len: t.length,
+          looks_json: t.trimStart().startsWith('{'),
+          head: t.slice(0, 120).replace(/\n/g, ' '),
+        },
+        'rdio: transcript sample',
+      );
+      sampleLogged = true;
+    }
+    const text = extractTranscriptText(row.transcript);
     if (!text) continue;
     const { systemLabel, talkgroupLabel } = await resolveLabels(
       row.system,
@@ -400,6 +444,10 @@ function scrubLlmTypos(text: string): string {
   return text.replace(/"{2,}([A-Za-z_]\w*)"\s*:/g, '"$1":');
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 export interface ParsedSummary {
   overview: string;
   structured: Record<string, unknown> | null;
@@ -440,6 +488,40 @@ export function parseSummaryOutput(text: string): ParsedSummary {
         let overview = typeof ov === 'string' ? ov : '';
         if (!overview && obj['quiet_hour']) {
           overview = 'Quiet hour — no significant incidents detected.';
+        }
+        if (!overview && Array.isArray(obj['incidents']) && obj['incidents'].length > 0) {
+          // Gemini parsed cleanly but skipped/blanked the `overview`
+          // field. Falling back to "(no summary)" wastes the rest of
+          // the structured response — synthesise a one-liner from the
+          // counts + the highest-severity incident title so the embed
+          // stays useful. The full structured object is still saved.
+          const incidents = obj['incidents'] as Array<Record<string, unknown>>;
+          const order: Record<string, number> = {
+            emergency: 0,
+            high: 1,
+            medium: 2,
+            low: 3,
+          };
+          const ranked = incidents
+            .filter(isPlainObject)
+            .slice()
+            .sort((a, b) => {
+              const sa = String(a['severity'] ?? 'low').toLowerCase();
+              const sb = String(b['severity'] ?? 'low').toLowerCase();
+              return (order[sa] ?? 99) - (order[sb] ?? 99);
+            });
+          const top = ranked[0];
+          const title =
+            top && typeof top['title'] === 'string'
+              ? (top['title'] as string)
+              : null;
+          const lvl =
+            typeof obj['activity_level'] === 'string'
+              ? (obj['activity_level'] as string)
+              : null;
+          overview = title
+            ? `${incidents.length} incident${incidents.length === 1 ? '' : 's'}${lvl ? ` (${lvl})` : ''} — top: ${title}.`
+            : `${incidents.length} incident${incidents.length === 1 ? '' : 's'}${lvl ? ` (${lvl})` : ''} reported.`;
         }
         if (label !== 'raw') {
           log.info({ label }, 'summary parse recovered');
@@ -696,6 +778,25 @@ export async function generateRdioHourlySummary(
     const parsed = parseSummaryOutput(raw);
     summaryText = parsed.overview;
     structured = parsed.structured;
+    if (!summaryText && calls.length > 0) {
+      // Gemini gave us a parseable response but no overview — or parse
+      // failed entirely. Either way the embed will render "(no summary)".
+      // Log the head/tail of the raw output and the structured keys so
+      // we can tell which case it is without bumping log level.
+      log.warn(
+        {
+          raw_len: raw.length,
+          raw_head: raw.slice(0, 200).replace(/\n/g, ' '),
+          raw_tail: raw.slice(-200).replace(/\n/g, ' '),
+          structured_keys: structured ? Object.keys(structured) : null,
+          incidents: structured && Array.isArray(structured['incidents'])
+            ? (structured['incidents'] as unknown[]).length
+            : null,
+          call_count: calls.length,
+        },
+        'rdio: hourly produced empty overview',
+      );
+    }
     if (structured) {
       try {
         structured = validateStructuredAgainstTranscripts(
