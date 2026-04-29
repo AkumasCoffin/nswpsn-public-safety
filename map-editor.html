@@ -6437,9 +6437,49 @@ async function loadPagerData() {
       if (Number.isFinite(num)) return `${num}%`;
       return c || 'unknown';
     }
+    function firmsFormatTime(props) {
+      const iso = props.acq_datetime;
+      if (iso) {
+        const d = new Date(iso);
+        if (!isNaN(d.getTime())) {
+          const fmt = new Intl.DateTimeFormat('en-AU', {
+            day: '2-digit', month: 'short',
+            hour: '2-digit', minute: '2-digit', hour12: true,
+            timeZone: 'Australia/Sydney',
+            timeZoneName: 'short',
+          });
+          return fmt.format(d);
+        }
+      }
+      const date = String(props.acq_date || '').trim();
+      const time = String(props.acq_time || '').padStart(4, '0');
+      if (date && time.length >= 4) {
+        return `${date} ${time.slice(0, 2)}:${time.slice(2, 4)} UTC`;
+      }
+      return '—';
+    }
+    function firmsFormatAgo(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      const diffMs = Date.now() - d.getTime();
+      if (diffMs < 0) return '';
+      const minutes = Math.floor(diffMs / 60000);
+      if (minutes < 1) return 'just now';
+      if (minutes < 60) return `${minutes} min ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) {
+        const m = minutes % 60;
+        return m > 0 ? `${hours}h ${m}m ago` : `${hours}h ago`;
+      }
+      const days = Math.floor(hours / 24);
+      const h = hours % 24;
+      return h > 0 ? `${days}d ${h}h ago` : `${days}d ago`;
+    }
     function firmsTooltip(props) {
       const clusterCount = Number(props._clusterCount) || 1;
-      const acq = props.acq_datetime || `${props.acq_date || ''} ${props.acq_time || ''}`.trim() || '—';
+      const detectedAt = firmsFormatTime(props);
+      const ago = firmsFormatAgo(props.acq_datetime);
       const totalFrp = Number(props._totalFrp);
       const maxFrp = Number(props.frp);
       const frpTxt = clusterCount > 1
@@ -6455,11 +6495,13 @@ async function loadPagerData() {
       const sizeLine = clusterCount > 1
         ? `<div style="color:#9ca3af;font-size:10px;margin-top:3px;">Zoom in to see individual pixels</div>`
         : `<div style="color:#9ca3af;font-size:10px;margin-top:3px;">Pixel footprint ~${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km</div>`;
+      const agoTag = ago ? `<span style="color:#94a3b8;font-size:10px;">&nbsp;(${ago})</span>` : '';
       return `<div style="font-size:11px;line-height:1.45;">
         <div style="font-weight:600;color:#fdba74;margin-bottom:3px;">${headline}</div>
-        <div><b>Detected:</b> ${acq} UTC (${dn})</div>
-        <div><b>FRP:</b> ${frpTxt} &nbsp;<b>Bright:</b> ${brightTxt}</div>
-        <div><b>Satellite:</b> ${sat} &nbsp;<b>Conf:</b> ${conf}</div>
+        <div><b>Detected:</b> ${detectedAt}${agoTag}</div>
+        <div><b>Period:</b> ${dn} &nbsp;<b>FRP:</b> ${frpTxt}</div>
+        <div><b>Brightness:</b> ${brightTxt} &nbsp;<b>Conf:</b> ${conf}</div>
+        <div><b>Satellite:</b> ${sat}</div>
         ${sizeLine}
       </div>`;
     }
