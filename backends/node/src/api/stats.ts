@@ -55,7 +55,26 @@ const PAGE_SESSION_TIMEOUT_SECS = 120;
 
 interface StatsHistoryRow {
   timestamp: string | number;
-  data: Record<string, unknown>;
+  data: Record<string, unknown> | string;
+}
+
+// Legacy python rows in stats_snapshots stored data as a JSON string
+// inside the JSONB column (double-encoded), so pg returns them as a
+// string. New Node rows write a plain object. Coerce to object on read.
+function unwrapSnapshotData(raw: unknown): Record<string, unknown> {
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through — return empty object so the chart treats it as missing
+    }
+    return {};
+  }
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  return {};
 }
 
 statsRouter.get('/api/stats/history', async (c) => {
@@ -80,7 +99,7 @@ statsRouter.get('/api/stats/history', async (c) => {
     return c.json(
       result.rows.map((r) => ({
         timestamp: Number(r.timestamp),
-        data: r.data,
+        data: unwrapSnapshotData(r.data),
       })),
     );
   } catch (err) {
