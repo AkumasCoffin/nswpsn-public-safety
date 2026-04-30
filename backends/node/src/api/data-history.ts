@@ -507,6 +507,23 @@ function pickStr(d: Record<string, unknown>, k: string): string | null {
   return typeof v === 'string' ? v : null;
 }
 
+/**
+ * Walk a list of JSONB keys and return the first non-empty string value.
+ * Used to derive a record's title from whichever field actually got
+ * populated by the upstream — pager rows have data.title, waze rows have
+ * data.street, RFS / traffic rows have data.locationDescriptor, etc.
+ */
+function pickFirstStr(
+  d: Record<string, unknown>,
+  keys: readonly string[],
+): string | null {
+  for (const k of keys) {
+    const v = d[k];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return null;
+}
+
 function pickNum(d: Record<string, unknown>, k: string): number | null {
   const v = d[k];
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -546,7 +563,23 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     latitude: r.lat,
     longitude: r.lng,
     location_text: pickStr(data, 'location_text'),
-    title: pickStr(data, 'title'),
+    // Title fallback chain. Most upstream payloads don't normalise to
+    // a single 'title' field, so we pull the most useful per-source
+    // alternative if data.title is missing:
+    //   pager      → data.title (set by pagerArchiveItems)
+    //   waze_*     → data.street ('A1 - Pacific Hwy', 'Combine St', ...)
+    //   pager      → data.alias (defensive — backend already promotes
+    //                 this to data.title, but covers older rows)
+    //   rfs/traffic → data.locationDescriptor or data.location
+    // Without this every waze record was returning title=null, which
+    // logs.html rendered as "Unknown".
+    title: pickFirstStr(data, [
+      'title',
+      'street',
+      'alias',
+      'locationDescriptor',
+      'location',
+    ]),
     category: r.category,
     subcategory: r.subcategory,
     status: pickStr(data, 'status'),
