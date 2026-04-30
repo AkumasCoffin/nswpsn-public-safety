@@ -2543,7 +2543,25 @@
         
         const icon = getSourceIcon(item.source, item.subcategory);
         const sourceName = formatSourceName(item.source);
-        const title = item.title || item.location_text || 'Unknown';
+        const data = item.data || {};
+        // Title fallback chain. The backend's formatted `title` only
+        // gets populated for sources whose archiveItems extractor sets
+        // data.title (currently just pager). For waze_* / traffic_* /
+        // rfs we have to dig a bit further into the JSONB blob:
+        //   data.street            — waze (street/road name)
+        //   data.alias             — pager (already promoted, defensive)
+        //   data.locationDescriptor — RFS / traffic incidents
+        //   data.title             — defensive (in case backend missed)
+        // Falls back to the source family name so at least we never
+        // render the literal string "Unknown".
+        const title = item.title
+          || data.street
+          || data.alias
+          || data.locationDescriptor
+          || data.title
+          || item.location_text
+          || sourceName
+          || 'Unknown';
         
         // For waze_police with no subcategory, show "Police Visible"
         let subcat = item.subcategory ? formatSubcategory(item.subcategory) : (item.source === 'waze_police' ? 'Police Visible' : '');
@@ -2557,8 +2575,7 @@
                              !item.location_text.toLowerCase().startsWith(title.toLowerCase());
         
         const viewed = isViewed(item.source_id);
-        const data = item.data || {};
-        
+
         // Get reported time (source_timestamp) for display
         let reportedTime = '';
         if (item.source_timestamp) {
