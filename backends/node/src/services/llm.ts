@@ -780,9 +780,9 @@ export async function generateRdioHourlySummary(
     structured = parsed.structured;
     if (!summaryText && calls.length > 0) {
       // Gemini gave us a parseable response but no overview — or parse
-      // failed entirely. Either way the embed will render "(no summary)".
-      // Log the head/tail of the raw output and the structured keys so
-      // we can tell which case it is without bumping log level.
+      // failed entirely. Log the head/tail of the raw output and the
+      // structured keys so we can tell which case it is without bumping
+      // log level.
       log.warn(
         {
           raw_len: raw.length,
@@ -809,6 +809,23 @@ export async function generateRdioHourlySummary(
           'rdio validator threw; persisting un-validated structured',
         );
       }
+    }
+
+    // Don't persist empty summaries. If we got no overview AND no
+    // structured incidents, the row would render as "(empty)" in the
+    // discord embed and on dashboard.html — strictly worse than just
+    // letting the previous hour's good summary remain "latest" until
+    // the next run lands. Better an absent hour than a misleading one.
+    const hasIncidents =
+      structured &&
+      Array.isArray(structured['incidents']) &&
+      (structured['incidents'] as unknown[]).length > 0;
+    if (!summaryText && !hasIncidents && calls.length > 0 && !p.force) {
+      log.warn(
+        { call_count: calls.length, period: periodLabel },
+        'rdio: hourly skipping persist — empty overview AND no structured incidents',
+      );
+      return null;
     }
   }
   const details: Record<string, unknown> = {
