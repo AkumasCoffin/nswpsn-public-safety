@@ -275,6 +275,31 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
           'cleanup: facets-daily prune failed',
         );
       }
+
+      // 2d. Prune archive_*_latest sidecar entries whose latest_fetched_at
+      // points at parent rows that have already been dropped via partition
+      // expiry. The sidecar's PK doesn't have an FK to the parent (FK
+      // across partitioned tables is finicky), so orphan rows accumulate
+      // unless we sweep them. Cutoff matches the parent retention window.
+      try {
+        for (const t of ARCHIVE_TABLES) {
+          const r = await client.query(
+            `DELETE FROM ${t}_latest
+              WHERE latest_fetched_at < (NOW() - INTERVAL '${retentionDays} days')`,
+          );
+          if ((r.rowCount ?? 0) > 0) {
+            log.info(
+              { table: `${t}_latest`, rows: r.rowCount },
+              'cleanup: pruned latest sidecar',
+            );
+          }
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'cleanup: latest-sidecar prune failed',
+        );
+      }
     } finally {
       client.release();
     }
