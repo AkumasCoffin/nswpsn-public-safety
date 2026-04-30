@@ -4326,8 +4326,13 @@
         // refresh while sitting on the last page doesn't send a deep
         // offset that the backend now caps at 10000.
         const params = new URLSearchParams({ api_key: API_KEY, limit: pageSize, unique: '1' });
+        // full=1 mirrors the main search so auto-refresh receives the
+        // JSONB `data` column. Without it the response payload's data
+        // field is `{}` and rendered records flip to "Unknown" titles
+        // with no message body the moment auto-refresh fires.
+        params.set('full', '1');
         const { reverseDisplay: refreshReverseDisplay } = applyPaginationParams(params, currentPage);
-        
+
         // Apply current filters - source can come from type dropdown or be derived from provider
         let source = document.getElementById('filter-source')?.value || '';
         const providerName = document.getElementById('filter-provider')?.value || '';
