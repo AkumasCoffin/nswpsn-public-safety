@@ -641,22 +641,31 @@ function countCacheKey(table: string, sql: string, params: unknown[]): string {
   return `${table}|${sql}|${JSON.stringify(params)}`;
 }
 
-// 60s LRU cache for /api/data/history DATA queries — the rows
+// 5-min LRU cache for /api/data/history DATA queries — the rows
 // themselves, not just the count. On disk-saturated hosts the per-
-// table SELECT regularly hits the 60s statement_timeout, leaving
-// browser users staring at an empty page. Caching the rows means a
+// table DISTINCT ON regularly hits the 30s statement_timeout, and
+// the underlying archive_waze pages get evicted from cache by the
+// concurrent waze ingest writer. Caching the rows means a single
 // successful query covers every subsequent identical request inside
-// the 60s window; the bot's per-minute polls and the typical "load
+// the window; the bot's per-minute polls and the typical "load
 // page 1, scroll, page-jump" pattern both warm the cache fast.
 //
+// TTL bumped from 60s → 5min after observing repeated 30s timeouts
+// on archive_waze unique=1 queries during heavy waze ingest bursts:
+// each cache miss took 30s, failed, didn't populate the cache, then
+// the next request faced the same cold path — every refresh hit
+// the timeout. 5 min gives a successful query enough time to absorb
+// many subsequent requests, and the underlying data only changes by
+// a few rows per minute anyway.
+//
 // Keyed on (table, sql, params), so the LIMIT/OFFSET/cursor naturally
-// shard the cache per page. Capped at 128 entries — each entry holds
+// shard the cache per page. Capped at 256 entries — each entry holds
 // up to ~limit (default 100) ArchiveQueryRows so memory stays bounded
 // even at the cap.
 interface DataCacheEntry { rows: ArchiveQueryRow[]; ts: number; }
 const dataCache = new Map<string, DataCacheEntry>();
-const DATA_CACHE_TTL_MS = 60_000;
-const DATA_CACHE_MAX = 128;
+const DATA_CACHE_TTL_MS = 5 * 60_000;
+const DATA_CACHE_MAX = 256;
 
 function dataCacheKey(table: string, sql: string, params: unknown[]): string {
   return `${table}|${sql}|${JSON.stringify(params)}`;
