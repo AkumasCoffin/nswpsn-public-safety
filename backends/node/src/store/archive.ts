@@ -21,6 +21,7 @@
  * Rows are bucketed by destination table and INSERTed with executemany-
  * style multi-VALUES. Postgres handles the partition routing.
  */
+import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
@@ -53,6 +54,39 @@ interface QueueItem {
 }
 
 const HARD_CAP = 50_000; // bound RAM if Postgres goes away briefly
+
+/**
+ * Stable hash of a row's data field for write-time dedup. Excludes
+ * fields that change every poll regardless of upstream state — those
+ * would defeat the dedup if hashed.
+ *
+ * Uses sorted JSON.stringify so key ordering doesn't churn the hash;
+ * SHA-1 truncated to 20 chars is plenty of entropy for distinguishing
+ * states of a single incident (collision space ~10^24 vs handful of
+ * snapshots per incident).
+ */
+function hashRowData(row: ArchiveRow): string {
+  const stable = stableSerialize(row.data);
+  return createHash('sha1').update(stable).digest('hex').slice(0, 20);
+}
+
+/**
+ * JSON.stringify with deterministic key order at every nesting level.
+ * Cheaper than canonicalising RFC 8785 — we only need stability across
+ * Node restarts, not interop with other implementations.
+ */
+function stableSerialize(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) {
+    return '[' + v.map(stableSerialize).join(',') + ']';
+  }
+  const keys = Object.keys(v as Record<string, unknown>).sort();
+  const parts: string[] = [];
+  for (const k of keys) {
+    parts.push(JSON.stringify(k) + ':' + stableSerialize((v as Record<string, unknown>)[k]));
+  }
+  return '{' + parts.join(',') + '}';
+}
 
 export class ArchiveWriter {
   private queue: QueueItem[] = [];
@@ -275,35 +309,53 @@ export class ArchiveWriter {
       await client.query('BEGIN');
       try {
         // 90s per-statement budget. Postgres applies statement_timeout
-      // per-statement (not per-transaction), so each chunk INSERT plus
-      // the heatmap and facets upserts each get their own clock — this
-      // is just defensive headroom for a single chunk on a slow host.
-      await client.query("SET LOCAL statement_timeout = '90s'");
-        for (let start = 0; start < rows.length; start += INSERT_CHUNK_SIZE) {
-          const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
-          await this.insertChunk(client, table, slice);
+        // per-statement (not per-transaction), so each chunk INSERT plus
+        // the heatmap and facets upserts each get their own clock — this
+        // is just defensive headroom for a single chunk on a slow host.
+        await client.query("SET LOCAL statement_timeout = '90s'");
+
+        // Write-time dedup (migration 018). Compute a stable hash of
+        // each row's data, look up existing sidecar hashes, and only
+        // INSERT to the parent when the data has actually changed
+        // since we last stored it. Polls that bring no new info
+        // bump sidecar.last_seen_at without touching the parent.
+        const hashed = rows.map((r) => ({ row: r, hash: hashRowData(r) }));
+        const existingHashes = await this.lookupExistingHashes(client, table, hashed);
+        const toInsert: ArchiveRow[] = [];
+        for (const e of hashed) {
+          // Rows with no source_id can't be deduped (no stable key) — always insert.
+          if (e.row.source_id == null || e.row.source_id === '') {
+            toInsert.push(e.row);
+            continue;
+          }
+          const key = `${e.row.source}${e.row.source_id}`;
+          const existing = existingHashes.get(key);
+          if (existing === undefined || existing !== e.hash) {
+            toInsert.push(e.row);
+          }
         }
-        // Maintain the per-table _latest sidecar for unique=1 reads.
-        // Same transaction as the parent INSERT so the two stay atomic;
-        // a parent row never exists without a corresponding sidecar entry
-        // pointing at it (or at a newer row, after a future flush). See
-        // migration 017.
-        await this.upsertLatestSidecar(client, table, rows);
-        // Incremental heatmap aggregation. Done in the same transaction
-        // as the archive_waze INSERTs so a row in archive_waze always
-        // has its bin counted (or, on error, neither happens). Only
-        // aggregates waze_police rows with non-null lat/lng — same
-        // filter as the historical archive_waze GROUP BY scan that
-        // this hook replaces.
+
+        if (toInsert.length > 0) {
+          for (let start = 0; start < toInsert.length; start += INSERT_CHUNK_SIZE) {
+            const slice = toInsert.slice(start, start + INSERT_CHUNK_SIZE);
+            await this.insertChunk(client, table, slice);
+          }
+        }
+
+        // Always UPSERT the sidecar so last_seen_at advances even when
+        // the data was unchanged. Sets latest_fetched_at + data_hash
+        // only when EXCLUDED.data_hash differs from the stored one
+        // (so unchanged-row UPSERTs don't drift the change pointer).
+        await this.upsertLatestSidecar(client, table, hashed);
+
+        // Incremental heatmap aggregation. Aggregates the rows we
+        // actually inserted (= changed rows) so the heatmap reflects
+        // real movement, not poll cadence.
         if (table === 'archive_waze') {
-          await this.upsertPoliceHeatmapBinDaily(client, rows);
+          await this.upsertPoliceHeatmapBinDaily(client, toInsert);
         }
-        // Incremental filter-facets aggregation. Skipped for archive_waze
-        // because waze facets come from the LiveStore in-memory snapshot
-        // (the wazeIngestCache), not the archive. Including archive_waze
-        // here would double-count waze types in the dropdown.
         if (table !== 'archive_waze') {
-          await this.upsertFilterFacetsDaily(client, table, rows);
+          await this.upsertFilterFacetsDaily(client, table, toInsert);
         }
         await client.query('COMMIT');
       } catch (err) {
@@ -316,40 +368,88 @@ export class ArchiveWriter {
   }
 
   /**
-   * Maintain the per-table _latest sidecar: one row per (source,
-   * source_id) pointing at the most recent fetched_at. Reads use
-   * this to drive unique=1 history queries with a sub-second
-   * `ORDER BY latest_fetched_at DESC LIMIT N` index walk + JOIN
-   * back to the parent on (source, source_id, fetched_at).
+   * Bulk-fetch existing data_hash values from the sidecar for the
+   * incoming batch. One SELECT regardless of batch size, using a
+   * tuple IN-clause with PK lookups via the (source, source_id) PK
+   * index. Returns a map of `sourcesource_id` -> data_hash.
+   */
+  private async lookupExistingHashes(
+    client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<{ source: string; source_id: string; data_hash: string | null }> }> },
+    table: ArchiveTable,
+    hashed: Array<{ row: ArchiveRow; hash: string }>,
+  ): Promise<Map<string, string>> {
+    // Dedupe lookup keys by (source, source_id) — a flush can have
+    // multiple rows for the same incident, but we only need one
+    // SELECT per pair.
+    const seenKey = new Set<string>();
+    const params: unknown[] = [];
+    const placeholders: string[] = [];
+    for (const e of hashed) {
+      if (e.row.source_id == null || e.row.source_id === '') continue;
+      const key = `${e.row.source}${e.row.source_id}`;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      placeholders.push(`($${params.length + 1}, $${params.length + 2})`);
+      params.push(e.row.source, e.row.source_id);
+    }
+    const out = new Map<string, string>();
+    if (placeholders.length === 0) return out;
+    const sql = `
+      SELECT source, source_id, data_hash
+        FROM ${table}_latest
+       WHERE (source, source_id) IN (${placeholders.join(',')})
+    `;
+    const r = await client.query(sql, params);
+    for (const row of r.rows) {
+      if (row.data_hash != null) {
+        out.set(`${row.source}${row.source_id}`, row.data_hash);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Maintain the per-table _latest sidecar (migrations 017 + 018).
+   * One row per (source, source_id) tracking:
+   *   latest_fetched_at — when the most recently STORED parent row was
+   *                       inserted. Only advances when data_hash
+   *                       changes; stable when polls bring no new info.
+   *   last_seen_at      — when we most recently saw this incident in
+   *                       any poll, regardless of whether the data
+   *                       changed. Bumped every flush.
+   *   data_hash         — SHA-1-prefix of the latest stored data, used
+   *                       on the next poll to detect "data unchanged"
+   *                       and skip the parent INSERT.
    *
-   * Within a single batch a (source, source_id) pair can appear
-   * multiple times (e.g. two waze polls inside one flush window) —
-   * we collapse to max(fetched_at) before writing so the multi-VALUES
-   * UPSERT doesn't include duplicates that would violate
-   * `ON CONFLICT (source, source_id) DO UPDATE`'s constraint that no
-   * two EXCLUDED tuples target the same conflict row.
+   * Within a flush, a (source, source_id) pair can appear multiple
+   * times — collapse to the max-fetched_at row's hash so the UPSERT
+   * EXCLUDED tuples are unique on the conflict key.
    *
-   * Skips rows with NULL/empty source_id — those can't be unique=1
-   * deduplicated anyway, and including them would create per-source
-   * "ghost" rows in the sidecar.
+   * Rows with NULL/empty source_id can't be unique=1 deduped (no
+   * stable key) and don't go in the sidecar at all.
    */
   private async upsertLatestSidecar(
     client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
     table: ArchiveTable,
-    rows: ArchiveRow[],
+    hashed: Array<{ row: ArchiveRow; hash: string }>,
   ): Promise<void> {
-    if (rows.length === 0) return;
+    if (hashed.length === 0) return;
     const map = new Map<
       string,
-      { source: string; source_id: string; fetched_at: number }
+      { source: string; source_id: string; fetched_at: number; hash: string }
     >();
-    for (const r of rows) {
-      const sid = r.source_id;
+    for (const e of hashed) {
+      const sid = e.row.source_id;
       if (sid == null || sid === '') continue;
-      const key = `${r.source} ${sid}`;
+      const key = `${e.row.source}${sid}`;
       const existing = map.get(key);
-      if (!existing || r.fetched_at > existing.fetched_at) {
-        map.set(key, { source: r.source, source_id: sid, fetched_at: r.fetched_at });
+      if (!existing || e.row.fetched_at > existing.fetched_at) {
+        map.set(key, {
+          source: e.row.source,
+          source_id: sid,
+          fetched_at: e.row.fetched_at,
+          hash: e.hash,
+        });
       }
     }
     if (map.size === 0) return;
@@ -359,17 +459,31 @@ export class ArchiveWriter {
     let i = 0;
     for (const v of map.values()) {
       placeholders.push(
-        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint))`,
+        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text)`,
       );
-      params.push(v.source, v.source_id, v.fetched_at);
-      i += 3;
+      params.push(v.source, v.source_id, v.fetched_at, v.fetched_at, v.hash);
+      i += 5;
     }
+    // last_seen_at always advances. latest_fetched_at + data_hash
+    // advance only when EXCLUDED.data_hash differs from the stored
+    // one — so a stable incident polled 1000 times keeps a single
+    // archive row but its sidecar entry stays "live" via last_seen_at.
     const sql = `
-      INSERT INTO ${table}_latest (source, source_id, latest_fetched_at)
+      INSERT INTO ${table}_latest
+        (source, source_id, latest_fetched_at, last_seen_at, data_hash)
       VALUES ${placeholders.join(',')}
       ON CONFLICT (source, source_id) DO UPDATE
-        SET latest_fetched_at = EXCLUDED.latest_fetched_at
-        WHERE ${table}_latest.latest_fetched_at < EXCLUDED.latest_fetched_at
+        SET last_seen_at = GREATEST(${table}_latest.last_seen_at, EXCLUDED.last_seen_at),
+            latest_fetched_at = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.latest_fetched_at
+              ELSE ${table}_latest.latest_fetched_at
+            END,
+            data_hash = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.data_hash
+              ELSE ${table}_latest.data_hash
+            END
     `;
     await client.query(sql, params);
   }
