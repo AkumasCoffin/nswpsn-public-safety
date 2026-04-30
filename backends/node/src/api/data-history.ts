@@ -214,6 +214,9 @@ interface RawArchiveRow extends QueryResultRow {
   last_seen_at_epoch?: string | number | null;
   /** Only set on unique=1 sidecar-driven queries. */
   last_seen_at?: Date | string | null;
+  /** Only set on unique=1 sidecar-driven queries. The upstream feed's
+   *  own publish/last-updated time, normalised to epoch seconds. */
+  source_timestamp_unix?: string | number | null;
   lat: number | null;
   lng: number | null;
   category: string | null;
@@ -236,6 +239,13 @@ function normaliseRow(r: RawArchiveRow): ArchiveQueryRow {
         ? Number.parseInt(r.last_seen_at_epoch, 10)
         : r.last_seen_at_epoch;
   }
+  let sourceTsUnix: number | null = null;
+  if (r.source_timestamp_unix != null) {
+    sourceTsUnix =
+      typeof r.source_timestamp_unix === 'string'
+        ? Number.parseInt(r.source_timestamp_unix, 10)
+        : r.source_timestamp_unix;
+  }
   let data: Record<string, unknown>;
   if (typeof r.data === 'string') {
     try {
@@ -254,6 +264,7 @@ function normaliseRow(r: RawArchiveRow): ArchiveQueryRow {
     fetched_at: r.fetched_at,
     last_seen_at_epoch: lastSeenEpoch,
     last_seen_at: r.last_seen_at ?? null,
+    source_timestamp_unix: sourceTsUnix,
     lat: r.lat,
     lng: r.lng,
     category: r.category,
@@ -567,6 +578,13 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
   //   2. data.last_seen — fallback used by sources that recorded their own
   //      last_seen field in JSONB before the sidecar existed.
   const lastSeen = r.last_seen_at_epoch ?? pickNum(data, 'last_seen');
+  // source_timestamp sources, in priority:
+  //   1. sidecar.source_timestamp_unix (extracted at write time from the
+  //      upstream payload — migration 020). Normalised epoch seconds.
+  //   2. data.source_timestamp_unix in the JSONB blob (legacy path; not
+  //      currently populated by any source but kept for forward-compat).
+  //   3. null (frontend can fall back to fetched_at_iso for display).
+  const srcTsUnix = r.source_timestamp_unix ?? pickNum(data, 'source_timestamp_unix');
   return {
     id: r.id,
     source: r.source,
@@ -574,7 +592,7 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     fetched_at: ts,
     fetched_at_iso: sydneyIsoFromUnix(ts),
     source_timestamp: pickStr(data, 'source_timestamp'),
-    source_timestamp_unix: pickNum(data, 'source_timestamp_unix'),
+    source_timestamp_unix: srcTsUnix,
     // Schema column is `lat`/`lng` but Python's response shape is
     // `latitude`/`longitude` — keep the legacy names so logs.html etc.
     // don't break.

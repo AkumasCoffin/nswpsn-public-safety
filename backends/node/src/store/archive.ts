@@ -40,6 +40,11 @@ export interface ArchiveRow {
   source_id?: string | null;
   /** Epoch seconds when the record was fetched. */
   fetched_at: number;
+  /** Epoch seconds the upstream feed published / last-updated this
+   *  incident — extracted from the source's own timestamp field.
+   *  Null when the upstream doesn't expose a timestamp; readers
+   *  fall back to fetched_at in that case. */
+  source_timestamp_unix?: number | null;
   lat?: number | null;
   lng?: number | null;
   category?: string | null;
@@ -436,7 +441,13 @@ export class ArchiveWriter {
     if (hashed.length === 0) return;
     const map = new Map<
       string,
-      { source: string; source_id: string; fetched_at: number; hash: string }
+      {
+        source: string;
+        source_id: string;
+        fetched_at: number;
+        hash: string;
+        source_ts_unix: number | null;
+      }
     >();
     for (const e of hashed) {
       const sid = e.row.source_id;
@@ -449,6 +460,7 @@ export class ArchiveWriter {
           source_id: sid,
           fetched_at: e.row.fetched_at,
           hash: e.hash,
+          source_ts_unix: e.row.source_timestamp_unix ?? null,
         });
       }
     }
@@ -459,18 +471,20 @@ export class ArchiveWriter {
     let i = 0;
     for (const v of map.values()) {
       placeholders.push(
-        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text)`,
+        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text, $${i + 6}::bigint)`,
       );
-      params.push(v.source, v.source_id, v.fetched_at, v.fetched_at, v.hash);
-      i += 5;
+      params.push(v.source, v.source_id, v.fetched_at, v.fetched_at, v.hash, v.source_ts_unix);
+      i += 6;
     }
-    // last_seen_at always advances. latest_fetched_at + data_hash
-    // advance only when EXCLUDED.data_hash differs from the stored
-    // one — so a stable incident polled 1000 times keeps a single
-    // archive row but its sidecar entry stays "live" via last_seen_at.
+    // last_seen_at always advances. latest_fetched_at + data_hash +
+    // source_timestamp_unix advance only when EXCLUDED.data_hash
+    // differs from the stored one — so a stable incident polled 1000
+    // times keeps a single archive row, the sidecar's source-side
+    // timestamp stays pinned to whenever the upstream actually
+    // updated it, and last_seen_at advances every poll.
     const sql = `
       INSERT INTO ${table}_latest
-        (source, source_id, latest_fetched_at, last_seen_at, data_hash)
+        (source, source_id, latest_fetched_at, last_seen_at, data_hash, source_timestamp_unix)
       VALUES ${placeholders.join(',')}
       ON CONFLICT (source, source_id) DO UPDATE
         SET last_seen_at = GREATEST(${table}_latest.last_seen_at, EXCLUDED.last_seen_at),
@@ -483,6 +497,11 @@ export class ArchiveWriter {
               WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.data_hash
               ELSE ${table}_latest.data_hash
+            END,
+            source_timestamp_unix = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.source_timestamp_unix
+              ELSE ${table}_latest.source_timestamp_unix
             END
     `;
     await client.query(sql, params);
