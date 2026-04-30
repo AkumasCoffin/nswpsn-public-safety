@@ -210,6 +210,10 @@ interface RawArchiveRow extends QueryResultRow {
   source_id: string | null;
   fetched_at_epoch: string | number;
   fetched_at: Date | string;
+  /** Only set on unique=1 sidecar-driven queries. epoch seconds. */
+  last_seen_at_epoch?: string | number | null;
+  /** Only set on unique=1 sidecar-driven queries. */
+  last_seen_at?: Date | string | null;
   lat: number | null;
   lng: number | null;
   category: string | null;
@@ -225,6 +229,13 @@ function normaliseRow(r: RawArchiveRow): ArchiveQueryRow {
     typeof r.fetched_at_epoch === 'string'
       ? Number.parseInt(r.fetched_at_epoch, 10)
       : r.fetched_at_epoch;
+  let lastSeenEpoch: number | null = null;
+  if (r.last_seen_at_epoch != null) {
+    lastSeenEpoch =
+      typeof r.last_seen_at_epoch === 'string'
+        ? Number.parseInt(r.last_seen_at_epoch, 10)
+        : r.last_seen_at_epoch;
+  }
   let data: Record<string, unknown>;
   if (typeof r.data === 'string') {
     try {
@@ -241,6 +252,8 @@ function normaliseRow(r: RawArchiveRow): ArchiveQueryRow {
     source_id: r.source_id,
     fetched_at_epoch: epoch,
     fetched_at: r.fetched_at,
+    last_seen_at_epoch: lastSeenEpoch,
+    last_seen_at: r.last_seen_at ?? null,
     lat: r.lat,
     lng: r.lng,
     category: r.category,
@@ -548,7 +561,12 @@ function pickBool(d: Record<string, unknown>, k: string, fallback: boolean): boo
 function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord {
   const data = r.data ?? {};
   const ts = r.fetched_at_epoch;
-  const lastSeen = pickNum(data, 'last_seen');
+  // last_seen sources, in priority:
+  //   1. sidecar.last_seen_at (set on unique=1 results from migration 018) —
+  //      authoritative "when did we last see this in any poll" timestamp.
+  //   2. data.last_seen — fallback used by sources that recorded their own
+  //      last_seen field in JSONB before the sidecar existed.
+  const lastSeen = r.last_seen_at_epoch ?? pickNum(data, 'last_seen');
   return {
     id: r.id,
     source: r.source,

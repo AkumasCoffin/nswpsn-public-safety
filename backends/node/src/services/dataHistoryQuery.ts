@@ -354,7 +354,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
 
   const sql = `
     WITH top_keys AS (
-      SELECT source, source_id, latest_fetched_at
+      SELECT source, source_id, latest_fetched_at, last_seen_at
       FROM ${table}_latest
       ${sidecarWhere}
       ORDER BY latest_fetched_at ${p.order}
@@ -363,6 +363,8 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     SELECT a.id, a.source, a.source_id,
            extract(epoch FROM a.fetched_at)::bigint AS fetched_at_epoch,
            a.fetched_at,
+           extract(epoch FROM k.last_seen_at)::bigint AS last_seen_at_epoch,
+           k.last_seen_at,
            a.lat, a.lng, a.category, a.subcategory,
            ${dataCol}
     FROM top_keys k
@@ -766,8 +768,13 @@ export interface ArchiveQueryRow {
   id: number;
   source: string;
   source_id: string | null;
+  /** When the most recently STORED row was inserted (data last changed). */
   fetched_at_epoch: number;
   fetched_at: Date | string;
+  /** Only present on unique=1 results. When the incident was last seen
+   *  in a poll, regardless of whether the data changed. epoch seconds. */
+  last_seen_at_epoch?: number | null;
+  last_seen_at?: Date | string | null;
   lat: number | null;
   lng: number | null;
   category: string | null;

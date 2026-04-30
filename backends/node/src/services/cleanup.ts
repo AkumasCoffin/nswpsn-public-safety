@@ -276,16 +276,20 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         );
       }
 
-      // 2d. Prune archive_*_latest sidecar entries whose latest_fetched_at
-      // points at parent rows that have already been dropped via partition
-      // expiry. The sidecar's PK doesn't have an FK to the parent (FK
-      // across partitioned tables is finicky), so orphan rows accumulate
-      // unless we sweep them. Cutoff matches the parent retention window.
+      // 2d. Prune archive_*_latest sidecar entries we haven't seen in
+      // a poll for longer than the retention window. Pruning by
+      // last_seen_at (NOT latest_fetched_at) is intentional: with the
+      // write-time dedup writer (migration 018), a stable incident
+      // polled every minute for 30 days keeps latest_fetched_at
+      // pinned to whenever the data last actually changed — which
+      // could be 25+ days ago. Cleaning by latest_fetched_at would
+      // delete sidecar entries for incidents that are still being
+      // seen. last_seen_at is the right "is this still alive" signal.
       try {
         for (const t of ARCHIVE_TABLES) {
           const r = await client.query(
             `DELETE FROM ${t}_latest
-              WHERE latest_fetched_at < (NOW() - INTERVAL '${retentionDays} days')`,
+              WHERE last_seen_at < (NOW() - INTERVAL '${retentionDays} days')`,
           );
           if ((r.rowCount ?? 0) > 0) {
             log.info(
