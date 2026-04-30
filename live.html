@@ -3914,8 +3914,15 @@
       dataSlice.forEach(h => {
         const d = new Date(h.timestamp);
         labels.push(d.toLocaleTimeString([], labelFormat));
-        
-        const data = h.data;
+
+        // Legacy python snapshots double-encoded `data` as a JSON string
+        // inside JSONB. New backend unwraps it, but parse defensively here
+        // in case any history row still arrives as a string.
+        let data = h.data;
+        if (typeof data === 'string') {
+          try { data = JSON.parse(data); } catch { data = {}; }
+        }
+        if (!data || typeof data !== 'object') data = {};
         
         // Power: Ausgrid + Endeavour + Essential totals (including maintenance)
         const powerTotal = (data.power?.ausgrid?.unplanned || 0) +
