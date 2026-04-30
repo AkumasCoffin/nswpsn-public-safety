@@ -3959,16 +3959,35 @@
       // Helper function to update a sparkline
       function updateSparkline(chart, data, labels, valueId, rangeId) {
         if (!chart) return;
-        
-        chart.data.labels = labels;
-        chart.data.datasets[0].data = data;
-        chart.update('none');
-        
-        const last = data[data.length - 1] || 0;
+
         const validData = data.filter(d => d !== undefined && d !== null);
         const min = validData.length > 0 ? Math.min(...validData) : 0;
         const max = validData.length > 0 ? Math.max(...validData) : 0;
-        
+        const last = data[data.length - 1] || 0;
+
+        // Adaptive Y-axis: when values are clustered well above zero
+        // (variation < 50% of max), zoom into the data range so we can
+        // see the line shape. Otherwise begin at zero so big drops to
+        // zero stay obvious.
+        const range = max - min;
+        const zoom = max > 0 && min > 0 && range / max < 0.5;
+        if (chart.options?.scales?.y) {
+          if (zoom) {
+            const pad = Math.max(1, range * 0.25);
+            chart.options.scales.y.min = Math.max(0, Math.floor(min - pad));
+            chart.options.scales.y.max = Math.ceil(max + pad);
+            chart.options.scales.y.beginAtZero = false;
+          } else {
+            chart.options.scales.y.min = undefined;
+            chart.options.scales.y.max = undefined;
+            chart.options.scales.y.beginAtZero = true;
+          }
+        }
+
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = data;
+        chart.update('none');
+
         const valueEl = document.getElementById(valueId);
         const rangeEl = document.getElementById(rangeId);
         if (valueEl) valueEl.textContent = last.toLocaleString();

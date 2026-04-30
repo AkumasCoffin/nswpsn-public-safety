@@ -448,6 +448,106 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+// Salvage a partial object from truncated JSON. Gemini 2.5 Flash sometimes
+// stops mid-string even though finish_reason=stop, leaving us with an
+// unclosed JSON document. We try to close any open string/object/array
+// brackets so the prefix we did receive parses. Returns null on failure.
+function repairTruncatedJson(input: string): Record<string, unknown> | null {
+  if (!input) return null;
+  // Walk the text tracking string state and bracket stack so we know what
+  // needs closing.
+  const stack: string[] = [];
+  let inStr = false;
+  let escape = false;
+  let lastValueEnd = -1; // index after last comma/colon/}-]/quote close
+  for (let i = 0; i < input.length; i++) {
+    const c = input[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inStr) {
+      if (c === '\\') {
+        escape = true;
+        continue;
+      }
+      if (c === '"') {
+        inStr = false;
+        lastValueEnd = i + 1;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === '{' || c === '[') {
+      stack.push(c);
+      continue;
+    }
+    if (c === '}' || c === ']') {
+      stack.pop();
+      lastValueEnd = i + 1;
+      continue;
+    }
+    if (c === ',' || c === ':') {
+      lastValueEnd = i;
+    }
+  }
+  if (stack.length === 0 && !inStr) return null; // not actually truncated
+
+  // Trim back to the last complete value boundary so we don't leave a
+  // dangling key like `"foo":` with no value, or `"foo": "ba` mid-string.
+  let trimmed = lastValueEnd > 0 ? input.slice(0, lastValueEnd) : '';
+  if (!trimmed) return null;
+  // Drop any trailing comma — `"a": 1, ` would parse, `"a": 1,` won't.
+  trimmed = trimmed.replace(/,\s*$/, '');
+  // If we cut right after a key's colon (`"foo":`), drop that key too.
+  trimmed = trimmed.replace(/,?\s*"[^"\\]*"\s*:\s*$/, '');
+
+  // Re-walk the trimmed prefix to recompute the bracket stack.
+  const closeStack: string[] = [];
+  let s = false;
+  let esc = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (s) {
+      if (c === '\\') {
+        esc = true;
+        continue;
+      }
+      if (c === '"') s = false;
+      continue;
+    }
+    if (c === '"') {
+      s = true;
+      continue;
+    }
+    if (c === '{' || c === '[') closeStack.push(c);
+    else if (c === '}' || c === ']') closeStack.pop();
+  }
+  // Close any still-open brackets.
+  let closing = '';
+  while (closeStack.length > 0) {
+    const open = closeStack.pop();
+    closing += open === '{' ? '}' : ']';
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed + closing);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // give up
+  }
+  return null;
+}
+
 export interface ParsedSummary {
   overview: string;
   structured: Record<string, unknown> | null;
@@ -531,6 +631,40 @@ export function parseSummaryOutput(text: string): ParsedSummary {
     } catch {
       // try next attempt
     }
+  }
+
+  // Salvage path: Gemini sometimes truncates mid-output even with
+  // finish_reason=stop. Trim back to the last valid value boundary,
+  // close any open brackets, and re-parse. Recovers `overview` plus
+  // however many `incidents` finished writing.
+  const repairFrom = first >= 0 ? cleaned.slice(first) : cleaned;
+  const repaired = repairTruncatedJson(repairFrom);
+  if (repaired) {
+    log.info(
+      {
+        keys: Object.keys(repaired),
+        incidents: Array.isArray(repaired['incidents'])
+          ? (repaired['incidents'] as unknown[]).length
+          : null,
+      },
+      'summary parse: recovered truncated JSON',
+    );
+    const ov = repaired['overview'];
+    let overview = typeof ov === 'string' ? ov : '';
+    if (
+      !overview &&
+      Array.isArray(repaired['incidents']) &&
+      (repaired['incidents'] as unknown[]).length > 0
+    ) {
+      const incidents = repaired['incidents'] as Array<Record<string, unknown>>;
+      const top = incidents.find(isPlainObject);
+      const title =
+        top && typeof top['title'] === 'string' ? (top['title'] as string) : null;
+      overview = title
+        ? `${incidents.length} incident${incidents.length === 1 ? '' : 's'} — top: ${title}.`
+        : `${incidents.length} incident${incidents.length === 1 ? '' : 's'} reported.`;
+    }
+    return { overview, structured: repaired };
   }
 
   // Parse fully failed. Returning the raw LLM body as overview puts
