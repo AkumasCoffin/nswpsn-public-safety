@@ -9813,18 +9813,27 @@ function initPagerHoursFromStorage() {
     async function loadRadarFrames() {
       try {
         let data;
+        let past = [];
+        let nowcast = [];
         try {
           const res = await apiFetch(`${PROXY_BASE}/api/weather/radar`);
           data = await res.json();
+          past = data.radar?.past || [];
+          nowcast = data.radar?.nowcast || [];
         } catch {
+          // backend fetch threw — fall through to direct fetch below
+        }
+        // Backend may have returned 200 with empty arrays when the upstream
+        // poll timed out. Treat that the same as a hard failure and try the
+        // browser-direct route before giving up.
+        if (past.length === 0 && nowcast.length === 0) {
           const fallback = await fetch('https://api.rainviewer.com/public/weather-maps.json');
           data = await fallback.json();
+          past = data.radar?.past || [];
+          nowcast = data.radar?.nowcast || [];
         }
-        
-        const past = data.radar?.past || [];
-        const nowcast = data.radar?.nowcast || [];
         radarFrames = [...past, ...nowcast];
-        
+
         if (radarFrames.length === 0) return;
         
         const slider = document.getElementById('radar-slider');
