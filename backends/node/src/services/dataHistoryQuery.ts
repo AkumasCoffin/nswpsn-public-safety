@@ -225,21 +225,23 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     sidecarAcc.parts.push(`source_id = $${sidecarAcc.params.length + 1}`);
     sidecarAcc.params.push(p.sourceId);
   }
-  // Time-window filters apply to last_seen_at, not latest_fetched_at.
-  // After dedup + recompute, latest_fetched_at points at the last data
-  // change (could be weeks ago for a stable incident); last_seen_at is
-  // "still alive in the last poll" and matches what users mean by
-  // "incidents in the last 24h". Sort still uses latest_fetched_at
-  // DESC so most-recently-changed lands at the top of the list.
+  // Time-window filter uses the SOURCE'S OWN publish timestamp
+  // (extracted at write time into source_timestamp_unix on the
+  // sidecar — see migration 020). Falls back to last_seen_at when
+  // the upstream payload didn't expose a usable timestamp so rows
+  // without source-side time still surface. Backend ingest times
+  // (fetched_at / latest_fetched_at) deliberately aren't used for
+  // user-facing windows — they describe our polling, not what the
+  // user means by "incidents in the last 24h".
   if (p.since !== null) {
     sidecarAcc.parts.push(
-      `last_seen_at >= to_timestamp($${sidecarAcc.params.length + 1})`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.since);
   }
   if (p.until !== null) {
     sidecarAcc.parts.push(
-      `last_seen_at <= to_timestamp($${sidecarAcc.params.length + 1})`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.until);
   }
@@ -358,12 +360,18 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   allParams.push(fetchSize);
   const limitPlaceholder = `$${allParams.length}`;
 
+  // ORDER BY also uses source_timestamp_unix with last_seen_at fallback,
+  // matching the filter semantics. Most-recently-published-by-the-source
+  // lands at the top of the list.
   const sql = `
     WITH top_keys AS (
-      SELECT source, source_id, latest_fetched_at, last_seen_at
+      SELECT source, source_id, latest_fetched_at, last_seen_at,
+             source_timestamp_unix,
+             COALESCE(source_timestamp_unix,
+                      EXTRACT(EPOCH FROM last_seen_at)::bigint) AS effective_ts
       FROM ${table}_latest
       ${sidecarWhere}
-      ORDER BY latest_fetched_at ${p.order}
+      ORDER BY effective_ts ${p.order}
       LIMIT ${cteLimit}
     )
     SELECT a.id, a.source, a.source_id,
@@ -371,6 +379,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
            a.fetched_at,
            extract(epoch FROM k.last_seen_at)::bigint AS last_seen_at_epoch,
            k.last_seen_at,
+           k.source_timestamp_unix,
            a.lat, a.lng, a.category, a.subcategory,
            ${dataCol}
     FROM top_keys k
@@ -380,7 +389,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
      AND a.fetched_at = k.latest_fetched_at
     WHERE TRUE
     ${parentWhere}
-    ORDER BY a.fetched_at ${p.order}, a.id ${p.order}
+    ORDER BY k.effective_ts ${p.order}, a.id ${p.order}
     LIMIT ${limitPlaceholder}
   `;
   return { sql, params: allParams, table };
@@ -714,17 +723,17 @@ export function buildCountSqlForTable(
       sidecarAcc.parts.push(`source_id = $${sidecarAcc.params.length + 1}`);
       sidecarAcc.params.push(p.sourceId);
     }
-    // Match the unique=1 data query — filter on last_seen_at so live
-    // incidents whose data hasn't changed recently are still counted.
+    // Match the unique=1 data query — filter on the source's own
+    // publish timestamp with last_seen_at fallback.
     if (p.since !== null) {
       sidecarAcc.parts.push(
-        `last_seen_at >= to_timestamp($${sidecarAcc.params.length + 1})`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.since);
     }
     if (p.until !== null) {
       sidecarAcc.parts.push(
-        `last_seen_at <= to_timestamp($${sidecarAcc.params.length + 1})`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.until);
     }
@@ -783,6 +792,10 @@ export interface ArchiveQueryRow {
    *  in a poll, regardless of whether the data changed. epoch seconds. */
   last_seen_at_epoch?: number | null;
   last_seen_at?: Date | string | null;
+  /** Only present on unique=1 results. Upstream feed's own publish /
+   *  last-updated time in epoch seconds — null when the source payload
+   *  didn't carry a usable timestamp. */
+  source_timestamp_unix?: number | null;
   lat: number | null;
   lng: number | null;
   category: string | null;

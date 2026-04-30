@@ -49,6 +49,84 @@ function asString(v: unknown): string | null {
   return null;
 }
 
+/**
+ * Extract a normalised "when did the source publish/update this row"
+ * unix-seconds timestamp from a feature's properties. Walks a list of
+ * known timestamp keys per source, accepts ISO strings / unix seconds /
+ * unix millis. Returns null when the upstream payload has no usable
+ * time field — readers fall back to fetched_at in that case.
+ *
+ * Why we do this at write time: the time field is per-source and
+ * sometimes nested. Doing it once in the writer means SQL filters /
+ * sorts can hit a top-level indexed column on the sidecar instead of
+ * (data->>'k')::bigint casts.
+ */
+function asEpochSeconds(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    // Heuristic: numbers > 10^12 are millis (e.g. Date.now()), seconds
+    // since 1970 are 10-digit until ~Nov 2286. Convert millis -> sec.
+    return v > 1e12 ? Math.floor(v / 1000) : Math.floor(v);
+  }
+  if (typeof v === 'string' && v.trim() !== '') {
+    const s = v.trim();
+    // Pure number string?
+    const n = Number(s);
+    if (Number.isFinite(n) && /^\d+(\.\d+)?$/.test(s)) {
+      return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+    // Try Date.parse — handles ISO 8601 + RFC 2822 + most other forms.
+    const ms = Date.parse(s);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  }
+  return null;
+}
+
+export function extractSourceTimestampUnix(
+  props: Record<string, unknown>,
+  source?: string,
+): number | null {
+  // Per-source preferred field, then a fallback list of common keys.
+  // RFS feeds carry `pubDate` (RFC 2822). Waze uses pubMillis (epoch
+  // millis). BoM uses `effective`. Traffic uses `lastUpdated`. Power
+  // outages use start/endDateTime — we prefer those over fetch time
+  // because outage announcements list the announce time as the start.
+  const candidates: string[] = [
+    'source_timestamp_unix',
+    'source_timestamp',
+    'pubMillis',
+    'pubDate',
+    'pubdate',
+    'lastUpdated',
+    'last_updated',
+    'updated',
+    'updated_at',
+    'updatedAt',
+    'lastModified',
+    'last_modified',
+    'effective',
+    'startTime',
+    'start_time',
+    'StartTime',
+    'created',
+    'created_at',
+    'createdAt',
+    'timestamp',
+    'date',
+    'datetime',
+  ];
+  // Source-specific overrides at the front of the candidate list.
+  if (source) {
+    if (source.startsWith('waze_')) candidates.unshift('pubMillis');
+    if (source === 'rfs') candidates.unshift('pubDate');
+    if (source.startsWith('bom_')) candidates.unshift('effective');
+  }
+  for (const k of candidates) {
+    const t = asEpochSeconds(props[k]);
+    if (t !== null) return t;
+  }
+  return null;
+}
+
 function isFeatureCollection(v: unknown): v is FeatureCollectionLike {
   return (
     !!v &&
@@ -278,6 +356,7 @@ export function defaultArchiveItems(
         source,
         source_id: extractSourceId(f as Record<string, unknown>),
         fetched_at,
+        source_timestamp_unix: extractSourceTimestampUnix(props, source),
         lat,
         lng,
         category,
@@ -299,6 +378,7 @@ export function defaultArchiveItems(
         source,
         source_id: extractSourceId(obj),
         fetched_at,
+        source_timestamp_unix: extractSourceTimestampUnix(obj, source),
         lat,
         lng,
         category,
