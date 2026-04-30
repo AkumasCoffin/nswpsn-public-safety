@@ -1689,10 +1689,12 @@
       // Show type group and populate types
       typeGroup.style.display = 'flex';
       
-      // Type icon mappings
+      // Type icon mappings — keyed on the `name` field returned by the
+      // /api/data/history/filters endpoint per provider.types[*].name.
       const typeIcons = {
         // Waze
         'Hazards': { icon: 'triangle-exclamation', color: '#eab308' },
+        'Traffic Jams': { icon: 'car', color: '#ef4444' },
         'Police': { icon: 'shield-halved', color: '#3b82f6' },
         'Roadwork': { icon: 'person-digging', color: '#f97316' },
         // LiveTraffic NSW
@@ -1700,17 +1702,27 @@
         'Flooding': { icon: 'water', color: '#3b82f6' },
         'Fires': { icon: 'fire', color: '#ef4444' },
         'Major Events': { icon: 'star', color: '#8b5cf6' },
-        // Endeavour
+        // RFS
+        'Major Incidents': { icon: 'fire-flame-curved', color: '#ef4444' },
+        // Endeavour / Ausgrid / Essential
         'Current Outages': { icon: 'bolt', color: '#ef4444' },
         'Planned Outages': { icon: 'calendar-check', color: '#22c55e' },
+        'Future Outages': { icon: 'calendar-plus', color: '#06b6d4' },
         'Outages': { icon: 'bolt', color: '#fbbf24' },
         // BOM
         'All Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
+        'Land Warnings': { icon: 'mountain-sun', color: '#22c55e' },
+        'Marine Warnings': { icon: 'water', color: '#0ea5e9' },
+        // legacy short keys (kept for any caller still passing them)
         'Land': { icon: 'mountain-sun', color: '#22c55e' },
         'Marine': { icon: 'water', color: '#0ea5e9' },
         'Warnings': { icon: 'cloud-bolt', color: '#3b82f6' },
         // Pager
         'Messages': { icon: 'comment-dots', color: '#8b5cf6' },
+        // User submissions
+        'User Incidents': { icon: 'user-plus', color: '#a855f7' },
+        // Radio scanner summaries
+        'Hourly Summaries': { icon: 'microphone-lines', color: '#10b981' },
       };
       
       // Add "All Types" option
@@ -2025,7 +2037,12 @@
           'Grass Fire': { icon: 'fire', color: '#f97316', group: 'Fire Type' },
           'Hazard Reduction': { icon: 'leaf', color: '#22c55e', group: 'Fire Type' },
           'Planned Burn': { icon: 'calendar-days', color: '#22c55e', group: 'Fire Type' },
+          'Burn off': { icon: 'fire', color: '#84cc16', group: 'Fire Type' },
           'Structure Fire': { icon: 'house-fire', color: '#dc2626', group: 'Fire Type' },
+          'Car Fire': { icon: 'car', color: '#ef4444', group: 'Fire Type' },
+          'Truck Fire': { icon: 'truck', color: '#ef4444', group: 'Fire Type' },
+          'Vehicle/Equipment Fire': { icon: 'car-side', color: '#ef4444', group: 'Fire Type' },
+          'Haystack fire': { icon: 'fire', color: '#f59e0b', group: 'Fire Type' },
           'MVA/Transport': { icon: 'car-burst', color: '#f97316', group: 'Fire Type' },
           'Not Applicable': { icon: 'ban', color: '#94a3b8', group: 'Fire Type' },
           'Other': { icon: 'question', color: '#94a3b8', group: 'Fire Type' },
@@ -2033,7 +2050,11 @@
           'Motor Vehicle Accident': { icon: 'car-burst', color: '#f97316', group: 'Fire Type' },
           'HAZMAT': { icon: 'biohazard', color: '#eab308', group: 'Fire Type' },
           'Rescue': { icon: 'life-ring', color: '#3b82f6', group: 'Fire Type' },
+          'Search/Rescue': { icon: 'magnifying-glass', color: '#3b82f6', group: 'Fire Type' },
           'Medical': { icon: 'kit-medical', color: '#ef4444', group: 'Fire Type' },
+          'ICEMS': { icon: 'kit-medical', color: '#dc2626', group: 'Fire Type' },
+          'Fire Alarm': { icon: 'bell', color: '#f97316', group: 'Fire Type' },
+          'Planned Event': { icon: 'calendar-check', color: '#22c55e', group: 'Fire Type' },
           // RFS - Alert Levels
           'Advice': { icon: 'circle-info', color: '#22c55e', group: 'Alert Level' },
           'Watch and Act': { icon: 'eye', color: '#f97316', group: 'Alert Level' },
@@ -2084,17 +2105,43 @@
           'SCHEDULED ROADWORK': { icon: 'person-digging', color: '#f97316', group: 'Roadwork Type' },
           'SPECIAL EVENT': { icon: 'star', color: '#8b5cf6', group: 'Event Type' },
           'FLOODING': { icon: 'water', color: '#3b82f6', group: 'Flood Type' },
-          // Endeavour
+          // Endeavour / Ausgrid / Essential — outage type
           'planned': { icon: 'calendar-check', color: '#22c55e', group: 'Outage Type' },
           'unplanned': { icon: 'bolt', color: '#ef4444', group: 'Outage Type' },
+          'future': { icon: 'calendar-plus', color: '#06b6d4', group: 'Outage Type' },
           'Planned': { icon: 'calendar-check', color: '#22c55e', group: 'Outage Type' },
           'Unplanned': { icon: 'bolt', color: '#ef4444', group: 'Outage Type' },
-          // Endeavour Statuses
+          'Future Maintenance': { icon: 'calendar-plus', color: '#06b6d4', group: 'Outage Type' },
+          'Current Maintenance': { icon: 'wrench', color: '#f97316', group: 'Outage Type' },
+          // Endeavour Statuses (uppercase legacy)
           'OUTAGE COMPLETED': { icon: 'check-circle', color: '#22c55e', group: 'Status' },
           'CREWS ATTENDING': { icon: 'truck-fast', color: '#3b82f6', group: 'Status' },
           'UNDER INVESTIGATION': { icon: 'magnifying-glass', color: '#8b5cf6', group: 'Status' },
           'SCHEDULED': { icon: 'calendar', color: '#f97316', group: 'Status' },
           'IN PROGRESS': { icon: 'spinner', color: '#3b82f6', group: 'Status' },
+          // Endeavour current-outage subcategory values
+          'Crew Dispatched': { icon: 'truck-fast', color: '#3b82f6', group: 'Status' },
+          'Damage Assessed': { icon: 'clipboard-check', color: '#f59e0b', group: 'Status' },
+          'Made Safe': { icon: 'shield-check', color: '#22c55e', group: 'Status' },
+          'Repair': { icon: 'wrench', color: '#f97316', group: 'Status' },
+          'Repair Control Room': { icon: 'satellite-dish', color: '#3b82f6', group: 'Status' },
+          'Active': { icon: 'circle-dot', color: '#ef4444', group: 'Status' },
+          'Open': { icon: 'circle-exclamation', color: '#f97316', group: 'Status' },
+          'Scheduled': { icon: 'calendar', color: '#f97316', group: 'Status' },
+          'active': { icon: 'circle-dot', color: '#ef4444', group: 'Status' },
+          'scheduled': { icon: 'calendar', color: '#f97316', group: 'Status' },
+          // Endeavour cause categories
+          'Tree contact': { icon: 'tree', color: '#16a34a', group: 'Cause' },
+          'Defective equipment': { icon: 'screwdriver-wrench', color: '#f97316', group: 'Cause' },
+          'Other network': { icon: 'network-wired', color: '#94a3b8', group: 'Cause' },
+          'None': { icon: 'circle-question', color: '#64748b', group: 'Cause' },
+          // Endeavour planned subcat
+          'Maintenance Work': { icon: 'wrench', color: '#22c55e', group: 'Outage Type' },
+          'Planned maintenance': { icon: 'calendar-check', color: '#22c55e', group: 'Outage Type' },
+          // Ausgrid causes
+          'Under investigation': { icon: 'magnifying-glass', color: '#8b5cf6', group: 'Cause' },
+          'customer equipment fault': { icon: 'plug-circle-exclamation', color: '#f97316', group: 'Cause' },
+          'overhead line damage': { icon: 'tower-broadcast', color: '#ef4444', group: 'Cause' },
           // BOM - Warning Types (from _extract_bom_warning_type)
           'Thunderstorm': { icon: 'cloud-bolt', color: '#8b5cf6', group: 'Warning Type' },
           'Flood': { icon: 'water', color: '#3b82f6', group: 'Warning Type' },
