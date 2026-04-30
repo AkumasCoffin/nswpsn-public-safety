@@ -480,6 +480,113 @@ const FACETS_WINDOW_DAYS = 7;
  * filtering; status/severity were nice-to-have.
  */
 /**
+ * Preferred read path: aggregate from the archive_*_latest sidecar
+ * tables (migration 017). Each sidecar row is a unique incident, so
+ * counts here match what /api/data/history?unique=1 returns to the
+ * frontend list. Joining back to the parent picks up the latest
+ * row's category/subcategory for the per-type dim breakdown.
+ *
+ * Replaces filter_facets_daily-based counting which summed every poll
+ * snapshot — Ausgrid showed "1380" in the dropdown but the unique=1
+ * list only had 3 rows because every outage was being polled ~460
+ * times. Sidecar-driven counts can't drift like that.
+ *
+ * Returns null if the sidecar is empty (boot before backfill, or no
+ * data in the window) so the caller can fall back to filter_facets_daily.
+ */
+async function archiveFacetsFromSidecar(): Promise<{
+  typeCounts: Record<string, number>;
+  perTypeDims: DimMap;
+  oldestUnix: number | null;
+  newestUnix: number | null;
+} | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+
+  const tables: ArchiveTable[] = [
+    'archive_misc',
+    'archive_power',
+    'archive_traffic',
+    'archive_rfs',
+    // archive_waze deliberately excluded — waze facets still come from
+    // LiveStore (the in-memory wazeIngestCache); including the sidecar
+    // here would double-count.
+  ];
+
+  const typeCounts: Record<string, number> = {};
+  const perTypeDims: DimMap = {};
+  let oldestUnix: number | null = null;
+  let newestUnix: number | null = null;
+
+  for (const table of tables) {
+    const sql = `
+      SELECT a.source,
+             a.category,
+             a.subcategory,
+             COUNT(*)::text AS cnt,
+             EXTRACT(EPOCH FROM MIN(l.latest_fetched_at))::bigint AS oldest,
+             EXTRACT(EPOCH FROM MAX(l.latest_fetched_at))::bigint AS newest
+        FROM ${table}_latest l
+        JOIN ${table} a
+          ON a.source = l.source
+         AND a.source_id = l.source_id
+         AND a.fetched_at = l.latest_fetched_at
+       WHERE l.latest_fetched_at >= NOW() - ($1 || ' days')::interval
+       GROUP BY 1, 2, 3
+    `;
+    let client;
+    try {
+      client = await pool.connect();
+    } catch (err) {
+      log.warn({ err: (err as Error).message, table }, 'filterCache (sidecar): pool acquire failed');
+      continue;
+    }
+    try {
+      await client.query('BEGIN');
+      try {
+        await client.query("SET LOCAL statement_timeout = '30s'");
+        const result = await client.query<ArchiveFacetRow>(sql, [String(FACETS_WINDOW_DAYS)]);
+        await client.query('COMMIT');
+        for (const row of result.rows) {
+          const cnt = parseInt(row.cnt, 10);
+          if (!Number.isFinite(cnt) || cnt <= 0) continue;
+          if (DEPRECATED_SOURCES.has(row.source)) continue;
+          const alertType = canonicalAlertType(row.source);
+          if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
+          if (alertType.startsWith('waze_')) continue;
+
+          typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
+          const slot = dimSlotFor(perTypeDims, alertType);
+          if (row.category) {
+            slot['category']![row.category] = (slot['category']![row.category] ?? 0) + cnt;
+          }
+          if (row.subcategory && !/^\d+$/.test(row.subcategory)) {
+            slot['subcategory']![row.subcategory] =
+              (slot['subcategory']![row.subcategory] ?? 0) + cnt;
+          }
+          if (typeof row.oldest === 'number') {
+            if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
+          }
+          if (typeof row.newest === 'number') {
+            if (newestUnix === null || row.newest > newestUnix) newestUnix = row.newest;
+          }
+        }
+      } catch (err) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        log.warn({ err: (err as Error).message, table }, 'filterCache (sidecar): query failed');
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  // If every table came up empty (sidecar not populated yet) hand back
+  // null so the caller falls through to the legacy paths.
+  if (Object.keys(typeCounts).length === 0) return null;
+  return { typeCounts, perTypeDims, oldestUnix, newestUnix };
+}
+
+/**
  * Fast read path: aggregate filter_facets_daily over the 7-day window.
  * Replaces the per-table GROUP BY scans that timed out at 60s. Returns
  * null if the table is empty (i.e. backfill hasn't run yet) so the
@@ -554,9 +661,14 @@ async function archiveFacets(): Promise<{
   oldestUnix: number | null;
   newestUnix: number | null;
 }> {
-  // Try the fast pre-aggregated path first. If it returns null (table
-  // empty / query errored), fall through to the legacy GROUP BY scan
-  // so the dropdown stays populated while the backfill is running.
+  // Preferred path: counts from the archive_*_latest sidecars so the
+  // dropdown numbers match the unique=1 list. See migration 017.
+  const fromSidecar = await archiveFacetsFromSidecar();
+  if (fromSidecar) return fromSidecar;
+
+  // Fallback: filter_facets_daily-based counts. These over-count
+  // because the rollup is per-poll, not per-incident — but better
+  // than empty dropdowns while the sidecar's backfilling.
   const fast = await archiveFacetsFromDaily();
   if (fast) return fast;
 
