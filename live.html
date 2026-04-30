@@ -3918,29 +3918,29 @@
         const data = h.data;
         
         // Power: Ausgrid + Endeavour + Essential totals (including maintenance)
-        const powerTotal = (data.power?.ausgrid?.unplanned || 0) + 
+        const powerTotal = (data.power?.ausgrid?.unplanned || 0) +
                           (data.power?.ausgrid?.planned || 0) +
-                          (data.power?.endeavour?.current || 0) + 
-                          (data.power?.endeavour?.maintenance || 0) +
+                          (data.power?.endeavour?.current || 0) +
+                          (data.power?.endeavour?.current_maintenance ?? data.power?.endeavour?.maintenance ?? 0) +
                           (data.power?.endeavour?.future || 0) +
                           (data.power?.essential?.unplanned || 0) +
                           (data.power?.essential?.planned || 0) +
                           (data.power?.essential?.future || 0);
         powerData.push(powerTotal);
-        
+
         // Traffic: total incidents
         trafficData.push(data.traffic?.total || 0);
-        
+
         // Roadwork
         roadworkData.push(data.traffic?.roadwork || 0);
-        
-        // BOM: total warnings (support both old and new data structures)
-        const bomTotal = (data.bom?.land || 0) + (data.bom?.marine || 0) || 
-                        (data.emergency?.bom_warnings || 0);
+
+        // BOM: total warnings (new schema nests under emergency.bom_warnings; old had top-level data.bom)
+        const bomTotal = (data.emergency?.bom_warnings?.land ?? data.bom?.land ?? 0) +
+                         (data.emergency?.bom_warnings?.marine ?? data.bom?.marine ?? 0);
         bomData.push(bomTotal);
-        
-        // RFS incidents
-        rfsData.push(data.emergency?.rfs || 0);
+
+        // RFS incidents (new: emergency.rfs_incidents, old: emergency.rfs)
+        rfsData.push(data.emergency?.rfs_incidents ?? data.emergency?.rfs ?? 0);
         
         // Floods (road closures due to flooding)
         floodsData.push(data.traffic?.floods || 0);
