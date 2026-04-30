@@ -225,15 +225,21 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     sidecarAcc.parts.push(`source_id = $${sidecarAcc.params.length + 1}`);
     sidecarAcc.params.push(p.sourceId);
   }
+  // Time-window filters apply to last_seen_at, not latest_fetched_at.
+  // After dedup + recompute, latest_fetched_at points at the last data
+  // change (could be weeks ago for a stable incident); last_seen_at is
+  // "still alive in the last poll" and matches what users mean by
+  // "incidents in the last 24h". Sort still uses latest_fetched_at
+  // DESC so most-recently-changed lands at the top of the list.
   if (p.since !== null) {
     sidecarAcc.parts.push(
-      `latest_fetched_at >= to_timestamp($${sidecarAcc.params.length + 1})`,
+      `last_seen_at >= to_timestamp($${sidecarAcc.params.length + 1})`,
     );
     sidecarAcc.params.push(p.since);
   }
   if (p.until !== null) {
     sidecarAcc.parts.push(
-      `latest_fetched_at <= to_timestamp($${sidecarAcc.params.length + 1})`,
+      `last_seen_at <= to_timestamp($${sidecarAcc.params.length + 1})`,
     );
     sidecarAcc.params.push(p.until);
   }
@@ -708,15 +714,17 @@ export function buildCountSqlForTable(
       sidecarAcc.parts.push(`source_id = $${sidecarAcc.params.length + 1}`);
       sidecarAcc.params.push(p.sourceId);
     }
+    // Match the unique=1 data query — filter on last_seen_at so live
+    // incidents whose data hasn't changed recently are still counted.
     if (p.since !== null) {
       sidecarAcc.parts.push(
-        `latest_fetched_at >= to_timestamp($${sidecarAcc.params.length + 1})`,
+        `last_seen_at >= to_timestamp($${sidecarAcc.params.length + 1})`,
       );
       sidecarAcc.params.push(p.since);
     }
     if (p.until !== null) {
       sidecarAcc.parts.push(
-        `latest_fetched_at <= to_timestamp($${sidecarAcc.params.length + 1})`,
+        `last_seen_at <= to_timestamp($${sidecarAcc.params.length + 1})`,
       );
       sidecarAcc.params.push(p.until);
     }

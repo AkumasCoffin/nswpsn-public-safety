@@ -519,19 +519,26 @@ async function archiveFacetsFromSidecar(): Promise<{
   let newestUnix: number | null = null;
 
   for (const table of tables) {
+    // Window the facet count on last_seen_at, NOT latest_fetched_at.
+    // After write-time dedup (migration 018) + recompute, a long-stable
+    // incident has latest_fetched_at pinned to when its data last
+    // actually changed (could be weeks ago) but last_seen_at advancing
+    // every poll. Filtering by latest_fetched_at would hide live
+    // incidents whose data hasn't changed recently — exactly the
+    // Ausgrid "shows 0 in dropdown but is still alive" case.
     const sql = `
       SELECT a.source,
              a.category,
              a.subcategory,
              COUNT(*)::text AS cnt,
              EXTRACT(EPOCH FROM MIN(l.latest_fetched_at))::bigint AS oldest,
-             EXTRACT(EPOCH FROM MAX(l.latest_fetched_at))::bigint AS newest
+             EXTRACT(EPOCH FROM MAX(l.last_seen_at))::bigint AS newest
         FROM ${table}_latest l
         JOIN ${table} a
           ON a.source = l.source
          AND a.source_id = l.source_id
          AND a.fetched_at = l.latest_fetched_at
-       WHERE l.latest_fetched_at >= NOW() - ($1 || ' days')::interval
+       WHERE l.last_seen_at >= NOW() - ($1 || ' days')::interval
        GROUP BY 1, 2, 3
     `;
     let client;
