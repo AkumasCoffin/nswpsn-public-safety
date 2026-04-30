@@ -78,10 +78,11 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
   processed: number;
   updated: number;
   skipped: number;
+  failed: number;
   ms: number;
 }> {
   const pool = await getPool();
-  if (!pool) return { table, processed: 0, updated: 0, skipped: 0, ms: 0 };
+  if (!pool) return { table, processed: 0, updated: 0, skipped: 0, failed: 0, ms: 0 };
   const start = Date.now();
 
   const sidecarRes = await pool.query<SidecarEntry>(
@@ -92,11 +93,20 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
   let processed = 0;
   let updated = 0;
   let skipped = 0;
+  let failed = 0;
 
   for (const entry of entries) {
     processed += 1;
+    // Borrow a connection per incident so we can scope SET LOCAL
+    // statement_timeout — a single slow archive_rfs row pulling 2k
+    // heavy JSONB blobs would otherwise hit the pool's default 30s
+    // timeout and abort. Bumping just for this read keeps the writer's
+    // budget unaffected.
+    const client = await pool.connect();
     try {
-      const parentRes = await pool.query<ParentRow>(
+      await client.query('BEGIN');
+      await client.query("SET LOCAL statement_timeout = '90s'");
+      const parentRes = await client.query<ParentRow>(
         `SELECT fetched_at, data
            FROM ${table}
           WHERE source = $1 AND source_id = $2
@@ -104,12 +114,11 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
           LIMIT ${PER_INCIDENT_LOOKBACK}`,
         [entry.source, entry.source_id],
       );
+      await client.query('COMMIT');
       if (parentRes.rows.length === 0) {
         skipped += 1;
         continue;
       }
-      // pg returns JSONB as parsed objects — already in the shape the
-      // writer hashed at INSERT time.
       const newest = parentRes.rows[0]!;
       const newestHash = hashData(newest.data);
       let earliestSameHash = newest.fetched_at;
@@ -129,17 +138,31 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
       if ((upd.rowCount ?? 0) > 0) updated += 1;
       else skipped += 1;
     } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      failed += 1;
+      // Pull every useful field off the error: pg's PostgresError carries
+      // `code`, `severity`, `detail`, etc. in addition to message.
+      const e = err as { message?: string; code?: string; severity?: string; detail?: string; name?: string };
       log.warn(
-        { err: (err as Error).message, table, source: entry.source, source_id: entry.source_id },
+        {
+          err_msg: e?.message ?? String(err),
+          err_code: e?.code,
+          err_name: e?.name,
+          err_detail: e?.detail,
+          table,
+          source: entry.source,
+          source_id: entry.source_id,
+        },
         'recompute: per-incident failed (continuing)',
       );
+    } finally {
+      client.release();
     }
     if (PAUSE_BETWEEN_INCIDENTS_MS > 0) {
       await new Promise((r) => setTimeout(r, PAUSE_BETWEEN_INCIDENTS_MS));
     }
-    // Heartbeat log every ~250 incidents so operators can see progress.
     if (processed % 250 === 0) {
-      log.info({ table, processed, updated, skipped }, 'recompute: progress');
+      log.info({ table, processed, updated, skipped, failed }, 'recompute: progress');
     }
   }
 
@@ -148,6 +171,7 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
     processed,
     updated,
     skipped,
+    failed,
     ms: Date.now() - start,
   };
 }
@@ -193,20 +217,33 @@ export async function runArchiveLatestRecompute(): Promise<void> {
     }
     log.info('archiveLatestRecompute: starting (background, throttled)');
     const all: Array<Awaited<ReturnType<typeof recomputeOneTable>>> = [];
+    let totalFailed = 0;
     for (const t of ARCHIVE_TABLES) {
       try {
         const stats = await recomputeOneTable(t);
         all.push(stats);
+        totalFailed += stats.failed;
         log.info(stats, 'recompute: table done');
       } catch (err) {
         log.warn(
           { err: (err as Error).message, table: t },
           'recompute: table failed (continuing with next)',
         );
+        totalFailed += 1;
       }
     }
-    await markDone();
-    log.info({ tables: all }, 'archiveLatestRecompute: complete');
+    // Mark complete only if no per-incident failures so the next boot
+    // re-tries the failed entries. The UPDATE inside recomputeOneTable
+    // is idempotent, so the already-processed entries are no-ops.
+    if (totalFailed === 0) {
+      await markDone();
+      log.info({ tables: all }, 'archiveLatestRecompute: complete');
+    } else {
+      log.warn(
+        { tables: all, totalFailed },
+        'archiveLatestRecompute: completed with failures, will retry on next boot',
+      );
+    }
   } finally {
     running = false;
   }
