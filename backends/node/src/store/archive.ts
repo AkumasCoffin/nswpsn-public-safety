@@ -283,6 +283,12 @@ export class ArchiveWriter {
           const slice = rows.slice(start, start + INSERT_CHUNK_SIZE);
           await this.insertChunk(client, table, slice);
         }
+        // Maintain the per-table _latest sidecar for unique=1 reads.
+        // Same transaction as the parent INSERT so the two stay atomic;
+        // a parent row never exists without a corresponding sidecar entry
+        // pointing at it (or at a newer row, after a future flush). See
+        // migration 017.
+        await this.upsertLatestSidecar(client, table, rows);
         // Incremental heatmap aggregation. Done in the same transaction
         // as the archive_waze INSERTs so a row in archive_waze always
         // has its bin counted (or, on error, neither happens). Only
@@ -307,6 +313,65 @@ export class ArchiveWriter {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Maintain the per-table _latest sidecar: one row per (source,
+   * source_id) pointing at the most recent fetched_at. Reads use
+   * this to drive unique=1 history queries with a sub-second
+   * `ORDER BY latest_fetched_at DESC LIMIT N` index walk + JOIN
+   * back to the parent on (source, source_id, fetched_at).
+   *
+   * Within a single batch a (source, source_id) pair can appear
+   * multiple times (e.g. two waze polls inside one flush window) —
+   * we collapse to max(fetched_at) before writing so the multi-VALUES
+   * UPSERT doesn't include duplicates that would violate
+   * `ON CONFLICT (source, source_id) DO UPDATE`'s constraint that no
+   * two EXCLUDED tuples target the same conflict row.
+   *
+   * Skips rows with NULL/empty source_id — those can't be unique=1
+   * deduplicated anyway, and including them would create per-source
+   * "ghost" rows in the sidecar.
+   */
+  private async upsertLatestSidecar(
+    client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    table: ArchiveTable,
+    rows: ArchiveRow[],
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const map = new Map<
+      string,
+      { source: string; source_id: string; fetched_at: number }
+    >();
+    for (const r of rows) {
+      const sid = r.source_id;
+      if (sid == null || sid === '') continue;
+      const key = `${r.source} ${sid}`;
+      const existing = map.get(key);
+      if (!existing || r.fetched_at > existing.fetched_at) {
+        map.set(key, { source: r.source, source_id: sid, fetched_at: r.fetched_at });
+      }
+    }
+    if (map.size === 0) return;
+
+    const placeholders: string[] = [];
+    const params: unknown[] = [];
+    let i = 0;
+    for (const v of map.values()) {
+      placeholders.push(
+        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint))`,
+      );
+      params.push(v.source, v.source_id, v.fetched_at);
+      i += 3;
+    }
+    const sql = `
+      INSERT INTO ${table}_latest (source, source_id, latest_fetched_at)
+      VALUES ${placeholders.join(',')}
+      ON CONFLICT (source, source_id) DO UPDATE
+        SET latest_fetched_at = EXCLUDED.latest_fetched_at
+        WHERE ${table}_latest.latest_fetched_at < EXCLUDED.latest_fetched_at
+    `;
+    await client.query(sql, params);
   }
 
   /**
