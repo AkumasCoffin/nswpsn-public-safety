@@ -250,7 +250,21 @@ export async function fetchWeatherCurrent(): Promise<WeatherSnapshot> {
 export type WeatherRadarSnapshot = unknown;
 
 export async function fetchWeatherRadar(): Promise<WeatherRadarSnapshot> {
-  return fetchJson<unknown>(RADAR_URL, { timeoutMs: 10_000 });
+  // RainViewer is US-hosted and the AU→US route flakes regularly. The
+  // payload is tiny (~few KB), so a longer ceiling and a single retry
+  // is much cheaper than dropping the snapshot every time.
+  try {
+    return await fetchJson<unknown>(RADAR_URL, { timeoutMs: 20_000 });
+  } catch (err) {
+    const msg = (err as Error).message ?? '';
+    const transient =
+      /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(
+        msg,
+      );
+    if (!transient) throw err;
+    await new Promise((r) => setTimeout(r, 3_000));
+    return fetchJson<unknown>(RADAR_URL, { timeoutMs: 30_000 });
+  }
 }
 
 export default function register(): void {
