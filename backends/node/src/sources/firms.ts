@@ -248,31 +248,52 @@ export function parseFirmsCsv(
 }
 
 /**
- * Fetch one FIRMS source. Bounded retry on transient errors (US-hosted
- * gateway flakes from AU). On hard failure returns `{ ok: false, error }`
- * so the parent fetcher can mark just that source down without losing
- * the other satellites.
+ * Fetch one FIRMS source. Bounded retry on transient errors (the AU→US
+ * NASA gateway is flaky under concurrent connections from the same IP).
+ * On hard failure returns `{ ok: false, error }` so the parent fetcher
+ * can mark just that source down without losing the other satellites.
  */
 async function fetchOneFirmsSource(
   key: string,
   src: FirmsSource,
 ): Promise<{ ok: true; features: FirmsFeature[] } | { ok: false; error: string }> {
   const url = `${FIRMS_API_BASE}/${encodeURIComponent(key)}/${src.id}/${NSW_BBOX}/${DAY_RANGE}`;
-  let csv: string;
-  try {
+  // Progressive timeouts: each subsequent attempt gets longer headroom
+  // because the failure mode is a slow upstream, not a fast 5xx.
+  const attempts: Array<{ timeoutMs: number; sleepBeforeMs: number }> = [
+    { timeoutMs: 60_000, sleepBeforeMs: 0 },
+    { timeoutMs: 90_000, sleepBeforeMs: 5_000 },
+    { timeoutMs: 120_000, sleepBeforeMs: 15_000 },
+  ];
+  let csv: string | null = null;
+  let lastErr = '';
+  for (let i = 0; i < attempts.length; i += 1) {
+    const a = attempts[i];
+    if (!a) break;
+    if (a.sleepBeforeMs > 0) {
+      await new Promise((r) => setTimeout(r, a.sleepBeforeMs));
+    }
     try {
-      csv = await fetchText(url, { timeoutMs: 60_000 });
+      csv = await fetchText(url, { timeoutMs: a.timeoutMs });
+      break;
     } catch (err) {
       const msg = (err as Error).message ?? '';
+      lastErr = msg;
       const transient =
-        /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(msg);
-      if (!transient) throw err;
-      log.warn({ err: msg, source: src.id }, 'firms: upstream timed out, retrying once');
-      await new Promise((r) => setTimeout(r, 5_000));
-      csv = await fetchText(url, { timeoutMs: 90_000 });
+        /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timeout|fetch failed/i.test(
+          msg,
+        );
+      if (!transient || i === attempts.length - 1) {
+        return { ok: false, error: msg || 'unknown error' };
+      }
+      log.warn(
+        { err: msg, source: src.id, attempt: i + 1 },
+        'firms: upstream timed out, will retry',
+      );
     }
-  } catch (err) {
-    return { ok: false, error: (err as Error).message ?? 'unknown error' };
+  }
+  if (csv === null) {
+    return { ok: false, error: lastErr || 'unknown error' };
   }
   const features = parseFirmsCsv(csv, src);
   if (features.length === 0 && csv.length > 0 && !csv.toLowerCase().includes('latitude')) {
@@ -290,12 +311,18 @@ export async function fetchFirmsHotspots(): Promise<FirmsSnapshot> {
     // No key — return empty so the frontend just shows nothing.
     return { ...EMPTY_SNAPSHOT, fetched_at: new Date().toISOString() };
   }
-  // Fan out to every VIIRS platform in parallel. Per-source failures
-  // don't fail the whole snapshot — operators get a partial result
-  // (e.g. NOAA-20 timed out but S-NPP + NOAA-21 returned) which is
-  // strictly more useful than 0 detections.
+  // Stagger the fan-out by 500 ms per source. NASA's AU→US gateway
+  // routinely drops 2 of 3 simultaneous TLS connections from the same
+  // IP, leaving S-NPP up while NOAA-20/21 ETIMEDOUT. A small offset
+  // keeps the connections from racing, dropping wallclock from worst-
+  // case 240 s (3× max retry timeout) to ~7-8 s on the happy path
+  // and ~30 s on a flaky day. Per-source failures still don't fail
+  // the whole snapshot.
   const results = await Promise.all(
-    FIRMS_SOURCES.map((src) => fetchOneFirmsSource(key, src)),
+    FIRMS_SOURCES.map(async (src, i) => {
+      if (i > 0) await new Promise((r) => setTimeout(r, i * 500));
+      return fetchOneFirmsSource(key, src);
+    }),
   );
   const features: FirmsFeature[] = [];
   const sourceStatus: FirmsSnapshot['source_status'] = [];
