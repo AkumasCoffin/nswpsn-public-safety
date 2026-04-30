@@ -226,22 +226,24 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     sidecarAcc.params.push(p.sourceId);
   }
   // Time-window filter uses the SOURCE'S OWN publish timestamp
-  // (extracted at write time into source_timestamp_unix on the
-  // sidecar — see migration 020). Falls back to last_seen_at when
-  // the upstream payload didn't expose a usable timestamp so rows
-  // without source-side time still surface. Backend ingest times
-  // (fetched_at / latest_fetched_at) deliberately aren't used for
-  // user-facing windows — they describe our polling, not what the
-  // user means by "incidents in the last 24h".
+  // (source_timestamp_unix on the sidecar — see migration 020),
+  // falling back to latest_fetched_at when the upstream payload
+  // didn't expose a usable timestamp. After the recompute task
+  // settles, latest_fetched_at is "when this incident's data last
+  // actually changed" — a meaningful chronological proxy when the
+  // source itself doesn't publish a timestamp (e.g. waze_jam,
+  // ausgrid). last_seen_at deliberately NOT in the fallback chain:
+  // it advances every poll, so for any live incident it's "now" and
+  // makes the entire list cluster at the top.
   if (p.since !== null) {
     sidecarAcc.parts.push(
-      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.since);
   }
   if (p.until !== null) {
     sidecarAcc.parts.push(
-      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.until);
   }
@@ -360,15 +362,24 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   allParams.push(fetchSize);
   const limitPlaceholder = `$${allParams.length}`;
 
-  // ORDER BY also uses source_timestamp_unix with last_seen_at fallback,
-  // matching the filter semantics. Most-recently-published-by-the-source
-  // lands at the top of the list.
+  // ORDER and JOIN dedup notes:
+  //   - effective_ts uses source_timestamp_unix with latest_fetched_at
+  //     fallback so the chronological feed is meaningful for sources
+  //     without their own pub timestamp (after recompute,
+  //     latest_fetched_at points at when the incident's data last
+  //     changed in our archive — a real-world chronological signal).
+  //   - LATERAL ... LIMIT 1 picks exactly one parent row per sidecar
+  //     entry. Pre-dedup-writer data has multiple identical (source,
+  //     source_id, fetched_at) rows in the parent (overlapping waze
+  //     bbox polls within one flush window), and a regular JOIN would
+  //     return all of them, surfacing dupes in the unique=1 list.
+  //     Highest a.id wins arbitrarily but deterministically.
   const sql = `
     WITH top_keys AS (
       SELECT source, source_id, latest_fetched_at, last_seen_at,
              source_timestamp_unix,
              COALESCE(source_timestamp_unix,
-                      EXTRACT(EPOCH FROM last_seen_at)::bigint) AS effective_ts
+                      EXTRACT(EPOCH FROM latest_fetched_at)::bigint) AS effective_ts
       FROM ${table}_latest
       ${sidecarWhere}
       ORDER BY effective_ts ${p.order}
@@ -383,10 +394,15 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
            a.lat, a.lng, a.category, a.subcategory,
            ${dataCol}
     FROM top_keys k
-    JOIN ${table} a
-      ON a.source = k.source
-     AND a.source_id = k.source_id
-     AND a.fetched_at = k.latest_fetched_at
+    CROSS JOIN LATERAL (
+      SELECT id, fetched_at, lat, lng, category, subcategory, data
+        FROM ${table}
+       WHERE source = k.source
+         AND source_id = k.source_id
+         AND fetched_at = k.latest_fetched_at
+       ORDER BY id DESC
+       LIMIT 1
+    ) a
     WHERE TRUE
     ${parentWhere}
     ORDER BY k.effective_ts ${p.order}, a.id ${p.order}
@@ -727,13 +743,13 @@ export function buildCountSqlForTable(
     // publish timestamp with last_seen_at fallback.
     if (p.since !== null) {
       sidecarAcc.parts.push(
-        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.since);
     }
     if (p.until !== null) {
       sidecarAcc.parts.push(
-        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.until);
     }
