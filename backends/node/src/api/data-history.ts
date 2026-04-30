@@ -344,11 +344,27 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     // the response carries a real `total`. The frontend's logs.html
     // pagination uses `total` to compute Math.ceil(total/limit) for
     // the page-jumper; with total=0 it can't navigate to later pages.
+    const dataNowMs = Date.now();
     const dataPromise = Promise.all(
       plan.queries.map(async (q) => {
+        const dKey = dataCacheKey(q.table, q.sql, q.params);
+        const dHit = dataCache.get(dKey);
+        if (dHit && dataNowMs - dHit.ts < DATA_CACHE_TTL_MS) {
+          return dHit.rows;
+        }
         try {
-          const r = await runWithTimeout(pool, q.sql, q.params);
-          return r.rows.map(normaliseRow);
+          // 30s timeout (was 60s) — on a saturated host a 60s wait
+          // ties up the connection AND the user's tab. Failing at 30
+          // lets the next request retry sooner and unblocks the pool.
+          const r = await runWithTimeout(pool, q.sql, q.params, 30);
+          const rows = r.rows.map(normaliseRow);
+          // Bound the cache: drop oldest when over capacity.
+          if (dataCache.size >= DATA_CACHE_MAX) {
+            const oldestKey = dataCache.keys().next().value;
+            if (oldestKey !== undefined) dataCache.delete(oldestKey);
+          }
+          dataCache.set(dKey, { rows, ts: dataNowMs });
+          return rows;
         } catch (err) {
           log.error({ err, table: q.table }, 'data-history query failed');
           return [] as ArchiveQueryRow[];
@@ -592,10 +608,32 @@ function countCacheKey(table: string, sql: string, params: unknown[]): string {
   return `${table}|${sql}|${JSON.stringify(params)}`;
 }
 
+// 60s LRU cache for /api/data/history DATA queries — the rows
+// themselves, not just the count. On disk-saturated hosts the per-
+// table SELECT regularly hits the 60s statement_timeout, leaving
+// browser users staring at an empty page. Caching the rows means a
+// successful query covers every subsequent identical request inside
+// the 60s window; the bot's per-minute polls and the typical "load
+// page 1, scroll, page-jump" pattern both warm the cache fast.
+//
+// Keyed on (table, sql, params), so the LIMIT/OFFSET/cursor naturally
+// shard the cache per page. Capped at 128 entries — each entry holds
+// up to ~limit (default 100) ArchiveQueryRows so memory stays bounded
+// even at the cap.
+interface DataCacheEntry { rows: ArchiveQueryRow[]; ts: number; }
+const dataCache = new Map<string, DataCacheEntry>();
+const DATA_CACHE_TTL_MS = 60_000;
+const DATA_CACHE_MAX = 128;
+
+function dataCacheKey(table: string, sql: string, params: unknown[]): string {
+  return `${table}|${sql}|${JSON.stringify(params)}`;
+}
+
 export function _resetDataHistoryAggregateCache(): void {
   sourcesCache = null;
   statsCache = null;
   countCache.clear();
+  dataCache.clear();
 }
 
 dataHistoryRouter.get('/api/data/history/sources', async (c) => {
