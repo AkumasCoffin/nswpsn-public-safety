@@ -722,9 +722,30 @@ function mergeCaseInsensitive(d: Record<string, number>): Record<string, number>
   return out;
 }
 
+// Sentinel values that the underlying source uses to mean "missing
+// data" — they're not real filter targets and just clutter the
+// dropdown. Compared case-insensitively after trimming. Kept narrow:
+// "Other", "Not Applicable" etc. ARE real classification buckets users
+// may want to filter by, so we don't strip them.
+const PLACEHOLDER_VALUES = new Set<string>([
+  '',
+  'none',
+  'null',
+  'undefined',
+  'n/a',
+  'unknown',
+  'unspecified',
+]);
+
+function isPlaceholderValue(v: string): boolean {
+  return PLACEHOLDER_VALUES.has(v.trim().toLowerCase());
+}
+
 function toSortedFacetList(d: Record<string, number>, cap?: number): FacetEntry[] {
   const merged = mergeCaseInsensitive(d);
-  const entries = Object.entries(merged).map(([value, count]) => ({ value, count }));
+  const entries = Object.entries(merged)
+    .filter(([value]) => !isPlaceholderValue(value))
+    .map(([value, count]) => ({ value, count }));
   entries.sort((a, b) => {
     if (a.count !== b.count) return b.count - a.count;
     return a.value.localeCompare(b.value);

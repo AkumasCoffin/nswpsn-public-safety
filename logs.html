@@ -2207,6 +2207,15 @@
           'Blocked': { icon: 'car-side', color: '#991b1b', group: 'Jam Severity' },
         };
         
+        // Hide the whole subcategory dropdown when there's nothing
+        // worth filtering by — empty list, or a single value (filtering
+        // by the only existing value is a no-op). Endeavour reuses this
+        // dropdown for the Status filter via subcategories, but that
+        // path runs above and won't reach here.
+        if (categoryOptions.length <= 1) {
+          document.getElementById('subcategory-group').style.display = 'none';
+        }
+
         // Add "All Categories" option first
         const allOption = document.createElement('div');
         allOption.className = 'custom-dropdown-option selected';
@@ -2216,7 +2225,7 @@
         allOption.innerHTML = `<i class="fa-solid fa-tags" style="color: #64748b;"></i><span>All Categories</span>`;
         allOption.onclick = () => selectSubcategory('', 'All Categories', 'tags', '#64748b');
         subcategoryOptionsContainer.appendChild(allOption);
-        
+
         // Check if this is pager (no icons for cap codes)
         const isPager = sourceToQuery && sourceToQuery.includes('pager');
         
