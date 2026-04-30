@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import type { ArchiveTable } from '../store/archive.js';
+import { extractSourceTimestampUnix } from './archiveExtract.js';
 
 const ARCHIVE_TABLES: ArchiveTable[] = [
   'archive_misc',
@@ -127,13 +128,22 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
         if (hashData(r.data) !== newestHash) break;
         earliestSameHash = r.fetched_at;
       }
+      // Also extract the source's own publish timestamp from the
+      // newest row's data — backfills source_timestamp_unix on
+      // sidecar entries that pre-date migration 020.
+      const dataObj =
+        newest.data && typeof newest.data === 'object'
+          ? (newest.data as Record<string, unknown>)
+          : {};
+      const srcTs = extractSourceTimestampUnix(dataObj, entry.source);
       const upd = await pool.query(
         `UPDATE ${table}_latest
-            SET latest_fetched_at = $1
+            SET latest_fetched_at = $1,
+                source_timestamp_unix = COALESCE(source_timestamp_unix, $4)
           WHERE source = $2
             AND source_id = $3
-            AND latest_fetched_at <> $1`,
-        [earliestSameHash, entry.source, entry.source_id],
+            AND (latest_fetched_at <> $1 OR source_timestamp_unix IS NULL)`,
+        [earliestSameHash, entry.source, entry.source_id, srcTs],
       );
       if ((upd.rowCount ?? 0) > 0) updated += 1;
       else skipped += 1;

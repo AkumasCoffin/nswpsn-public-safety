@@ -531,9 +531,9 @@ async function archiveFacetsFromSidecar(): Promise<{
              a.subcategory,
              COUNT(*)::text AS cnt,
              MIN(COALESCE(l.source_timestamp_unix,
-                          EXTRACT(EPOCH FROM l.last_seen_at)::bigint))::bigint AS oldest,
+                          EXTRACT(EPOCH FROM l.latest_fetched_at)::bigint))::bigint AS oldest,
              MAX(COALESCE(l.source_timestamp_unix,
-                          EXTRACT(EPOCH FROM l.last_seen_at)::bigint))::bigint AS newest
+                          EXTRACT(EPOCH FROM l.latest_fetched_at)::bigint))::bigint AS newest
         FROM ${table}_latest l
         JOIN ${table} a
           ON a.source = l.source

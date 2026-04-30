@@ -324,7 +324,28 @@ export class ArchiveWriter {
         // INSERT to the parent when the data has actually changed
         // since we last stored it. Polls that bring no new info
         // bump sidecar.last_seen_at without touching the parent.
-        const hashed = rows.map((r) => ({ row: r, hash: hashRowData(r) }));
+        const allHashed = rows.map((r) => ({ row: r, hash: hashRowData(r) }));
+        // Within-batch dedup pass: when overlapping waze polls land in
+        // the same flush, we get the same (source, source_id) row 2-3
+        // times — all hash-identical, but the cross-batch sidecar check
+        // would admit all of them because the sidecar has no entry yet
+        // for this incident. Collapse to one survivor (max fetched_at)
+        // before consulting the sidecar.
+        const collapsed = new Map<string, { row: ArchiveRow; hash: string }>();
+        const noKeyRows: Array<{ row: ArchiveRow; hash: string }> = [];
+        for (const e of allHashed) {
+          const sid = e.row.source_id;
+          if (sid == null || sid === '') {
+            noKeyRows.push(e);
+            continue;
+          }
+          const key = `${e.row.source}${sid}`;
+          const existingInBatch = collapsed.get(key);
+          if (!existingInBatch || e.row.fetched_at > existingInBatch.row.fetched_at) {
+            collapsed.set(key, e);
+          }
+        }
+        const hashed = [...collapsed.values(), ...noKeyRows];
         const existingHashes = await this.lookupExistingHashes(client, table, hashed);
         const toInsert: ArchiveRow[] = [];
         for (const e of hashed) {
