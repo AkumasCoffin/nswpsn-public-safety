@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.21
+// @version      1.22
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -65,6 +65,14 @@
     // doesn't benefit from sub-minute repolls of the same incidents.
     const PAN_INTERVAL_MS        = 7_000;  // fallback max wait per region (dead zones)
     const PAN_INTERVAL_JITTER_MS = 2_000;  // random extra 0..N per pan
+
+    // After every full sweep through REGIONS, sleep an extra random
+    // 30-60s before starting the next round. Disrupts perfectly-
+    // periodic sweep timing (which Waze's heuristics could fingerprint
+    // as a 50s metronome) and gives our backend cache a moment of
+    // quiet between batches.
+    const ROUND_PAUSE_MIN_MS     = 30_000;
+    const ROUND_PAUSE_RANGE_MS   = 30_000;  // 30s..60s
     const PAN_AFTER_INGEST_MS    = 1_500;  // how long to wait after georss before panning
     // Reload the page every 30 min as a recovery for stuck states. Waze
     // occasionally stops emitting georss responses after long sessions —
@@ -470,10 +478,22 @@
         try { pageWin.localStorage.setItem(LS_KEY, String(i)); } catch (e) {}
     }
 
+    // Set to true when the region we JUST processed was the last in the
+    // array. The next call to schedule a pan reads + clears this and
+    // adds the extra round pause on top of the normal cadence.
+    let endOfRoundPending = false;
+
     function rotateToNextRegion() {
         let idx = loadRegionIdx();
         const r = REGIONS[idx];
-        saveRegionIdx((idx + 1) % REGIONS.length);
+        const nextIdx = (idx + 1) % REGIONS.length;
+        saveRegionIdx(nextIdx);
+        // We just panned to REGIONS[idx]; if the next index has wrapped
+        // back to 0 it means the region we just processed was the last
+        // one in the sweep — flag a round-end pause for the *next*
+        // schedule, so we sleep AFTER this region's data settles, not
+        // before it gets processed.
+        if (nextIdx === 0) endOfRoundPending = true;
 
         const map = findLeafletMap();
         if (map) {
@@ -525,14 +545,24 @@
     let ingestArmedForCurrent = false;
     let ingestWaitTimer = null;
 
+    function nextDelayMs(baseMs) {
+        // Per-pan jitter + an optional extra 30-60s pause when we just
+        // finished a full sweep. The flag is consumed once so the pause
+        // only fires once per round, not on every call within the round.
+        const jitter = Math.floor(Math.random() * PAN_INTERVAL_JITTER_MS);
+        let extra = 0;
+        if (endOfRoundPending) {
+            endOfRoundPending = false;
+            extra = ROUND_PAUSE_MIN_MS + Math.floor(Math.random() * ROUND_PAUSE_RANGE_MS);
+            log(`end of round — pausing ${Math.round(extra / 1000)}s before next sweep`);
+        }
+        return baseMs + jitter + extra;
+    }
+
     function scheduleNextPan() {
         clearTimeout(rotationTimer);
         clearTimeout(ingestWaitTimer);
         ingestArmedForCurrent = true;
-        // Add 0..PAN_INTERVAL_JITTER_MS so the timing isn't a perfect
-        // 7s metronome — Waze's bot heuristics can fingerprint regular
-        // intervals.
-        const jitter = Math.floor(Math.random() * PAN_INTERVAL_JITTER_MS);
         rotationTimer = setTimeout(() => {
             ingestArmedForCurrent = false;
             // Skip the pan during cooldown — every request just earns
@@ -544,7 +574,7 @@
             }
             rotateToNextRegion();
             scheduleNextPan();
-        }, PAN_INTERVAL_MS + jitter);
+        }, nextDelayMs(PAN_INTERVAL_MS));
     }
 
     // Called by handleGeorss on successful ingest — bumps up the pan schedule
@@ -556,7 +586,7 @@
         ingestWaitTimer = setTimeout(() => {
             rotateToNextRegion();
             scheduleNextPan();
-        }, PAN_AFTER_INGEST_MS);
+        }, nextDelayMs(PAN_AFTER_INGEST_MS));
     }
 
     function startRotation() {
