@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.20
+// @version      1.21
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -23,233 +23,46 @@
     const BACKEND_URL = 'https://api.forcequit.xyz/api/waze/ingest';
     const INGEST_KEY  = 'REPLACE_WITH_YOUR_WAZE_INGEST_KEY';
 
-    // Regions rotated through. All at zoom 14 (street-level detail) — small
-    // bbox per tile (~1.5 × 1 km), ensures Waze returns all alerts in view
-    // without hitting the ~200 alert cap. Dense coverage of Sydney metro +
-    // all major NSW regional centres. ~70 tiles total.
+    // Regions rotated through. v1.21: switched from a dense ~190-tile
+    // zoom-14 grid (street level, ~1-2 km per tile) to a sparse 6-tile
+    // zoom-8 grid (~100-150 km per tile) so the script does one full
+    // NSW pass in 6 snapshots instead of 190. Trades fine-grained
+    // detail in low-density areas for far less browser activity, fewer
+    // pan operations, and dramatically lower risk of Waze 403'ing the
+    // georss endpoint for over-querying. The trade-off works because
+    // Waze's georss endpoint returns up to ~200 alerts per viewport
+    // and most regional NSW tiles have well under that.
+    //
+    // The six tiles are placed to cover the populated parts of NSW:
+    //   1. Sydney metro + Central Coast + Blue Mountains
+    //   2. Hunter / Newcastle / Mid North Coast
+    //   3. Northern Rivers / Far North Coast
+    //   4. Illawarra / South Coast / Far South
+    //   5. Central West / Western Plains (Bathurst, Dubbo, Orange)
+    //   6. Riverina / South West (Wagga, Albury, Griffith)
+    // Far-west / outback (Broken Hill, Tibooburra) is intentionally
+    // not covered — minimal traffic, high cost-per-alert.
     const REGIONS = [
-        // ---- Sydney CBD + Inner ring ----
-        { name: 'Sydney CBD',              lat: -33.870, lon: 151.210, zoom: 14 },
-        { name: 'Sydney Harbour',          lat: -33.855, lon: 151.225, zoom: 14 },
-        { name: 'Pyrmont / Glebe',         lat: -33.870, lon: 151.190, zoom: 14 },
-        { name: 'Surry Hills / Redfern',   lat: -33.895, lon: 151.210, zoom: 14 },
-        { name: 'Newtown / Erskineville',  lat: -33.900, lon: 151.175, zoom: 14 },
-        { name: 'Ultimo / Haymarket',      lat: -33.881, lon: 151.200, zoom: 14 },
-        // ---- Sydney Eastern Suburbs ----
-        { name: 'Eastern Suburbs',         lat: -33.895, lon: 151.260, zoom: 14 },
-        { name: 'Bondi / Randwick',        lat: -33.925, lon: 151.250, zoom: 14 },
-        { name: 'Bondi Junction / Double Bay', lat: -33.890, lon: 151.248, zoom: 14 },
-        { name: 'Rose Bay / Vaucluse',     lat: -33.870, lon: 151.270, zoom: 14 },
-        { name: 'Maroubra / Malabar',      lat: -33.950, lon: 151.245, zoom: 14 },
-        // ---- Sydney North Shore ----
-        { name: 'North Sydney',            lat: -33.840, lon: 151.210, zoom: 14 },
-        { name: 'Mosman / Neutral Bay',    lat: -33.830, lon: 151.240, zoom: 14 },
-        { name: 'Chatswood / St Leonards', lat: -33.800, lon: 151.185, zoom: 14 },
-        { name: 'Hornsby / Waitara',       lat: -33.700, lon: 151.100, zoom: 14 },
-        { name: 'Lane Cove / Artarmon',    lat: -33.815, lon: 151.165, zoom: 14 },
-        { name: 'Gordon / Pymble',         lat: -33.755, lon: 151.155, zoom: 14 },
-        // ---- Sydney Northern Beaches ----
-        { name: 'Manly / Balgowlah',       lat: -33.800, lon: 151.285, zoom: 14 },
-        { name: 'Dee Why / Brookvale',     lat: -33.750, lon: 151.290, zoom: 14 },
-        { name: 'Mona Vale / Narrabeen',   lat: -33.685, lon: 151.305, zoom: 14 },
-        { name: 'Avalon / Palm Beach',     lat: -33.630, lon: 151.325, zoom: 14 },
-        // ---- Sydney Inner West ----
-        { name: 'Inner West',              lat: -33.890, lon: 151.140, zoom: 14 },
-        { name: 'Marrickville / Dulwich Hill', lat: -33.915, lon: 151.150, zoom: 14 },
-        { name: 'Ashfield / Strathfield',  lat: -33.875, lon: 151.095, zoom: 14 },
-        { name: 'Olympic Park / Homebush', lat: -33.845, lon: 151.065, zoom: 14 },
-        // ---- Sydney South ----
-        { name: 'Canterbury / Hurstville', lat: -33.960, lon: 151.100, zoom: 14 },
-        { name: 'Rockdale / Kogarah',      lat: -33.955, lon: 151.140, zoom: 14 },
-        { name: 'Sutherland Shire',        lat: -34.030, lon: 151.080, zoom: 14 },
-        { name: 'Cronulla / Miranda',      lat: -34.050, lon: 151.150, zoom: 14 },
-        { name: 'Airport / Mascot',        lat: -33.935, lon: 151.180, zoom: 14 },
-        // ---- Sydney West ----
-        { name: 'Parramatta',              lat: -33.815, lon: 151.000, zoom: 14 },
-        { name: 'Blacktown',               lat: -33.770, lon: 150.910, zoom: 14 },
-        { name: 'Mount Druitt / St Marys', lat: -33.770, lon: 150.810, zoom: 14 },
-        { name: 'Ryde / Epping',           lat: -33.805, lon: 151.105, zoom: 14 },
-        { name: 'Carlingford / North Rocks', lat: -33.780, lon: 151.050, zoom: 14 },
-        { name: 'Liverpool / Bankstown',   lat: -33.920, lon: 150.930, zoom: 14 },
-        { name: 'Cabramatta / Fairfield',  lat: -33.895, lon: 150.955, zoom: 14 },
-        { name: 'Penrith',                 lat: -33.751, lon: 150.695, zoom: 14 },
-        { name: 'Campbelltown',            lat: -34.070, lon: 150.830, zoom: 14 },
-        { name: 'Camden / Narellan',       lat: -34.050, lon: 150.700, zoom: 14 },
-        // ---- Sydney Hills District ----
-        { name: 'Castle Hill / Baulkham Hills', lat: -33.735, lon: 150.985, zoom: 14 },
-        { name: 'Rouse Hill / Kellyville', lat: -33.685, lon: 150.920, zoom: 14 },
-        { name: 'Windsor / Richmond',      lat: -33.610, lon: 150.755, zoom: 14 },
-        // ---- Blue Mountains + Hawkesbury ----
-        { name: 'Katoomba / Leura',        lat: -33.715, lon: 150.310, zoom: 14 },
-        { name: 'Springwood / Glenbrook',  lat: -33.700, lon: 150.575, zoom: 14 },
-        // ---- Central Coast ----
-        { name: 'Woy Woy / Ettalong',      lat: -33.488, lon: 151.330, zoom: 14 },
-        { name: 'Gosford',                 lat: -33.425, lon: 151.345, zoom: 14 },
-        { name: 'Erina / Wamberal',        lat: -33.430, lon: 151.395, zoom: 14 },
-        { name: 'Avoca Beach',             lat: -33.470, lon: 151.435, zoom: 14 },
-        { name: 'Terrigal / The Entrance', lat: -33.355, lon: 151.480, zoom: 14 },
-        { name: 'Wyong / Tuggerah',        lat: -33.280, lon: 151.425, zoom: 14 },
-        { name: 'Toukley / Budgewoi',      lat: -33.260, lon: 151.540, zoom: 14 },
-        // ---- Newcastle / Hunter ----
-        { name: 'Newcastle CBD',           lat: -32.925, lon: 151.780, zoom: 14 },
-        { name: 'Newcastle West / Wallsend', lat: -32.900, lon: 151.720, zoom: 14 },
-        { name: 'Charlestown',             lat: -32.965, lon: 151.690, zoom: 14 },
-        { name: 'Belmont / Swansea',       lat: -33.030, lon: 151.665, zoom: 14 },
-        { name: 'Toronto / Lake Macquarie West', lat: -33.020, lon: 151.595, zoom: 14 },
-        { name: 'Lake Macquarie',          lat: -33.050, lon: 151.630, zoom: 14 },
-        { name: 'Maitland',                lat: -32.733, lon: 151.555, zoom: 14 },
-        { name: 'East Maitland / Thornton', lat: -32.745, lon: 151.605, zoom: 14 },
-        { name: 'Kurri Kurri',             lat: -32.815, lon: 151.480, zoom: 14 },
-        { name: 'Cessnock',                lat: -32.833, lon: 151.355, zoom: 14 },
-        { name: 'Singleton',               lat: -32.568, lon: 151.170, zoom: 14 },
-        { name: 'Muswellbrook',            lat: -32.265, lon: 150.890, zoom: 14 },
-        { name: 'Scone',                   lat: -32.058, lon: 150.865, zoom: 14 },
-        // ---- Illawarra / South Coast ----
-        // Densified: each regional centre split into CBD + surrounding suburbs.
-        { name: 'Helensburgh / Stanwell',  lat: -34.180, lon: 150.985, zoom: 14 },
-        { name: 'Bulli / Thirroul',        lat: -34.330, lon: 150.920, zoom: 14 },
-        { name: 'Corrimal / Fairy Meadow', lat: -34.395, lon: 150.890, zoom: 14 },
-        { name: 'Wollongong',              lat: -34.430, lon: 150.880, zoom: 14 },
-        { name: 'Figtree / Mount Keira',   lat: -34.435, lon: 150.860, zoom: 14 },
-        { name: 'Port Kembla',             lat: -34.475, lon: 150.905, zoom: 14 },
-        { name: 'Lake Heights / Warrawong', lat: -34.490, lon: 150.880, zoom: 14 },
-        { name: 'Dapto',                   lat: -34.495, lon: 150.795, zoom: 14 },
-        { name: 'Albion Park',             lat: -34.575, lon: 150.785, zoom: 14 },
-        { name: 'Shellharbour / Kiama',    lat: -34.630, lon: 150.830, zoom: 14 },
-        { name: 'Shellharbour Square',     lat: -34.580, lon: 150.860, zoom: 14 },
-        { name: 'Berry / Gerringong',      lat: -34.760, lon: 150.700, zoom: 14 },
-        { name: 'Bomaderry / North Nowra', lat: -34.857, lon: 150.610, zoom: 14 },
-        { name: 'Nowra / Bomaderry',       lat: -34.880, lon: 150.605, zoom: 14 },
-        { name: 'South Nowra',             lat: -34.910, lon: 150.595, zoom: 14 },
-        { name: 'Worrigee / Falls Creek',  lat: -34.930, lon: 150.625, zoom: 14 },
-        { name: 'Vincentia / Huskisson',   lat: -35.040, lon: 150.685, zoom: 14 },
-        { name: 'Sussex Inlet / St Georges Basin', lat: -35.155, lon: 150.605, zoom: 14 },
-        { name: 'Ulladulla',               lat: -35.360, lon: 150.475, zoom: 14 },
-        { name: 'Mollymook / Milton',      lat: -35.330, lon: 150.470, zoom: 14 },
-        { name: 'Batemans Bay',            lat: -35.710, lon: 150.180, zoom: 14 },
-        { name: 'Moruya',                  lat: -35.910, lon: 150.080, zoom: 14 },
-        { name: 'Narooma',                 lat: -36.215, lon: 150.135, zoom: 14 },
-        { name: 'Merimbula / Bega',        lat: -36.680, lon: 149.830, zoom: 14 },
-        { name: 'Eden',                    lat: -37.062, lon: 149.901, zoom: 14 },
-        // ---- Southern Highlands ----
-        { name: 'Bowral / Mittagong',      lat: -34.485, lon: 150.415, zoom: 14 },
-        { name: 'Moss Vale / Goulburn',    lat: -34.755, lon: 149.720, zoom: 14 },
-        // ---- ACT region ----
-        { name: 'Canberra / ACT',          lat: -35.280, lon: 149.130, zoom: 14 },
-        { name: 'Canberra North',          lat: -35.240, lon: 149.130, zoom: 14 },
-        { name: 'Canberra South',          lat: -35.345, lon: 149.095, zoom: 14 },
-        { name: 'Belconnen',               lat: -35.235, lon: 149.067, zoom: 14 },
-        { name: 'Tuggeranong',             lat: -35.420, lon: 149.075, zoom: 14 },
-        { name: 'Gungahlin',               lat: -35.185, lon: 149.130, zoom: 14 },
-        { name: 'Queanbeyan',              lat: -35.355, lon: 149.235, zoom: 14 },
-        { name: 'Yass',                    lat: -34.845, lon: 148.915, zoom: 14 },
-        { name: 'Murrumbateman',           lat: -34.972, lon: 149.030, zoom: 14 },
-        // ---- Snowy Mountains ----
-        { name: 'Cooma',                   lat: -36.235, lon: 149.130, zoom: 14 },
-        { name: 'Jindabyne',               lat: -36.415, lon: 148.625, zoom: 14 },
-        // ---- Central West ----
-        { name: 'Bathurst',                lat: -33.420, lon: 149.580, zoom: 14 },
-        { name: 'Kelso / Eglinton',        lat: -33.405, lon: 149.620, zoom: 14 },
-        { name: 'Orange',                  lat: -33.285, lon: 149.100, zoom: 14 },
-        { name: 'Orange North',            lat: -33.265, lon: 149.090, zoom: 14 },
-        { name: 'Lithgow',                 lat: -33.485, lon: 150.155, zoom: 14 },
-        { name: 'Portland / Wallerawang',  lat: -33.380, lon: 150.050, zoom: 14 },
-        { name: 'Mudgee',                  lat: -32.593, lon: 149.585, zoom: 14 },
-        { name: 'Parkes',                  lat: -33.135, lon: 148.175, zoom: 14 },
-        { name: 'Forbes',                  lat: -33.385, lon: 148.010, zoom: 14 },
-        { name: 'Cowra',                   lat: -33.835, lon: 148.685, zoom: 14 },
-        { name: 'Young',                   lat: -34.315, lon: 148.300, zoom: 14 },
-        { name: 'Dubbo',                   lat: -32.250, lon: 148.600, zoom: 14 },
-        { name: 'Dubbo West',              lat: -32.245, lon: 148.580, zoom: 14 },
-        // ---- Riverina ----
-        { name: 'Wagga Wagga',             lat: -35.115, lon: 147.370, zoom: 14 },
-        { name: 'Wagga South / Glenfield Park', lat: -35.140, lon: 147.355, zoom: 14 },
-        { name: 'Wagga North / Estella',   lat: -35.080, lon: 147.358, zoom: 14 },
-        { name: 'Junee',                   lat: -34.870, lon: 147.585, zoom: 14 },
-        { name: 'Albury',                  lat: -36.080, lon: 146.915, zoom: 14 },
-        { name: 'Lavington',               lat: -36.040, lon: 146.945, zoom: 14 },
-        { name: 'Griffith',                lat: -34.290, lon: 146.045, zoom: 14 },
-        { name: 'Leeton',                  lat: -34.555, lon: 146.405, zoom: 14 },
-        { name: 'Deniliquin',              lat: -35.535, lon: 144.960, zoom: 14 },
-        { name: 'Finley',                  lat: -35.640, lon: 145.575, zoom: 14 },
-        { name: 'Tumut',                   lat: -35.305, lon: 148.225, zoom: 14 },
-        { name: 'Tumbarumba',              lat: -35.778, lon: 148.011, zoom: 14 },
-        { name: 'Cootamundra',             lat: -34.640, lon: 148.030, zoom: 14 },
-        { name: 'Temora',                  lat: -34.450, lon: 147.535, zoom: 14 },
-        { name: 'Gundagai',                lat: -35.065, lon: 148.100, zoom: 14 },
-        // ---- North Coast ----
-        { name: 'Bulahdelah',              lat: -32.404, lon: 152.215, zoom: 14 },
-        { name: 'Taree',                   lat: -31.905, lon: 152.460, zoom: 14 },
-        { name: 'Forster / Tuncurry',      lat: -32.180, lon: 152.510, zoom: 14 },
-        { name: 'Wingham',                 lat: -31.870, lon: 152.367, zoom: 14 },
-        { name: 'Port Macquarie',          lat: -31.430, lon: 152.900, zoom: 14 },
-        { name: 'Port Macquarie West',     lat: -31.450, lon: 152.860, zoom: 14 },
-        { name: 'Wauchope',                lat: -31.460, lon: 152.730, zoom: 14 },
-        { name: 'Laurieton / Camden Haven', lat: -31.640, lon: 152.815, zoom: 14 },
-        { name: 'Kempsey',                 lat: -31.080, lon: 152.835, zoom: 14 },
-        { name: 'South West Rocks',        lat: -30.895, lon: 153.040, zoom: 14 },
-        { name: 'Nambucca Heads',          lat: -30.640, lon: 152.985, zoom: 14 },
-        { name: 'Macksville',              lat: -30.710, lon: 152.918, zoom: 14 },
-        { name: 'Coffs Harbour',           lat: -30.300, lon: 153.120, zoom: 14 },
-        { name: 'Coffs Harbour South / Sawtell', lat: -30.365, lon: 153.100, zoom: 14 },
-        { name: 'Woolgoolga',              lat: -30.110, lon: 153.200, zoom: 14 },
-        { name: 'Grafton',                 lat: -29.695, lon: 152.935, zoom: 14 },
-        { name: 'Yamba / Maclean',         lat: -29.435, lon: 153.355, zoom: 14 },
-        { name: 'Casino',                  lat: -28.865, lon: 153.050, zoom: 14 },
-        { name: 'Lismore',                 lat: -28.810, lon: 153.280, zoom: 14 },
-        { name: 'Goonellabah',             lat: -28.815, lon: 153.305, zoom: 14 },
-        { name: 'Ballina',                 lat: -28.865, lon: 153.565, zoom: 14 },
-        { name: 'Lennox Head',             lat: -28.787, lon: 153.585, zoom: 14 },
-        { name: 'Byron Bay',               lat: -28.645, lon: 153.615, zoom: 14 },
-        { name: 'Mullumbimby',             lat: -28.555, lon: 153.500, zoom: 14 },
-        { name: 'Tweed Heads',             lat: -28.180, lon: 153.545, zoom: 14 },
-        { name: 'Kingscliff / Pottsville', lat: -28.255, lon: 153.572, zoom: 14 },
-        { name: 'Murwillumbah',            lat: -28.330, lon: 153.390, zoom: 14 },
-        // ---- New England / North West ----
-        { name: 'Tamworth',                lat: -31.090, lon: 150.930, zoom: 14 },
-        { name: 'Tamworth South / Hillvue', lat: -31.115, lon: 150.910, zoom: 14 },
-        { name: 'Tamworth West',           lat: -31.090, lon: 150.890, zoom: 14 },
-        { name: 'Armidale',                lat: -30.510, lon: 151.665, zoom: 14 },
-        { name: 'Uralla',                  lat: -30.638, lon: 151.495, zoom: 14 },
-        { name: 'Gunnedah',                lat: -30.980, lon: 150.250, zoom: 14 },
-        { name: 'Narrabri',                lat: -30.325, lon: 149.785, zoom: 14 },
-        { name: 'Moree',                   lat: -29.465, lon: 149.840, zoom: 14 },
-        { name: 'Inverell',                lat: -29.775, lon: 151.110, zoom: 14 },
-        { name: 'Glen Innes',              lat: -29.735, lon: 151.740, zoom: 14 },
-        { name: 'Tenterfield',             lat: -29.050, lon: 152.020, zoom: 14 },
-        // ---- Western NSW (Central West → Outback) ----
-        { name: 'Narromine',               lat: -32.230, lon: 148.245, zoom: 14 },
-        { name: 'Warren',                  lat: -31.700, lon: 147.835, zoom: 14 },
-        { name: 'Coonamble',               lat: -30.955, lon: 148.390, zoom: 14 },
-        { name: 'Gilgandra',               lat: -31.710, lon: 148.665, zoom: 14 },
-        { name: 'Condobolin',              lat: -33.085, lon: 147.150, zoom: 14 },
-        { name: 'West Wyalong',            lat: -33.925, lon: 147.225, zoom: 14 },
-        { name: 'Lake Cargelligo',         lat: -33.305, lon: 146.375, zoom: 14 },
-        // ---- Far West / Outback ----
-        { name: 'Cobar',                   lat: -31.498, lon: 145.835, zoom: 14 },
-        { name: 'Nyngan',                  lat: -31.559, lon: 147.195, zoom: 14 },
-        { name: 'Bourke',                  lat: -30.091, lon: 145.935, zoom: 14 },
-        { name: 'Walgett',                 lat: -30.025, lon: 148.120, zoom: 14 },
-        { name: 'Lightning Ridge',         lat: -29.430, lon: 147.975, zoom: 14 },
-        { name: 'Brewarrina',              lat: -29.965, lon: 146.870, zoom: 14 },
-        { name: 'Hillston',                lat: -33.485, lon: 145.535, zoom: 14 },
-        { name: 'Hay',                     lat: -34.510, lon: 144.840, zoom: 14 },
-        { name: 'Balranald',               lat: -34.640, lon: 143.560, zoom: 14 },
-        { name: 'Wentworth',               lat: -34.110, lon: 141.915, zoom: 14 },
-        { name: 'Wilcannia',               lat: -31.560, lon: 143.380, zoom: 14 },
-        { name: 'Menindee',                lat: -32.395, lon: 142.420, zoom: 14 },
-        { name: 'Broken Hill',             lat: -31.955, lon: 141.465, zoom: 14 },
-        { name: 'Tibooburra',              lat: -29.435, lon: 142.015, zoom: 14 },
+        // 6-tile NSW pass at zoom 8. Each tile's viewport is ~100-150 km
+        // wide. Centres are placed so the union of all six covers the
+        // NSW coastal corridor, Hunter, Riverina and Central West —
+        // i.e. everywhere with non-trivial traffic.
+        { name: 'Sydney + Blue Mountains',     lat: -33.700, lon: 150.800, zoom: 8 },
+        { name: 'Hunter / Mid North Coast',    lat: -32.000, lon: 152.200, zoom: 8 },
+        { name: 'Northern Rivers',             lat: -29.500, lon: 152.800, zoom: 8 },
+        { name: 'Illawarra / South Coast',     lat: -35.300, lon: 150.300, zoom: 8 },
+        { name: 'Central West Plains',         lat: -33.000, lon: 148.300, zoom: 8 },
+        { name: 'Riverina / South West',       lat: -35.300, lon: 146.500, zoom: 8 },
     ];
     // After panning, wait up to this long for Waze to fire georss for the
     // new viewport. As soon as a georss response arrives we accelerate the
     // next pan — no point waiting if the data is already in.
     //
-    // Bumped 5s → 7s in v1.18 after seeing Waze 403 the georss endpoint
-    // after several hours of running. The 5s cadence × 190 regions = ~38
-    // requests/min from one IP/cookie pair, which trips Waze's bot
-    // heuristics. 7s averages ~27/min and adds a 0-2s jitter per pan
-    // so the timing isn't perfectly regular (also a fingerprint).
+    // Cadence kept at 7s + 0-2s jitter from v1.18. With v1.21's 6-tile
+    // pass, this is ~50s per full sweep and ~7-9 requests/min from one
+    // IP/cookie pair — trivially under Waze's bot heuristics. Could go
+    // faster but slower-than-needed is friendlier; the backend cache
+    // doesn't benefit from sub-minute repolls of the same incidents.
     const PAN_INTERVAL_MS        = 7_000;  // fallback max wait per region (dead zones)
     const PAN_INTERVAL_JITTER_MS = 2_000;  // random extra 0..N per pan
     const PAN_AFTER_INGEST_MS    = 1_500;  // how long to wait after georss before panning
