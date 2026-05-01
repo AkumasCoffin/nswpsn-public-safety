@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.22
+// @version      1.23
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -129,17 +129,22 @@
     // proactively before the 30-min absolute timer fires.
     let _lastIngestSuccess = Date.now();
 
-    // Anti-bot state — when Waze 403s/429s the georss endpoint, we go
-    // into a cooldown that PERSISTS across page reloads (in localStorage).
-    // We deliberately do NOT reload on 403 unless we successfully cleared
-    // Waze's session cookies (which requires GM_cookie permission, since
-    // Waze's session cookies are HttpOnly and document.cookie can't touch
-    // them). Reloading without clearing cookies just hits another 403 and
-    // wastes the cooldown.
+    // Anti-bot state — when Waze 403s/429s the georss endpoint we
+    // try to clear waze.com cookies via GM_cookie (HttpOnly cookies
+    // are reachable through that API where document.cookie can't see
+    // them) and force a page reload, which gives us a fresh session
+    // and usually clears the block immediately.
+    //
+    // Circuit breaker: if we hit too many 403s in a row across reloads
+    // (tracked via LS_BLOCK_COUNT, which persists), the IP itself is
+    // probably banned and reloading just earns more 403s. After
+    // RELOAD_BACKOFF_THRESHOLD consecutive 403s we fall back to the
+    // exponential cooldown without reloading.
     const LS_BLOCK_UNTIL = 'nswpsn_waze_block_until';
     const LS_BLOCK_COUNT = 'nswpsn_waze_block_count';
-    const COOLDOWN_BASE_MS = 5 * 60 * 1000;   // 5 min for first 403
+    const COOLDOWN_BASE_MS = 5 * 60 * 1000;   // 5 min for first 403 past threshold
     const COOLDOWN_MAX_MS  = 30 * 60 * 1000;  // cap at 30 min after repeats
+    const RELOAD_BACKOFF_THRESHOLD = 3;       // try 3 reloads before falling back to wait
 
     function loadCooldown() {
         try {
@@ -174,23 +179,121 @@
         return Math.max(0, loadCooldown().until - Date.now());
     }
 
+    // GM_cookie is the only way to delete HttpOnly waze.com cookies
+    // (where document.cookie is blocked). Both the legacy GM_cookie
+    // (Tampermonkey) and the modern GM.cookie (Violentmonkey, GM4)
+    // are supported.
+    function getCookieApi() {
+        if (typeof GM_cookie !== 'undefined' && GM_cookie) return GM_cookie;
+        if (typeof GM !== 'undefined' && GM && GM.cookie) return GM.cookie;
+        return null;
+    }
+
+    // Force-reload after a small delay so the log line lands and any
+    // in-flight requests have a chance to settle. Bypassed cache
+    // (location.reload(true)) where supported.
+    function forceReload(reason) {
+        log(`reloading: ${reason}`);
+        setTimeout(() => {
+            try { pageWin.location.reload(true); }
+            catch (e) {
+                try { pageWin.location.href = pageWin.location.href; }
+                catch (e2) { try { window.location.reload(); } catch (e3) {} }
+            }
+        }, 1500);
+    }
+
+    // Best-effort: enumerate every waze.com cookie and delete them all.
+    // Calls cb() once when done (or after a 3s safety timeout if the
+    // userscript manager's API never invokes our callbacks).
+    function clearWazeCookies(cb) {
+        const api = getCookieApi();
+        if (!api) {
+            log('GM_cookie API not available — cannot clear cookies');
+            cb(false);
+            return;
+        }
+        let done = false;
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            cb(ok);
+        };
+        // Safety timeout — some managers silently drop the callback.
+        setTimeout(() => finish(false), 3000);
+        try {
+            // GM_cookie.list takes a filter (domain) + callback. Some
+            // managers also expose Promise-based GM.cookie.list().
+            const listRes = api.list({ domain: 'waze.com' }, (cookies) => {
+                handleList(cookies);
+            });
+            if (listRes && typeof listRes.then === 'function') {
+                listRes.then(handleList).catch((err) => {
+                    log('cookie list failed', err);
+                    finish(false);
+                });
+            }
+        } catch (e) {
+            log('cookie list threw', e);
+            finish(false);
+        }
+        function handleList(cookies) {
+            const all = Array.isArray(cookies) ? cookies : [];
+            if (all.length === 0) {
+                log('no waze cookies to clear');
+                finish(true);
+                return;
+            }
+            let pending = all.length;
+            const tick = () => {
+                pending--;
+                if (pending <= 0) {
+                    log(`cleared ${all.length} waze cookie(s)`);
+                    finish(true);
+                }
+            };
+            for (const c of all) {
+                try {
+                    const dRes = api.delete({
+                        url: 'https://www.waze.com/',
+                        domain: c.domain,
+                        name: c.name,
+                    }, tick);
+                    if (dRes && typeof dRes.then === 'function') {
+                        dRes.then(tick).catch(tick);
+                    }
+                } catch (e) { tick(); }
+            }
+        }
+    }
+
     function noteWazeBlock(status) {
         const { count: prevCount } = loadCooldown();
         const newCount = prevCount + 1;
-        // Exponential backoff: 5min, 10min, 20min, 30min (capped).
-        const delay = Math.min(
-            COOLDOWN_BASE_MS * Math.pow(2, newCount - 1),
-            COOLDOWN_MAX_MS,
-        );
-        const until = Date.now() + delay;
-        saveCooldown(until, newCount);
-        log(`Waze ${status} — pausing rotation for ${Math.round(delay / 60000)}m (count ${newCount})`);
-        // No reload — reloading was the bug. Waze's block is IP/session
-        // based and reloading just re-triggers the watchdog/scheduled-
-        // reload loop. Instead: pause rotation in place. The page stays
-        // loaded, Waze keeps doing whatever it does, and after the
-        // cooldown elapses we silently resume panning. If the block was
-        // tied to our cookie, time alone usually clears it.
+
+        // Past the reload threshold — IP is probably banned, fall back
+        // to the old wait-it-out behaviour with exponential backoff.
+        if (newCount > RELOAD_BACKOFF_THRESHOLD) {
+            const delay = Math.min(
+                COOLDOWN_BASE_MS * Math.pow(2, newCount - RELOAD_BACKOFF_THRESHOLD - 1),
+                COOLDOWN_MAX_MS,
+            );
+            saveCooldown(Date.now() + delay, newCount);
+            log(`Waze ${status} #${newCount} — past reload threshold, waiting ${Math.round(delay / 60000)}m`);
+            return;
+        }
+
+        // Within reload budget — clear cookies and reload. The next
+        // page load comes up with a fresh waze.com session.
+        // LS_BLOCK_COUNT persists across reload so we still know how
+        // many we've done; LS_BLOCK_UNTIL is set to a tiny window so
+        // startRotation has a 5s breather to let the new session
+        // bootstrap before we start panning again.
+        saveCooldown(Date.now() + 5_000, newCount);
+        log(`Waze ${status} #${newCount} — clearing cookies + reloading (budget ${RELOAD_BACKOFF_THRESHOLD - newCount + 1} left)`);
+        clearWazeCookies((ok) => {
+            forceReload(ok ? `${status} (cookies cleared)` : `${status} (cookie clear failed)`);
+        });
     }
 
     function forward(payload) {
@@ -207,6 +310,15 @@
             onload: (r) => {
                 if (r.status >= 200 && r.status < 300) {
                     _lastIngestSuccess = Date.now();
+                    // Successful ingest → reset the consecutive-403 counter
+                    // so the reload budget is fresh for the next bad streak.
+                    try {
+                        const { count } = loadCooldown();
+                        if (count > 0) {
+                            saveCooldown(0, 0);
+                            log('clean ingest — reset block count');
+                        }
+                    } catch (e) {}
                     log('ingest OK', payload.alerts.length + 'a', payload.jams.length + 'j');
                     try { onIngestArrived(); } catch (e) {}
                 } else {
