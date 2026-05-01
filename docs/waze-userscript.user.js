@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.23
+// @version      1.24
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -590,10 +590,13 @@
         try { pageWin.localStorage.setItem(LS_KEY, String(i)); } catch (e) {}
     }
 
-    // Set to true when the region we JUST processed was the last in the
-    // array. The next call to schedule a pan reads + clears this and
-    // adds the extra round pause on top of the normal cadence.
-    let endOfRoundPending = false;
+    // Earliest wallclock time we're allowed to pan again. Set when we
+    // pan to the last region of a sweep — both timer paths (the normal
+    // cadence and the ingest-arrived fast path) check this and stretch
+    // their delay so neither fires before this timestamp. A flag-based
+    // version (consumed-on-read) was racy: ingest arrival after the
+    // last pan would consume the flag and bypass the pause.
+    let earliestPanAt = 0;
 
     function rotateToNextRegion() {
         let idx = loadRegionIdx();
@@ -602,10 +605,14 @@
         saveRegionIdx(nextIdx);
         // We just panned to REGIONS[idx]; if the next index has wrapped
         // back to 0 it means the region we just processed was the last
-        // one in the sweep — flag a round-end pause for the *next*
-        // schedule, so we sleep AFTER this region's data settles, not
-        // before it gets processed.
-        if (nextIdx === 0) endOfRoundPending = true;
+        // one in the sweep — set an absolute wait-until timestamp so
+        // BOTH the cadence timer AND the ingest-arrived fast path
+        // honour the pause, regardless of which one fires next.
+        if (nextIdx === 0) {
+            const pauseMs = ROUND_PAUSE_MIN_MS + Math.floor(Math.random() * ROUND_PAUSE_RANGE_MS);
+            earliestPanAt = Date.now() + pauseMs;
+            log(`end of round — pausing ${Math.round(pauseMs / 1000)}s before next sweep`);
+        }
 
         const map = findLeafletMap();
         if (map) {
@@ -658,17 +665,14 @@
     let ingestWaitTimer = null;
 
     function nextDelayMs(baseMs) {
-        // Per-pan jitter + an optional extra 30-60s pause when we just
-        // finished a full sweep. The flag is consumed once so the pause
-        // only fires once per round, not on every call within the round.
         const jitter = Math.floor(Math.random() * PAN_INTERVAL_JITTER_MS);
-        let extra = 0;
-        if (endOfRoundPending) {
-            endOfRoundPending = false;
-            extra = ROUND_PAUSE_MIN_MS + Math.floor(Math.random() * ROUND_PAUSE_RANGE_MS);
-            log(`end of round — pausing ${Math.round(extra / 1000)}s before next sweep`);
-        }
-        return baseMs + jitter + extra;
+        // Stretch the delay so we don't fire before earliestPanAt.
+        // Survives any path that schedules the next pan: cadence timer,
+        // ingest-arrived fast path, or post-ingest timer all converge
+        // here. earliestPanAt = 0 (default) is in the past, so this
+        // adds nothing during normal sweeps.
+        const earliestExtra = Math.max(0, earliestPanAt - Date.now() - baseMs);
+        return baseMs + jitter + earliestExtra;
     }
 
     function scheduleNextPan() {
