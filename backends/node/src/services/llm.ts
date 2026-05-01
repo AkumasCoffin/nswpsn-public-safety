@@ -361,7 +361,10 @@ export async function callLlm(opts: {
   const payload: Record<string, unknown> = {
     model: opts.model,
     temperature: 0.2,
-    max_tokens: opts.maxTokens ?? 60_000,
+    // Gemini 2.5 Flash hard caps output at 65,536 tokens. Pre-bump
+    // (60k) was leaving headroom that meant busy hours with dense
+    // per-call transcripts[] arrays were truncating mid-string.
+    max_tokens: opts.maxTokens ?? 65_000,
     messages: [
       { role: 'system', content: opts.systemPrompt },
       { role: 'user', content: opts.userPrompt },
@@ -665,6 +668,32 @@ export function parseSummaryOutput(text: string): ParsedSummary {
         : `${incidents.length} incident${incidents.length === 1 ? '' : 's'} reported.`;
     }
     return { overview, structured: repaired };
+  }
+
+  // Last-resort: regex-extract just the `overview` string. When the
+  // JSON is truncated deep inside the per-incident transcripts[] array
+  // (a common pattern on busy hours that bust the 65k token cap), the
+  // structured repair can't reconstruct anything useful — but the
+  // overview field appears very early in Gemini's output, so it's
+  // intact. Pull it out as a plain string so the discord embed and
+  // dashboard panel still render the high-level "what happened this
+  // hour" sentence rather than going blank.
+  const overviewMatch = /"overview"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(cleaned);
+  if (overviewMatch && overviewMatch[1]) {
+    let overview = overviewMatch[1];
+    // Unescape JSON string escapes — \" \\ \n etc.
+    try {
+      overview = JSON.parse(`"${overview}"`);
+    } catch {
+      // leave as-is if unescape fails
+    }
+    if (overview.trim().length > 0) {
+      log.info(
+        { len: overview.length },
+        'summary parse: recovered overview via regex (structured discarded)',
+      );
+      return { overview, structured: null };
+    }
   }
 
   // Parse fully failed. Returning the raw LLM body as overview puts
