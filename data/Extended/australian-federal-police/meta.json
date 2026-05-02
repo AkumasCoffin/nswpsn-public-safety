@@ -1,0 +1,24 @@
+{
+  "title": "🛡 Australian Federal Police",
+  "tag": "AFP",
+  "badges": [
+    {"label": "Australian Federal Police", "variant": "agency"},
+    {"label": "Federal Law Enforcement", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Australian Federal Police is the federal police service of Australia. It enforces Commonwealth criminal law, protects Commonwealth interests including national security, and provides community policing in the Australian Capital Territory and external territories."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Established 1979 by the merger of the Commonwealth Police and the ACT Police.",
+      "Approximately 7,500 employees including more than 4,000 sworn officers.",
+      "Mission areas: counter-terrorism, organised crime and gangs, drugs, cybercrime, child protection operations, fraud and anti-corruption.",
+      "Provides Aviation Police at major airports including Sydney and Bankstown."
+    ]},
+    {"type": "h", "text": "NSW Operations"},
+    {"type": "ul", "items": [
+      "AFP officers in NSW work from the Sydney Office and the Aviation operations at Sydney Airport.",
+      "AFP coordinates with NSW Police on joint task forces (e.g. JOCG-style operations) using shared liaison talkgroups."
+    ]}
+  ],
+  "sections": []
+}

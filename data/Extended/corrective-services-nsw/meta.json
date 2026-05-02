@@ -1,0 +1,18 @@
+{
+  "title": "🔒 Corrective Services NSW",
+  "tag": "CSNSW",
+  "badges": [
+    {"label": "Corrective Services NSW", "variant": "agency"},
+    {"label": "NSW Communities and Justice", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Corrective Services NSW is the agency responsible for adult prisons (correctional centres) and community-based supervision in NSW. It manages remand and sentenced inmates, escorts and prisoner transport, and the Community Corrections supervised-orders system."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Operates around 36 correctional centres including maximum, medium and minimum-security facilities.",
+      "Inmate population in the high 12,000s with thousands more on community orders.",
+      "Specialist units include the Security and Investigations Branch, the Corrective Services Industries (work programs) and Community Corrections."
+    ]}
+  ],
+  "sections": []
+}

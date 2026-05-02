@@ -1,0 +1,24 @@
+{
+  "title": "🌩 NSW State Emergency Service",
+  "tag": "NSW SES",
+  "badges": [
+    {"label": "NSW State Emergency Service", "variant": "agency"},
+    {"label": "Volunteer Emergency Service", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The NSW State Emergency Service is the lead combat agency for floods, storms and tsunamis in NSW. It also provides general rescue, vertical/cliff rescue, and is the primary land-based response for severe-weather incidents."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Established in 1955 as the State Emergency Service.",
+      "Around 10,000 volunteer members across 220+ units.",
+      "Lead agency for storm, flood and tsunami response under the State Emergency and Rescue Management Act.",
+      "Capabilities include flood rescue (in-water and boat), road-crash rescue, vertical rescue, urban search and rescue, and community education."
+    ]},
+    {"type": "h", "text": "Operational Notes"},
+    {"type": "ul", "items": [
+      "Activations escalate from local Unit through Region to State Operations Centre at Wollongong.",
+      "Major events frequently patch SES with FRNSW, RFS, NSW Police and NSW Ambulance on shared liaison talkgroups."
+    ]}
+  ],
+  "sections": []
+}

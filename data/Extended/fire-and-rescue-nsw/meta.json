@@ -1,0 +1,77 @@
+{
+  "title": "🚒 Fire and Rescue NSW – Overview",
+  "tag": "Agency",
+  "badges": [
+    {"label": "Fire and Rescue NSW", "variant": "agency"},
+    {"label": "State Fire & Rescue", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Fire and Rescue NSW (FRNSW) is the primary fire and emergency service for urban areas in New South Wales, responsible for protecting life, property and the environment in cities, larger towns and key industrial areas."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Established in 1884 (formerly NSW Fire Brigades).",
+      "Operates approximately 335 fire stations across NSW.",
+      "Responds to more than 130,000 incidents each year."
+    ]}
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "⚠ Priority Codes",
+      "tag": "Radio",
+      "wide": false,
+      "intro": "Quick reference for Fire and Rescue NSW radio priorities.",
+      "csv": "priority-codes.csv"
+    },
+    {
+      "type": "table",
+      "title": "📟 Status Codes",
+      "tag": "Unit Status",
+      "wide": false,
+      "intro": "Status codes as used by appliances when reporting to FireCom.",
+      "csv": "status-codes.csv"
+    },
+    {
+      "type": "grouped-table",
+      "title": "🧭 Regional Zones",
+      "tag": "Zones",
+      "wide": true,
+      "intro": "Fire and Rescue NSW Regional zones grouped by direction.",
+      "table_class": "frnsw-zone-table",
+      "groups": [
+        {"heading": "Regional North", "csv": "regional-zones-north.csv"},
+        {"heading": "Regional South", "csv": "regional-zones-south.csv"},
+        {"heading": "Regional West", "csv": "regional-zones-west.csv"}
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🏙 Metropolitan Zones",
+      "tag": "Zones",
+      "wide": true,
+      "intro": "Fire and Rescue NSW Metropolitan zones grouped by direction.",
+      "table_class": "frnsw-zone-table",
+      "groups": [
+        {"heading": "Metropolitan North", "csv": "metro-zones-north.csv"},
+        {"heading": "Metropolitan South", "csv": "metro-zones-south.csv"},
+        {"heading": "Metropolitan East", "csv": "metro-zones-east.csv"},
+        {"heading": "Metropolitan West", "csv": "metro-zones-west.csv"}
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🚛 Appliance Prefixes",
+      "tag": "Fleet",
+      "wide": true,
+      "intro": "Common Fire and Rescue NSW appliance prefixes, grouped by type.",
+      "table_class": "frnsw-prefix-table",
+      "groups": [
+        {"heading": "Pumpers", "csv": "appliance-pumpers.csv"},
+        {"heading": "Tankers", "csv": "appliance-tankers.csv"},
+        {"heading": "Rescue", "csv": "appliance-rescue.csv"},
+        {"heading": "Specialist & Support", "csv": "appliance-specialist.csv"},
+        {"heading": "Command & IMT", "csv": "appliance-command.csv"}
+      ]
+    }
+  ]
+}

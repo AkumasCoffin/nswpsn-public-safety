@@ -1,0 +1,18 @@
+{
+  "title": "⛏ NSW Mines Rescue",
+  "tag": "Mines Rescue",
+  "badges": [
+    {"label": "Coal Services — NSW Mines Rescue", "variant": "agency"},
+    {"label": "Industry Owned", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "NSW Mines Rescue is a service of Coal Services Pty Ltd (jointly owned by the NSW black-coal industry and the CFMEU). It provides specialist underground rescue capability, mine-emergency response and breathing-apparatus expertise to NSW coal mines and metalliferous operations."},
+    {"type": "h", "text": "Stations"},
+    {"type": "ul", "items": [
+      "Stations at Argenton (Hunter), Singleton, Lithgow, Woonona and Wollongong.",
+      "On-call brigade members are also working miners at member sites.",
+      "Capabilities: long-duration BA, irrespirable-atmosphere rescue, gas analysis, sealing teams, casualty extraction."
+    ]}
+  ],
+  "sections": []
+}

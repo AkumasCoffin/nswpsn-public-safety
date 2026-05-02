@@ -1,0 +1,18 @@
+{
+  "title": "🛡 Special Constables",
+  "tag": "Special",
+  "badges": [
+    {"label": "Special Constables", "variant": "agency"},
+    {"label": "Limited-Authority Officers", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Special Constables are appointed under the Police Act 1990 with specified, limited police powers — typically restricted to a particular employer, premises, or function (e.g. NSW Parliament, court precincts, Reserve Bank, certain Commonwealth sites)."},
+    {"type": "h", "text": "Notes"},
+    {"type": "ul", "items": [
+      "Not full sworn members of the NSW Police Force.",
+      "Appointed for protective-security duties at specific establishments.",
+      "Coordinated with NSW Police on shared liaison channels for incidents on covered premises."
+    ]}
+  ],
+  "sections": []
+}

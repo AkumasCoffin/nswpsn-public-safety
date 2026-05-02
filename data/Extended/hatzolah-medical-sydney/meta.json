@@ -1,0 +1,18 @@
+{
+  "title": "✡ Hatzolah Medical Sydney",
+  "tag": "Hatzolah",
+  "badges": [
+    {"label": "Hatzolah Sydney", "variant": "agency"},
+    {"label": "Volunteer EMS", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Hatzolah Medical Sydney is a volunteer first-response EMS organisation serving Sydney's eastern suburbs. Members are equipped with medical bags and respond by car or on foot to medical emergencies in their community, working in cooperation with NSW Ambulance."},
+    {"type": "h", "text": "Notes"},
+    {"type": "ul", "items": [
+      "Operates predominantly in the Bondi, Bondi Junction and Eastern Suburbs Jewish community area.",
+      "First responders only — patient transport is performed by NSW Ambulance.",
+      "Crews carry portable PSN radios for liaison with NSWAS during incidents."
+    ]}
+  ],
+  "sections": []
+}

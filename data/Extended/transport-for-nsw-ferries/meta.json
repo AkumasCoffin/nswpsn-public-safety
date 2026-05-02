@@ -1,0 +1,17 @@
+{
+  "title": "⛴ Transport for NSW – Ferries",
+  "tag": "Ferries",
+  "badges": [
+    {"label": "Sydney Ferries", "variant": "agency"},
+    {"label": "Transport for NSW", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Sydney Ferries operates passenger ferry services across Sydney Harbour and the Parramatta River under contract to Transport for NSW. The fleet includes the iconic Manly Freshwater-class, the Emerald-class commuter ferries, RiverCats and Lady-class vessels."},
+    {"type": "h", "text": "Routes"},
+    {"type": "ul", "items": [
+      "F1 Manly · F2 Taronga Zoo · F3 Parramatta River · F4 Pyrmont Bay · F5 Neutral Bay · F6 Mosman Bay · F7 Eastern Suburbs · F8 Cockatoo Island · F9 Watsons Bay · F10 Blackwattle Bay.",
+      "Major wharves: Circular Quay, Barangaroo, Manly, Parramatta, Taronga Zoo."
+    ]}
+  ],
+  "sections": []
+}

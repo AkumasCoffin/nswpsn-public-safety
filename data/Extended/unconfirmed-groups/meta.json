@@ -1,0 +1,18 @@
+{
+  "title": "❓ Unconfirmed Groups",
+  "tag": "Unknown",
+  "badges": [
+    {"label": "Unconfirmed", "variant": "agency"},
+    {"label": "Pending Identification", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Unconfirmed Groups are PSN talkgroups whose user agency has not been positively identified by the monitoring community, or where the prior allocation has changed. The TGIDs listed here may be active, dormant, reassigned, or temporarily allocated for testing."},
+    {"type": "h", "text": "Help Identify"},
+    {"type": "ul", "items": [
+      "If you have first-hand information about any of these talkgroups (especially their owning agency or function), please share via the project's data sources page so they can be re-categorised.",
+      "Verification typically requires distinct activity patterns, alias hints in audio, and corroboration with public-record information.",
+      "Never publish identifying information about private individuals heard on these channels."
+    ]}
+  ],
+  "sections": []
+}
