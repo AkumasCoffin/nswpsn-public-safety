@@ -38,6 +38,7 @@ import { usersRouter } from './api/users.js';
 import { dataHistoryRouter } from './api/data-history.js';
 // Aviation / news / summaries / transcripts (W7).
 import { aviationRouter } from './api/aviation.js';
+import { marinetrafficRouter } from './api/marinetraffic.js';
 import { newsRouter } from './api/news.js';
 import { summariesRouter } from './api/summaries.js';
 import { transcriptsRouter } from './api/transcripts.js';
@@ -254,6 +255,7 @@ export function createApp() {
   app.route('/', dataHistoryRouter);
   // Aviation cameras + news RSS + summaries (W7)
   app.route('/', aviationRouter);
+  app.route('/', marinetrafficRouter);
   app.route('/', newsRouter);
   app.route('/', summariesRouter);
   app.route('/', transcriptsRouter);
