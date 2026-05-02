@@ -34,6 +34,7 @@ import {
 import { ensureSessionTables } from './services/dashboardSession.js';
 import { closeBotDbPool } from './services/botDb.js';
 import { centralwatchBrowser } from './services/centralwatchBrowser.js';
+import { marinetrafficBrowser } from './services/marinetrafficBrowser.js';
 import {
   startCentralwatchRefreshLoop,
   stopCentralwatchRefreshLoop,
@@ -156,6 +157,15 @@ async function preflight(): Promise<void> {
   } else {
     log.info('centralwatch disabled (CENTRALWATCH_DISABLED=true)');
   }
+
+  // MarineTraffic: separate Playwright tab parked on their AIS map page so
+  // /api/marinetraffic/vessels can run JSON fetches with valid session
+  // cookies. Honours MARINETRAFFIC_DISABLED=true for boxes without chromium.
+  if (process.env['MARINETRAFFIC_DISABLED'] !== 'true') {
+    void marinetrafficBrowser.init();
+  } else {
+    log.info('marinetraffic disabled (MARINETRAFFIC_DISABLED=true)');
+  }
 }
 
 await preflight();
@@ -198,6 +208,7 @@ async function shutdown(signal: string) {
     stopCentralwatchRefreshLoop();
     stopCentralwatchImageBatchLoop();
     await centralwatchBrowser.shutdown();
+    await marinetrafficBrowser.shutdown();
     await liveStore.stopAndFlush();
     await archiveWriter.stopAndFlush();
     await closePool();
