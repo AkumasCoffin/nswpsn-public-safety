@@ -34,6 +34,14 @@ DirectoryIndex index.html
   Require all granted
 </FilesMatch>
 
+# Allow the agency directory JSON files at the site root.
+# Front-end fetches `/agency-data.json` and `/agency-extended.json` to populate
+# the sidebar Agencies dropdown and the per-agency reference pages. The broader
+# .json deny rule above protects everything else (package.json etc.).
+<FilesMatch "^(agency-data|agency-extended)\.json$">
+  Require all granted
+</FilesMatch>
+
 # Clean URLs — visitors can drop the .html extension.
 # The redirect rule canonicalises the URL ("/live.html" → "/live"); the
 # rewrite rule transparently serves /<page>.html when /<page> is requested.
