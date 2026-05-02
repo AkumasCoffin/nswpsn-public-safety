@@ -1,0 +1,25 @@
+{
+  "title": "🛡 NSW Police Force",
+  "tag": "NSWPF",
+  "badges": [
+    {"label": "NSW Police Force", "variant": "agency"},
+    {"label": "State Police", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The New South Wales Police Force is the primary law-enforcement agency for NSW. It is one of the largest police organisations in the English-speaking world, providing 24/7 emergency response, criminal investigation, traffic policing, public-order management and specialist operations across the state."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Established in 1862 as the unified NSW Police Force.",
+      "Around 17,000 sworn officers and 4,000 administrative staff.",
+      "Operates from roughly 470 stations grouped into Police Area Commands (metro) and Police Districts (regional).",
+      "Specialist units include PolAir, Marine Area Command, Counter Terrorism, Dog Unit, Rescue & Bomb Disposal, Tactical Operations Unit, Negotiators, Public Order & Riot Squad."
+    ]},
+    {"type": "h", "text": "Talkgroup Notes"},
+    {"type": "ul", "items": [
+      "Routine NSWPF radio traffic on the PSN is heavily encrypted; many talkgroups carry minimal cleartext.",
+      "Some specialist and tasking channels remain in clear or partially in clear.",
+      "Be aware that publishing anything that could compromise an active operation or identify victims/officers is illegal under NSW law."
+    ]}
+  ],
+  "sections": []
+}

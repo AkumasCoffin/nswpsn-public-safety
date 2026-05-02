@@ -1,0 +1,18 @@
+{
+  "title": "🚂 Australian Rail Track Corporation",
+  "tag": "ARTC",
+  "badges": [
+    {"label": "Australian Rail Track Corporation", "variant": "agency"},
+    {"label": "Federal Government Owned", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Australian Rail Track Corporation is a Commonwealth-owned company that manages and maintains most of the interstate standard-gauge rail network. In NSW it operates the Hunter Valley coal network and the interstate corridor, providing access to private operators."},
+    {"type": "h", "text": "Operations"},
+    {"type": "ul", "items": [
+      "Network Control Centres in Junee (NSW), Mile End (SA) and Broadmeadow (Hunter).",
+      "Inland Rail project — new Melbourne–Brisbane standard-gauge corridor.",
+      "Coordinates with NSW emergency services for level-crossing incidents and trespass."
+    ]}
+  ],
+  "sections": []
+}

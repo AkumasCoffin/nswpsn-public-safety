@@ -1,0 +1,19 @@
+{
+  "title": "🚇 Transport for NSW – Rail",
+  "tag": "Rail",
+  "badges": [
+    {"label": "Sydney Trains / NSW TrainLink / Sydney Metro", "variant": "agency"},
+    {"label": "Transport for NSW", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Heavy rail in NSW is delivered by three TfNSW operating entities: Sydney Trains (suburban), NSW TrainLink (intercity, regional and XPT services) and Sydney Metro (driverless metro). The network spans more than 1,500 km of track and 300+ stations."},
+    {"type": "h", "text": "Operators"},
+    {"type": "ul", "items": [
+      "Sydney Trains — eight suburban lines (T1–T9) plus the Airport line.",
+      "NSW TrainLink — Blue Mountains, Central Coast & Newcastle, South Coast, Southern Highlands, Hunter, plus regional XPT and Xplorer services.",
+      "Sydney Metro — Metro North West & City line; under expansion via Metro West and Western Sydney Airport line.",
+      "Rail Operations Centre coordinates response across the heavy-rail network with NSW Police Transit & Public Safety Command."
+    ]}
+  ],
+  "sections": []
+}

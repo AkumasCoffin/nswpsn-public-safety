@@ -1,0 +1,18 @@
+{
+  "title": "👶 Newborn & Paediatric Emergency Transport Service",
+  "tag": "NETS",
+  "badges": [
+    {"label": "NETS NSW", "variant": "agency"},
+    {"label": "Sydney Children's Hospitals Network", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "NETS is a specialist 24/7 emergency-transport service for critically unwell newborns, infants and children in NSW and the ACT. NETS teams (clinician + nurse) move patients between hospitals by road, helicopter or fixed-wing aircraft."},
+    {"type": "h", "text": "How It Works"},
+    {"type": "ul", "items": [
+      "Single clinical phone number used by referring hospitals to activate NETS.",
+      "NETS coordinates transfers between paediatric tertiary centres (Sydney Children's, Westmead, John Hunter Children's).",
+      "Teams use NSW Ambulance and aeromedical assets for movement, with NETS-specific clinical talkgroups for handover."
+    ]}
+  ],
+  "sections": []
+}

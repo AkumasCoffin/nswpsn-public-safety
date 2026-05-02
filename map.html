@@ -26,6 +26,7 @@
 
   <script src="https://kit.fontawesome.com/5d58b9d240.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
@@ -1251,6 +1252,42 @@
     .beach-detail-popup .leaflet-popup-close-button:hover {
       color: #fff !important;
     }
+    /* Repeater (NSWPSN site) popup — same dark theme as beach popups, teal accents,
+       and a scrollable inner area so the frequency list can be scrolled. */
+    .repeater-popup .leaflet-popup-content-wrapper {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(20, 184, 166, 0.45) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.55), 0 0 18px rgba(20, 184, 166, 0.18) !important;
+      color: #e2e8f0 !important;
+    }
+    .repeater-popup .leaflet-popup-content {
+      margin: 10px 12px !important;
+      max-height: 420px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(20,184,166,0.45) transparent;
+    }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar { width: 6px; }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-track { background: transparent; }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb {
+      background: rgba(20,184,166,0.45);
+      border-radius: 3px;
+    }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(20,184,166,0.7);
+    }
+    .repeater-popup .leaflet-popup-tip {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(20, 184, 166, 0.45) !important;
+    }
+    .repeater-popup .leaflet-popup-close-button {
+      color: #5eead4 !important;
+      font-size: 18px !important;
+    }
+    .repeater-popup .leaflet-popup-close-button:hover {
+      color: #fff !important;
+    }
 
     /* Pager / Incident Overview Tooltip – balanced width */
     .leaflet-tooltip {
@@ -1770,13 +1807,10 @@
       <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
       <a class="active" href="map.html" style="color: #fca5a5;">Incident Map</a>
       <a href="logs.html">Incident Logs</a>
-      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
-      <a href="ambulance.html">NSW Ambulance</a>
-      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
-      <a href="aviation.html">Aviation &amp; Callsigns</a>
       <a href="links.html">Useful Links</a>
       <a href="data-sources.html">Data Sources</a>
     </nav>
+    <div id="agencies-nav-mount"></div>
     <div class="sidebar-section-label">Legal</div>
     <nav class="sidebar-nav">
       <a href="terms.html">Terms &amp; Conditions</a>
@@ -1836,6 +1870,37 @@
         <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()"><span class="dot-indicator" style="background:#06b6d4;"></span> Beaches</button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()"><span class="dot-indicator" style="background:#38bdf8;"></span> Weather</button>
         <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
+        <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')"><span class="dot-indicator" style="background:#14b8a6;"></span> Repeaters</button>
+        <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')"><span class="dot-indicator" style="background:#0284c7;"></span> AIS Ships</button>
+      </div>
+      <div id="ais-controls" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid rgba(2,132,199,0.4);border-radius:8px;background:rgba(8,12,28,0.6);">
+        <div style="font-size:10px;color:#7dd3fc;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;font-weight:600;">
+          <i class="fa-solid fa-ship" style="margin-right:5px;"></i>AIS filters
+        </div>
+        <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;margin:6px 0 4px;">Ship Type</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px;">
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-cargo" checked onchange="toggleAisType('cargo', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Cargo</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-tanker" checked onchange="toggleAisType('tanker', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Tanker</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-passenger" checked onchange="toggleAisType('passenger', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Passenger</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-fishing" checked onchange="toggleAisType('fishing', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Fishing</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-tug" checked onchange="toggleAisType('tug', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Tug / Pilot</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-pleasure" checked onchange="toggleAisType('pleasure', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Pleasure</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-sailing" checked onchange="toggleAisType('sailing', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Sailing</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-hsc" checked onchange="toggleAisType('hsc', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> High-speed</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-gov" checked onchange="toggleAisType('gov', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Gov / Mil</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-other" checked onchange="toggleAisType('other', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Other</label>
+        </div>
+        <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;margin:8px 0 4px;">Status / Operation</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px;">
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-underway" checked onchange="toggleAisStatus('underway', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Underway</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-anchored" checked onchange="toggleAisStatus('anchored', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> At anchor</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-moored" checked onchange="toggleAisStatus('moored', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Moored</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-fishing" checked onchange="toggleAisStatus('fishing', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Fishing op</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-restricted" checked onchange="toggleAisStatus('restricted', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Restricted / NUC</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-aground" checked onchange="toggleAisStatus('aground', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Aground</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-unknown" checked onchange="toggleAisStatus('unknown', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Unknown</label>
+        </div>
+        <div id="ais-status-line" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;">No vessels loaded yet.</div>
       </div>
       <div id="firms-controls" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid rgba(249,115,22,0.35);border-radius:8px;background:rgba(20,12,4,0.55);">
         <div style="font-size:10px;color:#fdba74;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;font-weight:600;">
@@ -2577,6 +2642,77 @@
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
+    // ---------- AIS (vessel positions) ----------
+    // MarineTraffic provides vessel data; CORS blocks direct browser fetch so
+    // this hits a backend proxy at PROXY_BASE that re-fetches the upstream URL.
+    // Default upstream:
+    //   https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0/fleet_id:0/embed:1
+    // Replace MARINETRAFFIC_TILE on the backend if you want a different bbox.
+    const aisLayer = L.markerClusterGroup({
+      maxClusterRadius: 50,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 13,
+      iconCreateFunction: function (cluster) {
+        const count = cluster.getChildCount();
+        const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
+        const fontSize = count >= 100 ? 11 : 12;
+        return L.divIcon({
+          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#0284c7;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(2,132,199,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          className: '',
+          iconSize: L.point(size, size),
+          iconAnchor: L.point(size / 2, size / 2)
+        });
+      }
+    });
+    // Sub-layers per category — toggling these in/out of `aisLayer` filters
+    // the visible vessels without refetching.
+    let aisSubLayers = {
+      cargo: L.layerGroup(),
+      tanker: L.layerGroup(),
+      passenger: L.layerGroup(),
+      fishing: L.layerGroup(),
+      tug: L.layerGroup(),
+      pleasure: L.layerGroup(),
+      sailing: L.layerGroup(),
+      hsc: L.layerGroup(),
+      gov: L.layerGroup(),
+      other: L.layerGroup()
+    };
+    let aisStatusSubLayers = {
+      underway: L.layerGroup(),
+      anchored: L.layerGroup(),
+      moored: L.layerGroup(),
+      fishing: L.layerGroup(),
+      restricted: L.layerGroup(),
+      aground: L.layerGroup(),
+      unknown: L.layerGroup()
+    };
+    let _aisVessels = []; // raw decoded list, used to rebuild on filter changes
+    let aisTypeFilter = { cargo:true, tanker:true, passenger:true, fishing:true, tug:true, pleasure:true, sailing:true, hsc:true, gov:true, other:true };
+    let aisStatusFilter = { underway:true, anchored:true, moored:true, fishing:true, restricted:true, aground:true, unknown:true };
+
+    // NSW PSN / GRN site map — loaded from local JSON. 750+ towers, so we
+    // cluster aggressively at low zoom and let the user spiderfy at zoom 15.
+    const nswpsnLayer = L.markerClusterGroup({
+      maxClusterRadius: 60,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 14,
+      iconCreateFunction: function (cluster) {
+        const count = cluster.getChildCount();
+        const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
+        const fontSize = count >= 100 ? 11 : 12;
+        return L.divIcon({
+          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#14b8a6;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(20,184,166,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          className: '',
+          iconSize: L.point(size, size),
+          iconAnchor: L.point(size / 2, size / 2)
+        });
+      }
+    });
     
     // Camera image live refresh
     let cameraRefreshInterval = null;
@@ -3243,7 +3379,9 @@
         floods: floodsLayer,
         cameras: camerasLayer,
         beachwatch: beachwatchLayer,
-        firms: firmsLayer
+        firms: firmsLayer,
+        nswpsn: nswpsnLayer,
+        ais: aisLayer
       };
       const btnMap = {
         user: 'btn-user',
@@ -3255,7 +3393,9 @@
         floods: 'btn-floods',
         cameras: 'btn-cameras',
         beachwatch: 'btn-beachwatch',
-        firms: 'btn-firms'
+        firms: 'btn-firms',
+        nswpsn: 'btn-nswpsn',
+        ais: 'btn-ais'
       };
 
       const layer = layerMap[target];
@@ -3291,6 +3431,13 @@
         }
         if (target === 'beachwatch' && beachwatchLayer.getLayers().length === 0) loadBeachwatchData();
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
+        if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
+        if (target === 'ais' && _aisVessels.length === 0) loadAisData();
+      }
+      if (target === 'ais') {
+        const enabled = map.hasLayer(aisLayer);
+        const ctl = document.getElementById('ais-controls');
+        if (ctl) ctl.style.display = enabled ? 'block' : 'none';
       }
       // Surface the satellite filter controls only while the layer is on.
       if (target === 'firms') {
@@ -8934,6 +9081,330 @@ function initPagerHoursFromStorage() {
         dot.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
       }
     }
+    // ==================== AIS / VESSELS ====================
+    // MarineTraffic ship-type code to internal category. The TYPE field on
+    // their JSON is the AIS ship-type code (10-99).
+    function aisCategoryFromType(type) {
+      const t = parseInt(type, 10);
+      if (!isFinite(t)) return 'other';
+      if (t >= 30 && t <= 30) return 'fishing';
+      if (t === 31 || t === 32 || t === 33 || t === 50 || t === 52) return 'tug';
+      if (t === 51) return 'gov';                     // search-and-rescue
+      if (t === 53 || t === 54 || t === 55 || t === 35) return 'gov'; // port tender, anti-pollution, law-enforcement, military
+      if (t === 36) return 'sailing';
+      if (t === 37) return 'pleasure';
+      if (t === 40 || t === 41 || t === 42 || t === 43 || t === 44 || t === 45 || t === 46 || t === 47 || t === 48 || t === 49) return 'hsc';
+      if (t === 60 || t === 61 || t === 62 || t === 63 || t === 64 || t === 65 || t === 66 || t === 67 || t === 68 || t === 69) return 'passenger';
+      if (t >= 70 && t <= 79) return 'cargo';
+      if (t >= 80 && t <= 89) return 'tanker';
+      return 'other';
+    }
+    // AIS navigational-status code → bucket.
+    function aisStatusBucket(status) {
+      const s = parseInt(status, 10);
+      if (!isFinite(s)) return 'unknown';
+      if (s === 0) return 'underway';                 // under way using engine
+      if (s === 8) return 'underway';                 // under way sailing
+      if (s === 1) return 'anchored';
+      if (s === 5) return 'moored';
+      if (s === 7) return 'fishing';
+      if (s === 2 || s === 3 || s === 4 || s === 6) return 'restricted';
+      if (s === 6) return 'aground';
+      return 'unknown';
+    }
+    // Pretty label for the popup.
+    const AIS_STATUS_LABEL = {
+      0: 'Under way using engine',
+      1: 'At anchor',
+      2: 'Not under command',
+      3: 'Restricted manoeuvrability',
+      4: 'Constrained by draught',
+      5: 'Moored',
+      6: 'Aground',
+      7: 'Engaged in fishing',
+      8: 'Under way sailing',
+      9: 'Reserved (HSC)',
+      10: 'Reserved (WIG)',
+      14: 'AIS-SART (active)',
+      15: 'Default'
+    };
+    const AIS_TYPE_COLOR = {
+      cargo: '#0284c7',     // sky-700
+      tanker: '#dc2626',    // red-600 (hazardous cargo)
+      passenger: '#a855f7', // purple-500
+      fishing: '#10b981',   // emerald-500
+      tug: '#f59e0b',       // amber-500
+      pleasure: '#ec4899',  // pink-500
+      sailing: '#22d3ee',   // cyan-400
+      hsc: '#ef4444',       // red-500 (high-speed)
+      gov: '#475569',       // slate-600
+      other: '#64748b'      // slate-500
+    };
+    const AIS_TYPE_ICON = {
+      cargo: 'fa-ship', tanker: 'fa-ship', passenger: 'fa-ferry', fishing: 'fa-fish',
+      tug: 'fa-anchor', pleasure: 'fa-life-ring', sailing: 'fa-life-ring',
+      hsc: 'fa-rocket', gov: 'fa-shield', other: 'fa-ship'
+    };
+
+    function buildAisIcon(category, headingDeg) {
+      const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.other;
+      const icon = AIS_TYPE_ICON[category] || 'fa-ship';
+      const rot = isFinite(headingDeg) ? ('transform:rotate(' + headingDeg + 'deg);') : '';
+      return L.divIcon({
+        className: 'custom-pin',
+        html: '<div style="background:linear-gradient(135deg,' + color + ',' + color + 'cc);width:24px;height:24px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 6px ' + color + '99,0 0 10px ' + color + '40;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;' + rot + '"><i class="fa-solid ' + icon + '"></i></div>',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+    }
+
+    function buildAisPopupHtml(v) {
+      const name = (v.SHIPNAME || v.NAME || 'Unknown vessel').toString();
+      const status = AIS_STATUS_LABEL[parseInt(v.STATUS, 10)] || v.STATUS_NAME || '—';
+      const typeLabel = v.TYPE_SUMMARY || v.TYPE_NAME || ('Type ' + (v.TYPE || '—'));
+      const cat = aisCategoryFromType(v.TYPE);
+      const color = AIS_TYPE_COLOR[cat];
+      const speed = (v.SPEED != null && v.SPEED !== '') ? (parseFloat(v.SPEED) / 10).toFixed(1) + ' kn' : '—'; // MarineTraffic speed is in 1/10 knots
+      const course = (v.COURSE != null && v.COURSE !== '') ? (parseFloat(v.COURSE) / 10).toFixed(0) + '°' : '—';
+      const heading = (v.HEADING != null && v.HEADING !== '' && v.HEADING !== '511') ? v.HEADING + '°' : '—';
+      const dest = v.DESTINATION || '—';
+      const eta = v.ETA || '—';
+      const flag = v.FLAG || '';
+      const dim = (v.LENGTH || v.L || '') + (v.WIDTH ? ' × ' + v.WIDTH + ' m' : (v.LENGTH ? ' m' : ''));
+      const draught = (v.DRAUGHT) ? (parseFloat(v.DRAUGHT) / 10).toFixed(1) + ' m' : '';
+      const ts = v.TIMESTAMP ? new Date((+v.TIMESTAMP) * 1000).toUTCString() : (v.LAST_POS || '—');
+
+      function row(label, value) {
+        if (value == null || value === '' || value === '—') return '';
+        return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + escapeHtml(label) + '</span><span style="font-weight:600;">' + escapeHtml(String(value)) + '</span></div>';
+      }
+      function section(title, body, accent) {
+        if (!body) return '';
+        return '<div style="padding:6px 8px;background:rgba(2,132,199,0.08);border-radius:6px;margin-bottom:8px;">' +
+          '<div style="color:' + (accent || '#7dd3fc') + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' +
+          body +
+        '</div>';
+      }
+
+      const idBody = [
+        row('MMSI', v.MMSI),
+        row('IMO', v.IMO),
+        row('Callsign', v.CALLSIGN),
+        row('Flag', flag),
+        row('Type', typeLabel),
+        row('Dimensions', dim || '—'),
+        row('Draught', draught)
+      ].join('');
+
+      const navBody = [
+        row('Status', status),
+        row('Speed', speed),
+        row('Course', course),
+        row('Heading', heading),
+        row('Destination', dest),
+        row('ETA', eta),
+        row('Last update', ts)
+      ].join('');
+
+      const link = v.SHIP_ID || v.SHIPID
+        ? '<a href="https://www.marinetraffic.com/en/vessels/' + encodeURIComponent(v.SHIP_ID || v.SHIPID) + '/general" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:4px;font-size:11px;color:#7dd3fc;text-decoration:none;border:1px solid rgba(125,211,252,0.4);padding:3px 8px;border-radius:4px;">Open on MarineTraffic →</a>'
+        : '';
+
+      return '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+        '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<i class="fa-solid ' + (AIS_TYPE_ICON[cat] || 'fa-ship') + '"></i> ' + escapeHtml(name) +
+          ' <span style="background:' + color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + escapeHtml(cat.toUpperCase()) + '</span>' +
+        '</div>' +
+        section('🛟 IDENTIFICATION', idBody) +
+        section('🧭 NAVIGATION', navBody) +
+        link +
+      '</div>';
+    }
+
+    function _aisAddVessel(v) {
+      const lat = parseFloat(v.LAT);
+      const lon = parseFloat(v.LON);
+      if (!isFinite(lat) || !isFinite(lon)) return;
+      const cat = aisCategoryFromType(v.TYPE);
+      const stBucket = aisStatusBucket(v.STATUS);
+      const heading = parseFloat(v.HEADING);
+      const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null);
+      const marker = L.marker([lat, lon], { icon }).bindPopup(buildAisPopupHtml(v), {
+        className: 'repeater-popup',  // reuse the dark-themed popup styling
+        maxWidth: 380, autoPan: true, closeOnClick: false
+      });
+      marker._aisCategory = cat;
+      marker._aisStatus = stBucket;
+      if (aisSubLayers[cat]) aisSubLayers[cat].addLayer(marker);
+      if (aisStatusSubLayers[stBucket]) aisStatusSubLayers[stBucket].addLayer(marker);
+    }
+
+    function _rebuildAis() {
+      // Clear master + sub-layers, then re-bucket every vessel based on
+      // current filter state. Sub-layers exist as filter buckets only — the
+      // displayed marker actually lives on aisLayer (the cluster group).
+      aisLayer.clearLayers();
+      Object.values(aisSubLayers).forEach((sl) => sl.clearLayers());
+      Object.values(aisStatusSubLayers).forEach((sl) => sl.clearLayers());
+
+      let visible = 0;
+      _aisVessels.forEach((v) => {
+        const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
+        if (!isFinite(lat) || !isFinite(lon)) return;
+        const cat = aisCategoryFromType(v.TYPE);
+        const st = aisStatusBucket(v.STATUS);
+        if (!aisTypeFilter[cat]) return;
+        if (!aisStatusFilter[st]) return;
+        const heading = parseFloat(v.HEADING);
+        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null);
+        const marker = L.marker([lat, lon], { icon }).bindPopup(buildAisPopupHtml(v), {
+          className: 'repeater-popup', maxWidth: 380, autoPan: true, closeOnClick: false
+        });
+        aisLayer.addLayer(marker);
+        visible++;
+      });
+      const line = document.getElementById('ais-status-line');
+      if (line) line.textContent = visible + ' of ' + _aisVessels.length + ' vessels visible';
+    }
+
+    function toggleAisType(key, on) {
+      aisTypeFilter[key] = !!on;
+      _rebuildAis();
+    }
+    function toggleAisStatus(key, on) {
+      aisStatusFilter[key] = !!on;
+      _rebuildAis();
+    }
+
+    async function loadAisData() {
+      const line = document.getElementById('ais-status-line');
+      if (line) line.textContent = 'Loading vessels…';
+      try {
+        // Backend proxy endpoint — needs to be added on api.forcequit.xyz.
+        // It should re-fetch the MarineTraffic /getData/get_data_json_4/...
+        // URL and return the JSON.
+        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        // MarineTraffic responses are usually { data: [...] } or just an array.
+        const vessels = Array.isArray(data) ? data : (Array.isArray(data && data.data) ? data.data : []);
+        _aisVessels = vessels;
+        _rebuildAis();
+        console.log('[ais] loaded', vessels.length, 'vessels');
+      } catch (e) {
+        console.warn('[ais] failed to load:', e);
+        if (line) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+      }
+    }
+
+    async function loadNswpsnData() {
+      try {
+        const res = await fetch('data/nswpsn/NSW%20GRN%20Version%201.json', { cache: 'force-cache' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const sites = await res.json();
+        nswpsnLayer.clearLayers();
+
+        const icon = L.divIcon({
+          className: 'custom-pin',
+          html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+
+        let added = 0;
+        sites.forEach((s) => {
+          const lat = parseFloat(s.Latitude);
+          const lng = parseFloat(s.Longitude);
+          if (!isFinite(lat) || !isFinite(lng)) return;
+
+          const name = s.NAME || 'NSW PSN site';
+          const freqs = Array.isArray(s.Frequencies) ? s.Frequencies : [];
+
+          // Section helper — mirrors the beach-tooltip section styling.
+          function section(title, body, accent) {
+            if (!body) return '';
+            const a = accent || '#14b8a6';
+            const bg = 'rgba(20,184,166,0.08)';
+            return '<div style="padding:6px 8px;background:' + bg + ';border-radius:6px;margin-bottom:8px;">' +
+              '<div style="color:' + a + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' +
+              body +
+            '</div>';
+          }
+          // Two-column row with muted label + value.
+          function row(label, value) {
+            if (!value || value === 'See below') return '';
+            return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;">' +
+              '<span style="color:#94a3b8;min-width:84px;">' + escapeHtml(label) + '</span>' +
+              '<span style="font-weight:600;">' + escapeHtml(String(value)) + '</span>' +
+            '</div>';
+          }
+
+          // === Identification ===
+          const idBody = [
+            row('Site ID', s.SITE_ID),
+            row('GRN Site #', s['GRN Site ID #']),
+            row('Previous #', s['Previous Site ID #']),
+            row('System #', s['System #']),
+            row('NAC', s['NAC Code']),
+            row('Postcode', s.POSTCODE)
+          ].join('');
+
+          // === Zone / Control ===
+          const ctlBody = [
+            row('Zone', s['Zone Assignment']),
+            row('Control', s['Control Channel']),
+            row('Alt CC', s['Alt Control Channel'])
+          ].join('');
+
+          // === Frequencies ===
+          let freqBody = '';
+          if (freqs.length) {
+            freqBody =
+              '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">' + freqs.length + ' channel' + (freqs.length === 1 ? '' : 's') + '</div>' +
+              '<div style="max-height:140px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;color:#cbd5e1;">' +
+                freqs.map((f) => '<div>' + escapeHtml(String(f)) + '</div>').join('') +
+              '</div>';
+          }
+
+          // Notes (orange-tinted advisory section)
+          let notesBlock = '';
+          if (s.Notes) {
+            notesBlock =
+              '<div style="padding:6px 8px;background:rgba(249,115,22,0.08);border-radius:6px;margin-bottom:8px;">' +
+                '<div style="color:#fdba74;font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">⚠ NOTES</div>' +
+                '<div style="font-size:11.5px;color:#fed7aa;line-height:1.45;">' + escapeHtml(String(s.Notes)) + '</div>' +
+              '</div>';
+          }
+
+          // Header — name + GRN-site / repeater pill (mirrors Beachwatch pill)
+          let html =
+            '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+              '<div style="font-size:15px;font-weight:700;color:#14b8a6;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                '<i class="fa-solid fa-tower-broadcast"></i> ' + escapeHtml(name) +
+                ' <span style="background:#14b8a6;color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Repeater</span>' +
+                (s['Last Update'] ? ' <span style="color:#94a3b8;font-size:10px;font-weight:500;">Updated ' + escapeHtml(String(s['Last Update'])) + '</span>' : '') +
+              '</div>' +
+              section('🛰 IDENTIFICATION', idBody) +
+              section('📡 ZONE / CONTROL', ctlBody) +
+              notesBlock +
+              section('🎚 FREQUENCIES', freqBody) +
+            '</div>';
+
+          const marker = L.marker([lat, lng], { icon }).bindPopup(html, {
+            className: 'repeater-popup',
+            maxWidth: 380,
+            autoPan: true,
+            closeOnClick: false
+          });
+          nswpsnLayer.addLayer(marker);
+          added++;
+        });
+        console.log('[nswpsn] loaded', added, 'sites');
+      } catch (e) {
+        console.warn('[nswpsn] failed to load:', e);
+      }
+    }
+
     async function loadFirmsHotspots() {
       try {
         let data;
@@ -10502,5 +10973,6 @@ function initPagerHoursFromStorage() {
     })();
   </script>
   <script src="analytics.js"></script>
+  <script src="agencies.js"></script>
 </body>
 </html>

@@ -1,0 +1,93 @@
+{
+  "title": "🔥 NSW Rural Fire Service – Overview",
+  "tag": "NSW RFS",
+  "badges": [
+    {"label": "NSW Rural Fire Service", "variant": "agency"},
+    {"label": "Volunteer Fire Service", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The NSW Rural Fire Service (NSW RFS) is the world's largest volunteer fire service and the lead combat agency for bush and grass fires in New South Wales. It protects communities, property and the environment across around 95% of the state."}
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "⚠ Priority Codes",
+      "tag": "Radio",
+      "wide": false,
+      "intro": "RFS radio priority levels used when calling Fire Control.",
+      "csv": "priority-codes.csv"
+    },
+    {
+      "type": "table",
+      "title": "📟 MDT Status Codes",
+      "tag": "Unit Status",
+      "wide": false,
+      "intro": "Mobile Data Terminal (MDT) status values.",
+      "csv": "mdt-status-codes.csv"
+    },
+    {
+      "type": "table",
+      "title": "North Eastern Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-north-eastern.csv"
+    },
+    {
+      "type": "table",
+      "title": "North Western Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-north-western.csv"
+    },
+    {
+      "type": "table",
+      "title": "Hunter Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-hunter.csv"
+    },
+    {
+      "type": "table",
+      "title": "Greater Sydney Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-greater-sydney.csv"
+    },
+    {
+      "type": "table",
+      "title": "South Eastern Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-south-eastern.csv"
+    },
+    {
+      "type": "table",
+      "title": "South Western Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-south-western.csv"
+    },
+    {
+      "type": "table",
+      "title": "Western Area Command",
+      "tag": "Zones",
+      "wide": false,
+      "table_class": "rfs-zone-table",
+      "csv": "zones-western.csv"
+    },
+    {
+      "type": "table",
+      "title": "🚛 Appliance Categories",
+      "tag": "Fleet",
+      "wide": true,
+      "intro": "NSW RFS appliance categories (CAT types) commonly heard on radio and seen in CAD / logs.",
+      "csv": "appliance-categories.csv"
+    }
+  ]
+}

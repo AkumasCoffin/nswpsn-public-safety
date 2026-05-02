@@ -1,0 +1,18 @@
+{
+  "title": "🏢 Property NSW",
+  "tag": "Property NSW",
+  "badges": [
+    {"label": "Property NSW", "variant": "agency"},
+    {"label": "NSW Treasury", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Property NSW is the NSW Government's property-management entity. It manages a large portfolio of owned and leased commercial buildings, oversees major precincts (e.g. Darling Harbour, The Rocks, Sydney Olympic Park as Place Management NSW) and provides facilities-management services to other agencies."},
+    {"type": "h", "text": "Functions"},
+    {"type": "ul", "items": [
+      "Owned office portfolio in Sydney CBD and major regional centres.",
+      "Heritage and place-management at iconic precincts.",
+      "Security and operations talkgroups support 24/7 site management."
+    ]}
+  ],
+  "sections": []
+}

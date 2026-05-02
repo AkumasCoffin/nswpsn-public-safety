@@ -1,0 +1,17 @@
+{
+  "title": "🏛 ACT Government",
+  "tag": "ACT",
+  "badges": [
+    {"label": "ACT Government", "variant": "agency"},
+    {"label": "Australian Capital Territory", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Australian Capital Territory Government provides State-and-local style government for the ACT, including ACT Emergency Services Agency (ACT Fire & Rescue, ACT Ambulance Service, ACT Rural Fire Service, ACT SES) and ACT Health. ACT services share PSN talkgroups for cross-border operations with NSW."},
+    {"type": "h", "text": "Why You're Hearing Them"},
+    {"type": "ul", "items": [
+      "ACT Fire & Rescue, ACT Ambulance and ACT RFS share liaison talkgroups with NSW counterparts (especially around the Bombala/Cooma/Queanbeyan border).",
+      "ACT Policing is a function of the Australian Federal Police — ACT Policing-specific traffic appears under the AFP entry."
+    ]}
+  ],
+  "sections": []
+}

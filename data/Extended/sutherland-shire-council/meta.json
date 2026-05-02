@@ -1,0 +1,18 @@
+{
+  "title": "🏛 Sutherland Shire Council",
+  "tag": "Sutherland",
+  "badges": [
+    {"label": "Sutherland Shire Council", "variant": "agency"},
+    {"label": "NSW Local Government", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Sutherland Shire Council is the local government for southern Sydney, covering an area from Caringbah and Cronulla in the east through to Engadine, Menai and Royal National Park to the south and west."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Population around 230,000.",
+      "Operates lifeguards, parks, waste, environmental health, emergency-management coordination.",
+      "Talkgroups support council operations including ranger patrols, parks, libraries and waste services."
+    ]}
+  ],
+  "sections": []
+}

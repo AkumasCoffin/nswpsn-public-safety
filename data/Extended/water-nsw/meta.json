@@ -1,0 +1,18 @@
+{
+  "title": "💧 WaterNSW",
+  "tag": "WaterNSW",
+  "badges": [
+    {"label": "WaterNSW", "variant": "agency"},
+    {"label": "State Owned Corporation", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "WaterNSW operates the State's bulk water-storage network — including Warragamba, the Snowy water transfers, the Hunter and the Murray-Darling regulated rivers. It supplies bulk water to Sydney Water and to regional councils, and licenses water for irrigation and town supply."},
+    {"type": "h", "text": "Assets"},
+    {"type": "ul", "items": [
+      "Operates more than 40 large dams including Warragamba, Burrendong, Wyangala, Copeton and Glenbawn.",
+      "Manages the State's water-licence and metering system.",
+      "Coordinates flood operations of regulated dams during major events."
+    ]}
+  ],
+  "sections": []
+}

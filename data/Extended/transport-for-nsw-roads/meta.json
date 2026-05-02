@@ -1,0 +1,18 @@
+{
+  "title": "🛣 Transport for NSW – Roads",
+  "tag": "Roads",
+  "badges": [
+    {"label": "Roads (formerly RMS)", "variant": "agency"},
+    {"label": "Transport for NSW", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "TfNSW Roads (formerly Roads and Maritime Services) manages the State road network — motorways, highways, regional roads and major bridges and tunnels. It runs the Transport Management Centre, dispatches the Traffic Emergency Patrol, and oversees the road-asset network."},
+    {"type": "h", "text": "Capabilities"},
+    {"type": "ul", "items": [
+      "Transport Management Centre (TMC) — 24/7 incident coordination across road, rail, bus, ferry and light-rail.",
+      "Traffic Emergency Patrol — clears stalled vehicles and minor incidents to restore flow on motorways.",
+      "Heavy-vehicle and over-dimensional permit operations."
+    ]}
+  ],
+  "sections": []
+}

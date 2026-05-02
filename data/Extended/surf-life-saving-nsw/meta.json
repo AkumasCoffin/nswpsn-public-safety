@@ -1,0 +1,19 @@
+{
+  "title": "🏖 Surf Life Saving NSW",
+  "tag": "SLSNSW",
+  "badges": [
+    {"label": "Surf Life Saving NSW", "variant": "agency"},
+    {"label": "Volunteer Beach Rescue", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Surf Life Saving NSW is the peak body for volunteer surf lifesaving and beach rescue across NSW. It coordinates beach patrols, swift-water rescue on the coast, jet-ski rescue, helicopter rescue and aerial surveillance, and community drowning-prevention programs."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Around 78,000 members across 129 surf lifesaving clubs in 11 branches.",
+      "Operates the Westpac Lifesaver Rescue Helicopter Service jointly with NSW Ambulance.",
+      "Provides Australian Lifeguard Service (paid lifeguards) on more than 60 beaches outside volunteer patrol hours.",
+      "Rescue Water Craft (jet ski) operators stage at high-risk locations during summer."
+    ]}
+  ],
+  "sections": []
+}

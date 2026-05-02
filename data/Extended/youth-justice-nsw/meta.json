@@ -1,0 +1,18 @@
+{
+  "title": "⚖ Youth Justice NSW",
+  "tag": "Youth Justice",
+  "badges": [
+    {"label": "Youth Justice NSW", "variant": "agency"},
+    {"label": "NSW Communities and Justice", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Youth Justice NSW (formerly Juvenile Justice) supervises young people aged 10–17 in detention and on community-based orders. It operates Youth Justice Centres, runs court-ordered supervision and counselling programs, and provides bail-supervision and post-release support."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Operates a small number of Youth Justice Centres across NSW.",
+      "Community Youth Justice teams supervise young people on bail and community orders.",
+      "Specialist programs include the Joint Support Program for high-needs detainees."
+    ]}
+  ],
+  "sections": []
+}

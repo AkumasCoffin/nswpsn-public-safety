@@ -1,0 +1,5 @@
+Category,Lights & Siren,Description
+CAT 1,{pill:yes:Yes},"Patient is not breathing, unconscious, or in a serious time-critical condition."
+CAT 2,{pill:yes:Yes},Patient is conscious and breathing but still serious and requires urgent response.
+CAT 3,{pill:no:No},Moderate condition requiring ambulance response but not lights & sirens.
+CAT 4,{pill:no:No},Minor / low acuity condition.

@@ -1,0 +1,18 @@
+{
+  "title": "🍃 NSW Environment Protection Authority",
+  "tag": "NSW EPA",
+  "badges": [
+    {"label": "NSW EPA", "variant": "agency"},
+    {"label": "Environmental Regulator", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The NSW Environment Protection Authority is the State's primary environmental regulator. It licenses and audits polluting industries, responds to pollution incidents, prosecutes environmental offences, and regulates radiation, chemicals, contaminated land and waste."},
+    {"type": "h", "text": "Capabilities"},
+    {"type": "ul", "items": [
+      "24/7 Environment Line for pollution reports.",
+      "Hazmat support to fire and emergency services for chemical and radiation incidents.",
+      "Environmental forensics and authorised-officer enforcement powers."
+    ]}
+  ],
+  "sections": []
+}

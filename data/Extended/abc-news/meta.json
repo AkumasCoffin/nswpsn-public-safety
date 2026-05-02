@@ -1,0 +1,17 @@
+{
+  "title": "📰 ABC News",
+  "tag": "ABC",
+  "badges": [
+    {"label": "Australian Broadcasting Corporation", "variant": "agency"},
+    {"label": "Public Broadcaster", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Australian Broadcasting Corporation is Australia's national public broadcaster. ABC News operates 24/7 newsgathering across radio, television and digital. Talkgroups are typically used for news-crew coordination, outside-broadcast operations and major-event coverage."},
+    {"type": "h", "text": "Notes"},
+    {"type": "ul", "items": [
+      "ABC's Sydney headquarters is at Ultimo, with regional bureaux across NSW.",
+      "News crews coordinate with each other on production talkgroups during breaking events."
+    ]}
+  ],
+  "sections": []
+}

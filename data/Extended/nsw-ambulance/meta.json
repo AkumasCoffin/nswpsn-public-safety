@@ -1,0 +1,71 @@
+{
+  "title": "🚑 NSW Ambulance – Overview",
+  "tag": "ASNSW",
+  "badges": [
+    {"label": "NSW Ambulance", "variant": "agency"},
+    {"label": "NSW Health", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "NSW Ambulance provides emergency medical response, aeromedical retrieval, rescue operations and non-emergency transport across more than 800,000 km² of New South Wales. Over 1.2 million incidents are handled yearly."},
+    {"type": "h", "text": "Coverage & Reach"},
+    {"type": "ul", "items": [
+      "Serves 7.9+ million people across metro, regional and remote NSW.",
+      "250+ ambulance stations and response locations.",
+      "Road fleet travels ~40–45 million km per year.",
+      "One of the largest ambulance fleets in the world (around 1,500 vehicles)."
+    ]},
+    {"type": "h", "text": "Operational Divisions"},
+    {"type": "ul", "items": [
+      "{b:Clinical Operations:} front-line road paramedics and specialist roles.",
+      "{b:Aeromedical Operations:} helicopters & fixed-wing retrieval teams.",
+      "{b:Special Operations Team (SOT) / RAA:} remote & complex rescue environments.",
+      "{b:Critical Care:} CCPs, flight nurses & retrieval doctors."
+    ]},
+    {"type": "h", "text": "Control Centres"},
+    {"type": "ul", "items": [
+      "Ambulance Control Centres in Sydney, Newcastle, Wollongong and Dubbo.",
+      "Aeromedical Control Centre for helicopter and fixed-wing dispatch.",
+      "CAD / MDT and GPS-based nearest resource assignment."
+    ]}
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "📟 Category Codes",
+      "tag": "CAT 1–4",
+      "wide": false,
+      "intro": "NSW Ambulance category codes and whether they usually run lights and sirens.",
+      "csv": "category-codes.csv"
+    },
+    {
+      "type": "table",
+      "title": "📋 Call Codes",
+      "tag": "Zero / Code",
+      "wide": true,
+      "intro": "Common NSW Ambulance call codes.",
+      "csv": "call-codes.csv"
+    },
+    {
+      "type": "table",
+      "title": "🎧 Common Radio Phrases",
+      "tag": "Comms",
+      "wide": true,
+      "intro": "Common terms you will hear on NSW Ambulance talkgroups.",
+      "csv": "radio-phrases.csv"
+    },
+    {
+      "type": "list",
+      "title": "📡 Talkgroups & Monitoring Notes",
+      "tag": "NSW PSN",
+      "wide": true,
+      "items": [
+        "Each NSW Ambulance region has one or more {b:primary dispatch} talkgroups.",
+        "{b:Aeromedical} uses dedicated or shared retrieval channels.",
+        "Major incidents may link FRNSW, RFS, SES, Police on shared or patched channels.",
+        "Some talkgroups may be encrypted or carry limited traffic.",
+        "Traffic volume increases during storms, heatwaves and major events.",
+        "Do not publish identifiable patient information."
+      ]
+    }
+  ]
+}

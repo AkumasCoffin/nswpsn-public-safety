@@ -53,13 +53,11 @@
       <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
       <a href="map.html">Incident Map</a>
       <a href="logs.html">Incident Logs</a>
-      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
-      <a href="ambulance.html">NSW Ambulance</a>
-      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
-      <a href="aviation.html">Aviation &amp; Callsigns</a>
       <a href="links.html">Useful Links</a>
       <a href="data-sources.html">Data Sources</a>
     </nav>
+
+    <div id="agencies-nav-mount"></div>
 
     <div class="sidebar-section-label">Legal</div>
     <nav class="sidebar-nav">
@@ -183,7 +181,7 @@
         </div>
         <div class="card-body">
           <p>Callsigns for PolAir, Ambulance, Westpac, and Fire Aviation.</p>
-          <a class="card-link" href="aviation.html" data-umami-event="home-card-click" data-umami-event-card="Aviation">View Reference →</a>
+          <a class="card-link" href="agency.html?slug=nsw-aviation" data-umami-event="home-card-click" data-umami-event-card="Aviation">View Reference →</a>
         </div>
       </article>
 
@@ -196,6 +194,7 @@
 
   <script src="auth-common.js"></script>
   <script src="analytics.js"></script>
+  <script src="agencies.js"></script>
   <script>
     // ======== SUPABASE AUTH CALLBACK HANDLER ========
     // Check for Supabase auth tokens in URL and redirect to appropriate page
