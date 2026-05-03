@@ -9833,9 +9833,15 @@ function initPagerHoursFromStorage() {
     function aisListDetailHtml(v) {
       const id = _aisVesselId(v);
       const cached = _aisDetailCache.get(id);
-      const imgUrl = id ? `${PROXY_BASE}/api/marinetraffic/vessel-image/${encodeURIComponent(id)}` : '';
-      const imgTag = imgUrl
-        ? `<img src="${imgUrl}" alt="" onerror="this.style.display='none';">`
+      // Try MT's collection thumbnail directly first (works for ships
+      // with a curated photo, no proxy hop). On failure (404 / ORB),
+      // aisImgFallback() re-points the <img> at our backend proxy
+      // which scrapes the photo gallery for the ship. On a second
+      // failure, the image element is hidden.
+      const directUrl = id ? `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800` : '';
+      const proxyUrl = id ? `${PROXY_BASE}/api/marinetraffic/vessel-image/${encodeURIComponent(id)}` : '';
+      const imgTag = directUrl
+        ? `<img src="${directUrl}" alt="" data-fallback="${proxyUrl}" referrerpolicy="no-referrer" onerror="aisImgFallback(this);">`
         : '';
       let extras = '';
       if (cached && typeof cached === 'object') {
@@ -9881,6 +9887,22 @@ function initPagerHoursFromStorage() {
       }
       aisListRender();
     }
+
+    // Two-step image fallback for vessel detail thumbnails. First
+    // load attempts MT's collection CDN directly; on error this
+    // swaps the src to our backend proxy (which scrapes the photo
+    // gallery as a fallback). A second error hides the element.
+    window.aisImgFallback = function (img) {
+      const fb = img.getAttribute('data-fallback') || '';
+      // Mark the element so we know we've already tried the fallback
+      // and don't loop on a failing proxy.
+      if (fb && img.dataset.tried !== '1') {
+        img.dataset.tried = '1';
+        img.src = fb;
+      } else {
+        img.style.display = 'none';
+      }
+    };
 
     window.aisListClickRow = function (shipId, ev) {
       // Toggle expanded detail view for this row.
