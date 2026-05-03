@@ -80,21 +80,46 @@ class MarinetrafficBrowser {
   }
 
   private async doInit(): Promise<void> {
+    // Prefer playwright-extra + stealth plugin (patches navigator.webdriver,
+    // WebGL fingerprint, navigator.plugins, chrome.runtime, iframe
+    // contentWindow detection, etc. — the standard Cloudflare-bypass stack
+    // for headless Chromium). Fall back to plain playwright if the optional
+    // deps aren't installed so a deploy without them can still boot.
     let pw: PwModule;
+    let stealthEnabled = false;
     try {
-      const moduleId = 'playwright';
-      const mod = (await import(moduleId)) as unknown as PwModule;
-      pw = mod;
-    } catch (err) {
-      log.warn(
-        { err: (err as Error).message },
-        'playwright not installed — marinetraffic proxy will return 503',
-      );
-      this.ready = false;
-      return;
+      const peId = 'playwright-extra';
+      const peMod = (await import(peId)) as unknown as PwModule & {
+        chromium: { use: (plugin: unknown) => void };
+      };
+      try {
+        const stealthId = 'puppeteer-extra-plugin-stealth';
+        const stealthMod = (await import(stealthId)) as { default: () => unknown };
+        peMod.chromium.use(stealthMod.default());
+        stealthEnabled = true;
+      } catch (stealthErr) {
+        log.warn(
+          { err: (stealthErr as Error).message },
+          'marinetraffic: playwright-extra found but stealth plugin missing — running without it',
+        );
+      }
+      pw = peMod;
+    } catch {
+      try {
+        const moduleId = 'playwright';
+        const mod = (await import(moduleId)) as unknown as PwModule;
+        pw = mod;
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'playwright not installed — marinetraffic proxy will return 503',
+        );
+        this.ready = false;
+        return;
+      }
     }
 
-    log.info('marinetraffic: launching headless chromium...');
+    log.info({ stealthEnabled }, 'marinetraffic: launching headless chromium...');
 
     const browser = (await pw.chromium.launch({
       headless: true,
