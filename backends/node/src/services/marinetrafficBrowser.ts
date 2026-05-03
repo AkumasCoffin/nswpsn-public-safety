@@ -39,7 +39,7 @@ const MAP_LANDING_URL =
 // the resulting cf_clearance cookie. Using z:2 so the warm-up exercises a
 // broad-coverage tile that returns many vessels in one shot.
 const PREWARM_DATA_URL =
-  'https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:0/Y:1/station:0';
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0';
 
 const SESSION_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min
 // Cloudflare's JS challenge often completes within a few seconds but can
