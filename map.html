@@ -9927,9 +9927,10 @@ function initPagerHoursFromStorage() {
           marker.openTooltip();
         } catch (e) { /* ignore */ }
       }
-      // Make sure the floating list panel is open, render the
-      // expanded row, then scroll the row into view.
-      openAisListPanel();
+      // The floating list panel is opened with the AIS layer toggle
+      // and stays open until the user closes it explicitly — don't
+      // force it back open here. Just re-render so the row picks up
+      // the .selected style + inline detail, then scroll to it.
       aisListRender();
       const row = document.querySelector(`#ais-list-body .ais-list-row.selected`);
       if (row && typeof row.scrollIntoView === 'function') {
