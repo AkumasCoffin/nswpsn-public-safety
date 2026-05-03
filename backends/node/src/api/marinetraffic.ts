@@ -9,7 +9,7 @@
  * caches the result. The tile list below was hand-picked by the user
  * after verifying each URL returns vessels in their browser.
  *
- * Caching: 120 seconds — fetching all eight tiles takes ~40–60 s of
+ * Caching: 240 seconds — fetching all 20 tiles takes ~2 min of
  * sequential browser work (the worker serialises page access), so we
  * keep the result around long enough for follow-up requests within the
  * cache window to hit instantly.
@@ -29,14 +29,10 @@ import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
 export const marinetrafficRouter = new Hono();
 
 // User-verified working tiles (paste one in a browser and you get vessel
-// JSON back). Together they cover the major shipping basins; merging them
-// gives the front-end a comprehensive vessel layer without per-viewport
-// fetching. The first eight tiles are the user's z:3 set covering mid-
-// ocean basins worldwide. The two extras at the end are confirmed
-// Australia-region tiles (z:2/X:1/Y:1 returns ~11 vessels around AU
-// coast; z:10/X:472/Y:306 is Sydney-specific) — without them the merged
-// result was leaving Australian waters empty.
+// JSON back). Together they cover the major shipping basins worldwide
+// plus Australian waters at multiple zoom levels.
 const UPSTREAM_URLS = [
+  // Global mid-ocean basins (zoom 3)
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:2/Y:1/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:0/Y:1/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:2/Y:2/station:0',
@@ -45,12 +41,27 @@ const UPSTREAM_URLS = [
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:1/Y:2/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:1/Y:1/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:0/Y:3/station:0',
-  // Australia-coverage extras
+  // Australia: broad
   'https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0',
+  // Australia: medium (zoom 5 — six tiles around AU coast)
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:5/X:15/Y:10/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:5/X:13/Y:10/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:5/X:15/Y:8/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:5/X:13/Y:8/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:5/X:15/Y:7/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:5/X:12/Y:10/station:0',
+  // Australia: tight (zoom 6 — four tiles around NSW/VIC/QLD)
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:30/Y:19/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:28/Y:19/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:30/Y:18/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:28/Y:18/station:0',
+  // Sydney-specific
   'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:306/station:0',
 ];
 
-const CACHE_TTL_MS = 120_000;
+// 20 tiles sequential ≈ 2 min per batch (browser worker serialises page
+// access). Hold the result for 4 min so the next refresh isn't waiting.
+const CACHE_TTL_MS = 240_000;
 let cache: { data: unknown; expires: number } | null = null;
 let inFlight: Promise<unknown | null> | null = null;
 
