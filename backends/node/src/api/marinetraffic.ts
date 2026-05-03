@@ -106,6 +106,15 @@ let inFlight: Promise<unknown | null> | null = null;
 let lastUserHitMs = 0;
 let refreshTimer: NodeJS.Timeout | null = null;
 
+// Per-vessel detail cache for /api/marinetraffic/vessel/:id. Detail
+// data changes very slowly (callsign/IMO/dimensions) so we hold each
+// entry for 30 minutes.
+const VESSEL_DETAIL_TTL_MS = 30 * 60_000;
+const vesselDetailCache = new Map<
+  string,
+  { data: unknown; expires: number }
+>();
+
 // Merge several upstream payloads. MarineTraffic returns
 // `{ type: 1, data: { rows: [...], areaShips: N } }` per tile. We merge
 // all rows, dedupe by SHIP_ID / SHIPID / MMSI, and sum areaShips counts.
@@ -226,5 +235,35 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
     );
   }
   cache = { data, fetchedAt: Date.now() };
+  return c.json(data);
+});
+
+// GET /api/marinetraffic/vessel/:id
+//   Returns extended vessel info from MT (name, IMO, MMSI, dimensions,
+//   country, type, etc). Uses the browser worker's APIRequestContext
+//   (shared cookies + cf_clearance) with XHR-style headers so MT
+//   serves JSON instead of the HTML detail page.
+//   Cached per ship-id for 30 minutes.
+marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!/^\d+$/.test(id)) {
+    return c.json({ error: 'invalid ship id' }, 400);
+  }
+  const now = Date.now();
+  const cached = vesselDetailCache.get(id);
+  if (cached && cached.expires > now) {
+    return c.json(cached.data);
+  }
+  if (!marinetrafficBrowser.isReady()) {
+    if (cached) return c.json(cached.data);
+    return c.json({ error: 'browser worker not ready' }, 503);
+  }
+  const url = `https://www.marinetraffic.com/en/vessels/${encodeURIComponent(id)}/general`;
+  const data = await marinetrafficBrowser.fetchJsonViaContext(url);
+  if (data == null) {
+    if (cached) return c.json(cached.data);
+    return c.json({ error: 'vessel detail fetch failed' }, 502);
+  }
+  vesselDetailCache.set(id, { data, expires: now + VESSEL_DETAIL_TTL_MS });
   return c.json(data);
 });

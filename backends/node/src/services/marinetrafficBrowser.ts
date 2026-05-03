@@ -365,6 +365,68 @@ class MarinetrafficBrowser {
     });
   }
 
+  /**
+   * Fetch a MarineTraffic JSON endpoint via the browser context's HTTP
+   * client (not via page.goto). The context shares cookies + the
+   * cf_clearance the page worker has solved, so MT lets the request
+   * through, but we send proper XHR-style headers so endpoints that do
+   * content negotiation (e.g. /en/vessels/{id}/general) return JSON
+   * instead of HTML.
+   *
+   * Returns the parsed JSON on success, null on any failure (logged).
+   */
+  async fetchJsonViaContext(url: string, timeoutMs = 25000): Promise<unknown | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const ctx = this.context as {
+        request: {
+          get: (
+            url: string,
+            opts: { headers?: Record<string, string>; timeout?: number },
+          ) => Promise<{
+            ok: () => boolean;
+            status: () => number;
+            text: () => Promise<string>;
+          }>;
+        };
+      };
+      try {
+        const res = await ctx.request.get(url, {
+          timeout: timeoutMs,
+          headers: {
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'X-Requested-With': 'XMLHttpRequest',
+            Referer: 'https://www.marinetraffic.com/',
+          },
+        });
+        const status = res.status();
+        const text = await res.text();
+        if (!res.ok()) {
+          log.warn(
+            { url, status, bodyPreview: text.slice(0, 200) },
+            'marinetraffic context fetch: non-2xx',
+          );
+          return null;
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          log.warn(
+            { url, status, bodyPreview: text.slice(0, 200) },
+            'marinetraffic context fetch: response not JSON',
+          );
+          return null;
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message, url },
+          'marinetraffic context fetch threw',
+        );
+        return null;
+      }
+    });
+  }
+
   private async refreshSession(): Promise<void> {
     if (!this.ready || this.shuttingDown) return;
     await this.runExclusive(async () => {

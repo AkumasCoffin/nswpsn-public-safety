@@ -1327,6 +1327,106 @@
       color: inherit;
     }
 
+    /* AIS vessel-list panel — floating right strip with search + scroll
+       list. Shown only while the AIS layer is enabled. */
+    .ais-list-panel {
+      position: absolute;
+      top: 70px;
+      right: 12px;
+      width: 320px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 160px);
+      z-index: 850;
+      display: none;
+      flex-direction: column;
+      background: rgba(15, 23, 42, 0.94);
+      border: 1px solid rgba(125, 211, 252, 0.35);
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+      overflow: hidden;
+      font-size: 12px;
+      color: #e2e8f0;
+    }
+    .ais-list-panel.open { display: flex; }
+    .ais-list-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; border-bottom: 1px solid rgba(125, 211, 252, 0.18);
+    }
+    .ais-list-header h4 {
+      margin: 0; font-size: 13px; font-weight: 600; flex: 1;
+      color: #7dd3fc; letter-spacing: 0.02em;
+    }
+    .ais-list-header .ais-list-count { font-size: 11px; color: #94a3b8; }
+    .ais-list-header .ais-list-close {
+      background: transparent; border: 0; color: #94a3b8; font-size: 14px;
+      cursor: pointer; padding: 2px 6px; border-radius: 4px;
+    }
+    .ais-list-header .ais-list-close:hover { color: #fff; background: rgba(255,255,255,0.06); }
+    .ais-list-search {
+      padding: 8px 12px; border-bottom: 1px solid rgba(125, 211, 252, 0.12);
+    }
+    .ais-list-search input {
+      width: 100%; box-sizing: border-box;
+      padding: 6px 10px; border-radius: 6px;
+      background: rgba(8, 12, 28, 0.65);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      color: #e2e8f0; font-size: 12px;
+    }
+    .ais-list-search input::placeholder { color: #64748b; }
+    .ais-list-search input:focus { outline: none; border-color: #7dd3fc; }
+    .ais-list-body {
+      flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    }
+    .ais-list-body::-webkit-scrollbar { width: 6px; }
+    .ais-list-body::-webkit-scrollbar-track { background: transparent; }
+    .ais-list-body::-webkit-scrollbar-thumb { background: rgba(125,211,252,0.25); border-radius: 3px; }
+    .ais-list-row {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .ais-list-row:hover { background: rgba(125, 211, 252, 0.08); }
+    .ais-list-row.selected { background: rgba(125, 211, 252, 0.14); }
+    .ais-list-row .ais-list-glyph svg { display: block; }
+    .ais-list-row .ais-list-info { min-width: 0; }
+    .ais-list-row .ais-list-name {
+      font-weight: 600; font-size: 12px; color: #f1f5f9;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ais-list-row .ais-list-meta {
+      font-size: 10px; color: #94a3b8; margin-top: 1px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ais-list-row .ais-list-speed {
+      font-variant-numeric: tabular-nums;
+      font-size: 11px; color: #cbd5e1; min-width: 38px; text-align: right;
+    }
+    .ais-list-empty {
+      padding: 18px 12px; text-align: center; color: #64748b; font-size: 11px;
+    }
+    .ais-list-detail {
+      grid-column: 1 / -1;
+      margin-top: 6px; padding: 8px 0; border-top: 1px dashed rgba(148, 163, 184, 0.18);
+      font-size: 11px; line-height: 1.45;
+    }
+    .ais-list-detail img {
+      width: 100%; max-height: 140px; object-fit: cover;
+      border-radius: 6px; margin-bottom: 6px;
+      background: rgba(0,0,0,0.3);
+    }
+    .ais-list-detail .row { display: flex; gap: 6px; }
+    .ais-list-detail .row .k { color: #94a3b8; min-width: 80px; }
+    .ais-list-detail .row .v { color: #e2e8f0; font-weight: 500; }
+    @media (max-width: 720px) {
+      .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
+    }
+
     /* AIS vessel hover tooltip — overrides the bright pager-style default
        above so vessel info reads on a dark slate panel. */
     .leaflet-tooltip.ais-tooltip {
@@ -2134,6 +2234,22 @@
         <div id="sidebar-content" style="margin-top:1rem;">
           <div style="text-align:center; color:var(--text-soft); margin-top:2rem;">Select a pin on the map<br>to view details.</div>
         </div>
+      </div>
+
+      <!-- Floating list of AIS vessels currently visible in the map view.
+           Populated/refreshed by aisListRender() whenever the AIS data
+           or filters or map bounds change. -->
+      <div class="ais-list-panel" id="ais-list-panel">
+        <div class="ais-list-header">
+          <i class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
+          <h4>AIS Vessels</h4>
+          <span class="ais-list-count" id="ais-list-count">0</span>
+          <button class="ais-list-close" onclick="closeAisListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ais-list-search">
+          <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="aisListOnSearch(this.value)">
+        </div>
+        <div class="ais-list-body" id="ais-list-body"></div>
       </div>
     </div>
   </main>
@@ -3462,8 +3578,13 @@
         const enabled = map.hasLayer(aisLayer);
         const ctl = document.getElementById('ais-controls');
         if (ctl) ctl.style.display = enabled ? 'block' : 'none';
-        if (enabled) addFilterButton('ais');
-        else removeFilterButton('ais');
+        if (enabled) {
+          addFilterButton('ais');
+          openAisListPanel();
+        } else {
+          removeFilterButton('ais');
+          closeAisListPanel();
+        }
       }
       // Surface the satellite filter controls only while the layer is on.
       if (target === 'firms') {
@@ -9377,8 +9498,17 @@ function initPagerHoursFromStorage() {
       '</div>';
     }
 
+    // Marker index keyed by SHIP_ID so the floating vessel list can pan
+    // to / open a specific vessel without scanning the cluster group.
+    const _aisMarkers = new Map();
+
+    function _aisVesselId(v) {
+      return String(v.SHIP_ID || v.SHIPID || v.MMSI || '');
+    }
+
     function _rebuildAis() {
       aisLayer.clearLayers();
+      _aisMarkers.clear();
       let visible = 0;
       _aisVessels.forEach((v) => {
         const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
@@ -9394,12 +9524,223 @@ function initPagerHoursFromStorage() {
           className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
         });
         aisLayer.addLayer(marker);
+        const id = _aisVesselId(v);
+        if (id) _aisMarkers.set(id, marker);
         visible++;
       });
       const line = document.getElementById('ais-status-line');
       if (line) line.textContent = visible + ' of ' + _aisVessels.length + ' vessels visible';
       if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      aisListRender();
     }
+
+    // ==================== AIS VESSEL LIST PANEL ====================
+    let _aisListSearch = '';
+    let _aisListSelectedId = null;
+    const _aisDetailCache = new Map(); // shipId → fetched MT detail JSON
+
+    function openAisListPanel() {
+      const p = document.getElementById('ais-list-panel');
+      if (p) p.classList.add('open');
+      aisListRender();
+    }
+    function closeAisListPanel() {
+      const p = document.getElementById('ais-list-panel');
+      if (p) p.classList.remove('open');
+    }
+    window.closeAisListPanel = closeAisListPanel;
+
+    function aisListOnSearch(q) {
+      _aisListSearch = (q || '').toLowerCase().trim();
+      aisListRender();
+    }
+    window.aisListOnSearch = aisListOnSearch;
+
+    // Build the list. Filters by:
+    //   - active type/status filters (matches what's drawn on the map)
+    //   - the search box (name / MMSI / IMO / destination substring)
+    //   - the current map viewport (only vessels whose lat/lng are in
+    //     the visible bounds — keeps the list short and relevant)
+    function aisListRender() {
+      const body = document.getElementById('ais-list-body');
+      const countEl = document.getElementById('ais-list-count');
+      if (!body) return;
+      if (_aisVessels.length === 0) {
+        body.innerHTML = '<div class="ais-list-empty">No vessels loaded yet.</div>';
+        if (countEl) countEl.textContent = '0';
+        return;
+      }
+      const bounds = map.getBounds();
+      const q = _aisListSearch;
+      const matches = [];
+      for (const v of _aisVessels) {
+        const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
+        if (!isFinite(lat) || !isFinite(lon)) continue;
+        const cat = aisCategoryFromVessel(v);
+        const st = aisStatusBucket(v);
+        if (!aisTypeFilter[cat]) continue;
+        if (!aisStatusFilter[st]) continue;
+        // Only filter by viewport when there's no search; otherwise the
+        // user might be looking for a vessel that's just off-screen.
+        if (!q && !bounds.contains([lat, lon])) continue;
+        if (q) {
+          const hay = [v.SHIPNAME, v.NAME, v.MMSI, v.IMO, v.DESTINATION, v.CALLSIGN]
+            .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
+          if (!hay.includes(q)) continue;
+        }
+        matches.push({ v, cat, st });
+      }
+      // Sort: by name, with [SAT-AIS] vessels at the end.
+      matches.sort((a, b) => {
+        const an = (a.v.SHIPNAME || '').toString();
+        const bn = (b.v.SHIPNAME || '').toString();
+        const aSat = an === '[SAT-AIS]';
+        const bSat = bn === '[SAT-AIS]';
+        if (aSat !== bSat) return aSat ? 1 : -1;
+        return an.localeCompare(bn);
+      });
+      if (countEl) {
+        countEl.textContent = q
+          ? `${matches.length} match${matches.length === 1 ? '' : 'es'}`
+          : `${matches.length} in view`;
+      }
+      if (matches.length === 0) {
+        body.innerHTML = '<div class="ais-list-empty">' +
+          (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No vessels in current view.') +
+          '</div>';
+        return;
+      }
+      const cap = 250; // don't render thousands of rows
+      const slice = matches.slice(0, cap);
+      const rowsHtml = slice.map(({ v, cat }) => {
+        const id = _aisVesselId(v);
+        const color = AIS_TYPE_COLOR[cat] || AIS_TYPE_COLOR.unspecified;
+        const heading = parseFloat(v.HEADING);
+        const headingDeg = isFinite(heading) && heading !== 511 ? heading : null;
+        const glyph = aisListGlyph(cat, color, headingDeg);
+        const rawName = (v.SHIPNAME || v.NAME || 'Unknown').toString();
+        const isSatAis = rawName === '[SAT-AIS]';
+        const name = isSatAis ? 'Satellite AIS contact' : rawName;
+        const speedKn = (v.SPEED != null && v.SPEED !== '')
+          ? (parseFloat(v.SPEED) / 10).toFixed(1) + ' kn'
+          : '—';
+        const dest = v.DESTINATION ? escapeHtml(String(v.DESTINATION)) : '';
+        const typeLbl = (v.TYPE_NAME || cat).toString();
+        const meta = dest
+          ? `${escapeHtml(typeLbl)} · ${dest}`
+          : escapeHtml(typeLbl);
+        const selected = _aisListSelectedId === id ? ' selected' : '';
+        const detail = (_aisListSelectedId === id) ? aisListDetailHtml(v) : '';
+        return `
+          <div class="ais-list-row${selected}" onclick="aisListClickRow('${escapeHtml(id)}', event)">
+            <div class="ais-list-glyph">${glyph}</div>
+            <div class="ais-list-info">
+              <div class="ais-list-name">${escapeHtml(name)}</div>
+              <div class="ais-list-meta">${meta}</div>
+            </div>
+            <div class="ais-list-speed">${speedKn}</div>
+            ${detail}
+          </div>
+        `;
+      }).join('');
+      const overflow = matches.length > cap
+        ? `<div class="ais-list-empty">+ ${matches.length - cap} more — refine search to narrow.</div>`
+        : '';
+      body.innerHTML = rowsHtml + overflow;
+    }
+
+    function aisListGlyph(category, color, headingDeg) {
+      if (category === 'navaid') {
+        return `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      }
+      if (!isFinite(headingDeg)) {
+        return `<svg viewBox="0 0 24 24" width="14" height="14" style="margin:2px;"><circle cx="12" cy="12" r="6" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(${headingDeg}deg);"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+    }
+
+    function aisListDetailHtml(v) {
+      const id = _aisVesselId(v);
+      const cached = _aisDetailCache.get(id);
+      const imgUrl = id ? `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800` : '';
+      const imgTag = imgUrl
+        ? `<img src="${imgUrl}" alt="" onerror="this.style.display='none';">`
+        : '';
+      let extras = '';
+      if (cached && typeof cached === 'object') {
+        const r = (k, val) => (val == null || val === '')
+          ? ''
+          : `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(String(val))}</span></div>`;
+        extras = [
+          r('Name',     cached.name),
+          r('AIS name', cached.aisName),
+          r('Type',     cached.type),
+          r('Subtype',  cached.subtype),
+          r('IMO',      cached.imo),
+          r('MMSI',     cached.mmsi),
+          r('Callsign', cached.callsign),
+          r('Country',  cached.country),
+          r('Length',   cached.length ? cached.length + ' m' : ''),
+          r('Width',    cached.width ? cached.width + ' m' : ''),
+          r('Year',     cached.yearBuilt),
+          r('Home port',cached.homePort),
+        ].filter(Boolean).join('');
+      } else if (cached === '__loading__') {
+        extras = '<div class="row"><span class="k">Loading…</span></div>';
+      } else if (cached === '__error__') {
+        extras = '<div class="row" style="color:#94a3b8;">Could not load extra detail.</div>';
+      }
+      return `<div class="ais-list-detail" onclick="event.stopPropagation();">${imgTag}${extras}</div>`;
+    }
+
+    async function aisListFetchDetail(shipId) {
+      if (!shipId) return;
+      const existing = _aisDetailCache.get(shipId);
+      if (existing && existing !== '__error__') return; // already loaded or loading
+      _aisDetailCache.set(shipId, '__loading__');
+      aisListRender();
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _aisDetailCache.set(shipId, data);
+      } catch (e) {
+        console.warn('[ais] vessel detail fetch failed', e);
+        _aisDetailCache.set(shipId, '__error__');
+      }
+      aisListRender();
+    }
+
+    window.aisListClickRow = function (shipId, ev) {
+      // Toggle expanded detail view for this row.
+      const sameRow = _aisListSelectedId === shipId;
+      _aisListSelectedId = sameRow ? null : shipId;
+      // Pan to + open the marker tooltip.
+      const marker = _aisMarkers.get(shipId);
+      if (marker && !sameRow) {
+        try {
+          const ll = marker.getLatLng();
+          // Don't zoom — just pan so the user keeps spatial context.
+          map.panTo(ll, { animate: true, duration: 0.4 });
+          marker.openTooltip();
+        } catch (e) { /* ignore */ }
+      }
+      aisListRender();
+      // Lazy-load extra MT detail (image + extended fields) once.
+      if (!sameRow) aisListFetchDetail(shipId);
+    };
+
+    // Refresh the list when the map view changes (debounced — moveend
+    // and zoomend can fire rapidly during a fling).
+    let _aisListMoveDebounce = null;
+    map.on('moveend zoomend', () => {
+      if (_aisListMoveDebounce) clearTimeout(_aisListMoveDebounce);
+      _aisListMoveDebounce = setTimeout(() => {
+        if (document.getElementById('ais-list-panel')?.classList.contains('open')) {
+          aisListRender();
+        }
+      }, 150);
+    });
 
     function toggleAisType(key, on) {
       aisTypeFilter[key] = !!on;
