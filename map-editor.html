@@ -7402,18 +7402,23 @@ async function loadPagerData() {
     function toggleAisStatus(key, on) { aisStatusFilter[key] = !!on; _rebuildAis(); }
     async function loadAisData() {
       const line = document.getElementById('ais-status-line');
-      if (line) line.textContent = 'Loading vessels…';
+      const hadData = _aisVessels.length > 0;
+      if (line && !hadData) line.textContent = 'Loading vessels…';
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         const vessels = aisExtractVessels(data);
+        if (vessels.length === 0 && hadData) {
+          console.warn('[ais] empty response — keeping previous', _aisVessels.length, 'vessels');
+          return;
+        }
         _aisVessels = vessels;
         _rebuildAis();
         console.log('[ais] loaded', vessels.length, 'vessels');
       } catch (e) {
         console.warn('[ais] failed to load:', e);
-        if (line) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
       }
     }
 
@@ -10735,6 +10740,7 @@ async function loadPagerData() {
       if (map.hasLayer(beachLayer)) redrawTasks.push(loadBeachData());
       if (map.hasLayer(weatherLayer)) redrawTasks.push(loadWeatherData());
       if (map.hasLayer(outagesLayer)) redrawTasks.push(loadOutageData());
+      if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       
       await Promise.all(redrawTasks);
       

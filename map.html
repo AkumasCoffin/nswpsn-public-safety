@@ -9385,21 +9385,26 @@ function initPagerHoursFromStorage() {
 
     async function loadAisData() {
       const line = document.getElementById('ais-status-line');
-      if (line) line.textContent = 'Loading vessels…';
+      const hadData = _aisVessels.length > 0;
+      if (line && !hadData) line.textContent = 'Loading vessels…';
       try {
-        // Backend proxy endpoint — needs to be added on api.forcequit.xyz.
-        // It should re-fetch the MarineTraffic /getData/get_data_json_4/...
-        // URL and return the JSON.
         const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         const vessels = aisExtractVessels(data);
+        // Don't blow away populated markers if a refresh comes back
+        // empty (backend cache mid-replace, transient upstream failure,
+        // etc.) — better to show stale than nothing.
+        if (vessels.length === 0 && hadData) {
+          console.warn('[ais] empty response — keeping previous', _aisVessels.length, 'vessels');
+          return;
+        }
         _aisVessels = vessels;
         _rebuildAis();
         console.log('[ais] loaded', vessels.length, 'vessels');
       } catch (e) {
         console.warn('[ais] failed to load:', e);
-        if (line) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
       }
     }
 
@@ -10742,7 +10747,10 @@ function initPagerHoursFromStorage() {
       if (map.hasLayer(beachwatchLayer)) redrawTasks.push(loadBeachwatchData());
       if (map.hasLayer(weatherLayer)) redrawTasks.push(loadWeatherData());
       if (map.hasLayer(outagesLayer)) redrawTasks.push(loadOutageData());
-      
+      // AIS vessels — refresh from the backend's prefetched cache so
+      // the layer self-heals if markers were ever lost.
+      if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
+
       // Also refresh RFS data (always loaded)
       redrawTasks.push(loadAllData());
       
