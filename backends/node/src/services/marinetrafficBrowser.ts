@@ -28,11 +28,42 @@ type PwModule = {
   };
 };
 
-// Map page that the live SPA uses (centred on NSW). We mirror the same
-// centerx/centery/zoom triple the working browser session uses so the
-// Cloudflare WAF sets cookies that match this tile region.
+// Default map landing URL (centred on NSW, zoom:10). Used by the
+// session-init path and as a fallback when fetchJson can't parse a
+// tile URL. For per-tile fetches we synthesise a tile-specific
+// landing URL via tileLandingUrl() below — MarineTraffic only serves
+// data tiles inside the SPA's current viewport at the tile's zoom,
+// so warming the SPA with a generic URL fails for most z:11 tiles
+// and any z:9/z:10 tile outside the central viewport window.
 const MAP_LANDING_URL =
   'https://www.marinetraffic.com/en/ais/home/centerx:151.6/centery:-33.2/zoom:10';
+
+// Pull z/X/Y out of a MarineTraffic tile data URL. Returns null if the
+// URL doesn't match the expected /z:N/X:N/Y:N/ pattern.
+function parseTileCoords(url: string): { z: number; x: number; y: number } | null {
+  const m = url.match(/\/z:(\d+)\/X:(\d+)\/Y:(\d+)\//);
+  if (!m) return null;
+  return {
+    z: parseInt(m[1] as string, 10),
+    x: parseInt(m[2] as string, 10),
+    y: parseInt(m[3] as string, 10),
+  };
+}
+
+// Convert a MarineTraffic tile coord to its centre lng/lat. MT's tile
+// scheme uses 2^(z-1) tiles per axis (verified empirically — e.g.
+// z:10 X:472 Y:306 sits at lng~152, lat~-33.5 which is Sydney).
+function tileLandingUrl(z: number, x: number, y: number): string {
+  const n = Math.pow(2, z - 1);
+  const lng = ((x + 0.5) / n) * 360 - 180;
+  const lat =
+    (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n))) * 180) /
+    Math.PI;
+  return (
+    'https://www.marinetraffic.com/en/ais/home' +
+    `/centerx:${lng.toFixed(4)}/centery:${lat.toFixed(4)}/zoom:${z}`
+  );
+}
 // Pre-warm tile — same as the default in api/marinetraffic.ts. Hitting this
 // URL via page.goto causes the browser to solve any per-URL WAF challenge,
 // matching the centralwatch pattern. Subsequent in-page fetch() calls reuse
@@ -267,11 +298,18 @@ class MarinetrafficBrowser {
         waitForTimeout: (ms: number) => Promise<void>;
       };
       try {
-        // Step 1: warm the session by visiting the map page. This refreshes
-        // the cf_clearance + app session so the data URL doesn't return
-        // MarineTraffic's own 404 page (which it does when you keep hitting
-        // the JSON endpoint repeatedly without intervening map activity).
-        await page.goto(MAP_LANDING_URL, {
+        // Step 1: warm the session by visiting the map page at the
+        // tile's own centre + zoom. MarineTraffic only serves a data
+        // tile when its z/X/Y intersects the SPA's current viewport,
+        // so a one-size-fits-all warmup URL silently 404s for any
+        // tile outside that view. Per-tile warmup also refreshes the
+        // cf_clearance + app session, which MT requires between
+        // repeated direct hits to the JSON endpoint.
+        const coords = parseTileCoords(url);
+        const landingUrl = coords
+          ? tileLandingUrl(coords.z, coords.x, coords.y)
+          : MAP_LANDING_URL;
+        await page.goto(landingUrl, {
           timeout: timeoutMs,
           waitUntil: 'domcontentloaded',
         });
