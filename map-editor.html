@@ -7305,12 +7305,18 @@ async function loadPagerData() {
       refreshActiveFilterPanel();
     };
     const _AIS_AGE_STOPS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
-    window.setAisMaxAgeFromSlider = function (idx) {
-      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, parseInt(idx, 10) || 0));
+    window.setAisMaxAgePreview = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(_AIS_AGE_STOPS[i]);
+    };
+    window.setAisMaxAgeFromSlider = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
       aisMaxAgeMin = _AIS_AGE_STOPS[i];
       const lbl = document.getElementById('ff-ais-age-val');
       if (lbl) lbl.textContent = _aisFormatAge(aisMaxAgeMin);
       _rebuildAis();
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     };
     // Repeaters layer source filter — currently one entry, ready
     // to slot in more sources later.
@@ -7422,8 +7428,9 @@ async function loadPagerData() {
         }).join('');
         const ageSlider = `<div style="display:flex;align-items:center;gap:8px;">
             <span style="flex:1;display:block;">
-              <input type="range" min="0" max="${ageMax}" step="1" value="${ageIdx}"
-                     oninput="setAisMaxAgeFromSlider(this.value)"
+              <input type="range" min="0" max="${ageMax}" step="0.01" value="${ageIdx}"
+                     oninput="setAisMaxAgePreview(this.value)"
+                     onchange="setAisMaxAgeFromSlider(this.value)"
                      style="width:100%;accent-color:#0284c7;cursor:pointer;display:block;">
               <span style="position:relative;display:block;height:18px;margin:2px 6px 0;">${ageTicks}</span>
             </span>
