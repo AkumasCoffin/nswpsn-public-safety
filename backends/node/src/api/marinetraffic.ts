@@ -25,8 +25,12 @@ import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
 
 export const marinetrafficRouter = new Hono();
 
-const CACHE_TTL_MS = 30_000;
-const cache = new Map<string, { data: unknown; expires: number }>();
+// 60s cache: each upstream hit involves a real browser navigating to the map
+// page + the data URL (~5-8s of headless work). Hitting upstream more than
+// once a minute also seems to trip MarineTraffic's app router into serving
+// 404s for the data URL — likely a heuristic against scraping.
+const CACHE_TTL_MS = 60_000;
+const cache = new Map<string, { data: unknown; expires: number; staleAfter: number }>();
 
 function buildUpstreamUrl(z: string, x: string, y: string): string {
   // The working endpoint shape is .../z:Z/X:X/Y:Y/station:0 — appending
@@ -52,6 +56,9 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
 
   if (!marinetrafficBrowser.isReady()) {
     log.warn('marinetraffic: browser not ready');
+    // Even when the worker is down, return the last cached payload (if any)
+    // so the layer keeps showing vessels rather than going empty.
+    if (hit) return c.json(hit.data);
     return c.json(
       {
         error: 'browser worker not ready',
@@ -66,11 +73,19 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
   const url = buildUpstreamUrl(z, x, y);
   const data = await marinetrafficBrowser.fetchJson(url);
   if (data == null) {
+    // Stale-while-failing: prefer keeping the last-known vessel set on
+    // screen rather than wiping it on a transient upstream error. The cache
+    // entry is still in the Map (just past its TTL) — surface it again with
+    // a fresh expiry-pushback so we don't hammer upstream during an outage.
+    if (hit) {
+      hit.expires = now + 30_000; // try again in 30s
+      return c.json(hit.data);
+    }
     return c.json(
       { error: 'upstream fetch failed (see api-node logs)', vessels: [] },
       502,
     );
   }
-  cache.set(cacheKey, { data, expires: now + CACHE_TTL_MS });
+  cache.set(cacheKey, { data, expires: now + CACHE_TTL_MS, staleAfter: now + CACHE_TTL_MS });
   return c.json(data);
 });
