@@ -3598,6 +3598,11 @@
           updateSidebarFilterVisibility();
         }
       }
+      if (target === 'nswpsn') {
+        const enabled = map.hasLayer(nswpsnLayer);
+        if (enabled) addFilterButton('nswpsn');
+        else removeFilterButton('nswpsn');
+      }
       // Surface the satellite filter controls only while the layer is on.
       if (target === 'firms') {
         const enabled = map.hasLayer(firmsLayer);
@@ -9285,6 +9290,40 @@ function initPagerHoursFromStorage() {
       else _aisExpandedTypes.add(key);
       refreshActiveFilterPanel();
     };
+    // Repeaters layer subtype filter — currently just "NSW PSN P25
+    // sites" (every entry in NSW GRN Version 1.json), structured so
+    // additional source toggles slot in without new wiring.
+    window.toggleNswpsnSubtypePill = function (key) {
+      nswpsnFilter[key] = !nswpsnFilter[key];
+      _rebuildNswpsn();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.nswpsn = {
+      icon: 'fa-tower-broadcast',
+      label: 'Repeaters',
+      color: '#14b8a6',
+      render() {
+        const counts = {};
+        for (const s of _nswpsnSites) {
+          const sub = nswpsnSiteSubtype(s);
+          counts[sub] = (counts[sub] || 0) + 1;
+        }
+        const pills = NSWPSN_SUBTYPES.map((t) => {
+          const n = counts[t.key] || 0;
+          const on = nswpsnFilter[t.key] !== false;
+          const style = on
+            ? `background:${t.color}33;border-color:${t.color};color:#f8fafc;`
+            : `border-color:${t.color}80;color:${t.color};`;
+          return `<button class="floating-filter-pill" style="${style}" onclick="toggleNswpsnSubtypePill('${t.key}')">${escapeHtml(t.label)} (${n.toLocaleString()})</button>`;
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i> Repeaters</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${pills}</div>
+        `;
+      },
+    };
+
     FILTER_REGISTRY.ais = {
       icon: 'fa-ship',
       label: 'AIS Ships',
@@ -10060,22 +10099,49 @@ function initPagerHoursFromStorage() {
       }
     }
 
+    // Subtype filters within the Repeaters layer. Only one entry for
+    // now ("p25" = NSW PSN P25 sites loaded from NSW GRN Version 1.json)
+    // but the structure is set up to take additional sources later
+    // (e.g. DMR, conventional repeaters) without restructuring the
+    // layer-toggle plumbing.
+    const NSWPSN_SUBTYPES = [
+      { key: 'p25', label: 'NSW PSN P25 sites', color: '#14b8a6' },
+    ];
+    let nswpsnFilter = { p25: true };
+    let _nswpsnSites = []; // raw decoded list, kept so subtype toggle can rebuild without refetching
+
+    function nswpsnSiteSubtype(/* s */) {
+      // Every site in the current data file is a P25 GRN site. When
+      // we add other source files this should branch on a marker
+      // field (e.g. s.System || s.Network) before falling through.
+      return 'p25';
+    }
+
     async function loadNswpsnData() {
       try {
         const res = await fetch('data/nswpsn/NSW%20GRN%20Version%201.json', { cache: 'force-cache' });
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const sites = await res.json();
-        nswpsnLayer.clearLayers();
+        _nswpsnSites = await res.json();
+        _rebuildNswpsn();
+        console.log('[nswpsn] loaded', _nswpsnSites.length, 'sites');
+      } catch (e) {
+        console.warn('[nswpsn] failed to load:', e);
+      }
+    }
 
+    function _rebuildNswpsn() {
+      try {
+        nswpsnLayer.clearLayers();
         const icon = L.divIcon({
           className: 'custom-pin',
           html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>',
           iconSize: [28, 28],
           iconAnchor: [14, 14]
         });
-
         let added = 0;
-        sites.forEach((s) => {
+        _nswpsnSites.forEach((s) => {
+          const sub = nswpsnSiteSubtype(s);
+          if (!nswpsnFilter[sub]) return;
           const lat = parseFloat(s.Latitude);
           const lng = parseFloat(s.Longitude);
           if (!isFinite(lat) || !isFinite(lng)) return;
@@ -10162,9 +10228,9 @@ function initPagerHoursFromStorage() {
           nswpsnLayer.addLayer(marker);
           added++;
         });
-        console.log('[nswpsn] loaded', added, 'sites');
+        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
       } catch (e) {
-        console.warn('[nswpsn] failed to load:', e);
+        console.warn('[nswpsn] rebuild failed:', e);
       }
     }
 
@@ -11721,6 +11787,7 @@ function initPagerHoursFromStorage() {
           pager: typeof pagerLayer !== 'undefined' ? pagerLayer : null,
           roadwork: typeof roadworkLayer !== 'undefined' ? roadworkLayer : null,
           ais: typeof aisLayer !== 'undefined' ? aisLayer : null,
+          nswpsn: typeof nswpsnLayer !== 'undefined' ? nswpsnLayer : null,
         };
         for (const [key, layer] of Object.entries(_layerByKey)) {
           if (layer && map.hasLayer(layer)) addFilterButton(key);
