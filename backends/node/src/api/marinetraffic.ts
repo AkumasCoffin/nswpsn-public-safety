@@ -38,12 +38,11 @@ function buildUpstreamUrl(z: string, x: string, y: string): string {
   return `https://www.marinetraffic.com/getData/get_data_json_4/z:${z}/X:${x}/Y:${y}/station:0`;
 }
 
-// Default tile set — z:2 returns vessels for ~1/16th of the globe per tile.
-// The two tiles below cover everything south of the equator from Africa east
-// to the Pacific, which catches Australian/NZ waters plus Indian Ocean traffic.
-// Fewer tiles means fewer browser navigations per refresh.
+// Default tile — z:2/X:1/Y:1 is the tile the user verified covers Australian
+// waters in MarineTraffic's internal tile scheme (which doesn't follow
+// standard slippy-map coordinates exactly).
 const DEFAULT_TILES = [
-  { z: '2', x: '0', y: '1' },  // NW (the tile the user verified — Pacific N)
+  { z: '2', x: '1', y: '1' },
 ];
 
 type Tile = { z: string; x: string; y: string };
@@ -93,7 +92,7 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
   } else if (c.req.query('z') || c.req.query('x') || c.req.query('y')) {
     tiles = [{
       z: (c.req.query('z') ?? '2').replace(/\D/g, '') || '2',
-      x: (c.req.query('x') ?? '0').replace(/\D/g, '') || '0',
+      x: (c.req.query('x') ?? '1').replace(/\D/g, '') || '1',
       y: (c.req.query('y') ?? '1').replace(/\D/g, '') || '1',
     }];
   } else {
