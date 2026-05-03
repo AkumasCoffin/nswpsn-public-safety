@@ -3904,6 +3904,9 @@
     function toggleListSidebar() { /* removed - list sidebar no longer exists */ }
     function closeIncidentSidebar() {
       document.getElementById('incident-sidebar').classList.remove('open');
+      // If we were showing a pinned AIS vessel, drop the pin so the
+      // map-level tooltip closes too.
+      if (typeof aisUnpinVessel === 'function') aisUnpinVessel();
       // Clear selection state when details sidebar is closed
       document.querySelectorAll('.pager-pin-dot.pin-selected').forEach(el => {
         el.classList.remove('pin-selected');
@@ -9667,6 +9670,9 @@ function initPagerHoursFromStorage() {
     // Marker index keyed by SHIP_ID so the floating vessel list can pan
     // to / open a specific vessel without scanning the cluster group.
     const _aisMarkers = new Map();
+    // Vessel id whose tooltip is currently "pinned" open by a click.
+    // Hover-only tooltips on other markers continue to work.
+    let _aisPinnedId = null;
 
     function _aisVesselId(v) {
       return String(v.SHIP_ID || v.SHIPID || v.MMSI || '');
@@ -9691,14 +9697,30 @@ function initPagerHoursFromStorage() {
         const heading = parseFloat(v.HEADING);
         const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
         const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
+        const id = _aisVesselId(v);
         const marker = L.marker([lat, lon], { icon }).bindTooltip(buildAisPopupHtml(v), {
           className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
         });
+        // Click → pin tooltip + populate sidebar with the rich detail
+        // card. Hover keeps working for un-pinned markers.
+        marker.on('click', (ev) => {
+          if (ev && ev.originalEvent && typeof ev.originalEvent.stopPropagation === 'function') {
+            // Don't let the click bubble to the map (which clears
+            // the pinned state).
+            L.DomEvent.stopPropagation(ev.originalEvent);
+          }
+          aisPinVessel(id);
+        });
         aisLayer.addLayer(marker);
-        const id = _aisVesselId(v);
         if (id) _aisMarkers.set(id, marker);
         visible++;
       });
+      // Re-pin if the pinned vessel was just rebuilt (e.g. after a
+      // filter change or auto-refresh).
+      if (_aisPinnedId && _aisMarkers.has(_aisPinnedId)) {
+        const m = _aisMarkers.get(_aisPinnedId);
+        m.openTooltip();
+      }
       const line = document.getElementById('ais-status-line');
       if (line) line.textContent = visible + ' of ' + _aisVessels.length + ' vessels visible';
       if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
@@ -9873,9 +9895,17 @@ function initPagerHoursFromStorage() {
     async function aisListFetchDetail(shipId) {
       if (!shipId) return;
       const existing = _aisDetailCache.get(shipId);
-      if (existing && existing !== '__error__') return; // already loaded or loading
+      if (existing && existing !== '__error__' && existing !== '__loading__') {
+        // Already loaded — just refresh any open UI surface that
+        // depends on it.
+        aisListRender();
+        aisUpdateSidebarExtra(shipId);
+        return;
+      }
+      if (existing === '__loading__') return; // in-flight
       _aisDetailCache.set(shipId, '__loading__');
       aisListRender();
+      aisUpdateSidebarExtra(shipId);
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -9886,6 +9916,124 @@ function initPagerHoursFromStorage() {
         _aisDetailCache.set(shipId, '__error__');
       }
       aisListRender();
+      aisUpdateSidebarExtra(shipId);
+    }
+
+    // Repaint the "extra MT detail" block inside the pinned sidebar
+    // (called once when fetch starts and again when it completes).
+    function aisUpdateSidebarExtra(shipId) {
+      const root = document.getElementById('sidebar-content')?.querySelector('[data-ais-detail]');
+      if (!root || root.dataset.shipId !== shipId) return;
+      const slot = document.getElementById('ais-sidebar-extra');
+      if (!slot) return;
+      const cached = _aisDetailCache.get(shipId);
+      if (cached === '__loading__') {
+        slot.textContent = 'Loading extra detail…';
+        return;
+      }
+      if (cached === '__error__' || !cached) {
+        slot.textContent = 'Could not load extra detail.';
+        return;
+      }
+      const c = cached;
+      const r = (k, val) =>
+        val == null || val === ''
+          ? ''
+          : `<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">${escapeHtml(k)}</span><span style="font-weight:600;">${escapeHtml(String(val))}</span></div>`;
+      slot.innerHTML = `
+        <div style="padding:6px 8px;background:rgba(2,132,199,0.08);border-radius:6px;">
+          <div style="color:#7dd3fc;font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">📋 EXTRA DETAIL</div>
+          ${r('AIS name', c.aisName)}
+          ${r('Type', c.type)}
+          ${r('Subtype', c.subtype)}
+          ${r('Country', c.country)}
+          ${r('IMO', c.imo)}
+          ${r('MMSI', c.mmsi)}
+          ${r('Callsign', c.callsign)}
+          ${r('Length', c.length ? c.length + ' m' : '')}
+          ${r('Width', c.width ? c.width + ' m' : '')}
+          ${r('Year built', c.yearBuilt)}
+          ${r('Home port', c.homePort)}
+        </div>
+      `;
+    }
+
+    // Pin a vessel: keep its tooltip open and surface its full
+    // detail card in the right-hand sidebar. Replaces any previous
+    // pin. Called from marker click + sidebar list row click.
+    function aisPinVessel(shipId) {
+      if (!shipId) return;
+      // Close any previously-pinned tooltip.
+      if (_aisPinnedId && _aisPinnedId !== shipId) {
+        const prev = _aisMarkers.get(_aisPinnedId);
+        if (prev) prev.closeTooltip();
+      }
+      _aisPinnedId = shipId;
+      const marker = _aisMarkers.get(shipId);
+      if (marker) {
+        try {
+          map.panTo(marker.getLatLng(), { animate: true, duration: 0.4 });
+          marker.openTooltip();
+        } catch (e) { /* ignore */ }
+      }
+      // Render the rich detail card in the existing incident sidebar.
+      const sidebar = document.getElementById('incident-sidebar');
+      const content = document.getElementById('sidebar-content');
+      const v = _aisVessels.find((x) => _aisVesselId(x) === shipId);
+      if (sidebar && content && v) {
+        content.innerHTML = aisSidebarHtml(v);
+        sidebar.classList.add('open');
+        // Lazy-load extra MT detail (image + extended fields).
+        aisListFetchDetail(shipId);
+      }
+    }
+    window.aisPinVessel = aisPinVessel;
+
+    function aisUnpinVessel() {
+      if (!_aisPinnedId) return;
+      const marker = _aisMarkers.get(_aisPinnedId);
+      if (marker) marker.closeTooltip();
+      _aisPinnedId = null;
+      // Only close the sidebar if it's currently showing a vessel
+      // (don't blow away a different layer's content).
+      const content = document.getElementById('sidebar-content');
+      if (content && content.querySelector('[data-ais-detail]')) {
+        const sidebar = document.getElementById('incident-sidebar');
+        if (sidebar) sidebar.classList.remove('open');
+      }
+    }
+    window.aisUnpinVessel = aisUnpinVessel;
+
+    // Click anywhere on the map (not on a marker) → unpin. Marker
+    // click handlers stop propagation, so this only fires for
+    // background clicks.
+    map.on('click', () => {
+      aisUnpinVessel();
+    });
+
+    // Sidebar HTML for a pinned vessel — same rich card as the
+    // hover tooltip plus a slot the lazy detail fetch fills with
+    // image + extended MT fields.
+    function aisSidebarHtml(v) {
+      const id = _aisVesselId(v);
+      const cat = aisCategoryFromVessel(v);
+      const color = AIS_TYPE_COLOR[cat] || AIS_TYPE_COLOR.unspecified;
+      const rawName = (v.SHIPNAME || v.NAME || 'Unknown').toString();
+      const isSatAis = rawName === '[SAT-AIS]';
+      const name = isSatAis ? 'Satellite AIS contact' : rawName;
+      const tooltipHtml = buildAisPopupHtml(v);
+      const directUrl = id ? `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800` : '';
+      const proxyUrl = id ? `${PROXY_BASE}/api/marinetraffic/vessel-image/${encodeURIComponent(id)}` : '';
+      const imgTag = directUrl
+        ? `<img src="${directUrl}" alt="" data-fallback="${proxyUrl}" referrerpolicy="no-referrer" onerror="aisImgFallback(this);" style="width:100%;border-radius:6px;margin-bottom:10px;">`
+        : '';
+      return `
+        <div data-ais-detail data-ship-id="${escapeHtml(id)}" style="font-family:system-ui,sans-serif;">
+          ${imgTag}
+          ${tooltipHtml}
+          <div id="ais-sidebar-extra" style="margin-top:10px;font-size:11px;color:#94a3b8;">Loading extra detail…</div>
+        </div>
+      `;
     }
 
     // Two-step image fallback for vessel detail thumbnails. First
@@ -9905,22 +10053,16 @@ function initPagerHoursFromStorage() {
     };
 
     window.aisListClickRow = function (shipId, ev) {
-      // Toggle expanded detail view for this row.
       const sameRow = _aisListSelectedId === shipId;
       _aisListSelectedId = sameRow ? null : shipId;
-      // Pan to + open the marker tooltip.
-      const marker = _aisMarkers.get(shipId);
-      if (marker && !sameRow) {
-        try {
-          const ll = marker.getLatLng();
-          // Don't zoom — just pan so the user keeps spatial context.
-          map.panTo(ll, { animate: true, duration: 0.4 });
-          marker.openTooltip();
-        } catch (e) { /* ignore */ }
-      }
       aisListRender();
-      // Lazy-load extra MT detail (image + extended fields) once.
-      if (!sameRow) aisListFetchDetail(shipId);
+      // Pin the marker (opens tooltip + populates sidebar) on first
+      // click; toggle off on second click of the same row.
+      if (sameRow) {
+        aisUnpinVessel();
+      } else {
+        aisPinVessel(shipId);
+      }
     };
 
     // Refresh the list when the map view changes (debounced — moveend
