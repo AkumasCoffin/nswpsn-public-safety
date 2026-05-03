@@ -455,6 +455,7 @@
     .floating-filter-status { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(148, 163, 184, 0.18); font-size: 10px; color: #94a3b8; line-height: 1.5; }
     @media (min-width: 901px) {
       #firms-controls,
+      #ais-controls,
       #weather-panel,
       #hazards-panel,
       #police-panel,
@@ -2030,7 +2031,9 @@
       spiderfyOnMaxZoom: true,
       showCoverageOnHover: false,
       zoomToBoundsOnClick: true,
-      disableClusteringAtZoom: 13,
+      // Ungroup once you're zoomed in past country/regional view — at z9
+      // (≈ Sydney metro span) every vessel shows as its own pin.
+      disableClusteringAtZoom: 9,
       iconCreateFunction: function (cluster) {
         const count = cluster.getChildCount();
         const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
@@ -3735,6 +3738,8 @@ async function loadPagerData() {
         const enabled = map.hasLayer(aisLayer);
         const ctl = document.getElementById('ais-controls');
         if (ctl) ctl.style.display = enabled ? 'block' : 'none';
+        if (enabled) addFilterButton('ais');
+        else removeFilterButton('ais');
       }
       if (target === 'firms') {
         const enabled = map.hasLayer(firmsLayer);
@@ -7133,6 +7138,72 @@ async function loadPagerData() {
           </div>`;
       },
     };
+
+    window.toggleAisTypePill = function (key) {
+      aisTypeFilter[key] = !aisTypeFilter[key];
+      _ffSetCheckbox(`chk-ais-${key}`, aisTypeFilter[key]);
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAisStatusPill = function (key) {
+      aisStatusFilter[key] = !aisStatusFilter[key];
+      _ffSetCheckbox(`chk-ais-st-${key}`, aisStatusFilter[key]);
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.ais = {
+      icon: 'fa-ship', label: 'AIS Ships', color: '#0284c7',
+      render() {
+        const types = [
+          { key: 'cargo',     label: 'Cargo' },
+          { key: 'tanker',    label: 'Tanker' },
+          { key: 'passenger', label: 'Passenger' },
+          { key: 'fishing',   label: 'Fishing' },
+          { key: 'tug',       label: 'Tug / Pilot' },
+          { key: 'pleasure',  label: 'Pleasure' },
+          { key: 'sailing',   label: 'Sailing' },
+          { key: 'hsc',       label: 'High-speed' },
+          { key: 'gov',       label: 'Gov / Mil' },
+          { key: 'other',     label: 'Other' },
+        ];
+        const statuses = [
+          { key: 'underway',   label: 'Underway' },
+          { key: 'anchored',   label: 'At anchor' },
+          { key: 'moored',     label: 'Moored' },
+          { key: 'fishing',    label: 'Fishing op' },
+          { key: 'restricted', label: 'Restricted / NUC' },
+          { key: 'aground',    label: 'Aground' },
+          { key: 'unknown',    label: 'Unknown' },
+        ];
+        const typeCounts = {}, statusCounts = {};
+        for (const v of _aisVessels) {
+          const c = aisCategoryFromVessel(v);
+          const s = aisStatusBucket(v);
+          typeCounts[c] = (typeCounts[c] || 0) + 1;
+          statusCounts[s] = (statusCounts[s] || 0) + 1;
+        }
+        const typePills = types.map((t) => {
+          const n = typeCounts[t.key] || 0;
+          return _ffPill(aisTypeFilter[t.key], `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
+        }).join('');
+        const statusPills = statuses.map((s) => {
+          const n = statusCounts[s.key] || 0;
+          return _ffPill(aisStatusFilter[s.key], `${s.label} (${n.toLocaleString()})`, `toggleAisStatusPill('${s.key}')`);
+        }).join('');
+        const total = _aisVessels.length;
+        const visibleTxt = document.getElementById('ais-status-line')?.textContent
+          || (total ? `${total.toLocaleString()} vessels loaded` : 'Loading vessels…');
+        const escTxt = (typeof escapeHtml === 'function')
+          ? escapeHtml(visibleTxt)
+          : String(visibleTxt).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+        return `<h4><i class="fa-solid fa-ship" style="color:#0284c7;"></i> AIS Ships</h4>
+          <div class="ff-section-label">Ship type</div>
+          <div class="floating-filter-pills">${typePills}</div>
+          <div class="ff-section-label">Status</div>
+          <div class="floating-filter-pills">${statusPills}</div>
+          <div class="floating-filter-status">${escTxt}</div>`;
+      },
+    };
     function _renderFirmsLayer() {
       firmsLayer.clearLayers();
       if (!_firmsFeatures.length) return;
@@ -7176,6 +7247,60 @@ async function loadPagerData() {
       }
     }
     // ==================== AIS / VESSELS ====================
+    function aisExtractVessels(payload) {
+      if (Array.isArray(payload)) return payload;
+      if (payload && Array.isArray(payload.rows)) return payload.rows;
+      if (payload && Array.isArray(payload.data)) return payload.data;
+      if (payload && payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
+      return [];
+    }
+    function aisCategoryFromVessel(v) {
+      const name = (v.TYPE_NAME || v.TYPE_SUMMARY || '').toLowerCase();
+      if (name) {
+        if (name.includes('tanker')) return 'tanker';
+        if (name.includes('cargo')) return 'cargo';
+        if (name.includes('passenger') || name.includes('ferry')) return 'passenger';
+        if (name.includes('fishing')) return 'fishing';
+        if (name.includes('tug') || name.includes('pilot')) return 'tug';
+        if (name.includes('pleasure') || name.includes('yacht')) return 'pleasure';
+        if (name.includes('sailing')) return 'sailing';
+        if (name.includes('high speed') || name.includes('hsc')) return 'hsc';
+        if (name.includes('military') || name.includes('law') || name.includes('navy')) return 'gov';
+        return 'other';
+      }
+      const t = parseInt(v.SHIPTYPE != null ? v.SHIPTYPE : v.TYPE, 10);
+      if (t === 7) return 'cargo';
+      if (t === 8) return 'tanker';
+      if (t === 6) return 'passenger';
+      if (t === 2) return 'fishing';
+      if (t === 3) return 'tug';
+      if (t === 4) return 'hsc';
+      if (t === 5) return 'gov';
+      if (t === 9) return 'pleasure';
+      if (t === 1) return 'sailing';
+      return 'other';
+    }
+    function aisStatusBucket(v) {
+      const name = (v.STATUS_NAME || '').toLowerCase();
+      if (name) {
+        if (name.includes('under way') || name.includes('underway')) return 'underway';
+        if (name.includes('anchor')) return 'anchored';
+        if (name.includes('moor')) return 'moored';
+        if (name.includes('aground')) return 'aground';
+        if (name.includes('fishing')) return 'fishing';
+        if (name.includes('restricted') || name.includes('not under command') || name.includes('constrained')) return 'restricted';
+        return 'unknown';
+      }
+      const s = parseInt(v.STATUS, 10);
+      if (!isFinite(s)) return 'unknown';
+      if (s === 0 || s === 8) return 'underway';
+      if (s === 1) return 'anchored';
+      if (s === 5) return 'moored';
+      if (s === 7) return 'fishing';
+      if (s === 2 || s === 3 || s === 4) return 'restricted';
+      if (s === 6) return 'aground';
+      return 'unknown';
+    }
     const AIS_TYPE_COLOR = {
       cargo: '#0284c7', tanker: '#dc2626', passenger: '#a855f7', fishing: '#10b981',
       tug: '#f59e0b', pleasure: '#ec4899', sailing: '#22d3ee', hsc: '#ef4444',
@@ -7258,6 +7383,7 @@ async function loadPagerData() {
       });
       const line = document.getElementById('ais-status-line');
       if (line) line.textContent = visible + ' of ' + _aisVessels.length + ' vessels visible';
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     }
     function toggleAisType(key, on) { aisTypeFilter[key] = !!on; _rebuildAis(); }
     function toggleAisStatus(key, on) { aisStatusFilter[key] = !!on; _rebuildAis(); }
