@@ -9315,12 +9315,23 @@ function initPagerHoursFromStorage() {
     // into a non-linear age scale below — gives finer steps in the
     // "minutes" range and coarser steps once you're into hours/days.
     const _AIS_AGE_STOPS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
-    window.setAisMaxAgeFromSlider = function (idx) {
-      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, parseInt(idx, 10) || 0));
+    // Live preview while the user drags — show the snap-target
+    // label but don't commit (rebuilding the AIS layer on every
+    // pixel of drag is way too expensive).
+    window.setAisMaxAgePreview = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(_AIS_AGE_STOPS[i]);
+    };
+    // On release: snap to nearest stop, commit, rebuild the layer
+    // and re-render the panel so the tick highlight follows.
+    window.setAisMaxAgeFromSlider = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
       aisMaxAgeMin = _AIS_AGE_STOPS[i];
       const lbl = document.getElementById('ff-ais-age-val');
       if (lbl) lbl.textContent = _aisFormatAge(aisMaxAgeMin);
       _rebuildAis();
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     };
     // Repeaters layer subtype filter — currently just "NSW PSN P25
     // sites" (every entry in NSW GRN Version 1.json), structured so
@@ -9457,8 +9468,9 @@ function initPagerHoursFromStorage() {
         const ageSlider = `
           <div style="display:flex;align-items:center;gap:8px;">
             <span style="flex:1;display:block;">
-              <input type="range" min="0" max="${ageMax}" step="1" value="${ageIdx}"
-                     oninput="setAisMaxAgeFromSlider(this.value)"
+              <input type="range" min="0" max="${ageMax}" step="0.01" value="${ageIdx}"
+                     oninput="setAisMaxAgePreview(this.value)"
+                     onchange="setAisMaxAgeFromSlider(this.value)"
                      style="width:100%;accent-color:#0284c7;cursor:pointer;display:block;">
               <span style="position:relative;display:block;height:18px;margin:2px 6px 0;">${ageTicks}</span>
             </span>
