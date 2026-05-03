@@ -297,60 +297,71 @@ class MarinetrafficBrowser {
         } | null>;
         waitForTimeout: (ms: number) => Promise<void>;
       };
-      try {
-        // Step 1: warm the session by visiting the map page at the
-        // tile's own centre + zoom. MarineTraffic only serves a data
-        // tile when its z/X/Y intersects the SPA's current viewport,
-        // so a one-size-fits-all warmup URL silently 404s for any
-        // tile outside that view. Per-tile warmup also refreshes the
-        // cf_clearance + app session, which MT requires between
-        // repeated direct hits to the JSON endpoint.
-        const coords = parseTileCoords(url);
-        const landingUrl = coords
-          ? tileLandingUrl(coords.z, coords.x, coords.y)
-          : MAP_LANDING_URL;
-        await page.goto(landingUrl, {
-          timeout: timeoutMs,
-          waitUntil: 'domcontentloaded',
-        });
-        await page.waitForTimeout(800);
-
-        // Step 2: navigate to the data URL — same as pasting it in the
-        // address bar. Chromium renders through its built-in JSON viewer
-        // and Playwright's Response.text() gives us the raw body.
-        const response = await page.goto(url, {
-          timeout: timeoutMs,
-          waitUntil: 'domcontentloaded',
-        });
-        if (!response) {
-          log.warn({ url }, 'marinetraffic browser navigation: no response');
-          return null;
-        }
-        const status = response.status();
-        const text = await response.text();
-        if (!response.ok()) {
-          log.warn(
-            { url, status, bodyPreview: text.slice(0, 300) },
-            'marinetraffic browser navigation: non-2xx',
-          );
-          return null;
-        }
+      // Step 1: warm the session by visiting the map page at the
+      // tile's own centre + zoom. MarineTraffic only serves a data
+      // tile when its z/X/Y intersects the SPA's current viewport,
+      // so a one-size-fits-all warmup URL silently 404s for any
+      // tile outside that view. Per-tile warmup also refreshes the
+      // cf_clearance + app session, which MT requires between
+      // repeated direct hits to the JSON endpoint.
+      const coords = parseTileCoords(url);
+      const landingUrl = coords
+        ? tileLandingUrl(coords.z, coords.x, coords.y)
+        : MAP_LANDING_URL;
+      // Two attempts: most tiles succeed on the first try with an 800 ms
+      // post-warmup wait, but ~5-10% are flaky (the SPA hasn't finished
+      // registering its viewport with MT's tile-serving logic by the
+      // time we navigate to the data URL). A second attempt with a
+      // longer wait catches almost all of those.
+      let lastWarn: Record<string, unknown> | null = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const warmWaitMs = attempt === 1 ? 800 : 2000;
         try {
-          return JSON.parse(text);
+          await page.goto(landingUrl, {
+            timeout: timeoutMs,
+            waitUntil: 'domcontentloaded',
+          });
+          await page.waitForTimeout(warmWaitMs);
+
+          // Step 2: navigate to the data URL — same as pasting it in
+          // the address bar. Chromium renders through its built-in
+          // JSON viewer and Playwright's Response.text() gives us the
+          // raw body.
+          const response = await page.goto(url, {
+            timeout: timeoutMs,
+            waitUntil: 'domcontentloaded',
+          });
+          if (!response) {
+            lastWarn = { url, attempt, reason: 'no response' };
+            continue;
+          }
+          const status = response.status();
+          const text = await response.text();
+          if (!response.ok()) {
+            lastWarn = { url, attempt, status, bodyPreview: text.slice(0, 300) };
+            continue;
+          }
+          try {
+            return JSON.parse(text);
+          } catch (err) {
+            lastWarn = {
+              url,
+              attempt,
+              status,
+              bodyPreview: text.slice(0, 300),
+              err: (err as Error).message,
+              reason: 'invalid JSON',
+            };
+            continue;
+          }
         } catch (err) {
-          log.warn(
-            { url, status, bodyPreview: text.slice(0, 300), err: (err as Error).message },
-            'marinetraffic browser navigation: response not JSON',
-          );
-          return null;
+          lastWarn = { url, attempt, err: (err as Error).message, reason: 'goto threw' };
         }
-      } catch (err) {
-        log.warn(
-          { err: (err as Error).message, url },
-          'marinetraffic browser navigation threw',
-        );
-        return null;
       }
+      if (lastWarn) {
+        log.warn(lastWarn, 'marinetraffic browser navigation: failed both attempts');
+      }
+      return null;
     });
   }
 
