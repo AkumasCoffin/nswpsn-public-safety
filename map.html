@@ -9296,8 +9296,11 @@ function initPagerHoursFromStorage() {
           // Hide the chevron when there's only one subtype (it'd be
           // identical to the parent — Navaid, HSC).
           const hasSubs = subs.length > 1;
+          // Render the expand chevron as a proper coloured button —
+          // the bare `▸` / `▾` glyph blended into the pill row and
+          // looked like a glitch instead of an interactive control.
           const chevron = hasSubs
-            ? `<button class="ais-subtype-chevron" onclick="event.stopPropagation();toggleAisTypeExpand('${t.key}')" title="${expanded ? 'Hide' : 'Show'} subtypes" style="margin-left:4px;background:transparent;border:0;color:${color};cursor:pointer;font-size:11px;padding:0 2px;">${expanded ? '▾' : '▸'}</button>`
+            ? `<button class="ais-subtype-chevron" onclick="event.stopPropagation();toggleAisTypeExpand('${t.key}')" title="${expanded ? 'Hide' : 'Show'} subtypes" style="margin-left:2px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;background:${expanded ? color + '33' : 'rgba(30,41,59,0.6)'};border:1px solid ${color}80;border-radius:50%;color:${color};cursor:pointer;font-size:11px;padding:0;line-height:1;flex-shrink:0;"><i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'}"></i></button>`
             : '';
           const mainPill = _ffPillColored(aisTypeFilter[t.key], color, glyph, `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
           let subRow = '';
