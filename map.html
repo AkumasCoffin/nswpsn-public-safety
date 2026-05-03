@@ -9852,15 +9852,15 @@ function initPagerHoursFromStorage() {
     function aisListDetailHtml(v) {
       const id = _aisVesselId(v);
       const cached = _aisDetailCache.get(id);
-      // Try MT's collection thumbnail directly first (works for ships
-      // with a curated photo, no proxy hop). On failure (404 / ORB),
-      // aisImgFallback() re-points the <img> at our backend proxy
-      // which scrapes the photo gallery for the ship. On a second
-      // failure, the image element is hidden.
+      // Load MT's collection thumbnail directly. Loads instantly for
+      // ships that have a curated photo; for everyone else the
+      // <img> just hides on error. We don't proxy through the
+      // backend any more — the gallery-scrape fallback was slow
+      // (~10 s per miss), 404'd most of the time, and was running
+      // for every vessel a user clicked.
       const directUrl = id ? `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800` : '';
-      const proxyUrl = id ? `${PROXY_BASE}/api/marinetraffic/vessel-image/${encodeURIComponent(id)}` : '';
       const imgTag = directUrl
-        ? `<img src="${directUrl}" alt="" data-fallback="${proxyUrl}" referrerpolicy="no-referrer" onerror="aisImgFallback(this);">`
+        ? `<img src="${directUrl}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none';">`
         : '';
       let extras = '';
       if (cached && typeof cached === 'object') {
@@ -9964,22 +9964,6 @@ function initPagerHoursFromStorage() {
     map.on('click', () => {
       aisUnpinVessel();
     });
-
-    // Two-step image fallback for vessel detail thumbnails. First
-    // load attempts MT's collection CDN directly; on error this
-    // swaps the src to our backend proxy (which scrapes the photo
-    // gallery as a fallback). A second error hides the element.
-    window.aisImgFallback = function (img) {
-      const fb = img.getAttribute('data-fallback') || '';
-      // Mark the element so we know we've already tried the fallback
-      // and don't loop on a failing proxy.
-      if (fb && img.dataset.tried !== '1') {
-        img.dataset.tried = '1';
-        img.src = fb;
-      } else {
-        img.style.display = 'none';
-      }
-    };
 
     window.aisListClickRow = function (shipId, ev) {
       const sameRow = _aisListSelectedId === shipId;
