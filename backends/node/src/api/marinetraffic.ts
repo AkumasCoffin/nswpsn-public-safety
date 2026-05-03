@@ -31,12 +31,17 @@ import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
 
 export const marinetrafficRouter = new Hono();
 
-// Single fixed upstream tile — z:2/X:1/Y:1 was the tile the user verified
-// covers Australian waters in MarineTraffic's internal (non-standard) tile
-// scheme. To narrow / widen, paste a working URL into your browser, confirm
-// it covers the area you want, and replace this constant.
+// Single fixed upstream tile — z:3/X:3/Y:2 covers Australian waters
+// (specifically the eastern half including Sydney/NSW). MarineTraffic
+// uses half the standard slippy tile count at each zoom level, so:
+//
+//   X = floor((lng + 180) / 360 * 2^(zoom-1))
+//   Y = floor((1 - ln(tan(lat) + sec(lat)) / π) / 2 * 2^(zoom-1))
+//
+// Both halves of this formula were derived from the user's verified tiles:
+// zoom-10 Sydney → X:472,Y:306 and zoom-2 Sydney → X:1,Y:1.
 const UPSTREAM_URL =
-  'https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0';
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:3/Y:2/station:0';
 
 const CACHE_TTL_MS = 60_000;
 let cache: { data: unknown; expires: number } | null = null;
