@@ -112,7 +112,7 @@ class MarinetrafficBrowser {
 
     const context = (await browser.newContext({
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 800 },
       locale: 'en-AU',
       timezoneId: 'Australia/Sydney',
@@ -218,73 +218,60 @@ class MarinetrafficBrowser {
   }
 
   /**
-   * Run fetch() inside the page so cookies + correct origin are applied.
-   * Returns parsed JSON, or null on any failure (logged).
+   * Fetch JSON via page navigation rather than in-page XHR.
+   *
+   * MarineTraffic's Cloudflare config rejects XHRs from inside the page
+   * (Sec-Fetch-Dest: empty, Sec-Fetch-Mode: cors) even with valid cookies,
+   * but accepts a normal page navigation (Sec-Fetch-Dest: document,
+   * Sec-Fetch-Mode: navigate). When you paste their data URL into a
+   * browser address bar, Chromium hits it as a navigation and the response
+   * is rendered through the built-in JSON viewer — that's exactly what
+   * works for the user. This method mirrors that: page.goto the data URL,
+   * then read the rendered response body.
+   *
+   * Returns the parsed JSON or null on any failure (logged).
    */
-  async fetchJson(url: string, timeoutMs = 15000): Promise<unknown | null> {
+  async fetchJson(url: string, timeoutMs = 20000): Promise<unknown | null> {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
-      const page = this.page as { evaluate: <T>(fn: string) => Promise<T> };
-      const script = `(async () => {
-        const url = ${JSON.stringify(url)};
-        const timeout = ${JSON.stringify(timeoutMs)};
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeout);
-        try {
-          // Match the SPA's actual XHR — same-origin fetch with credentials,
-          // no custom headers (browser auto-sets Accept, Sec-Fetch-*, etc.).
-          // We deliberately don't add ad-hoc custom headers since they trip
-          // Cloudflare's bot fingerprinting.
-          const resp = await fetch(url, {
-            signal: controller.signal,
-            credentials: 'include',
-            headers: {
-              'Accept': 'application/json, text/javascript, */*; q=0.01',
-              'X-Requested-With': 'XMLHttpRequest'
-            }
-          });
-          clearTimeout(timer);
-          const ct = resp.headers.get('content-type') || '';
-          if (!resp.ok) {
-            const bodyText = (await resp.text()).slice(0, 300);
-            return { ok: false, status: resp.status, contentType: ct, bodyPreview: bodyText };
-          }
-          const text = await resp.text();
-          try {
-            return { ok: true, status: resp.status, data: JSON.parse(text) };
-          } catch (e) {
-            return { ok: false, status: resp.status, contentType: ct, bodyPreview: text.slice(0, 300), error: 'json-parse-failed' };
-          }
-        } catch (e) {
-          clearTimeout(timer);
-          return { ok: false, error: String(e && e.message ? e.message : e) };
-        }
-      })()`;
+      const page = this.page as {
+        goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<{
+          ok: () => boolean;
+          status: () => number;
+          text: () => Promise<string>;
+        } | null>;
+      };
       try {
-        const result = await page.evaluate<{
-          ok: boolean;
-          status?: number;
-          contentType?: string;
-          bodyPreview?: string;
-          data?: unknown;
-          error?: string;
-        }>(script);
-        if (result && result.ok) return result.data ?? null;
-        log.warn(
-          {
-            url,
-            status: result?.status,
-            contentType: result?.contentType,
-            bodyPreview: result?.bodyPreview,
-            err: result?.error,
-          },
-          'marinetraffic browser fetchJson failed',
-        );
-        return null;
+        const response = await page.goto(url, {
+          timeout: timeoutMs,
+          waitUntil: 'domcontentloaded',
+        });
+        if (!response) {
+          log.warn({ url }, 'marinetraffic browser navigation: no response');
+          return null;
+        }
+        const status = response.status();
+        const text = await response.text();
+        if (!response.ok()) {
+          log.warn(
+            { url, status, bodyPreview: text.slice(0, 300) },
+            'marinetraffic browser navigation: non-2xx',
+          );
+          return null;
+        }
+        try {
+          return JSON.parse(text);
+        } catch (err) {
+          log.warn(
+            { url, status, bodyPreview: text.slice(0, 300), err: (err as Error).message },
+            'marinetraffic browser navigation: response not JSON',
+          );
+          return null;
+        }
       } catch (err) {
         log.warn(
           { err: (err as Error).message, url },
-          'marinetraffic browser fetchJson threw',
+          'marinetraffic browser navigation threw',
         );
         return null;
       }
