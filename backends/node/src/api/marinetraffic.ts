@@ -38,11 +38,13 @@ function buildUpstreamUrl(z: string, x: string, y: string): string {
   return `https://www.marinetraffic.com/getData/get_data_json_4/z:${z}/X:${x}/Y:${y}/station:0`;
 }
 
-// Default tile — z:2/X:1/Y:1 is the tile the user verified covers Australian
-// waters in MarineTraffic's internal tile scheme (which doesn't follow
-// standard slippy-map coordinates exactly).
+// Default tile — z:3/X:0/Y:3 is a tighter zoom-3 tile that covers Australian
+// waters in MarineTraffic's internal tile scheme. To merge multiple tiles
+// (broader coverage, more vessels), call:
+//   ?tiles=3:0:3,3:1:3
+// or whatever combination the user has verified in their browser.
 const DEFAULT_TILES = [
-  { z: '2', x: '1', y: '1' },
+  { z: '3', x: '0', y: '3' },
 ];
 
 type Tile = { z: string; x: string; y: string };
@@ -91,9 +93,9 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
     tiles = tilesQuery;
   } else if (c.req.query('z') || c.req.query('x') || c.req.query('y')) {
     tiles = [{
-      z: (c.req.query('z') ?? '2').replace(/\D/g, '') || '2',
-      x: (c.req.query('x') ?? '1').replace(/\D/g, '') || '1',
-      y: (c.req.query('y') ?? '1').replace(/\D/g, '') || '1',
+      z: (c.req.query('z') ?? '3').replace(/\D/g, '') || '3',
+      x: (c.req.query('x') ?? '0').replace(/\D/g, '') || '0',
+      y: (c.req.query('y') ?? '3').replace(/\D/g, '') || '3',
     }];
   } else {
     tiles = DEFAULT_TILES;
