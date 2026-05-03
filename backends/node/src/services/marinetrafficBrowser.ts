@@ -416,27 +416,39 @@ class MarinetrafficBrowser {
           const ct = (resp.headers()['content-type'] || '').toLowerCase();
           if (!ct.includes('json')) return;
           // Parse asynchronously and check for vessel-shaped fields.
-          void resp.text().then((text) => {
-            if (captured !== null) return;
-            try {
-              const json = JSON.parse(text);
-              if (
-                json &&
-                typeof json === 'object' &&
-                ((json as Record<string, unknown>).shipId ||
-                  (json as Record<string, unknown>).SHIP_ID ||
-                  (json as Record<string, unknown>).mmsi ||
-                  (json as Record<string, unknown>).MMSI ||
-                  (json as Record<string, unknown>).imo ||
-                  (json as Record<string, unknown>).IMO)
-              ) {
-                captured = json;
-                if (resolveCaptured) resolveCaptured(json);
+          // resp.text() can reject with "Protocol error
+          // (Network.getResponseBody): No resource with given
+          // identifier found" if Chromium has discarded the
+          // response body before we get to read it (e.g. the page
+          // already navigated away). Swallow that here — losing one
+          // candidate body is fine, but an unhandled rejection
+          // would crash the process.
+          resp
+            .text()
+            .then((text) => {
+              if (captured !== null) return;
+              try {
+                const json = JSON.parse(text);
+                if (
+                  json &&
+                  typeof json === 'object' &&
+                  ((json as Record<string, unknown>).shipId ||
+                    (json as Record<string, unknown>).SHIP_ID ||
+                    (json as Record<string, unknown>).mmsi ||
+                    (json as Record<string, unknown>).MMSI ||
+                    (json as Record<string, unknown>).imo ||
+                    (json as Record<string, unknown>).IMO)
+                ) {
+                  captured = json;
+                  if (resolveCaptured) resolveCaptured(json);
+                }
+              } catch {
+                /* not JSON or not parseable */
               }
-            } catch {
-              /* not JSON or not parseable */
-            }
-          });
+            })
+            .catch(() => {
+              /* response body discarded by chromium — ignore */
+            });
         } catch {
           /* ignore */
         }
