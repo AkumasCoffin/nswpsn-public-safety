@@ -6905,6 +6905,18 @@ async function loadPagerData() {
     function _ffPill(active, label, onclickJs) {
       return `<button class="floating-filter-pill ${active ? 'active' : ''}" onclick="${onclickJs}">${label}</button>`;
     }
+    function _ffPillColored(active, color, glyph, label, onclickJs) {
+      const style = active
+        ? `background:${color}33;border-color:${color};color:#f1f5f9;`
+        : '';
+      return `<button class="floating-filter-pill" style="${style}" onclick="${onclickJs}">${glyph}<span style="margin-left:6px;">${label}</span></button>`;
+    }
+    function _ffAisTypeGlyph(category, color) {
+      if (category === 'navaid') {
+        return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+    }
 
     FILTER_REGISTRY.firms = {
       icon: 'fa-fire',
@@ -7185,7 +7197,9 @@ async function loadPagerData() {
         }
         const typePills = types.map((t) => {
           const n = typeCounts[t.key] || 0;
-          return _ffPill(aisTypeFilter[t.key], `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
+          const color = AIS_TYPE_COLOR[t.key] || AIS_TYPE_COLOR.unspecified;
+          const glyph = _ffAisTypeGlyph(t.key, color);
+          return _ffPillColored(aisTypeFilter[t.key], color, glyph, `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
         }).join('');
         const statusPills = statuses.map((s) => {
           const n = statusCounts[s.key] || 0;
