@@ -35,14 +35,13 @@ function buildUpstreamUrl(z: string, x: string, y: string): string {
 }
 
 marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
-  // Default tile is the slippy-map z:8 tile that covers NSW offshore
-  // (X:119, Y:75 ≈ 150°E to 157.5°E, -26°S to -33°S). The map page picks
-  // these up dynamically as the user pans; we use a single fixed tile here
-  // so the front-end gets a useful default without the back-end having to
-  // know the viewport.
-  const z = (c.req.query('z') ?? '8').replace(/\D/g, '') || '8';
-  const x = (c.req.query('x') ?? '119').replace(/\D/g, '') || '119';
-  const y = (c.req.query('y') ?? '75').replace(/\D/g, '') || '75';
+  // Default tile is z:10/X:472/Y:306 — the same tile the live MarineTraffic
+  // SPA fetches when the map is centred on Sydney/Newcastle (centerx:151.6
+  // centery:-33.2 zoom:10). Using their internal tile scheme so the WAF
+  // cookies obtained on the matching map page apply to the data fetch.
+  const z = (c.req.query('z') ?? '10').replace(/\D/g, '') || '10';
+  const x = (c.req.query('x') ?? '472').replace(/\D/g, '') || '472';
+  const y = (c.req.query('y') ?? '306').replace(/\D/g, '') || '306';
   const cacheKey = `${z}/${x}/${y}`;
 
   const now = Date.now();
