@@ -31,17 +31,14 @@ import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
 
 export const marinetrafficRouter = new Hono();
 
-// Single fixed upstream tile — z:3/X:3/Y:2 covers Australian waters
-// (specifically the eastern half including Sydney/NSW). MarineTraffic
-// uses half the standard slippy tile count at each zoom level, so:
-//
-//   X = floor((lng + 180) / 360 * 2^(zoom-1))
-//   Y = floor((1 - ln(tan(lat) + sec(lat)) / π) / 2 * 2^(zoom-1))
-//
-// Both halves of this formula were derived from the user's verified tiles:
-// zoom-10 Sydney → X:472,Y:306 and zoom-2 Sydney → X:1,Y:1.
+// Single fixed upstream tile — z:3/X:2/Y:2 covers Australian waters.
+// MarineTraffic's zoom-3 tile scheme appears to use even X values only
+// (X:0 and X:2 split the world into two halves), with Y:1 and Y:2 being
+// the equator-to-southern-temperate band. User-confirmed working tiles
+// at zoom 3: {X:0,2} × {Y:1,2}. Sydney (151.6°E, -33.2°S) sits in the
+// eastern + southern quadrant → X:2 Y:2.
 const UPSTREAM_URL =
-  'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:3/Y:2/station:0';
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:2/Y:2/station:0';
 
 const CACHE_TTL_MS = 60_000;
 let cache: { data: unknown; expires: number } | null = null;
