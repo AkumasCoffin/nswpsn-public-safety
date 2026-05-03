@@ -245,18 +245,16 @@ class MarinetrafficBrowser {
   /**
    * Fetch JSON via page navigation rather than in-page XHR.
    *
-   * MarineTraffic's Cloudflare config rejects XHRs from inside the page
-   * (Sec-Fetch-Dest: empty, Sec-Fetch-Mode: cors) even with valid cookies,
-   * but accepts a normal page navigation (Sec-Fetch-Dest: document,
-   * Sec-Fetch-Mode: navigate). When you paste their data URL into a
-   * browser address bar, Chromium hits it as a navigation and the response
-   * is rendered through the built-in JSON viewer — that's exactly what
-   * works for the user. This method mirrors that: page.goto the data URL,
-   * then read the rendered response body.
+   * MarineTraffic's Cloudflare config rejects XHRs (Sec-Fetch-Dest: empty)
+   * but accepts a normal page navigation (Sec-Fetch-Dest: document). Plus
+   * their app server stops returning JSON if you keep hitting the data URL
+   * repeatedly without ever loading the map page — it serves its own 404
+   * page instead. So before each data fetch we re-warm the session by
+   * navigating to the map page first, then to the data URL.
    *
    * Returns the parsed JSON or null on any failure (logged).
    */
-  async fetchJson(url: string, timeoutMs = 20000): Promise<unknown | null> {
+  async fetchJson(url: string, timeoutMs = 25000): Promise<unknown | null> {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
       const page = this.page as {
@@ -265,8 +263,22 @@ class MarinetrafficBrowser {
           status: () => number;
           text: () => Promise<string>;
         } | null>;
+        waitForTimeout: (ms: number) => Promise<void>;
       };
       try {
+        // Step 1: warm the session by visiting the map page. This refreshes
+        // the cf_clearance + app session so the data URL doesn't return
+        // MarineTraffic's own 404 page (which it does when you keep hitting
+        // the JSON endpoint repeatedly without intervening map activity).
+        await page.goto(MAP_LANDING_URL, {
+          timeout: timeoutMs,
+          waitUntil: 'domcontentloaded',
+        });
+        await page.waitForTimeout(800);
+
+        // Step 2: navigate to the data URL — same as pasting it in the
+        // address bar. Chromium renders through its built-in JSON viewer
+        // and Playwright's Response.text() gives us the raw body.
         const response = await page.goto(url, {
           timeout: timeoutMs,
           waitUntil: 'domcontentloaded',
