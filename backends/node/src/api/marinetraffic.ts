@@ -310,8 +310,20 @@ marinetrafficRouter.get('/api/marinetraffic/vessel-image/:id', async (c) => {
     }
     return c.text('browser worker not ready', 503);
   }
-  const url = `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800`;
-  const result = await marinetrafficBrowser.fetchBinary(url);
+  // Fast path: MT's curated collection thumbnail (only set for ships
+  // with a chosen primary photo, which excludes most small craft).
+  const collectionUrl = `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800`;
+  let result = await marinetrafficBrowser.fetchBinary(collectionUrl);
+  // Fallback: scrape the vessel's user-uploaded photo gallery and
+  // fetch the first photo found there. Slower (page navigation +
+  // image fetch) but covers the long tail of vessels without a
+  // collection thumbnail.
+  if (!result || result.status >= 400 || result.bytes.length === 0) {
+    const galleryUrl = await marinetrafficBrowser.findVesselGalleryImageUrl(id);
+    if (galleryUrl) {
+      result = await marinetrafficBrowser.fetchBinary(galleryUrl);
+    }
+  }
   if (!result || result.status >= 400 || result.bytes.length === 0) {
     vesselImageMissCache.set(id, now);
     if (cached) {
