@@ -62,18 +62,33 @@ const UPSTREAM_URLS = [
   'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:28/Y:19/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:30/Y:18/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:6/X:28/Y:18/station:0',
-  // Sydney area (zoom 9 + zoom 10). Coverage here is restricted by
-  // MarineTraffic to tiles within their SPA's current viewport — the
-  // warmup URL (services/marinetrafficBrowser.ts MAP_LANDING_URL) sits
-  // at zoom:10 centred on Sydney, so only tiles immediately around
-  // that view return data; further-out coords return their 404 page.
-  // To extend high-zoom coverage we'd need to vary the warmup URL per
-  // batch (and probably re-warm between groups of tiles).
+  // NSW coast wider (zoom 9 — seven tiles)
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:233/Y:153/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:233/Y:154/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:233/Y:155/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:234/Y:155/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:235/Y:153/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:235/Y:154/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:9/X:235/Y:155/station:0',
+  // Sydney metro (zoom 10 — six tiles)
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:469/Y:305/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:470/Y:306/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:471/Y:305/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:305/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:306/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:307/station:0',
+  // Sydney harbour / Botany Bay tight (zoom 11 — eight tiles).
+  // These need the per-tile landing URL handling in
+  // services/marinetrafficBrowser.ts to return data — MT only serves
+  // tiles inside the SPA's current viewport at the matching zoom.
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:940/Y:612/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:940/Y:613/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:941/Y:612/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:941/Y:613/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:942/Y:612/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:943/Y:612/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:943/Y:614/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:11/X:943/Y:615/station:0',
 ];
 
 // Background refresh cadence — gap between the end of one batch and the

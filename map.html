@@ -1336,10 +1336,12 @@
       border-radius: 8px !important;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
       padding: 10px 12px !important;
-      min-width: 0 !important;
-      max-width: 520px !important;
+      min-width: 320px !important;
+      max-width: 600px !important;
+      width: max-content !important;
       backdrop-filter: blur(6px);
     }
+    .leaflet-tooltip.ais-tooltip > div { width: 100%; max-width: 100% !important; }
     .leaflet-tooltip.ais-tooltip::before {
       border-top-color: rgba(15, 23, 42, 0.96) !important;
       border-right-color: rgba(15, 23, 42, 0.96) !important;
