@@ -2841,6 +2841,20 @@
     // Tracks which main type pills are expanded in the floating
     // filter panel to show their subtypes.
     let _aisExpandedTypes = new Set();
+    // Maximum allowed ELAPSED (minutes since last AIS position
+    // report) for a vessel to render. 1440 = 24 h = "show any age".
+    // The slider in the AIS filter panel writes this value.
+    let aisMaxAgeMin = 1440;
+    function _aisFormatAge(min) {
+      if (min >= 1440) return 'Any age';
+      if (min < 60) return '≤ ' + min + ' min';
+      if (min % 60 === 0) return '≤ ' + (min / 60) + ' hr';
+      return '≤ ' + (min / 60).toFixed(1) + ' hr';
+    }
+    function _aisVesselAgeMin(v) {
+      const e = parseInt(v.ELAPSED, 10);
+      return isFinite(e) ? e : null;
+    }
 
     // NSW PSN / GRN site map — loaded from local JSON. 750+ towers, so we
     // cluster aggressively at low zoom and let the user spiderfy at zoom 15.
@@ -9290,6 +9304,17 @@ function initPagerHoursFromStorage() {
       else _aisExpandedTypes.add(key);
       refreshActiveFilterPanel();
     };
+    // Last-seen slider input handler. The slider value is the index
+    // into a non-linear age scale below — gives finer steps in the
+    // "minutes" range and coarser steps once you're into hours/days.
+    const _AIS_AGE_STOPS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+    window.setAisMaxAgeFromSlider = function (idx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, parseInt(idx, 10) || 0));
+      aisMaxAgeMin = _AIS_AGE_STOPS[i];
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(aisMaxAgeMin);
+      _rebuildAis();
+    };
     // Repeaters layer subtype filter — currently just "NSW PSN P25
     // sites" (every entry in NSW GRN Version 1.json), structured so
     // additional source toggles slot in without new wiring.
@@ -9397,12 +9422,28 @@ function initPagerHoursFromStorage() {
         const total = _aisVessels.length;
         const visibleTxt = document.getElementById('ais-status-line')?.textContent
           || (total ? `${total.toLocaleString()} vessels loaded` : 'Loading vessels…');
+        // Last-seen slider. Index into _AIS_AGE_STOPS — picks the
+        // closest stop ≥ aisMaxAgeMin so the thumb position
+        // survives panel re-renders.
+        let ageIdx = _AIS_AGE_STOPS.findIndex((s) => s >= aisMaxAgeMin);
+        if (ageIdx < 0) ageIdx = _AIS_AGE_STOPS.length - 1;
+        const ageMax = _AIS_AGE_STOPS.length - 1;
+        const ageSlider = `
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="range" min="0" max="${ageMax}" step="1" value="${ageIdx}"
+                   oninput="setAisMaxAgeFromSlider(this.value)"
+                   style="flex:1;accent-color:#0284c7;cursor:pointer;">
+            <span id="ff-ais-age-val" style="font-size:10px;color:#cbd5e1;min-width:60px;text-align:right;font-variant-numeric:tabular-nums;">${_aisFormatAge(aisMaxAgeMin)}</span>
+          </div>
+        `;
         return `
           <h4><i class="fa-solid fa-ship" style="color:#0284c7;"></i> AIS Ships</h4>
           <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
           <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
           <div class="ff-section-label" style="margin-top:8px;">Status</div>
           <div class="floating-filter-pills">${statusPills}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Last seen</div>
+          ${ageSlider}
           <div class="floating-filter-status">${escapeHtml(visibleTxt)}</div>
         `;
       },
@@ -9766,6 +9807,11 @@ function initPagerHoursFromStorage() {
         // toggled OFF. Vessels with GT_SHIPTYPE not in the legend, or
         // not yet in aisSubtypeFilter, pass through (treated as on).
         if (gt && aisSubtypeFilter[gt] === false) return;
+        // Age cutoff. Vessels with no ELAPSED value pass through —
+        // dropping them would silently hide every vessel that
+        // doesn't expose the field.
+        const ageMin = _aisVesselAgeMin(v);
+        if (ageMin != null && ageMin > aisMaxAgeMin) return;
         const heading = parseFloat(v.HEADING);
         const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
         const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
