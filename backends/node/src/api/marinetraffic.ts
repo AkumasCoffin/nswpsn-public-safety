@@ -31,6 +31,7 @@
  */
 import { Hono } from 'hono';
 import { log } from '../lib/log.js';
+import { getPool } from '../db/pool.js';
 import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
 
 export const marinetrafficRouter = new Hono();
@@ -106,14 +107,57 @@ let inFlight: Promise<unknown | null> | null = null;
 let lastUserHitMs = 0;
 let refreshTimer: NodeJS.Timeout | null = null;
 
-// Per-vessel detail cache for /api/marinetraffic/vessel/:id. Detail
-// data changes very slowly (callsign/IMO/dimensions) so we hold each
-// entry for 30 minutes.
+// Per-vessel detail cache for /api/marinetraffic/vessel/:id. Two
+// layers:
+//   1. In-process Map (30 min freshness) for hot vessels.
+//   2. Postgres marinetraffic_vessel_cache table (24 h freshness)
+//      so every detail we ever fetched persists across restarts and
+//      cold-start requests don't trigger a 2-3 s browser navigation
+//      for ships we've already seen.
+// On a hit, we always re-mint the in-process entry from the DB so
+// the next request short-circuits at the Map layer.
 const VESSEL_DETAIL_TTL_MS = 30 * 60_000;
+const VESSEL_DETAIL_DB_TTL_MS = 24 * 60 * 60_000;
 const vesselDetailCache = new Map<
   string,
   { data: unknown; expires: number }
 >();
+
+async function dbReadVesselDetail(id: string): Promise<{
+  data: unknown;
+  fetchedAtMs: number;
+} | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  try {
+    const res = await pool.query<{ data: unknown; fetched_at: Date }>(
+      'SELECT data, fetched_at FROM marinetraffic_vessel_cache WHERE ship_id = $1',
+      [id],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return { data: row.data, fetchedAtMs: row.fetched_at.getTime() };
+  } catch (err) {
+    log.warn({ err, id }, 'marinetraffic vessel cache: db read failed');
+    return null;
+  }
+}
+
+async function dbWriteVesselDetail(id: string, data: unknown): Promise<void> {
+  const pool = await getPool();
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO marinetraffic_vessel_cache (ship_id, data, fetched_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (ship_id) DO UPDATE
+         SET data = EXCLUDED.data, fetched_at = now()`,
+      [id, JSON.stringify(data)],
+    );
+  } catch (err) {
+    log.warn({ err, id }, 'marinetraffic vessel cache: db write failed');
+  }
+}
 // Per-vessel image cache for /api/marinetraffic/vessel-image/:id.
 // Vessel collection photos change rarely; hold image bytes for 6 h.
 const VESSEL_IMAGE_TTL_MS = 6 * 60 * 60_000;
@@ -251,29 +295,49 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
 
 // GET /api/marinetraffic/vessel/:id
 //   Returns extended vessel info from MT (name, IMO, MMSI, dimensions,
-//   country, type, etc.) by navigating MT's HTML detail page in the
-//   shared headless browser and extracting the embedded vessel JSON.
-//   Cached per ship-id for 30 minutes.
+//   country, type, etc.). Lookup order:
+//     1. In-process Map (30 min) — sub-ms hit.
+//     2. Postgres marinetraffic_vessel_cache (24 h) — single SELECT,
+//        promoted into the Map on hit.
+//     3. MT origin via the headless browser worker — slow (~2-3 s),
+//        result is written back to both caches.
 marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
   const id = c.req.param('id');
   if (!/^\d+$/.test(id)) {
     return c.json({ error: 'invalid ship id' }, 400);
   }
   const now = Date.now();
-  const cached = vesselDetailCache.get(id);
-  if (cached && cached.expires > now) {
-    return c.json(cached.data);
+  // Layer 1: hot in-process cache.
+  const memCached = vesselDetailCache.get(id);
+  if (memCached && memCached.expires > now) {
+    return c.json(memCached.data);
   }
+  // Layer 2: warm DB cache. Always cheaper than navigating MT, even
+  // when stale we promote the row into the Map so the next request
+  // skips the DB hop.
+  const dbRow = await dbReadVesselDetail(id);
+  if (dbRow && now - dbRow.fetchedAtMs < VESSEL_DETAIL_DB_TTL_MS) {
+    vesselDetailCache.set(id, {
+      data: dbRow.data,
+      expires: now + VESSEL_DETAIL_TTL_MS,
+    });
+    return c.json(dbRow.data);
+  }
+  // Layer 3: origin fetch.
   if (!marinetrafficBrowser.isReady()) {
-    if (cached) return c.json(cached.data);
+    if (dbRow) return c.json(dbRow.data); // serve stale DB row
+    if (memCached) return c.json(memCached.data);
     return c.json({ error: 'browser worker not ready' }, 503);
   }
   const data = await marinetrafficBrowser.fetchVesselDetail(id);
   if (data == null) {
-    if (cached) return c.json(cached.data);
+    if (dbRow) return c.json(dbRow.data); // stale-while-failing
+    if (memCached) return c.json(memCached.data);
     return c.json({ error: 'vessel detail not found' }, 502);
   }
   vesselDetailCache.set(id, { data, expires: now + VESSEL_DETAIL_TTL_MS });
+  // Persist to DB asynchronously — don't block the response on it.
+  void dbWriteVesselDetail(id, data);
   return c.json(data);
 });
 
