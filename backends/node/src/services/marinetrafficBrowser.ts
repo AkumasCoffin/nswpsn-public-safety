@@ -583,53 +583,89 @@ class MarinetrafficBrowser {
           timeout: timeoutMs,
           waitUntil: 'domcontentloaded',
         });
-        await page.waitForTimeout(1500);
+        // MT's gallery is lazy-loaded; wait longer than the detail
+        // pages to let the photo grid render.
+        await page.waitForTimeout(3500);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const evalFn = (() => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const g: any = globalThis;
           const doc = g.document;
-          if (!doc) return null;
+          if (!doc) return { found: null, diag: { total: 0 } };
           const candidates: { url: string; size: number }[] = [];
+          // Scrape from <img> first (covers most cases).
           const imgs = doc.querySelectorAll('img');
           for (let i = 0; i < imgs.length; i++) {
             const img = imgs[i];
-            const src =
-              img.getAttribute('src') ||
-              img.getAttribute('data-src') ||
-              img.getAttribute('data-lazy-src') ||
-              '';
-            if (!src) continue;
-            // MT vessel photos live on these CDNs.
-            if (
-              !src.includes('photos.marinetraffic.com') &&
-              !src.includes('images.marinetraffic.com')
-            ) {
-              continue;
+            const attrs = [
+              'src',
+              'data-src',
+              'data-lazy-src',
+              'data-original',
+              'data-img',
+              'data-srcset',
+              'srcset',
+            ];
+            for (const a of attrs) {
+              const raw = img.getAttribute(a);
+              if (!raw) continue;
+              // srcset/data-srcset is a comma-separated list of "url Wd, ..."
+              const parts = raw.split(',');
+              for (const p of parts) {
+                const trimmed = p.trim().split(/\s+/)[0];
+                if (!trimmed) continue;
+                if (!/marinetraffic\.com/.test(trimmed)) continue;
+                if (/\b(logo|icon|sprite|avatar|placeholder|nodata)\b/i.test(trimmed)) continue;
+                if (!/\.(webp|jpe?g|png)(?:\?|$)/i.test(trimmed) && !/photo/i.test(trimmed)) continue;
+                const sizeMatch = trimmed.match(/[?&]size=(\d+)/);
+                const size = sizeMatch ? parseInt(sizeMatch[1] || '0', 10) : 240;
+                candidates.push({ url: trimmed, size });
+              }
             }
-            // Skip layout / icon assets.
-            if (/\b(logo|icon|sprite|avatar|placeholder)\b/i.test(src)) continue;
-            // Prefer larger photos: thumbnails are usually ~120-240px,
-            // detail images 800+. Fold size into the URL when MT uses
-            // a ?size=N param.
-            const sizeMatch = src.match(/[?&]size=(\d+)/);
-            const size = sizeMatch ? parseInt(sizeMatch[1] || '0', 10) : 240;
-            candidates.push({ url: src, size });
           }
-          if (candidates.length === 0) return null;
+          // Also scan <a href> for photo-detail links (MT sometimes
+          // wraps thumbnails in <a> with the larger photo URL).
+          const links = doc.querySelectorAll('a');
+          for (let i = 0; i < links.length; i++) {
+            const href = links[i].getAttribute('href') || '';
+            if (!href) continue;
+            if (!/marinetraffic\.com/.test(href) && !href.startsWith('/en/photos/')) continue;
+            if (/\.(webp|jpe?g|png)(?:\?|$)/i.test(href)) {
+              candidates.push({ url: href, size: 800 });
+            }
+          }
+          // Inline style background-image fallback.
+          const styled = doc.querySelectorAll('[style*="background-image"]');
+          for (let i = 0; i < styled.length; i++) {
+            const style = styled[i].getAttribute('style') || '';
+            const m = style.match(/background-image\s*:\s*url\(['"]?([^)'"]+)['"]?\)/);
+            if (m && /marinetraffic\.com/.test(m[1] || '')) {
+              candidates.push({ url: m[1] || '', size: 240 });
+            }
+          }
+          if (candidates.length === 0) {
+            return { found: null, diag: { total: imgs.length } };
+          }
           candidates.sort((a, b) => b.size - a.size);
           const top = candidates[0];
-          if (!top) return null;
+          if (!top) return { found: null, diag: { total: imgs.length } };
           let best = top.url;
-          // Bump up to 800 if the URL has a size param (MT's photo
-          // CDN serves arbitrary sizes).
           best = best.replace(/([?&])size=\d+/, '$1size=800');
-          // Make the URL absolute if it came in protocol-relative.
           if (best.startsWith('//')) best = 'https:' + best;
-          return best;
-        }) as () => string | null;
-        const found = await page.evaluate<string | null>(evalFn);
-        return found;
+          if (best.startsWith('/')) best = 'https://www.marinetraffic.com' + best;
+          return { found: best, diag: { total: imgs.length, count: candidates.length } };
+        }) as () => { found: string | null; diag: Record<string, unknown> };
+        const result = await page.evaluate<{
+          found: string | null;
+          diag: Record<string, unknown>;
+        }>(evalFn);
+        if (!result.found) {
+          log.warn(
+            { url, diag: result.diag },
+            'marinetraffic gallery scrape: no image candidates',
+          );
+        }
+        return result.found;
       } catch (err) {
         log.warn(
           { err: (err as Error).message, url },
