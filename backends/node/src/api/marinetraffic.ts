@@ -9,16 +9,23 @@
  * caches the result. The tile list below was hand-picked by the user
  * after verifying each URL returns vessels in their browser.
  *
- * Caching: 240 seconds — fetching all 20 tiles takes ~2 min of
- * sequential browser work (the worker serialises page access), so we
- * keep the result around long enough for follow-up requests within the
- * cache window to hit instantly.
+ * Caching strategy:
+ *   - A background refresh loop keeps the cache populated so user
+ *     requests never wait on a cold fetch. The loop schedules its next
+ *     run after each completion, with the gap depending on whether a
+ *     user has hit the endpoint recently:
+ *       - Active (request within last ACTIVE_WINDOW_MS): 60 s gap.
+ *       - Idle: 120 s gap.
+ *   - The HTTP handler always serves whatever's in the cache. It only
+ *     blocks on a live fetch if there's no cached payload at all
+ *     (cold-start, before the first background refresh completes).
  *
  * Failure modes:
  *   - 503 if the browser worker isn't ready (chromium not installed,
- *     `MARINETRAFFIC_DISABLED=true`, or initial page load failed).
- *   - 502 if every tile fetch fails. Partial successes are merged and
- *     returned regardless.
+ *     `MARINETRAFFIC_DISABLED=true`, or initial page load failed) AND
+ *     we have no cached payload to fall back on.
+ *   - 502 on cold-start if every tile fetch fails. Partial successes
+ *     are merged and returned regardless.
  *   - On any failure with a previous cached payload available, that
  *     payload is served (stale-while-failing).
  */
@@ -59,11 +66,20 @@ const UPSTREAM_URLS = [
   'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:306/station:0',
 ];
 
-// 20 tiles sequential ≈ 2 min per batch (browser worker serialises page
-// access). Hold the result for 4 min so the next refresh isn't waiting.
-const CACHE_TTL_MS = 240_000;
-let cache: { data: unknown; expires: number } | null = null;
+// Background refresh cadence — gap between the end of one batch and the
+// start of the next. Active mode kicks in when a user request has hit
+// the endpoint within ACTIVE_WINDOW_MS.
+const REFRESH_ACTIVE_MS = 60_000;
+const REFRESH_IDLE_MS = 120_000;
+const ACTIVE_WINDOW_MS = 5 * 60_000;
+// Initial delay before the first background refresh — gives the browser
+// worker time to launch chromium and complete its prewarm fetch.
+const REFRESH_INITIAL_DELAY_MS = 30_000;
+
+let cache: { data: unknown; fetchedAt: number } | null = null;
 let inFlight: Promise<unknown | null> | null = null;
+let lastUserHitMs = 0;
+let refreshTimer: NodeJS.Timeout | null = null;
 
 // Merge several upstream payloads. MarineTraffic returns
 // `{ type: 1, data: { rows: [...], areaShips: N } }` per tile. We merge
@@ -111,15 +127,56 @@ async function fetchAllTiles(): Promise<unknown | null> {
   return mergeUpstream(payloads);
 }
 
+// Background refresh loop. Each tick fetches all tiles, replaces the
+// cache, then reschedules itself based on whether a user has hit the
+// endpoint recently. Runs forever; errors are swallowed so a single
+// failed batch doesn't stop the loop.
+async function backgroundRefresh(): Promise<void> {
+  refreshTimer = null;
+  try {
+    if (!marinetrafficBrowser.isReady()) {
+      log.debug('marinetraffic: skipping refresh — browser not ready');
+    } else if (inFlight) {
+      log.debug('marinetraffic: skipping refresh — fetch already in flight');
+    } else {
+      inFlight = fetchAllTiles().finally(() => {
+        inFlight = null;
+      });
+      const data = await inFlight;
+      if (data != null) {
+        cache = { data, fetchedAt: Date.now() };
+        log.info('marinetraffic: background refresh complete');
+      }
+    }
+  } catch (err) {
+    log.warn({ err }, 'marinetraffic: background refresh failed');
+  } finally {
+    const sinceHit = Date.now() - lastUserHitMs;
+    const next = sinceHit < ACTIVE_WINDOW_MS ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS;
+    refreshTimer = setTimeout(backgroundRefresh, next);
+    refreshTimer.unref?.();
+  }
+}
+
+// Kick off the loop once the module loads. The first tick waits a bit
+// so the browser worker has time to prewarm; the HTTP handler will
+// block on a live fetch in the meantime if anyone hits the endpoint.
+refreshTimer = setTimeout(backgroundRefresh, REFRESH_INITIAL_DELAY_MS);
+refreshTimer.unref?.();
+
 marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
-  const now = Date.now();
-  if (cache && cache.expires > now) {
+  lastUserHitMs = Date.now();
+
+  // Always serve whatever's in the cache — the background loop keeps it
+  // fresh, and stale data beats blocking the request for ~2 min on a
+  // batch refetch.
+  if (cache) {
     return c.json(cache.data);
   }
 
+  // Cold start: no cache yet. Block on the first batch.
   if (!marinetrafficBrowser.isReady()) {
     log.warn('marinetraffic: browser not ready');
-    if (cache) return c.json(cache.data);
     return c.json(
       {
         error: 'browser worker not ready',
@@ -131,9 +188,6 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
     );
   }
 
-  // De-duplicate concurrent refreshes — a batch takes ~40-60 s and
-  // multiple front-end refreshes during that window would otherwise
-  // each kick off their own batch.
   if (!inFlight) {
     inFlight = fetchAllTiles().finally(() => {
       inFlight = null;
@@ -141,15 +195,11 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
   }
   const data = await inFlight;
   if (data == null) {
-    if (cache) {
-      cache.expires = now + 30_000;
-      return c.json(cache.data);
-    }
     return c.json(
       { error: 'every upstream tile failed (see api-node logs)', vessels: [] },
       502,
     );
   }
-  cache = { data, expires: now + CACHE_TTL_MS };
+  cache = { data, fetchedAt: Date.now() };
   return c.json(data);
 });

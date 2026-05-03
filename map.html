@@ -1327,6 +1327,26 @@
       color: inherit;
     }
 
+    /* AIS vessel hover tooltip — overrides the bright pager-style default
+       above so vessel info reads on a dark slate panel. */
+    .leaflet-tooltip.ais-tooltip {
+      background: rgba(15, 23, 42, 0.96) !important;
+      color: #e2e8f0 !important;
+      border: 1px solid rgba(125, 211, 252, 0.4) !important;
+      border-radius: 8px !important;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+      padding: 10px 12px !important;
+      min-width: 0 !important;
+      max-width: 380px !important;
+      backdrop-filter: blur(6px);
+    }
+    .leaflet-tooltip.ais-tooltip::before {
+      border-top-color: rgba(15, 23, 42, 0.96) !important;
+      border-right-color: rgba(15, 23, 42, 0.96) !important;
+      border-bottom-color: rgba(15, 23, 42, 0.96) !important;
+      border-left-color: rgba(15, 23, 42, 0.96) !important;
+    }
+
     /* Compact tooltip for police-heatmap hex cells. Override the
        default min-width / green glow / white card so a tiny hex
        label doesn't render as a 350px white box. */
@@ -2654,9 +2674,9 @@
       spiderfyOnMaxZoom: true,
       showCoverageOnHover: false,
       zoomToBoundsOnClick: true,
-      // Ungroup once you're zoomed in past country/regional view — at z9
-      // (≈ Sydney metro span) every vessel shows as its own pin.
-      disableClusteringAtZoom: 9,
+      // Ungroup once you're zoomed in past world/continent view — at z7
+      // every vessel shows as its own pin.
+      disableClusteringAtZoom: 7,
       iconCreateFunction: function (cluster) {
         const count = cluster.getChildCount();
         const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
@@ -9244,14 +9264,23 @@ function initPagerHoursFromStorage() {
 
     function buildAisIcon(category, headingDeg, isSatAis) {
       const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.other;
-      const icon = AIS_TYPE_ICON[category] || 'fa-ship';
-      const rot = isFinite(headingDeg) ? ('transform:rotate(' + headingDeg + 'deg);') : '';
-      const dimmed = isSatAis ? 'opacity:0.65;' : '';
+      const op = isSatAis ? 0.55 : 1;
+      // No heading (anchored / moored / SAT-AIS / unknown): plain dot.
+      if (!isFinite(headingDeg)) {
+        return L.divIcon({
+          className: 'ais-pin',
+          html: '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';"></div>',
+          iconSize: [12, 12],
+          iconAnchor: [6, 6]
+        });
+      }
+      // Directional arrow rotated by heading. SVG renders crisp at any
+      // zoom and lets us avoid the heavy circular background.
       return L.divIcon({
-        className: 'custom-pin',
-        html: '<div style="background:linear-gradient(135deg,' + color + ',' + color + 'cc);width:24px;height:24px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 6px ' + color + '99,0 0 10px ' + color + '40;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;' + rot + dimmed + '"><i class="fa-solid ' + icon + '"></i></div>',
-        iconSize: [24, 24],
-        iconAnchor: [12, 12]
+        className: 'ais-pin',
+        html: '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block;transform:rotate(' + headingDeg + 'deg);opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
       });
     }
 
@@ -9309,10 +9338,6 @@ function initPagerHoursFromStorage() {
         row('Last update', ts)
       ].join('');
 
-      const link = v.SHIP_ID || v.SHIPID
-        ? '<a href="https://www.marinetraffic.com/en/vessels/' + encodeURIComponent(v.SHIP_ID || v.SHIPID) + '/general" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:4px;font-size:11px;color:#7dd3fc;text-decoration:none;border:1px solid rgba(125,211,252,0.4);padding:3px 8px;border-radius:4px;">Open on MarineTraffic →</a>'
-        : '';
-
       return '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
         '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<i class="fa-solid ' + (AIS_TYPE_ICON[cat] || 'fa-ship') + '"></i> ' + escapeHtml(name) +
@@ -9320,7 +9345,6 @@ function initPagerHoursFromStorage() {
         '</div>' +
         section('🛟 IDENTIFICATION', idBody) +
         section('🧭 NAVIGATION', navBody) +
-        link +
       '</div>';
     }
 
@@ -9337,8 +9361,8 @@ function initPagerHoursFromStorage() {
         const heading = parseFloat(v.HEADING);
         const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
         const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
-        const marker = L.marker([lat, lon], { icon }).bindPopup(buildAisPopupHtml(v), {
-          className: 'repeater-popup', maxWidth: 380, autoPan: true, closeOnClick: false
+        const marker = L.marker([lat, lon], { icon }).bindTooltip(buildAisPopupHtml(v), {
+          className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
         });
         aisLayer.addLayer(marker);
         visible++;
