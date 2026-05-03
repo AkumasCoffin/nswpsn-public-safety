@@ -383,7 +383,12 @@ class MarinetrafficBrowser {
         waitForTimeout: (ms: number) => Promise<void>;
         evaluate: <T>(fn: () => T) => Promise<T>;
       };
-      const url = `https://www.marinetraffic.com/en/vessels/${encodeURIComponent(shipId)}/general`;
+      // The real MT vessel detail page lives at this URL — the live
+      // SPA navigates here when you click a vessel marker on their
+      // map, and it embeds the structured vessel JSON in the page.
+      // (`/en/vessels/{id}/general` is a different route that just
+      // serves the marketing/HTML shell and never returned the JSON.)
+      const url = `https://www.marinetraffic.com/en/ais/details/ships/shipid:${encodeURIComponent(shipId)}`;
       try {
         await page.goto(url, {
           timeout: timeoutMs,
