@@ -1337,7 +1337,7 @@
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
       padding: 10px 12px !important;
       min-width: 0 !important;
-      max-width: 380px !important;
+      max-width: 520px !important;
       backdrop-filter: blur(6px);
     }
     .leaflet-tooltip.ais-tooltip::before {
@@ -9338,7 +9338,7 @@ function initPagerHoursFromStorage() {
         row('Last update', ts)
       ].join('');
 
-      return '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+      return '<div style="max-width:500px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
         '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<i class="fa-solid ' + (AIS_TYPE_ICON[cat] || 'fa-ship') + '"></i> ' + escapeHtml(name) +
           ' <span style="background:' + color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + escapeHtml(cat.toUpperCase()) + '</span>' +
