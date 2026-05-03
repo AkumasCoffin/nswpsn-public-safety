@@ -5863,6 +5863,24 @@ function initPagerHoursFromStorage() {
     // parallel. Holding the in-flight promise per (method+url+body) lets
     // every duplicate caller share one network round-trip.
     const _inflightFetches = new Map();
+    // Any successful /api/* response is proof the API is reachable —
+    // flip the indicator to "online" without waiting for the next
+    // 60s heartbeat. Defined here so apiFetch can call it; the
+    // heartbeat path also calls updateApiStatus directly when it
+    // gets back full status detail.
+    function _markApiOnlineFromFetch(url) {
+      try {
+        if (typeof url !== 'string') return;
+        if (!/\/api\//.test(url)) return;
+        const dot = document.getElementById('api-status-dot');
+        const text = document.getElementById('api-status-text');
+        if (!dot || !text) return;
+        if (dot.classList.contains('connected')) return; // already online
+        dot.className = 'api-status-dot connected';
+        text.textContent = 'API Online';
+      } catch (_) { /* ignore */ }
+    }
+
     function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
       const headers = {
@@ -5872,21 +5890,23 @@ function initPagerHoursFromStorage() {
       // Dedupe only safe idempotent reads. Anything with a body or
       // non-GET/HEAD method gets a fresh fetch.
       const dedupable = (method === 'GET' || method === 'HEAD') && !options.body;
+      const promote = (r) => {
+        if (r && r.ok) _markApiOnlineFromFetch(url);
+        return r;
+      };
       if (dedupable) {
         const key = method + ' ' + url;
         const existing = _inflightFetches.get(key);
         if (existing) {
-          // Clone so each caller gets its own consumable Response (body
-          // streams can only be read once).
-          return existing.then(r => r.clone());
+          return existing.then(r => r.clone()).then(promote);
         }
         const p = fetch(url, { ...options, headers }).finally(() => {
           _inflightFetches.delete(key);
         });
         _inflightFetches.set(key, p);
-        return p.then(r => r.clone());
+        return p.then(r => r.clone()).then(promote);
       }
-      return fetch(url, { ...options, headers });
+      return fetch(url, { ...options, headers }).then(promote);
     }
     
     // Load API config from backend (with flood guard)
@@ -5934,16 +5954,29 @@ function initPagerHoursFromStorage() {
       // Prevent concurrent heartbeat requests (avoid flood)
       if (_heartbeatInFlight) return;
       _heartbeatInFlight = true;
+      // Abort if the network call hangs — without this a single
+      // stalled fetch locks _heartbeatInFlight forever and the
+      // status indicator gets stuck on whatever it last showed.
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 10_000);
       try {
         if (action === 'open') _heartbeatOpenSent = true;
-        // Use fetch directly (heartbeat is public, doesn't need API key)
-        const res = await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${MAP_PAGE_ID}&page_type=${MAP_PAGE_TYPE}&data_page=${MAP_IS_DATA_PAGE}`);
+        const res = await fetch(
+          `${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${MAP_PAGE_ID}&page_type=${MAP_PAGE_TYPE}&data_page=${MAP_IS_DATA_PAGE}`,
+          { signal: ctl.signal },
+        );
         const data = await res.json();
         updateApiStatus(data, true);
       } catch (e) {
         console.warn('Map heartbeat failed:', e);
         updateApiStatus(null, false);
+        // The heartbeat failed but other apiFetch calls may still
+        // be hitting the API just fine. Schedule a fast retry so
+        // the offline state clears as soon as the API is back,
+        // instead of waiting the full 60s heartbeat interval.
+        setTimeout(() => sendMapHeartbeat('ping'), 8_000);
       } finally {
+        clearTimeout(timer);
         _heartbeatInFlight = false;
       }
     }
