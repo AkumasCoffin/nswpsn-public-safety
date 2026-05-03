@@ -9932,9 +9932,16 @@ function initPagerHoursFromStorage() {
       // force it back open here. Just re-render so the row picks up
       // the .selected style + inline detail, then scroll to it.
       aisListRender();
-      const row = document.querySelector(`#ais-list-body .ais-list-row.selected`);
-      if (row && typeof row.scrollIntoView === 'function') {
-        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      // scrollIntoView with block:'nearest' is a no-op when the row
+      // is partially visible, so we'd often "scroll" to the row but
+      // it'd stay just out of view. Compute the body-relative offset
+      // and scroll to centre the row, accounting for the sticky
+      // header + search bar above the body.
+      const body = document.getElementById('ais-list-body');
+      const row = body && body.querySelector('.ais-list-row.selected');
+      if (body && row && typeof body.scrollTo === 'function') {
+        const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
+        body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
       }
       // Lazy-load extra MT detail (image + extended fields).
       aisListFetchDetail(shipId);
