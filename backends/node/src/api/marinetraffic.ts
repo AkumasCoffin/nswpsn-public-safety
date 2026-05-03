@@ -29,13 +29,20 @@ const CACHE_TTL_MS = 30_000;
 const cache = new Map<string, { data: unknown; expires: number }>();
 
 function buildUpstreamUrl(z: string, x: string, y: string): string {
-  return `https://www.marinetraffic.com/getData/get_data_json_4/z:${z}/X:${x}/Y:${y}/station:0/fleet_id:0/embed:1`;
+  // The working endpoint shape is .../z:Z/X:X/Y:Y/station:0 — appending
+  // /fleet_id:0/embed:1 makes it 403. Verified live 2026-05.
+  return `https://www.marinetraffic.com/getData/get_data_json_4/z:${z}/X:${x}/Y:${y}/station:0`;
 }
 
 marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
-  const z = (c.req.query('z') ?? '2').replace(/\D/g, '') || '2';
-  const x = (c.req.query('x') ?? '1').replace(/\D/g, '') || '1';
-  const y = (c.req.query('y') ?? '1').replace(/\D/g, '') || '1';
+  // Default tile is the slippy-map z:8 tile that covers NSW offshore
+  // (X:119, Y:75 ≈ 150°E to 157.5°E, -26°S to -33°S). The map page picks
+  // these up dynamically as the user pans; we use a single fixed tile here
+  // so the front-end gets a useful default without the back-end having to
+  // know the viewport.
+  const z = (c.req.query('z') ?? '8').replace(/\D/g, '') || '8';
+  const x = (c.req.query('x') ?? '119').replace(/\D/g, '') || '119';
+  const y = (c.req.query('y') ?? '75').replace(/\D/g, '') || '75';
   const cacheKey = `${z}/${x}/${y}`;
 
   const now = Date.now();

@@ -7176,37 +7176,6 @@ async function loadPagerData() {
       }
     }
     // ==================== AIS / VESSELS ====================
-    function aisCategoryFromType(type) {
-      const t = parseInt(type, 10);
-      if (!isFinite(t)) return 'other';
-      if (t >= 30 && t <= 30) return 'fishing';
-      if (t === 31 || t === 32 || t === 33 || t === 50 || t === 52) return 'tug';
-      if (t === 51 || t === 53 || t === 54 || t === 55 || t === 35) return 'gov';
-      if (t === 36) return 'sailing';
-      if (t === 37) return 'pleasure';
-      if (t >= 40 && t <= 49) return 'hsc';
-      if (t >= 60 && t <= 69) return 'passenger';
-      if (t >= 70 && t <= 79) return 'cargo';
-      if (t >= 80 && t <= 89) return 'tanker';
-      return 'other';
-    }
-    function aisStatusBucket(status) {
-      const s = parseInt(status, 10);
-      if (!isFinite(s)) return 'unknown';
-      if (s === 0 || s === 8) return 'underway';
-      if (s === 1) return 'anchored';
-      if (s === 5) return 'moored';
-      if (s === 7) return 'fishing';
-      if (s === 2 || s === 3 || s === 4) return 'restricted';
-      if (s === 6) return 'aground';
-      return 'unknown';
-    }
-    const AIS_STATUS_LABEL = {
-      0: 'Under way using engine', 1: 'At anchor', 2: 'Not under command',
-      3: 'Restricted manoeuvrability', 4: 'Constrained by draught', 5: 'Moored',
-      6: 'Aground', 7: 'Engaged in fishing', 8: 'Under way sailing', 9: 'Reserved (HSC)',
-      10: 'Reserved (WIG)', 14: 'AIS-SART (active)', 15: 'Default'
-    };
     const AIS_TYPE_COLOR = {
       cargo: '#0284c7', tanker: '#dc2626', passenger: '#a855f7', fishing: '#10b981',
       tug: '#f59e0b', pleasure: '#ec4899', sailing: '#22d3ee', hsc: '#ef4444',
@@ -7217,13 +7186,14 @@ async function loadPagerData() {
       tug: 'fa-anchor', pleasure: 'fa-life-ring', sailing: 'fa-life-ring',
       hsc: 'fa-rocket', gov: 'fa-shield', other: 'fa-ship'
     };
-    function buildAisIcon(category, headingDeg) {
+    function buildAisIcon(category, headingDeg, isSatAis) {
       const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.other;
       const icon = AIS_TYPE_ICON[category] || 'fa-ship';
       const rot = isFinite(headingDeg) ? ('transform:rotate(' + headingDeg + 'deg);') : '';
+      const dimmed = isSatAis ? 'opacity:0.65;' : '';
       return L.divIcon({
         className: 'custom-pin',
-        html: '<div style="background:linear-gradient(135deg,' + color + ',' + color + 'cc);width:24px;height:24px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 6px ' + color + '99,0 0 10px ' + color + '40;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;' + rot + '"><i class="fa-solid ' + icon + '"></i></div>',
+        html: '<div style="background:linear-gradient(135deg,' + color + ',' + color + 'cc);width:24px;height:24px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 6px ' + color + '99,0 0 10px ' + color + '40;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;' + rot + dimmed + '"><i class="fa-solid ' + icon + '"></i></div>',
         iconSize: [24, 24], iconAnchor: [12, 12]
       });
     }
@@ -7231,17 +7201,21 @@ async function loadPagerData() {
       const esc = (typeof escapeHtml === 'function')
         ? escapeHtml
         : (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      const name = (v.SHIPNAME || v.NAME || 'Unknown vessel').toString();
-      const status = AIS_STATUS_LABEL[parseInt(v.STATUS, 10)] || v.STATUS_NAME || '—';
-      const typeLabel = v.TYPE_SUMMARY || v.TYPE_NAME || ('Type ' + (v.TYPE || '—'));
-      const cat = aisCategoryFromType(v.TYPE);
+      const rawName = (v.SHIPNAME || v.NAME || 'Unknown vessel').toString();
+      const isSatAis = rawName === '[SAT-AIS]';
+      const name = isSatAis ? 'Satellite AIS contact' : rawName;
+      const status = v.STATUS_NAME || '—';
+      const typeLabel = v.TYPE_NAME || v.TYPE_SUMMARY || ('Type ' + (v.SHIPTYPE != null ? v.SHIPTYPE : (v.TYPE != null ? v.TYPE : '—')));
+      const cat = aisCategoryFromVessel(v);
       const color = AIS_TYPE_COLOR[cat];
       const speed = (v.SPEED != null && v.SPEED !== '') ? (parseFloat(v.SPEED) / 10).toFixed(1) + ' kn' : '—';
-      const course = (v.COURSE != null && v.COURSE !== '') ? (parseFloat(v.COURSE) / 10).toFixed(0) + '°' : '—';
+      const course = (v.COURSE != null && v.COURSE !== '') ? parseFloat(v.COURSE).toFixed(0) + '°' : '—';
       const heading = (v.HEADING != null && v.HEADING !== '' && v.HEADING !== '511') ? v.HEADING + '°' : '—';
       const draught = (v.DRAUGHT) ? (parseFloat(v.DRAUGHT) / 10).toFixed(1) + ' m' : '';
       const dim = (v.LENGTH || v.L || '') + (v.WIDTH ? ' × ' + v.WIDTH + ' m' : (v.LENGTH ? ' m' : ''));
-      const ts = v.TIMESTAMP ? new Date((+v.TIMESTAMP) * 1000).toUTCString() : (v.LAST_POS || '—');
+      const ts = (v.ELAPSED != null && v.ELAPSED !== '')
+        ? (parseInt(v.ELAPSED, 10) + ' min ago')
+        : (v.TIMESTAMP ? new Date((+v.TIMESTAMP) * 1000).toUTCString() : (v.LAST_POS || '—'));
       function row(label, value) {
         if (value == null || value === '' || value === '—') return '';
         return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + esc(label) + '</span><span style="font-weight:600;">' + esc(String(value)) + '</span></div>';
@@ -7269,12 +7243,13 @@ async function loadPagerData() {
       _aisVessels.forEach((v) => {
         const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
         if (!isFinite(lat) || !isFinite(lon)) return;
-        const cat = aisCategoryFromType(v.TYPE);
-        const st = aisStatusBucket(v.STATUS);
+        const cat = aisCategoryFromVessel(v);
+        const st = aisStatusBucket(v);
         if (!aisTypeFilter[cat]) return;
         if (!aisStatusFilter[st]) return;
         const heading = parseFloat(v.HEADING);
-        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null);
+        const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
+        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
         const marker = L.marker([lat, lon], { icon }).bindPopup(buildAisPopupHtml(v), {
           className: 'repeater-popup', maxWidth: 380, autoPan: true, closeOnClick: false
         });
@@ -7293,7 +7268,7 @@ async function loadPagerData() {
         const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        const vessels = Array.isArray(data) ? data : (Array.isArray(data && data.data) ? data.data : []);
+        const vessels = aisExtractVessels(data);
         _aisVessels = vessels;
         _rebuildAis();
         console.log('[ais] loaded', vessels.length, 'vessels');
