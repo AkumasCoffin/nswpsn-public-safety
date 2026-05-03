@@ -559,6 +559,88 @@ class MarinetrafficBrowser {
   }
 
   /**
+   * Find the URL of the first user-uploaded photo on a vessel's MT
+   * photo gallery page. The /collection/{shipId}.webp shortcut only
+   * works for the small minority of vessels that have a curated
+   * collection thumbnail — most vessels (incl. small craft, rescue
+   * boats) only have community-uploaded gallery photos. Returns the
+   * absolute URL of the largest gallery image we can find, or null.
+   */
+  async findVesselGalleryImageUrl(shipId: string, timeoutMs = 25000): Promise<string | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const page = this.page as {
+        goto: (
+          url: string,
+          opts: { timeout: number; waitUntil?: string },
+        ) => Promise<unknown>;
+        waitForTimeout: (ms: number) => Promise<void>;
+        evaluate: <T>(fn: () => T) => Promise<T>;
+      };
+      const url = `https://www.marinetraffic.com/en/photos/of/ships/shipid:${encodeURIComponent(shipId)}`;
+      try {
+        await page.goto(url, {
+          timeout: timeoutMs,
+          waitUntil: 'domcontentloaded',
+        });
+        await page.waitForTimeout(1500);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const evalFn = (() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const g: any = globalThis;
+          const doc = g.document;
+          if (!doc) return null;
+          const candidates: { url: string; size: number }[] = [];
+          const imgs = doc.querySelectorAll('img');
+          for (let i = 0; i < imgs.length; i++) {
+            const img = imgs[i];
+            const src =
+              img.getAttribute('src') ||
+              img.getAttribute('data-src') ||
+              img.getAttribute('data-lazy-src') ||
+              '';
+            if (!src) continue;
+            // MT vessel photos live on these CDNs.
+            if (
+              !src.includes('photos.marinetraffic.com') &&
+              !src.includes('images.marinetraffic.com')
+            ) {
+              continue;
+            }
+            // Skip layout / icon assets.
+            if (/\b(logo|icon|sprite|avatar|placeholder)\b/i.test(src)) continue;
+            // Prefer larger photos: thumbnails are usually ~120-240px,
+            // detail images 800+. Fold size into the URL when MT uses
+            // a ?size=N param.
+            const sizeMatch = src.match(/[?&]size=(\d+)/);
+            const size = sizeMatch ? parseInt(sizeMatch[1] || '0', 10) : 240;
+            candidates.push({ url: src, size });
+          }
+          if (candidates.length === 0) return null;
+          candidates.sort((a, b) => b.size - a.size);
+          const top = candidates[0];
+          if (!top) return null;
+          let best = top.url;
+          // Bump up to 800 if the URL has a size param (MT's photo
+          // CDN serves arbitrary sizes).
+          best = best.replace(/([?&])size=\d+/, '$1size=800');
+          // Make the URL absolute if it came in protocol-relative.
+          if (best.startsWith('//')) best = 'https:' + best;
+          return best;
+        }) as () => string | null;
+        const found = await page.evaluate<string | null>(evalFn);
+        return found;
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message, url },
+          'marinetraffic gallery scrape: navigation threw',
+        );
+        return null;
+      }
+    });
+  }
+
+  /**
    * Fetch arbitrary binary content (images) via the browser context's
    * HTTP client. Returns null on any failure. Used for proxying
    * vessel-image WebPs through our origin so they don't get blocked

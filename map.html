@@ -2833,6 +2833,14 @@
     // Anchored / Other to match MT's "Current Status" toggles.
     let aisTypeFilter = { cargo:true, tanker:true, passenger:true, hsc:true, tug:true, fishing:true, pleasure:true, navaid:true, unspecified:true };
     let aisStatusFilter = { underway:true, anchored:true, other:true };
+    // Subtype filter (GT_SHIPTYPE id → bool). Populated lazily once
+    // AIS_SUBTYPES is defined below — we initialise this to {} here
+    // and treat undefined entries as "enabled" so the panel works
+    // even if a GT_SHIPTYPE arrives that's not in the legend yet.
+    let aisSubtypeFilter = {};
+    // Tracks which main type pills are expanded in the floating
+    // filter panel to show their subtypes.
+    let _aisExpandedTypes = new Set();
 
     // NSW PSN / GRN site map — loaded from local JSON. 750+ towers, so we
     // cluster aggressively at low zoom and let the user spiderfy at zoom 15.
@@ -9228,6 +9236,22 @@ function initPagerHoursFromStorage() {
       _rebuildAis();
       refreshActiveFilterPanel();
     };
+    // GT_SHIPTYPE subtype pill — toggles the filter and re-renders.
+    // Default state for unknown ids is "on", so the first click sets
+    // false, the second sets true again.
+    window.toggleAisSubtypePill = function (gtId) {
+      const cur = aisSubtypeFilter[gtId] !== false; // undefined treated as on
+      aisSubtypeFilter[gtId] = !cur;
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    // Toggle whether a main type's subtype list is expanded in the
+    // floating filter panel.
+    window.toggleAisTypeExpand = function (key) {
+      if (_aisExpandedTypes.has(key)) _aisExpandedTypes.delete(key);
+      else _aisExpandedTypes.add(key);
+      refreshActiveFilterPanel();
+    };
     FILTER_REGISTRY.ais = {
       icon: 'fa-ship',
       label: 'AIS Ships',
@@ -9249,19 +9273,47 @@ function initPagerHoursFromStorage() {
           { key: 'anchored', label: 'Anchored' },
           { key: 'other',    label: 'Other' },
         ];
+        // Tally per main category and per subtype.
         const typeCounts = {};
+        const subtypeCounts = {};
         const statusCounts = {};
         for (const v of _aisVessels) {
           const c = aisCategoryFromVessel(v);
           const s = aisStatusBucket(v);
+          const gt = aisGtSubtype(v);
           typeCounts[c] = (typeCounts[c] || 0) + 1;
           statusCounts[s] = (statusCounts[s] || 0) + 1;
+          if (gt) subtypeCounts[gt] = (subtypeCounts[gt] || 0) + 1;
         }
-        const typePills = types.map((t) => {
+        // Build a row per type: the main pill + (when expanded) a
+        // wrapped row of subtype mini-pills indented under it.
+        const typeRowsHtml = types.map((t) => {
           const n = typeCounts[t.key] || 0;
           const color = AIS_TYPE_COLOR[t.key] || AIS_TYPE_COLOR.unspecified;
           const glyph = _ffAisTypeGlyph(t.key, color);
-          return _ffPillColored(aisTypeFilter[t.key], color, glyph, `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
+          const expanded = _aisExpandedTypes.has(t.key);
+          const subs = AIS_SUBTYPES[t.key] || [];
+          // Hide the chevron when there's only one subtype (it'd be
+          // identical to the parent — Navaid, HSC).
+          const hasSubs = subs.length > 1;
+          const chevron = hasSubs
+            ? `<button class="ais-subtype-chevron" onclick="event.stopPropagation();toggleAisTypeExpand('${t.key}')" title="${expanded ? 'Hide' : 'Show'} subtypes" style="margin-left:4px;background:transparent;border:0;color:${color};cursor:pointer;font-size:11px;padding:0 2px;">${expanded ? '▾' : '▸'}</button>`
+            : '';
+          const mainPill = _ffPillColored(aisTypeFilter[t.key], color, glyph, `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
+          let subRow = '';
+          if (expanded && hasSubs) {
+            const subPills = subs.map((s) => {
+              const sn = subtypeCounts[s.id] || 0;
+              const on = aisSubtypeFilter[s.id] !== false;
+              const subColor = color;
+              const style = on
+                ? `background:${subColor}33;border-color:${subColor};color:#f8fafc;`
+                : `border-color:${subColor}66;color:${subColor};`;
+              return `<button class="floating-filter-pill ais-subtype-pill" style="${style};font-size:10px;padding:3px 8px;" onclick="toggleAisSubtypePill('${s.id}')">${s.name} (${sn.toLocaleString()})</button>`;
+            }).join('');
+            subRow = `<div class="floating-filter-pills" style="margin:4px 0 6px 18px;gap:4px;">${subPills}</div>`;
+          }
+          return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">${mainPill}${chevron}</div>${subRow}`;
         }).join('');
         const statusPills = statuses.map((s) => {
           const n = statusCounts[s.key] || 0;
@@ -9272,9 +9324,9 @@ function initPagerHoursFromStorage() {
           || (total ? `${total.toLocaleString()} vessels loaded` : 'Loading vessels…');
         return `
           <h4><i class="fa-solid fa-ship" style="color:#0284c7;"></i> AIS Ships</h4>
-          <div class="ff-section-label">Ship type</div>
-          <div class="floating-filter-pills">${typePills}</div>
-          <div class="ff-section-label">Status</div>
+          <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
+          <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Status</div>
           <div class="floating-filter-pills">${statusPills}</div>
           <div class="floating-filter-status">${escapeHtml(visibleTxt)}</div>
         `;
@@ -9333,12 +9385,14 @@ function initPagerHoursFromStorage() {
       if (payload && payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
       return [];
     }
-    // MarineTraffic uses a simplified SHIPTYPE code (0-9), NOT the raw
-    // AIS code. They also include TYPE_NAME / TYPE_SUMMARY strings which
-    // are more authoritative — prefer those when present. Categories
-    // mirror MT's public filter UI: cargo, tanker, passenger, hsc, tug,
-    // fishing, pleasure, navaid, unspecified.
+    // GT_SHIPTYPE → main category (most specific signal MT exposes).
+    // Falls back to TYPE_NAME / TYPE_SUMMARY string match, then to
+    // the simplified SHIPTYPE code. Categories mirror MT's public
+    // filter UI: cargo, tanker, passenger, hsc, tug, fishing,
+    // pleasure, navaid, unspecified.
     function aisCategoryFromVessel(v) {
+      const gt = String(v.GT_SHIPTYPE != null ? v.GT_SHIPTYPE : '');
+      if (gt && AIS_GT_TO_CATEGORY[gt]) return AIS_GT_TO_CATEGORY[gt];
       const name = (v.TYPE_NAME || v.TYPE_SUMMARY || '').toLowerCase();
       if (name) {
         if (name.includes('tanker')) return 'tanker';
@@ -9352,10 +9406,6 @@ function initPagerHoursFromStorage() {
         if (name.includes('unspecified') || name.includes('unknown')) return 'unspecified';
         return 'unspecified';
       }
-      // Fall back to MarineTraffic's simplified SHIPTYPE code. Verified
-      // against live data: 0=Unspecified, 2=Fishing, 3=Tugs & Special
-      // Craft, 7=Cargo, 8=Tanker. Other codes inferred from MT's
-      // public colour legend.
       const t = parseInt(v.SHIPTYPE != null ? v.SHIPTYPE : v.TYPE, 10);
       if (t === 7) return 'cargo';
       if (t === 8) return 'tanker';
@@ -9366,6 +9416,10 @@ function initPagerHoursFromStorage() {
       if (t === 9) return 'pleasure';
       if (t === 5) return 'navaid';
       return 'unspecified';
+    }
+    // Returns the GT_SHIPTYPE id as a string, or '' if not present.
+    function aisGtSubtype(v) {
+      return String(v.GT_SHIPTYPE != null ? v.GT_SHIPTYPE : '');
     }
     // STATUS_NAME (or numeric STATUS legacy) → filter bucket. MT's
     // public UI only exposes Underway / Anchored, so we collapse the
@@ -9385,6 +9439,114 @@ function initPagerHoursFromStorage() {
       if (s === 1 || s === 5) return 'anchored';
       return 'other';
     }
+    // GT_SHIPTYPE → human-readable subtype mapping, mirrored from MT's
+    // own /en/ajax_app_settings/get_app_settings response. Each main
+    // SHIPTYPE category exposes a list of finer-grained subtypes; we
+    // surface them as expandable pills under their parent type so the
+    // user can filter, e.g., "Tankers" down to just "LNG Tanker".
+    const AIS_SUBTYPES = {
+      cargo: [
+        { id: '21',  name: 'General Cargo' },
+        { id: '4',   name: 'Bulk Carrier' },
+        { id: '10',  name: 'Container Ship' },
+        { id: '55',  name: 'Ro-Ro / Vehicles' },
+        { id: '52',  name: 'Reefer' },
+        { id: '1',   name: 'Aggregates' },
+        { id: '8',   name: 'Cement' },
+        { id: '37',  name: 'Ore' },
+        { id: '27',  name: 'Livestock' },
+        { id: '32',  name: 'OBO' },
+        { id: '22',  name: 'Heavy Load' },
+        { id: '68',  name: 'Barge' },
+        { id: '70',  name: 'Inland Cargo' },
+        { id: '39',  name: 'Special Cargo' },
+        { id: '907', name: 'Other Cargo' },
+      ],
+      tanker: [
+        { id: '61',  name: 'Tanker' },
+        { id: '35',  name: 'Oil Products' },
+        { id: '12',  name: 'Crude Oil' },
+        { id: '36',  name: 'Oil / Chemical' },
+        { id: '9',   name: 'Chemical' },
+        { id: '29',  name: 'LPG' },
+        { id: '28',  name: 'LNG' },
+        { id: '5',   name: 'Bunkering' },
+        { id: '3',   name: 'Asphalt / Bitumen' },
+        { id: '66',  name: 'Water' },
+        { id: '69',  name: 'Inland Tanker' },
+        { id: '43',  name: 'Special Tanker' },
+        { id: '908', name: 'Other Tanker' },
+        { id: '20',  name: 'Floating Storage' },
+      ],
+      passenger: [
+        { id: '46',  name: 'Passenger' },
+        { id: '54',  name: 'Ro-Ro / Passenger' },
+        { id: '25',  name: 'Inland Passenger' },
+        { id: '45',  name: 'Passenger / Cargo' },
+        { id: '41',  name: 'Special Passenger' },
+        { id: '906', name: 'Other Passenger' },
+      ],
+      hsc: [
+        { id: '23', name: 'High Speed Craft' },
+      ],
+      tug: [
+        { id: '64',  name: 'Tug' },
+        { id: '51',  name: 'Pusher Tug' },
+        { id: '65',  name: 'Tug / Supply' },
+        { id: '59',  name: 'Special Tug' },
+        { id: '48',  name: 'Pilot Boat' },
+        { id: '60',  name: 'Supply Vessel' },
+        { id: '58',  name: 'Service Vessel' },
+        { id: '33',  name: 'Offshore Structure' },
+        { id: '13',  name: 'Dredger' },
+        { id: '53',  name: 'Research / Survey' },
+        { id: '11',  name: 'Crew Boat' },
+        { id: '47',  name: 'Patrol' },
+        { id: '6',   name: 'Cable Layer' },
+        { id: '26',  name: 'Landing Craft' },
+        { id: '34',  name: 'Offshore Vessel' },
+        { id: '2',   name: 'Anchor Handling' },
+        { id: '49',  name: 'Platform' },
+        { id: '19',  name: 'Floating Crane' },
+        { id: '14',  name: 'Drill Ship' },
+        { id: '57',  name: 'Search & Rescue' },
+        { id: '50',  name: 'Pollution Control' },
+        { id: '24',  name: 'Icebreaker' },
+        { id: '15',  name: 'Fire Fighting' },
+        { id: '62',  name: 'Training Ship' },
+        { id: '71',  name: 'Inland Tug' },
+        { id: '38',  name: 'Special Craft' },
+        { id: '30',  name: 'Military Ops' },
+        { id: '903', name: 'Other Tug / Special' },
+      ],
+      fishing: [
+        { id: '18',  name: 'Fishing Vessel' },
+        { id: '16',  name: 'Fish Carrier' },
+        { id: '63',  name: 'Trawler' },
+        { id: '40',  name: 'Special Fishing' },
+        { id: '902', name: 'Other Fishing' },
+      ],
+      pleasure: [
+        { id: '67',  name: 'Yacht' },
+        { id: '56',  name: 'Sailing Vessel' },
+        { id: '42',  name: 'Other Pleasure' },
+      ],
+      navaid: [
+        { id: '31', name: 'Navigation Aids' },
+      ],
+      unspecified: [
+        { id: '900', name: 'Unspecified' },
+      ],
+    };
+    // Reverse lookup: GT_SHIPTYPE id → main category key.
+    const AIS_GT_TO_CATEGORY = (() => {
+      const m = {};
+      for (const cat of Object.keys(AIS_SUBTYPES)) {
+        for (const s of AIS_SUBTYPES[cat]) m[s.id] = cat;
+      }
+      return m;
+    })();
+
     // Colours matched against MarineTraffic's public type-icon legend
     // (green cargo / red tankers / blue passenger / yellow HSC / cyan
     // tugs / orange fishing / pink pleasure / orange-diamond navaid /
@@ -9521,6 +9683,11 @@ function initPagerHoursFromStorage() {
         const st = aisStatusBucket(v);
         if (!aisTypeFilter[cat]) return;
         if (!aisStatusFilter[st]) return;
+        const gt = aisGtSubtype(v);
+        // Subtype map only contains entries the user has explicitly
+        // toggled OFF. Vessels with GT_SHIPTYPE not in the legend, or
+        // not yet in aisSubtypeFilter, pass through (treated as on).
+        if (gt && aisSubtypeFilter[gt] === false) return;
         const heading = parseFloat(v.HEADING);
         const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
         const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
