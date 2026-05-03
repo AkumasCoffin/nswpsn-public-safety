@@ -28,12 +28,22 @@ type PwModule = {
   };
 };
 
-// Initial map centre — Sydney offshore. The data endpoint accepts any tile
-// coords; this URL just primes the session.
+// Map page that the live SPA uses (centred on NSW). We mirror the same
+// centerx/centery/zoom triple the working browser session uses so the
+// Cloudflare WAF sets cookies that match this tile region.
 const MAP_LANDING_URL =
-  'https://www.marinetraffic.com/en/ais/home/centerx:151.0/centery:-34.1/zoom:10';
+  'https://www.marinetraffic.com/en/ais/home/centerx:151.6/centery:-33.2/zoom:10';
+// Pre-warm tile — same as the default in api/marinetraffic.ts. Hitting this
+// URL via page.goto causes the browser to solve any per-URL WAF challenge,
+// matching the centralwatch pattern. Subsequent in-page fetch() calls reuse
+// the resulting cf_clearance cookie.
+const PREWARM_DATA_URL =
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:306/station:0';
 
 const SESSION_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min
+// Cloudflare's JS challenge often completes within a few seconds but can
+// take longer on a headless box. Keep polling for cf_clearance up to this.
+const CF_CLEARANCE_TIMEOUT_MS = 25_000;
 
 class MarinetrafficBrowser {
   private browser: unknown = null;
@@ -125,14 +135,36 @@ class MarinetrafficBrowser {
     );
 
     try {
-      // domcontentloaded is enough — the page's own JS will keep loading
-      // tiles after, but cookies are set by the time the document parses.
+      // 1. Land on the map page so Cloudflare drops a session cookie + cf_clearance.
       await page.goto(MAP_LANDING_URL, { timeout: 45000, waitUntil: 'domcontentloaded' });
-      // Give Cloudflare a beat to finish any JS challenge handoff.
-      await page.waitForTimeout(4000);
+      // Poll until cf_clearance shows up (the WAF challenge solved cookie).
+      const ok = await this.waitForCfClearance(context, CF_CLEARANCE_TIMEOUT_MS);
+      if (!ok) {
+        log.warn('marinetraffic: cf_clearance never appeared on map page (continuing anyway)');
+      }
+      // 2. Pre-warm the data URL by navigating to it directly. The map page's
+      //    SPA does this internally; doing it here causes the browser to
+      //    solve any per-URL WAF challenge for /getData/* once, so that
+      //    later fetch() calls inside the page reuse the clearance.
+      try {
+        await page.goto(PREWARM_DATA_URL, { timeout: 30000, waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(1500);
+        log.info('marinetraffic: data endpoint prewarmed');
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'marinetraffic: data prewarm failed (will retry on first fetch)',
+        );
+      }
+      // 3. Return to the map page so subsequent fetch()s have a sensible Referer.
+      try {
+        await page.goto(MAP_LANDING_URL, { timeout: 30000, waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(1500);
+      } catch { /* best-effort */ }
       const cookies = await context.cookies('https://www.marinetraffic.com');
+      const hasClearance = cookies.some((c) => c.name === 'cf_clearance');
       log.info(
-        { cookieCount: cookies.length },
+        { cookieCount: cookies.length, cfClearance: hasClearance },
         'marinetraffic: browser ready',
       );
     } catch (err) {
@@ -156,6 +188,20 @@ class MarinetrafficBrowser {
       () => void this.refreshSession(),
       SESSION_REFRESH_INTERVAL_MS,
     );
+  }
+
+  /** Poll the context cookies until cf_clearance shows up or the timeout hits. */
+  private async waitForCfClearance(
+    context: { cookies: (url: string) => Promise<Array<{ name: string }>> },
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const cookies = await context.cookies('https://www.marinetraffic.com');
+      if (cookies.some((c) => c.name === 'cf_clearance')) return true;
+      await new Promise((res) => setTimeout(res, 500));
+    }
+    return false;
   }
 
   private async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
