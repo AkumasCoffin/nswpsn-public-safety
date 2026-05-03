@@ -231,13 +231,16 @@ class MarinetrafficBrowser {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
+          // Match the SPA's actual XHR — same-origin fetch with credentials,
+          // no custom headers (browser auto-sets Accept, Sec-Fetch-*, etc.).
+          // We deliberately don't add ad-hoc custom headers since they trip
+          // Cloudflare's bot fingerprinting.
           const resp = await fetch(url, {
             signal: controller.signal,
             credentials: 'include',
             headers: {
               'Accept': 'application/json, text/javascript, */*; q=0.01',
-              'X-Requested-With': 'XMLHttpRequest',
-              'Vessel-Image': '00d4d80f7afac6c031bd0eed7e6d9a5cabf3'
+              'X-Requested-With': 'XMLHttpRequest'
             }
           });
           clearTimeout(timer);
