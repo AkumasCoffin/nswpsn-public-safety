@@ -31,7 +31,11 @@ export const marinetrafficRouter = new Hono();
 // User-verified working tiles (paste one in a browser and you get vessel
 // JSON back). Together they cover the major shipping basins; merging them
 // gives the front-end a comprehensive vessel layer without per-viewport
-// fetching.
+// fetching. The first eight tiles are the user's z:3 set covering mid-
+// ocean basins worldwide. The two extras at the end are confirmed
+// Australia-region tiles (z:2/X:1/Y:1 returns ~11 vessels around AU
+// coast; z:10/X:472/Y:306 is Sydney-specific) — without them the merged
+// result was leaving Australian waters empty.
 const UPSTREAM_URLS = [
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:2/Y:1/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:0/Y:1/station:0',
@@ -41,6 +45,9 @@ const UPSTREAM_URLS = [
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:1/Y:2/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:1/Y:1/station:0',
   'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:0/Y:3/station:0',
+  // Australia-coverage extras
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0',
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:10/X:472/Y:306/station:0',
 ];
 
 const CACHE_TTL_MS = 120_000;
