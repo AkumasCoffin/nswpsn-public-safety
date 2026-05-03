@@ -31,10 +31,12 @@ import { marinetrafficBrowser } from '../services/marinetrafficBrowser.js';
 
 export const marinetrafficRouter = new Hono();
 
-// Single fixed upstream tile — verified by the user to return Australian
-// waters. Change this constant if MarineTraffic's tile scheme shifts.
+// Single fixed upstream tile — z:2/X:1/Y:1 was the tile the user verified
+// covers Australian waters in MarineTraffic's internal (non-standard) tile
+// scheme. To narrow / widen, paste a working URL into your browser, confirm
+// it covers the area you want, and replace this constant.
 const UPSTREAM_URL =
-  'https://www.marinetraffic.com/getData/get_data_json_4/z:3/X:0/Y:3/station:0';
+  'https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0';
 
 const CACHE_TTL_MS = 60_000;
 let cache: { data: unknown; expires: number } | null = null;
