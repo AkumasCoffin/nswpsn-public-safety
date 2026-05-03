@@ -8718,8 +8718,8 @@ function initPagerHoursFromStorage() {
     // the pill is in its inactive grey state.
     function _ffPillColored(active, color, glyph, label, onclickJs) {
       const style = active
-        ? `background:${color}33;border-color:${color};color:#f1f5f9;`
-        : '';
+        ? `background:${color}40;border-color:${color};color:#f8fafc;`
+        : `border-color:${color}80;color:${color};`;
       return `<button class="floating-filter-pill" style="${style}" onclick="${onclickJs}">${glyph}<span style="margin-left:6px;">${label}</span></button>`;
     }
     function _ffAisTypeGlyph(category, color) {
