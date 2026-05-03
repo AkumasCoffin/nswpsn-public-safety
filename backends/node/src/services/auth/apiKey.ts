@@ -44,6 +44,10 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   '/api/centralwatch/image/',
   '/api/centralwatch/cameras',
   '/api/dashboard/',
+  // Vessel image proxy is loaded via <img src> which can't add the
+  // X-API-Key header, so it has to be public (the upstream MT photo
+  // is itself public-domain anyway).
+  '/api/marinetraffic/vessel-image/',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {

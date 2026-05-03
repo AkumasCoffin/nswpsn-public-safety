@@ -367,14 +367,20 @@ class MarinetrafficBrowser {
 
   /**
    * Navigate the worker page to a MarineTraffic vessel detail URL and
-   * extract the embedded vessel data. MT serves /en/vessels/{id}/general
-   * as an HTML SPA shell, then hydrates a window-level state object
-   * from a JSON blob in the page. This method tries a sequence of
-   * known extraction patterns and returns the first match, or null.
+   * extract the structured vessel JSON. MT's SPA fetches that JSON
+   * over XHR after the page loads, so the most reliable extractor is
+   * just to listen on the page's response stream and grab the first
+   * JSON body that looks like a vessel record. Falls back to DOM
+   * scraping if the XHR never fires.
    */
   async fetchVesselDetail(shipId: string, timeoutMs = 25000): Promise<unknown | null> {
     if (!this.isReady()) return null;
     return this.runExclusive(async () => {
+      type PwResponse = {
+        url: () => string;
+        headers: () => Record<string, string>;
+        text: () => Promise<string>;
+      };
       const page = this.page as {
         goto: (
           url: string,
@@ -382,20 +388,76 @@ class MarinetrafficBrowser {
         ) => Promise<unknown>;
         waitForTimeout: (ms: number) => Promise<void>;
         evaluate: <T>(fn: () => T) => Promise<T>;
+        on: (event: 'response', handler: (resp: PwResponse) => void) => void;
+        off: (event: 'response', handler: (resp: PwResponse) => void) => void;
       };
-      // The real MT vessel detail page lives at this URL — the live
-      // SPA navigates here when you click a vessel marker on their
-      // map, and it embeds the structured vessel JSON in the page.
-      // (`/en/vessels/{id}/general` is a different route that just
-      // serves the marketing/HTML shell and never returned the JSON.)
+      // The real MT vessel detail page — the SPA navigates here when
+      // you click a vessel marker on their map. The page itself is
+      // mostly an HTML shell; the structured JSON is fetched via XHR
+      // after navigation, which we capture below by listening on the
+      // page's response stream.
       const url = `https://www.marinetraffic.com/en/ais/details/ships/shipid:${encodeURIComponent(shipId)}`;
+      let captured: unknown = null;
+      let resolveCaptured: ((v: unknown) => void) | null = null;
+      const capturedP = new Promise<unknown>((resolve) => {
+        resolveCaptured = resolve;
+      });
+      const onResponse = (resp: PwResponse) => {
+        if (captured !== null) return;
+        try {
+          const respUrl = resp.url();
+          // MT's vessel-detail XHR usually hits one of these path
+          // fragments. Filtering reduces the body parse work.
+          if (
+            !/\/(asset|vessel|ship|details|getAsset|getVessel)/i.test(respUrl)
+          ) {
+            return;
+          }
+          const ct = (resp.headers()['content-type'] || '').toLowerCase();
+          if (!ct.includes('json')) return;
+          // Parse asynchronously and check for vessel-shaped fields.
+          void resp.text().then((text) => {
+            if (captured !== null) return;
+            try {
+              const json = JSON.parse(text);
+              if (
+                json &&
+                typeof json === 'object' &&
+                ((json as Record<string, unknown>).shipId ||
+                  (json as Record<string, unknown>).SHIP_ID ||
+                  (json as Record<string, unknown>).mmsi ||
+                  (json as Record<string, unknown>).MMSI ||
+                  (json as Record<string, unknown>).imo ||
+                  (json as Record<string, unknown>).IMO)
+              ) {
+                captured = json;
+                if (resolveCaptured) resolveCaptured(json);
+              }
+            } catch {
+              /* not JSON or not parseable */
+            }
+          });
+        } catch {
+          /* ignore */
+        }
+      };
+      page.on('response', onResponse);
       try {
         await page.goto(url, {
           timeout: timeoutMs,
           waitUntil: 'domcontentloaded',
         });
-        // Give MT's hydration JS a moment to populate window globals.
-        await page.waitForTimeout(1500);
+        // Wait for the XHR (capped at 3 s — MT's hydration is normally
+        // sub-second, longer means it's not coming).
+        await Promise.race([
+          capturedP,
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
+        if (captured !== null) {
+          return captured;
+        }
+        // Fallback: DOM extraction (kept for older page shapes).
+        await page.waitForTimeout(500);
         // The evaluate callback runs inside the page (browser context),
         // not Node, so DOM globals exist at runtime. We cast through
         // `any` to keep the Node TS compiler from complaining about
@@ -490,6 +552,8 @@ class MarinetrafficBrowser {
           'marinetraffic vessel detail: navigation threw',
         );
         return null;
+      } finally {
+        page.off('response', onResponse);
       }
     });
   }
