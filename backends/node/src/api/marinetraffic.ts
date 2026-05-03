@@ -38,15 +38,68 @@ function buildUpstreamUrl(z: string, x: string, y: string): string {
   return `https://www.marinetraffic.com/getData/get_data_json_4/z:${z}/X:${x}/Y:${y}/station:0`;
 }
 
+// Default tile set — z:2 returns vessels for ~1/16th of the globe per tile.
+// The two tiles below cover everything south of the equator from Africa east
+// to the Pacific, which catches Australian/NZ waters plus Indian Ocean traffic.
+// Fewer tiles means fewer browser navigations per refresh.
+const DEFAULT_TILES = [
+  { z: '2', x: '0', y: '1' },  // NW (the tile the user verified — Pacific N)
+];
+
+type Tile = { z: string; x: string; y: string };
+
+function parseTilesQuery(raw: string | undefined): Tile[] | null {
+  if (!raw) return null;
+  const out: Tile[] = [];
+  for (const part of raw.split(',')) {
+    const m = part.trim().match(/^(\d+):(\d+):(\d+)$/);
+    if (!m) continue;
+    out.push({ z: m[1] ?? '0', x: m[2] ?? '0', y: m[3] ?? '0' });
+  }
+  return out.length ? out : null;
+}
+
+// Merge several upstream payloads into one. MarineTraffic returns
+// `{ type: 1, data: { rows: [...], areaShips: N } }` per tile. We merge
+// `data.rows`, dedupe by SHIP_ID, and sum `areaShips`.
+function mergeUpstream(payloads: unknown[]): unknown {
+  const seen = new Set<string>();
+  const merged: Record<string, unknown>[] = [];
+  let total = 0;
+  for (const p of payloads) {
+    if (!p || typeof p !== 'object') continue;
+    const data = (p as { data?: { rows?: unknown[]; areaShips?: number } }).data;
+    const rows = Array.isArray(data?.rows) ? data!.rows : [];
+    if (typeof data?.areaShips === 'number') total += data.areaShips;
+    for (const row of rows as Record<string, unknown>[]) {
+      const id = String(row['SHIP_ID'] ?? row['SHIPID'] ?? row['MMSI'] ?? '');
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      merged.push(row);
+    }
+  }
+  return { type: 1, data: { rows: merged, areaShips: total || merged.length } };
+}
+
 marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
-  // Default tile is z:10/X:472/Y:306 — the same tile the live MarineTraffic
-  // SPA fetches when the map is centred on Sydney/Newcastle (centerx:151.6
-  // centery:-33.2 zoom:10). Using their internal tile scheme so the WAF
-  // cookies obtained on the matching map page apply to the data fetch.
-  const z = (c.req.query('z') ?? '10').replace(/\D/g, '') || '10';
-  const x = (c.req.query('x') ?? '472').replace(/\D/g, '') || '472';
-  const y = (c.req.query('y') ?? '306').replace(/\D/g, '') || '306';
-  const cacheKey = `${z}/${x}/${y}`;
+  // Three modes (priority order):
+  //   1. ?tiles=z:x:y,z:x:y,…  — explicit comma-separated list, merged.
+  //   2. ?z=&x=&y=             — single tile (legacy single-tile mode).
+  //   3. no params              — DEFAULT_TILES (Pacific + Australian seas).
+  let tiles: Tile[];
+  const tilesQuery = parseTilesQuery(c.req.query('tiles'));
+  if (tilesQuery) {
+    tiles = tilesQuery;
+  } else if (c.req.query('z') || c.req.query('x') || c.req.query('y')) {
+    tiles = [{
+      z: (c.req.query('z') ?? '2').replace(/\D/g, '') || '2',
+      x: (c.req.query('x') ?? '0').replace(/\D/g, '') || '0',
+      y: (c.req.query('y') ?? '1').replace(/\D/g, '') || '1',
+    }];
+  } else {
+    tiles = DEFAULT_TILES;
+  }
+  const cacheKey = tiles.map((t) => `${t.z}/${t.x}/${t.y}`).join('|');
 
   const now = Date.now();
   const hit = cache.get(cacheKey);
@@ -56,8 +109,6 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
 
   if (!marinetrafficBrowser.isReady()) {
     log.warn('marinetraffic: browser not ready');
-    // Even when the worker is down, return the last cached payload (if any)
-    // so the layer keeps showing vessels rather than going empty.
     if (hit) return c.json(hit.data);
     return c.json(
       {
@@ -70,15 +121,23 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
     );
   }
 
-  const url = buildUpstreamUrl(z, x, y);
-  const data = await marinetrafficBrowser.fetchJson(url);
-  if (data == null) {
-    // Stale-while-failing: prefer keeping the last-known vessel set on
-    // screen rather than wiping it on a transient upstream error. The cache
-    // entry is still in the Map (just past its TTL) — surface it again with
-    // a fresh expiry-pushback so we don't hammer upstream during an outage.
+  // Fetch tiles serially — the browser worker serialises page access anyway,
+  // and parallel calls would just queue. Skip null results so a single bad
+  // tile doesn't sink the whole batch.
+  const payloads: unknown[] = [];
+  let anySucceeded = false;
+  for (const t of tiles) {
+    const url = buildUpstreamUrl(t.z, t.x, t.y);
+    const data = await marinetrafficBrowser.fetchJson(url);
+    if (data != null) {
+      payloads.push(data);
+      anySucceeded = true;
+    }
+  }
+
+  if (!anySucceeded) {
     if (hit) {
-      hit.expires = now + 30_000; // try again in 30s
+      hit.expires = now + 30_000;
       return c.json(hit.data);
     }
     return c.json(
@@ -86,6 +145,8 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
       502,
     );
   }
-  cache.set(cacheKey, { data, expires: now + CACHE_TTL_MS, staleAfter: now + CACHE_TTL_MS });
-  return c.json(data);
+
+  const merged = tiles.length === 1 ? payloads[0] : mergeUpstream(payloads);
+  cache.set(cacheKey, { data: merged, expires: now + CACHE_TTL_MS, staleAfter: now + CACHE_TTL_MS });
+  return c.json(merged);
 });
