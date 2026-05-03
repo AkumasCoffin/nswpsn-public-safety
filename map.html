@@ -9662,7 +9662,7 @@ function initPagerHoursFromStorage() {
     function aisListDetailHtml(v) {
       const id = _aisVesselId(v);
       const cached = _aisDetailCache.get(id);
-      const imgUrl = id ? `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800` : '';
+      const imgUrl = id ? `${PROXY_BASE}/api/marinetraffic/vessel-image/${encodeURIComponent(id)}` : '';
       const imgTag = imgUrl
         ? `<img src="${imgUrl}" alt="" onerror="this.style.display='none';">`
         : '';

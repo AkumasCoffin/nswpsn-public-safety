@@ -366,6 +366,196 @@ class MarinetrafficBrowser {
   }
 
   /**
+   * Navigate the worker page to a MarineTraffic vessel detail URL and
+   * extract the embedded vessel data. MT serves /en/vessels/{id}/general
+   * as an HTML SPA shell, then hydrates a window-level state object
+   * from a JSON blob in the page. This method tries a sequence of
+   * known extraction patterns and returns the first match, or null.
+   */
+  async fetchVesselDetail(shipId: string, timeoutMs = 25000): Promise<unknown | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const page = this.page as {
+        goto: (
+          url: string,
+          opts: { timeout: number; waitUntil?: string },
+        ) => Promise<unknown>;
+        waitForTimeout: (ms: number) => Promise<void>;
+        evaluate: <T>(fn: () => T) => Promise<T>;
+      };
+      const url = `https://www.marinetraffic.com/en/vessels/${encodeURIComponent(shipId)}/general`;
+      try {
+        await page.goto(url, {
+          timeout: timeoutMs,
+          waitUntil: 'domcontentloaded',
+        });
+        // Give MT's hydration JS a moment to populate window globals.
+        await page.waitForTimeout(1500);
+        // The evaluate callback runs inside the page (browser context),
+        // not Node, so DOM globals exist at runtime. We cast through
+        // `any` to keep the Node TS compiler from complaining about
+        // missing `window` / `document` types.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const evalFn = (() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const g: any = globalThis;
+          const w = g;
+          const doc = g.document;
+          if (!doc) return null;
+          // 1. Direct window globals known to be set by MT's pages.
+          for (const key of [
+            'assetData',
+            'vesselData',
+            'shipData',
+            'asset_detail',
+          ]) {
+            const v = w[key];
+            if (v && typeof v === 'object') return v;
+          }
+          // 2. Nested in MT's main app namespace.
+          const mt = w.MT;
+          if (mt && typeof mt === 'object') {
+            for (const key of ['vessel', 'asset', 'ship', 'data']) {
+              const v = mt[key];
+              if (v && typeof v === 'object') return v;
+            }
+          }
+          // 3. JSON-LD blocks.
+          const lds = doc.querySelectorAll(
+            'script[type="application/ld+json"]',
+          );
+          for (let i = 0; i < lds.length; i++) {
+            const s = lds[i];
+            try {
+              const j = JSON.parse(s.textContent || '');
+              const t = j && j['@type'];
+              if (t === 'Ship' || t === 'Vehicle' || t === 'Boat') return j;
+            } catch {
+              /* ignore */
+            }
+          }
+          // 4. <script id="..."> with a JSON body.
+          for (const id of [
+            'vessel-data',
+            'js-vessel-info-data',
+            'asset-data',
+            '__NEXT_DATA__',
+          ]) {
+            const el = doc.getElementById(id);
+            if (el && el.textContent) {
+              try {
+                return JSON.parse(el.textContent);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          // 5. Inline <script> regex fallback for old-style pages.
+          const scripts = doc.querySelectorAll('script:not([src])');
+          for (let i = 0; i < scripts.length; i++) {
+            const s = scripts[i];
+            const t = s.textContent || '';
+            const patterns = [
+              /window\.assetData\s*=\s*(\{[\s\S]*?\});/,
+              /var\s+assetData\s*=\s*(\{[\s\S]*?\});/,
+              /window\.vesselData\s*=\s*(\{[\s\S]*?\});/,
+              /var\s+assetDetail\s*=\s*(\{[\s\S]*?\});/,
+            ];
+            for (const re of patterns) {
+              const m = t.match(re);
+              if (m) {
+                try {
+                  return JSON.parse(m[1]);
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+          }
+          return null;
+        }) as () => unknown;
+        const data = await page.evaluate<unknown>(evalFn);
+        if (data == null) {
+          log.warn({ url }, 'marinetraffic vessel detail: no JSON found in page');
+        }
+        return data;
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message, url },
+          'marinetraffic vessel detail: navigation threw',
+        );
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Fetch arbitrary binary content (images) via the browser context's
+   * HTTP client. Returns null on any failure. Used for proxying
+   * vessel-image WebPs through our origin so they don't get blocked
+   * by Cross-Origin-Resource-Policy / Opaque Response Blocking on
+   * the front-end.
+   */
+  async fetchBinary(
+    url: string,
+    timeoutMs = 25000,
+  ): Promise<{ bytes: Uint8Array<ArrayBuffer>; contentType: string; status: number } | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const ctx = this.context as {
+        request: {
+          get: (
+            url: string,
+            opts: { headers?: Record<string, string>; timeout?: number },
+          ) => Promise<{
+            ok: () => boolean;
+            status: () => number;
+            headers: () => Record<string, string>;
+            body: () => Promise<Buffer>;
+            text: () => Promise<string>;
+          }>;
+        };
+      };
+      try {
+        const res = await ctx.request.get(url, {
+          timeout: timeoutMs,
+          headers: {
+            Accept: 'image/webp,image/avif,image/png,image/*,*/*;q=0.8',
+            Referer: 'https://www.marinetraffic.com/',
+          },
+        });
+        const status = res.status();
+        const headers = res.headers();
+        const contentType = headers['content-type'] || '';
+        const empty = new Uint8Array(new ArrayBuffer(0));
+        if (!res.ok()) {
+          return { bytes: empty, contentType, status };
+        }
+        // Refuse to forward non-image bodies — MT returns an HTML 404
+        // page for missing vessel images, and we want the caller to
+        // see a real 404 rather than that HTML.
+        if (!contentType.startsWith('image/')) {
+          return { bytes: empty, contentType, status: 404 };
+        }
+        const buf = await res.body();
+        // Copy into a freshly-allocated ArrayBuffer-backed Uint8Array
+        // so the type is `Uint8Array<ArrayBuffer>` (Hono needs that
+        // exact shape on c.body, and Buffer's underlying may be a
+        // SharedArrayBuffer in some Node configs).
+        const fresh = new Uint8Array(new ArrayBuffer(buf.byteLength));
+        fresh.set(buf);
+        return { bytes: fresh, contentType, status };
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message, url },
+          'marinetraffic binary fetch threw',
+        );
+        return null;
+      }
+    });
+  }
+
+  /**
    * Fetch a MarineTraffic JSON endpoint via the browser context's HTTP
    * client (not via page.goto). The context shares cookies + the
    * cf_clearance the page worker has solved, so MT lets the request

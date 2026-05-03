@@ -114,6 +114,17 @@ const vesselDetailCache = new Map<
   string,
   { data: unknown; expires: number }
 >();
+// Per-vessel image cache for /api/marinetraffic/vessel-image/:id.
+// Vessel collection photos change rarely; hold image bytes for 6 h.
+const VESSEL_IMAGE_TTL_MS = 6 * 60 * 60_000;
+const vesselImageCache = new Map<
+  string,
+  { bytes: Uint8Array<ArrayBuffer>; contentType: string; expires: number }
+>();
+// Negative cache for missing images so we don't hammer MT for vessels
+// that have no collection photo.
+const VESSEL_IMAGE_NEGATIVE_TTL_MS = 30 * 60_000;
+const vesselImageMissCache = new Map<string, number>();
 
 // Merge several upstream payloads. MarineTraffic returns
 // `{ type: 1, data: { rows: [...], areaShips: N } }` per tile. We merge
@@ -240,9 +251,8 @@ marinetrafficRouter.get('/api/marinetraffic/vessels', async (c) => {
 
 // GET /api/marinetraffic/vessel/:id
 //   Returns extended vessel info from MT (name, IMO, MMSI, dimensions,
-//   country, type, etc). Uses the browser worker's APIRequestContext
-//   (shared cookies + cf_clearance) with XHR-style headers so MT
-//   serves JSON instead of the HTML detail page.
+//   country, type, etc.) by navigating MT's HTML detail page in the
+//   shared headless browser and extracting the embedded vessel JSON.
 //   Cached per ship-id for 30 minutes.
 marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
   const id = c.req.param('id');
@@ -258,12 +268,68 @@ marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
     if (cached) return c.json(cached.data);
     return c.json({ error: 'browser worker not ready' }, 503);
   }
-  const url = `https://www.marinetraffic.com/en/vessels/${encodeURIComponent(id)}/general`;
-  const data = await marinetrafficBrowser.fetchJsonViaContext(url);
+  const data = await marinetrafficBrowser.fetchVesselDetail(id);
   if (data == null) {
     if (cached) return c.json(cached.data);
-    return c.json({ error: 'vessel detail fetch failed' }, 502);
+    return c.json({ error: 'vessel detail not found' }, 502);
   }
   vesselDetailCache.set(id, { data, expires: now + VESSEL_DETAIL_TTL_MS });
   return c.json(data);
+});
+
+// GET /api/marinetraffic/vessel-image/:id
+//   Proxies the MarineTraffic collection photo for a vessel. Bypasses
+//   the cross-origin resource policy that blocks the upstream WebP
+//   when loaded directly via <img src="https://images.marinetraffic.com/...">.
+//   Bytes are cached in memory for 6 h; misses (no photo for the
+//   vessel) are negative-cached for 30 min.
+marinetrafficRouter.get('/api/marinetraffic/vessel-image/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!/^\d+$/.test(id)) {
+    return c.text('invalid id', 400);
+  }
+  const now = Date.now();
+  const cached = vesselImageCache.get(id);
+  if (cached && cached.expires > now) {
+    return c.body(cached.bytes, 200, {
+      'Content-Type': cached.contentType,
+      'Cache-Control': 'public, max-age=21600',
+      'Access-Control-Allow-Origin': '*',
+    });
+  }
+  const missAt = vesselImageMissCache.get(id);
+  if (missAt && now - missAt < VESSEL_IMAGE_NEGATIVE_TTL_MS) {
+    return c.text('no image', 404);
+  }
+  if (!marinetrafficBrowser.isReady()) {
+    if (cached) {
+      return c.body(cached.bytes, 200, {
+        'Content-Type': cached.contentType,
+        'Access-Control-Allow-Origin': '*',
+      });
+    }
+    return c.text('browser worker not ready', 503);
+  }
+  const url = `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800`;
+  const result = await marinetrafficBrowser.fetchBinary(url);
+  if (!result || result.status >= 400 || result.bytes.length === 0) {
+    vesselImageMissCache.set(id, now);
+    if (cached) {
+      return c.body(cached.bytes, 200, {
+        'Content-Type': cached.contentType,
+        'Access-Control-Allow-Origin': '*',
+      });
+    }
+    return c.text('no image', 404);
+  }
+  vesselImageCache.set(id, {
+    bytes: result.bytes,
+    contentType: result.contentType,
+    expires: now + VESSEL_IMAGE_TTL_MS,
+  });
+  return c.body(result.bytes, 200, {
+    'Content-Type': result.contentType,
+    'Cache-Control': 'public, max-age=21600',
+    'Access-Control-Allow-Origin': '*',
+  });
 });
