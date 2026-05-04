@@ -421,6 +421,15 @@ A "quiet hour" means EVERY single transmission in the batch was noise after
 line-level filtering. If even ONE line contains a unit + action, it's NOT a quiet
 hour. Mark `quiet_hour: true` only when `filtered_count == transcript_count`.
 
+**Hard rule:** if `quiet_hour` is `false` you MUST emit at least one entry in
+`incidents[]`. Returning a non-empty `overview` with `incidents: []` and
+`quiet_hour: false` is INVALID — the front-end renders only the bare overview
+and the user gets no per-incident detail. If the hour really had operational
+traffic but you can't pin any of it to a specific job (hard to imagine when
+`filtered_count < transcript_count`), bucket the activity into one
+`"miscellaneous-radio-traffic"` incident with whatever transcripts justify
+each line, rather than emitting an empty list.
+
 === CALL_ID UNIQUENESS ACROSS INCIDENTS ===
 
 Each `call_id` represents ONE audio recording. It belongs to EXACTLY ONE incident, and appears in EXACTLY ONE `transcripts[]` entry in the entire response.
