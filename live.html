@@ -3020,6 +3020,11 @@
         html += '</div>';
       } else if (structured.quiet_hour) {
         html += '<div style="color:#64748b;font-style:italic;font-size:0.85rem;">Quiet hour — no operational transmissions after filtering noise.</div>';
+      } else {
+        // Non-quiet hour with no incidents emitted — the model produced
+        // an overview but skipped the per-incident block. Surface that
+        // clearly instead of leaving a bare paragraph.
+        html += '<div style="color:#94a3b8;font-style:italic;font-size:0.78rem;border-top:1px dashed rgba(148,163,184,0.18);margin-top:0.4rem;padding-top:0.4rem;">No per-incident detail available for this hour — only the overview was generated.</div>';
       }
       html += '</div>';
 

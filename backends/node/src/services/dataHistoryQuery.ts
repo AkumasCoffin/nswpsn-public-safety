@@ -385,7 +385,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
       ORDER BY effective_ts ${p.order}
       LIMIT ${cteLimit}
     )
-    SELECT a.id, a.source, a.source_id,
+    SELECT a.id, k.source, k.source_id,
            extract(epoch FROM a.fetched_at)::bigint AS fetched_at_epoch,
            a.fetched_at,
            extract(epoch FROM k.last_seen_at)::bigint AS last_seen_at_epoch,
