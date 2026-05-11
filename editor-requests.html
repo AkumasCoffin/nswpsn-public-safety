@@ -4,7 +4,7 @@
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>User Management | Forcequit Admin</title>
+  <title>Admin | Forcequit</title>
   <meta name="theme-color" content="#0f172a">
   
   <meta name="description" content="Admin panel for managing NSW PSN editor requests and user permissions.">
@@ -12,14 +12,14 @@
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nswpsn.forcequit.xyz/editor-requests.html">
-  <meta property="og:title" content="User Management – Forcequit Admin">
+  <meta property="og:title" content="Admin – Forcequit">
   <meta property="og:description" content="Admin panel for managing NSW PSN editor requests and user permissions.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
   <meta property="og:site_name" content="Forcequit NSW PSN">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/editor-requests.html">
-  <meta name="twitter:title" content="User Management – Forcequit Admin">
+  <meta name="twitter:title" content="Admin – Forcequit">
   <meta name="twitter:description" content="Admin panel for managing NSW PSN editor requests and user permissions.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
 
@@ -173,6 +173,220 @@
     .stat-card.pending .stat-value { color: var(--warning); }
     .stat-card.approved .stat-value { color: var(--success); }
     .stat-card.rejected .stat-value { color: var(--danger); }
+
+    /* === Dev tab — backend status panel === */
+    /* Hero strip showing overall backend state. Bigger badge + readable meta. */
+    .dev-overall {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+      background:
+        radial-gradient(120% 240% at 0% 0%, rgba(34,197,94,0.08) 0%, transparent 60%),
+        var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 2rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .dev-overall.degraded {
+      background:
+        radial-gradient(120% 240% at 0% 0%, rgba(234,179,8,0.10) 0%, transparent 60%),
+        var(--bg-card);
+    }
+    .dev-overall.down {
+      background:
+        radial-gradient(120% 240% at 0% 0%, rgba(239,68,68,0.12) 0%, transparent 60%),
+        var(--bg-card);
+    }
+    .dev-overall-badge {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.55rem 1.1rem;
+      border-radius: 10px;
+      background: rgba(34, 197, 94, 0.18);
+      color: var(--success);
+      border: 1px solid rgba(34, 197, 94, 0.4);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    .dev-overall-badge::before {
+      content: '';
+      width: 10px; height: 10px; border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+    }
+    .dev-overall-badge.degraded {
+      background: rgba(234, 179, 8, 0.18);
+      color: var(--warning);
+      border-color: rgba(234, 179, 8, 0.4);
+    }
+    .dev-overall-badge.down {
+      background: rgba(239, 68, 68, 0.18);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+    .dev-overall-meta {
+      color: var(--text-soft);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    .dev-overall-meta strong { color: var(--text-primary); font-weight: 600; }
+
+    /* Section dividers — small uppercase label + a hairline. */
+    .dev-section-h {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: var(--text-soft);
+      font-size: 0.78rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin: 2rem 0 1rem;
+      font-weight: 600;
+    }
+    .dev-section-h::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, var(--border-subtle), transparent);
+    }
+
+    /* Card grid — wider cards, more breathing room. */
+    .dev-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+
+    /* Card itself — icon + name + dot up top, big primary metric in the
+       middle, secondary key/value row at the bottom. */
+    .dev-card {
+      position: relative;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), transparent 50%),
+        var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 1.1rem 1.15rem 0.9rem;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .dev-card:hover {
+      transform: translateY(-1px);
+      border-color: rgba(34, 197, 94, 0.35);
+      box-shadow: 0 4px 18px rgba(0,0,0,0.25);
+    }
+    .dev-card.degraded:hover { border-color: rgba(234, 179, 8, 0.4); }
+    .dev-card.down:hover     { border-color: rgba(239, 68, 68, 0.4); }
+    .dev-card.unknown:hover  { border-color: rgba(148, 163, 184, 0.35); }
+
+    /* Status dot in top-right; the rest of the card uses neutral border. */
+    .dev-card-dot {
+      position: absolute;
+      top: 0.95rem;
+      right: 1.05rem;
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(34, 197, 94, 0.55);
+    }
+    .dev-card.degraded .dev-card-dot { background: var(--warning); box-shadow: 0 0 8px rgba(234, 179, 8, 0.55); }
+    .dev-card.down     .dev-card-dot { background: var(--danger);  box-shadow: 0 0 8px rgba(239, 68, 68, 0.55); }
+    .dev-card.unknown  .dev-card-dot { background: var(--text-soft); box-shadow: none; opacity: 0.5; }
+
+    /* Icon + name row */
+    .dev-card-head {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      margin-bottom: 0.85rem;
+      padding-right: 1.5rem; /* leave room for the dot */
+    }
+    .dev-card-icon {
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+      background: rgba(34, 197, 94, 0.12);
+      color: var(--success);
+      flex-shrink: 0;
+    }
+    .dev-card.degraded .dev-card-icon { background: rgba(234, 179, 8, 0.12); color: var(--warning); }
+    .dev-card.down     .dev-card-icon { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
+    .dev-card.unknown  .dev-card-icon { background: rgba(148, 163, 184, 0.10); color: var(--text-soft); }
+    .dev-card-icon i { font-size: 0.95rem; }
+    .dev-card-name {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Primary metric — the one number that matters most for this card. */
+    .dev-card-primary {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      margin-bottom: 0.65rem;
+    }
+    .dev-card-primary .value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1;
+      letter-spacing: -0.01em;
+    }
+    .dev-card.degraded .dev-card-primary .value { color: var(--warning); }
+    .dev-card.down     .dev-card-primary .value { color: var(--danger); }
+    .dev-card.unknown  .dev-card-primary .value { color: var(--text-soft); }
+    .dev-card-primary .label {
+      font-size: 0.72rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* Secondary metrics row — small key/value pills along the bottom. */
+    .dev-card-secondary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--text-soft);
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 0.65rem;
+    }
+    .dev-card-secondary span { white-space: nowrap; }
+    .dev-card-secondary strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .dev-card-error {
+      margin-top: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--danger);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-word;
+    }
+
+    /* Tab-button pill (mirrors overall status next to "Dev" label). */
+    .dev-status-pill {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      margin-left: 0.5rem;
+      vertical-align: middle;
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.55);
+    }
+    .dev-status-pill.degraded { background: var(--warning); box-shadow: 0 0 6px rgba(234, 179, 8, 0.55); }
+    .dev-status-pill.down     { background: var(--danger);  box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
     
     .filter-bar {
       display: flex;
@@ -558,7 +772,7 @@
         <i class="fas fa-arrow-left"></i> Back to Map
       </a>
       <h2>Forcequit <span>Admin</span></h2>
-      <p id="login-message" style="color: var(--text-soft); margin-bottom: 1.5rem;">Sign in to access User Management</p>
+      <p id="login-message" style="color: var(--text-soft); margin-bottom: 1.5rem;">Sign in to access Admin</p>
       
       <div id="login-form-container">
         <div style="margin-bottom: 1rem;">
@@ -577,7 +791,7 @@
       
       <div style="border-top: 1px solid var(--border-subtle); margin-top: 1.5rem; padding-top: 1.5rem; text-align: center;">
         <p style="color: var(--text-soft); font-size: 0.8rem;">
-          <i class="fas fa-lock"></i> Team Member or Owner role required
+          <i class="fas fa-lock"></i> Owner, Team Member, or Dev role required
         </p>
       </div>
     </div>
@@ -611,6 +825,10 @@
         </button>
         <button class="tab-btn" data-tab="users" onclick="switchTab('users')">
           <i class="fas fa-users"></i> Users
+        </button>
+        <button class="tab-btn" data-tab="dev" onclick="switchTab('dev')">
+          <i class="fas fa-server"></i> Dev
+          <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
         </button>
       </div>
 
@@ -675,6 +893,20 @@
             <i class="fas fa-spinner"></i>
           </div>
         </div>
+      </div>
+
+      <!-- Dev Tab -->
+      <div id="dev-tab" class="tab-content">
+        <div class="dev-overall" id="dev-overall">
+          <div class="dev-overall-badge" id="dev-overall-badge">…</div>
+          <div class="dev-overall-meta" id="dev-overall-meta">loading status</div>
+        </div>
+
+        <h3 class="dev-section-h">Backend Internals</h3>
+        <div class="dev-card-grid" id="dev-internals-grid"></div>
+
+        <h3 class="dev-section-h">Data Sources</h3>
+        <div class="dev-card-grid" id="dev-sources-grid"></div>
       </div>
     </div>
   </div>
@@ -930,18 +1162,28 @@
     let currentEditUserId = null;
     let currentTab = 'requests';
     
-    // Permission state
+    // Permission state. `tabs` is the per-tab visibility set we get from
+    // /api/check-admin — the page renders only the tabs the user's role
+    // mix is allowed to open.
     let userPermissions = {
       is_owner: false,
       is_team_member: false,
+      is_dev: false,
       is_map_editor: false,
       can_manage_users: false,
-      can_assign_privileged_roles: false
+      can_assign_privileged_roles: false,
+      tabs: { requests: false, users: false, dev: false }
     };
+
+    // Dev-tab status polling state. We refresh /api/status while the Dev
+    // tab is the active panel; pause when it's not, so we don't burn
+    // requests in the background.
+    let _devStatusTimer = null;
+    const _devStatusIntervalMs = 30_000;
     
     function switchTab(tab) {
       currentTab = tab;
-      
+
       // Update tab buttons
       document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.remove('active');
@@ -949,25 +1191,337 @@
           btn.classList.add('active');
         }
       });
-      
+
       // Update tab content
       document.querySelectorAll('.tab-content').forEach(content => {
         content.classList.remove('active');
       });
       document.getElementById(`${tab}-tab`).classList.add('active');
-      
+
       // Load data if needed
       if (tab === 'users' && allUsers.length === 0) {
         loadUsers();
       }
+
+      // Dev tab: start polling /api/status when entered, stop when left.
+      // Other tabs don't need a per-tab polling loop.
+      if (tab === 'dev') {
+        startDevStatusPolling();
+      } else {
+        stopDevStatusPolling();
+      }
     }
-    
+
     async function refreshAll() {
       if (currentTab === 'requests') {
         await refreshRequests();
-      } else {
+      } else if (currentTab === 'users') {
         await loadUsers();
+      } else if (currentTab === 'dev') {
+        await refreshDevStatus();
       }
+    }
+
+    // === Dev tab — backend status panel =================================
+    function startDevStatusPolling() {
+      // First refresh is immediate; then every _devStatusIntervalMs.
+      refreshDevStatus();
+      if (_devStatusTimer) return;
+      _devStatusTimer = setInterval(refreshDevStatus, _devStatusIntervalMs);
+    }
+
+    function stopDevStatusPolling() {
+      if (_devStatusTimer) {
+        clearInterval(_devStatusTimer);
+        _devStatusTimer = null;
+      }
+    }
+
+    async function refreshDevStatus() {
+      try {
+        // /api/status is unauthenticated by design (so external monitors
+        // like Uptime Kuma can hit it). No api_key needed.
+        const res = await fetch(`${API_BASE_URL}/api/status`);
+        if (!res.ok && res.status !== 503) {
+          // 503 still has a JSON body; only bail on network errors / 4xx.
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderDevStatus(data);
+      } catch (e) {
+        const overall = document.getElementById('dev-overall-badge');
+        const meta = document.getElementById('dev-overall-meta');
+        if (overall) {
+          overall.textContent = 'ERROR';
+          overall.className = 'dev-overall-badge down';
+        }
+        if (meta) meta.textContent = `Could not fetch /api/status: ${e.message}`;
+      }
+    }
+
+    // Render helpers — small enough to keep inline.
+    function _fmtAge(secs) {
+      if (secs == null) return '—';
+      if (secs < 60)   return `${Math.round(secs)}s`;
+      if (secs < 3600) return `${Math.round(secs / 60)}m`;
+      return `${Math.round(secs / 3600)}h`;
+    }
+    function _fmtUptime(secs) {
+      if (secs == null) return '—';
+      const d = Math.floor(secs / 86400);
+      const h = Math.floor((secs % 86400) / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      if (d > 0) return `${d}d ${h}h`;
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
+    // Render a single card. `opts` is:
+    //   { name, icon, statusCls, primary: {value, label}, secondary: [{label, value}], error? }
+    function _renderCard(opts) {
+      const cls = opts.statusCls || '';
+      const secondary = (opts.secondary || [])
+        .filter(s => s && s.value != null && s.value !== '')
+        .map(s => `<span>${s.label} <strong>${s.value}</strong></span>`)
+        .join('');
+      const errorBlock = opts.error
+        ? `<div class="dev-card-error">${opts.error}</div>`
+        : '';
+      return `
+        <div class="dev-card ${cls}">
+          <div class="dev-card-dot"></div>
+          <div class="dev-card-head">
+            <div class="dev-card-icon"><i class="fas fa-${opts.icon || 'circle'}"></i></div>
+            <div class="dev-card-name">${opts.name}</div>
+          </div>
+          <div class="dev-card-primary">
+            <span class="value">${opts.primary.value}</span>
+            <span class="label">${opts.primary.label}</span>
+          </div>
+          ${secondary ? `<div class="dev-card-secondary">${secondary}</div>` : ''}
+          ${errorBlock}
+        </div>`;
+    }
+
+    // Per-source FontAwesome icons. Keep generic — no need to chase
+    // perfect metaphors, just visually distinguish at a glance. Keys
+    // match the actual source names returned by /api/status →
+    // checks.sources (Node backend uses fully-qualified names like
+    // rfs_incidents, traffic_majorevent, endeavour_current, etc.).
+    const _sourceIcons = {
+      rfs_incidents:        'fire',
+      bom_warnings:         'cloud-bolt',
+      pager:                'pager',
+      traffic_incidents:    'triangle-exclamation',
+      traffic_roadwork:     'screwdriver-wrench',
+      traffic_flood:        'water',
+      traffic_fire:         'fire-flame-curved',
+      traffic_majorevent:   'flag',
+      traffic_cameras:      'video',
+      beachwatch:           'umbrella-beach',
+      beachsafe:            'water-ladder',
+      weather_current:      'temperature-half',
+      weather_radar:        'satellite',
+      aviation_cameras:     'plane',
+      endeavour_current:    'plug-circle-bolt',
+      endeavour_planned:    'calendar-day',
+      endeavour_maintenance:'screwdriver-wrench',
+      ausgrid:              'bolt',
+      ausgrid_stats:        'chart-line',
+      essential_current:    'plug',
+      essential_future:     'clock',
+    };
+
+    function _sourceCard(name, s) {
+      const status = (s && s.status) || 'unknown';
+      const okLabel = status === 'unknown' ? 'no data yet' : 'since last ok';
+      return _renderCard({
+        name: (s && s.label) || name,
+        icon: _sourceIcons[name] || 'circle-nodes',
+        statusCls: status === 'ok' ? '' : status,
+        primary: {
+          value: _fmtAge(s ? s.last_success_age_secs : null),
+          label: okLabel,
+        },
+        secondary: [
+          { label: 'fails',     value: s ? s.consec_fails : null },
+          { label: 'thresh',    value: s ? `${_fmtAge(s.soft_threshold_secs)} / ${_fmtAge(s.hard_threshold_secs)}` : null },
+          (s && s.last_error_age_secs != null)
+            ? { label: 'last err', value: _fmtAge(s.last_error_age_secs) }
+            : null,
+        ].filter(Boolean),
+      });
+    }
+
+    function renderDevStatus(data) {
+      // Overall badge + meta line.
+      const overall = data.status || 'unknown';
+      const badge = document.getElementById('dev-overall-badge');
+      badge.textContent = overall.toUpperCase();
+      badge.className = `dev-overall-badge ${overall === 'ok' ? '' : overall}`;
+      const meta = document.getElementById('dev-overall-meta');
+      const sum = data.summary || {};
+      meta.innerHTML =
+        `uptime <strong>${_fmtUptime(data.uptime_secs)}</strong> · ` +
+        `mode <strong>${data.mode || '?'}</strong> · ` +
+        `sources <strong>${sum.sources_ok || 0}/${sum.sources_total || 0}</strong> ok` +
+        (sum.sources_down ? `, <strong style="color:var(--danger)">${sum.sources_down} down</strong>` : '') +
+        (sum.sources_degraded ? `, <strong style="color:var(--warning)">${sum.sources_degraded} degraded</strong>` : '') +
+        (sum.sources_unknown ? `, ${sum.sources_unknown} unknown` : '');
+
+      // Tab-button pill mirrors the overall colour so a quick glance at
+      // the tab nav tells you backend state without opening the panel.
+      const pill = document.getElementById('dev-status-pill');
+      if (pill) {
+        pill.style.display = '';
+        pill.className = `dev-status-pill ${overall === 'ok' ? '' : overall}`;
+      }
+
+      // Backend internals grid. Each card picks the *one* metric that
+      // tells you the most about that subsystem's health and shows it
+      // big; secondary stats sit underneath as small key/value pills.
+      const checks = data.checks || {};
+      const intGrid = document.getElementById('dev-internals-grid');
+      const db = checks.database || {};
+      const aw = checks.archive_writer || {};
+      const ab = checks.archive_buffer || {};
+      const ig = checks.ingest || {};
+      const cl = checks.cleanup || {};
+      const wi = checks.waze_ingest || {};
+      const ph = checks.police_heatmap || {};
+      const fc = checks.filter_cache || {};
+      const rc = checks.ram_cache || {};
+
+      const _cls = (c) => (c && c.ok === false) ? 'down' : '';
+
+      intGrid.innerHTML = [
+        _renderCard({
+          name: 'Database', icon: 'database', statusCls: _cls(db),
+          primary: { value: db.latency_ms != null ? `${db.latency_ms}ms` : '—', label: 'select 1 latency' },
+          secondary: [
+            { label: 'pool',  value: `${db.pool_in_use ?? '?'}/${db.pool_max ?? '?'}` },
+            { label: 'idle',  value: db.pool_idle ?? null },
+          ],
+          error: db.error,
+        }),
+        _renderCard({
+          name: 'Archive Writer', icon: 'pen-to-square', statusCls: _cls(aw),
+          primary: { value: _fmtAge(aw.last_flush_age_secs), label: 'since last flush' },
+          secondary: [
+            { label: 'interval', value: _fmtAge(aw.flush_interval_secs) },
+            { label: 'thresh',   value: _fmtAge(aw.threshold_secs) },
+          ],
+        }),
+        _renderCard({
+          name: 'Archive Buffer', icon: 'layer-group', statusCls: _cls(ab),
+          primary: { value: ab.records ?? '—', label: 'records queued' },
+          secondary: [
+            { label: 'warn', value: ab.warn_threshold != null ? ab.warn_threshold.toLocaleString() : null },
+            { label: 'cap',  value: ab.hard_cap != null ? ab.hard_cap.toLocaleString() : null },
+          ],
+        }),
+        _renderCard({
+          name: 'Ingest', icon: 'inbox', statusCls: '',
+          primary: {
+            value: ig.last_flush_records != null ? ig.last_flush_records.toLocaleString() : '—',
+            label: 'last flush · records',
+          },
+          secondary: [
+            { label: 'sources', value: ig.last_flush_sources ?? null },
+            { label: 'took',    value: ig.last_flush_ms != null ? `${ig.last_flush_ms}ms` : null },
+            { label: 'ago',     value: _fmtAge(ig.last_flush_age_secs) },
+            { label: 'total',   value: ig.total_records_flushed != null ? ig.total_records_flushed.toLocaleString() : null },
+          ],
+        }),
+        _renderCard({
+          name: 'Cleanup', icon: 'broom', statusCls: '',
+          primary: {
+            value: _fmtAge(cl.last_run_age_secs),
+            label: 'since last run',
+          },
+          secondary: [
+            (cl.last_history_deleted   ? { label: 'deleted',  value: cl.last_history_deleted.toLocaleString() } : null),
+            (cl.last_pager_ended       ? { label: 'pager✗',   value: cl.last_pager_ended } : null),
+            (cl.last_waze_ended        ? { label: 'waze✗',    value: cl.last_waze_ended  } : null),
+            { label: 'total del', value: cl.total_history_deleted != null ? cl.total_history_deleted.toLocaleString() : null },
+            (cl.last_vacuum_age_secs != null
+              ? { label: 'vacuum',  value: `${_fmtAge(cl.last_vacuum_age_secs)} (${cl.last_vacuum_ms}ms)` }
+              : null),
+            { label: 'retain',    value: cl.retention_days != null ? `${cl.retention_days}d` : null },
+          ].filter(Boolean),
+        }),
+        _renderCard({
+          name: 'Waze Ingest', icon: 'satellite-dish', statusCls: _cls(wi),
+          // Show ingests/min as the headline — the userscript hits
+          // /api/waze/ingest every ~5s so age is always near zero,
+          // making the rate the meaningful health signal.
+          primary: {
+            value: wi.ingests_per_min != null ? `${wi.ingests_per_min}/min` : '—',
+            label: 'ingest rate',
+          },
+          secondary: [
+            { label: 'regions', value: wi.regions_cached ?? null },
+            { label: 'last',    value: _fmtAge(wi.last_ingest_age_secs) },
+            { label: 'total',   value: wi.total_ingests != null ? wi.total_ingests.toLocaleString() : null },
+            { label: 'block',   value: wi.block_rate_pct != null ? `${wi.block_rate_pct}%` : null },
+            wi.gate_active ? { label: 'gated', value: 'YES' } : null,
+          ].filter(Boolean),
+        }),
+        _renderCard({
+          name: 'Police Heatmap', icon: 'shield-halved', statusCls: _cls(ph),
+          primary: { value: _fmtAge(ph.last_refresh_age_secs), label: 'since last refresh' },
+          secondary: [
+            { label: 'bins',   value: ph.bins != null ? ph.bins.toLocaleString() : null },
+            { label: 'thresh', value: _fmtAge(ph.threshold_secs) },
+          ],
+        }),
+        _renderCard({
+          name: 'Filter Cache', icon: 'filter', statusCls: _cls(fc),
+          primary: { value: _fmtAge(fc.last_refresh_age_secs), label: 'since last refresh' },
+          secondary: [
+            { label: 'interval', value: _fmtAge(fc.refresh_interval_secs) },
+            { label: 'thresh',   value: _fmtAge(fc.threshold_secs) },
+          ],
+        }),
+        _renderCard({
+          name: 'RAM Cache', icon: 'memory', statusCls: '',
+          primary: { value: rc.hit_rate_pct != null ? `${rc.hit_rate_pct}%` : '—', label: 'hit rate' },
+          secondary: [
+            { label: 'hits',   value: rc.hits != null ? rc.hits.toLocaleString() : null },
+            { label: 'misses', value: rc.misses != null ? rc.misses.toLocaleString() : null },
+          ],
+        }),
+      ].join('');
+
+      // Sources grid — render in a stable order so the layout doesn't
+      // jiggle on every refresh. Sources live at checks.sources in the
+      // Node /api/status response (was top-level on python, hence the
+      // earlier `data.sources` lookup which always returned {}).
+      const sources = (data.checks && data.checks.sources) || {};
+      // Sources we never want on the dev panel even though the backend
+      // registers them. weather_radar is RainViewer tile metadata, not
+      // an incident feed — its freshness is uninteresting for ops.
+      const HIDDEN_SOURCES = new Set(['weather_radar']);
+      const order = [
+        'rfs_incidents', 'bom_warnings', 'pager',
+        'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
+        'traffic_fire', 'traffic_majorevent', 'traffic_cameras',
+        'beachwatch', 'beachsafe',
+        'weather_current',
+        'aviation_cameras',
+        'endeavour_current', 'endeavour_planned', 'endeavour_maintenance',
+        'ausgrid', 'ausgrid_stats',
+        'essential_current', 'essential_future',
+      ];
+      // Stable known sources first, then any unknown ones the backend
+      // gained without a UI update — appended in alphabetical order so
+      // the grid still renders new sources without code changes.
+      const known = new Set(order);
+      const extras = Object.keys(sources).filter(n => !known.has(n) && !HIDDEN_SOURCES.has(n)).sort();
+      const srcGrid = document.getElementById('dev-sources-grid');
+      srcGrid.innerHTML = [...order, ...extras]
+        .filter(name => sources[name] && !HIDDEN_SOURCES.has(name))
+        .map(name => _sourceCard(name, sources[name]))
+        .join('');
     }
     
     async function doAdminLogin() {
@@ -987,7 +1541,7 @@
       
       if (error) {
         errorDiv.textContent = error.message;
-        document.getElementById('login-message').textContent = 'Sign in to access User Management';
+        document.getElementById('login-message').textContent = 'Sign in to access Admin';
         return;
       }
       
@@ -1000,7 +1554,7 @@
       const session = data.session;
       
       if (!session) {
-        document.getElementById('login-message').textContent = 'Sign in to access User Management';
+        document.getElementById('login-message').textContent = 'Sign in to access Admin';
         document.getElementById('login-form-container').style.display = 'block';
         return;
       }
@@ -1025,7 +1579,7 @@
         });
         
         if (!response.ok) {
-          document.getElementById('login-message').textContent = 'Access denied. Team Member or Owner role required.';
+          document.getElementById('login-message').textContent = 'Access denied. Owner, Team Member, or Dev role required.';
           return;
         }
         
@@ -1036,7 +1590,7 @@
               <i class="fas fa-exclamation-triangle"></i> Access Denied
             </div>
             <div style="font-size: 0.85rem;">
-              You need the <strong>Team Member</strong> or <strong>Owner</strong> role to access this page.
+              You need the <strong>Owner</strong>, <strong>Team Member</strong>, or <strong>Dev</strong> role to access this page.
               ${result.roles && result.roles.length > 0 
                 ? `<br><br>Your current roles: ${result.roles.join(', ')}` 
                 : '<br><br>You have no assigned roles.'}
@@ -1052,16 +1606,25 @@
           return;
         }
         
-        // Store permissions
+        // Store permissions. Older backends won't return the `tabs` block
+        // or `is_dev`; fall back to legacy semantics so the page still
+        // works during a partial deploy.
         const hasMapEditor = result.roles && result.roles.includes('map_editor');
-        userPermissions = {
-          is_owner: result.is_owner,
-          is_team_member: result.is_team_member,
-          is_map_editor: hasMapEditor,
-          can_manage_users: result.can_manage_users,
-          can_assign_privileged_roles: result.can_assign_privileged_roles
+        const tabs = result.tabs || {
+          requests: !!(result.is_owner || result.is_team_member),
+          users:    !!result.can_manage_users,
+          dev:      !!result.is_owner,  // legacy: only owners had dev-equivalent access
         };
-        
+        userPermissions = {
+          is_owner: !!result.is_owner,
+          is_team_member: !!result.is_team_member,
+          is_dev: !!result.is_dev,
+          is_map_editor: hasMapEditor,
+          can_manage_users: !!result.can_manage_users,
+          can_assign_privileged_roles: !!result.can_assign_privileged_roles,
+          tabs: tabs,
+        };
+
         // Apply UI restrictions based on permissions
         applyPermissionRestrictions();
         
@@ -1079,21 +1642,43 @@
     }
     
     function applyPermissionRestrictions() {
-      // Hide Users tab if not owner
-      const usersTab = document.querySelector('[data-tab="users"]');
-      if (!userPermissions.can_manage_users) {
-        usersTab.style.display = 'none';
+      const tabs = userPermissions.tabs;
+
+      // Hide each tab button the user isn't allowed to open. The page
+      // shows only the tabs they have access to — a dev-only user lands
+      // straight on the Dev panel and never sees Requests / Users.
+      const reqBtn = document.querySelector('[data-tab="requests"]');
+      const usrBtn = document.querySelector('[data-tab="users"]');
+      const devBtn = document.querySelector('[data-tab="dev"]');
+      if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
+      if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
+      if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
+
+      // Pick a default tab the user can actually see. Without this a
+      // dev-only user would open the page on the (now-hidden) Requests
+      // tab and stare at an empty container.
+      const defaultTab = tabs.requests ? 'requests' :
+                         tabs.users    ? 'users' :
+                         tabs.dev      ? 'dev' : null;
+      if (defaultTab && defaultTab !== currentTab) {
+        switchTab(defaultTab);
       }
-      
-      // Show Editor link only if user has map_editor access
+
+      // Editor link — show whenever they could plausibly use it.
       const editorLink = document.getElementById('editor-link');
       if (userPermissions.is_map_editor || userPermissions.is_owner) {
         editorLink.style.display = 'inline-flex';
       }
-      
-      // Update header to show role
-      const roleIndicator = userPermissions.is_owner ? '👑 Owner' : '👥 Team Member';
-      document.querySelector('.header h1').innerHTML = `User <span>Management</span> <span style="font-size: 0.7rem; color: var(--text-soft); margin-left: 0.5rem;">${roleIndicator}</span>`;
+
+      // Header — use the broadest title so a dev-only user doesn't see
+      // "User Management" on a page where Users is hidden.
+      const roleBits = [];
+      if (userPermissions.is_owner)       roleBits.push('👑 Owner');
+      if (userPermissions.is_team_member) roleBits.push('👥 Team Member');
+      if (userPermissions.is_dev)         roleBits.push('🛠️ Dev');
+      const roleIndicator = roleBits.join(' · ') || 'Authenticated';
+      document.querySelector('.header h1').innerHTML =
+        `Admin <span style="font-size: 0.7rem; color: var(--text-soft); margin-left: 0.5rem; font-weight: 400;">${roleIndicator}</span>`;
     }
     
     async function loadRequests() {

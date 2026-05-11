@@ -1,0 +1,19 @@
+{
+  "title": "🛟 Marine Rescue NSW",
+  "tag": "MR NSW",
+  "badges": [
+    {"label": "Marine Rescue NSW", "variant": "agency"},
+    {"label": "Volunteer Marine Rescue", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Marine Rescue NSW is the State's primary volunteer marine search-and-rescue service. It coordinates on-water rescue, vessel safety monitoring (logged Trip Watch), missing-vessel response and emergency communications across the NSW coast and major inland waterways."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Established in 2009 by merging the Australian Volunteer Coast Guard, Royal Volunteer Coastal Patrol and Volunteer Rescue Association marine units.",
+      "Around 3,000 volunteers across 46 units from Point Danger to Eden, plus Alpine Lakes and Moama on the Murray.",
+      "Operates a fleet of more than 100 rescue vessels and a 24/7 State Communications Centre.",
+      "Tasked through Marine Area Command (NSW Police) for life-at-risk incidents."
+    ]}
+  ],
+  "sections": []
+}

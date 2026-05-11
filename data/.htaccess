@@ -1,0 +1,7 @@
+# Per-directory override: this folder ships the agency reference content
+# (CSVs + meta.json + the NSW GRN site list) which the front-end fetches
+# at runtime. The root .htaccess broadly denies *.json for security; this
+# child file re-enables JSON serving inside data/ only.
+<FilesMatch "\.json$">
+  Require all granted
+</FilesMatch>

@@ -1,0 +1,18 @@
+{
+  "title": "🏛 Blue Mountains City Council",
+  "tag": "BMCC",
+  "badges": [
+    {"label": "Blue Mountains City Council", "variant": "agency"},
+    {"label": "NSW Local Government", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Blue Mountains City Council is the local government area covering the Blue Mountains region west of Sydney. Council services include parks and reserves, waste, roads, bushfire mitigation works and emergency operations support."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Population around 80,000 spread across 27 towns and villages.",
+      "World Heritage–listed Greater Blue Mountains Area covers most of the LGA.",
+      "Operates a 24/7 control centre during major incidents and runs an extensive volunteer bushfire-mitigation crew program alongside the RFS."
+    ]}
+  ],
+  "sections": []
+}

@@ -1,0 +1,18 @@
+{
+  "title": "✚ St John Ambulance NSW",
+  "tag": "St John",
+  "badges": [
+    {"label": "St John Ambulance Australia (NSW)", "variant": "agency"},
+    {"label": "Volunteer / First Aid", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "St John Ambulance NSW is a volunteer first-aid charity. In NSW, primary emergency ambulance services are provided by NSW Ambulance — St John's role is community first-aid, event medical coverage, training and youth (Cadet) programs."},
+    {"type": "h", "text": "Notes"},
+    {"type": "ul", "items": [
+      "Different from St John Ambulance WA / NT — those subdivisions are the primary EMS in those jurisdictions.",
+      "In NSW, St John volunteers are commonly seen at sporting events, festivals and shows providing on-site first aid.",
+      "Coordination with NSW Ambulance occurs on event-specific liaison talkgroups."
+    ]}
+  ],
+  "sections": []
+}

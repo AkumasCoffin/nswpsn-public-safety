@@ -1,0 +1,18 @@
+{
+  "title": "🌳 Western Sydney Parklands",
+  "tag": "WSP",
+  "badges": [
+    {"label": "Western Sydney Parklands Trust", "variant": "agency"},
+    {"label": "NSW DPHI", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Western Sydney Parklands Trust manages a 5,280-hectare urban parkland — one of the world's largest. It runs across Liverpool, Fairfield and Blacktown, providing recreation areas, cycleways, leasehold farms, and large bushland reserves."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Established 2006 by Act of Parliament.",
+      "Over 60 km of trails, picnic areas, dog parks and adventure playgrounds.",
+      "Ranger and operations talkgroups support 7-day-a-week site management."
+    ]}
+  ],
+  "sections": []
+}

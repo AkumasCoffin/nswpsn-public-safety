@@ -1,0 +1,18 @@
+{
+  "title": "⚓ Transport for NSW – Maritime",
+  "tag": "Maritime",
+  "badges": [
+    {"label": "NSW Maritime", "variant": "agency"},
+    {"label": "Transport for NSW", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "NSW Maritime is the regulator of recreational and commercial vessel safety on NSW waterways. It is part of Transport for NSW and works closely with the Marine Area Command (NSW Police), Marine Rescue NSW and AMSA."},
+    {"type": "h", "text": "Functions"},
+    {"type": "ul", "items": [
+      "Boating-safety regulation, licensing and registration.",
+      "Pollution response and aids-to-navigation maintenance.",
+      "Boating Safety Officers patrol popular waterways during peak periods."
+    ]}
+  ],
+  "sections": []
+}

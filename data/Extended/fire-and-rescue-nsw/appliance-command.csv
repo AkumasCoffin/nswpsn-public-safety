@@ -1,0 +1,8 @@
+Prefix,Meaning,Notes
+{b:CO},Command,Zone / area command vehicles
+{b:CU},Communications Unit,Communications support for incidents
+{b:IMT},Incident Management Team,IMT command / control platforms
+{b:LP},Ladder Platform,
+{b:AP},Aerial Pumper,
+{b:CAP},CAFS Aerial Pumper,
+{b:HP},Hydraulic Platform,

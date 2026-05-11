@@ -1,0 +1,18 @@
+{
+  "title": "⛑ VRA Rescue NSW",
+  "tag": "VRA",
+  "badges": [
+    {"label": "Volunteer Rescue Association", "variant": "agency"},
+    {"label": "Volunteer Land Rescue", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "VRA Rescue NSW is a volunteer general land-rescue service accredited by the State Rescue Board. Squads provide road-crash rescue, vertical rescue, swift-water and flood rescue, and general assistance to NSW Police, NSW Ambulance and other emergency services."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Around 30 squads spread across regional NSW.",
+      "Primary or secondary RCR (Road Crash Rescue) authority in many regional areas where there is no FRNSW or career RFS rescue capability.",
+      "Tasked through NSW Police VKG and dispatched with paramedics and fire on shared incident talkgroups."
+    ]}
+  ],
+  "sections": []
+}

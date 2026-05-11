@@ -1,0 +1,9 @@
+Phrase,Meaning
+"""Code 1""",Urgent response (lights & sirens).
+"""Code 2""",Normal traffic response.
+"""On scene""",Arrived at patient location.
+"""Departing scene""",Leaving scene with/without patient.
+"""At hospital""",Arrived at ED / receiving facility.
+"""Clear of hospital""",Ready for next task.
+"""Available radio""",Back in service and monitoring.
+"""Unavailable – meal""",On meal break; not normally available unless escalated.

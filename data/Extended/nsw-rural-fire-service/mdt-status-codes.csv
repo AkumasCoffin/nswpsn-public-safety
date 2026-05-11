@@ -1,0 +1,7 @@
+Code,Status,Detail
+{b:1},Responding,En route to incident
+{b:2},On scene,Arrived at scene
+{b:3},Available,"On air, ready for tasking"
+{b:4},Not available,Cannot be assigned
+{b:5},At station,Closed at station
+{b:6},Emergency,Vehicle in duress

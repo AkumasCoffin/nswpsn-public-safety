@@ -1,0 +1,18 @@
+{
+  "title": "🚰 Hunter Water",
+  "tag": "Hunter Water",
+  "badges": [
+    {"label": "Hunter Water Corporation", "variant": "agency"},
+    {"label": "State Owned Corporation", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Hunter Water provides drinking water, wastewater and recycled-water services to around 600,000 people across the Lower Hunter — Newcastle, Lake Macquarie, Maitland, Cessnock, Port Stephens and Dungog."},
+    {"type": "h", "text": "Operations"},
+    {"type": "ul", "items": [
+      "Around 250,000 connected properties.",
+      "Major sources: Chichester Dam, Grahamstown Dam, Tomago/Anna Bay sandbeds.",
+      "24/7 incident response for main breaks and sewage overflows."
+    ]}
+  ],
+  "sections": []
+}

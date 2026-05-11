@@ -1,0 +1,275 @@
+{
+  "title": "✈ NSW Aviation – Aircraft & Callsigns",
+  "tag": "Aviation",
+  "badges": [
+    {
+      "label": "Aircraft Registry",
+      "variant": "agency"
+    },
+    {
+      "label": "Multi-agency",
+      "variant": "parent"
+    }
+  ],
+  "overview": [
+    {
+      "type": "p",
+      "text": "Aircraft registrations and callsigns for NSW Ambulance, Police, Westpac, Surf Life Saving, RFDS and military assets operating in or near NSW. Use the Agencies search in the sidebar to jump to a specific registration or callsign."
+    }
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "🛩 Air Ambulance NSW – Fixed Wing",
+      "tag": "NSWAS",
+      "wide": false,
+      "intro": "NSW Ambulance operates a fleet of fixed-wing aircraft for urgent patient transfers and long-distance retrievals.",
+      "table_class": "aircraft-table",
+      "csv": "air-ambulance-fixed-wing.csv"
+    },
+    {
+      "type": "table",
+      "title": "🚁 NSW Ambulance / Toll HEMS",
+      "tag": "NSWAS",
+      "wide": false,
+      "intro": "AW139 helicopters operated by Toll Helicopters on behalf of NSW Ambulance.",
+      "table_class": "aircraft-table",
+      "csv": "toll-hems.csv"
+    },
+    {
+      "type": "table",
+      "title": "🚁 Westpac Rescue Helicopters",
+      "tag": "Rescue",
+      "wide": false,
+      "intro": "Operated by Westpac on behalf of agencies including NSW Ambulance and Tasmania Police.",
+      "table_class": "aircraft-table",
+      "csv": "westpac-rescue.csv"
+    },
+    {
+      "type": "table",
+      "title": "🏖 Surf Life Saving NSW",
+      "tag": "SLSNSW",
+      "wide": false,
+      "intro": "Life Saver Rescue Helicopters.",
+      "table_class": "aircraft-table",
+      "csv": "surf-life-saving.csv"
+    },
+    {
+      "type": "table",
+      "title": "🚔 Police Aviation",
+      "tag": "Police",
+      "wide": false,
+      "intro": "Police aviation assets from NSW and Victoria.",
+      "table_class": "aircraft-table",
+      "csv": "police-aviation.csv"
+    },
+    {
+      "type": "table",
+      "title": "🚑 Interstate Ambulance",
+      "tag": "Interstate",
+      "wide": false,
+      "intro": "Ambulance assets from Victoria and South Australia.",
+      "table_class": "aircraft-table",
+      "csv": "interstate-ambulance.csv"
+    },
+    {
+      "type": "table",
+      "title": "⚓ Military",
+      "tag": "ADF",
+      "wide": false,
+      "intro": "Royal Australian Navy assets.",
+      "table_class": "aircraft-table",
+      "csv": "military.csv"
+    },
+    {
+      "type": "table",
+      "title": "🌙 Royal Flying Doctor Service",
+      "tag": "RFDS",
+      "wide": false,
+      "intro": "Fixed-wing aircraft used by RFDS sections across Australia.",
+      "table_class": "aircraft-table",
+      "csv": "rfds.csv"
+    },
+    {
+      "type": "heading",
+      "text": "Other known Firefighting and Rescue aircraft",
+      "subtext": "Multi-country fleet sourced from operational firefighting registers. Each country card collapses; click to expand."
+    },
+    {
+      "type": "grouped-table",
+      "title": "🇦🇺 Australia",
+      "tag": "483 aircraft",
+      "wide": true,
+      "collapsible": true,
+      "open": false,
+      "intro": "Firefighting fleet aircraft registered in Australia.",
+      "table_class": "aircraft-table",
+      "groups": [
+        {
+          "heading": "🚁 Rotary-Wing — Type 1 (Heavy)",
+          "csv": "fleet-australia-rw-type-1-heavy.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 2 (Medium)",
+          "csv": "fleet-australia-rw-type-2-medium.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 3 (Light)",
+          "csv": "fleet-australia-rw-type-3-light.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Type 4 (SEAT)",
+          "csv": "fleet-australia-fw-type-4-seat.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — AAS / Recce",
+          "csv": "fleet-australia-fw-aas-recce.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Other",
+          "csv": "fleet-australia-fw-other.csv"
+        },
+        {
+          "heading": "❓ Unspecified",
+          "csv": "fleet-australia-unspecified.csv"
+        }
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🇳🇿 New Zealand",
+      "tag": "321 aircraft",
+      "wide": true,
+      "collapsible": true,
+      "open": false,
+      "intro": "Firefighting fleet aircraft registered in New Zealand.",
+      "table_class": "aircraft-table",
+      "groups": [
+        {
+          "heading": "🚁 Rotary-Wing — Type 1 (Heavy)",
+          "csv": "fleet-new-zealand-rw-type-1-heavy.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 2 (Medium)",
+          "csv": "fleet-new-zealand-rw-type-2-medium.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 3 (Light)",
+          "csv": "fleet-new-zealand-rw-type-3-light.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Type 4 (SEAT)",
+          "csv": "fleet-new-zealand-fw-type-4-seat.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Type 5 (SEAT)",
+          "csv": "fleet-new-zealand-fw-type-5-seat.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — AAS / Recce",
+          "csv": "fleet-new-zealand-fw-aas-recce.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Other",
+          "csv": "fleet-new-zealand-fw-other.csv"
+        },
+        {
+          "heading": "❓ Unspecified",
+          "csv": "fleet-new-zealand-unspecified.csv"
+        }
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🇺🇸 United States",
+      "tag": "54 aircraft",
+      "wide": true,
+      "collapsible": true,
+      "open": false,
+      "intro": "Firefighting fleet aircraft registered in United States.",
+      "table_class": "aircraft-table",
+      "groups": [
+        {
+          "heading": "🚁 Rotary-Wing — Type 1 (Heavy)",
+          "csv": "fleet-united-states-rw-type-1-heavy.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 2 (Medium)",
+          "csv": "fleet-united-states-rw-type-2-medium.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Type 1 (MEAT)",
+          "csv": "fleet-united-states-fw-type-1-meat.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Other",
+          "csv": "fleet-united-states-fw-other.csv"
+        },
+        {
+          "heading": "❓ Unspecified",
+          "csv": "fleet-united-states-unspecified.csv"
+        }
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🇨🇦 Canada",
+      "tag": "13 aircraft",
+      "wide": true,
+      "collapsible": true,
+      "open": false,
+      "intro": "Firefighting fleet aircraft registered in Canada.",
+      "table_class": "aircraft-table",
+      "groups": [
+        {
+          "heading": "🚁 Rotary-Wing — Type 1 (Heavy)",
+          "csv": "fleet-canada-rw-type-1-heavy.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 2 (Medium)",
+          "csv": "fleet-canada-rw-type-2-medium.csv"
+        },
+        {
+          "heading": "🛩 Fixed-Wing — Type 1 (MEAT)",
+          "csv": "fleet-canada-fw-type-1-meat.csv"
+        }
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🇵🇬 Papua New Guinea",
+      "tag": "2 aircraft",
+      "wide": true,
+      "collapsible": true,
+      "open": false,
+      "intro": "Firefighting fleet aircraft registered in Papua New Guinea.",
+      "table_class": "aircraft-table",
+      "groups": [
+        {
+          "heading": "🚁 Rotary-Wing — Type 1 (Heavy)",
+          "csv": "fleet-papua-new-guinea-rw-type-1-heavy.csv"
+        },
+        {
+          "heading": "🚁 Rotary-Wing — Type 2 (Medium)",
+          "csv": "fleet-papua-new-guinea-rw-type-2-medium.csv"
+        }
+      ]
+    },
+    {
+      "type": "grouped-table",
+      "title": "🇵🇭 Philippines",
+      "tag": "1 aircraft",
+      "wide": true,
+      "collapsible": true,
+      "open": false,
+      "intro": "Firefighting fleet aircraft registered in Philippines.",
+      "table_class": "aircraft-table",
+      "groups": [
+        {
+          "heading": "🛸 Unmanned Aerial Vehicles",
+          "csv": "fleet-philippines-uav.csv"
+        }
+      ]
+    }
+  ]
+}

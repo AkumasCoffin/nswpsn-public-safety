@@ -1,0 +1,6 @@
+Prefix,Meaning,Notes
+{b:HA},Aerial Appliance,Ladder / platform appliances
+{b:BA},Breathing Apparatus,BA support and logistics
+{b:H},Hazmat,Dedicated hazardous materials appliance
+{b:U},Utility,Support / crew transport
+{b:BUS},Rehab / Personnel Carrier,"Moving crews, rehab at major incidents"

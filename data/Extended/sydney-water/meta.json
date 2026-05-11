@@ -1,0 +1,18 @@
+{
+  "title": "💧 Sydney Water",
+  "tag": "Sydney Water",
+  "badges": [
+    {"label": "Sydney Water Corporation", "variant": "agency"},
+    {"label": "State Owned Corporation", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Sydney Water provides drinking water, wastewater, recycled water and some stormwater services to about 5.4 million people in Greater Sydney, the Illawarra and the Blue Mountains. Its network is the largest urban water network in Australia."},
+    {"type": "h", "text": "Network"},
+    {"type": "ul", "items": [
+      "Around 22,000 km of water mains and 26,000 km of sewer mains.",
+      "Treatment plants include Prospect (water) and several large coastal wastewater plants.",
+      "24/7 incident response for main breaks, sewage overflows and chemical spills."
+    ]}
+  ],
+  "sections": []
+}

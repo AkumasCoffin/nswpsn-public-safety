@@ -1,0 +1,18 @@
+{
+  "title": "⚡ Ausgrid",
+  "tag": "Ausgrid",
+  "badges": [
+    {"label": "Ausgrid", "variant": "agency"},
+    {"label": "Electricity Distribution", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Ausgrid owns and operates the electricity distribution network across Sydney, the Central Coast and the Hunter Region. It carries power from the high-voltage transmission grid to about 1.7 million homes and businesses."},
+    {"type": "h", "text": "Coverage"},
+    {"type": "ul", "items": [
+      "Around 22,000 km² of NSW from Waterfall to Upper Hunter.",
+      "Roughly 30,000 km of overhead and underground network.",
+      "24/7 control room dispatches outage and emergency response crews."
+    ]}
+  ],
+  "sections": []
+}

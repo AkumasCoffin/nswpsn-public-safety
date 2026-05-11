@@ -1,0 +1,18 @@
+{
+  "title": "🔌 Endeavour Energy",
+  "tag": "Endeavour",
+  "badges": [
+    {"label": "Endeavour Energy", "variant": "agency"},
+    {"label": "Electricity Distribution", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Endeavour Energy operates the electricity distribution network across Sydney's Greater West, the Blue Mountains, the Southern Highlands and the Illawarra — connecting around 2.7 million people and a million end-customers."},
+    {"type": "h", "text": "Coverage"},
+    {"type": "ul", "items": [
+      "Network area roughly 25,000 km².",
+      "Around 38,000 km of distribution lines.",
+      "24/7 control centre dispatches network-emergency crews and coordinates with NSW emergency services for downed-wire incidents."
+    ]}
+  ],
+  "sections": []
+}

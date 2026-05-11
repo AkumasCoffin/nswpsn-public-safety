@@ -1,0 +1,6 @@
+Prefix,Meaning,Notes
+{b:T},Tanker,Rural / village water carrier
+{b:VT},Village Tanker,Smaller village-class tanker
+{b:CT},CAFS Tanker,Tanker with Compressed Air Foam System
+{b:HT},Hazmat Tanker,Tanker configured for hazardous materials
+{b:RT},Rescue Tanker,Tanker with rescue tools and equipment

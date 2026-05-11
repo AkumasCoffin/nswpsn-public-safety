@@ -1,0 +1,18 @@
+{
+  "title": "🌲 Forestry Corporation of NSW",
+  "tag": "FCNSW",
+  "badges": [
+    {"label": "Forestry Corporation of NSW", "variant": "agency"},
+    {"label": "State Owned Corporation", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Forestry Corporation of NSW manages around 2 million hectares of State Forests for timber production, recreation, fire management, biodiversity and Aboriginal cultural heritage. It maintains an internal fire-fighting capability and works closely with the RFS during the bushfire season."},
+    {"type": "h", "text": "Operations"},
+    {"type": "ul", "items": [
+      "Plantation and native-forest harvesting; timber sales for hardwood and softwood products.",
+      "Operational fire-management capability with crews, dozers, water-bombing aircraft contracts.",
+      "Recreation: 100+ campgrounds, 4WD trails, mountain-bike parks (e.g. Penrose, Cumberland, Sugar Pines)."
+    ]}
+  ],
+  "sections": []
+}

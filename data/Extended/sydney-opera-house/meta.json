@@ -1,0 +1,18 @@
+{
+  "title": "🎭 Sydney Opera House",
+  "tag": "SOH",
+  "badges": [
+    {"label": "Sydney Opera House Trust", "variant": "agency"},
+    {"label": "NSW Government Statutory Authority", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Sydney Opera House is one of Australia's most recognised landmarks and a UNESCO World Heritage site. The Opera House Trust manages venue operations, security, fire-safety, technical production and patron services across multiple performance halls."},
+    {"type": "h", "text": "Notes"},
+    {"type": "ul", "items": [
+      "Hosts more than 1,800 performances per year drawing 1.4M attendees.",
+      "Operates a 24/7 site security and operations team — talkgroups support venue, FOH, stage door, security and maintenance.",
+      "Coordinates with NSW Police and FRNSW for events and emergencies on-site."
+    ]}
+  ],
+  "sections": []
+}

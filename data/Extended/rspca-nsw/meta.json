@@ -1,0 +1,18 @@
+{
+  "title": "🐾 RSPCA NSW",
+  "tag": "RSPCA",
+  "badges": [
+    {"label": "RSPCA NSW", "variant": "agency"},
+    {"label": "Animal Welfare Charity", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Royal Society for the Prevention of Cruelty to Animals (NSW) is an independent non-government charity. RSPCA Inspectors are authorised officers under the Prevention of Cruelty to Animals Act and investigate cruelty complaints, seize animals at risk, and prosecute offences."},
+    {"type": "h", "text": "At a Glance"},
+    {"type": "ul", "items": [
+      "Operates animal shelters, veterinary hospitals and an inspectorate.",
+      "Cruelty hotline (1300 CRUELTY) takes around 16,000+ reports per year in NSW.",
+      "Inspectors carry powers of entry and seizure but are not police; serious cases are escalated to NSW Police."
+    ]}
+  ],
+  "sections": []
+}

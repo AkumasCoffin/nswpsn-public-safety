@@ -1,0 +1,5 @@
+Code,Summary
+{pill:red:Emergency},Threat to life / urgent assistance
+{pill:red:Red},Highest priority message
+{pill:blue:Blue},Incident update / SitRep
+{pill:yellow:Yellow},Non-Priority / General Message

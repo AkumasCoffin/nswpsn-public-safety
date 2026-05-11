@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_script_dir, '.env'), override=True)
 
-from db import get_conn, get_conn_dict
+from db import get_conn, get_conn_dict, pool_stats as _db_pool_stats
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='NSW PSN API Proxy Server')
@@ -1774,6 +1774,29 @@ _ARCHIVE_BUFFER_MAX_RECORDS = 50_000  # hard cap to bound RAM
 _archive_buffer = []  # list of (records, source_type) tuples
 _archive_buffer_records = 0  # running record count, kept in sync with the list
 _archive_buffer_lock = threading.Lock()
+# Wall-clock timestamps of the last successful archive-writer drain (any
+# records or zero) and process start, exposed by /api/status so external
+# monitors can detect a stuck writer thread.
+_archive_writer_last_flush_at = 0.0
+_PROCESS_START_TIME = time.time()
+# Last-flush snapshot + cumulative ingest counters surfaced on the Dev
+# tab as the "Ingest" card. Populated by _archive_writer_drain_once.
+_archive_last_flush_records  = 0
+_archive_last_flush_sources  = 0
+_archive_last_flush_ms       = 0
+_archive_last_flush_at_data  = 0.0   # only set when a non-empty drain happened
+_archive_total_records       = 0     # cumulative since process start
+_archive_total_flushes       = 0
+# Cleanup-loop telemetry — populated by cleanup_old_data() and the
+# vacuum helper. Surfaced as the "Cleanup" card.
+_cleanup_last_run_at         = 0.0
+_cleanup_last_history_del    = 0
+_cleanup_last_stats_del      = 0
+_cleanup_last_pager_ended    = 0
+_cleanup_last_waze_ended     = 0
+_cleanup_total_history_del   = 0   # cumulative since process start
+_cleanup_last_vacuum_at      = 0.0
+_cleanup_last_vacuum_ms      = 0
 
 # Friendly names for archive logging — also used by the writer thread.
 _ARCHIVE_NAMES = {
@@ -1823,6 +1846,24 @@ def store_incidents_batch(incidents, source_type=None):
     src = source_type or (incidents[0].get('source') if incidents else 'unknown')
     name = _ARCHIVE_NAMES.get(src, src)
     n = len(incidents)
+
+    # Skip Waze archival entirely. Waze produces ~1300 records every 30s
+    # and archiving them was creating sustained UPDATE contention on
+    # data_history (archive writer + bbox reconcile + cleanup all fighting
+    # for the same rows, statement timeouts cascading into pool
+    # exhaustion). Live Waze data is served from _waze_ingest_cache
+    # (in-memory dict populated by the userscript ingest POST), so the
+    # map and /api/waze/* endpoints are unaffected. The only loss is the
+    # historical Waze view on the logs page — niche use case.
+    #
+    # This is intentionally a hard cutoff rather than a soft one (env
+    # toggle): the contention pattern is structural and won't reappear
+    # in the Node rewrite (separate per-source partitioned tables, no
+    # is_live UPDATEs). When the rewrite is done, this whole function is
+    # going away.
+    if src in ('waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork'):
+        return {'total': n, 'new': 0, 'changed': 0, 'unchanged': 0,
+                'ended': 0, 'queued': False, 'skipped': 'waze_archive_disabled'}
 
     global _archive_buffer_records
     dropped = 0
@@ -1892,6 +1933,21 @@ def _archive_writer_drain_once():
             Log.error(f"Archive writer: {name} flush failed: {e}")
 
     elapsed_ms = int((time.time() - start) * 1000)
+
+    # Stamp the ingest-flow trackers used by /api/status. Only count
+    # non-empty drains for last_flush_at_data — empty drains are still
+    # heartbeats but they don't represent ingest activity.
+    global _archive_last_flush_records, _archive_last_flush_sources
+    global _archive_last_flush_ms, _archive_last_flush_at_data
+    global _archive_total_records, _archive_total_flushes
+    if total_records > 0:
+        _archive_last_flush_records = total_records
+        _archive_last_flush_sources = sources_written
+        _archive_last_flush_ms      = elapsed_ms
+        _archive_last_flush_at_data = time.time()
+        _archive_total_records      += total_records
+        _archive_total_flushes      += 1
+
     return (sources_written, total_records, elapsed_ms)
 
 
@@ -1923,6 +1979,7 @@ def _archive_writer_loop():
     ARCHIVE_FLUSH_INTERVAL seconds; one final drain on shutdown."""
     Log.startup(f"Archive writer started (flush every {ARCHIVE_FLUSH_INTERVAL}s, "
                 f"buffer cap {_ARCHIVE_BUFFER_MAX_RECORDS:,} records)")
+    global _archive_writer_last_flush_at
     while not _shutdown_event.is_set():
         # _shutdown_event.wait returns True when set — exit loop, but still
         # do one last drain below to flush any buffered records.
@@ -1930,6 +1987,9 @@ def _archive_writer_loop():
             break
         try:
             sources, total, elapsed = _archive_writer_drain_once()
+            # Stamp the heartbeat even on empty drains — the watchdog wants
+            # to know the thread is alive, not whether there was data.
+            _archive_writer_last_flush_at = time.time()
             if sources or total:
                 Log.data(f"📦 Archive flush: {sources} sources, {total} records [{elapsed}ms]")
         except Exception as e:
@@ -2115,7 +2175,12 @@ def _store_incidents_batch_inner(incidents, source_type=None):
             if source_type in waze_sources:
                 pass
             elif source_type and all_source_ids_in_batch:
-                # Get all source_ids we know about for this source_type that are still marked as live
+                # Get all source_ids we know about for this source_type that are still marked as live.
+                # 30s timeout — this DISTINCT fires every 30s per source from the archive writer
+                # thread, and as data_history grows it becomes a candidate for the slow query
+                # that silently eats the connection pool. Without an explicit timeout Postgres'
+                # default would let it hang indefinitely.
+                c.execute("SET LOCAL statement_timeout = '30s'")
                 c.execute('''
                     SELECT DISTINCT source_id FROM data_history
                     WHERE source = %s AND is_live = 1 AND source_id IS NOT NULL
@@ -2167,6 +2232,7 @@ def cleanup_old_data():
     deleted_history = 0
     deleted_stats = 0
     pager_ended = 0
+    waze_ended = 0
     
     # Clean up history (single table in PostgreSQL)
     # Note: previously this whole block ran under _db_lock_history_waze
@@ -2179,7 +2245,8 @@ def cleanup_old_data():
         try:
             c = conn.cursor()
 
-            # Mark pager hits as ended if older than 1 hour
+            # Mark pager hits as ended if older than 1 hour. Small set
+            # (~100 rows/cycle), one transaction is fine.
             c.execute('''
                 UPDATE data_history
                 SET is_live = 0
@@ -2187,6 +2254,7 @@ def cleanup_old_data():
                 AND COALESCE(source_timestamp_unix, fetched_at) < %s
             ''', (pager_cutoff,))
             pager_ended = c.rowcount
+            conn.commit()  # release pager locks before any heavier work
             if pager_ended > 0:
                 Log.cleanup(f"Marked {pager_ended} pager hits as ended (>1 hour old)")
 
@@ -2194,15 +2262,32 @@ def cleanup_old_data():
             # Per-batch diffing is disabled for Waze (incomplete rotations would
             # flip everything off), so this is the only path that clears stale
             # Waze records from the live set.
+            #
+            # Batched in chunks of 1000 with a commit between each. Without
+            # batching, a 5000-row UPDATE would hold row locks for 2+ minutes
+            # under contention, blocking the archive writer + reconcile worker
+            # the entire time and producing the cascade we hit on 2026-04-27.
+            # 1000 rows takes <1s under normal load, so other writers get
+            # frequent lock-windows.
             waze_cutoff = int(time.time()) - 3600
-            c.execute('''
-                UPDATE data_history
-                SET is_live = 0
-                WHERE source IN ('waze_hazard', 'waze_police', 'waze_roadwork', 'waze_jam')
-                AND is_live = 1
-                AND COALESCE(last_seen, fetched_at) < %s
-            ''', (waze_cutoff,))
-            waze_ended = c.rowcount
+            waze_ended = 0
+            while True:
+                c.execute('''
+                    UPDATE data_history SET is_live = 0
+                    WHERE id IN (
+                        SELECT id FROM data_history
+                        WHERE source IN ('waze_hazard', 'waze_police',
+                                         'waze_roadwork', 'waze_jam')
+                          AND is_live = 1
+                          AND COALESCE(last_seen, fetched_at) < %s
+                        LIMIT 1000
+                    )
+                ''', (waze_cutoff,))
+                chunk = c.rowcount
+                waze_ended += chunk
+                conn.commit()  # release locks between batches
+                if chunk < 1000:
+                    break
             if waze_ended > 0:
                 Log.cleanup(f"Marked {waze_ended} Waze records as ended (>1 hour since last_seen)")
 
@@ -2242,7 +2327,20 @@ def cleanup_old_data():
     total = deleted_history + deleted_stats
     if total > 0:
         Log.cleanup(f"Deleted {deleted_history} history + {deleted_stats} stats (>{DATA_RETENTION_DAYS} days old)", force=True)
-    
+
+    # Stamp the cleanup trackers used by /api/status. last_run_at fires
+    # every cycle (so the Dev tab can show "ran X ago" even when nothing
+    # was deleted); the per-cycle counts only update when the cycle
+    # actually did work.
+    global _cleanup_last_run_at, _cleanup_last_history_del, _cleanup_last_stats_del
+    global _cleanup_last_pager_ended, _cleanup_last_waze_ended, _cleanup_total_history_del
+    _cleanup_last_run_at      = time.time()
+    _cleanup_last_history_del = deleted_history
+    _cleanup_last_stats_del   = deleted_stats
+    _cleanup_last_pager_ended = pager_ended
+    _cleanup_last_waze_ended  = waze_ended
+    _cleanup_total_history_del += deleted_history
+
     return total
 
 
@@ -2572,8 +2670,12 @@ def _vacuum_data_history():
             t0 = time.time()
             cur.execute('VACUUM (ANALYZE) data_history')
             cur.close()
+            elapsed_ms = int((time.time() - t0) * 1000)
+            global _cleanup_last_vacuum_at, _cleanup_last_vacuum_ms
+            _cleanup_last_vacuum_at = time.time()
+            _cleanup_last_vacuum_ms = elapsed_ms
             if DEV_MODE:
-                Log.cleanup(f"VACUUM (ANALYZE) data_history complete [{int((time.time()-t0)*1000)}ms]")
+                Log.cleanup(f"VACUUM (ANALYZE) data_history complete [{elapsed_ms}ms]")
         finally:
             conn.close()
     except Exception as e:
@@ -4929,7 +5031,12 @@ PUBLIC_ENDPOINTS = {'/api/health', '/', '/api/config', '/api/heartbeat', '/api/e
                     '/api/waze/ingest',
                     # Read-only filter catalogue — used by /logs and the dashboard to populate
                     # dropdowns. No PII, just aggregated category/source/severity counts.
-                    '/api/data/history/filters'}
+                    '/api/data/history/filters',
+                    # Backend health / status — surfaced as booleans + ages,
+                    # no incident contents. Public so external monitors
+                    # (Uptime Kuma) and the in-page admin dashboard can hit
+                    # it without juggling the API key.
+                    '/api/status'}
 # Endpoints that start with these prefixes are public (for dynamic routes like /api/check-editor/<user_id>)
 PUBLIC_ENDPOINT_PREFIXES = ['/api/check-editor/', '/api/centralwatch/image/', '/api/centralwatch/cameras',
                             # Dashboard endpoints use Discord OAuth2 session cookie auth
@@ -9444,8 +9551,17 @@ def _ensure_reconcile_worker():
 def _waze_reconcile_bbox(bbox_raw, alerts, jams):
     """Enqueue a per-region 'gone' reconcile. Non-blocking; coalesces by
     bbox key so revisits don't pile up — the worker always processes the
-    freshest payload for each region."""
-    _ensure_reconcile_worker()
+    freshest payload for each region.
+
+    DISABLED — paired with the Waze archive-disable (store_incidents_batch
+    skips waze_*). With no fresh waze rows being written, the only thing
+    reconcile would do is fight cleanup_old_data for the same stale rows
+    and produce statement-timeout cascades. Live waze state lives in
+    _waze_ingest_cache (in-memory); historical state ages out via
+    cleanup_old_data after 1h. Going away entirely in the Node rewrite.
+    """
+    return
+    _ensure_reconcile_worker()  # noqa: unreachable, keeps the import live for now
     # Extract just the fields the sync worker needs — don't hold references
     # to the full payload alerts[] on the queue.
     current_ids = set()
@@ -10113,6 +10229,9 @@ def _hydrate_police_heatmap_ram_from_db():
         Log.startup(f"Police heatmap RAM hydrated from Postgres — {len(rows)} bins")
 
 
+_HEATMAP_CONSEC_FAILS = 0  # consecutive aggregation timeouts/errors
+
+
 def _refresh_police_heatmap_cache():
     """Rebuild the police heatmap cache from data_history.
 
@@ -10126,6 +10245,18 @@ def _refresh_police_heatmap_cache():
          disk cache survives a restart. If this fails, RAM still has
          the new data — the read path doesn't notice.
     """
+    global _HEATMAP_CONSEC_FAILS
+
+    # Circuit breaker: after 3 consecutive failures, skip the next 4 cycles
+    # (≈40 min at the default 10 min refresh). When data_history is bloated
+    # or under heavy archive load, the aggregation can't finish — retrying
+    # every cycle just keeps a pool slot blocked for 45s pointlessly.
+    if _HEATMAP_CONSEC_FAILS >= 3 and (_HEATMAP_CONSEC_FAILS % 5) != 4:
+        _HEATMAP_CONSEC_FAILS += 1
+        if DEV_MODE:
+            Log.info(f"Police heatmap aggregation skipped (consec_fails={_HEATMAP_CONSEC_FAILS}, RAM still fresh)")
+        return
+
     cutoff = int(time.time()) - (_POLICE_HEATMAP_WINDOW_DAYS * 86400)
     bin_deg = _POLICE_HEATMAP_BIN_DEG
 
@@ -10134,7 +10265,14 @@ def _refresh_police_heatmap_cache():
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute("SET statement_timeout = '300s'")
+        # 45s instead of 300s — when this can't finish in 45s the table
+        # is bloated to the point where the aggregation will time out at
+        # 5 min anyway, just having held a connection that whole time
+        # blocking every other request from grabbing it. The RAM cache
+        # already has whatever was last successfully aggregated, so
+        # readers don't notice the failure. Use SET LOCAL so the timeout
+        # doesn't leak to the next caller of this pooled connection.
+        cur.execute("SET LOCAL statement_timeout = '45s'")
         cur.execute(
             '''
             SELECT
@@ -10158,6 +10296,7 @@ def _refresh_police_heatmap_cache():
         raw = cur.fetchall()
         cur.close()
     except Exception as e:
+        _HEATMAP_CONSEC_FAILS += 1
         Log.error(f"Police heatmap aggregation error: {e}")
         return
     finally:
@@ -10165,6 +10304,10 @@ def _refresh_police_heatmap_cache():
             conn.close()
         except Exception:
             pass
+
+    # Aggregation succeeded — clear the circuit breaker so future cycles
+    # try again immediately when the table calms down.
+    _HEATMAP_CONSEC_FAILS = 0
 
     # Normalise + ditch any rows that can't be coerced to numbers.
     rows = []
@@ -10227,10 +10370,17 @@ def _refresh_police_heatmap_cache():
 
 def _police_heatmap_scheduler():
     """Background loop that refreshes the police heatmap cache every N
-    seconds (POLICE_HEATMAP_REFRESH_INTERVAL). First refresh fires almost
-    immediately so the cache populates as soon as possible after restart."""
-    # Tiny stagger so we don't slam the DB the second the app starts.
-    time.sleep(5)
+    seconds (POLICE_HEATMAP_REFRESH_INTERVAL).
+
+    First refresh used to fire 5s after boot, but that put the heaviest
+    GROUP BY of the cycle right alongside the first archive flush
+    (which lands at ARCHIVE_FLUSH_INTERVAL=30s) and the source workers'
+    first round of upstream fetches. The pool would saturate and every
+    subsequent cheap query queued behind the aggregation. Now we wait
+    60s — by then the initial archive flush is done, the source pollers
+    have settled into their loop, and the pool has slack.
+    The RAM hydrate at startup keeps the endpoint hot in the meantime."""
+    time.sleep(60)
     while not _shutdown_event.is_set():
         try:
             _refresh_police_heatmap_cache()
@@ -10857,11 +11007,420 @@ def get_config():
 @app.route('/api/health')
 def health():
     return jsonify({
-        'status': 'ok', 
+        'status': 'ok',
         'mode': 'dev' if DEV_MODE else 'production',
         'cache_keys': list(cache.keys()),
         'active_viewers': get_active_page_count()
     })
+
+
+# Thresholds for /api/status. Tunable via env so we can tighten/loosen
+# without a redeploy. Defaults are generous — they only fire when something
+# is genuinely wrong, not on transient hiccups.
+STATUS_DB_TIMEOUT_SECS         = int(os.environ.get('STATUS_DB_TIMEOUT_SECS', 5))
+STATUS_CACHE_TTL_SECS          = int(os.environ.get('STATUS_CACHE_TTL_SECS', 5))
+
+# Cached /api/status response. Multiple monitors + the in-page Dev tab
+# all hammer this endpoint, and each call costs at minimum one DB
+# round-trip (SELECT 1). A 5s TTL collapses ~20 callers/min down to
+# ~12/min and stops the endpoint from being a contributing factor when
+# the DB is already stressed. _STATUS_CACHE_INFLIGHT prevents the
+# thundering-herd case where the cache expires and 5 callers all build
+# the response simultaneously.
+_STATUS_CACHE = {'data': None, 'http_code': 200, 'ts': 0.0}
+_STATUS_CACHE_LOCK = threading.Lock()
+_STATUS_CACHE_INFLIGHT = threading.Lock()
+STATUS_WRITER_STALE_SECS       = int(os.environ.get('STATUS_WRITER_STALE_SECS', 300))    # 5 min
+STATUS_WAZE_STALE_SECS         = int(os.environ.get('STATUS_WAZE_STALE_SECS', 900))      # 15 min
+STATUS_BUFFER_WARN_RECORDS     = int(os.environ.get('STATUS_BUFFER_WARN_RECORDS', 10_000))
+STATUS_HEATMAP_STALE_SECS      = int(os.environ.get('STATUS_HEATMAP_STALE_SECS', 1800))  # 30 min
+STATUS_FILTER_CACHE_STALE_SECS = int(os.environ.get('STATUS_FILTER_CACHE_STALE_SECS', 1800))
+
+
+def _status_source_summary(now):
+    """Roll up _SOURCE_HEALTH into a per-source dict that's easy to query
+    with JSONata: sources.<name>.ok, sources.<name>.last_success_age_secs,
+    etc. Status per source is ok | degraded | down | unknown, derived from
+    the soft/hard thresholds in _SOURCE_THRESHOLDS."""
+    out = {}
+    counts = {'ok': 0, 'degraded': 0, 'down': 0, 'unknown': 0}
+    with _SOURCE_HEALTH_LOCK:
+        snapshot = {k: dict(v) for k, v in _SOURCE_HEALTH.items()}
+    # Walk threshold table so sources we know about but never heard from
+    # still appear (as 'unknown') — otherwise an Uptime Kuma monitor
+    # configured on `sources.rfs.ok` would silently miss "RFS never
+    # polled" right after a restart.
+    for name, t in _SOURCE_THRESHOLDS.items():
+        h = snapshot.get(name, {})
+        last_success = h.get('last_success')
+        last_error = h.get('last_error')
+        consec = int(h.get('consec_fails') or 0)
+        success_age = int(now - last_success) if last_success else None
+        error_age = int(now - last_error) if last_error else None
+        if last_success is None:
+            src_status = 'unknown'
+            ok = False
+        elif success_age >= t['hard']:
+            src_status = 'down'
+            ok = False
+        elif success_age >= t['soft']:
+            src_status = 'degraded'
+            ok = False
+        else:
+            src_status = 'ok'
+            ok = True
+        counts[src_status] += 1
+        out[name] = {
+            'ok': ok,
+            'status': src_status,
+            'label': t.get('label', name),
+            'last_success_age_secs': success_age,
+            'last_error_age_secs': error_age,
+            'last_error_msg': h.get('last_error_msg'),
+            'consec_fails': consec,
+            'total_success': int(h.get('total_success') or 0),
+            'total_fail': int(h.get('total_fail') or 0),
+            'soft_threshold_secs': t['soft'],
+            'hard_threshold_secs': t['hard'],
+        }
+    return out, counts
+
+
+def _compute_status_dict():
+    """Build the /api/status payload + http_code.
+
+    Separated from the route handler so a short-lived cache can wrap
+    this function without nesting the whole 250-line check body inside
+    a try/finally — the route does the cache dance, this builds the
+    truth.
+    """
+    now = time.time()
+    checks = {}
+    critical_failed = False
+    degraded = False
+
+    # ---- 1. Database connectivity + pool occupancy ----------------------
+    # Three-tier classification so a stressed-but-reachable DB doesn't
+    # flap the whole backend to 503:
+    #   - Connection refused / pool exhausted / unknown error  →  DOWN
+    #   - SELECT 1 timed out (DB is up but slow)                →  DEGRADED
+    #   - SELECT 1 returned                                     →  OK
+    # A slow SELECT under archive/heatmap load is normal contention; the
+    # archive writer + heatmap RAM fallback are designed to absorb it,
+    # so 503-ing the status endpoint would just generate noise without
+    # signalling a real outage.
+    db_ok = False
+    db_latency_ms = None
+    db_error = None
+    db_t0 = time.time()
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(f"SET LOCAL statement_timeout = '{STATUS_DB_TIMEOUT_SECS * 1000}ms'")
+        c.execute('SELECT 1')
+        c.fetchone()
+        db_ok = True
+        db_latency_ms = int((time.time() - db_t0) * 1000)
+    except psycopg2.Error as e:
+        # SQLSTATE 57014 = query_canceled (statement_timeout). DB is
+        # reachable, just slow — treat as degraded.
+        db_error = str(e)[:200]
+        if getattr(e, 'pgcode', None) == '57014':
+            degraded = True
+            db_latency_ms = int((time.time() - db_t0) * 1000)
+        else:
+            critical_failed = True
+    except Exception as e:
+        # Pool exhaustion (psycopg2.pool.PoolError) and any other
+        # non-DB exception falls here — these mean we can't even talk
+        # to the DB, so it's a real outage.
+        db_error = str(e)[:200]
+        critical_failed = True
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+    pool_info = _db_pool_stats()
+    checks['database'] = {
+        'ok': db_ok,
+        'latency_ms': db_latency_ms,
+        'pool_in_use': pool_info.get('in_use'),
+        'pool_idle': pool_info.get('idle'),
+        'pool_max': pool_info.get('max'),
+        'error': db_error,
+    }
+
+    # ---- 2. Archive writer heartbeat ------------------------------------
+    writer_age = now - _archive_writer_last_flush_at if _archive_writer_last_flush_at else None
+    writer_ok = writer_age is not None and writer_age <= STATUS_WRITER_STALE_SECS
+    # Boot grace: first ARCHIVE_FLUSH_INTERVAL after start, no heartbeat yet.
+    if writer_age is None and (now - _PROCESS_START_TIME) < (ARCHIVE_FLUSH_INTERVAL + 30):
+        writer_ok = True
+    if not writer_ok:
+        critical_failed = True
+    checks['archive_writer'] = {
+        'ok': writer_ok,
+        'last_flush_age_secs': int(writer_age) if writer_age is not None else None,
+        'threshold_secs': STATUS_WRITER_STALE_SECS,
+        'flush_interval_secs': ARCHIVE_FLUSH_INTERVAL,
+    }
+
+    # ---- 3. Archive buffer occupancy ------------------------------------
+    with _archive_buffer_lock:
+        buf_records = _archive_buffer_records
+    buffer_ok = buf_records <= STATUS_BUFFER_WARN_RECORDS
+    if not buffer_ok:
+        degraded = True
+    checks['archive_buffer'] = {
+        'ok': buffer_ok,
+        'records': buf_records,
+        'warn_threshold': STATUS_BUFFER_WARN_RECORDS,
+        'hard_cap': _ARCHIVE_BUFFER_MAX_RECORDS,
+    }
+
+    # ---- 4. Waze ingest freshness + userscript health -------------------
+    if WAZE_INGEST_ENABLED:
+        waze_age = now - _waze_last_ingest_at if _waze_last_ingest_at else None
+        waze_ok = waze_age is not None and waze_age <= STATUS_WAZE_STALE_SECS
+        if waze_age is None and (now - _PROCESS_START_TIME) < 120:
+            waze_ok = True
+        if not waze_ok:
+            degraded = True
+        try:
+            with _waze_ingest_lock:
+                regions_cached = len(_waze_ingest_cache)
+        except Exception:
+            regions_cached = None
+        try:
+            metrics = _waze_metrics_snapshot()
+            block_rate = metrics.get('block_rate_percent')
+            gate_active = bool(metrics.get('gate_active'))
+        except Exception:
+            block_rate = None
+            gate_active = False
+        checks['waze_ingest'] = {
+            'ok': waze_ok,
+            'enabled': True,
+            'last_ingest_age_secs': int(waze_age) if waze_age is not None else None,
+            'threshold_secs': STATUS_WAZE_STALE_SECS,
+            'regions_cached': regions_cached,
+            'block_rate_pct': block_rate,
+            'gate_active': gate_active,
+        }
+    else:
+        checks['waze_ingest'] = {'ok': True, 'enabled': False}
+
+    # ---- 5. Police heatmap freshness ------------------------------------
+    try:
+        with _POLICE_HEATMAP_RAM_LOCK:
+            hm_updated_at = _POLICE_HEATMAP_RAM.get('updated_at')
+            hm_bins = len(_POLICE_HEATMAP_RAM.get('rows') or [])
+    except Exception:
+        hm_updated_at = None
+        hm_bins = 0
+    if hm_updated_at is not None:
+        try:
+            hm_ts = hm_updated_at.timestamp() if hasattr(hm_updated_at, 'timestamp') else float(hm_updated_at)
+            hm_age = int(now - hm_ts)
+        except Exception:
+            hm_age = None
+    else:
+        hm_age = None
+    hm_ok = hm_age is not None and hm_age <= STATUS_HEATMAP_STALE_SECS
+    # Boot grace — first refresh runs ~POLICE_HEATMAP_REFRESH_INTERVAL after start.
+    if hm_age is None and (now - _PROCESS_START_TIME) < 900:
+        hm_ok = True
+    if not hm_ok:
+        degraded = True
+    checks['police_heatmap'] = {
+        'ok': hm_ok,
+        'bins': hm_bins,
+        'last_refresh_age_secs': hm_age,
+        'threshold_secs': STATUS_HEATMAP_STALE_SECS,
+    }
+
+    # ---- 6. Filter cache freshness --------------------------------------
+    fc_age = int(now - _filter_cache_last_refresh_at) if _filter_cache_last_refresh_at else None
+    fc_ok = fc_age is not None and fc_age <= STATUS_FILTER_CACHE_STALE_SECS
+    if fc_age is None and (now - _PROCESS_START_TIME) < (FILTER_CACHE_REFRESH_INTERVAL + 60):
+        fc_ok = True
+    if not fc_ok:
+        degraded = True
+    checks['filter_cache'] = {
+        'ok': fc_ok,
+        'last_refresh_age_secs': fc_age,
+        'threshold_secs': STATUS_FILTER_CACHE_STALE_SECS,
+        'refresh_interval_secs': FILTER_CACHE_REFRESH_INTERVAL,
+    }
+
+    # ---- 6b. Ingest activity (last archive flush + cumulative) ---------
+    # Informational only — `archive_writer` already covers liveness, this
+    # surfaces what's actually flowing through. last_flush_at_data is the
+    # most recent NON-EMPTY drain; flushes that drained zero records (idle
+    # cycle) bump archive_writer's heartbeat but not this one.
+    ingest_age = (
+        int(now - _archive_last_flush_at_data)
+        if _archive_last_flush_at_data else None
+    )
+    checks['ingest'] = {
+        'last_flush_age_secs':   ingest_age,
+        'last_flush_records':    int(_archive_last_flush_records),
+        'last_flush_sources':    int(_archive_last_flush_sources),
+        'last_flush_ms':         int(_archive_last_flush_ms),
+        'total_records_flushed': int(_archive_total_records),
+        'total_flushes':         int(_archive_total_flushes),
+    }
+
+    # ---- 6c. Cleanup loop telemetry ------------------------------------
+    cleanup_age = (
+        int(now - _cleanup_last_run_at)
+        if _cleanup_last_run_at else None
+    )
+    vacuum_age = (
+        int(now - _cleanup_last_vacuum_at)
+        if _cleanup_last_vacuum_at else None
+    )
+    checks['cleanup'] = {
+        'last_run_age_secs':       cleanup_age,
+        'last_history_deleted':    int(_cleanup_last_history_del),
+        'last_stats_deleted':      int(_cleanup_last_stats_del),
+        'last_pager_ended':        int(_cleanup_last_pager_ended),
+        'last_waze_ended':         int(_cleanup_last_waze_ended),
+        'total_history_deleted':   int(_cleanup_total_history_del),
+        'last_vacuum_age_secs':    vacuum_age,
+        'last_vacuum_ms':          int(_cleanup_last_vacuum_ms),
+        'retention_days':          DATA_RETENTION_DAYS,
+        'cleanup_interval_secs':   DATA_CLEANUP_INTERVAL,
+    }
+
+    # ---- 7. RAM cache layer hit rate (informational, no ok/fail) --------
+    try:
+        ram_hits = int(_CACHE_GET_RAM_HITS)
+        ram_misses = int(_CACHE_GET_RAM_MISSES)
+    except Exception:
+        ram_hits = ram_misses = 0
+    total_cache_lookups = ram_hits + ram_misses
+    hit_rate_pct = round(ram_hits / total_cache_lookups * 100.0, 2) if total_cache_lookups else None
+    checks['ram_cache'] = {
+        'hits': ram_hits,
+        'misses': ram_misses,
+        'hit_rate_pct': hit_rate_pct,
+    }
+
+    # ---- 8. Per-source rollup ------------------------------------------
+    sources, source_counts = _status_source_summary(now)
+    if source_counts['down'] > 0:
+        degraded = True  # source-level outage doesn't 503 the backend
+    elif source_counts['degraded'] > 0:
+        degraded = True
+
+    # ---- Summary aggregate ---------------------------------------------
+    failed_checks = sum(
+        1 for k, v in checks.items()
+        if isinstance(v, dict) and v.get('ok') is False
+    )
+    summary = {
+        'checks_failed': failed_checks,
+        'sources_total': len(_SOURCE_THRESHOLDS),
+        'sources_ok': source_counts['ok'],
+        'sources_degraded': source_counts['degraded'],
+        'sources_down': source_counts['down'],
+        'sources_unknown': source_counts['unknown'],
+    }
+
+    if critical_failed:
+        overall = 'down'
+        http_code = 503
+    elif degraded:
+        overall = 'degraded'
+        http_code = 200
+    else:
+        overall = 'ok'
+        http_code = 200
+
+    return ({
+        'status': overall,
+        'uptime_secs': int(now - _PROCESS_START_TIME),
+        'started_at': int(_PROCESS_START_TIME),
+        'now': int(now),
+        'mode': 'dev' if DEV_MODE else 'production',
+        'summary': summary,
+        'checks': checks,
+        'sources': sources,
+    }, http_code)
+
+
+@app.route('/api/status')
+def status_endpoint():
+    """Health endpoint shaped for Uptime Kuma JSON-Query (JSONata) monitors.
+
+    HTTP status reflects critical backend state only:
+      - 200 when the backend is functional (DB reachable, writer thread alive)
+      - 503 when a critical subsystem is broken
+
+    The JSON body has a finer-grained status of ok | degraded | down plus a
+    per-check breakdown and per-source roll-up. The tree is shaped so
+    common JSONata expressions stay short:
+
+        status                                      → 'ok' | 'degraded' | 'down'
+        checks.database.ok                          → true / false
+        checks.database.latency_ms < 200            → boolean
+        checks.archive_writer.ok                    → true / false
+        checks.waze_ingest.regions_cached >= 150    → boolean
+        sources.rfs.ok                              → true / false
+        sources.rfs.consec_fails < 5                → boolean
+        summary.sources_down                        → number
+        summary.sources_down + summary.sources_degraded   → number
+
+    Sources that have never reported are exposed with status='unknown' so
+    a "is RFS healthy" monitor doesn't silently pass right after a restart.
+
+    Response is cached in-process for STATUS_CACHE_TTL_SECS (default 5s)
+    to absorb the multi-monitor + Dev-tab refresh storm — at minimum one
+    SELECT 1 + a handful of dict reads per call, so without caching every
+    monitor hitting at the same minute boundary would each cost a DB
+    round-trip even though their results would be identical.
+    """
+    now = time.time()
+
+    # Cache hit — fast path. Re-stamp `now` and `uptime_secs` so cached
+    # responses don't visibly drift during the TTL window.
+    with _STATUS_CACHE_LOCK:
+        cached = _STATUS_CACHE
+        if cached['data'] is not None and (now - cached['ts']) < STATUS_CACHE_TTL_SECS:
+            payload = dict(cached['data'])
+            payload['now'] = int(now)
+            payload['uptime_secs'] = int(now - _PROCESS_START_TIME)
+            return jsonify(payload), cached['http_code']
+
+    # Cache miss — gate concurrent rebuilds behind an inflight lock so a
+    # request flood doesn't trigger N parallel SELECT 1s on a stressed
+    # DB. Wait up to 2s for the in-flight rebuild; if it took longer
+    # we'll proceed and run our own (better than waiting forever).
+    got_lock = _STATUS_CACHE_INFLIGHT.acquire(timeout=2)
+    try:
+        if got_lock:
+            # Double-check: another caller may have populated the cache
+            # while we were blocked on the inflight lock.
+            with _STATUS_CACHE_LOCK:
+                cached = _STATUS_CACHE
+                if cached['data'] is not None and (time.time() - cached['ts']) < STATUS_CACHE_TTL_SECS:
+                    payload = dict(cached['data'])
+                    payload['now'] = int(time.time())
+                    payload['uptime_secs'] = int(time.time() - _PROCESS_START_TIME)
+                    return jsonify(payload), cached['http_code']
+
+        payload, http_code = _compute_status_dict()
+        with _STATUS_CACHE_LOCK:
+            _STATUS_CACHE['data'] = payload
+            _STATUS_CACHE['http_code'] = http_code
+            _STATUS_CACHE['ts'] = time.time()
+        return jsonify(payload), http_code
+    finally:
+        if got_lock:
+            _STATUS_CACHE_INFLIGHT.release()
+
 
 @app.route('/api/cache/clear')
 def clear_cache():
@@ -11180,9 +11739,13 @@ _DATA_HISTORY_COUNT_INFLIGHT_LOCK = threading.Lock()
 
 
 # Cap concurrent refresh workers. Each runs a 90s COUNT(*) and holds
-# a pooled connection — without this cap, a traffic spike can spawn
-# dozens of parallel refreshes and exhaust the connection pool.
-_DATA_HISTORY_COUNT_INFLIGHT_MAX = 4
+# a pooled connection — and the count is the SAME number whether one
+# worker computes it or four do. Multiple in-flight refreshes just
+# multiply the pool/lock pressure without giving us a different answer.
+# Hard cap: 1. Spillover requests get the cached value (which is still
+# fresh enough); the next request after the in-flight one finishes
+# triggers the next refresh.
+_DATA_HISTORY_COUNT_INFLIGHT_MAX = 1
 
 
 def _async_refresh_data_history_count(cache_key, actual_where, params,
@@ -11276,8 +11839,15 @@ def _prewarm_data_history_count_cache():
     unique=1, no other filters). Strategy: prefer the instant pg_class
     reltuples estimate so the cache is hot in milliseconds, then try
     a real COUNT(*) for accuracy — if that times out we keep the
-    estimate. Either way the user's first click never sees total=0."""
-    time.sleep(15)
+    estimate. Either way the user's first click never sees total=0.
+
+    Phase 1 (reltuples) runs immediately — it's a single index lookup
+    against pg_class. Phase 2 (real COUNT(*) with 90s timeout) waits
+    90s so it doesn't compete with the first archive flush + filter
+    cache refresh + heatmap aggregation for the same data_history
+    rows. Bumped from 15s; under boot load the COUNT(*) was timing
+    out and falling back to the estimate anyway, so the wait is
+    effectively free."""
     cutoff = int(time.time()) - 24 * 3600
     actual_where = "(fetched_at >= %s) AND is_latest = 1"
     params = [cutoff]
@@ -11286,7 +11856,8 @@ def _prewarm_data_history_count_cache():
     cache_key = (actual_where, ((cutoff // 60) * 60,), 'all')
     pager_cutoff = int(time.time()) - 3600
 
-    # Phase 1: instant estimate. Uses reltuples for the whole table —
+    # Phase 1: instant estimate. Runs immediately so the cache is hot
+    # within milliseconds of boot — uses reltuples for the whole table,
     # an over-estimate vs. is_latest=1 + 24h, but better than zero and
     # gives pagination something to chew on. Real count overwrites later.
     est = _data_history_reltuples_estimate()
@@ -11295,8 +11866,11 @@ def _prewarm_data_history_count_cache():
         if DEV_MODE:
             Log.startup(f"data/history count cache seeded with reltuples estimate — ~{est}")
 
-    # Phase 2: try the real count. May still time out under heavy load —
-    # if so we keep the estimate from phase 1.
+    # Phase 2: try the real count. Wait 90s so this doesn't compete
+    # with the first archive flush + filter cache refresh + heatmap
+    # aggregation for the same data_history rows. Under boot load the
+    # COUNT(*) was timing out and falling back to the estimate anyway.
+    time.sleep(90)
     try:
         conn = get_conn()
         try:
@@ -11983,6 +12557,12 @@ def pager_hits():
 # =========================================================================
 
 FILTER_CACHE_REFRESH_INTERVAL = int(os.environ.get('FILTER_CACHE_REFRESH_INTERVAL', 300))
+# Wall-clock of the last successful filter-cache refresh, exposed by
+# /api/status. 0.0 means "never".
+_filter_cache_last_refresh_at = 0.0
+
+
+_FILTER_CACHE_CONSEC_FAILS = 0
 
 
 def _refresh_filter_cache():
@@ -11991,8 +12571,22 @@ def _refresh_filter_cache():
     Does 5 small GROUP BY queries (one per dimension), collects results,
     and atomically swaps the cache contents in a single transaction. The
     whole thing is usually <1s because is_latest=1 is a tiny fraction of
-    data_history.
+    data_history — but under heavy archive UPDATE load the visibility
+    map gets dirty and the GROUP BYs can time out. When that happens
+    we keep the previous cache contents (clients see stale dropdown
+    values, which is invisible) and back off so we don't retry against
+    the same hot table every cycle.
     """
+    global _FILTER_CACHE_CONSEC_FAILS
+
+    # Circuit breaker: after 3 consecutive failures, skip 4 cycles
+    # (≈20 min at the default 5 min refresh interval).
+    if _FILTER_CACHE_CONSEC_FAILS >= 3 and (_FILTER_CACHE_CONSEC_FAILS % 5) != 4:
+        _FILTER_CACHE_CONSEC_FAILS += 1
+        if DEV_MODE:
+            Log.info(f"Filter cache refresh skipped (consec_fails={_FILTER_CACHE_CONSEC_FAILS}, serving stale)")
+        return
+
     try:
         deprecated = list(DEPRECATED_SOURCES) or ['__nothing__']
         dep_ph = ','.join(['%s'] * len(deprecated))
@@ -12002,12 +12596,12 @@ def _refresh_filter_cache():
         conn = get_conn()
         try:
             c = conn.cursor()
-            # Background task — give it a generous budget. The 5 GROUP BYs
-            # over is_latest=1 rows can run long when archive UPDATEs leave
-            # the visibility map dirty; failing the refresh just leaves the
-            # filter dropdown stale, so it's worth waiting longer rather
-            # than hammering retries.
-            c.execute("SET LOCAL statement_timeout = '180s'")
+            # 60s instead of 180s. If 5 small GROUP BYs can't finish in
+            # 60s, the table is in a state where 180s won't help either —
+            # the connection just sits blocked while every other request
+            # waits for a pool slot. Failure leaves the cache stale,
+            # which is fine.
+            c.execute("SET LOCAL statement_timeout = '60s'")
 
             # Sources (no source scope — top-level list)
             c.execute(f'''
@@ -12054,18 +12648,29 @@ def _refresh_filter_cache():
                     + args_str
                 )
             conn.commit()
+            global _filter_cache_last_refresh_at
+            _filter_cache_last_refresh_at = time.time()
+            _FILTER_CACHE_CONSEC_FAILS = 0
             if DEV_MODE:
                 Log.cleanup(f"Filter cache refreshed — {len(rows_to_insert)} rows")
         finally:
             conn.close()
     except Exception as e:
+        _FILTER_CACHE_CONSEC_FAILS += 1
         Log.error(f"Filter cache refresh error: {e}")
 
 
 def _filter_cache_scheduler():
-    """Background loop that refreshes the filter cache every N seconds."""
-    # Let the DB settle after startup, then do the first refresh.
-    time.sleep(30)
+    """Background loop that refreshes the filter cache every N seconds.
+
+    First refresh delayed 120s — the 5×GROUP BY rebuild has a 180s
+    timeout and competes for the same is_latest=1 rows that archive
+    UPDATEs are touching. Letting the boot storm pass first means the
+    first refresh completes in ~1s instead of timing out. Filter cache
+    serves stale data from data_history_filter_cache during the
+    delay, which is exactly its design — five extra minutes of
+    eventually-consistent dropdown values is invisible to users."""
+    time.sleep(120)
     while not _shutdown_event.is_set():
         try:
             _refresh_filter_cache()
@@ -13302,7 +13907,14 @@ def check_editor_status(user_id):
 @app.route('/api/check-admin/<user_id>', methods=['GET'])
 @require_api_key
 def check_admin_status(user_id):
-    """Check user's admin access level (owner or team_member)"""
+    """Check user's admin access level (owner / team_member / dev).
+
+    Returns per-tab visibility flags under `tabs` so the admin page can
+    render exactly the tabs each role is allowed to see:
+      - owner:        all three tabs (requests, users, dev)
+      - team_member:  requests + users (no dev)
+      - dev:          dev only (no requests, no users)
+    """
     try:
         # Check cache first
         cache_key = f"admin_{user_id}"
@@ -13322,7 +13934,8 @@ def check_admin_status(user_id):
 
         is_owner = 'owner' in user_roles
         is_team_member = 'team_member' in user_roles
-        is_admin = is_owner or is_team_member
+        is_dev = 'dev' in user_roles
+        is_admin = is_owner or is_team_member or is_dev
 
         # Fallback: If NO owner exists anywhere, check if this is the first setup
         # This prevents lockout during initial setup
@@ -13340,17 +13953,33 @@ def check_admin_status(user_id):
                 Log.warn(f"No owners exist in system - granting first-time owner to {user_id}")
                 is_admin = True
                 is_owner = True
-        
-        # Permission levels:
-        # - Owner: Full access (approve, deny, any role, user management)
-        # - Team Member: Approve/deny requests, can only assign map_editor/pager_contributor/radio_contributor
+
+        # Permission matrix (per-tab):
+        # - Owner:        all three tabs.
+        # - Team Member:  Requests + Users. Cannot assign privileged roles
+        #                 (team_member/dev/owner) — only map_editor /
+        #                 pager_contributor / radio_contributor.
+        # - Dev:          Dev tab only (status + future backend controls).
+        can_view_requests = is_owner or is_team_member
+        can_view_users    = is_owner or is_team_member
+        can_view_dev      = is_owner or is_dev
         result = {
             'user_id': user_id,
             'is_admin': is_admin,
             'is_owner': is_owner,
             'is_team_member': is_team_member,
-            'can_manage_users': is_owner,  # Only owners can edit existing users
-            'can_assign_privileged_roles': is_owner,  # Only owners can assign team_member/dev/owner
+            'is_dev': is_dev,
+            # Kept for backwards compatibility with older clients. Now means
+            # "can the Users tab be opened" — owner OR team_member.
+            'can_manage_users': can_view_users,
+            # Owner-only — gates which role checkboxes are visible in the
+            # Users tab. Team members can edit users but not promote them.
+            'can_assign_privileged_roles': is_owner,
+            'tabs': {
+                'requests': can_view_requests,
+                'users':    can_view_users,
+                'dev':      can_view_dev,
+            },
             'roles': user_roles
         }
         

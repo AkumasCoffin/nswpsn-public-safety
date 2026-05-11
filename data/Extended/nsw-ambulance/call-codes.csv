@@ -1,0 +1,18 @@
+Code,Meaning,Confirmed
+Zero 1,Clear the air – urgent message,{pill:yes:Yes}
+Code 1,Officer in trouble / require Police,{pill:yes:Yes}
+Code 2,Cardiac arrest,{pill:yes:Yes}
+Code 3,Notify hospital – doctor required on arrival,{pill:yes:Yes}
+Code 4,Patient deceased / DOA – Police required,{pill:yes:Yes}
+Code 5,Arriving at hospital with DOA for certification,{pill:yes:Yes}
+Code 6,Departing hospital for morgue,{pill:yes:Yes}
+Code 7,Arrived at morgue,{pill:yes:Yes}
+Code 8,Patient with terminal condition,{pill:yes:Yes}
+Code 9,Person trapped / rescue required,{pill:yes:Yes}
+Code 10,Fire Brigade required,{pill:yes:Yes}
+Code 11,Live wires down – electrical authority required,{pill:yes:Yes}
+Code 14,Ambulance involved in collision,{pill:yes:Yes}
+Code 17,Drug overdose,{pill:yes:Yes}
+Code 20,Meal break,{pill:yes:Yes}
+Code 23,Infectious disease,{pill:yes:Yes}
+Other codes,"12,13,15,16,18,19,21,22,24,25,26",{pill:legacy:Not confirmed}

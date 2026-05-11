@@ -1,0 +1,18 @@
+{
+  "title": "💧 Central Tablelands Water",
+  "tag": "CTW",
+  "badges": [
+    {"label": "Central Tablelands Water", "variant": "agency"},
+    {"label": "County Council Water Utility", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Central Tablelands Water is a NSW county council that supplies bulk and reticulated drinking water to towns in Blayney, Cabonne and Weddin shires."},
+    {"type": "h", "text": "Coverage"},
+    {"type": "ul", "items": [
+      "Constituent councils: Blayney, Cabonne, Weddin.",
+      "Sources from Lake Rowlands and treatment plant near Carcoar.",
+      "Serves towns including Grenfell, Canowindra, Molong, Cudal, Eugowra and Manildra."
+    ]}
+  ],
+  "sections": []
+}

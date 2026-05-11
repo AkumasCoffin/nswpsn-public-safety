@@ -1,0 +1,18 @@
+{
+  "title": "📡 NSW Telco Authority",
+  "tag": "TGA",
+  "badges": [
+    {"label": "NSW Telco Authority", "variant": "agency"},
+    {"label": "NSW Government", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The NSW Telco Authority builds, maintains and operates the State's Public Safety Network (PSN) — the digital trunked radio network that consolidates the previous Government Radio Network (GRN) and serves the police, fire, ambulance, SES, health, transport, utilities and many councils."},
+    {"type": "h", "text": "Why You're Hearing Them"},
+    {"type": "ul", "items": [
+      "TGA owns the network — its own talkgroups are typically site-test, engineering and field-maintenance traffic.",
+      "Operates a 24/7 Network Operations Centre.",
+      "Migration of NSW agencies onto the PSN consolidates emergency communications statewide."
+    ]}
+  ],
+  "sections": []
+}

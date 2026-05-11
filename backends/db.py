@@ -24,8 +24,13 @@ if not DATABASE_URL:
         "Example: postgresql://user:password@localhost:5432/nswpsn"
     )
 
-# Connection pool: min 2, max 20 connections shared across threads
-_pool = pool.ThreadedConnectionPool(2, 20, DATABASE_URL)
+# Connection pool: min 4, max 20 connections shared across threads.
+# Min was 2; bumped to 4 because on boot ~9 source workers + count
+# prewarm + heatmap + filter cache scheduler all want a connection at
+# once. Min=2 meant the first two grabbed pooled conns instantly and
+# the rest paid the cost of opening a new connection under load,
+# adding latency and TCP/auth churn during the worst possible window.
+_pool = pool.ThreadedConnectionPool(4, 20, DATABASE_URL)
 
 
 class _PooledConn:
@@ -105,3 +110,26 @@ def get_conn_dict():
     conn.autocommit = False
     conn.cursor_factory = RealDictCursor
     return _PooledConn(conn)
+
+
+def pool_stats():
+    """Return current pool occupancy as {'in_use', 'idle', 'max'}.
+
+    Reads the psycopg2 pool's private members (`_used`, `_pool`) under a
+    try/except so an internals change can't break the status endpoint —
+    we just return None for any field we couldn't read.
+    """
+    in_use = idle = None
+    try:
+        in_use = len(getattr(_pool, '_used', {}) or {})
+    except Exception:
+        pass
+    try:
+        idle = len(getattr(_pool, '_pool', []) or [])
+    except Exception:
+        pass
+    return {
+        'in_use': in_use,
+        'idle': idle,
+        'max': getattr(_pool, 'maxconn', None),
+    }
