@@ -1,0 +1,8 @@
+Code,Meaning
+{b:1},Responding to incident
+{b:2},Stand-down / cancelled
+{b:3},On-scene / arrived at incident
+{b:4},Available for calls
+{b:5},Back at station
+{b:6},Entering RFS area of responsibility
+{b:7},"Appliance off-line (contamination, mechanical issue, etc.)"

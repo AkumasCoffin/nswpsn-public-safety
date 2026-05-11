@@ -1,0 +1,6 @@
+Priority,Summary,Typical Use
+{pill:red:Red},Highest priority / urgent assistance,"Serious incidents, persons trapped, major fire escalation, firefighter in danger."
+{pill:white:White},Unreported incident discovered,"Crew finds a job while driving — medical, accident, or fire not yet reported."
+{pill:blue:Blue},Active incident update,"Tactical updates, fire conditions, strategy changes, resource changes."
+{pill:green:Green},Incident complete,Final summary of actions taken and outcome.
+{pill:yellow:Yellow},Low-priority / logistical,"Routine, non-incident traffic (station moves, returning to area, etc.)."

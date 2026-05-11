@@ -1,0 +1,19 @@
+{
+  "title": "🤝 Shared Liaison Groups",
+  "tag": "Liaison",
+  "badges": [
+    {"label": "Multi-agency Liaison", "variant": "agency"},
+    {"label": "Cross-Service Coordination", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Shared Liaison Groups are talkgroups that bring multiple emergency services onto a single common channel for incident coordination. They are used at major incidents where two or more services need to talk to each other in real time without leaving the PSN."},
+    {"type": "h", "text": "Typical Patches"},
+    {"type": "ul", "items": [
+      "FRNSW + NSW Ambulance + NSW Police at structure fires and rescues.",
+      "RFS + FRNSW + Forestry + NPWS during major bushfires.",
+      "SES + NSW Ambulance + NSW Police during flood operations.",
+      "Multi-agency event management for major events (NYE, Vivid, Royal Show)."
+    ]}
+  ],
+  "sections": []
+}

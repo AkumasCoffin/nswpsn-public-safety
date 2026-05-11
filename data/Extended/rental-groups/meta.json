@@ -1,0 +1,23 @@
+{
+  "title": "📻 Rental Groups",
+  "tag": "Rental",
+  "badges": [
+    {"label": "Rental Talkgroups", "variant": "agency"},
+    {"label": "Commercial / Event Hire", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Rental Groups are PSN talkgroups leased on a short or long-term basis to organisations that don't have their own permanent allocation. They cover event production, contractor crews, pop-up operations and one-off government projects."},
+    {"type": "h", "text": "Common Uses"},
+    {"type": "ul", "items": [
+      "Major-event security and traffic (e.g. Vivid Sydney, NYE, Mardi Gras, Sydney Royal Easter Show, marathon and triathlon support).",
+      "Construction tier-one contractors during major-project blockades.",
+      "Short-term agency surge capacity."
+    ]},
+    {"type": "h", "text": "Notes"},
+    {"type": "ul", "items": [
+      "Renter identity is rarely advertised in the PSN talkgroup name and frequently changes.",
+      "Encryption settings vary by hire customer."
+    ]}
+  ],
+  "sections": []
+}

@@ -1,0 +1,19 @@
+{
+  "title": "🏞 NSW National Parks & Wildlife Service",
+  "tag": "NPWS",
+  "badges": [
+    {"label": "NPWS", "variant": "agency"},
+    {"label": "NSW DCCEEW", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The NSW National Parks and Wildlife Service manages more than 870 national parks, nature reserves and historic sites covering around 7.5 million hectares — about 9% of NSW. NPWS is a major fire-fighting agency and the lead manager for park-based emergencies and search-and-rescue."},
+    {"type": "h", "text": "Capabilities"},
+    {"type": "ul", "items": [
+      "Field staff trained as remote-area firefighters and as Park Rangers.",
+      "Hazard-reduction burning and fire suppression alongside RFS and Forestry Corporation.",
+      "Pest, weed and threatened-species management programs.",
+      "Coordinates with NSW Police Rescue and SES for park search and rescue."
+    ]}
+  ],
+  "sections": []
+}

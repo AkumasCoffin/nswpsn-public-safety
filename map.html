@@ -26,6 +26,7 @@
 
   <script src="https://kit.fontawesome.com/5d58b9d240.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
@@ -849,6 +850,165 @@
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
     .btn-toggle.active#btn-beachwatch { border: 1px solid #06b6d4; color: #67e8f9; }
+    .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
+
+    /* Floating per-layer filter sidebar (desktop only). Each enabled
+       layer with filter options appends a button to this column; clicking
+       opens the filter selection panel to the right. The sidebar grows
+       upward as buttons are added. Hidden on mobile (where the sidebar
+       layout already serves the same purpose via the inline panels). */
+    .floating-filter-sidebar {
+      position: absolute;
+      left: 12px;
+      /* Stacked above the map-type controls (Dark/Sat/Topo) which sit at
+         bottom: 20px / ~40px tall. Any closer and the filter buttons
+         render under the type-control pill. */
+      bottom: 76px;
+      z-index: 800;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .floating-filter-sidebar > * { pointer-events: auto; }
+    @media (max-width: 900px) {
+      .floating-filter-sidebar { display: none; }
+      .floating-filter-panel { display: none !important; }
+    }
+    .floating-filter-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 17px;
+      transition: background-color 0.15s, border-color 0.15s, transform 0.15s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn:hover {
+      background: rgba(30, 41, 59, 0.96);
+      transform: translateX(2px);
+    }
+    .floating-filter-btn.active {
+      box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    /* Hover tooltip — appears to the right of the button. Uses
+       data-tooltip rather than the native title attribute so it shows
+       instantly without the OS-level delay and matches the panel style. */
+    .floating-filter-btn[data-tooltip] {
+      position: relative;
+    }
+    .floating-filter-btn[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%) translateX(-4px);
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s, transform 0.15s;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn[data-tooltip]:hover::after {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
+    .floating-filter-panel {
+      position: absolute;
+      left: 64px;
+      /* Anchored to the same bottom as the sidebar so it opens flush
+         with the bottom-most filter button instead of overlapping the
+         map-type pill. */
+      bottom: 76px;
+      z-index: 800;
+      min-width: 220px;
+      max-width: 300px;
+      max-height: calc(100vh - 160px);
+      overflow-y: auto;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: #e2e8f0;
+      display: none;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    .floating-filter-panel.open { display: block; }
+    .floating-filter-panel h4 {
+      margin: 0 0 10px 0;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .floating-filter-panel .ff-section-label {
+      font-size: 10px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 8px 0 6px 0;
+      font-weight: 600;
+    }
+    .floating-filter-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .floating-filter-pill {
+      padding: 5px 11px;
+      border-radius: 14px;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.12s;
+    }
+    .floating-filter-pill:hover { border-color: #94a3b8; color: #cbd5e1; }
+    .floating-filter-pill.active {
+      background: rgba(249, 115, 22, 0.28);
+      border-color: #f97316;
+      color: #fed7aa;
+    }
+    .floating-filter-status {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(148, 163, 184, 0.18);
+      font-size: 10px;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+    /* Hide every inline filter panel on desktop — the floating sidebar
+       takes over. Mobile (≤900px) keeps them via the existing inline
+       sidebar so the responsive layout stays unchanged. */
+    @media (min-width: 901px) {
+      #firms-controls,
+      #ais-panel,
+      #weather-panel,
+      #hazards-panel,
+      #police-panel,
+      #cameras-panel,
+      #pager-panel,
+      #outages-panel,
+      #beaches-panel { display: none !important; }
+    }
     .btn-toggle.active#btn-repeaters { border: 1px solid #22c55e; color: #86efac; }
     .btn-toggle.active#btn-towers { border: 1px solid #ec4899; color: #f9a8d4; }
     .btn-toggle.active#btn-weather { border: 1px solid #38bdf8; color: #7dd3fc; }
@@ -1093,6 +1253,42 @@
     .beach-detail-popup .leaflet-popup-close-button:hover {
       color: #fff !important;
     }
+    /* Repeater (NSWPSN site) popup — same dark theme as beach popups, teal accents,
+       and a scrollable inner area so the frequency list can be scrolled. */
+    .repeater-popup .leaflet-popup-content-wrapper {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(20, 184, 166, 0.45) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.55), 0 0 18px rgba(20, 184, 166, 0.18) !important;
+      color: #e2e8f0 !important;
+    }
+    .repeater-popup .leaflet-popup-content {
+      margin: 10px 12px !important;
+      max-height: 420px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(20,184,166,0.45) transparent;
+    }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar { width: 6px; }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-track { background: transparent; }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb {
+      background: rgba(20,184,166,0.45);
+      border-radius: 3px;
+    }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(20,184,166,0.7);
+    }
+    .repeater-popup .leaflet-popup-tip {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(20, 184, 166, 0.45) !important;
+    }
+    .repeater-popup .leaflet-popup-close-button {
+      color: #5eead4 !important;
+      font-size: 18px !important;
+    }
+    .repeater-popup .leaflet-popup-close-button:hover {
+      color: #fff !important;
+    }
 
     /* Pager / Incident Overview Tooltip – balanced width */
     .leaflet-tooltip {
@@ -1129,6 +1325,128 @@
     /* Ensure all tooltip text is white */
     .leaflet-tooltip, .leaflet-tooltip * {
       color: inherit;
+    }
+
+    /* AIS vessel-list panel — floating right strip with search + scroll
+       list. Shown only while the AIS layer is enabled. */
+    .ais-list-panel {
+      position: absolute;
+      top: 70px;
+      right: 12px;
+      width: 320px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 160px);
+      z-index: 850;
+      display: none;
+      flex-direction: column;
+      background: rgba(15, 23, 42, 0.94);
+      border: 1px solid rgba(125, 211, 252, 0.35);
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+      overflow: hidden;
+      font-size: 12px;
+      color: #e2e8f0;
+    }
+    .ais-list-panel.open { display: flex; }
+    .ais-list-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; border-bottom: 1px solid rgba(125, 211, 252, 0.18);
+    }
+    .ais-list-header h4 {
+      margin: 0; font-size: 13px; font-weight: 600; flex: 1;
+      color: #7dd3fc; letter-spacing: 0.02em;
+    }
+    .ais-list-header .ais-list-count { font-size: 11px; color: #94a3b8; }
+    .ais-list-header .ais-list-close {
+      background: transparent; border: 0; color: #94a3b8; font-size: 14px;
+      cursor: pointer; padding: 2px 6px; border-radius: 4px;
+    }
+    .ais-list-header .ais-list-close:hover { color: #fff; background: rgba(255,255,255,0.06); }
+    .ais-list-search {
+      padding: 8px 12px; border-bottom: 1px solid rgba(125, 211, 252, 0.12);
+    }
+    .ais-list-search input {
+      width: 100%; box-sizing: border-box;
+      padding: 6px 10px; border-radius: 6px;
+      background: rgba(8, 12, 28, 0.65);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      color: #e2e8f0; font-size: 12px;
+    }
+    .ais-list-search input::placeholder { color: #64748b; }
+    .ais-list-search input:focus { outline: none; border-color: #7dd3fc; }
+    .ais-list-body {
+      flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    }
+    .ais-list-body::-webkit-scrollbar { width: 6px; }
+    .ais-list-body::-webkit-scrollbar-track { background: transparent; }
+    .ais-list-body::-webkit-scrollbar-thumb { background: rgba(125,211,252,0.25); border-radius: 3px; }
+    .ais-list-row {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .ais-list-row:hover { background: rgba(125, 211, 252, 0.08); }
+    .ais-list-row.selected { background: rgba(125, 211, 252, 0.14); }
+    .ais-list-row .ais-list-glyph svg { display: block; }
+    .ais-list-row .ais-list-info { min-width: 0; }
+    .ais-list-row .ais-list-name {
+      font-weight: 600; font-size: 12px; color: #f1f5f9;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ais-list-row .ais-list-meta {
+      font-size: 10px; color: #94a3b8; margin-top: 1px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ais-list-row .ais-list-speed {
+      font-variant-numeric: tabular-nums;
+      font-size: 11px; color: #cbd5e1; min-width: 38px; text-align: right;
+    }
+    .ais-list-empty {
+      padding: 18px 12px; text-align: center; color: #64748b; font-size: 11px;
+    }
+    .ais-list-detail {
+      grid-column: 1 / -1;
+      margin-top: 6px; padding: 8px 0; border-top: 1px dashed rgba(148, 163, 184, 0.18);
+      font-size: 11px; line-height: 1.45;
+    }
+    .ais-list-detail img {
+      width: 100%; max-height: 140px; object-fit: cover;
+      border-radius: 6px; margin-bottom: 6px;
+      background: rgba(0,0,0,0.3);
+    }
+    .ais-list-detail .row { display: flex; gap: 6px; }
+    .ais-list-detail .row .k { color: #94a3b8; min-width: 80px; }
+    .ais-list-detail .row .v { color: #e2e8f0; font-weight: 500; }
+    @media (max-width: 720px) {
+      .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
+    }
+
+    /* AIS vessel hover tooltip — overrides the bright pager-style default
+       above so vessel info reads on a dark slate panel. */
+    .leaflet-tooltip.ais-tooltip {
+      background: rgba(15, 23, 42, 0.96) !important;
+      color: #e2e8f0 !important;
+      border: 1px solid rgba(125, 211, 252, 0.4) !important;
+      border-radius: 8px !important;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+      padding: 10px 12px !important;
+      min-width: 320px !important;
+      max-width: 600px !important;
+      width: max-content !important;
+      backdrop-filter: blur(6px);
+    }
+    .leaflet-tooltip.ais-tooltip > div { width: 100%; max-width: 100% !important; }
+    .leaflet-tooltip.ais-tooltip::before {
+      border-top-color: rgba(15, 23, 42, 0.96) !important;
+      border-right-color: rgba(15, 23, 42, 0.96) !important;
+      border-bottom-color: rgba(15, 23, 42, 0.96) !important;
+      border-left-color: rgba(15, 23, 42, 0.96) !important;
     }
 
     /* Compact tooltip for police-heatmap hex cells. Override the
@@ -1612,13 +1930,10 @@
       <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
       <a class="active" href="map.html" style="color: #fca5a5;">Incident Map</a>
       <a href="logs.html">Incident Logs</a>
-      <a href="fire-and-rescue.html">Fire and Rescue NSW</a>
-      <a href="ambulance.html">NSW Ambulance</a>
-      <a href="rural-fire-service.html">NSW Rural Fire Service</a>
-      <a href="aviation.html">Aviation &amp; Callsigns</a>
       <a href="links.html">Useful Links</a>
       <a href="data-sources.html">Data Sources</a>
     </nav>
+    <div id="agencies-nav-mount"></div>
     <div class="sidebar-section-label">Legal</div>
     <nav class="sidebar-nav">
       <a href="terms.html">Terms &amp; Conditions</a>
@@ -1657,8 +1972,14 @@
   <main class="main" id="map-layout-root">
     <div class="map-container">
       <div id="map"></div>
-      
-      
+
+      <!-- Desktop floating filter sidebar (hidden on mobile via media
+           query). Each enabled layer with filter options registers a
+           button here; clicking opens the panel. Auto-closes any other
+           open panel when a different button is clicked. -->
+      <div class="floating-filter-sidebar" id="floating-filter-sidebar"></div>
+      <div class="floating-filter-panel" id="floating-filter-panel"></div>
+
       <div class="layer-toggles" id="layer-toggles">
         <button id="btn-user" class="btn-toggle active" onclick="toggleMapLayer('user')"><span class="dot-indicator" style="background:#a855f7;"></span> User</button>
         <button id="btn-rfs" class="btn-toggle active" onclick="toggleMapLayer('rfs')"><span class="dot-indicator" style="background:#ef4444;"></span> RFS</button>
@@ -1671,6 +1992,24 @@
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()"><span class="dot-indicator" style="background:#8b5cf6;"></span> Cameras</button>
         <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()"><span class="dot-indicator" style="background:#06b6d4;"></span> Beaches</button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()"><span class="dot-indicator" style="background:#38bdf8;"></span> Weather</button>
+        <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
+        <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')"><span class="dot-indicator" style="background:#14b8a6;"></span> Repeaters</button>
+        <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')"><span class="dot-indicator" style="background:#0284c7;"></span> AIS Ships</button>
+      </div>
+      <div id="firms-controls" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid rgba(249,115,22,0.35);border-radius:8px;background:rgba(20,12,4,0.55);">
+        <div style="font-size:10px;color:#fdba74;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;font-weight:600;">
+          <i class="fa-solid fa-satellite" style="margin-right:5px;"></i>Satellite filter
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;margin-bottom:4px;cursor:pointer;">
+          <input type="checkbox" id="chk-firms-snpp" checked onchange="toggleFirmsSatellite('S-NPP', this.checked)" style="accent-color:#f97316;width:14px;height:14px;"> VIIRS S-NPP
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;margin-bottom:4px;cursor:pointer;">
+          <input type="checkbox" id="chk-firms-noaa20" checked onchange="toggleFirmsSatellite('NOAA-20', this.checked)" style="accent-color:#f97316;width:14px;height:14px;"> VIIRS NOAA-20
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;margin-bottom:0;cursor:pointer;">
+          <input type="checkbox" id="chk-firms-noaa21" checked onchange="toggleFirmsSatellite('NOAA-21', this.checked)" style="accent-color:#f97316;width:14px;height:14px;"> VIIRS NOAA-21
+        </label>
+        <div id="firms-source-status" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;"></div>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
@@ -1797,6 +2136,30 @@
         <label><input type="checkbox" id="chk-beachwatch" checked onchange="onBeachFilterChange()"><span class="filter-dot" style="background:#22c55e;"></span> Beachwatch (Water Quality)</label>
         <label><input type="checkbox" id="chk-beachsafe" checked onchange="onBeachFilterChange()"><span class="filter-dot" style="background:#3b82f6;"></span> BeachSafe (Patrol / Hazards)</label>
       </div>
+
+      <!-- AIS Ships Filter Panel — keyed off btn-ais. Identical pattern
+           to the other layer filter panels: shown inline on mobile via
+           the sidebar slot, replaced on desktop by the floating filter
+           button + colour-matched pills. -->
+      <div class="filter-panel" id="ais-panel">
+        <div class="mobile-drag-handle"></div>
+        <h4><i class="fa-solid fa-ship" style="color:#7dd3fc;"></i> AIS Ships</h4>
+        <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;margin:6px 0 4px;">Ship Type</div>
+        <label><input type="checkbox" id="chk-ais-cargo" checked onchange="toggleAisType('cargo', this.checked)" style="accent-color:#10b981;"><span class="filter-dot" style="background:#10b981;"></span> Cargo</label>
+        <label><input type="checkbox" id="chk-ais-tanker" checked onchange="toggleAisType('tanker', this.checked)" style="accent-color:#ef4444;"><span class="filter-dot" style="background:#ef4444;"></span> Tanker</label>
+        <label><input type="checkbox" id="chk-ais-passenger" checked onchange="toggleAisType('passenger', this.checked)" style="accent-color:#3b82f6;"><span class="filter-dot" style="background:#3b82f6;"></span> Passenger</label>
+        <label><input type="checkbox" id="chk-ais-hsc" checked onchange="toggleAisType('hsc', this.checked)" style="accent-color:#facc15;"><span class="filter-dot" style="background:#facc15;"></span> High-speed</label>
+        <label><input type="checkbox" id="chk-ais-tug" checked onchange="toggleAisType('tug', this.checked)" style="accent-color:#06b6d4;"><span class="filter-dot" style="background:#06b6d4;"></span> Tug / Special</label>
+        <label><input type="checkbox" id="chk-ais-fishing" checked onchange="toggleAisType('fishing', this.checked)" style="accent-color:#f97316;"><span class="filter-dot" style="background:#f97316;"></span> Fishing</label>
+        <label><input type="checkbox" id="chk-ais-pleasure" checked onchange="toggleAisType('pleasure', this.checked)" style="accent-color:#ec4899;"><span class="filter-dot" style="background:#ec4899;"></span> Pleasure</label>
+        <label><input type="checkbox" id="chk-ais-navaid" checked onchange="toggleAisType('navaid', this.checked)" style="accent-color:#fb923c;"><span class="filter-dot" style="background:#fb923c;"></span> Navaid</label>
+        <label><input type="checkbox" id="chk-ais-unspecified" checked onchange="toggleAisType('unspecified', this.checked)" style="accent-color:#cbd5e1;"><span class="filter-dot" style="background:#cbd5e1;"></span> Unspecified</label>
+        <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;margin:10px 0 4px;">Status</div>
+        <label><input type="checkbox" id="chk-ais-st-underway" checked onchange="toggleAisStatus('underway', this.checked)" style="accent-color:#0284c7;"> Underway</label>
+        <label><input type="checkbox" id="chk-ais-st-anchored" checked onchange="toggleAisStatus('anchored', this.checked)" style="accent-color:#0284c7;"> Anchored</label>
+        <label><input type="checkbox" id="chk-ais-st-other" checked onchange="toggleAisStatus('other', this.checked)" style="accent-color:#0284c7;"> Other</label>
+        <div id="ais-status-line" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;">No vessels loaded yet.</div>
+      </div>
       </div><!-- /map-filters-for-sidebar -->
 
       <div class="map-type-controls">
@@ -1872,6 +2235,22 @@
           <div style="text-align:center; color:var(--text-soft); margin-top:2rem;">Select a pin on the map<br>to view details.</div>
         </div>
       </div>
+
+      <!-- Floating list of AIS vessels currently visible in the map view.
+           Populated/refreshed by aisListRender() whenever the AIS data
+           or filters or map bounds change. -->
+      <div class="ais-list-panel" id="ais-list-panel">
+        <div class="ais-list-header">
+          <i class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
+          <h4>AIS Vessels</h4>
+          <span class="ais-list-count" id="ais-list-count">0</span>
+          <button class="ais-list-close" onclick="closeAisListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ais-list-search">
+          <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="aisListOnSearch(this.value)">
+        </div>
+        <div class="ais-list-body" id="ais-list-body"></div>
+      </div>
     </div>
   </main>
 
@@ -1892,7 +2271,8 @@
       { panel: 'police-panel', btn: 'btn-police' },
       { panel: 'cameras-panel', btn: 'btn-cameras' },
       { panel: 'beaches-panel', btn: 'btn-beachwatch' },
-      { panel: 'weather-panel', btn: 'btn-weather' }
+      { panel: 'weather-panel', btn: 'btn-weather' },
+      { panel: 'ais-panel', btn: 'btn-ais' }
     ];
     function updateSidebarFilterVisibility() {
       if (window.innerWidth > 900) return;
@@ -2302,7 +2682,9 @@
       endeavour_current: { data: null, timestamp: 0 },
       endeavour_maintenance: { data: null, timestamp: 0 },
       endeavour_future: { data: null, timestamp: 0 },
-      essential_energy: { data: null, timestamp: 0 }
+      essential_energy: { data: null, timestamp: 0 },
+      // NASA FIRMS fire-hotspot polygons
+      firms_hotspots: { data: null, timestamp: 0 }
     };
     const LAYER_CACHE_TTL = 60000; // 1 minute - shorter since backend pre-warms data
     
@@ -2363,7 +2745,23 @@
     // Sub-layers for filtered data
     let hazardSubLayers = {};
     let policeSubLayers = {};
-    
+    // Hazards: flat marker list lets us re-project into sub-layers when
+    // the source filter (livetraffic / waze) flips, without refetching.
+    const _hazardMarkers = []; // [{marker, type, source}]
+    const _hazardSelectedSources = new Set(['livetraffic', 'waze']);
+
+    // Roadwork — filtered by classified type rather than by source. The
+    // raw feeds carry inconsistent type labels (mainCategory /
+    // subCategoryB for Live Traffic, wazeSubtype for Waze) so we
+    // normalise each marker into one of a handful of buckets and store
+    // the per-marker type alongside the marker. Filtering then just
+    // re-projects the flat list into roadworkLayer based on the
+    // currently-selected type set.
+    const _roadworkMarkers = [];        // [{marker, type, source}]
+    const _roadworkAvailableTypes = []; // distinct types in current dataset, ordered
+    const _roadworkSelectedTypes = new Set(); // populated from available on first load
+    const _roadworkSelectedSources = new Set(['livetraffic', 'waze']); // both on by default
+
     // Camera filter states and sub-layers
     const cameraFilters = {
       traffic: true,
@@ -2373,9 +2771,118 @@
     let cameraSubLayers = {};
     
     const floodsLayer = L.layerGroup();
+    // NASA FIRMS fire-hotspot polygons (off by default — niche layer that
+    // only matters when bushfires are active).
+    const firmsLayer = L.layerGroup();
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
+    // ---------- AIS (vessel positions) ----------
+    // MarineTraffic provides vessel data; CORS blocks direct browser fetch so
+    // this hits a backend proxy at PROXY_BASE that re-fetches the upstream URL.
+    // Default upstream:
+    //   https://www.marinetraffic.com/getData/get_data_json_4/z:2/X:1/Y:1/station:0/fleet_id:0/embed:1
+    // Replace MARINETRAFFIC_TILE on the backend if you want a different bbox.
+    const aisLayer = L.markerClusterGroup({
+      maxClusterRadius: 50,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      // Ungroup once you're zoomed in past world/continent view — at z7
+      // every vessel shows as its own pin.
+      disableClusteringAtZoom: 7,
+      iconCreateFunction: function (cluster) {
+        const count = cluster.getChildCount();
+        const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
+        const fontSize = count >= 100 ? 11 : 12;
+        return L.divIcon({
+          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#0284c7;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(2,132,199,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          className: '',
+          iconSize: L.point(size, size),
+          iconAnchor: L.point(size / 2, size / 2)
+        });
+      }
+    });
+    // Sub-layers per category — toggling these in/out of `aisLayer` filters
+    // the visible vessels without refetching.
+    let aisSubLayers = {
+      cargo: L.layerGroup(),
+      tanker: L.layerGroup(),
+      passenger: L.layerGroup(),
+      fishing: L.layerGroup(),
+      tug: L.layerGroup(),
+      pleasure: L.layerGroup(),
+      sailing: L.layerGroup(),
+      hsc: L.layerGroup(),
+      gov: L.layerGroup(),
+      other: L.layerGroup()
+    };
+    let aisStatusSubLayers = {
+      underway: L.layerGroup(),
+      anchored: L.layerGroup(),
+      moored: L.layerGroup(),
+      fishing: L.layerGroup(),
+      restricted: L.layerGroup(),
+      aground: L.layerGroup(),
+      unknown: L.layerGroup()
+    };
+    let _aisVessels = []; // raw decoded list, used to rebuild on filter changes
+    // Categories mirror the public MarineTraffic filter UI exactly:
+    // Cargo / Tankers / Passenger / HSC / Tugs+Special / Fishing /
+    // Pleasure / Navaid / Unspecified. Status is just Underway /
+    // Anchored / Other to match MT's "Current Status" toggles.
+    let aisTypeFilter = { cargo:true, tanker:true, passenger:true, hsc:true, tug:true, fishing:true, pleasure:true, navaid:true, unspecified:true };
+    let aisStatusFilter = { underway:true, anchored:true, other:true };
+    // Subtype filter (GT_SHIPTYPE id → bool). Populated lazily once
+    // AIS_SUBTYPES is defined below — we initialise this to {} here
+    // and treat undefined entries as "enabled" so the panel works
+    // even if a GT_SHIPTYPE arrives that's not in the legend yet.
+    let aisSubtypeFilter = {};
+    // Tracks which main type pills are expanded in the floating
+    // filter panel to show their subtypes.
+    let _aisExpandedTypes = new Set();
+    // Maximum allowed ELAPSED (minutes since last AIS position
+    // report) for a vessel to render. 1440 = 24 h = "show any age".
+    // The slider in the AIS filter panel writes this value.
+    let aisMaxAgeMin = 1440;
+    function _aisFormatAge(min) {
+      if (min >= 1440) return 'Any age';
+      if (min < 60) return '≤ ' + min + ' min';
+      if (min % 60 === 0) return '≤ ' + (min / 60) + ' hr';
+      return '≤ ' + (min / 60).toFixed(1) + ' hr';
+    }
+    // Compact tick label (per-stop, fits the cramped slider strip).
+    function _aisAgeTickLabel(min) {
+      if (min >= 1440) return 'Any';
+      if (min < 60) return min + 'm';
+      if (min === 60) return '1h';
+      return (min / 60) + 'h';
+    }
+    function _aisVesselAgeMin(v) {
+      const e = parseInt(v.ELAPSED, 10);
+      return isFinite(e) ? e : null;
+    }
+
+    // NSW PSN / GRN site map — loaded from local JSON. 750+ towers, so we
+    // cluster aggressively at low zoom and let the user spiderfy at zoom 15.
+    const nswpsnLayer = L.markerClusterGroup({
+      maxClusterRadius: 60,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 14,
+      iconCreateFunction: function (cluster) {
+        const count = cluster.getChildCount();
+        const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
+        const fontSize = count >= 100 ? 11 : 12;
+        return L.divIcon({
+          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#14b8a6;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(20,184,166,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          className: '',
+          iconSize: L.point(size, size),
+          iconAnchor: L.point(size / 2, size / 2)
+        });
+      }
+    });
     
     // Camera image live refresh
     let cameraRefreshInterval = null;
@@ -3033,26 +3540,32 @@
     function toggleMapLayer(target) {
       if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: target });
       const layerMap = {
-        user: userLayer, 
-        rfs: rfsLayer, 
+        user: userLayer,
+        rfs: rfsLayer,
         pager: pagerLayer,
         hazards: hazardsLayer,
         police: policeLayer,
         roadwork: roadworkLayer,
         floods: floodsLayer,
         cameras: camerasLayer,
-        beachwatch: beachwatchLayer
+        beachwatch: beachwatchLayer,
+        firms: firmsLayer,
+        nswpsn: nswpsnLayer,
+        ais: aisLayer
       };
-      const btnMap = { 
-        user: 'btn-user', 
-        rfs: 'btn-rfs', 
+      const btnMap = {
+        user: 'btn-user',
+        rfs: 'btn-rfs',
         pager: 'btn-pager',
         hazards: 'btn-hazards',
         police: 'btn-police',
         roadwork: 'btn-roadwork',
         floods: 'btn-floods',
         cameras: 'btn-cameras',
-        beachwatch: 'btn-beachwatch'
+        beachwatch: 'btn-beachwatch',
+        firms: 'btn-firms',
+        nswpsn: 'btn-nswpsn',
+        ais: 'btn-ais'
       };
 
       const layer = layerMap[target];
@@ -3087,6 +3600,47 @@
           startCameraRefresh(); // Start live refresh when cameras enabled
         }
         if (target === 'beachwatch' && beachwatchLayer.getLayers().length === 0) loadBeachwatchData();
+        if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
+        if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
+        if (target === 'ais' && _aisVessels.length === 0) loadAisData();
+      }
+      if (target === 'ais') {
+        const enabled = map.hasLayer(aisLayer);
+        const panel = document.getElementById('ais-panel');
+        if (panel) panel.classList.toggle('open', enabled);
+        if (enabled) {
+          addFilterButton('ais');
+          openAisListPanel();
+        } else {
+          removeFilterButton('ais');
+          closeAisListPanel();
+        }
+        if (typeof updateSidebarFilterVisibility === 'function') {
+          updateSidebarFilterVisibility();
+        }
+      }
+      if (target === 'nswpsn') {
+        const enabled = map.hasLayer(nswpsnLayer);
+        if (enabled) addFilterButton('nswpsn');
+        else removeFilterButton('nswpsn');
+      }
+      // Surface the satellite filter controls only while the layer is on.
+      if (target === 'firms') {
+        const enabled = map.hasLayer(firmsLayer);
+        const ctl = document.getElementById('firms-controls');
+        if (ctl) ctl.style.display = enabled ? 'block' : 'none';
+        // Floating filter sidebar (desktop). The CSS media query hides
+        // the column on mobile so this is harmless there.
+        if (enabled) addFilterButton('firms');
+        else removeFilterButton('firms');
+      }
+      // Roadwork has no per-source filters but still gets a sidebar
+      // button (purely informational panel) so users can see at a
+      // glance which layers are on.
+      if (target === 'roadwork') {
+        const enabled = map.hasLayer(roadworkLayer);
+        if (enabled) addFilterButton('roadwork');
+        else removeFilterButton('roadwork');
       }
       refreshMapAndList();
     }
@@ -3827,7 +4381,7 @@ function initPagerHoursFromStorage() {
                      border-radius:4px;
                      border:2px solid #22c55e;
                      background:rgba(34,197,94,0.15);
-                     box-shadow:0 0 12px #22c55e;
+                     box-shadow:0 0 6px rgba(34,197,94,0.55);
                      transform:rotate(45deg);
                    ">
               </div>`;
@@ -3881,7 +4435,7 @@ function initPagerHoursFromStorage() {
                      border-radius:4px;
                      border:2px solid #22c55e;
                      background:rgba(34,197,94,0.15);
-                     box-shadow:0 0 12px #22c55e;
+                     box-shadow:0 0 6px rgba(34,197,94,0.55);
                      transform:rotate(45deg);
                    ">
               </div>`;
@@ -3942,7 +4496,7 @@ function initPagerHoursFromStorage() {
           } else if (status.includes('monitor') || status.includes('investigation')) {
             shadowStyle = 'box-shadow: 0 0 8px #a855f7; border-color: #a855f7;';
           } else if (status.includes('contained') || status.includes('control') || status.includes('safe') || status.includes('patrol')) {
-            shadowStyle = 'box-shadow: 0 0 8px #22c55e; border-color: #22c55e;';
+            shadowStyle = 'box-shadow: 0 0 4px rgba(34,197,94,0.55); border-color: #22c55e;';
           } else if (status.includes('pending')) {
             shadowStyle = 'box-shadow: 0 0 8px #94a3b8; border-color: #94a3b8;';
           } else if (status.includes('on scene')) {
@@ -3981,7 +4535,7 @@ function initPagerHoursFromStorage() {
                   border-radius:3px;
                   border:2px solid #22c55e;
                   background:rgba(34,197,94,0.2);
-                  box-shadow:0 0 8px #22c55e;
+                  box-shadow:0 0 4px rgba(34,197,94,0.55);
                   transform:rotate(45deg);
                   pointer-events:none;
                 "></div>
@@ -4020,7 +4574,7 @@ function initPagerHoursFromStorage() {
                    border-radius:4px;
                    border:2px solid #22c55e;
                    background:rgba(34,197,94,0.15);
-                   box-shadow:0 0 12px #22c55e;
+                   box-shadow:0 0 6px rgba(34,197,94,0.55);
                    transform:rotate(45deg);
                  ">
             </div>`;
@@ -4076,7 +4630,7 @@ function initPagerHoursFromStorage() {
                      border-radius:4px;
                      border:2px solid #22c55e;
                      background:rgba(34,197,94,0.15);
-                     box-shadow:0 0 12px #22c55e;
+                     box-shadow:0 0 6px rgba(34,197,94,0.55);
                      transform:rotate(45deg);
                    ">
               </div>`;
@@ -4131,7 +4685,7 @@ function initPagerHoursFromStorage() {
                      border-radius:4px;
                      border:2px solid #22c55e;
                      background:rgba(34,197,94,0.15);
-                     box-shadow:0 0 12px #22c55e;
+                     box-shadow:0 0 6px rgba(34,197,94,0.55);
                      transform:rotate(45deg);
                    ">
               </div>`;
@@ -4212,7 +4766,7 @@ function initPagerHoursFromStorage() {
                   border-radius:3px;
                   border:2px solid #22c55e;
                   background:rgba(34,197,94,0.3);
-                  box-shadow:0 0 10px #22c55e;
+                  box-shadow:0 0 5px rgba(34,197,94,0.55);
                   transform:rotate(45deg);
                   pointer-events:none;
                 "></div>
@@ -5335,6 +5889,24 @@ function initPagerHoursFromStorage() {
     // parallel. Holding the in-flight promise per (method+url+body) lets
     // every duplicate caller share one network round-trip.
     const _inflightFetches = new Map();
+    // Any successful /api/* response is proof the API is reachable —
+    // flip the indicator to "online" without waiting for the next
+    // 60s heartbeat. Defined here so apiFetch can call it; the
+    // heartbeat path also calls updateApiStatus directly when it
+    // gets back full status detail.
+    function _markApiOnlineFromFetch(url) {
+      try {
+        if (typeof url !== 'string') return;
+        if (!/\/api\//.test(url)) return;
+        const dot = document.getElementById('api-status-dot');
+        const text = document.getElementById('api-status-text');
+        if (!dot || !text) return;
+        if (dot.classList.contains('connected')) return; // already online
+        dot.className = 'api-status-dot connected';
+        text.textContent = 'API Online';
+      } catch (_) { /* ignore */ }
+    }
+
     function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
       const headers = {
@@ -5344,21 +5916,23 @@ function initPagerHoursFromStorage() {
       // Dedupe only safe idempotent reads. Anything with a body or
       // non-GET/HEAD method gets a fresh fetch.
       const dedupable = (method === 'GET' || method === 'HEAD') && !options.body;
+      const promote = (r) => {
+        if (r && r.ok) _markApiOnlineFromFetch(url);
+        return r;
+      };
       if (dedupable) {
         const key = method + ' ' + url;
         const existing = _inflightFetches.get(key);
         if (existing) {
-          // Clone so each caller gets its own consumable Response (body
-          // streams can only be read once).
-          return existing.then(r => r.clone());
+          return existing.then(r => r.clone()).then(promote);
         }
         const p = fetch(url, { ...options, headers }).finally(() => {
           _inflightFetches.delete(key);
         });
         _inflightFetches.set(key, p);
-        return p.then(r => r.clone());
+        return p.then(r => r.clone()).then(promote);
       }
-      return fetch(url, { ...options, headers });
+      return fetch(url, { ...options, headers }).then(promote);
     }
     
     // Load API config from backend (with flood guard)
@@ -5406,16 +5980,29 @@ function initPagerHoursFromStorage() {
       // Prevent concurrent heartbeat requests (avoid flood)
       if (_heartbeatInFlight) return;
       _heartbeatInFlight = true;
+      // Abort if the network call hangs — without this a single
+      // stalled fetch locks _heartbeatInFlight forever and the
+      // status indicator gets stuck on whatever it last showed.
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 10_000);
       try {
         if (action === 'open') _heartbeatOpenSent = true;
-        // Use fetch directly (heartbeat is public, doesn't need API key)
-        const res = await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${MAP_PAGE_ID}&page_type=${MAP_PAGE_TYPE}&data_page=${MAP_IS_DATA_PAGE}`);
+        const res = await fetch(
+          `${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${MAP_PAGE_ID}&page_type=${MAP_PAGE_TYPE}&data_page=${MAP_IS_DATA_PAGE}`,
+          { signal: ctl.signal },
+        );
         const data = await res.json();
         updateApiStatus(data, true);
       } catch (e) {
         console.warn('Map heartbeat failed:', e);
         updateApiStatus(null, false);
+        // The heartbeat failed but other apiFetch calls may still
+        // be hitting the API just fine. Schedule a fast retry so
+        // the offline state clears as soon as the API is back,
+        // instead of waiting the full 60s heartbeat interval.
+        setTimeout(() => sendMapHeartbeat('ping'), 8_000);
       } finally {
+        clearTimeout(timer);
         _heartbeatInFlight = false;
       }
     }
@@ -5679,11 +6266,13 @@ function initPagerHoursFromStorage() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(outagesLayer);
+        removeFilterButton('outages');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(outagesLayer);
         if (outagesLayer.getLayers().length === 0) loadOutageData();
+        addFilterButton('outages');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -5720,11 +6309,13 @@ function initPagerHoursFromStorage() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(hazardsLayer);
+        removeFilterButton('hazards');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(hazardsLayer);
         if (hazardsLayer.getLayers().length === 0) loadHazardsData();
+        addFilterButton('hazards');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -5750,6 +6341,7 @@ function initPagerHoursFromStorage() {
         // Reset pin toggle so reopening starts with pins on.
         const pinChk = document.getElementById('chk-police-pins');
         if (pinChk) pinChk.checked = true;
+        removeFilterButton('police');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
@@ -5758,6 +6350,7 @@ function initPagerHoursFromStorage() {
           if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
           if (policeLayer.getLayers().length === 0) loadPoliceData();
         }
+        addFilterButton('police');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -6019,6 +6612,16 @@ function initPagerHoursFromStorage() {
 
     async function loadPoliceHeatmap(forceRefresh = false) {
       const stats = document.getElementById('heat-stats');
+      // The floating filter panel reads #heat-stats at render time; if
+      // we mutate it without re-rendering, the panel keeps showing
+      // whatever was there at panel-open time (typically "Loading…"
+      // until the first network round-trip lands).
+      const setStats = (text) => {
+        if (stats) stats.textContent = text;
+        if (typeof refreshActiveFilterPanel === 'function') {
+          refreshActiveFilterPanel();
+        }
+      };
       try {
         const subs = _heatmapSelectedSubtypes();
         // If user unchecks all three, render nothing (no points to show).
@@ -6028,11 +6631,11 @@ function initPagerHoursFromStorage() {
           }
           policeHeatmapLayer = null;
           _policeHeatmapData = null;
-          if (stats) stats.textContent = 'Pick at least one type.';
+          setStats('Pick at least one type.');
           return;
         }
         const url = `${PROXY_BASE}/api/waze/police-heatmap?subtypes=${encodeURIComponent(subs.join(','))}`;
-        if (stats) stats.textContent = 'Loading…';
+        setStats('Loading…');
         const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -6046,11 +6649,11 @@ function initPagerHoursFromStorage() {
             map.removeLayer(policeHeatmapLayer);
           }
           policeHeatmapLayer = null;
-          if (stats) {
-            stats.textContent = data.cache_status === 'warming'
+          setStats(
+            data.cache_status === 'warming'
               ? 'Cache warming up… retrying in 10s'
-              : 'Cache busy — retrying in 5s';
-          }
+              : 'Cache busy — retrying in 5s',
+          );
           const delay = data.cache_status === 'warming' ? 10000 : 5000;
           setTimeout(() => {
             if (document.getElementById('chk-police-heatmap')?.checked) {
@@ -6070,15 +6673,15 @@ function initPagerHoursFromStorage() {
         if (!map.hasLayer(policeHeatmapLayer)) map.addLayer(policeHeatmapLayer);
         _ensureHexViewportListeners();
         _renderPoliceHexGrid();
-        if (stats) {
-          stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
-        }
+        setStats(
+          `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`,
+        );
         // Legend min/max are set inside _renderPoliceHexGrid using the
         // actual hex-max (which can be larger than data.max_count after
         // multiple bins collapse into one hex at low zooms).
       } catch (e) {
         console.error('Police heatmap load failed', e);
-        if (stats) stats.textContent = 'Failed to load. Retry.';
+        setStats('Failed to load. Retry.');
       }
     }
 
@@ -6093,12 +6696,14 @@ function initPagerHoursFromStorage() {
         map.removeLayer(camerasLayer);
         stopCameraRefresh();
         clearCameraSelection();
+        removeFilterButton('cameras');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(camerasLayer);
         if (camerasLayer.getLayers().length === 0) loadCamerasData();
         startCameraRefresh();
+        addFilterButton('cameras');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -6129,11 +6734,13 @@ function initPagerHoursFromStorage() {
         document.querySelectorAll('.pager-pin-dot.pin-selected').forEach(el => {
           el.classList.remove('pin-selected');
         });
+        removeFilterButton('pager');
       } else {
         // Turn on pager layer and open panel with settings
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(pagerLayer);
+        addFilterButton('pager');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -6148,11 +6755,13 @@ function initPagerHoursFromStorage() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(beachwatchLayer);
+        removeFilterButton('beaches');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(beachwatchLayer);
         if (beachwatchLayer.getLayers().length === 0) loadBeachwatchData();
+        addFilterButton('beaches');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -6202,7 +6811,7 @@ function initPagerHoursFromStorage() {
     
     function toggleHazardFilter(type, checked) {
       hazardFilters[type] = checked;
-      
+
       // Update sub-layer visibility
       const subLayer = hazardSubLayers[type];
       if (subLayer) {
@@ -6213,6 +6822,26 @@ function initPagerHoursFromStorage() {
         }
       }
     }
+
+    /** Rebuild the per-type sub-layers from the flat hazards list,
+     *  honouring the source filter. Call after a load or after the
+     *  user toggles a source pill. */
+    function _rebuildHazardSubLayers() {
+      // Reset every typed sub-layer's contents.
+      Object.values(hazardSubLayers).forEach((sl) => sl.clearLayers());
+      for (const m of _hazardMarkers) {
+        if (!_hazardSelectedSources.has(m.source)) continue;
+        const sl = hazardSubLayers[m.type];
+        if (sl) sl.addLayer(m.marker);
+      }
+    }
+    function toggleHazardSourcePill(src) {
+      if (_hazardSelectedSources.has(src)) _hazardSelectedSources.delete(src);
+      else _hazardSelectedSources.add(src);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    }
+    window.toggleHazardSourcePill = toggleHazardSourcePill;
     
     function togglePoliceFilter(type, checked) {
       policeFilters[type] = checked;
@@ -6652,14 +7281,16 @@ function initPagerHoursFromStorage() {
       }
       
       hazardsLayer.clearLayers();
-      
+
       // Create sub-layers for each filter type
       hazardSubLayers = {
         accident: L.layerGroup(),
         hazard: L.layerGroup(),
         closures: L.layerGroup()  // Combines road closures + traffic jams
       };
-      
+      // Reset the flat marker list — repopulated below.
+      _hazardMarkers.length = 0;
+
       let totalCount = 0;
       let jamCount = 0;
       
@@ -7073,12 +7704,13 @@ function initPagerHoursFromStorage() {
                 iconAnchor: [12, 12]
               });
               const category = getHazardCategory(props);
-              const marker = L.marker([lat, lon], { icon }).addTo(hazardSubLayers[category]);
+              const marker = L.marker([lat, lon], { icon });
               marker.bindTooltip(buildHazardTooltip(props), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
               });
+              _hazardMarkers.push({ marker, type: category, source: 'livetraffic' });
               totalCount++;
             }
           });
@@ -7109,17 +7741,18 @@ function initPagerHoursFromStorage() {
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
-              const marker = L.marker([lat, lon], { icon }).addTo(hazardSubLayers[category]);
+              const marker = L.marker([lat, lon], { icon });
               marker.bindTooltip(buildHazardTooltip(props), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
               });
+              _hazardMarkers.push({ marker, type: category, source: 'waze' });
               totalCount++;
             }
           });
         }
-        
+
         // Add jam polylines (traffic slowdowns)
         if (wazeData && wazeData.jams) {
           wazeData.jams.forEach(jam => {
@@ -7137,12 +7770,13 @@ function initPagerHoursFromStorage() {
                 opacity: 0.8,
                 lineCap: 'round',
                 lineJoin: 'round'
-              }).addTo(hazardSubLayers.closures);
-              
+              });
+
               polyline.bindTooltip(buildJamTooltip(props), {
                 sticky: true,
                 opacity: 0.95
               });
+              _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze' });
               jamCount++;
             }
           });
@@ -7150,7 +7784,9 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Waze hazards error', e);
       }
-      
+
+      _rebuildHazardSubLayers();
+
       // Add sub-layers to main layer based on filter state
       Object.keys(hazardSubLayers).forEach(type => {
         if (hazardFilters[type]) {
@@ -7371,8 +8007,37 @@ function initPagerHoursFromStorage() {
         return;
       }
       
+      // Reset the flat marker list — we rebuild it from scratch each
+      // load so type pill counts stay accurate.
       roadworkLayer.clearLayers();
+      _roadworkMarkers.length = 0;
       let totalCount = 0;
+
+      // Normalise a raw feature's type into a small, readable bucket.
+      // Waze ships ALL_CAPS_WITH_UNDERSCORES; Live Traffic ships free
+      // text. The fallback bucket is "Roadwork" so anything we can't
+      // classify still shows up under a sensible label.
+      const _roadworkClassify = (props, isWaze) => {
+        const norm = (s) => String(s || '').trim();
+        const titleCaseLocal = (s) => norm(s).toLowerCase().replace(/(^|\s|-|\/)\w/g, c => c.toUpperCase());
+        if (isWaze) {
+          const sub = norm(props.wazeSubtype).replace(/^CONSTRUCTION_?/i, '').replace(/_/g, ' ').trim();
+          if (sub.toUpperCase() === 'NONE' || !sub) return 'Construction';
+          return titleCaseLocal(sub);
+        }
+        // Live Traffic: try subCategory (the backend doesn't expose
+        // subCategoryB), then mainCategory, then incidentKind, then
+        // displayType. Some incidents only have a headline like
+        // "Pavement maintenance" so fall through to that as a final
+        // resort before the generic "Roadwork" bucket.
+        const t = norm(props.subCategory)
+          || norm(props.mainCategory)
+          || norm(props.incidentKind)
+          || norm(props.displayType)
+          || norm(props.headline);
+        if (!t) return 'Roadwork';
+        return titleCaseLocal(t);
+      };
       
       // Build tooltip for roadwork (Waze or LiveTraffic) - styled like outage tooltips
       function buildRoadworkTooltip(props) {
@@ -7580,7 +8245,6 @@ function initPagerHoursFromStorage() {
       }
       
       try {
-        // Use the data already fetched at the start of the function
         if (trafficData && trafficData.features) {
           trafficData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
@@ -7592,11 +8256,16 @@ function initPagerHoursFromStorage() {
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
-              const marker = L.marker([lat, lon], { icon }).addTo(roadworkLayer);
+              const marker = L.marker([lat, lon], { icon });
               marker.bindTooltip(buildRoadworkTooltip(props), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
+              });
+              _roadworkMarkers.push({
+                marker,
+                type: _roadworkClassify(props, false),
+                source: 'livetraffic',
               });
               totalCount++;
             }
@@ -7605,9 +8274,8 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Traffic roadwork error', e);
       }
-      
+
       try {
-        // Use the waze data already fetched at the start of the function
         if (wazeData && wazeData.features) {
           wazeData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
@@ -7619,11 +8287,16 @@ function initPagerHoursFromStorage() {
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
-              const marker = L.marker([lat, lon], { icon }).addTo(roadworkLayer);
+              const marker = L.marker([lat, lon], { icon });
               marker.bindTooltip(buildRoadworkTooltip(props), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
+              });
+              _roadworkMarkers.push({
+                marker,
+                type: _roadworkClassify(props, true),
+                source: 'waze',
               });
               totalCount++;
             }
@@ -7632,8 +8305,52 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Waze roadwork error', e);
       }
-      
-      console.log(`Loaded ${totalCount} roadwork pins (Live Traffic + Waze)`);
+
+      // Recompute the type catalogue. New types default to selected so
+      // a previously-unseen category isn't silently filtered out on
+      // first appearance; deselected types stick across reloads.
+      const seenTypes = new Set();
+      for (const m of _roadworkMarkers) seenTypes.add(m.type);
+      _roadworkAvailableTypes.length = 0;
+      for (const t of Array.from(seenTypes).sort((a, b) => a.localeCompare(b))) {
+        _roadworkAvailableTypes.push(t);
+        // Default-on for newly-seen types. Keep prior off-state.
+        if (!_roadworkSelectedTypes.has(`__off:${t}`)) _roadworkSelectedTypes.add(t);
+      }
+      _renderRoadworkVisible();
+
+      console.log(`Loaded ${totalCount} roadwork pins (${_roadworkAvailableTypes.length} types)`);
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    }
+
+    /** Re-project the flat marker list onto roadworkLayer, honoring
+     *  both selected types and selected sources. */
+    function _renderRoadworkVisible() {
+      roadworkLayer.clearLayers();
+      for (const m of _roadworkMarkers) {
+        if (!_roadworkSelectedTypes.has(m.type)) continue;
+        if (!_roadworkSelectedSources.has(m.source)) continue;
+        roadworkLayer.addLayer(m.marker);
+      }
+    }
+    function toggleRoadworkSourcePill(src) {
+      if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
+      else _roadworkSelectedSources.add(src);
+      _renderRoadworkVisible();
+      refreshActiveFilterPanel();
+    }
+    window.toggleRoadworkSourcePill = toggleRoadworkSourcePill;
+
+    /** Flip a roadwork type pill on/off. */
+    function toggleRoadworkType(t) {
+      if (_roadworkSelectedTypes.has(t)) {
+        _roadworkSelectedTypes.delete(t);
+        _roadworkSelectedTypes.add(`__off:${t}`); // remember the off-state across reloads
+      } else {
+        _roadworkSelectedTypes.add(t);
+        _roadworkSelectedTypes.delete(`__off:${t}`);
+      }
+      _renderRoadworkVisible();
     }
 
     // Floods
@@ -7780,6 +8497,1897 @@ function initPagerHoursFromStorage() {
       }
       
       console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
+    }
+
+    // NASA FIRMS fire-hotspot polygons. Each feature is the satellite
+    // pixel footprint (375m × 375m for VIIRS) so the polygon represents
+    // the actual area the satellite flagged as actively burning over the
+    // last 24h. Confidence + FRP (fire radiative power, in MW) drive
+    // colour and opacity so a smouldering 1MW pixel doesn't render the
+    // same as a 1000MW running fire.
+    function firmsFillFor(props) {
+      // FRP-based intensity ramp. NASA classes >100MW as a major
+      // detection. Anything past 200MW gets the brightest colour.
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return '#dc2626';   // intense red
+      if (frp >= 50)  return '#f97316';   // orange
+      if (frp >= 10)  return '#facc15';   // yellow
+      return '#fde047';                   // pale yellow (low FRP / smoulder)
+    }
+    function firmsRadiusFor(props) {
+      // Pixel-radius scaled by FRP so larger fires read larger at every
+      // zoom level. The previous "actual pixel footprint as polygon"
+      // sized at 375 m is unreadable at NSW-wide zoom (sub-pixel) — using
+      // a fixed pixel radius keeps every detection visible.
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return 11;
+      if (frp >= 50)  return 9;
+      if (frp >= 10)  return 7;
+      return 5;
+    }
+    function firmsOpacityFor(props) {
+      // Low-confidence VIIRS detections + tiny daytime pixels can be
+      // hot-roof / industrial false positives; render them more
+      // transparent so the user instinctively trusts the bright ones.
+      const conf = String(props.confidence || '').toLowerCase();
+      if (conf === 'high' || conf === 'h') return 0.85;
+      if (conf === 'low'  || conf === 'l') return 0.45;
+      const num = Number(conf);
+      if (Number.isFinite(num)) return num >= 50 ? 0.70 : 0.50;
+      return 0.70;
+    }
+    // Map FIRMS confidence values to readable labels. VIIRS uses single
+    // letters (l/n/h); MODIS uses 0-100 numeric. Anything else falls
+    // back to the raw value so we don't silently drop data.
+    function firmsConfidenceLabel(conf) {
+      const c = String(conf == null ? '' : conf).toLowerCase().trim();
+      if (c === 'h' || c === 'high') return 'high';
+      if (c === 'n' || c === 'nominal') return 'nominal';
+      if (c === 'l' || c === 'low') return 'low';
+      const num = Number(c);
+      if (Number.isFinite(num)) return `${num}%`;
+      return c || 'unknown';
+    }
+    // Format the FIRMS acq_datetime in Sydney local time with a short
+    // "X ago" hint. NRT detections lag the satellite pass by ~3h, so
+    // showing "5h ago" is a meaningful freshness cue alongside the wall
+    // clock. Falls back to a clean "29 Apr 02:41 UTC" if the field is
+    // missing.
+    function firmsFormatTime(props) {
+      const iso = props.acq_datetime;
+      if (iso) {
+        const d = new Date(iso);
+        if (!isNaN(d.getTime())) {
+          const fmt = new Intl.DateTimeFormat('en-AU', {
+            day: '2-digit', month: 'short',
+            hour: '2-digit', minute: '2-digit', hour12: true,
+            timeZone: 'Australia/Sydney',
+            timeZoneName: 'short',
+          });
+          return fmt.format(d);
+        }
+      }
+      const date = String(props.acq_date || '').trim();
+      const time = String(props.acq_time || '').padStart(4, '0');
+      if (date && time.length >= 4) {
+        return `${date} ${time.slice(0, 2)}:${time.slice(2, 4)} UTC`;
+      }
+      return '—';
+    }
+    function firmsFormatAgo(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      const diffMs = Date.now() - d.getTime();
+      if (diffMs < 0) return '';
+      const minutes = Math.floor(diffMs / 60000);
+      if (minutes < 1) return 'just now';
+      if (minutes < 60) return `${minutes} min ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) {
+        const m = minutes % 60;
+        return m > 0 ? `${hours}h ${m}m ago` : `${hours}h ago`;
+      }
+      const days = Math.floor(hours / 24);
+      const h = hours % 24;
+      return h > 0 ? `${days}d ${h}h ago` : `${days}d ago`;
+    }
+    // FRP buckets — "fire radiative power" from the satellite. NASA's own
+    // guidance: <10 MW low, 10-50 moderate, 50-100 high, >100 major. Use
+    // those bands to map raw watts to a one-word severity for the tooltip.
+    function firmsIntensityLabel(frp) {
+      const n = Number(frp);
+      if (!Number.isFinite(n) || n <= 0) return 'unknown';
+      if (n >= 200) return 'extreme';
+      if (n >= 50)  return 'high';
+      if (n >= 10)  return 'moderate';
+      if (n >= 1)   return 'low';
+      return 'very low';
+    }
+    function firmsConfidenceTitleCase(conf) {
+      const s = firmsConfidenceLabel(conf);
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    function firmsSatelliteLine(props) {
+      // "NOAA-21 (VIIRS) · Daytime" or "Aqua (MODIS) · Nighttime".
+      const sat = props.satellite_tag || props.satellite || '—';
+      const inst = props.instrument || '';
+      const dn = props.daynight === 'D' ? 'Daytime'
+        : props.daynight === 'N' ? 'Nighttime' : '';
+      const left = inst ? `${sat} (${inst})` : sat;
+      return dn ? `${left} · ${dn}` : left;
+    }
+    function firmsTooltip(props) {
+      // Cluster-aware tooltip — when N detections collapsed into one
+      // marker, surface the count + total FRP rather than pretending
+      // it's a single pixel.
+      const clusterCount = Number(props._clusterCount) || 1;
+      const detectedAt = firmsFormatTime(props);
+      const ago = firmsFormatAgo(props.acq_datetime);
+      const totalFrp = Number(props._totalFrp);
+      const maxFrp = Number(props.frp);
+      const intensityLabel = firmsIntensityLabel(clusterCount > 1 ? totalFrp : maxFrp);
+      const intensityLine = clusterCount > 1
+        ? `${Number.isFinite(totalFrp) ? totalFrp.toFixed(1) : '—'} MW total <span style="color:#94a3b8;">(${intensityLabel}, max ${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW per pixel)</span>`
+        : `${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW <span style="color:#94a3b8;">(${intensityLabel})</span>`;
+      const conf = firmsConfidenceTitleCase(props.confidence);
+      const headline = clusterCount > 1
+        ? `🔥 ${clusterCount} fire detections nearby`
+        : `🔥 NASA FIRMS Hotspot`;
+      const footnote = clusterCount > 1
+        ? `Zoom in for individual detections.`
+        : `Pixel footprint ${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km.`;
+      const agoTag = ago ? ` <span style="color:#94a3b8;font-size:10px;">(${ago})</span>` : '';
+      return `<div style="font-size:11px;line-height:1.5;">
+        <div style="font-weight:600;color:#fdba74;margin-bottom:4px;">${headline}</div>
+        <div><b>Detected:</b> ${detectedAt}${agoTag}</div>
+        <div><b>Fire intensity:</b> ${intensityLine}</div>
+        <div><b>Confidence:</b> ${conf}</div>
+        <div><b>Satellite:</b> ${firmsSatelliteLine(props)}</div>
+        <div style="color:#9ca3af;font-size:10px;margin-top:4px;">${footnote}</div>
+      </div>`;
+    }
+
+    // Grid cell size in degrees, picked so adjacent VIIRS pixels collapse
+    // to one dot at low zoom but expand to individuals near street level.
+    // Aggressive at continental zoom — a fire region of 80 detections at
+    // NSW-wide view should read as one big dot, not 80 stacked ones.
+    function firmsClusterCellDeg(zoom) {
+      if (zoom >= 12) return 0;     // no clustering
+      if (zoom >= 11) return 0.02;  // ~2 km cells (city)
+      if (zoom >= 9)  return 0.08;  // ~9 km cells (region)
+      if (zoom >= 7)  return 0.25;  // ~28 km cells (state)
+      if (zoom >= 5)  return 0.60;  // ~67 km cells (national)
+      return 1.20;                   // continental
+    }
+
+    function firmsClusterFeatures(features, cellDeg) {
+      if (!cellDeg || cellDeg <= 0) {
+        // No clustering — return one cluster-of-one per detection.
+        return features.map((f) => {
+          const p = (f && f.properties) || {};
+          const frp = Number(p.frp) || 0;
+          return {
+            lat: Number(p.latitude),
+            lng: Number(p.longitude),
+            count: 1,
+            totalFrp: frp,
+            maxFrp: frp,
+            confidence: p.confidence,
+            acq_datetime: p.acq_datetime,
+            satellite: p.satellite,
+            satellite_tag: p.satellite_tag,
+            instrument: p.instrument,
+            daynight: p.daynight,
+            brightness: p.brightness,
+            scan_km: p.scan_km,
+            track_km: p.track_km,
+          };
+        });
+      }
+      const buckets = new Map();
+      const confRank = (c) => {
+        const s = String(c == null ? '' : c).toLowerCase();
+        if (s === 'h') return 3;
+        if (s === 'n') return 2;
+        if (s === 'l') return 1;
+        const num = Number(s);
+        if (Number.isFinite(num)) return num >= 80 ? 3 : num >= 50 ? 2 : 1;
+        return 0;
+      };
+      for (const f of features) {
+        const p = (f && f.properties) || {};
+        const lat = Number(p.latitude);
+        const lng = Number(p.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const cy = Math.floor(lat / cellDeg);
+        const cx = Math.floor(lng / cellDeg);
+        const key = cy + '|' + cx;
+        let b = buckets.get(key);
+        if (!b) {
+          b = {
+            sumLat: 0, sumLng: 0, count: 0,
+            totalFrp: 0, maxFrp: 0,
+            confidence: '', _confRank: -1,
+            acq_datetime: '',
+            satellite: '', satellite_tag: '', instrument: '',
+            daynight: '', brightness: null,
+            scan_km: null, track_km: null,
+          };
+          buckets.set(key, b);
+        }
+        b.sumLat += lat;
+        b.sumLng += lng;
+        b.count += 1;
+        const frp = Number(p.frp) || 0;
+        b.totalFrp += frp;
+        if (frp > b.maxFrp) {
+          b.maxFrp = frp;
+          // Carry the brightest detection's metadata as the cluster's
+          // representative — that's what the fire-radius colour is keyed off.
+          b.satellite = p.satellite || b.satellite;
+          b.satellite_tag = p.satellite_tag || b.satellite_tag;
+          b.instrument = p.instrument || b.instrument;
+          b.daynight = p.daynight || b.daynight;
+          b.brightness = p.brightness ?? b.brightness;
+          b.scan_km = p.scan_km ?? b.scan_km;
+          b.track_km = p.track_km ?? b.track_km;
+        }
+        const r = confRank(p.confidence);
+        if (r > b._confRank) {
+          b._confRank = r;
+          b.confidence = p.confidence;
+        }
+        const t = p.acq_datetime || '';
+        if (t > b.acq_datetime) b.acq_datetime = t;
+      }
+      const out = [];
+      for (const b of buckets.values()) {
+        out.push({
+          lat: b.sumLat / b.count,
+          lng: b.sumLng / b.count,
+          count: b.count,
+          totalFrp: b.totalFrp,
+          maxFrp: b.maxFrp,
+          confidence: b.confidence,
+          acq_datetime: b.acq_datetime,
+          satellite: b.satellite,
+          satellite_tag: b.satellite_tag,
+          instrument: b.instrument,
+          daynight: b.daynight,
+          brightness: b.brightness,
+          scan_km: b.scan_km,
+          track_km: b.track_km,
+        });
+      }
+      return out;
+    }
+
+    function firmsClusterRadius(cluster) {
+      // Base radius from peak-FRP; bump for clusters so a fire region
+      // with 100+ pixels reads as a big dot at NSW-wide zoom rather
+      // than the same size as one isolated detection.
+      const base = firmsRadiusFor({ frp: cluster.maxFrp });
+      const c = cluster.count;
+      if (c >= 200) return base + 14;
+      if (c >= 100) return base + 11;
+      if (c >= 50)  return base + 8;
+      if (c >= 20)  return base + 5;
+      if (c >= 10)  return base + 3;
+      if (c >= 3)   return base + 1;
+      return base;
+    }
+
+    // -------------------------------------------------------------------
+    // Floating filter sidebar (desktop). Each layer with filter options
+    // registers itself here via FILTER_REGISTRY. addFilterButton() drops
+    // a button into the column when the layer is on; removeFilterButton()
+    // pulls it when the layer is off. Only one panel is open at a time;
+    // clicking another button auto-closes the previous.
+    // -------------------------------------------------------------------
+    const FILTER_REGISTRY = {};
+    let _activeFilterKey = null;
+
+    function _renderFilterPanel(key) {
+      const panel = document.getElementById('floating-filter-panel');
+      const cfg = FILTER_REGISTRY[key];
+      if (!panel || !cfg) return;
+      panel.innerHTML = cfg.render();
+      panel.classList.add('open');
+      // Sync button highlight
+      document.querySelectorAll('#floating-filter-sidebar .floating-filter-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.key === key);
+      });
+      _activeFilterKey = key;
+    }
+    function hideFilterPanel() {
+      const panel = document.getElementById('floating-filter-panel');
+      if (panel) panel.classList.remove('open');
+      document.querySelectorAll('#floating-filter-sidebar .floating-filter-btn').forEach((b) => {
+        b.classList.remove('active');
+      });
+      _activeFilterKey = null;
+    }
+    function _toggleFilterButton(key) {
+      if (_activeFilterKey === key) hideFilterPanel();
+      else _renderFilterPanel(key);
+    }
+    function addFilterButton(key) {
+      const cfg = FILTER_REGISTRY[key];
+      if (!cfg) return;
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!sidebar) return;
+      if (sidebar.querySelector(`[data-key="${key}"]`)) return; // already there
+      const btn = document.createElement('button');
+      btn.className = 'floating-filter-btn';
+      btn.dataset.key = key;
+      // data-tooltip drives the CSS hover label (instant, styled to
+      // match the panel). Native title kept as a fallback for screen
+      // readers and the rare environment where ::after is suppressed.
+      btn.setAttribute('data-tooltip', cfg.label);
+      btn.title = cfg.label;
+      btn.innerHTML = `<i class="fa-solid ${cfg.icon}" style="color:${cfg.color || '#e2e8f0'};"></i>`;
+      btn.onclick = () => _toggleFilterButton(key);
+      sidebar.appendChild(btn);
+    }
+    function removeFilterButton(key) {
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!sidebar) return;
+      const btn = sidebar.querySelector(`[data-key="${key}"]`);
+      if (btn) btn.remove();
+      if (_activeFilterKey === key) hideFilterPanel();
+    }
+    /** Convenience: re-render the currently-open panel after state mutates. */
+    function refreshActiveFilterPanel() {
+      if (_activeFilterKey) _renderFilterPanel(_activeFilterKey);
+    }
+    // Stop clicks inside the panel from bubbling to the document-level
+    // outside-click listener. Without this, a pill click (which calls
+    // refreshActiveFilterPanel and replaces the panel's innerHTML)
+    // detaches the click target before the document handler runs, so
+    // panel.contains(e.target) returns false and the panel closes
+    // unexpectedly. Same for clicks on the sidebar buttons themselves.
+    (function () {
+      const panel = document.getElementById('floating-filter-panel');
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (panel) panel.addEventListener('click', (e) => e.stopPropagation());
+      if (sidebar) sidebar.addEventListener('click', (e) => e.stopPropagation());
+    })();
+    // Click anywhere on the document outside the panel/sidebar closes
+    // the active panel. Pills handle their own state inside, so this
+    // never fires for in-panel clicks (see the stopPropagation above).
+    document.addEventListener('click', () => {
+      if (_activeFilterKey) hideFilterPanel();
+    });
+
+    let _firmsFeatures = [];           // last fetched raw features
+    let _firmsZoomHandlerWired = false;
+    let _firmsLastSourceStatus = [];   // captured from /api/firms/hotspots for the panel
+    // Per-satellite filter — defaults to all on. Toggled by the user via
+    // the floating-sidebar pill buttons.
+    const _firmsSelectedSats = new Set(['S-NPP', 'NOAA-20', 'NOAA-21']);
+    window.toggleFirmsSatellite = function (sat, checked) {
+      // Kept for the legacy mobile checkbox UI.
+      if (checked) _firmsSelectedSats.add(sat);
+      else _firmsSelectedSats.delete(sat);
+      _renderFirmsLayer();
+      refreshActiveFilterPanel();
+    };
+    window.toggleFirmsSatellitePill = function (sat) {
+      if (_firmsSelectedSats.has(sat)) _firmsSelectedSats.delete(sat);
+      else _firmsSelectedSats.add(sat);
+      // Mirror state to the (hidden-on-desktop) inline checkboxes so
+      // the mobile UI doesn't drift out of sync if a user resizes.
+      const id = sat === 'S-NPP' ? 'chk-firms-snpp'
+        : sat === 'NOAA-20' ? 'chk-firms-noaa20'
+        : sat === 'NOAA-21' ? 'chk-firms-noaa21' : '';
+      const el = id && document.getElementById(id);
+      if (el) el.checked = _firmsSelectedSats.has(sat);
+      _renderFirmsLayer();
+      refreshActiveFilterPanel();
+    };
+
+    // -------------------------------------------------------------------
+    // Layer → floating-filter-panel adapters. Each entry's render() emits
+    // pill-style buttons (and any additional controls) that proxy to the
+    // existing layer-specific handlers (toggleHazardFilter,
+    // togglePoliceFilter, …). Pill click writes the new value back into
+    // the (hidden-on-desktop) inline checkbox so the existing handler
+    // keeps working unchanged, then refreshes the active panel.
+    // -------------------------------------------------------------------
+
+    function _ffSetCheckbox(id, on) {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!on;
+    }
+    function _ffPill(active, label, onclickJs) {
+      return `<button class="floating-filter-pill ${active ? 'active' : ''}" onclick="${onclickJs}">${label}</button>`;
+    }
+    // Pill variant that carries a per-pill colour. Used by AIS to keep
+    // the filter buttons visually matched to the on-map pin colour for
+    // each ship type. `glyph` is rendered before the label — pass a
+    // colored dot/diamond/whatever so the colour is visible even when
+    // the pill is in its inactive grey state.
+    function _ffPillColored(active, color, glyph, label, onclickJs) {
+      const style = active
+        ? `background:${color}40;border-color:${color};color:#f8fafc;`
+        : `border-color:${color}80;color:${color};`;
+      return `<button class="floating-filter-pill" style="${style}" onclick="${onclickJs}">${glyph}<span style="margin-left:6px;">${label}</span></button>`;
+    }
+    function _ffAisTypeGlyph(category, color) {
+      // Mirror the pin shape so the filter pill reads as "this colour
+      // = this type of pin". Navaids show a diamond, everything else
+      // shows a heading-up arrow (matches the rotating SVG arrow used
+      // for moving vessels).
+      if (category === 'navaid') {
+        return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+    }
+
+    // Register the FIRMS layer with the floating filter sidebar.
+    FILTER_REGISTRY.firms = {
+      icon: 'fa-fire',
+      label: 'Fire Hotspots',
+      color: '#fdba74',
+      render() {
+        const sats = [
+          { key: 'S-NPP',   label: 'S-NPP' },
+          { key: 'NOAA-20', label: 'NOAA-20' },
+          { key: 'NOAA-21', label: 'NOAA-21' },
+        ];
+        const pills = sats.map((s) => {
+          const on = _firmsSelectedSats.has(s.key);
+          return `<button class="floating-filter-pill ${on ? 'active' : ''}" onclick="toggleFirmsSatellitePill('${s.key}')">${s.label}</button>`;
+        }).join('');
+        const status = (_firmsLastSourceStatus || []).map((s) => {
+          const ok = !!s.ok;
+          const color = ok ? '#34d399' : '#f87171';
+          const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
+          return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-fire" style="color:#fdba74;"></i> Fire Hotspots</h4>
+          <div class="ff-section-label"><i class="fa-solid fa-satellite" style="margin-right:5px;"></i>VIIRS satellite</div>
+          <div class="floating-filter-pills">${pills}</div>
+          <div class="floating-filter-status">${status || '<em>Loading…</em>'}</div>
+        `;
+      },
+    };
+
+    // Hazards (Crashes / Hazards / Closures+Jams).
+    window.toggleHazardPill = function (key) {
+      hazardFilters[key] = !hazardFilters[key];
+      _ffSetCheckbox(`chk-hazards-${key}`, hazardFilters[key]);
+      toggleHazardFilter(key, hazardFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.hazards = {
+      icon: 'fa-triangle-exclamation',
+      label: 'Traffic Hazards',
+      color: '#ef4444',
+      render() {
+        const items = [
+          { key: 'accident', label: 'Crashes',         color: '#ef4444' },
+          { key: 'hazard',   label: 'Hazards',         color: '#f97316' },
+          { key: 'closures', label: 'Closures / Jams', color: '#a855f7' },
+        ];
+        // Per-type and per-source counts — only count markers from
+        // sources that are currently selected so the type counts reflect
+        // what's actually visible on the map.
+        const typeCounts = { accident: 0, hazard: 0, closures: 0 };
+        let ltCount = 0, wzCount = 0;
+        for (const m of _hazardMarkers) {
+          if (m.source === 'livetraffic') ltCount++;
+          else if (m.source === 'waze') wzCount++;
+          if (!_hazardSelectedSources.has(m.source)) continue;
+          if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
+        }
+        const typePills = items.map((it) => {
+          const n = typeCounts[it.key] || 0;
+          return _ffPill(hazardFilters[it.key], `${it.label} (${n.toLocaleString()})`, `toggleHazardPill('${it.key}')`);
+        }).join('');
+        const sourcePills = `
+          ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
+          ${_ffPill(_hazardSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleHazardSourcePill('waze')")}
+        `;
+        return `
+          <h4><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> Traffic Hazards</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${sourcePills}</div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>
+        `;
+      },
+    };
+
+    // Police (pins on/off + 3 type pills + heatmap toggle + opacity slider).
+    window.togglePolicePinsPill = function () {
+      const chk = document.getElementById('chk-police-pins');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-police-pins', next);
+      togglePolicePinsMode(next);
+      refreshActiveFilterPanel();
+    };
+    window.togglePoliceTypePill = function (key) {
+      policeFilters[key] = !policeFilters[key];
+      _ffSetCheckbox(`chk-police-${key}`, policeFilters[key]);
+      togglePoliceFilter(key, policeFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    window.togglePoliceHeatmapPill = function () {
+      const chk = document.getElementById('chk-police-heatmap');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-police-heatmap', next);
+      togglePoliceHeatmapMode(next);
+      refreshActiveFilterPanel();
+    };
+    window.setPoliceHeatmapOpacityFromPanel = function (v) {
+      const el = document.getElementById('heat-opacity');
+      if (el) el.value = String(v);
+      setHeatmapOpacity(v);
+      const lbl = document.querySelector('#floating-filter-panel #ff-heat-opacity-val');
+      if (lbl) lbl.textContent = `${v}%`;
+    };
+    FILTER_REGISTRY.police = {
+      icon: 'fa-shield-halved',
+      label: 'Police Reports',
+      color: '#3b82f6',
+      render() {
+        const pinsOn = document.getElementById('chk-police-pins')?.checked ?? true;
+        const types = [
+          { key: 'visible', label: 'Visible' },
+          { key: 'hidden',  label: 'Hidden' },
+          { key: 'camera',  label: 'Speed Camera' },
+        ];
+        const typePills = types.map((t) =>
+          _ffPill(policeFilters[t.key], t.label, `togglePoliceTypePill('${t.key}')`)
+        ).join('');
+        const heatOn = document.getElementById('chk-police-heatmap')?.checked ?? false;
+        const heatOpacity = document.getElementById('heat-opacity')?.value ?? 100;
+        const heatStats = document.getElementById('heat-stats')?.textContent ?? '';
+        const heatExtras = heatOn ? `
+          <div style="margin-top:8px;">
+            <div style="height:8px;border-radius:4px;background:linear-gradient(to right,rgb(103,232,249) 0%,rgb(37,99,235) 25%,rgb(124,58,237) 50%,rgb(236,72,153) 75%,rgb(239,68,68) 100%);"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+            <span style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;width:48px;">Opacity</span>
+            <input type="range" min="10" max="100" step="5" value="${heatOpacity}"
+                   oninput="setPoliceHeatmapOpacityFromPanel(this.value)"
+                   style="flex:1;accent-color:#22d3ee;cursor:pointer;">
+            <span id="ff-heat-opacity-val" style="font-size:10px;color:#cbd5e1;width:32px;text-align:right;">${heatOpacity}%</span>
+          </div>
+          <div style="margin-top:6px;font-size:10px;color:#64748b;text-align:right;">${heatStats}</div>
+        ` : '';
+        return `
+          <h4><i class="fa-solid fa-shield-halved" style="color:#3b82f6;"></i> Police Reports</h4>
+          <div class="floating-filter-pills">
+            ${_ffPill(pinsOn, '<i class="fa-solid fa-map-pin"></i> Pins', 'togglePolicePinsPill()')}
+            ${_ffPill(heatOn, '<i class="fa-solid fa-fire"></i> Heatmap', 'togglePoliceHeatmapPill()')}
+          </div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>
+          ${heatExtras}
+        `;
+      },
+    };
+
+    // Cameras (Traffic / Airport Weather / Fire Towers).
+    window.toggleCameraPill = function (key) {
+      cameraFilters[key] = !cameraFilters[key];
+      _ffSetCheckbox(`chk-cam-${key}`, cameraFilters[key]);
+      toggleCameraFilter(key, cameraFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.cameras = {
+      icon: 'fa-video',
+      label: 'Cameras',
+      color: '#8b5cf6',
+      render() {
+        const items = [
+          { key: 'traffic',   label: 'Traffic' },
+          { key: 'aviation',  label: 'Airport Weather' },
+          { key: 'firetower', label: 'Fire Towers' },
+        ];
+        const pills = items.map((it) =>
+          _ffPill(cameraFilters[it.key], it.label, `toggleCameraPill('${it.key}')`)
+        ).join('');
+        return `
+          <h4><i class="fa-solid fa-video" style="color:#8b5cf6;"></i> Cameras</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${pills}</div>
+        `;
+      },
+    };
+
+    // Beaches (Beachwatch water-quality / BeachSafe patrol+hazards).
+    window.toggleBeachPill = function (key) {
+      const chkId = key === 'beachwatch' ? 'chk-beachwatch' : 'chk-beachsafe';
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      onBeachFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.beaches = {
+      icon: 'fa-umbrella-beach',
+      label: 'Beaches',
+      color: '#06b6d4',
+      render() {
+        const bw = document.getElementById('chk-beachwatch')?.checked ?? true;
+        const bs = document.getElementById('chk-beachsafe')?.checked ?? true;
+        return `
+          <h4><i class="fa-solid fa-umbrella-beach" style="color:#06b6d4;"></i> Beaches</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(bw, 'Beachwatch (water quality)', "toggleBeachPill('beachwatch')")}
+            ${_ffPill(bs, 'BeachSafe (patrol + hazards)', "toggleBeachPill('beachsafe')")}
+          </div>
+        `;
+      },
+    };
+
+    // Outages (Unplanned / Current maintenance / Future maintenance).
+    window.toggleOutagePill = function (key) {
+      const chkId = `chk-outages-${key}`;
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      onOutageFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.outages = {
+      icon: 'fa-bolt',
+      label: 'Outages',
+      color: '#f97316',
+      render() {
+        const u = document.getElementById('chk-outages-unplanned')?.checked ?? true;
+        const m = document.getElementById('chk-outages-maintenance')?.checked ?? true;
+        const f = document.getElementById('chk-outages-future')?.checked ?? true;
+        return `
+          <h4><i class="fa-solid fa-bolt" style="color:#f97316;"></i> Outages</h4>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(u, 'Unplanned',          "toggleOutagePill('unplanned')")}
+            ${_ffPill(m, 'Current maintenance',"toggleOutagePill('maintenance')")}
+            ${_ffPill(f, 'Future maintenance', "toggleOutagePill('future')")}
+          </div>
+        `;
+      },
+    };
+
+    // Pager — single hour-range slider rather than pills.
+    window.setPagerHoursFromPanel = function (v) {
+      const r = document.getElementById('pager-hours-range');
+      if (r) {
+        r.value = String(v);
+        if (typeof updatePagerHoursLabel === 'function') updatePagerHoursLabel();
+        if (typeof updateSliderFill === 'function') updateSliderFill();
+        if (typeof onPagerHoursChange === 'function') onPagerHoursChange();
+      }
+      const lbl = document.querySelector('#floating-filter-panel #ff-pager-hours-val');
+      if (lbl) lbl.textContent = `${v}h`;
+    };
+    FILTER_REGISTRY.pager = {
+      icon: 'fa-pager',
+      label: 'Pager',
+      color: '#22c55e',
+      render() {
+        const v = Number(document.getElementById('pager-hours-range')?.value ?? 12);
+        return `
+          <h4><i class="fa-solid fa-pager" style="color:#22c55e;"></i> Pager</h4>
+          <div class="ff-section-label">Time range</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="range" min="1" max="24" step="1" value="${v}"
+                   oninput="document.getElementById('ff-pager-hours-val').textContent = this.value + 'h'"
+                   onchange="setPagerHoursFromPanel(this.value)"
+                   style="flex:1;accent-color:#22c55e;cursor:pointer;">
+            <span id="ff-pager-hours-val" style="font-size:11px;color:#cbd5e1;width:36px;text-align:right;">${v}h</span>
+          </div>
+          <div style="font-size:10px;color:#64748b;margin-top:6px;">Pager hits over the last N hours.</div>
+        `;
+      },
+    };
+
+    // Roadwork — pill per discovered type. Counts include both Live
+    // Traffic and Waze contributions to each type; the underlying
+    // markers carry their source so the tooltip stays accurate.
+    window.toggleRoadworkPill = function (t) {
+      toggleRoadworkType(t);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.roadwork = {
+      icon: 'fa-road',
+      label: 'Roadwork',
+      color: '#eab308',
+      render() {
+        if (_roadworkAvailableTypes.length === 0) {
+          return `
+            <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+            <div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading roadwork data…</div>
+          `;
+        }
+        const typeCounts = {};
+        let ltCount = 0, wzCount = 0;
+        for (const m of _roadworkMarkers) {
+          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+          if (m.source === 'livetraffic') ltCount++;
+          else if (m.source === 'waze') wzCount++;
+        }
+        const typePills = _roadworkAvailableTypes.map((t) => {
+          const on = _roadworkSelectedTypes.has(t);
+          const safe = String(t).replace(/'/g, "\\'");
+          return _ffPill(on, `${t} (${(typeCounts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
+        }).join('');
+        const sourcePills = `
+          ${_ffPill(_roadworkSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkSourcePill('livetraffic')")}
+          ${_ffPill(_roadworkSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleRoadworkSourcePill('waze')")}
+        `;
+        return `
+          <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${sourcePills}</div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>
+        `;
+      },
+    };
+
+    // Weather (Rain Radar + Weather Stations + radar timeline + temp legend).
+    window.toggleRadarPill = function () {
+      const chk = document.getElementById('chk-radar');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-radar', next);
+      toggleRadar(next);
+      refreshActiveFilterPanel();
+    };
+    window.toggleWeatherPinsPill = function () {
+      const chk = document.getElementById('chk-weather-pins');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-weather-pins', next);
+      toggleWeatherPins(next);
+      refreshActiveFilterPanel();
+    };
+    window.setRadarSliderFromPanel = function (v) {
+      const r = document.getElementById('radar-slider');
+      if (r) { r.value = String(v); if (typeof onRadarSliderChange === 'function') onRadarSliderChange(v); }
+    };
+    FILTER_REGISTRY.weather = {
+      icon: 'fa-cloud-sun',
+      label: 'Weather',
+      color: '#38bdf8',
+      render() {
+        const radarOn = document.getElementById('chk-radar')?.checked ?? false;
+        const pinsOn  = document.getElementById('chk-weather-pins')?.checked ?? false;
+        const slider = document.getElementById('radar-slider');
+        const max = Number(slider?.max ?? 0);
+        const val = Number(slider?.value ?? 0);
+        const timeLbl = document.getElementById('radar-time-display')?.textContent ?? '--:--';
+        const radarTimeline = (radarOn && max > 0) ? `
+          <div class="ff-section-label">Radar time</div>
+          <input type="range" min="0" max="${max}" value="${val}"
+                 oninput="setRadarSliderFromPanel(this.value)"
+                 style="width:100%;accent-color:#38bdf8;cursor:pointer;">
+          <div style="text-align:center;font-size:11px;color:#cbd5e1;font-family:monospace;margin-top:4px;">${timeLbl}</div>
+        ` : '';
+        return `
+          <h4><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i> Weather</h4>
+          <div class="floating-filter-pills">
+            ${_ffPill(radarOn, '<i class="fa-solid fa-cloud-rain"></i> Rain Radar', 'toggleRadarPill()')}
+            ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
+          </div>
+          ${radarTimeline}
+        `;
+      },
+    };
+
+    // AIS Ships — type and status pills mirror the inline checkbox state
+    // so the existing toggleAisType / toggleAisStatus handlers keep
+    // working on mobile. Counts reflect the entire fetched fleet, not
+    // just what's currently visible after filtering.
+    window.toggleAisTypePill = function (key) {
+      aisTypeFilter[key] = !aisTypeFilter[key];
+      _ffSetCheckbox(`chk-ais-${key}`, aisTypeFilter[key]);
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAisStatusPill = function (key) {
+      aisStatusFilter[key] = !aisStatusFilter[key];
+      _ffSetCheckbox(`chk-ais-st-${key}`, aisStatusFilter[key]);
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    // GT_SHIPTYPE subtype pill — toggles the filter and re-renders.
+    // Default state for unknown ids is "on", so the first click sets
+    // false, the second sets true again.
+    window.toggleAisSubtypePill = function (gtId) {
+      const cur = aisSubtypeFilter[gtId] !== false; // undefined treated as on
+      aisSubtypeFilter[gtId] = !cur;
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    // Toggle whether a main type's subtype list is expanded in the
+    // floating filter panel.
+    window.toggleAisTypeExpand = function (key) {
+      if (_aisExpandedTypes.has(key)) _aisExpandedTypes.delete(key);
+      else _aisExpandedTypes.add(key);
+      refreshActiveFilterPanel();
+    };
+    // Last-seen slider input handler. The slider value is the index
+    // into a non-linear age scale below — gives finer steps in the
+    // "minutes" range and coarser steps once you're into hours/days.
+    const _AIS_AGE_STOPS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+    // Live preview while the user drags — show the snap-target
+    // label but don't commit (rebuilding the AIS layer on every
+    // pixel of drag is way too expensive).
+    window.setAisMaxAgePreview = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(_AIS_AGE_STOPS[i]);
+    };
+    // On release: snap to nearest stop, commit, rebuild the layer
+    // and re-render the panel so the tick highlight follows.
+    window.setAisMaxAgeFromSlider = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
+      aisMaxAgeMin = _AIS_AGE_STOPS[i];
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(aisMaxAgeMin);
+      _rebuildAis();
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    };
+    // Repeaters layer subtype filter — currently just "NSW PSN P25
+    // sites" (every entry in NSW GRN Version 1.json), structured so
+    // additional source toggles slot in without new wiring.
+    window.toggleNswpsnSubtypePill = function (key) {
+      nswpsnFilter[key] = !nswpsnFilter[key];
+      _rebuildNswpsn();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.nswpsn = {
+      icon: 'fa-tower-broadcast',
+      label: 'Repeaters',
+      color: '#14b8a6',
+      render() {
+        const counts = {};
+        for (const s of _nswpsnSites) {
+          const sub = nswpsnSiteSubtype(s);
+          counts[sub] = (counts[sub] || 0) + 1;
+        }
+        const pills = NSWPSN_SUBTYPES.map((t) => {
+          const n = counts[t.key] || 0;
+          const on = nswpsnFilter[t.key] !== false;
+          const style = on
+            ? `background:${t.color}33;border-color:${t.color};color:#f8fafc;`
+            : `border-color:${t.color}80;color:${t.color};`;
+          return `<button class="floating-filter-pill" style="${style}" onclick="toggleNswpsnSubtypePill('${t.key}')">${escapeHtml(t.label)} (${n.toLocaleString()})</button>`;
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i> Repeaters</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${pills}</div>
+        `;
+      },
+    };
+
+    FILTER_REGISTRY.ais = {
+      icon: 'fa-ship',
+      label: 'AIS Ships',
+      color: '#0284c7',
+      render() {
+        const types = [
+          { key: 'cargo',       label: 'Cargo' },
+          { key: 'tanker',      label: 'Tanker' },
+          { key: 'passenger',   label: 'Passenger' },
+          { key: 'hsc',         label: 'High-speed' },
+          { key: 'tug',         label: 'Tug / Special' },
+          { key: 'fishing',     label: 'Fishing' },
+          { key: 'pleasure',    label: 'Pleasure' },
+          { key: 'navaid',      label: 'Navaid' },
+          { key: 'unspecified', label: 'Unspecified' },
+        ];
+        const statuses = [
+          { key: 'underway', label: 'Underway' },
+          { key: 'anchored', label: 'Anchored' },
+          { key: 'other',    label: 'Other' },
+        ];
+        // Tally per main category and per subtype.
+        const typeCounts = {};
+        const subtypeCounts = {};
+        const statusCounts = {};
+        for (const v of _aisVessels) {
+          const c = aisCategoryFromVessel(v);
+          const s = aisStatusBucket(v);
+          const gt = aisGtSubtype(v);
+          typeCounts[c] = (typeCounts[c] || 0) + 1;
+          statusCounts[s] = (statusCounts[s] || 0) + 1;
+          if (gt) subtypeCounts[gt] = (subtypeCounts[gt] || 0) + 1;
+        }
+        // Build a row per type: the main pill + (when expanded) a
+        // wrapped row of subtype mini-pills indented under it.
+        const typeRowsHtml = types.map((t) => {
+          const n = typeCounts[t.key] || 0;
+          const color = AIS_TYPE_COLOR[t.key] || AIS_TYPE_COLOR.unspecified;
+          const glyph = _ffAisTypeGlyph(t.key, color);
+          const expanded = _aisExpandedTypes.has(t.key);
+          const subs = AIS_SUBTYPES[t.key] || [];
+          // Hide the chevron when there's only one subtype (it'd be
+          // identical to the parent — Navaid, HSC).
+          const hasSubs = subs.length > 1;
+          // Render the expand chevron as a proper coloured button —
+          // the bare `▸` / `▾` glyph blended into the pill row and
+          // looked like a glitch instead of an interactive control.
+          const chevron = hasSubs
+            ? `<button class="ais-subtype-chevron" onclick="event.stopPropagation();toggleAisTypeExpand('${t.key}')" title="${expanded ? 'Hide' : 'Show'} subtypes" style="margin-left:2px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;background:${expanded ? color + '33' : 'rgba(30,41,59,0.6)'};border:1px solid ${color}80;border-radius:50%;color:${color};cursor:pointer;font-size:11px;padding:0;line-height:1;flex-shrink:0;"><i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'}"></i></button>`
+            : '';
+          const mainPill = _ffPillColored(aisTypeFilter[t.key], color, glyph, `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
+          let subRow = '';
+          if (expanded && hasSubs) {
+            const subPills = subs.map((s) => {
+              const sn = subtypeCounts[s.id] || 0;
+              const on = aisSubtypeFilter[s.id] !== false;
+              const subColor = color;
+              const style = on
+                ? `background:${subColor}33;border-color:${subColor};color:#f8fafc;`
+                : `border-color:${subColor}66;color:${subColor};`;
+              return `<button class="floating-filter-pill ais-subtype-pill" style="${style};font-size:10px;padding:3px 8px;" onclick="toggleAisSubtypePill('${s.id}')">${s.name} (${sn.toLocaleString()})</button>`;
+            }).join('');
+            subRow = `<div class="floating-filter-pills" style="margin:4px 0 6px 18px;gap:4px;">${subPills}</div>`;
+          }
+          return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">${mainPill}${chevron}</div>${subRow}`;
+        }).join('');
+        const statusPills = statuses.map((s) => {
+          const n = statusCounts[s.key] || 0;
+          return _ffPill(aisStatusFilter[s.key], `${s.label} (${n.toLocaleString()})`, `toggleAisStatusPill('${s.key}')`);
+        }).join('');
+        const total = _aisVessels.length;
+        const visibleTxt = document.getElementById('ais-status-line')?.textContent
+          || (total ? `${total.toLocaleString()} vessels loaded` : 'Loading vessels…');
+        // Last-seen slider. Index into _AIS_AGE_STOPS — picks the
+        // closest stop ≥ aisMaxAgeMin so the thumb position
+        // survives panel re-renders.
+        let ageIdx = _AIS_AGE_STOPS.findIndex((s) => s >= aisMaxAgeMin);
+        if (ageIdx < 0) ageIdx = _AIS_AGE_STOPS.length - 1;
+        const ageMax = _AIS_AGE_STOPS.length - 1;
+        // Render each stop as a tick below the slider with a small
+        // label, plus a highlighted dot on the active stop. Ticks
+        // are pointer-events:none so dragging the slider isn't
+        // interrupted; clicking a label DOES jump to that stop.
+        const ageTicks = _AIS_AGE_STOPS.map((minVal, i) => {
+          const pct = (i / ageMax) * 100;
+          const isActive = i === ageIdx;
+          const dotColor = isActive ? '#7dd3fc' : 'rgba(148,163,184,0.55)';
+          const textColor = isActive ? '#7dd3fc' : '#64748b';
+          const weight = isActive ? '600' : '400';
+          return (
+            `<button type="button" onclick="setAisMaxAgeFromSlider(${i})" `
+            + `style="position:absolute;left:${pct.toFixed(2)}%;transform:translateX(-50%);`
+            + 'display:flex;flex-direction:column;align-items:center;background:transparent;border:0;padding:0;cursor:pointer;pointer-events:auto;">'
+            + `<div style="width:6px;height:6px;border-radius:50%;background:${dotColor};margin-bottom:1px;"></div>`
+            + `<div style="font-size:9px;color:${textColor};font-weight:${weight};line-height:1;font-variant-numeric:tabular-nums;">${_aisAgeTickLabel(minVal)}</div>`
+            + '</button>'
+          );
+        }).join('');
+        const ageSlider = `
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="flex:1;display:block;">
+              <input type="range" min="0" max="${ageMax}" step="0.01" value="${ageIdx}"
+                     oninput="setAisMaxAgePreview(this.value)"
+                     onchange="setAisMaxAgeFromSlider(this.value)"
+                     style="width:100%;accent-color:#0284c7;cursor:pointer;display:block;">
+              <span style="position:relative;display:block;height:18px;margin:2px 6px 0;">${ageTicks}</span>
+            </span>
+            <span id="ff-ais-age-val" style="font-size:10px;color:#cbd5e1;min-width:60px;text-align:right;font-variant-numeric:tabular-nums;">${_aisFormatAge(aisMaxAgeMin)}</span>
+          </div>
+        `;
+        return `
+          <h4><i class="fa-solid fa-ship" style="color:#0284c7;"></i> AIS Ships</h4>
+          <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
+          <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Status</div>
+          <div class="floating-filter-pills">${statusPills}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Last seen</div>
+          ${ageSlider}
+          <div class="floating-filter-status">${escapeHtml(visibleTxt)}</div>
+        `;
+      },
+    };
+    function _renderFirmsLayer() {
+      firmsLayer.clearLayers();
+      if (!_firmsFeatures.length) return;
+      const filtered = _firmsFeatures.filter((f) => {
+        const sat = (f.properties && f.properties.satellite_tag) || '';
+        return _firmsSelectedSats.has(sat);
+      });
+      if (!filtered.length) return;
+      const zoom = map.getZoom();
+      const cellDeg = firmsClusterCellDeg(zoom);
+      const clusters = firmsClusterFeatures(filtered, cellDeg);
+      for (const c of clusters) {
+        if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+        const fill = firmsFillFor({ frp: c.maxFrp });
+        const op = firmsOpacityFor({ confidence: c.confidence });
+        const radius = firmsClusterRadius(c);
+        const props = {
+          frp: c.maxFrp,
+          _totalFrp: c.totalFrp,
+          _clusterCount: c.count,
+          confidence: c.confidence,
+          acq_datetime: c.acq_datetime,
+          satellite: c.satellite,
+          satellite_tag: c.satellite_tag,
+          instrument: c.instrument,
+          daynight: c.daynight,
+          brightness: c.brightness,
+          scan_km: c.scan_km,
+          track_km: c.track_km,
+        };
+        const dot = L.circleMarker([c.lat, c.lng], {
+          radius,
+          color: '#7f1d1d',
+          weight: 1,
+          opacity: 0.9,
+          fillColor: fill,
+          fillOpacity: op,
+          interactive: true
+        }).addTo(firmsLayer);
+        dot.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
+      }
+    }
+    // ==================== AIS / VESSELS ====================
+    // Pull vessels out of MarineTraffic's response shape. They use
+    // {data:{rows:[...], areaShips:N}} now (verified 2026-05); legacy
+    // shapes [{...}] and {data:[...]} still tolerated.
+    function aisExtractVessels(payload) {
+      if (Array.isArray(payload)) return payload;
+      if (payload && Array.isArray(payload.rows)) return payload.rows;
+      if (payload && Array.isArray(payload.data)) return payload.data;
+      if (payload && payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
+      return [];
+    }
+    // GT_SHIPTYPE → main category (most specific signal MT exposes).
+    // Falls back to TYPE_NAME / TYPE_SUMMARY string match, then to
+    // the simplified SHIPTYPE code. Categories mirror MT's public
+    // filter UI: cargo, tanker, passenger, hsc, tug, fishing,
+    // pleasure, navaid, unspecified.
+    function aisCategoryFromVessel(v) {
+      const gt = String(v.GT_SHIPTYPE != null ? v.GT_SHIPTYPE : '');
+      if (gt && AIS_GT_TO_CATEGORY[gt]) return AIS_GT_TO_CATEGORY[gt];
+      const name = (v.TYPE_NAME || v.TYPE_SUMMARY || '').toLowerCase();
+      if (name) {
+        if (name.includes('tanker')) return 'tanker';
+        if (name.includes('cargo')) return 'cargo';
+        if (name.includes('passenger') || name.includes('ferry')) return 'passenger';
+        if (name.includes('high speed') || name.includes('hsc')) return 'hsc';
+        if (name.includes('tug') || name.includes('special') || name.includes('pilot')) return 'tug';
+        if (name.includes('fishing')) return 'fishing';
+        if (name.includes('pleasure') || name.includes('yacht') || name.includes('sailing')) return 'pleasure';
+        if (name.includes('navigation aid') || name.includes('navaid') || name.includes('aton')) return 'navaid';
+        if (name.includes('unspecified') || name.includes('unknown')) return 'unspecified';
+        return 'unspecified';
+      }
+      const t = parseInt(v.SHIPTYPE != null ? v.SHIPTYPE : v.TYPE, 10);
+      if (t === 7) return 'cargo';
+      if (t === 8) return 'tanker';
+      if (t === 6) return 'passenger';
+      if (t === 4) return 'hsc';
+      if (t === 3) return 'tug';
+      if (t === 2) return 'fishing';
+      if (t === 9) return 'pleasure';
+      if (t === 5) return 'navaid';
+      return 'unspecified';
+    }
+    // Returns the GT_SHIPTYPE id as a string, or '' if not present.
+    function aisGtSubtype(v) {
+      return String(v.GT_SHIPTYPE != null ? v.GT_SHIPTYPE : '');
+    }
+    // STATUS_NAME (or numeric STATUS legacy) → filter bucket. MT's
+    // public UI only exposes Underway / Anchored, so we collapse the
+    // many AIS-spec status strings into those two plus an "other"
+    // catch-all (restricted manoeuvrability, aground, default,
+    // unknown, empty, etc.).
+    function aisStatusBucket(v) {
+      const name = (v.STATUS_NAME || '').toLowerCase();
+      if (name) {
+        if (name.includes('under way') || name.includes('underway')) return 'underway';
+        if (name.includes('anchor') || name.includes('moor')) return 'anchored';
+        return 'other';
+      }
+      const s = parseInt(v.STATUS, 10);
+      if (!isFinite(s)) return 'other';
+      if (s === 0 || s === 8) return 'underway';
+      if (s === 1 || s === 5) return 'anchored';
+      return 'other';
+    }
+    // GT_SHIPTYPE → human-readable subtype mapping, mirrored from MT's
+    // own /en/ajax_app_settings/get_app_settings response. Each main
+    // SHIPTYPE category exposes a list of finer-grained subtypes; we
+    // surface them as expandable pills under their parent type so the
+    // user can filter, e.g., "Tankers" down to just "LNG Tanker".
+    const AIS_SUBTYPES = {
+      cargo: [
+        { id: '21',  name: 'General Cargo' },
+        { id: '4',   name: 'Bulk Carrier' },
+        { id: '10',  name: 'Container Ship' },
+        { id: '55',  name: 'Ro-Ro / Vehicles' },
+        { id: '52',  name: 'Reefer' },
+        { id: '1',   name: 'Aggregates' },
+        { id: '8',   name: 'Cement' },
+        { id: '37',  name: 'Ore' },
+        { id: '27',  name: 'Livestock' },
+        { id: '32',  name: 'OBO' },
+        { id: '22',  name: 'Heavy Load' },
+        { id: '68',  name: 'Barge' },
+        { id: '70',  name: 'Inland Cargo' },
+        { id: '39',  name: 'Special Cargo' },
+        { id: '907', name: 'Other Cargo' },
+      ],
+      tanker: [
+        { id: '61',  name: 'Tanker' },
+        { id: '35',  name: 'Oil Products' },
+        { id: '12',  name: 'Crude Oil' },
+        { id: '36',  name: 'Oil / Chemical' },
+        { id: '9',   name: 'Chemical' },
+        { id: '29',  name: 'LPG' },
+        { id: '28',  name: 'LNG' },
+        { id: '5',   name: 'Bunkering' },
+        { id: '3',   name: 'Asphalt / Bitumen' },
+        { id: '66',  name: 'Water' },
+        { id: '69',  name: 'Inland Tanker' },
+        { id: '43',  name: 'Special Tanker' },
+        { id: '908', name: 'Other Tanker' },
+        { id: '20',  name: 'Floating Storage' },
+      ],
+      passenger: [
+        { id: '46',  name: 'Passenger' },
+        { id: '54',  name: 'Ro-Ro / Passenger' },
+        { id: '25',  name: 'Inland Passenger' },
+        { id: '45',  name: 'Passenger / Cargo' },
+        { id: '41',  name: 'Special Passenger' },
+        { id: '906', name: 'Other Passenger' },
+      ],
+      hsc: [
+        { id: '23', name: 'High Speed Craft' },
+      ],
+      tug: [
+        { id: '64',  name: 'Tug' },
+        { id: '51',  name: 'Pusher Tug' },
+        { id: '65',  name: 'Tug / Supply' },
+        { id: '59',  name: 'Special Tug' },
+        { id: '48',  name: 'Pilot Boat' },
+        { id: '60',  name: 'Supply Vessel' },
+        { id: '58',  name: 'Service Vessel' },
+        { id: '33',  name: 'Offshore Structure' },
+        { id: '13',  name: 'Dredger' },
+        { id: '53',  name: 'Research / Survey' },
+        { id: '11',  name: 'Crew Boat' },
+        { id: '47',  name: 'Patrol' },
+        { id: '6',   name: 'Cable Layer' },
+        { id: '26',  name: 'Landing Craft' },
+        { id: '34',  name: 'Offshore Vessel' },
+        { id: '2',   name: 'Anchor Handling' },
+        { id: '49',  name: 'Platform' },
+        { id: '19',  name: 'Floating Crane' },
+        { id: '14',  name: 'Drill Ship' },
+        { id: '57',  name: 'Search & Rescue' },
+        { id: '50',  name: 'Pollution Control' },
+        { id: '24',  name: 'Icebreaker' },
+        { id: '15',  name: 'Fire Fighting' },
+        { id: '62',  name: 'Training Ship' },
+        { id: '71',  name: 'Inland Tug' },
+        { id: '38',  name: 'Special Craft' },
+        { id: '30',  name: 'Military Ops' },
+        { id: '903', name: 'Other Tug / Special' },
+      ],
+      fishing: [
+        { id: '18',  name: 'Fishing Vessel' },
+        { id: '16',  name: 'Fish Carrier' },
+        { id: '63',  name: 'Trawler' },
+        { id: '40',  name: 'Special Fishing' },
+        { id: '902', name: 'Other Fishing' },
+      ],
+      pleasure: [
+        { id: '67',  name: 'Yacht' },
+        { id: '56',  name: 'Sailing Vessel' },
+        { id: '42',  name: 'Other Pleasure' },
+      ],
+      navaid: [
+        { id: '31', name: 'Navigation Aids' },
+      ],
+      unspecified: [
+        { id: '900', name: 'Unspecified' },
+      ],
+    };
+    // Reverse lookup: GT_SHIPTYPE id → main category key.
+    const AIS_GT_TO_CATEGORY = (() => {
+      const m = {};
+      for (const cat of Object.keys(AIS_SUBTYPES)) {
+        for (const s of AIS_SUBTYPES[cat]) m[s.id] = cat;
+      }
+      return m;
+    })();
+
+    // Colours matched against MarineTraffic's public type-icon legend
+    // (green cargo / red tankers / blue passenger / yellow HSC / cyan
+    // tugs / orange fishing / pink pleasure / orange-diamond navaid /
+    // grey unspecified).
+    const AIS_TYPE_COLOR = {
+      cargo:       '#10b981', // emerald — Cargo vessels
+      tanker:      '#ef4444', // red — Tankers
+      passenger:   '#3b82f6', // blue — Passenger vessels
+      hsc:         '#facc15', // yellow — High speed craft
+      tug:         '#06b6d4', // cyan — Tugs & Special craft
+      fishing:     '#f97316', // orange — Fishing
+      pleasure:    '#ec4899', // pink — Pleasure craft
+      navaid:      '#fb923c', // light orange — Navigation aids (diamond shape)
+      unspecified: '#cbd5e1'  // slate-300 — Unspecified ships
+    };
+    const AIS_TYPE_ICON = {
+      cargo: 'fa-ship', tanker: 'fa-ship', passenger: 'fa-ferry',
+      hsc: 'fa-rocket', tug: 'fa-anchor', fishing: 'fa-fish',
+      pleasure: 'fa-life-ring', navaid: 'fa-tower-broadcast', unspecified: 'fa-ship'
+    };
+
+    function buildAisIcon(category, headingDeg, isSatAis) {
+      const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.unspecified;
+      const op = isSatAis ? 0.55 : 1;
+      // Navigation aids — diamond marker (matches MT's icon legend).
+      // Always shown as a diamond regardless of heading.
+      if (category === 'navaid') {
+        return L.divIcon({
+          className: 'ais-pin',
+          html: '<svg viewBox="0 0 24 24" width="16" height="16" style="display:block;opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        });
+      }
+      // No heading (anchored / moored / SAT-AIS / unknown): plain dot.
+      if (!isFinite(headingDeg)) {
+        return L.divIcon({
+          className: 'ais-pin',
+          html: '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';"></div>',
+          iconSize: [12, 12],
+          iconAnchor: [6, 6]
+        });
+      }
+      // Directional arrow rotated by heading. SVG renders crisp at any
+      // zoom and lets us avoid the heavy circular background.
+      return L.divIcon({
+        className: 'ais-pin',
+        html: '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block;transform:rotate(' + headingDeg + 'deg);opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+    }
+
+    function buildAisPopupHtml(v) {
+      const rawName = (v.SHIPNAME || v.NAME || 'Unknown vessel').toString();
+      const isSatAis = rawName === '[SAT-AIS]';
+      const name = isSatAis ? 'Satellite AIS contact' : rawName;
+      const status = v.STATUS_NAME || '—';
+      const typeLabel = v.TYPE_NAME || v.TYPE_SUMMARY || ('Type ' + (v.SHIPTYPE != null ? v.SHIPTYPE : (v.TYPE != null ? v.TYPE : '—')));
+      const cat = aisCategoryFromVessel(v);
+      const color = AIS_TYPE_COLOR[cat];
+      const speed = (v.SPEED != null && v.SPEED !== '') ? (parseFloat(v.SPEED) / 10).toFixed(1) + ' kn' : '—'; // MarineTraffic speed is in 1/10 knots
+      const course = (v.COURSE != null && v.COURSE !== '') ? parseFloat(v.COURSE).toFixed(0) + '°' : '—';
+      const heading = (v.HEADING != null && v.HEADING !== '' && v.HEADING !== '511') ? v.HEADING + '°' : '—';
+      const dest = v.DESTINATION || '—';
+      const eta = v.ETA || '—';
+      const flag = v.FLAG || '';
+      const dim = (v.LENGTH || v.L || '') + (v.WIDTH ? ' × ' + v.WIDTH + ' m' : (v.LENGTH ? ' m' : ''));
+      const draught = (v.DRAUGHT) ? (parseFloat(v.DRAUGHT) / 10).toFixed(1) + ' m' : '';
+      // ELAPSED is minutes since last position report. TIMESTAMP / LAST_POS is
+      // a fallback for older shapes.
+      const ts = (v.ELAPSED != null && v.ELAPSED !== '')
+        ? (parseInt(v.ELAPSED, 10) + ' min ago')
+        : (v.TIMESTAMP ? new Date((+v.TIMESTAMP) * 1000).toUTCString() : (v.LAST_POS || '—'));
+
+      function row(label, value) {
+        if (value == null || value === '' || value === '—') return '';
+        return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + escapeHtml(label) + '</span><span style="font-weight:600;">' + escapeHtml(String(value)) + '</span></div>';
+      }
+      function section(title, body, accent) {
+        if (!body) return '';
+        return '<div style="padding:6px 8px;background:rgba(2,132,199,0.08);border-radius:6px;margin-bottom:8px;">' +
+          '<div style="color:' + (accent || '#7dd3fc') + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' +
+          body +
+        '</div>';
+      }
+
+      const idBody = [
+        row('MMSI', v.MMSI),
+        row('IMO', v.IMO),
+        row('Callsign', v.CALLSIGN),
+        row('Flag', flag),
+        row('Type', typeLabel),
+        row('Dimensions', dim || '—'),
+        row('Draught', draught)
+      ].join('');
+
+      const navBody = [
+        row('Status', status),
+        row('Speed', speed),
+        row('Course', course),
+        row('Heading', heading),
+        row('Destination', dest),
+        row('ETA', eta),
+        row('Last update', ts)
+      ].join('');
+
+      return '<div style="max-width:500px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+        '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<i class="fa-solid ' + (AIS_TYPE_ICON[cat] || 'fa-ship') + '"></i> ' + escapeHtml(name) +
+          ' <span style="background:' + color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + escapeHtml(cat.toUpperCase()) + '</span>' +
+        '</div>' +
+        section('🛟 IDENTIFICATION', idBody) +
+        section('🧭 NAVIGATION', navBody) +
+      '</div>';
+    }
+
+    // Marker index keyed by SHIP_ID so the floating vessel list can pan
+    // to / open a specific vessel without scanning the cluster group.
+    const _aisMarkers = new Map();
+    // Vessel id whose tooltip is currently "pinned" open by a click.
+    // Hover-only tooltips on other markers continue to work.
+    let _aisPinnedId = null;
+
+    function _aisVesselId(v) {
+      return String(v.SHIP_ID || v.SHIPID || v.MMSI || '');
+    }
+
+    function _rebuildAis() {
+      aisLayer.clearLayers();
+      _aisMarkers.clear();
+      let visible = 0;
+      _aisVessels.forEach((v) => {
+        const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
+        if (!isFinite(lat) || !isFinite(lon)) return;
+        const cat = aisCategoryFromVessel(v);
+        const st = aisStatusBucket(v);
+        if (!aisTypeFilter[cat]) return;
+        if (!aisStatusFilter[st]) return;
+        const gt = aisGtSubtype(v);
+        // Subtype map only contains entries the user has explicitly
+        // toggled OFF. Vessels with GT_SHIPTYPE not in the legend, or
+        // not yet in aisSubtypeFilter, pass through (treated as on).
+        if (gt && aisSubtypeFilter[gt] === false) return;
+        // Age cutoff. Vessels with no ELAPSED value pass through —
+        // dropping them would silently hide every vessel that
+        // doesn't expose the field.
+        const ageMin = _aisVesselAgeMin(v);
+        if (ageMin != null && ageMin > aisMaxAgeMin) return;
+        const heading = parseFloat(v.HEADING);
+        const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
+        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
+        const id = _aisVesselId(v);
+        const marker = L.marker([lat, lon], { icon }).bindTooltip(buildAisPopupHtml(v), {
+          className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+        });
+        // Click → pin tooltip + populate sidebar with the rich detail
+        // card. Hover keeps working for un-pinned markers.
+        marker.on('click', (ev) => {
+          if (ev && ev.originalEvent && typeof ev.originalEvent.stopPropagation === 'function') {
+            // Don't let the click bubble to the map (which clears
+            // the pinned state).
+            L.DomEvent.stopPropagation(ev.originalEvent);
+          }
+          aisPinVessel(id);
+        });
+        aisLayer.addLayer(marker);
+        if (id) _aisMarkers.set(id, marker);
+        visible++;
+      });
+      // Re-pin if the pinned vessel was just rebuilt (e.g. after a
+      // filter change or auto-refresh).
+      if (_aisPinnedId && _aisMarkers.has(_aisPinnedId)) {
+        const m = _aisMarkers.get(_aisPinnedId);
+        m.openTooltip();
+      }
+      const line = document.getElementById('ais-status-line');
+      if (line) line.textContent = visible + ' of ' + _aisVessels.length + ' vessels visible';
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      aisListRender();
+    }
+
+    // ==================== AIS VESSEL LIST PANEL ====================
+    let _aisListSearch = '';
+    let _aisListSelectedId = null;
+    const _aisDetailCache = new Map(); // shipId → fetched MT detail JSON
+
+    function openAisListPanel() {
+      const p = document.getElementById('ais-list-panel');
+      if (p) p.classList.add('open');
+      aisListRender();
+    }
+    function closeAisListPanel() {
+      const p = document.getElementById('ais-list-panel');
+      if (p) p.classList.remove('open');
+    }
+    window.closeAisListPanel = closeAisListPanel;
+
+    function aisListOnSearch(q) {
+      _aisListSearch = (q || '').toLowerCase().trim();
+      aisListRender();
+    }
+    window.aisListOnSearch = aisListOnSearch;
+
+    // Build the list. Filters by:
+    //   - active type/status filters (matches what's drawn on the map)
+    //   - the search box (name / MMSI / IMO / destination substring)
+    //   - the current map viewport (only vessels whose lat/lng are in
+    //     the visible bounds — keeps the list short and relevant)
+    function aisListRender() {
+      const body = document.getElementById('ais-list-body');
+      const countEl = document.getElementById('ais-list-count');
+      if (!body) return;
+      if (_aisVessels.length === 0) {
+        body.innerHTML = '<div class="ais-list-empty">No vessels loaded yet.</div>';
+        if (countEl) countEl.textContent = '0';
+        return;
+      }
+      const bounds = map.getBounds();
+      const q = _aisListSearch;
+      const matches = [];
+      for (const v of _aisVessels) {
+        const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
+        if (!isFinite(lat) || !isFinite(lon)) continue;
+        const cat = aisCategoryFromVessel(v);
+        const st = aisStatusBucket(v);
+        if (!aisTypeFilter[cat]) continue;
+        if (!aisStatusFilter[st]) continue;
+        // Only filter by viewport when there's no search; otherwise the
+        // user might be looking for a vessel that's just off-screen.
+        if (!q && !bounds.contains([lat, lon])) continue;
+        if (q) {
+          const hay = [v.SHIPNAME, v.NAME, v.MMSI, v.IMO, v.DESTINATION, v.CALLSIGN]
+            .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
+          if (!hay.includes(q)) continue;
+        }
+        matches.push({ v, cat, st });
+      }
+      // Sort: by name, with [SAT-AIS] vessels at the end.
+      matches.sort((a, b) => {
+        const an = (a.v.SHIPNAME || '').toString();
+        const bn = (b.v.SHIPNAME || '').toString();
+        const aSat = an === '[SAT-AIS]';
+        const bSat = bn === '[SAT-AIS]';
+        if (aSat !== bSat) return aSat ? 1 : -1;
+        return an.localeCompare(bn);
+      });
+      if (countEl) {
+        countEl.textContent = q
+          ? `${matches.length} match${matches.length === 1 ? '' : 'es'}`
+          : `${matches.length} in view`;
+      }
+      if (matches.length === 0) {
+        body.innerHTML = '<div class="ais-list-empty">' +
+          (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No vessels in current view.') +
+          '</div>';
+        return;
+      }
+      const cap = 250; // don't render thousands of rows
+      const slice = matches.slice(0, cap);
+      const rowsHtml = slice.map(({ v, cat }) => {
+        const id = _aisVesselId(v);
+        const color = AIS_TYPE_COLOR[cat] || AIS_TYPE_COLOR.unspecified;
+        const heading = parseFloat(v.HEADING);
+        const headingDeg = isFinite(heading) && heading !== 511 ? heading : null;
+        const glyph = aisListGlyph(cat, color, headingDeg);
+        const rawName = (v.SHIPNAME || v.NAME || 'Unknown').toString();
+        const isSatAis = rawName === '[SAT-AIS]';
+        const name = isSatAis ? 'Satellite AIS contact' : rawName;
+        const speedKn = (v.SPEED != null && v.SPEED !== '')
+          ? (parseFloat(v.SPEED) / 10).toFixed(1) + ' kn'
+          : '—';
+        const dest = v.DESTINATION ? escapeHtml(String(v.DESTINATION)) : '';
+        const typeLbl = (v.TYPE_NAME || cat).toString();
+        const meta = dest
+          ? `${escapeHtml(typeLbl)} · ${dest}`
+          : escapeHtml(typeLbl);
+        const selected = _aisListSelectedId === id ? ' selected' : '';
+        const detail = (_aisListSelectedId === id) ? aisListDetailHtml(v) : '';
+        return `
+          <div class="ais-list-row${selected}" onclick="aisListClickRow('${escapeHtml(id)}', event)">
+            <div class="ais-list-glyph">${glyph}</div>
+            <div class="ais-list-info">
+              <div class="ais-list-name">${escapeHtml(name)}</div>
+              <div class="ais-list-meta">${meta}</div>
+            </div>
+            <div class="ais-list-speed">${speedKn}</div>
+            ${detail}
+          </div>
+        `;
+      }).join('');
+      const overflow = matches.length > cap
+        ? `<div class="ais-list-empty">+ ${matches.length - cap} more — refine search to narrow.</div>`
+        : '';
+      body.innerHTML = rowsHtml + overflow;
+    }
+
+    function aisListGlyph(category, color, headingDeg) {
+      if (category === 'navaid') {
+        return `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      }
+      if (!isFinite(headingDeg)) {
+        return `<svg viewBox="0 0 24 24" width="14" height="14" style="margin:2px;"><circle cx="12" cy="12" r="6" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(${headingDeg}deg);"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+    }
+
+    function aisListDetailHtml(v) {
+      const id = _aisVesselId(v);
+      const cached = _aisDetailCache.get(id);
+      // Load MT's collection thumbnail directly. Loads instantly for
+      // ships that have a curated photo; for everyone else the
+      // <img> just hides on error. We don't proxy through the
+      // backend any more — the gallery-scrape fallback was slow
+      // (~10 s per miss), 404'd most of the time, and was running
+      // for every vessel a user clicked.
+      const directUrl = id ? `https://images.marinetraffic.com/collection/${encodeURIComponent(id)}.webp?size=800` : '';
+      const imgTag = directUrl
+        ? `<img src="${directUrl}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none';">`
+        : '';
+      let extras = '';
+      if (cached && typeof cached === 'object') {
+        const r = (k, val) => (val == null || val === '')
+          ? ''
+          : `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(String(val))}</span></div>`;
+        extras = [
+          r('Name',     cached.name),
+          r('AIS name', cached.aisName),
+          r('Type',     cached.type),
+          r('Subtype',  cached.subtype),
+          r('IMO',      cached.imo),
+          r('MMSI',     cached.mmsi),
+          r('Callsign', cached.callsign),
+          r('Country',  cached.country),
+          r('Length',   cached.length ? cached.length + ' m' : ''),
+          r('Width',    cached.width ? cached.width + ' m' : ''),
+          r('Year',     cached.yearBuilt),
+          r('Home port',cached.homePort),
+        ].filter(Boolean).join('');
+      } else if (cached === '__loading__') {
+        extras = '<div class="row"><span class="k">Loading…</span></div>';
+      } else if (cached === '__error__') {
+        extras = '<div class="row" style="color:#94a3b8;">Could not load extra detail.</div>';
+      }
+      return `<div class="ais-list-detail" onclick="event.stopPropagation();">${imgTag}${extras}</div>`;
+    }
+
+    async function aisListFetchDetail(shipId) {
+      if (!shipId) return;
+      const existing = _aisDetailCache.get(shipId);
+      if (existing && existing !== '__error__' && existing !== '__loading__') return;
+      if (existing === '__loading__') return; // in-flight
+      _aisDetailCache.set(shipId, '__loading__');
+      aisListRender();
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _aisDetailCache.set(shipId, data);
+      } catch (e) {
+        console.warn('[ais] vessel detail fetch failed', e);
+        _aisDetailCache.set(shipId, '__error__');
+      }
+      aisListRender();
+    }
+
+    // Pin a vessel: keep its tooltip open and expand its row in the
+    // floating AIS Vessels list panel (the same panel that's open
+    // when the layer is on). Replaces any previous pin.
+    function aisPinVessel(shipId) {
+      if (!shipId) return;
+      // Close any previously-pinned tooltip.
+      if (_aisPinnedId && _aisPinnedId !== shipId) {
+        const prev = _aisMarkers.get(_aisPinnedId);
+        if (prev) prev.closeTooltip();
+      }
+      _aisPinnedId = shipId;
+      _aisListSelectedId = shipId;
+      const marker = _aisMarkers.get(shipId);
+      if (marker) {
+        try {
+          map.panTo(marker.getLatLng(), { animate: true, duration: 0.4 });
+          marker.openTooltip();
+        } catch (e) { /* ignore */ }
+      }
+      // The floating list panel is opened with the AIS layer toggle
+      // and stays open until the user closes it explicitly — don't
+      // force it back open here. Just re-render so the row picks up
+      // the .selected style + inline detail, then scroll to it.
+      aisListRender();
+      // scrollIntoView with block:'nearest' is a no-op when the row
+      // is partially visible, so we'd often "scroll" to the row but
+      // it'd stay just out of view. Compute the body-relative offset
+      // and scroll to centre the row, accounting for the sticky
+      // header + search bar above the body.
+      const body = document.getElementById('ais-list-body');
+      const row = body && body.querySelector('.ais-list-row.selected');
+      if (body && row && typeof body.scrollTo === 'function') {
+        const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
+        body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+      }
+      // Lazy-load extra MT detail (image + extended fields).
+      aisListFetchDetail(shipId);
+    }
+    window.aisPinVessel = aisPinVessel;
+
+    function aisUnpinVessel() {
+      if (!_aisPinnedId) return;
+      const marker = _aisMarkers.get(_aisPinnedId);
+      if (marker) marker.closeTooltip();
+      _aisPinnedId = null;
+      _aisListSelectedId = null;
+      aisListRender();
+    }
+    window.aisUnpinVessel = aisUnpinVessel;
+
+    // Click anywhere on the map (not on a marker) → unpin. Marker
+    // click handlers stop propagation, so this only fires for
+    // background clicks.
+    map.on('click', () => {
+      aisUnpinVessel();
+    });
+
+    window.aisListClickRow = function (shipId, ev) {
+      const sameRow = _aisListSelectedId === shipId;
+      _aisListSelectedId = sameRow ? null : shipId;
+      aisListRender();
+      // Pin the marker (opens tooltip + populates sidebar) on first
+      // click; toggle off on second click of the same row.
+      if (sameRow) {
+        aisUnpinVessel();
+      } else {
+        aisPinVessel(shipId);
+      }
+    };
+
+    // Refresh the list when the map view changes (debounced — moveend
+    // and zoomend can fire rapidly during a fling).
+    let _aisListMoveDebounce = null;
+    map.on('moveend zoomend', () => {
+      if (_aisListMoveDebounce) clearTimeout(_aisListMoveDebounce);
+      _aisListMoveDebounce = setTimeout(() => {
+        if (document.getElementById('ais-list-panel')?.classList.contains('open')) {
+          aisListRender();
+        }
+      }, 150);
+    });
+
+    function toggleAisType(key, on) {
+      aisTypeFilter[key] = !!on;
+      _rebuildAis();
+    }
+    function toggleAisStatus(key, on) {
+      aisStatusFilter[key] = !!on;
+      _rebuildAis();
+    }
+
+    async function loadAisData() {
+      const line = document.getElementById('ais-status-line');
+      const hadData = _aisVessels.length > 0;
+      if (line && !hadData) line.textContent = 'Loading vessels…';
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const vessels = aisExtractVessels(data);
+        // Don't blow away populated markers if a refresh comes back
+        // empty (backend cache mid-replace, transient upstream failure,
+        // etc.) — better to show stale than nothing.
+        if (vessels.length === 0 && hadData) {
+          console.warn('[ais] empty response — keeping previous', _aisVessels.length, 'vessels');
+          return;
+        }
+        _aisVessels = vessels;
+        _rebuildAis();
+        console.log('[ais] loaded', vessels.length, 'vessels');
+      } catch (e) {
+        console.warn('[ais] failed to load:', e);
+        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+      }
+    }
+
+    // Subtype filters within the Repeaters layer. Only one entry for
+    // now ("p25" = NSW PSN P25 sites loaded from NSW GRN Version 1.json)
+    // but the structure is set up to take additional sources later
+    // (e.g. DMR, conventional repeaters) without restructuring the
+    // layer-toggle plumbing.
+    const NSWPSN_SUBTYPES = [
+      { key: 'p25', label: 'NSW PSN P25 sites', color: '#14b8a6' },
+    ];
+    let nswpsnFilter = { p25: true };
+    let _nswpsnSites = []; // raw decoded list, kept so subtype toggle can rebuild without refetching
+
+    function nswpsnSiteSubtype(/* s */) {
+      // Every site in the current data file is a P25 GRN site. When
+      // we add other source files this should branch on a marker
+      // field (e.g. s.System || s.Network) before falling through.
+      return 'p25';
+    }
+
+    async function loadNswpsnData() {
+      try {
+        const res = await fetch('data/nswpsn/NSW%20GRN%20Version%201.json', { cache: 'force-cache' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        _nswpsnSites = await res.json();
+        _rebuildNswpsn();
+        console.log('[nswpsn] loaded', _nswpsnSites.length, 'sites');
+      } catch (e) {
+        console.warn('[nswpsn] failed to load:', e);
+      }
+    }
+
+    function _rebuildNswpsn() {
+      try {
+        nswpsnLayer.clearLayers();
+        const icon = L.divIcon({
+          className: 'custom-pin',
+          html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+        let added = 0;
+        _nswpsnSites.forEach((s) => {
+          const sub = nswpsnSiteSubtype(s);
+          if (!nswpsnFilter[sub]) return;
+          const lat = parseFloat(s.Latitude);
+          const lng = parseFloat(s.Longitude);
+          if (!isFinite(lat) || !isFinite(lng)) return;
+
+          const name = s.NAME || 'NSW PSN site';
+          const freqs = Array.isArray(s.Frequencies) ? s.Frequencies : [];
+
+          // Section helper — mirrors the beach-tooltip section styling.
+          function section(title, body, accent) {
+            if (!body) return '';
+            const a = accent || '#14b8a6';
+            const bg = 'rgba(20,184,166,0.08)';
+            return '<div style="padding:6px 8px;background:' + bg + ';border-radius:6px;margin-bottom:8px;">' +
+              '<div style="color:' + a + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' +
+              body +
+            '</div>';
+          }
+          // Two-column row with muted label + value.
+          function row(label, value) {
+            if (!value || value === 'See below') return '';
+            return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;">' +
+              '<span style="color:#94a3b8;min-width:84px;">' + escapeHtml(label) + '</span>' +
+              '<span style="font-weight:600;">' + escapeHtml(String(value)) + '</span>' +
+            '</div>';
+          }
+
+          // === Identification ===
+          const idBody = [
+            row('Site ID', s.SITE_ID),
+            row('GRN Site #', s['GRN Site ID #']),
+            row('Previous #', s['Previous Site ID #']),
+            row('System #', s['System #']),
+            row('NAC', s['NAC Code']),
+            row('Postcode', s.POSTCODE)
+          ].join('');
+
+          // === Zone / Control ===
+          const ctlBody = [
+            row('Zone', s['Zone Assignment']),
+            row('Control', s['Control Channel']),
+            row('Alt CC', s['Alt Control Channel'])
+          ].join('');
+
+          // === Frequencies ===
+          let freqBody = '';
+          if (freqs.length) {
+            freqBody =
+              '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">' + freqs.length + ' channel' + (freqs.length === 1 ? '' : 's') + '</div>' +
+              '<div style="max-height:140px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;color:#cbd5e1;">' +
+                freqs.map((f) => '<div>' + escapeHtml(String(f)) + '</div>').join('') +
+              '</div>';
+          }
+
+          // Notes (orange-tinted advisory section)
+          let notesBlock = '';
+          if (s.Notes) {
+            notesBlock =
+              '<div style="padding:6px 8px;background:rgba(249,115,22,0.08);border-radius:6px;margin-bottom:8px;">' +
+                '<div style="color:#fdba74;font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">⚠ NOTES</div>' +
+                '<div style="font-size:11.5px;color:#fed7aa;line-height:1.45;">' + escapeHtml(String(s.Notes)) + '</div>' +
+              '</div>';
+          }
+
+          // Header — name + GRN-site / repeater pill (mirrors Beachwatch pill)
+          let html =
+            '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+              '<div style="font-size:15px;font-weight:700;color:#14b8a6;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                '<i class="fa-solid fa-tower-broadcast"></i> ' + escapeHtml(name) +
+                ' <span style="background:#14b8a6;color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Repeater</span>' +
+                (s['Last Update'] ? ' <span style="color:#94a3b8;font-size:10px;font-weight:500;">Updated ' + escapeHtml(String(s['Last Update'])) + '</span>' : '') +
+              '</div>' +
+              section('🛰 IDENTIFICATION', idBody) +
+              section('📡 ZONE / CONTROL', ctlBody) +
+              notesBlock +
+              section('🎚 FREQUENCIES', freqBody) +
+            '</div>';
+
+          const marker = L.marker([lat, lng], { icon }).bindPopup(html, {
+            className: 'repeater-popup',
+            maxWidth: 380,
+            autoPan: true,
+            closeOnClick: false
+          });
+          nswpsnLayer.addLayer(marker);
+          added++;
+        });
+        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      } catch (e) {
+        console.warn('[nswpsn] rebuild failed:', e);
+      }
+    }
+
+    async function loadFirmsHotspots() {
+      try {
+        let data;
+        const cached = layerCache.firms_hotspots;
+        if (cached && cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
+          data = cached.data;
+        } else {
+          const res = await apiFetch(`${PROXY_BASE}/api/firms/hotspots`);
+          data = await res.json();
+          if (!layerCache.firms_hotspots) layerCache.firms_hotspots = { data: null, timestamp: 0 };
+          layerCache.firms_hotspots.data = data;
+          layerCache.firms_hotspots.timestamp = Date.now();
+        }
+        // Normalise once: drop features without a usable centroid so the
+        // re-render path can stay simple.
+        const features = (data && Array.isArray(data.features)) ? data.features : [];
+        const norm = [];
+        for (const f of features) {
+          if (!f || !f.geometry) continue;
+          const props = f.properties || {};
+          let lat = Number(props.latitude);
+          let lng = Number(props.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            const ring = f.geometry.coordinates && f.geometry.coordinates[0];
+            if (!Array.isArray(ring) || ring.length === 0) continue;
+            let sx = 0, sy = 0, n = 0;
+            for (let i = 0; i < ring.length - 1; i++) {
+              const pt = ring[i];
+              if (!Array.isArray(pt)) continue;
+              sx += Number(pt[0]); sy += Number(pt[1]); n++;
+            }
+            if (n === 0) continue;
+            lng = sx / n; lat = sy / n;
+          }
+          norm.push({ properties: { ...props, latitude: lat, longitude: lng } });
+        }
+        _firmsFeatures = norm;
+        if (!_firmsZoomHandlerWired) {
+          // Re-cluster on zoom change so dense fire regions stay readable
+          // without showing 50 stacked dots at NSW-wide view.
+          map.on('zoomend', () => {
+            if (map.hasLayer(firmsLayer)) _renderFirmsLayer();
+          });
+          _firmsZoomHandlerWired = true;
+        }
+        // Capture per-satellite source health for the floating filter
+        // panel + the legacy inline mobile panel.
+        _firmsLastSourceStatus = (data && Array.isArray(data.source_status)) ? data.source_status : [];
+        const statusEl = document.getElementById('firms-source-status');
+        if (statusEl) {
+          if (_firmsLastSourceStatus.length === 0) {
+            statusEl.textContent = '';
+          } else {
+            statusEl.innerHTML = _firmsLastSourceStatus.map((s) => {
+              const ok = s.ok;
+              const color = ok ? '#34d399' : '#f87171';
+              const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
+              return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+            }).join('');
+          }
+        }
+        if (_activeFilterKey === 'firms') refreshActiveFilterPanel();
+        _renderFirmsLayer();
+        console.log(`Loaded ${_firmsFeatures.length} FIRMS detections (rendered as clusters)`);
+      } catch (e) {
+        console.error('FIRMS hotspots error', e);
+      }
     }
 
     // Traffic Cameras + Airport Weather Cameras + Central Watch Fire Tower Cameras
@@ -8550,8 +11158,11 @@ function initPagerHoursFromStorage() {
         document.getElementById('chk-weather-pins').checked = false;
         toggleRadar(false);
         toggleWeatherPins(false);
+        removeFilterButton('weather');
+      } else {
+        addFilterButton('weather');
       }
-      
+
       panel.classList.toggle('open');
       btn.classList.toggle('active', !isOpen);
       updateFilterPanelPositions();
@@ -8589,18 +11200,27 @@ function initPagerHoursFromStorage() {
     async function loadRadarFrames() {
       try {
         let data;
+        let past = [];
+        let nowcast = [];
         try {
           const res = await apiFetch(`${PROXY_BASE}/api/weather/radar`);
           data = await res.json();
+          past = data.radar?.past || [];
+          nowcast = data.radar?.nowcast || [];
         } catch {
+          // backend fetch threw — fall through to direct fetch below
+        }
+        // Backend may have returned 200 with empty arrays when the upstream
+        // poll timed out. Treat that the same as a hard failure and try the
+        // browser-direct route before giving up.
+        if (past.length === 0 && nowcast.length === 0) {
           const fallback = await fetch('https://api.rainviewer.com/public/weather-maps.json');
           data = await fallback.json();
+          past = data.radar?.past || [];
+          nowcast = data.radar?.nowcast || [];
         }
-        
-        const past = data.radar?.past || [];
-        const nowcast = data.radar?.nowcast || [];
         radarFrames = [...past, ...nowcast];
-        
+
         if (radarFrames.length === 0) return;
         
         const slider = document.getElementById('radar-slider');
@@ -8932,7 +11552,10 @@ function initPagerHoursFromStorage() {
       if (map.hasLayer(beachwatchLayer)) redrawTasks.push(loadBeachwatchData());
       if (map.hasLayer(weatherLayer)) redrawTasks.push(loadWeatherData());
       if (map.hasLayer(outagesLayer)) redrawTasks.push(loadOutageData());
-      
+      // AIS vessels — refresh from the backend's prefetched cache so
+      // the layer self-heals if markers were ever lost.
+      if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
+
       // Also refresh RFS data (always loaded)
       redrawTasks.push(loadAllData());
       
@@ -9233,6 +11856,30 @@ function initPagerHoursFromStorage() {
     (async () => {
       await loadApiConfig();
       initPagerHoursFromStorage();
+      // Layers that come up enabled by default still need their filter
+      // button registered with the floating sidebar — toggle functions
+      // only fire on user click. Sweep every known layer and register a
+      // button for whichever ones are already on. Catches default-on
+      // pager + any layer whose toggle path didn't reach addFilterButton
+      // (e.g. URL deep-link restoration paths).
+      if (typeof addFilterButton === 'function') {
+        const _layerByKey = {
+          firms: typeof firmsLayer !== 'undefined' ? firmsLayer : null,
+          hazards: typeof hazardsLayer !== 'undefined' ? hazardsLayer : null,
+          police: typeof policeLayer !== 'undefined' ? policeLayer : null,
+          cameras: typeof camerasLayer !== 'undefined' ? camerasLayer : null,
+          beaches: typeof beachwatchLayer !== 'undefined' ? beachwatchLayer : null,
+          outages: typeof outagesLayer !== 'undefined' ? outagesLayer : null,
+          weather: typeof weatherLayer !== 'undefined' ? weatherLayer : null,
+          pager: typeof pagerLayer !== 'undefined' ? pagerLayer : null,
+          roadwork: typeof roadworkLayer !== 'undefined' ? roadworkLayer : null,
+          ais: typeof aisLayer !== 'undefined' ? aisLayer : null,
+          nswpsn: typeof nswpsnLayer !== 'undefined' ? nswpsnLayer : null,
+        };
+        for (const [key, layer] of Object.entries(_layerByKey)) {
+          if (layer && map.hasLayer(layer)) addFilterButton(key);
+        }
+      }
       loadAllData();
       setupRealtimeSubscription();
       
@@ -9247,5 +11894,6 @@ function initPagerHoursFromStorage() {
     })();
   </script>
   <script src="analytics.js"></script>
+  <script src="agencies.js"></script>
 </body>
 </html>

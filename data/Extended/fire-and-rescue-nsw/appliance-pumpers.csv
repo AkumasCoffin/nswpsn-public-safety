@@ -1,0 +1,6 @@
+Prefix,Meaning,Notes
+{b:P},Pumper,Standard urban pumper
+{b:HP},Heavy Pumper,High-capacity pumper
+{b:RP},Rescue Pumper,Pumper with road-crash rescue capability
+{b:LP},Light Pumper,"Smaller pumper, often village / metro"
+{b:CP},CAFS Pumper,Pumper fitted with Compressed Air Foam System

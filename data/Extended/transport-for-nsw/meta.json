@@ -1,0 +1,18 @@
+{
+  "title": "🚌 Transport for NSW",
+  "tag": "TfNSW",
+  "badges": [
+    {"label": "Transport for NSW", "variant": "agency"},
+    {"label": "NSW Government", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "Transport for NSW is the lead State agency for the planning, regulation, integration and delivery of transport services and infrastructure across NSW. It oversees buses, ferries, light rail, trains, roads, maritime safety and active transport."},
+    {"type": "h", "text": "Structure"},
+    {"type": "ul", "items": [
+      "Established 2011, expanded in 2019 to absorb Roads & Maritime Services (RMS).",
+      "Operating divisions cover Sydney Trains, NSW TrainLink, Sydney Metro, Sydney Ferries, regional services and Transport Management Centres.",
+      "Operates the Transport Management Centre at Eveleigh — coordinates real-time response across road, rail, bus, ferry and light-rail."
+    ]}
+  ],
+  "sections": []
+}

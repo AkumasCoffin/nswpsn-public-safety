@@ -144,6 +144,41 @@
     .beach-detail-popup .leaflet-popup-close-button:hover {
       color: #fff !important;
     }
+    /* Repeater (NSWPSN site) popup — same dark theme, teal accents, scrollable. */
+    .repeater-popup .leaflet-popup-content-wrapper {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(20, 184, 166, 0.45) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.55), 0 0 18px rgba(20, 184, 166, 0.18) !important;
+      color: #e2e8f0 !important;
+    }
+    .repeater-popup .leaflet-popup-content {
+      margin: 10px 12px !important;
+      max-height: 420px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(20,184,166,0.45) transparent;
+    }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar { width: 6px; }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-track { background: transparent; }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb {
+      background: rgba(20,184,166,0.45);
+      border-radius: 3px;
+    }
+    .repeater-popup .leaflet-popup-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(20,184,166,0.7);
+    }
+    .repeater-popup .leaflet-popup-tip {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(20, 184, 166, 0.45) !important;
+    }
+    .repeater-popup .leaflet-popup-close-button {
+      color: #5eead4 !important;
+      font-size: 18px !important;
+    }
+    .repeater-popup .leaflet-popup-close-button:hover {
+      color: #fff !important;
+    }
 
     /* Pager / Incident Overview Tooltip – balanced width */
     .leaflet-tooltip {
@@ -165,6 +200,17 @@
     /* Only set default text color, allow inline styles to override */
     .leaflet-tooltip strong { color: #fff; }
     .leaflet-tooltip div { margin-bottom: 4px; }
+
+    /* AIS vessel hover tooltip — overrides the default green-glow tooltip
+       above so vessel info reads on a clean dark slate panel. */
+    .leaflet-tooltip.ais-tooltip {
+      min-width: 320px !important;
+      max-width: 600px !important;
+      width: max-content !important;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+      border: 1px solid rgba(125, 211, 252, 0.4) !important;
+    }
+    .leaflet-tooltip.ais-tooltip > div { width: 100%; max-width: 100% !important; }
     
     /* Dark tooltips for all map modes */
     .map-dark-mode .leaflet-tooltip,
@@ -334,6 +380,100 @@
     .btn-toggle.active#btn-roadwork { border: 1px solid #eab308; color: #fde047; }
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
+    .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
+
+    .floating-filter-sidebar {
+      position: absolute;
+      left: 12px;
+      bottom: 76px; /* above the map-type controls */
+      z-index: 800;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .floating-filter-sidebar > * { pointer-events: auto; }
+    @media (max-width: 900px) {
+      .floating-filter-sidebar { display: none; }
+      .floating-filter-panel { display: none !important; }
+    }
+    .floating-filter-btn {
+      width: 42px; height: 42px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      font-size: 17px;
+      transition: background-color 0.15s, border-color 0.15s, transform 0.15s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn:hover { background: rgba(30, 41, 59, 0.96); transform: translateX(2px); }
+    .floating-filter-btn.active { box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4); }
+    .floating-filter-btn[data-tooltip] { position: relative; }
+    .floating-filter-btn[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      left: calc(100% + 10px); top: 50%;
+      transform: translateY(-50%) translateX(-4px);
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #e2e8f0;
+      font-size: 12px; font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s, transform 0.15s;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .floating-filter-btn[data-tooltip]:hover::after {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
+    .floating-filter-panel {
+      position: absolute;
+      left: 64px; bottom: 76px;
+      z-index: 800;
+      min-width: 220px; max-width: 300px;
+      max-height: calc(100vh - 160px); overflow-y: auto;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: #e2e8f0;
+      display: none;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    .floating-filter-panel.open { display: block; }
+    .floating-filter-panel h4 { margin: 0 0 10px 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .floating-filter-panel .ff-section-label { font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px 0; font-weight: 600; }
+    .floating-filter-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+    .floating-filter-pill {
+      padding: 5px 11px; border-radius: 14px;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: #94a3b8;
+      font-size: 11px; font-weight: 500;
+      cursor: pointer; user-select: none;
+      transition: all 0.12s;
+    }
+    .floating-filter-pill:hover { border-color: #94a3b8; color: #cbd5e1; }
+    .floating-filter-pill.active { background: rgba(249, 115, 22, 0.28); border-color: #f97316; color: #fed7aa; }
+    .floating-filter-status { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(148, 163, 184, 0.18); font-size: 10px; color: #94a3b8; line-height: 1.5; }
+    @media (min-width: 901px) {
+      #firms-controls,
+      #ais-controls,
+      #weather-panel,
+      #hazards-panel,
+      #police-panel,
+      #cameras-panel,
+      #outages-panel,
+      #beaches-panel { display: none !important; }
+    }
     .btn-toggle.active#btn-beaches { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-weather { border: 1px solid #38bdf8; color: #7dd3fc; }
 
@@ -1434,7 +1574,12 @@
   <main class="main" id="editor-layout-root">
     <div class="map-container">
       <div id="map"></div>
-      
+
+      <!-- Desktop floating filter sidebar (hidden on mobile via media
+           query). See map.html for the full pattern. -->
+      <div class="floating-filter-sidebar" id="floating-filter-sidebar"></div>
+      <div class="floating-filter-panel" id="floating-filter-panel"></div>
+
       <!-- Refresh Timer -->
       <div class="refresh-timer" id="refresh-timer" onclick="manualRefresh()" title="Click to refresh now">
         <i class="fas fa-sync-alt"></i>
@@ -1454,6 +1599,48 @@
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()"><span class="dot-indicator" style="background:#8b5cf6;"></span> Cameras</button>
         <button id="btn-beaches" class="btn-toggle" onclick="toggleBeachesPanel()"><span class="dot-indicator" style="background:#06b6d4;"></span> Beaches</button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()"><span class="dot-indicator" style="background:#38bdf8;"></span> Weather</button>
+        <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
+        <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')"><span class="dot-indicator" style="background:#14b8a6;"></span> Repeaters</button>
+        <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')"><span class="dot-indicator" style="background:#0284c7;"></span> AIS Ships</button>
+      </div>
+      <div id="ais-controls" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid rgba(2,132,199,0.4);border-radius:8px;background:rgba(8,12,28,0.6);">
+        <div style="font-size:10px;color:#7dd3fc;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;font-weight:600;">
+          <i class="fa-solid fa-ship" style="margin-right:5px;"></i>AIS filters
+        </div>
+        <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;margin:6px 0 4px;">Ship Type</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px;">
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-cargo" checked onchange="toggleAisType('cargo', this.checked)" style="accent-color:#10b981;width:13px;height:13px;"> Cargo</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-tanker" checked onchange="toggleAisType('tanker', this.checked)" style="accent-color:#ef4444;width:13px;height:13px;"> Tanker</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-passenger" checked onchange="toggleAisType('passenger', this.checked)" style="accent-color:#3b82f6;width:13px;height:13px;"> Passenger</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-hsc" checked onchange="toggleAisType('hsc', this.checked)" style="accent-color:#facc15;width:13px;height:13px;"> High-speed</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-tug" checked onchange="toggleAisType('tug', this.checked)" style="accent-color:#06b6d4;width:13px;height:13px;"> Tug / Special</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-fishing" checked onchange="toggleAisType('fishing', this.checked)" style="accent-color:#f97316;width:13px;height:13px;"> Fishing</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-pleasure" checked onchange="toggleAisType('pleasure', this.checked)" style="accent-color:#ec4899;width:13px;height:13px;"> Pleasure</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-navaid" checked onchange="toggleAisType('navaid', this.checked)" style="accent-color:#fb923c;width:13px;height:13px;"> Navaid</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-unspecified" checked onchange="toggleAisType('unspecified', this.checked)" style="accent-color:#cbd5e1;width:13px;height:13px;"> Unspecified</label>
+        </div>
+        <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;margin:8px 0 4px;">Status</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px;">
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-underway" checked onchange="toggleAisStatus('underway', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Underway</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-anchored" checked onchange="toggleAisStatus('anchored', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Anchored</label>
+          <label style="display:flex;align-items:center;gap:4px;color:#e2e8f0;cursor:pointer;"><input type="checkbox" id="chk-ais-st-other" checked onchange="toggleAisStatus('other', this.checked)" style="accent-color:#0284c7;width:13px;height:13px;"> Other</label>
+        </div>
+        <div id="ais-status-line" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;">No vessels loaded yet.</div>
+      </div>
+      <div id="firms-controls" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid rgba(249,115,22,0.35);border-radius:8px;background:rgba(20,12,4,0.55);">
+        <div style="font-size:10px;color:#fdba74;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;font-weight:600;">
+          <i class="fa-solid fa-satellite" style="margin-right:5px;"></i>Satellite filter
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;margin-bottom:4px;cursor:pointer;">
+          <input type="checkbox" id="chk-firms-snpp" checked onchange="toggleFirmsSatellite('S-NPP', this.checked)" style="accent-color:#f97316;width:14px;height:14px;"> VIIRS S-NPP
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;margin-bottom:4px;cursor:pointer;">
+          <input type="checkbox" id="chk-firms-noaa20" checked onchange="toggleFirmsSatellite('NOAA-20', this.checked)" style="accent-color:#f97316;width:14px;height:14px;"> VIIRS NOAA-20
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;margin-bottom:0;cursor:pointer;">
+          <input type="checkbox" id="chk-firms-noaa21" checked onchange="toggleFirmsSatellite('NOAA-21', this.checked)" style="accent-color:#f97316;width:14px;height:14px;"> VIIRS NOAA-21
+        </label>
+        <div id="firms-source-status" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;"></div>
       </div>
 
       <!-- Mobile settings backdrop -->
@@ -1844,6 +2031,169 @@
     const rfsLayer = L.layerGroup();
     const pagerLayer = L.layerGroup();
     const outagesLayer = L.layerGroup();
+    // ---------- AIS / vessels (mirrors map.html) ----------
+    const aisLayer = L.markerClusterGroup({
+      maxClusterRadius: 50,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      // Ungroup once you're zoomed in past world/continent view — at z7
+      // every vessel shows as its own pin.
+      disableClusteringAtZoom: 7,
+      iconCreateFunction: function (cluster) {
+        const count = cluster.getChildCount();
+        const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
+        const fontSize = count >= 100 ? 11 : 12;
+        return L.divIcon({
+          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#0284c7;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(2,132,199,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          className: '',
+          iconSize: L.point(size, size),
+          iconAnchor: L.point(size / 2, size / 2)
+        });
+      }
+    });
+    let _aisVessels = [];
+    let aisTypeFilter = { cargo:true, tanker:true, passenger:true, hsc:true, tug:true, fishing:true, pleasure:true, navaid:true, unspecified:true };
+    let aisStatusFilter = { underway:true, anchored:true, other:true };
+    // GT_SHIPTYPE → finer subtype mapping (mirrors map.html). Each
+    // main SHIPTYPE category exposes a list of subtypes pulled from
+    // MT's get_app_settings 'shiptypes' map.
+    const AIS_SUBTYPES = {
+      cargo: [
+        { id: '21',  name: 'General Cargo' },
+        { id: '4',   name: 'Bulk Carrier' },
+        { id: '10',  name: 'Container Ship' },
+        { id: '55',  name: 'Ro-Ro / Vehicles' },
+        { id: '52',  name: 'Reefer' },
+        { id: '1',   name: 'Aggregates' },
+        { id: '8',   name: 'Cement' },
+        { id: '37',  name: 'Ore' },
+        { id: '27',  name: 'Livestock' },
+        { id: '32',  name: 'OBO' },
+        { id: '22',  name: 'Heavy Load' },
+        { id: '68',  name: 'Barge' },
+        { id: '70',  name: 'Inland Cargo' },
+        { id: '39',  name: 'Special Cargo' },
+        { id: '907', name: 'Other Cargo' },
+      ],
+      tanker: [
+        { id: '61',  name: 'Tanker' },
+        { id: '35',  name: 'Oil Products' },
+        { id: '12',  name: 'Crude Oil' },
+        { id: '36',  name: 'Oil / Chemical' },
+        { id: '9',   name: 'Chemical' },
+        { id: '29',  name: 'LPG' },
+        { id: '28',  name: 'LNG' },
+        { id: '5',   name: 'Bunkering' },
+        { id: '3',   name: 'Asphalt / Bitumen' },
+        { id: '66',  name: 'Water' },
+        { id: '69',  name: 'Inland Tanker' },
+        { id: '43',  name: 'Special Tanker' },
+        { id: '908', name: 'Other Tanker' },
+        { id: '20',  name: 'Floating Storage' },
+      ],
+      passenger: [
+        { id: '46',  name: 'Passenger' },
+        { id: '54',  name: 'Ro-Ro / Passenger' },
+        { id: '25',  name: 'Inland Passenger' },
+        { id: '45',  name: 'Passenger / Cargo' },
+        { id: '41',  name: 'Special Passenger' },
+        { id: '906', name: 'Other Passenger' },
+      ],
+      hsc: [{ id: '23', name: 'High Speed Craft' }],
+      tug: [
+        { id: '64',  name: 'Tug' },
+        { id: '51',  name: 'Pusher Tug' },
+        { id: '65',  name: 'Tug / Supply' },
+        { id: '59',  name: 'Special Tug' },
+        { id: '48',  name: 'Pilot Boat' },
+        { id: '60',  name: 'Supply Vessel' },
+        { id: '58',  name: 'Service Vessel' },
+        { id: '33',  name: 'Offshore Structure' },
+        { id: '13',  name: 'Dredger' },
+        { id: '53',  name: 'Research / Survey' },
+        { id: '11',  name: 'Crew Boat' },
+        { id: '47',  name: 'Patrol' },
+        { id: '6',   name: 'Cable Layer' },
+        { id: '26',  name: 'Landing Craft' },
+        { id: '34',  name: 'Offshore Vessel' },
+        { id: '2',   name: 'Anchor Handling' },
+        { id: '49',  name: 'Platform' },
+        { id: '19',  name: 'Floating Crane' },
+        { id: '14',  name: 'Drill Ship' },
+        { id: '57',  name: 'Search & Rescue' },
+        { id: '50',  name: 'Pollution Control' },
+        { id: '24',  name: 'Icebreaker' },
+        { id: '15',  name: 'Fire Fighting' },
+        { id: '62',  name: 'Training Ship' },
+        { id: '71',  name: 'Inland Tug' },
+        { id: '38',  name: 'Special Craft' },
+        { id: '30',  name: 'Military Ops' },
+        { id: '903', name: 'Other Tug / Special' },
+      ],
+      fishing: [
+        { id: '18',  name: 'Fishing Vessel' },
+        { id: '16',  name: 'Fish Carrier' },
+        { id: '63',  name: 'Trawler' },
+        { id: '40',  name: 'Special Fishing' },
+        { id: '902', name: 'Other Fishing' },
+      ],
+      pleasure: [
+        { id: '67',  name: 'Yacht' },
+        { id: '56',  name: 'Sailing Vessel' },
+        { id: '42',  name: 'Other Pleasure' },
+      ],
+      navaid: [{ id: '31', name: 'Navigation Aids' }],
+      unspecified: [{ id: '900', name: 'Unspecified' }],
+    };
+    const AIS_GT_TO_CATEGORY = (() => {
+      const m = {};
+      for (const cat of Object.keys(AIS_SUBTYPES)) {
+        for (const s of AIS_SUBTYPES[cat]) m[s.id] = cat;
+      }
+      return m;
+    })();
+    let aisSubtypeFilter = {};
+    let _aisExpandedTypes = new Set();
+    // Last-seen filter (minutes since last AIS position report).
+    // 1440 = 24 h = "show any age".
+    let aisMaxAgeMin = 1440;
+    function _aisFormatAge(min) {
+      if (min >= 1440) return 'Any age';
+      if (min < 60) return '≤ ' + min + ' min';
+      if (min % 60 === 0) return '≤ ' + (min / 60) + ' hr';
+      return '≤ ' + (min / 60).toFixed(1) + ' hr';
+    }
+    function _aisAgeTickLabel(min) {
+      if (min >= 1440) return 'Any';
+      if (min < 60) return min + 'm';
+      if (min === 60) return '1h';
+      return (min / 60) + 'h';
+    }
+    function _aisVesselAgeMin(v) {
+      const e = parseInt(v.ELAPSED, 10);
+      return isFinite(e) ? e : null;
+    }
+
+    // NSW PSN / GRN site map — clustered because there are 750+ towers.
+    const nswpsnLayer = L.markerClusterGroup({
+      maxClusterRadius: 60,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 14,
+      iconCreateFunction: function (cluster) {
+        const count = cluster.getChildCount();
+        const size = count >= 100 ? 36 : count >= 10 ? 30 : 26;
+        const fontSize = count >= 100 ? 11 : 12;
+        return L.divIcon({
+          html: '<div style="width:' + size + 'px;height:' + size + 'px;background:#14b8a6;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 10px rgba(20,184,166,0.55);border:2px solid rgba(255,255,255,0.55);"><span style="font-size:' + fontSize + 'px;font-weight:700;color:#fff;">' + count + '</span></div>',
+          className: '',
+          iconSize: L.point(size, size),
+          iconAnchor: L.point(size / 2, size / 2)
+        });
+      }
+    });
     
     // Waze layers - no clustering to keep different pin types separate
     const hazardsLayer = L.layerGroup();
@@ -1950,7 +2300,15 @@
     // Sub-layers for filtered data
     let hazardSubLayers = {};
     let policeSubLayers = {};
-    
+    const _hazardMarkers = [];
+    const _hazardSelectedSources = new Set(['livetraffic', 'waze']);
+
+    // Roadwork — type-based filtering (see map.html for the pattern).
+    const _roadworkMarkers = [];
+    const _roadworkAvailableTypes = [];
+    const _roadworkSelectedTypes = new Set();
+    const _roadworkSelectedSources = new Set(['livetraffic', 'waze']);
+
     // Camera filter states and sub-layers
     const cameraFilters = {
       traffic: true,
@@ -1963,6 +2321,8 @@
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachLayer = L.layerGroup();
+    // NASA FIRMS fire-hotspot polygons (off by default).
+    const firmsLayer = L.layerGroup();
     
     // What3Words grid layer
     const w3wGridLayer = L.layerGroup();
@@ -3358,7 +3718,7 @@ async function loadPagerData() {
           border-radius:4px;
           border:2px solid #22c55e;
           background:rgba(34,197,94,0.15);
-          box-shadow:0 0 12px #22c55e;
+          box-shadow:0 0 6px rgba(34,197,94,0.55);
           transform:rotate(45deg);
         "></div>
       `;
@@ -3446,21 +3806,27 @@ async function loadPagerData() {
     }
 
     function toggleMapLayer(target) {
-      const layerMap = { 
+      const layerMap = {
         hazards: hazardsLayer,
         police: policeLayer,
         roadwork: roadworkLayer,
         floods: floodsLayer,
         cameras: camerasLayer,
-        beaches: beachLayer
+        beaches: beachLayer,
+        firms: firmsLayer,
+        nswpsn: nswpsnLayer,
+        ais: aisLayer
       };
-      const btnMap = { 
+      const btnMap = {
         hazards: 'btn-hazards',
         police: 'btn-police',
         roadwork: 'btn-roadwork',
         floods: 'btn-floods',
         cameras: 'btn-cameras',
-        beaches: 'btn-beaches'
+        beaches: 'btn-beaches',
+        firms: 'btn-firms',
+        nswpsn: 'btn-nswpsn',
+        ais: 'btn-ais'
       };
 
       const layer = layerMap[target];
@@ -3489,6 +3855,33 @@ async function loadPagerData() {
           startCameraRefresh(); // Start live refresh when cameras enabled
         }
         if (target === 'beaches' && beachLayer.getLayers().length === 0) loadBeachData();
+        if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
+        if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
+        if (target === 'ais' && _aisVessels.length === 0) loadAisData();
+      }
+      if (target === 'ais') {
+        const enabled = map.hasLayer(aisLayer);
+        const ctl = document.getElementById('ais-controls');
+        if (ctl) ctl.style.display = enabled ? 'block' : 'none';
+        if (enabled) addFilterButton('ais');
+        else removeFilterButton('ais');
+      }
+      if (target === 'firms') {
+        const enabled = map.hasLayer(firmsLayer);
+        const ctl = document.getElementById('firms-controls');
+        if (ctl) ctl.style.display = enabled ? 'block' : 'none';
+        if (enabled) addFilterButton('firms');
+        else removeFilterButton('firms');
+      }
+      if (target === 'roadwork') {
+        const enabled = map.hasLayer(roadworkLayer);
+        if (enabled) addFilterButton('roadwork');
+        else removeFilterButton('roadwork');
+      }
+      if (target === 'nswpsn') {
+        const enabled = map.hasLayer(nswpsnLayer);
+        if (enabled) addFilterButton('nswpsn');
+        else removeFilterButton('nswpsn');
       }
     }
 
@@ -4222,11 +4615,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(outagesLayer);
+        removeFilterButton('outages');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(outagesLayer);
         if (outagesLayer.getLayers().length === 0) loadOutageData();
+        addFilterButton('outages');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4263,11 +4658,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(hazardsLayer);
+        removeFilterButton('hazards');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(hazardsLayer);
         if (hazardsLayer.getLayers().length === 0) loadHazardsData();
+        addFilterButton('hazards');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4291,6 +4688,7 @@ async function loadPagerData() {
         if (heatCtl) heatCtl.style.display = 'none';
         const pinChk = document.getElementById('chk-police-pins');
         if (pinChk) pinChk.checked = true;
+        removeFilterButton('police');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
@@ -4299,6 +4697,7 @@ async function loadPagerData() {
           if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
           if (policeLayer.getLayers().length === 0) loadPoliceData();
         }
+        addFilterButton('police');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4491,6 +4890,14 @@ async function loadPagerData() {
 
     async function loadPoliceHeatmap(forceRefresh = false) {
       const stats = document.getElementById('heat-stats');
+      // Floating filter panel snapshots #heat-stats at render time;
+      // mutate-and-refresh keeps the panel in sync after the data lands.
+      const setStats = (text) => {
+        if (stats) stats.textContent = text;
+        if (typeof refreshActiveFilterPanel === 'function') {
+          refreshActiveFilterPanel();
+        }
+      };
       try {
         const subs = _heatmapSelectedSubtypes();
         if (subs.length === 0) {
@@ -4499,11 +4906,11 @@ async function loadPagerData() {
           }
           policeHeatmapLayer = null;
           _policeHeatmapData = null;
-          if (stats) stats.textContent = 'Pick at least one type.';
+          setStats('Pick at least one type.');
           return;
         }
         const url = `${PROXY_BASE}/api/waze/police-heatmap?subtypes=${encodeURIComponent(subs.join(','))}`;
-        if (stats) stats.textContent = 'Loading…';
+        setStats('Loading…');
         const res = await apiFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -4514,11 +4921,11 @@ async function loadPagerData() {
             map.removeLayer(policeHeatmapLayer);
           }
           policeHeatmapLayer = null;
-          if (stats) {
-            stats.textContent = data.cache_status === 'warming'
+          setStats(
+            data.cache_status === 'warming'
               ? 'Cache warming up… retrying in 10s'
-              : 'Cache busy — retrying in 5s';
-          }
+              : 'Cache busy — retrying in 5s',
+          );
           const delay = data.cache_status === 'warming' ? 10000 : 5000;
           setTimeout(() => {
             if (document.getElementById('chk-police-heatmap')?.checked) {
@@ -4536,14 +4943,14 @@ async function loadPagerData() {
         if (!map.hasLayer(policeHeatmapLayer)) map.addLayer(policeHeatmapLayer);
         _ensureHexViewportListeners();
         _renderPoliceHexGrid();
-        if (stats) {
-          stats.textContent = `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`;
-        }
+        setStats(
+          `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`,
+        );
         // Legend labels are set inside _renderPoliceHexGrid using the
         // actual hex-max after client-side rebinning.
       } catch (e) {
         console.error('Police heatmap load failed', e);
-        if (stats) stats.textContent = 'Failed to load. Retry.';
+        setStats('Failed to load. Retry.');
       }
     }
 
@@ -4558,12 +4965,14 @@ async function loadPagerData() {
         map.removeLayer(camerasLayer);
         stopCameraRefresh();
         clearCameraSelection();
+        removeFilterButton('cameras');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(camerasLayer);
         if (camerasLayer.getLayers().length === 0) loadCamerasData();
         startCameraRefresh();
+        addFilterButton('cameras');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4590,11 +4999,13 @@ async function loadPagerData() {
         panel.classList.remove('open');
         btn.classList.remove('active');
         map.removeLayer(beachLayer);
+        removeFilterButton('beaches');
       } else {
         panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(beachLayer);
         if (beachLayer.getLayers().length === 0) loadBeachData();
+        addFilterButton('beaches');
       }
       updateFilterPanelPositions();
       updateSettingsBackdrop();
@@ -4653,6 +5064,21 @@ async function loadPagerData() {
         }
       }
     }
+    function _rebuildHazardSubLayers() {
+      Object.values(hazardSubLayers).forEach((sl) => sl.clearLayers());
+      for (const m of _hazardMarkers) {
+        if (!_hazardSelectedSources.has(m.source)) continue;
+        const sl = hazardSubLayers[m.type];
+        if (sl) sl.addLayer(m.marker);
+      }
+    }
+    function toggleHazardSourcePill(src) {
+      if (_hazardSelectedSources.has(src)) _hazardSelectedSources.delete(src);
+      else _hazardSelectedSources.add(src);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    }
+    window.toggleHazardSourcePill = toggleHazardSourcePill;
     
     function togglePoliceFilter(type, checked) {
       policeFilters[type] = checked;
@@ -5092,14 +5518,15 @@ async function loadPagerData() {
       }
       
       hazardsLayer.clearLayers();
-      
+
       // Create sub-layers for each filter type
       hazardSubLayers = {
         accident: L.layerGroup(),
         hazard: L.layerGroup(),
-        closures: L.layerGroup()  // Combines road closures + traffic jams
+        closures: L.layerGroup()
       };
-      
+      _hazardMarkers.length = 0;
+
       let totalCount = 0;
       let jamCount = 0;
       
@@ -5512,17 +5939,18 @@ async function loadPagerData() {
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             });
-            const marker = L.marker([lat, lon], { icon }).addTo(hazardSubLayers[category]);
+            const marker = L.marker([lat, lon], { icon });
             marker.bindTooltip(buildHazardTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+            _hazardMarkers.push({ marker, type: category, source: 'livetraffic' });
             totalCount++;
           }
         });
       }
-      
+
       // Process Waze hazards from cached data
       // Add point hazards (accidents, road closures, hazards)
       // Note: Waze flood items (FLOOD subtype) are excluded here and shown on the Floods layer instead
@@ -5544,17 +5972,18 @@ async function loadPagerData() {
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             });
-            const marker = L.marker([lat, lon], { icon }).addTo(hazardSubLayers[category]);
+            const marker = L.marker([lat, lon], { icon });
             marker.bindTooltip(buildHazardTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+            _hazardMarkers.push({ marker, type: category, source: 'waze' });
             totalCount++;
           }
         });
       }
-      
+
       // Add jam polylines (traffic slowdowns)
       if (wazeData && wazeData.jams) {
         wazeData.jams.forEach(jam => {
@@ -5572,17 +6001,20 @@ async function loadPagerData() {
               opacity: 0.8,
               lineCap: 'round',
               lineJoin: 'round'
-            }).addTo(hazardSubLayers.closures);
-            
+            });
+
             polyline.bindTooltip(buildJamTooltip(props), {
               sticky: true,
               opacity: 0.95
             });
+            _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze' });
             jamCount++;
           }
         });
       }
-      
+
+      _rebuildHazardSubLayers();
+
       // Add sub-layers to main layer based on filter state
       Object.keys(hazardSubLayers).forEach(type => {
         if (hazardFilters[type]) {
@@ -5802,7 +6234,25 @@ async function loadPagerData() {
       }
       
       roadworkLayer.clearLayers();
+      _roadworkMarkers.length = 0;
       let totalCount = 0;
+
+      const _roadworkClassify = (props, isWaze) => {
+        const norm = (s) => String(s || '').trim();
+        const titleCaseLocal = (s) => norm(s).toLowerCase().replace(/(^|\s|-|\/)\w/g, c => c.toUpperCase());
+        if (isWaze) {
+          const sub = norm(props.wazeSubtype).replace(/^CONSTRUCTION_?/i, '').replace(/_/g, ' ').trim();
+          if (sub.toUpperCase() === 'NONE' || !sub) return 'Construction';
+          return titleCaseLocal(sub);
+        }
+        const t = norm(props.subCategory)
+          || norm(props.mainCategory)
+          || norm(props.incidentKind)
+          || norm(props.displayType)
+          || norm(props.headline);
+        if (!t) return 'Roadwork';
+        return titleCaseLocal(t);
+      };
       
       // Build tooltip for roadwork (Waze or LiveTraffic) - styled like outage tooltips
       function buildRoadworkTooltip(props) {
@@ -6021,17 +6471,18 @@ async function loadPagerData() {
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             });
-            const marker = L.marker([lat, lon], { icon }).addTo(roadworkLayer);
+            const marker = L.marker([lat, lon], { icon });
             marker.bindTooltip(buildRoadworkTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+            _roadworkMarkers.push({ marker, type: _roadworkClassify(props, false), source: 'livetraffic' });
             totalCount++;
           }
         });
       }
-      
+
       // Process Waze roadwork/construction from cached data
       if (wazeData && wazeData.features) {
         wazeData.features.forEach(feature => {
@@ -6044,18 +6495,56 @@ async function loadPagerData() {
               iconSize: [24, 24],
               iconAnchor: [12, 12]
             });
-            const marker = L.marker([lat, lon], { icon }).addTo(roadworkLayer);
+            const marker = L.marker([lat, lon], { icon });
             marker.bindTooltip(buildRoadworkTooltip(props), {
               direction: 'top',
               offset: [0, -10],
               opacity: 0.95
             });
+            _roadworkMarkers.push({ marker, type: _roadworkClassify(props, true), source: 'waze' });
             totalCount++;
           }
         });
       }
-      
-      console.log(`Loaded ${totalCount} roadwork pins (Live Traffic + Waze)`);
+
+      const seenTypes = new Set();
+      for (const m of _roadworkMarkers) seenTypes.add(m.type);
+      _roadworkAvailableTypes.length = 0;
+      for (const t of Array.from(seenTypes).sort((a, b) => a.localeCompare(b))) {
+        _roadworkAvailableTypes.push(t);
+        if (!_roadworkSelectedTypes.has(`__off:${t}`)) _roadworkSelectedTypes.add(t);
+      }
+      _renderRoadworkVisible();
+
+      console.log(`Loaded ${totalCount} roadwork pins (${_roadworkAvailableTypes.length} types)`);
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    }
+
+    function _renderRoadworkVisible() {
+      roadworkLayer.clearLayers();
+      for (const m of _roadworkMarkers) {
+        if (!_roadworkSelectedTypes.has(m.type)) continue;
+        if (!_roadworkSelectedSources.has(m.source)) continue;
+        roadworkLayer.addLayer(m.marker);
+      }
+    }
+    function toggleRoadworkSourcePill(src) {
+      if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
+      else _roadworkSelectedSources.add(src);
+      _renderRoadworkVisible();
+      refreshActiveFilterPanel();
+    }
+    window.toggleRoadworkSourcePill = toggleRoadworkSourcePill;
+
+    function toggleRoadworkType(t) {
+      if (_roadworkSelectedTypes.has(t)) {
+        _roadworkSelectedTypes.delete(t);
+        _roadworkSelectedTypes.add(`__off:${t}`);
+      } else {
+        _roadworkSelectedTypes.add(t);
+        _roadworkSelectedTypes.delete(`__off:${t}`);
+      }
+      _renderRoadworkVisible();
     }
 
     // Floods
@@ -6206,6 +6695,1154 @@ async function loadPagerData() {
       }
       
       console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
+    }
+
+    // NASA FIRMS fire-hotspot polygons. Each feature is a satellite-pixel
+    // footprint over the last 24h, coloured by FRP (fire radiative power)
+    // and confidence. See loadFirmsHotspots in map.html for the reference
+    // implementation.
+    function firmsFillFor(props) {
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return '#dc2626';
+      if (frp >= 50)  return '#f97316';
+      if (frp >= 10)  return '#facc15';
+      return '#fde047';
+    }
+    function firmsRadiusFor(props) {
+      const frp = Number(props.frp) || 0;
+      if (frp >= 200) return 11;
+      if (frp >= 50)  return 9;
+      if (frp >= 10)  return 7;
+      return 5;
+    }
+    function firmsOpacityFor(props) {
+      const conf = String(props.confidence || '').toLowerCase();
+      if (conf === 'high' || conf === 'h') return 0.85;
+      if (conf === 'low'  || conf === 'l') return 0.45;
+      const num = Number(conf);
+      if (Number.isFinite(num)) return num >= 50 ? 0.70 : 0.50;
+      return 0.70;
+    }
+    function firmsConfidenceLabel(conf) {
+      const c = String(conf == null ? '' : conf).toLowerCase().trim();
+      if (c === 'h' || c === 'high') return 'high';
+      if (c === 'n' || c === 'nominal') return 'nominal';
+      if (c === 'l' || c === 'low') return 'low';
+      const num = Number(c);
+      if (Number.isFinite(num)) return `${num}%`;
+      return c || 'unknown';
+    }
+    function firmsFormatTime(props) {
+      const iso = props.acq_datetime;
+      if (iso) {
+        const d = new Date(iso);
+        if (!isNaN(d.getTime())) {
+          const fmt = new Intl.DateTimeFormat('en-AU', {
+            day: '2-digit', month: 'short',
+            hour: '2-digit', minute: '2-digit', hour12: true,
+            timeZone: 'Australia/Sydney',
+            timeZoneName: 'short',
+          });
+          return fmt.format(d);
+        }
+      }
+      const date = String(props.acq_date || '').trim();
+      const time = String(props.acq_time || '').padStart(4, '0');
+      if (date && time.length >= 4) {
+        return `${date} ${time.slice(0, 2)}:${time.slice(2, 4)} UTC`;
+      }
+      return '—';
+    }
+    function firmsFormatAgo(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      const diffMs = Date.now() - d.getTime();
+      if (diffMs < 0) return '';
+      const minutes = Math.floor(diffMs / 60000);
+      if (minutes < 1) return 'just now';
+      if (minutes < 60) return `${minutes} min ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) {
+        const m = minutes % 60;
+        return m > 0 ? `${hours}h ${m}m ago` : `${hours}h ago`;
+      }
+      const days = Math.floor(hours / 24);
+      const h = hours % 24;
+      return h > 0 ? `${days}d ${h}h ago` : `${days}d ago`;
+    }
+    function firmsIntensityLabel(frp) {
+      const n = Number(frp);
+      if (!Number.isFinite(n) || n <= 0) return 'unknown';
+      if (n >= 200) return 'extreme';
+      if (n >= 50)  return 'high';
+      if (n >= 10)  return 'moderate';
+      if (n >= 1)   return 'low';
+      return 'very low';
+    }
+    function firmsConfidenceTitleCase(conf) {
+      const s = firmsConfidenceLabel(conf);
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    function firmsSatelliteLine(props) {
+      const sat = props.satellite_tag || props.satellite || '—';
+      const inst = props.instrument || '';
+      const dn = props.daynight === 'D' ? 'Daytime'
+        : props.daynight === 'N' ? 'Nighttime' : '';
+      const left = inst ? `${sat} (${inst})` : sat;
+      return dn ? `${left} · ${dn}` : left;
+    }
+    function firmsTooltip(props) {
+      const clusterCount = Number(props._clusterCount) || 1;
+      const detectedAt = firmsFormatTime(props);
+      const ago = firmsFormatAgo(props.acq_datetime);
+      const totalFrp = Number(props._totalFrp);
+      const maxFrp = Number(props.frp);
+      const intensityLabel = firmsIntensityLabel(clusterCount > 1 ? totalFrp : maxFrp);
+      const intensityLine = clusterCount > 1
+        ? `${Number.isFinite(totalFrp) ? totalFrp.toFixed(1) : '—'} MW total <span style="color:#94a3b8;">(${intensityLabel}, max ${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW per pixel)</span>`
+        : `${Number.isFinite(maxFrp) ? maxFrp.toFixed(1) : '—'} MW <span style="color:#94a3b8;">(${intensityLabel})</span>`;
+      const conf = firmsConfidenceTitleCase(props.confidence);
+      const headline = clusterCount > 1
+        ? `🔥 ${clusterCount} fire detections nearby`
+        : `🔥 NASA FIRMS Hotspot`;
+      const footnote = clusterCount > 1
+        ? `Zoom in for individual detections.`
+        : `Pixel footprint ${(Number(props.scan_km) || 0.375).toFixed(2)} × ${(Number(props.track_km) || 0.375).toFixed(2)} km.`;
+      const agoTag = ago ? ` <span style="color:#94a3b8;font-size:10px;">(${ago})</span>` : '';
+      return `<div style="font-size:11px;line-height:1.5;">
+        <div style="font-weight:600;color:#fdba74;margin-bottom:4px;">${headline}</div>
+        <div><b>Detected:</b> ${detectedAt}${agoTag}</div>
+        <div><b>Fire intensity:</b> ${intensityLine}</div>
+        <div><b>Confidence:</b> ${conf}</div>
+        <div><b>Satellite:</b> ${firmsSatelliteLine(props)}</div>
+        <div style="color:#9ca3af;font-size:10px;margin-top:4px;">${footnote}</div>
+      </div>`;
+    }
+
+    function firmsClusterCellDeg(zoom) {
+      if (zoom >= 12) return 0;
+      if (zoom >= 11) return 0.02;
+      if (zoom >= 9)  return 0.08;
+      if (zoom >= 7)  return 0.25;
+      if (zoom >= 5)  return 0.60;
+      return 1.20;
+    }
+
+    function firmsClusterFeatures(features, cellDeg) {
+      if (!cellDeg || cellDeg <= 0) {
+        return features.map((f) => {
+          const p = (f && f.properties) || {};
+          const frp = Number(p.frp) || 0;
+          return {
+            lat: Number(p.latitude),
+            lng: Number(p.longitude),
+            count: 1,
+            totalFrp: frp,
+            maxFrp: frp,
+            confidence: p.confidence,
+            acq_datetime: p.acq_datetime,
+            satellite: p.satellite,
+            satellite_tag: p.satellite_tag,
+            instrument: p.instrument,
+            daynight: p.daynight,
+            brightness: p.brightness,
+            scan_km: p.scan_km,
+            track_km: p.track_km,
+          };
+        });
+      }
+      const buckets = new Map();
+      const confRank = (c) => {
+        const s = String(c == null ? '' : c).toLowerCase();
+        if (s === 'h') return 3;
+        if (s === 'n') return 2;
+        if (s === 'l') return 1;
+        const num = Number(s);
+        if (Number.isFinite(num)) return num >= 80 ? 3 : num >= 50 ? 2 : 1;
+        return 0;
+      };
+      for (const f of features) {
+        const p = (f && f.properties) || {};
+        const lat = Number(p.latitude);
+        const lng = Number(p.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const cy = Math.floor(lat / cellDeg);
+        const cx = Math.floor(lng / cellDeg);
+        const key = cy + '|' + cx;
+        let b = buckets.get(key);
+        if (!b) {
+          b = {
+            sumLat: 0, sumLng: 0, count: 0,
+            totalFrp: 0, maxFrp: 0,
+            confidence: '', _confRank: -1,
+            acq_datetime: '',
+            satellite: '', satellite_tag: '', instrument: '',
+            daynight: '', brightness: null,
+            scan_km: null, track_km: null,
+          };
+          buckets.set(key, b);
+        }
+        b.sumLat += lat;
+        b.sumLng += lng;
+        b.count += 1;
+        const frp = Number(p.frp) || 0;
+        b.totalFrp += frp;
+        if (frp > b.maxFrp) {
+          b.maxFrp = frp;
+          b.satellite = p.satellite || b.satellite;
+          b.satellite_tag = p.satellite_tag || b.satellite_tag;
+          b.instrument = p.instrument || b.instrument;
+          b.daynight = p.daynight || b.daynight;
+          b.brightness = p.brightness ?? b.brightness;
+          b.scan_km = p.scan_km ?? b.scan_km;
+          b.track_km = p.track_km ?? b.track_km;
+        }
+        const r = confRank(p.confidence);
+        if (r > b._confRank) {
+          b._confRank = r;
+          b.confidence = p.confidence;
+        }
+        const t = p.acq_datetime || '';
+        if (t > b.acq_datetime) b.acq_datetime = t;
+      }
+      const out = [];
+      for (const b of buckets.values()) {
+        out.push({
+          lat: b.sumLat / b.count,
+          lng: b.sumLng / b.count,
+          count: b.count,
+          totalFrp: b.totalFrp,
+          maxFrp: b.maxFrp,
+          confidence: b.confidence,
+          acq_datetime: b.acq_datetime,
+          satellite: b.satellite,
+          satellite_tag: b.satellite_tag,
+          instrument: b.instrument,
+          daynight: b.daynight,
+          brightness: b.brightness,
+          scan_km: b.scan_km,
+          track_km: b.track_km,
+        });
+      }
+      return out;
+    }
+
+    function firmsClusterRadius(cluster) {
+      const base = firmsRadiusFor({ frp: cluster.maxFrp });
+      const c = cluster.count;
+      if (c >= 200) return base + 14;
+      if (c >= 100) return base + 11;
+      if (c >= 50)  return base + 8;
+      if (c >= 20)  return base + 5;
+      if (c >= 10)  return base + 3;
+      if (c >= 3)   return base + 1;
+      return base;
+    }
+
+    // Floating filter sidebar (desktop). Shared infra: layers register
+    // themselves into FILTER_REGISTRY; the sidebar shows one button per
+    // enabled layer with filters; only one panel open at a time.
+    const FILTER_REGISTRY = {};
+    let _activeFilterKey = null;
+    function _renderFilterPanel(key) {
+      const panel = document.getElementById('floating-filter-panel');
+      const cfg = FILTER_REGISTRY[key];
+      if (!panel || !cfg) return;
+      panel.innerHTML = cfg.render();
+      panel.classList.add('open');
+      document.querySelectorAll('#floating-filter-sidebar .floating-filter-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.key === key);
+      });
+      _activeFilterKey = key;
+    }
+    function hideFilterPanel() {
+      const panel = document.getElementById('floating-filter-panel');
+      if (panel) panel.classList.remove('open');
+      document.querySelectorAll('#floating-filter-sidebar .floating-filter-btn').forEach((b) => b.classList.remove('active'));
+      _activeFilterKey = null;
+    }
+    function _toggleFilterButton(key) {
+      if (_activeFilterKey === key) hideFilterPanel();
+      else _renderFilterPanel(key);
+    }
+    function addFilterButton(key) {
+      const cfg = FILTER_REGISTRY[key];
+      if (!cfg) return;
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!sidebar) return;
+      if (sidebar.querySelector(`[data-key="${key}"]`)) return;
+      const btn = document.createElement('button');
+      btn.className = 'floating-filter-btn';
+      btn.dataset.key = key;
+      btn.setAttribute('data-tooltip', cfg.label);
+      btn.title = cfg.label;
+      btn.innerHTML = `<i class="fa-solid ${cfg.icon}" style="color:${cfg.color || '#e2e8f0'};"></i>`;
+      btn.onclick = () => _toggleFilterButton(key);
+      sidebar.appendChild(btn);
+    }
+    function removeFilterButton(key) {
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (!sidebar) return;
+      const btn = sidebar.querySelector(`[data-key="${key}"]`);
+      if (btn) btn.remove();
+      if (_activeFilterKey === key) hideFilterPanel();
+    }
+    function refreshActiveFilterPanel() {
+      if (_activeFilterKey) _renderFilterPanel(_activeFilterKey);
+    }
+    (function () {
+      const panel = document.getElementById('floating-filter-panel');
+      const sidebar = document.getElementById('floating-filter-sidebar');
+      if (panel) panel.addEventListener('click', (e) => e.stopPropagation());
+      if (sidebar) sidebar.addEventListener('click', (e) => e.stopPropagation());
+    })();
+    document.addEventListener('click', () => {
+      if (_activeFilterKey) hideFilterPanel();
+    });
+
+    let _firmsFeatures = [];
+    let _firmsZoomHandlerWired = false;
+    let _firmsLastSourceStatus = [];
+    const _firmsSelectedSats = new Set(['S-NPP', 'NOAA-20', 'NOAA-21']);
+    window.toggleFirmsSatellite = function (sat, checked) {
+      if (checked) _firmsSelectedSats.add(sat);
+      else _firmsSelectedSats.delete(sat);
+      _renderFirmsLayer();
+      refreshActiveFilterPanel();
+    };
+    window.toggleFirmsSatellitePill = function (sat) {
+      if (_firmsSelectedSats.has(sat)) _firmsSelectedSats.delete(sat);
+      else _firmsSelectedSats.add(sat);
+      const id = sat === 'S-NPP' ? 'chk-firms-snpp'
+        : sat === 'NOAA-20' ? 'chk-firms-noaa20'
+        : sat === 'NOAA-21' ? 'chk-firms-noaa21' : '';
+      const el = id && document.getElementById(id);
+      if (el) el.checked = _firmsSelectedSats.has(sat);
+      _renderFirmsLayer();
+      refreshActiveFilterPanel();
+    };
+    function _ffSetCheckbox(id, on) {
+      const el = document.getElementById(id);
+      if (el) el.checked = !!on;
+    }
+    function _ffPill(active, label, onclickJs) {
+      return `<button class="floating-filter-pill ${active ? 'active' : ''}" onclick="${onclickJs}">${label}</button>`;
+    }
+    function _ffPillColored(active, color, glyph, label, onclickJs) {
+      const style = active
+        ? `background:${color}40;border-color:${color};color:#f8fafc;`
+        : `border-color:${color}80;color:${color};`;
+      return `<button class="floating-filter-pill" style="${style}" onclick="${onclickJs}">${glyph}<span style="margin-left:6px;">${label}</span></button>`;
+    }
+    function _ffAisTypeGlyph(category, color) {
+      if (category === 'navaid') {
+        return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+    }
+
+    FILTER_REGISTRY.firms = {
+      icon: 'fa-fire',
+      label: 'Fire Hotspots',
+      color: '#fdba74',
+      render() {
+        const sats = [
+          { key: 'S-NPP',   label: 'S-NPP' },
+          { key: 'NOAA-20', label: 'NOAA-20' },
+          { key: 'NOAA-21', label: 'NOAA-21' },
+        ];
+        const pills = sats.map((s) => {
+          const on = _firmsSelectedSats.has(s.key);
+          return `<button class="floating-filter-pill ${on ? 'active' : ''}" onclick="toggleFirmsSatellitePill('${s.key}')">${s.label}</button>`;
+        }).join('');
+        const status = (_firmsLastSourceStatus || []).map((s) => {
+          const ok = !!s.ok;
+          const color = ok ? '#34d399' : '#f87171';
+          const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
+          return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-fire" style="color:#fdba74;"></i> Fire Hotspots</h4>
+          <div class="ff-section-label"><i class="fa-solid fa-satellite" style="margin-right:5px;"></i>VIIRS satellite</div>
+          <div class="floating-filter-pills">${pills}</div>
+          <div class="floating-filter-status">${status || '<em>Loading…</em>'}</div>
+        `;
+      },
+    };
+
+    window.toggleHazardPill = function (key) {
+      hazardFilters[key] = !hazardFilters[key];
+      _ffSetCheckbox(`chk-hazards-${key}`, hazardFilters[key]);
+      toggleHazardFilter(key, hazardFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.hazards = {
+      icon: 'fa-triangle-exclamation', label: 'Traffic Hazards', color: '#ef4444',
+      render() {
+        const items = [
+          { key: 'accident', label: 'Crashes' },
+          { key: 'hazard',   label: 'Hazards' },
+          { key: 'closures', label: 'Closures / Jams' },
+        ];
+        const typeCounts = { accident: 0, hazard: 0, closures: 0 };
+        let ltCount = 0, wzCount = 0;
+        for (const m of _hazardMarkers) {
+          if (m.source === 'livetraffic') ltCount++;
+          else if (m.source === 'waze') wzCount++;
+          if (!_hazardSelectedSources.has(m.source)) continue;
+          if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
+        }
+        const typePills = items.map((it) => {
+          const n = typeCounts[it.key] || 0;
+          return _ffPill(hazardFilters[it.key], `${it.label} (${n.toLocaleString()})`, `toggleHazardPill('${it.key}')`);
+        }).join('');
+        const sourcePills = `
+          ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
+          ${_ffPill(_hazardSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleHazardSourcePill('waze')")}
+        `;
+        return `<h4><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> Traffic Hazards</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${sourcePills}</div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>`;
+      },
+    };
+
+    window.togglePolicePinsPill = function () {
+      const chk = document.getElementById('chk-police-pins');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-police-pins', next);
+      if (typeof togglePolicePinsMode === 'function') togglePolicePinsMode(next);
+      refreshActiveFilterPanel();
+    };
+    window.togglePoliceTypePill = function (key) {
+      policeFilters[key] = !policeFilters[key];
+      _ffSetCheckbox(`chk-police-${key}`, policeFilters[key]);
+      togglePoliceFilter(key, policeFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    window.togglePoliceHeatmapPill = function () {
+      const chk = document.getElementById('chk-police-heatmap');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-police-heatmap', next);
+      if (typeof togglePoliceHeatmapMode === 'function') togglePoliceHeatmapMode(next);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.police = {
+      icon: 'fa-shield-halved', label: 'Police Reports', color: '#3b82f6',
+      render() {
+        const pinsOn = document.getElementById('chk-police-pins')?.checked ?? true;
+        const heatOn = document.getElementById('chk-police-heatmap')?.checked ?? false;
+        const types = [
+          { key: 'visible', label: 'Visible' },
+          { key: 'hidden',  label: 'Hidden' },
+          { key: 'camera',  label: 'Speed Camera' },
+        ];
+        const typePills = types.map((t) =>
+          _ffPill(policeFilters[t.key], t.label, `togglePoliceTypePill('${t.key}')`)
+        ).join('');
+        return `<h4><i class="fa-solid fa-shield-halved" style="color:#3b82f6;"></i> Police Reports</h4>
+          <div class="floating-filter-pills">
+            ${_ffPill(pinsOn, '<i class="fa-solid fa-map-pin"></i> Pins', 'togglePolicePinsPill()')}
+            ${_ffPill(heatOn, '<i class="fa-solid fa-fire"></i> Heatmap', 'togglePoliceHeatmapPill()')}
+          </div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>`;
+      },
+    };
+
+    window.toggleCameraPill = function (key) {
+      cameraFilters[key] = !cameraFilters[key];
+      _ffSetCheckbox(`chk-cam-${key}`, cameraFilters[key]);
+      toggleCameraFilter(key, cameraFilters[key]);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.cameras = {
+      icon: 'fa-video', label: 'Cameras', color: '#8b5cf6',
+      render() {
+        const items = [
+          { key: 'traffic',   label: 'Traffic' },
+          { key: 'aviation',  label: 'Airport Weather' },
+          { key: 'firetower', label: 'Fire Towers' },
+        ];
+        const pills = items.map((it) =>
+          _ffPill(cameraFilters[it.key], it.label, `toggleCameraPill('${it.key}')`)
+        ).join('');
+        return `<h4><i class="fa-solid fa-video" style="color:#8b5cf6;"></i> Cameras</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${pills}</div>`;
+      },
+    };
+
+    window.toggleBeachPill = function (key) {
+      const chkId = key === 'beachwatch' ? 'chk-beachwatch' : 'chk-beachsafe';
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      if (typeof onBeachFilterChange === 'function') onBeachFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.beaches = {
+      icon: 'fa-umbrella-beach', label: 'Beaches', color: '#06b6d4',
+      render() {
+        const bw = document.getElementById('chk-beachwatch')?.checked ?? true;
+        const bs = document.getElementById('chk-beachsafe')?.checked ?? true;
+        return `<h4><i class="fa-solid fa-umbrella-beach" style="color:#06b6d4;"></i> Beaches</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(bw, 'Beachwatch (water quality)', "toggleBeachPill('beachwatch')")}
+            ${_ffPill(bs, 'BeachSafe (patrol + hazards)', "toggleBeachPill('beachsafe')")}
+          </div>`;
+      },
+    };
+
+    window.toggleOutagePill = function (key) {
+      const chkId = `chk-outages-${key}`;
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      if (typeof onOutageFilterChange === 'function') onOutageFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.outages = {
+      icon: 'fa-bolt', label: 'Outages', color: '#f97316',
+      render() {
+        const u = document.getElementById('chk-outages-unplanned')?.checked ?? true;
+        const m = document.getElementById('chk-outages-maintenance')?.checked ?? true;
+        const f = document.getElementById('chk-outages-future')?.checked ?? true;
+        return `<h4><i class="fa-solid fa-bolt" style="color:#f97316;"></i> Outages</h4>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(u, 'Unplanned',           "toggleOutagePill('unplanned')")}
+            ${_ffPill(m, 'Current maintenance', "toggleOutagePill('maintenance')")}
+            ${_ffPill(f, 'Future maintenance',  "toggleOutagePill('future')")}
+          </div>`;
+      },
+    };
+
+    window.toggleRadarPill = function () {
+      const chk = document.getElementById('chk-radar');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-radar', next);
+      if (typeof toggleRadar === 'function') toggleRadar(next);
+      refreshActiveFilterPanel();
+    };
+    window.toggleWeatherPinsPill = function () {
+      const chk = document.getElementById('chk-weather-pins');
+      const next = chk ? !chk.checked : true;
+      _ffSetCheckbox('chk-weather-pins', next);
+      if (typeof toggleWeatherPins === 'function') toggleWeatherPins(next);
+      refreshActiveFilterPanel();
+    };
+    window.toggleRoadworkPill = function (t) {
+      toggleRoadworkType(t);
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.roadwork = {
+      icon: 'fa-road', label: 'Roadwork', color: '#eab308',
+      render() {
+        if (_roadworkAvailableTypes.length === 0) {
+          return `<h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+            <div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading roadwork data…</div>`;
+        }
+        const typeCounts = {};
+        let ltCount = 0, wzCount = 0;
+        for (const m of _roadworkMarkers) {
+          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+          if (m.source === 'livetraffic') ltCount++;
+          else if (m.source === 'waze') wzCount++;
+        }
+        const typePills = _roadworkAvailableTypes.map((t) => {
+          const on = _roadworkSelectedTypes.has(t);
+          const safe = String(t).replace(/'/g, "\\'");
+          return _ffPill(on, `${t} (${(typeCounts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
+        }).join('');
+        const sourcePills = `
+          ${_ffPill(_roadworkSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkSourcePill('livetraffic')")}
+          ${_ffPill(_roadworkSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleRoadworkSourcePill('waze')")}
+        `;
+        return `<h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${sourcePills}</div>
+          <div class="ff-section-label">Type</div>
+          <div class="floating-filter-pills">${typePills}</div>`;
+      },
+    };
+
+    FILTER_REGISTRY.weather = {
+      icon: 'fa-cloud-sun', label: 'Weather', color: '#38bdf8',
+      render() {
+        const radarOn = document.getElementById('chk-radar')?.checked ?? false;
+        const pinsOn  = document.getElementById('chk-weather-pins')?.checked ?? false;
+        return `<h4><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i> Weather</h4>
+          <div class="floating-filter-pills">
+            ${_ffPill(radarOn, '<i class="fa-solid fa-cloud-rain"></i> Rain Radar', 'toggleRadarPill()')}
+            ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
+          </div>`;
+      },
+    };
+
+    window.toggleAisTypePill = function (key) {
+      aisTypeFilter[key] = !aisTypeFilter[key];
+      _ffSetCheckbox(`chk-ais-${key}`, aisTypeFilter[key]);
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAisStatusPill = function (key) {
+      aisStatusFilter[key] = !aisStatusFilter[key];
+      _ffSetCheckbox(`chk-ais-st-${key}`, aisStatusFilter[key]);
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAisSubtypePill = function (gtId) {
+      const cur = aisSubtypeFilter[gtId] !== false;
+      aisSubtypeFilter[gtId] = !cur;
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAisTypeExpand = function (key) {
+      if (_aisExpandedTypes.has(key)) _aisExpandedTypes.delete(key);
+      else _aisExpandedTypes.add(key);
+      refreshActiveFilterPanel();
+    };
+    const _AIS_AGE_STOPS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+    window.setAisMaxAgePreview = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(_AIS_AGE_STOPS[i]);
+    };
+    window.setAisMaxAgeFromSlider = function (rawIdx) {
+      const i = Math.max(0, Math.min(_AIS_AGE_STOPS.length - 1, Math.round(parseFloat(rawIdx))));
+      aisMaxAgeMin = _AIS_AGE_STOPS[i];
+      const lbl = document.getElementById('ff-ais-age-val');
+      if (lbl) lbl.textContent = _aisFormatAge(aisMaxAgeMin);
+      _rebuildAis();
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    };
+    // Repeaters layer source filter — currently one entry, ready
+    // to slot in more sources later.
+    window.toggleNswpsnSubtypePill = function (key) {
+      nswpsnFilter[key] = !nswpsnFilter[key];
+      _rebuildNswpsn();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.nswpsn = {
+      icon: 'fa-tower-broadcast', label: 'Repeaters', color: '#14b8a6',
+      render() {
+        const counts = {};
+        for (const s of _nswpsnSites) {
+          const sub = nswpsnSiteSubtype(s);
+          counts[sub] = (counts[sub] || 0) + 1;
+        }
+        const pills = NSWPSN_SUBTYPES.map((t) => {
+          const n = counts[t.key] || 0;
+          const on = nswpsnFilter[t.key] !== false;
+          const style = on
+            ? `background:${t.color}33;border-color:${t.color};color:#f8fafc;`
+            : `border-color:${t.color}80;color:${t.color};`;
+          return `<button class="floating-filter-pill" style="${style}" onclick="toggleNswpsnSubtypePill('${t.key}')">${escapeHtml(t.label)} (${n.toLocaleString()})</button>`;
+        }).join('');
+        return `<h4><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i> Repeaters</h4>
+          <div class="ff-section-label">Source</div>
+          <div class="floating-filter-pills">${pills}</div>`;
+      },
+    };
+
+    FILTER_REGISTRY.ais = {
+      icon: 'fa-ship', label: 'AIS Ships', color: '#0284c7',
+      render() {
+        const types = [
+          { key: 'cargo',       label: 'Cargo' },
+          { key: 'tanker',      label: 'Tanker' },
+          { key: 'passenger',   label: 'Passenger' },
+          { key: 'hsc',         label: 'High-speed' },
+          { key: 'tug',         label: 'Tug / Special' },
+          { key: 'fishing',     label: 'Fishing' },
+          { key: 'pleasure',    label: 'Pleasure' },
+          { key: 'navaid',      label: 'Navaid' },
+          { key: 'unspecified', label: 'Unspecified' },
+        ];
+        const statuses = [
+          { key: 'underway', label: 'Underway' },
+          { key: 'anchored', label: 'Anchored' },
+          { key: 'other',    label: 'Other' },
+        ];
+        const typeCounts = {}, subtypeCounts = {}, statusCounts = {};
+        for (const v of _aisVessels) {
+          const c = aisCategoryFromVessel(v);
+          const s = aisStatusBucket(v);
+          const gt = aisGtSubtype(v);
+          typeCounts[c] = (typeCounts[c] || 0) + 1;
+          statusCounts[s] = (statusCounts[s] || 0) + 1;
+          if (gt) subtypeCounts[gt] = (subtypeCounts[gt] || 0) + 1;
+        }
+        const typeRowsHtml = types.map((t) => {
+          const n = typeCounts[t.key] || 0;
+          const color = AIS_TYPE_COLOR[t.key] || AIS_TYPE_COLOR.unspecified;
+          const glyph = _ffAisTypeGlyph(t.key, color);
+          const expanded = _aisExpandedTypes.has(t.key);
+          const subs = AIS_SUBTYPES[t.key] || [];
+          const hasSubs = subs.length > 1;
+          const chevron = hasSubs
+            ? `<button class="ais-subtype-chevron" onclick="event.stopPropagation();toggleAisTypeExpand('${t.key}')" title="${expanded ? 'Hide' : 'Show'} subtypes" style="margin-left:2px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;background:${expanded ? color + '33' : 'rgba(30,41,59,0.6)'};border:1px solid ${color}80;border-radius:50%;color:${color};cursor:pointer;font-size:11px;padding:0;line-height:1;flex-shrink:0;"><i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'}"></i></button>`
+            : '';
+          const mainPill = _ffPillColored(aisTypeFilter[t.key], color, glyph, `${t.label} (${n.toLocaleString()})`, `toggleAisTypePill('${t.key}')`);
+          let subRow = '';
+          if (expanded && hasSubs) {
+            const subPills = subs.map((s) => {
+              const sn = subtypeCounts[s.id] || 0;
+              const on = aisSubtypeFilter[s.id] !== false;
+              const subColor = color;
+              const style = on
+                ? `background:${subColor}33;border-color:${subColor};color:#f8fafc;`
+                : `border-color:${subColor}66;color:${subColor};`;
+              return `<button class="floating-filter-pill ais-subtype-pill" style="${style};font-size:10px;padding:3px 8px;" onclick="toggleAisSubtypePill('${s.id}')">${s.name} (${sn.toLocaleString()})</button>`;
+            }).join('');
+            subRow = `<div class="floating-filter-pills" style="margin:4px 0 6px 18px;gap:4px;">${subPills}</div>`;
+          }
+          return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">${mainPill}${chevron}</div>${subRow}`;
+        }).join('');
+        const statusPills = statuses.map((s) => {
+          const n = statusCounts[s.key] || 0;
+          return _ffPill(aisStatusFilter[s.key], `${s.label} (${n.toLocaleString()})`, `toggleAisStatusPill('${s.key}')`);
+        }).join('');
+        const total = _aisVessels.length;
+        const visibleTxt = document.getElementById('ais-status-line')?.textContent
+          || (total ? `${total.toLocaleString()} vessels loaded` : 'Loading vessels…');
+        const escTxt = (typeof escapeHtml === 'function')
+          ? escapeHtml(visibleTxt)
+          : String(visibleTxt).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+        let ageIdx = _AIS_AGE_STOPS.findIndex((s) => s >= aisMaxAgeMin);
+        if (ageIdx < 0) ageIdx = _AIS_AGE_STOPS.length - 1;
+        const ageMax = _AIS_AGE_STOPS.length - 1;
+        const ageTicks = _AIS_AGE_STOPS.map((minVal, i) => {
+          const pct = (i / ageMax) * 100;
+          const isActive = i === ageIdx;
+          const dotColor = isActive ? '#7dd3fc' : 'rgba(148,163,184,0.55)';
+          const textColor = isActive ? '#7dd3fc' : '#64748b';
+          const weight = isActive ? '600' : '400';
+          return `<button type="button" onclick="setAisMaxAgeFromSlider(${i})"
+            style="position:absolute;left:${pct.toFixed(2)}%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;background:transparent;border:0;padding:0;cursor:pointer;pointer-events:auto;">
+            <div style="width:6px;height:6px;border-radius:50%;background:${dotColor};margin-bottom:1px;"></div>
+            <div style="font-size:9px;color:${textColor};font-weight:${weight};line-height:1;font-variant-numeric:tabular-nums;">${_aisAgeTickLabel(minVal)}</div>
+          </button>`;
+        }).join('');
+        const ageSlider = `<div style="display:flex;align-items:center;gap:8px;">
+            <span style="flex:1;display:block;">
+              <input type="range" min="0" max="${ageMax}" step="0.01" value="${ageIdx}"
+                     oninput="setAisMaxAgePreview(this.value)"
+                     onchange="setAisMaxAgeFromSlider(this.value)"
+                     style="width:100%;accent-color:#0284c7;cursor:pointer;display:block;">
+              <span style="position:relative;display:block;height:18px;margin:2px 6px 0;">${ageTicks}</span>
+            </span>
+            <span id="ff-ais-age-val" style="font-size:10px;color:#cbd5e1;min-width:60px;text-align:right;font-variant-numeric:tabular-nums;">${_aisFormatAge(aisMaxAgeMin)}</span>
+          </div>`;
+        return `<h4><i class="fa-solid fa-ship" style="color:#0284c7;"></i> AIS Ships</h4>
+          <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
+          <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Status</div>
+          <div class="floating-filter-pills">${statusPills}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Last seen</div>
+          ${ageSlider}
+          <div class="floating-filter-status">${escTxt}</div>`;
+      },
+    };
+    function _renderFirmsLayer() {
+      firmsLayer.clearLayers();
+      if (!_firmsFeatures.length) return;
+      const filtered = _firmsFeatures.filter((f) => {
+        const sat = (f.properties && f.properties.satellite_tag) || '';
+        return _firmsSelectedSats.has(sat);
+      });
+      if (!filtered.length) return;
+      const zoom = map.getZoom();
+      const cellDeg = firmsClusterCellDeg(zoom);
+      const clusters = firmsClusterFeatures(filtered, cellDeg);
+      for (const c of clusters) {
+        if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+        const fill = firmsFillFor({ frp: c.maxFrp });
+        const op = firmsOpacityFor({ confidence: c.confidence });
+        const radius = firmsClusterRadius(c);
+        const props = {
+          frp: c.maxFrp,
+          _totalFrp: c.totalFrp,
+          _clusterCount: c.count,
+          confidence: c.confidence,
+          acq_datetime: c.acq_datetime,
+          satellite: c.satellite,
+          satellite_tag: c.satellite_tag,
+          instrument: c.instrument,
+          daynight: c.daynight,
+          brightness: c.brightness,
+          scan_km: c.scan_km,
+          track_km: c.track_km,
+        };
+        const dot = L.circleMarker([c.lat, c.lng], {
+          radius,
+          color: '#7f1d1d',
+          weight: 1,
+          opacity: 0.9,
+          fillColor: fill,
+          fillOpacity: op,
+          interactive: true
+        }).addTo(firmsLayer);
+        dot.bindTooltip(firmsTooltip(props), { sticky: true, opacity: 0.95 });
+      }
+    }
+    // ==================== AIS / VESSELS ====================
+    function aisExtractVessels(payload) {
+      if (Array.isArray(payload)) return payload;
+      if (payload && Array.isArray(payload.rows)) return payload.rows;
+      if (payload && Array.isArray(payload.data)) return payload.data;
+      if (payload && payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
+      return [];
+    }
+    function aisCategoryFromVessel(v) {
+      const gt = String(v.GT_SHIPTYPE != null ? v.GT_SHIPTYPE : '');
+      if (gt && AIS_GT_TO_CATEGORY[gt]) return AIS_GT_TO_CATEGORY[gt];
+      const name = (v.TYPE_NAME || v.TYPE_SUMMARY || '').toLowerCase();
+      if (name) {
+        if (name.includes('tanker')) return 'tanker';
+        if (name.includes('cargo')) return 'cargo';
+        if (name.includes('passenger') || name.includes('ferry')) return 'passenger';
+        if (name.includes('high speed') || name.includes('hsc')) return 'hsc';
+        if (name.includes('tug') || name.includes('special') || name.includes('pilot')) return 'tug';
+        if (name.includes('fishing')) return 'fishing';
+        if (name.includes('pleasure') || name.includes('yacht') || name.includes('sailing')) return 'pleasure';
+        if (name.includes('navigation aid') || name.includes('navaid') || name.includes('aton')) return 'navaid';
+        if (name.includes('unspecified') || name.includes('unknown')) return 'unspecified';
+        return 'unspecified';
+      }
+      const t = parseInt(v.SHIPTYPE != null ? v.SHIPTYPE : v.TYPE, 10);
+      if (t === 7) return 'cargo';
+      if (t === 8) return 'tanker';
+      if (t === 6) return 'passenger';
+      if (t === 4) return 'hsc';
+      if (t === 3) return 'tug';
+      if (t === 2) return 'fishing';
+      if (t === 9) return 'pleasure';
+      if (t === 5) return 'navaid';
+      return 'unspecified';
+    }
+    function aisGtSubtype(v) {
+      return String(v.GT_SHIPTYPE != null ? v.GT_SHIPTYPE : '');
+    }
+    function aisStatusBucket(v) {
+      const name = (v.STATUS_NAME || '').toLowerCase();
+      if (name) {
+        if (name.includes('under way') || name.includes('underway')) return 'underway';
+        if (name.includes('anchor') || name.includes('moor')) return 'anchored';
+        return 'other';
+      }
+      const s = parseInt(v.STATUS, 10);
+      if (!isFinite(s)) return 'other';
+      if (s === 0 || s === 8) return 'underway';
+      if (s === 1 || s === 5) return 'anchored';
+      return 'other';
+    }
+    const AIS_TYPE_COLOR = {
+      cargo:       '#10b981',
+      tanker:      '#ef4444',
+      passenger:   '#3b82f6',
+      hsc:         '#facc15',
+      tug:         '#06b6d4',
+      fishing:     '#f97316',
+      pleasure:    '#ec4899',
+      navaid:      '#fb923c',
+      unspecified: '#cbd5e1'
+    };
+    const AIS_TYPE_ICON = {
+      cargo: 'fa-ship', tanker: 'fa-ship', passenger: 'fa-ferry',
+      hsc: 'fa-rocket', tug: 'fa-anchor', fishing: 'fa-fish',
+      pleasure: 'fa-life-ring', navaid: 'fa-tower-broadcast', unspecified: 'fa-ship'
+    };
+    function buildAisIcon(category, headingDeg, isSatAis) {
+      const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.unspecified;
+      const op = isSatAis ? 0.55 : 1;
+      if (category === 'navaid') {
+        return L.divIcon({
+          className: 'ais-pin',
+          html: '<svg viewBox="0 0 24 24" width="16" height="16" style="display:block;opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+          iconSize: [16, 16], iconAnchor: [8, 8]
+        });
+      }
+      if (!isFinite(headingDeg)) {
+        return L.divIcon({
+          className: 'ais-pin',
+          html: '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';"></div>',
+          iconSize: [12, 12], iconAnchor: [6, 6]
+        });
+      }
+      return L.divIcon({
+        className: 'ais-pin',
+        html: '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block;transform:rotate(' + headingDeg + 'deg);opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+        iconSize: [20, 20], iconAnchor: [10, 10]
+      });
+    }
+    function buildAisPopupHtml(v) {
+      const esc = (typeof escapeHtml === 'function')
+        ? escapeHtml
+        : (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const rawName = (v.SHIPNAME || v.NAME || 'Unknown vessel').toString();
+      const isSatAis = rawName === '[SAT-AIS]';
+      const name = isSatAis ? 'Satellite AIS contact' : rawName;
+      const status = v.STATUS_NAME || '—';
+      const typeLabel = v.TYPE_NAME || v.TYPE_SUMMARY || ('Type ' + (v.SHIPTYPE != null ? v.SHIPTYPE : (v.TYPE != null ? v.TYPE : '—')));
+      const cat = aisCategoryFromVessel(v);
+      const color = AIS_TYPE_COLOR[cat];
+      const speed = (v.SPEED != null && v.SPEED !== '') ? (parseFloat(v.SPEED) / 10).toFixed(1) + ' kn' : '—';
+      const course = (v.COURSE != null && v.COURSE !== '') ? parseFloat(v.COURSE).toFixed(0) + '°' : '—';
+      const heading = (v.HEADING != null && v.HEADING !== '' && v.HEADING !== '511') ? v.HEADING + '°' : '—';
+      const draught = (v.DRAUGHT) ? (parseFloat(v.DRAUGHT) / 10).toFixed(1) + ' m' : '';
+      const dim = (v.LENGTH || v.L || '') + (v.WIDTH ? ' × ' + v.WIDTH + ' m' : (v.LENGTH ? ' m' : ''));
+      const ts = (v.ELAPSED != null && v.ELAPSED !== '')
+        ? (parseInt(v.ELAPSED, 10) + ' min ago')
+        : (v.TIMESTAMP ? new Date((+v.TIMESTAMP) * 1000).toUTCString() : (v.LAST_POS || '—'));
+      function row(label, value) {
+        if (value == null || value === '' || value === '—') return '';
+        return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + esc(label) + '</span><span style="font-weight:600;">' + esc(String(value)) + '</span></div>';
+      }
+      function section(title, body, accent) {
+        if (!body) return '';
+        return '<div style="padding:6px 8px;background:rgba(2,132,199,0.08);border-radius:6px;margin-bottom:8px;">' +
+          '<div style="color:' + (accent || '#7dd3fc') + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' + body +
+        '</div>';
+      }
+      const idBody = [row('MMSI', v.MMSI), row('IMO', v.IMO), row('Callsign', v.CALLSIGN), row('Flag', v.FLAG || ''), row('Type', typeLabel), row('Dimensions', dim || '—'), row('Draught', draught)].join('');
+      const navBody = [row('Status', status), row('Speed', speed), row('Course', course), row('Heading', heading), row('Destination', v.DESTINATION || '—'), row('ETA', v.ETA || '—'), row('Last update', ts)].join('');
+      return '<div style="max-width:500px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+        '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<i class="fa-solid ' + (AIS_TYPE_ICON[cat] || 'fa-ship') + '"></i> ' + esc(name) +
+          ' <span style="background:' + color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + esc(cat.toUpperCase()) + '</span>' +
+        '</div>' + section('🛟 IDENTIFICATION', idBody) + section('🧭 NAVIGATION', navBody) + '</div>';
+    }
+    function _rebuildAis() {
+      aisLayer.clearLayers();
+      let visible = 0;
+      _aisVessels.forEach((v) => {
+        const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
+        if (!isFinite(lat) || !isFinite(lon)) return;
+        const cat = aisCategoryFromVessel(v);
+        const st = aisStatusBucket(v);
+        if (!aisTypeFilter[cat]) return;
+        if (!aisStatusFilter[st]) return;
+        const gt = aisGtSubtype(v);
+        if (gt && aisSubtypeFilter[gt] === false) return;
+        const ageMin = _aisVesselAgeMin(v);
+        if (ageMin != null && ageMin > aisMaxAgeMin) return;
+        const heading = parseFloat(v.HEADING);
+        const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
+        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
+        const marker = L.marker([lat, lon], { icon }).bindTooltip(buildAisPopupHtml(v), {
+          className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+        });
+        aisLayer.addLayer(marker);
+        visible++;
+      });
+      const line = document.getElementById('ais-status-line');
+      if (line) line.textContent = visible + ' of ' + _aisVessels.length + ' vessels visible';
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    }
+    function toggleAisType(key, on) { aisTypeFilter[key] = !!on; _rebuildAis(); }
+    function toggleAisStatus(key, on) { aisStatusFilter[key] = !!on; _rebuildAis(); }
+    async function loadAisData() {
+      const line = document.getElementById('ais-status-line');
+      const hadData = _aisVessels.length > 0;
+      if (line && !hadData) line.textContent = 'Loading vessels…';
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const vessels = aisExtractVessels(data);
+        if (vessels.length === 0 && hadData) {
+          console.warn('[ais] empty response — keeping previous', _aisVessels.length, 'vessels');
+          return;
+        }
+        _aisVessels = vessels;
+        _rebuildAis();
+        console.log('[ais] loaded', vessels.length, 'vessels');
+      } catch (e) {
+        console.warn('[ais] failed to load:', e);
+        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+      }
+    }
+
+    // Repeaters layer subtype filter (mirrors map.html). Currently
+    // one source ("NSW PSN P25 sites" — every entry in the bundled
+    // NSW GRN JSON) but the structure is set up to take additional
+    // sources later.
+    const NSWPSN_SUBTYPES = [
+      { key: 'p25', label: 'NSW PSN P25 sites', color: '#14b8a6' },
+    ];
+    let nswpsnFilter = { p25: true };
+    let _nswpsnSites = [];
+    function nswpsnSiteSubtype(/* s */) { return 'p25'; }
+
+    async function loadNswpsnData() {
+      try {
+        const res = await fetch('data/nswpsn/NSW%20GRN%20Version%201.json', { cache: 'force-cache' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        _nswpsnSites = await res.json();
+        _rebuildNswpsn();
+        console.log('[nswpsn] loaded', _nswpsnSites.length, 'sites');
+      } catch (e) {
+        console.warn('[nswpsn] failed to load:', e);
+      }
+    }
+
+    function _rebuildNswpsn() {
+      try {
+        nswpsnLayer.clearLayers();
+        const icon = L.divIcon({
+          className: 'custom-pin',
+          html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:28px;height:28px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(20,184,166,0.5),0 0 12px rgba(20,184,166,0.25);display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;"><i class="fa-solid fa-tower-broadcast"></i></div>',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+
+        const esc = (typeof escapeHtml === 'function')
+          ? escapeHtml
+          : (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+              '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+
+        let added = 0;
+        _nswpsnSites.forEach((s) => {
+          const sub = nswpsnSiteSubtype(s);
+          if (!nswpsnFilter[sub]) return;
+          const lat = parseFloat(s.Latitude);
+          const lng = parseFloat(s.Longitude);
+          if (!isFinite(lat) || !isFinite(lng)) return;
+
+          const name = s.NAME || 'NSW PSN site';
+          const freqs = Array.isArray(s.Frequencies) ? s.Frequencies : [];
+
+          function section(title, body, accent) {
+            if (!body) return '';
+            const a = accent || '#14b8a6';
+            const bg = 'rgba(20,184,166,0.08)';
+            return '<div style="padding:6px 8px;background:' + bg + ';border-radius:6px;margin-bottom:8px;">' +
+              '<div style="color:' + a + ';font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">' + title + '</div>' +
+              body +
+            '</div>';
+          }
+          function row(label, value) {
+            if (!value || value === 'See below') return '';
+            return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;">' +
+              '<span style="color:#94a3b8;min-width:84px;">' + esc(label) + '</span>' +
+              '<span style="font-weight:600;">' + esc(String(value)) + '</span>' +
+            '</div>';
+          }
+
+          const idBody = [
+            row('Site ID', s.SITE_ID),
+            row('GRN Site #', s['GRN Site ID #']),
+            row('Previous #', s['Previous Site ID #']),
+            row('System #', s['System #']),
+            row('NAC', s['NAC Code']),
+            row('Postcode', s.POSTCODE)
+          ].join('');
+
+          const ctlBody = [
+            row('Zone', s['Zone Assignment']),
+            row('Control', s['Control Channel']),
+            row('Alt CC', s['Alt Control Channel'])
+          ].join('');
+
+          let freqBody = '';
+          if (freqs.length) {
+            freqBody =
+              '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">' + freqs.length + ' channel' + (freqs.length === 1 ? '' : 's') + '</div>' +
+              '<div style="max-height:140px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;color:#cbd5e1;">' +
+                freqs.map((f) => '<div>' + esc(String(f)) + '</div>').join('') +
+              '</div>';
+          }
+
+          let notesBlock = '';
+          if (s.Notes) {
+            notesBlock =
+              '<div style="padding:6px 8px;background:rgba(249,115,22,0.08);border-radius:6px;margin-bottom:8px;">' +
+                '<div style="color:#fdba74;font-weight:700;font-size:10px;letter-spacing:0.5px;margin-bottom:4px;">⚠ NOTES</div>' +
+                '<div style="font-size:11.5px;color:#fed7aa;line-height:1.45;">' + esc(String(s.Notes)) + '</div>' +
+              '</div>';
+          }
+
+          const html =
+            '<div style="max-width:360px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+              '<div style="font-size:15px;font-weight:700;color:#14b8a6;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                '<i class="fa-solid fa-tower-broadcast"></i> ' + esc(name) +
+                ' <span style="background:#14b8a6;color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">Repeater</span>' +
+                (s['Last Update'] ? ' <span style="color:#94a3b8;font-size:10px;font-weight:500;">Updated ' + esc(String(s['Last Update'])) + '</span>' : '') +
+              '</div>' +
+              section('🛰 IDENTIFICATION', idBody) +
+              section('📡 ZONE / CONTROL', ctlBody) +
+              notesBlock +
+              section('🎚 FREQUENCIES', freqBody) +
+            '</div>';
+
+          const marker = L.marker([lat, lng], { icon }).bindPopup(html, {
+            className: 'repeater-popup',
+            maxWidth: 380,
+            autoPan: true,
+            closeOnClick: false
+          });
+          nswpsnLayer.addLayer(marker);
+          added++;
+        });
+        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      } catch (e) {
+        console.warn('[nswpsn] rebuild failed:', e);
+      }
+    }
+
+    async function loadFirmsHotspots() {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/firms/hotspots`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const features = (data && Array.isArray(data.features)) ? data.features : [];
+        const norm = [];
+        for (const f of features) {
+          if (!f || !f.geometry) continue;
+          const props = f.properties || {};
+          let lat = Number(props.latitude);
+          let lng = Number(props.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            const ring = f.geometry.coordinates && f.geometry.coordinates[0];
+            if (!Array.isArray(ring) || ring.length === 0) continue;
+            let sx = 0, sy = 0, n = 0;
+            for (let i = 0; i < ring.length - 1; i++) {
+              const pt = ring[i];
+              if (!Array.isArray(pt)) continue;
+              sx += Number(pt[0]); sy += Number(pt[1]); n++;
+            }
+            if (n === 0) continue;
+            lng = sx / n; lat = sy / n;
+          }
+          norm.push({ properties: { ...props, latitude: lat, longitude: lng } });
+        }
+        _firmsFeatures = norm;
+        if (!_firmsZoomHandlerWired) {
+          map.on('zoomend', () => {
+            if (map.hasLayer(firmsLayer)) _renderFirmsLayer();
+          });
+          _firmsZoomHandlerWired = true;
+        }
+        _firmsLastSourceStatus = (data && Array.isArray(data.source_status)) ? data.source_status : [];
+        const statusEl = document.getElementById('firms-source-status');
+        if (statusEl) {
+          statusEl.innerHTML = _firmsLastSourceStatus.map((s) => {
+            const ok = s.ok;
+            const color = ok ? '#34d399' : '#f87171';
+            const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
+            return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+          }).join('');
+        }
+        if (_activeFilterKey === 'firms') refreshActiveFilterPanel();
+        _renderFirmsLayer();
+        console.log(`Loaded ${_firmsFeatures.length} FIRMS detections (rendered as clusters)`);
+      } catch (e) {
+        console.error('FIRMS hotspots error', e);
+      }
     }
 
     // Traffic Cameras + Airport Weather Cameras + Central Watch Fire Tower Cameras
@@ -7225,8 +8862,11 @@ async function loadPagerData() {
         document.getElementById('chk-weather-pins').checked = false;
         toggleRadar(false);
         toggleWeatherPins(false);
+        removeFilterButton('weather');
+      } else {
+        addFilterButton('weather');
       }
-      
+
       panel.classList.toggle('open');
       btn.classList.toggle('active', !isOpen);
       updateFilterPanelPositions();
@@ -7264,18 +8904,27 @@ async function loadPagerData() {
     async function loadRadarFrames() {
       try {
         let data;
+        let past = [];
+        let nowcast = [];
         try {
           const res = await apiFetch(`${PROXY_BASE}/api/weather/radar`);
           data = await res.json();
+          past = data.radar?.past || [];
+          nowcast = data.radar?.nowcast || [];
         } catch {
+          // backend fetch threw — fall through to direct fetch below
+        }
+        // Backend may have returned 200 with empty arrays when the upstream
+        // poll timed out. Treat that the same as a hard failure and try the
+        // browser-direct route before giving up.
+        if (past.length === 0 && nowcast.length === 0) {
           const fallback = await fetch('https://api.rainviewer.com/public/weather-maps.json');
           data = await fallback.json();
+          past = data.radar?.past || [];
+          nowcast = data.radar?.nowcast || [];
         }
-        
-        const past = data.radar?.past || [];
-        const nowcast = data.radar?.nowcast || [];
         radarFrames = [...past, ...nowcast];
-        
+
         if (radarFrames.length === 0) return;
         
         const slider = document.getElementById('radar-slider');
@@ -9356,6 +11005,7 @@ async function loadPagerData() {
       if (map.hasLayer(beachLayer)) redrawTasks.push(loadBeachData());
       if (map.hasLayer(weatherLayer)) redrawTasks.push(loadWeatherData());
       if (map.hasLayer(outagesLayer)) redrawTasks.push(loadOutageData());
+      if (map.hasLayer(aisLayer)) redrawTasks.push(loadAisData());
       
       await Promise.all(redrawTasks);
       

@@ -34,6 +34,299 @@ html, body {
   max-width: 100vw;
 }
 
+/* --- GLOBAL CUSTOM SCROLLBARS ---
+   Thin, accent-orange themed scrollbars across every scrollable element.
+   Firefox uses scrollbar-width/color; WebKit (Chrome/Edge/Safari) uses ::-webkit-scrollbar.
+   Element-specific overrides (.table-scroll, .layer-toggles) still win via specificity. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.4) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(249, 115, 22, 0.45);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.45), inset 0 0 4px rgba(255, 175, 95, 0.3);
+  animation: scrollbar-thumb-glow 2.6s ease-in-out infinite;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 0.85);
+  background-clip: padding-box;
+  box-shadow: 0 0 14px rgba(249, 115, 22, 0.85), inset 0 0 6px rgba(255, 200, 140, 0.55);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+@keyframes scrollbar-thumb-glow {
+  0%, 100% { box-shadow: 0 0 6px rgba(249, 115, 22, 0.45), inset 0 0 4px rgba(255, 175, 95, 0.3); }
+  50%      { box-shadow: 0 0 14px rgba(249, 115, 22, 0.85), inset 0 0 6px rgba(255, 200, 140, 0.55); }
+}
+/* Reserve scrollbar space so layout doesn't shift when content grows. */
+@supports (scrollbar-gutter: stable) {
+  html, body {
+    scrollbar-gutter: stable;
+  }
+}
+
+/* On agency pages the scroll-spy rail replaces the native scrollbar.
+   `<html>` gets `.has-scroll-spy` from scroll-indicator.js. The actual scroll
+   container on this layout is `.main` (because html/body are pinned to viewport
+   height with body display:flex), so `.main` is included in every selector. */
+html.has-scroll-spy,
+html.has-scroll-spy body,
+html.has-scroll-spy .main {
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+  scrollbar-gutter: auto !important;
+  -ms-overflow-style: none !important;
+}
+html.has-scroll-spy::-webkit-scrollbar,
+html.has-scroll-spy body::-webkit-scrollbar,
+html.has-scroll-spy .main::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+html.has-scroll-spy::-webkit-scrollbar-thumb,
+html.has-scroll-spy body::-webkit-scrollbar-thumb,
+html.has-scroll-spy .main::-webkit-scrollbar-thumb,
+html.has-scroll-spy::-webkit-scrollbar-track,
+html.has-scroll-spy body::-webkit-scrollbar-track,
+html.has-scroll-spy .main::-webkit-scrollbar-track {
+  display: none !important;
+  background: transparent !important;
+}
+
+/* --- SOFT SCROLL-SNAP ON CARDS ---
+   `proximity` (not `mandatory`) is gentle — it only nudges to a card when you stop near one. */
+@media (min-width: 901px) {
+  html {
+    scroll-snap-type: y proximity;
+    scroll-padding-top: 1.5rem;
+    scroll-behavior: smooth;
+  }
+  .main-header,
+  .card-grid > .card {
+    scroll-snap-align: start;
+    scroll-snap-stop: normal;
+  }
+}
+
+/* --- SCROLL-SPY RAIL ---
+   Vertical rail along the right edge with a dot for each snap target. Click a
+   dot to jump to that card; the active dot glows with the accent color. */
+.scroll-spy-rail {
+  position: fixed;
+  right: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 26px;
+  z-index: 180;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+.scroll-spy-rail-dragging,
+.scroll-spy-rail:active { cursor: grabbing; }
+.scroll-spy-rail::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(
+    to bottom,
+    rgba(148, 163, 184, 0) 0%,
+    rgba(148, 163, 184, 0.16) 4%,
+    rgba(148, 163, 184, 0.16) 96%,
+    rgba(148, 163, 184, 0) 100%
+  );
+}
+.scroll-spy-rail-empty { display: none; }
+
+/* Sliding thumb that mirrors the native scrollbar position. Sits behind the
+   dots (lower z-index) but is wider than them, so dots appear centered on it. */
+.scroll-spy-thumb {
+  position: absolute;
+  left: 50%;
+  width: 12px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: linear-gradient(
+    to bottom,
+    rgba(249, 115, 22, 0.65),
+    rgba(249, 115, 22, 0.4)
+  );
+  border: 1px solid rgba(255, 175, 95, 0.55);
+  box-shadow:
+    0 0 8px rgba(249, 115, 22, 0.55),
+    inset 0 0 4px rgba(255, 200, 140, 0.4);
+  pointer-events: none;       /* events bubble to rail so it can drag */
+  z-index: 1;
+  transition: background 0.18s ease, box-shadow 0.18s ease, width 0.18s ease;
+}
+.scroll-spy-rail:hover .scroll-spy-thumb {
+  width: 14px;
+  background: linear-gradient(
+    to bottom,
+    rgba(249, 115, 22, 0.85),
+    rgba(249, 115, 22, 0.55)
+  );
+  box-shadow:
+    0 0 12px rgba(249, 115, 22, 0.75),
+    inset 0 0 6px rgba(255, 200, 140, 0.5);
+}
+.scroll-spy-rail-dragging .scroll-spy-thumb {
+  width: 16px;
+  background: linear-gradient(
+    to bottom,
+    rgba(249, 115, 22, 0.95),
+    rgba(249, 115, 22, 0.65)
+  );
+  box-shadow:
+    0 0 16px rgba(249, 115, 22, 0.9),
+    inset 0 0 8px rgba(255, 200, 140, 0.6);
+}
+.scroll-spy-dot {
+  position: absolute;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.85);
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.55);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  transition:
+    transform 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+  outline: none;
+}
+.scroll-spy-dot::after {
+  /* Larger invisible hit area so the 9px dot is easy to click. */
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+.scroll-spy-dot:hover {
+  background: rgba(249, 115, 22, 0.85);
+  border-color: rgba(249, 115, 22, 0.95);
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.6);
+  transform: translate(-50%, -50%) scale(1.35);
+}
+.scroll-spy-dot:focus-visible {
+  background: rgba(249, 115, 22, 0.85);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.35);
+}
+.scroll-spy-dot.active {
+  background: var(--accent);
+  border-color: rgba(255, 200, 140, 0.9);
+  box-shadow:
+    0 0 8px rgba(249, 115, 22, 0.85),
+    0 0 16px rgba(249, 115, 22, 0.45);
+  transform: translate(-50%, -50%) scale(1.35);
+}
+/* Dot that represents two cards sharing a grid row — slight pill shape so it
+   reads as "merged". */
+.scroll-spy-dot-merged {
+  width: 14px;
+  height: 9px;
+  border-radius: 6px;
+}
+.scroll-spy-dot-merged.active {
+  width: 16px;
+  height: 10px;
+}
+
+/* --- FLOATING SCROLL CARD INDICATOR ---
+   Animated label that floats near the scrollbar showing the card currently in focus. */
+.scroll-card-indicator {
+  position: fixed;
+  right: 36px; /* sits just to the left of the spy rail (rail ends at right: 30px) */
+  top: 50%;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.85rem 0.5rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-main);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.94));
+  border: 1px solid rgba(249, 115, 22, 0.55);
+  border-radius: 10px;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.55),
+    0 0 16px rgba(249, 115, 22, 0.35),
+    inset 0 0 0 1px rgba(255, 175, 95, 0.12);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translate(12px, -50%);
+  transition: opacity 0.3s ease, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.scroll-card-indicator.visible {
+  opacity: 1;
+  transform: translate(0, -50%);
+  animation: scroll-indicator-pulse 2.2s ease-in-out infinite;
+}
+.scroll-card-indicator::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  background: rgba(15, 23, 42, 0.96);
+  border-right: 1px solid rgba(249, 115, 22, 0.55);
+  border-top: 1px solid rgba(249, 115, 22, 0.55);
+  transform: translateY(-50%) rotate(45deg);
+}
+.scroll-card-indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.85);
+  flex-shrink: 0;
+  animation: scroll-indicator-dot 1.6s ease-in-out infinite;
+}
+@keyframes scroll-indicator-pulse {
+  0%, 100% { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 16px rgba(249, 115, 22, 0.35), inset 0 0 0 1px rgba(255, 175, 95, 0.12); }
+  50%      { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6), 0 0 28px rgba(249, 115, 22, 0.65), inset 0 0 0 1px rgba(255, 200, 140, 0.25); }
+}
+@keyframes scroll-indicator-dot {
+  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 6px rgba(249, 115, 22, 0.7); }
+  50%      { transform: scale(1.25); opacity: 0.85; box-shadow: 0 0 14px rgba(249, 115, 22, 1); }
+}
+@media (max-width: 900px) {
+  .scroll-card-indicator,
+  .scroll-spy-rail { display: none; }
+}
+
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
   background-color: #020617;
@@ -114,6 +407,310 @@ a:hover { text-decoration: underline; }
 .sidebar-nav a::before { content: "●"; font-size: 0.45rem; color: rgba(148, 163, 184, 0.6); }
 .sidebar-nav a:hover { background: rgba(15,23,42,0.9); color: var(--text-main); transform: translateX(2px); text-decoration: none; }
 
+/* Agencies dropdown (sidebar) — clearly clickable, two-level collapsible */
+.agency-root {
+  margin-top: 0.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.4);
+  overflow: hidden;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.agency-root:hover { border-color: rgba(249, 115, 22, 0.4); }
+.agency-root[open] {
+  background: rgba(15, 23, 42, 0.7);
+  border-color: rgba(249, 115, 22, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.agency-root > summary,
+.agency-cat > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  user-select: none;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.agency-root > summary::-webkit-details-marker,
+.agency-cat > summary::-webkit-details-marker { display: none; }
+
+/* Chevron — clearly visible caret, rotates on open */
+.agency-root > summary::before,
+.agency-cat > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 6px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform 0.2s ease, opacity 0.18s ease;
+}
+.agency-root[open] > summary::before,
+.agency-cat[open] > summary::before {
+  transform: rotate(90deg);
+  opacity: 1;
+}
+.agency-root > summary:hover::before,
+.agency-cat > summary:hover::before { opacity: 1; }
+
+/* Root summary — top-level "All Agencies" toggle */
+.agency-root > summary {
+  padding: 0.7rem 0.85rem;
+  color: var(--text-main);
+  font-weight: 600;
+  font-size: 0.92rem;
+  letter-spacing: 0.01em;
+}
+.agency-root > summary:hover { background: rgba(249, 115, 22, 0.08); color: var(--accent); }
+.agency-root[open] > summary { color: var(--accent); border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+.agency-root-name { flex: 1; }
+
+.agency-root-body {
+  padding: 0.4rem 0.45rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.agency-root-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.agency-root-list-hidden { display: none; }
+
+/* Sidebar global search */
+.agency-search { display: flex; flex-direction: column; gap: 0.4rem; }
+.agency-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.agency-search-input-icon {
+  position: absolute;
+  left: 0.65rem;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  pointer-events: none;
+}
+.agency-search-input {
+  width: 100%;
+  padding: 0.5rem 1.9rem 0.5rem 1.9rem;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(2, 6, 23, 0.65);
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.agency-search-input::placeholder { color: var(--text-soft); }
+.agency-search-input:focus {
+  border-color: rgba(249, 115, 22, 0.55);
+  background: rgba(15, 23, 42, 0.85);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
+}
+.agency-search-input::-webkit-search-cancel-button { display: none; }
+
+.agency-search-clear {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  border: none;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.agency-search-clear:hover { background: rgba(249, 115, 22, 0.35); color: var(--text-main); }
+
+.agency-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+.agency-search-empty {
+  padding: 0.7rem 0.5rem;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  text-align: center;
+  font-style: italic;
+}
+
+.agency-search-group {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(2, 6, 23, 0.45);
+}
+.agency-search-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-main);
+  background: rgba(249, 115, 22, 0.08);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.agency-search-group-header:hover {
+  background: rgba(249, 115, 22, 0.18);
+  color: var(--accent);
+  text-decoration: none;
+}
+.agency-search-group-icon {
+  width: 0.95rem;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  flex-shrink: 0;
+}
+.agency-search-group-header:hover .agency-search-group-icon { color: var(--accent); }
+
+.agency-search-item {
+  display: grid;
+  grid-template-columns: 3.4rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.76rem;
+  line-height: 1.3;
+  color: var(--text-muted);
+  border-top: 1px solid rgba(148, 163, 184, 0.06);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.agency-search-item:first-of-type { border-top: none; }
+.agency-search-item:hover {
+  background: rgba(249, 115, 22, 0.08);
+  color: var(--text-main);
+  text-decoration: none;
+}
+.agency-search-item-type {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 4px;
+  padding: 0.18rem 0.35rem;
+  text-align: center;
+  white-space: nowrap;
+}
+.agency-search-item:hover .agency-search-item-type { color: var(--accent); background: rgba(249, 115, 22, 0.18); }
+.agency-search-item-text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.agency-search-item-primary {
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agency-search-item-secondary {
+  font-size: 0.7rem;
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agency-search-item mark,
+.agency-search-group-header mark {
+  background: rgba(249, 115, 22, 0.35);
+  color: var(--text-main);
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* Category summary — second-level toggle */
+.agency-cat {
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  overflow: hidden;
+}
+.agency-cat:hover { border-color: rgba(148, 163, 184, 0.28); }
+.agency-cat[open] {
+  background: rgba(15, 23, 42, 0.85);
+  border-color: rgba(148, 163, 184, 0.3);
+}
+.agency-cat > summary {
+  padding: 0.5rem 0.65rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+.agency-cat > summary:hover { background: rgba(15, 23, 42, 0.9); color: var(--text-main); }
+.agency-cat[open] > summary {
+  color: var(--text-main);
+  background: rgba(249, 115, 22, 0.08);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.agency-cat-name { flex: 1; }
+
+.agency-cat-list {
+  padding: 0.3rem 0.3rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+/* Individual agency link — icon + name, no arrow (so it doesn't read as another dropdown) */
+.agency-item-link {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.42rem 0.6rem;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
+}
+.agency-item-icon {
+  width: 1rem;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  transition: color 0.15s ease;
+}
+.agency-item-name { flex: 1; min-width: 0; }
+.agency-item-link:hover {
+  background: rgba(249, 115, 22, 0.08);
+  color: var(--text-main);
+  text-decoration: none;
+  transform: translateX(2px);
+}
+.agency-item-link:hover .agency-item-icon { color: var(--accent); }
+.agency-item-link.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.agency-item-link.active .agency-item-icon { color: var(--accent); }
+
 .sidebar-highlight { margin-top: 1.4rem; padding: 0.75rem; border-radius: 12px; font-size: 0.78rem; background: radial-gradient(circle at top, rgba(248,113,113,0.16), transparent 55%); border: 1px solid rgba(248, 250, 252, 0.06); }
 .sidebar-highlight-title { font-weight: 600; margin-bottom: 0.2rem; }
 .sidebar-footer { margin-top: 1.4rem; font-size: 0.75rem; color: var(--text-soft); padding-bottom: 1rem; }
@@ -186,7 +783,7 @@ a:hover { text-decoration: underline; }
   .table { min-width: 500px; }
   .table th, .table td { padding: 0.5rem 0.6rem; font-size: 0.78rem; }
   .table th { font-size: 0.65rem; }
-  .frnsw-zone-table { min-width: 580px; }
+  .frnsw-zone-table { min-width: 640px; }
   .frnsw-zone-table td:nth-child(3) { font-size: 0.72rem; }
   
   /* Active units list */
@@ -269,6 +866,76 @@ a:hover { text-decoration: underline; }
 .card-tag { padding: 0.1rem 0.55rem; border-radius: var(--radius-pill); border: 1px solid rgba(148, 163, 184, 0.5); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); }
 .card-tag-live { border-color: #ef4444; color: #fecaca; background: radial-gradient(circle at 0 0, rgba(239,68,68,0.45), rgba(15,23,42,0.98)); }
 .card-body { font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; overflow: hidden; max-width: 100%; }
+
+/* Section divider rendered as full-width heading inside .card-grid. */
+.card-grid-heading {
+  grid-column: 1 / -1;
+  margin: 1.4rem 0 0.2rem;
+  padding: 1rem 0 0.6rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  position: relative;
+}
+.card-grid-heading::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 64px;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.55);
+}
+.card-grid-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-main);
+}
+.card-grid-heading p {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-soft);
+  line-height: 1.45;
+  max-width: 70ch;
+}
+
+/* Collapsible cards (used by country-grouped fleet sections on the Aviation page). */
+.card-collapsible { padding: 0; }
+.card-collapsible-details { padding: 0; }
+.card-collapsible-details > .card-body { padding: 0 1.1rem 1rem; }
+.card-collapsible-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 1.1rem;
+  user-select: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  transition: background 0.18s ease;
+}
+.card-collapsible-summary::-webkit-details-marker { display: none; }
+.card-collapsible-summary:hover { background: rgba(249, 115, 22, 0.06); }
+.card-collapsible-summary .card-title { flex: 1; }
+.card-collapsible-chevron {
+  width: 0;
+  height: 0;
+  border-left: 6px solid var(--text-soft);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  flex-shrink: 0;
+  transition: transform 0.2s ease, border-left-color 0.18s ease;
+}
+.card-collapsible-summary:hover .card-collapsible-chevron { border-left-color: var(--accent); }
+.card-collapsible-details[open] > .card-collapsible-summary .card-collapsible-chevron {
+  transform: rotate(90deg);
+  border-left-color: var(--accent);
+}
+.card-collapsible-details[open] > .card-collapsible-summary {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
 .card-link { display: inline-block; margin-top: 1rem; font-size: 0.85rem; font-weight: 600; color: var(--accent); }
 
 /* Buttons */
@@ -326,58 +993,87 @@ a:hover { text-decoration: underline; }
 .table tr:last-child td { border-bottom: none; }
 .table tbody tr { transition: background 0.15s ease; }
 .table tbody tr:hover { background: rgba(249, 115, 22, 0.06); }
+.table tbody tr.row-highlighted {
+  background: rgba(249, 115, 22, 0.32) !important;
+  box-shadow: inset 3px 0 0 var(--accent);
+  animation: row-highlight-flash 1.6s ease-out;
+}
+@keyframes row-highlight-flash {
+  0%   { background: rgba(249, 115, 22, 0.6); box-shadow: inset 0 0 24px rgba(249, 115, 22, 0.55), inset 3px 0 0 var(--accent); }
+  60%  { background: rgba(249, 115, 22, 0.45); }
+  100% { background: rgba(249, 115, 22, 0.32); box-shadow: inset 3px 0 0 var(--accent); }
+}
 
 /* Zone Tables (FRNSW) - 3 column layout */
 .frnsw-zone-table { table-layout: fixed; width: 100%; }
-.frnsw-zone-table th:nth-child(1), 
-.frnsw-zone-table td:nth-child(1) { width: 60px; min-width: 60px; }
-.frnsw-zone-table th:nth-child(2), 
-.frnsw-zone-table td:nth-child(2) { width: 160px; min-width: 140px; white-space: nowrap; }
-.frnsw-zone-table th:nth-child(3), 
-.frnsw-zone-table td:nth-child(3) { width: auto; }
-.frnsw-zone-table td:nth-child(1) { 
-  font-weight: 700; 
-  color: #f97316; 
+.frnsw-zone-table th:nth-child(1),
+.frnsw-zone-table td:nth-child(1) { width: 64px; min-width: 64px; }
+.frnsw-zone-table th:nth-child(2),
+.frnsw-zone-table td:nth-child(2) {
+  width: 220px;
+  min-width: 200px;
+  white-space: normal;        /* let "Metropolitan North Zone 1" wrap if column shrinks */
+  word-break: normal;
+  overflow-wrap: break-word;
+  padding-right: 1.1rem;       /* visual gap into the localities column */
+}
+.frnsw-zone-table th:nth-child(3),
+.frnsw-zone-table td:nth-child(3) { width: auto; padding-left: 0.85rem; }
+.frnsw-zone-table td:nth-child(1) {
+  font-weight: 700;
+  color: #f97316;
   font-size: 0.85rem;
   letter-spacing: 0.02em;
 }
-.frnsw-zone-table td:nth-child(2) { 
-  color: #e2e8f0; 
-  font-weight: 500; 
+.frnsw-zone-table td:nth-child(2) {
+  color: #e2e8f0;
+  font-weight: 500;
+  line-height: 1.4;
 }
-.frnsw-zone-table td:nth-child(3) { 
-  color: #94a3b8; 
+.frnsw-zone-table td:nth-child(3) {
+  color: #94a3b8;
   font-size: 0.78rem;
   line-height: 1.6;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* RFS Zone Tables - 4 column layout */
 .rfs-zone-table { table-layout: fixed; width: 100%; }
 .rfs-zone-table th:nth-child(1), 
 .rfs-zone-table td:nth-child(1) { width: 70px; min-width: 65px; }
-.rfs-zone-table th:nth-child(2), 
-.rfs-zone-table td:nth-child(2) { width: 140px; min-width: 120px; }
-.rfs-zone-table th:nth-child(3), 
-.rfs-zone-table td:nth-child(3) { width: auto; }
-.rfs-zone-table th:nth-child(4), 
-.rfs-zone-table td:nth-child(4) { width: 100px; min-width: 90px; white-space: nowrap; }
-.rfs-zone-table td:nth-child(1) { 
-  font-weight: 700; 
-  color: #f97316; 
+.rfs-zone-table th:nth-child(2),
+.rfs-zone-table td:nth-child(2) {
+  width: 170px;
+  min-width: 150px;
+  padding-right: 1.1rem;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.rfs-zone-table th:nth-child(3),
+.rfs-zone-table td:nth-child(3) { width: auto; padding-left: 0.85rem; padding-right: 0.85rem; }
+.rfs-zone-table th:nth-child(4),
+.rfs-zone-table td:nth-child(4) { width: 110px; min-width: 100px; white-space: nowrap; }
+.rfs-zone-table td:nth-child(1) {
+  font-weight: 700;
+  color: #f97316;
   font-size: 0.9rem;
   text-align: center;
 }
-.rfs-zone-table td:nth-child(2) { 
-  color: #e2e8f0; 
-  font-weight: 500; 
+.rfs-zone-table td:nth-child(2) {
+  color: #e2e8f0;
+  font-weight: 500;
+  line-height: 1.4;
 }
-.rfs-zone-table td:nth-child(3) { 
-  color: #94a3b8; 
+.rfs-zone-table td:nth-child(3) {
+  color: #94a3b8;
   font-size: 0.78rem;
   line-height: 1.5;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
-.rfs-zone-table td:nth-child(4) { 
-  color: #60a5fa; 
+.rfs-zone-table td:nth-child(4) {
+  color: #60a5fa;
   font-weight: 600;
   font-size: 0.75rem;
   font-family: 'SF Mono', 'Consolas', monospace;
@@ -386,8 +1082,8 @@ a:hover { text-decoration: underline; }
 /* Specific table column widths - only apply to tables with those classes */
 .frnsw-prefix-table { table-layout: fixed; }
 .frnsw-prefix-table th:nth-child(1), .frnsw-prefix-table td:nth-child(1) { width: 16%; }
-.frnsw-prefix-table th:nth-child(2), .frnsw-prefix-table td:nth-child(2) { width: 30%; }
-.frnsw-prefix-table th:nth-child(3), .frnsw-prefix-table td:nth-child(3) { width: 54%; }
+.frnsw-prefix-table th:nth-child(2), .frnsw-prefix-table td:nth-child(2) { width: 30%; padding-right: 0.85rem; }
+.frnsw-prefix-table th:nth-child(3), .frnsw-prefix-table td:nth-child(3) { width: 54%; overflow-wrap: break-word; word-break: break-word; }
 
 .aircraft-table { table-layout: fixed; }
 .aircraft-table th:nth-child(1), .aircraft-table td:nth-child(1) { width: 80px; min-width: 75px; }
@@ -412,9 +1108,9 @@ a:hover { text-decoration: underline; }
 
 /* Mobile Table Improvements */
 @media (max-width: 768px) {
-  .frnsw-zone-table { table-layout: auto; min-width: 600px; }
-  .frnsw-zone-table th:nth-child(2), 
-  .frnsw-zone-table td:nth-child(2) { min-width: 120px; }
+  .frnsw-zone-table { table-layout: auto; min-width: 640px; }
+  .frnsw-zone-table th:nth-child(2),
+  .frnsw-zone-table td:nth-child(2) { min-width: 180px; }
   
   .rfs-zone-table { table-layout: auto; min-width: 520px; }
   .rfs-zone-table th:nth-child(2), 

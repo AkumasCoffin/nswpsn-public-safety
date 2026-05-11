@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN Quick Reference – Agency</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+
+  <meta name="description" content="NSW Public Safety Network agency talkgroup IDs and aliases.">
+  <meta name="author" content="Forcequit">
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+
+<body>
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Agency</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="aviation.html">Aviation &amp; Callsigns</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+    </nav>
+
+    <div id="agencies-nav-mount"></div>
+
+    <div class="sidebar-section-label">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html">Terms &amp; Conditions</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </nav>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">Radio Feed</a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">Pager Feed</a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Support Discord</a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb" id="agency-breadcrumb">Agencies</div>
+      <h1 id="agency-title">Agency Reference</h1>
+      <p id="agency-meta">Loading talkgroup data…</p>
+    </header>
+
+    <div id="agency-fragment-mount"></div>
+
+    <section class="card-grid" id="agency-content">
+      <article class="card card-wide" id="agency-tgid-card">
+        <div class="card-header">
+          <div class="card-title">🔍 Talkgroup IDs</div>
+          <div class="card-tag" id="agency-tgid-count">—</div>
+        </div>
+        <div class="card-body">
+          <p class="card-hint" style="margin-top:0; color:var(--text-soft); font-size:0.78rem;">Use the Agencies search in the sidebar to jump to a specific TGID, zone, or code.</p>
+          <div class="table-wrapper"><div class="table-scroll"><table class="table">
+            <thead><tr><th style="width:6.5rem;">TGID</th><th style="width:9rem;">Alias</th><th>Description</th></tr></thead>
+            <tbody id="tgid-tbody"><tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">Loading…</td></tr></tbody>
+          </table></div></div>
+        </div>
+      </article>
+    </section>
+
+    <div class="main-footer-note">
+      NSW PSN reference (unofficial) · TGID data from <a href="data-sources.html">community sources</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a>
+    </div>
+  </main>
+
+  <script src="analytics.js"></script>
+  <script src="agencies.js"></script>
+  <script src="scroll-indicator.js"></script>
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    function getSlug() {
+      const params = new URLSearchParams(location.search);
+      return (params.get('slug') || '').trim().toLowerCase();
+    }
+
+    function setNotFound(slug) {
+      document.getElementById('agency-title').textContent = 'Agency not found';
+      document.getElementById('agency-meta').textContent = slug
+        ? `No agency with slug "${slug}" — open the Agencies dropdown to pick one.`
+        : 'No agency selected — open the Agencies dropdown in the sidebar.';
+      document.getElementById('agency-tgid-count').textContent = '0';
+      document.getElementById('tgid-tbody').innerHTML =
+        '<tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">No data.</td></tr>';
+      document.querySelector('.card-hint').textContent = '';
+    }
+
+    function renderRows(rows) {
+      const tbody = document.getElementById('tgid-tbody');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">No data.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map((r) => {
+        const aliasIsDash = !r.alias || r.alias === '-';
+        const descIsDash = !r.description || r.description === '-';
+        const alias = aliasIsDash ? '<span style="color:var(--text-soft);">—</span>' : escapeHtml(r.alias);
+        const desc = descIsDash ? '<span style="color:var(--text-soft);">—</span>' : escapeHtml(r.description);
+        return `<tr><td style="font-family:ui-monospace,Menlo,monospace;">${escapeHtml(r.tgid)}</td><td>${alias}</td><td>${desc}</td></tr>`;
+      }).join('');
+    }
+
+    // Scroll the first row whose text contains `query` into view and apply a highlight class.
+    function scrollToMatch(query) {
+      const q = (query || '').trim().toLowerCase();
+      if (!q) return false;
+      const rows = document.querySelectorAll('.table tbody tr');
+      for (const row of rows) {
+        if ((row.textContent || '').toLowerCase().includes(q)) {
+          row.classList.add('row-highlighted');
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return true;
+        }
+      }
+      return false;
+    }
+
+    async function loadAgency() {
+      const slug = getSlug();
+      if (!slug) { setNotFound(''); return; }
+      let data;
+      try {
+        // Shared cache from agencies.js — avoids a duplicate fetch.
+        data = await (window.AgencyJSON && window.AgencyJSON.loadData
+          ? window.AgencyJSON.loadData()
+          : fetch('agency-data.json').then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }));
+      } catch (e) {
+        setNotFound(slug);
+        document.getElementById('agency-meta').textContent = 'Failed to load agency data: ' + e.message;
+        return;
+      }
+      const agency = data.agencies && data.agencies[slug];
+      if (!agency) { setNotFound(slug); return; }
+
+      document.title = `NSW PSN Quick Reference – ${agency.name}`;
+      document.getElementById('agency-breadcrumb').textContent = agency.category;
+      document.getElementById('agency-title').textContent = agency.name;
+      document.getElementById('agency-meta').textContent = agency.count > 0
+        ? `${agency.count} talkgroup${agency.count === 1 ? '' : 's'} from radioreference.`
+        : 'Reference data below.';
+      document.getElementById('agency-tgid-count').textContent = agency.count + ' TGIDs';
+
+      // Hide the TGID card entirely for agencies that don't have any TGIDs
+      // (e.g. NSW Aviation — its content lives in the extended-data tables only).
+      const tgidCard = document.getElementById('agency-tgid-card');
+      if (tgidCard) tgidCard.style.display = agency.count > 0 ? '' : 'none';
+
+      renderRows(agency.tgids);
+
+      // Render extended-reference cards (overview prose + tables) from agency-extended.json.
+      await renderExtended(agency.slug);
+
+      // Honor ?q= deep links from the sidebar global search by scrolling to and
+      // highlighting the first matching row across all rendered tables.
+      const initialQuery = (new URLSearchParams(location.search).get('q') || '').trim();
+      if (initialQuery) {
+        // Run on next frame so all extended tables are laid out before we scroll.
+        requestAnimationFrame(() => scrollToMatch(initialQuery));
+      }
+    }
+
+    // ----- Extended reference renderer -----
+
+    function renderCellMarkup(value) {
+      // Convert simple inline tokens into safe HTML. Everything else is HTML-escaped.
+      // Supported tokens:
+      //   {pill:variant:label}   →  <span class="pill pill-variant">label</span>
+      //   {b:text}               →  <strong>text</strong>
+      const TOKEN = /\{(pill|b):([^}]+)\}/g;
+      const parts = [];
+      let last = 0;
+      let m;
+      while ((m = TOKEN.exec(value)) !== null) {
+        if (m.index > last) parts.push(escapeHtml(value.slice(last, m.index)));
+        if (m[1] === 'pill') {
+          const [variant, ...rest] = m[2].split(':');
+          const label = rest.join(':');
+          parts.push(`<span class="pill pill-${escapeHtml(variant)}">${escapeHtml(label)}</span>`);
+        } else if (m[1] === 'b') {
+          parts.push(`<strong>${escapeHtml(m[2])}</strong>`);
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < value.length) parts.push(escapeHtml(value.slice(last)));
+      return parts.join('') || '&nbsp;';
+    }
+
+    function renderTable(table, tableClass) {
+      if (!table || !table.headers || !table.rows) return '';
+      const cls = ['table'].concat(tableClass ? [tableClass] : []).join(' ');
+      const thead = '<thead><tr>' + table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('') + '</tr></thead>';
+      const tbody = '<tbody>' + table.rows.map((row) =>
+        '<tr>' + row.map((cell) => `<td>${renderCellMarkup(cell || '')}</td>`).join('') + '</tr>'
+      ).join('') + '</tbody>';
+      return `<div class="table-wrapper"><div class="table-scroll"><table class="${cls}">${thead}${tbody}</table></div></div>`;
+    }
+
+    function renderOverviewBody(blocks) {
+      return blocks.map((b) => {
+        if (b.type === 'p') return `<p>${renderCellMarkup(b.text || '')}</p>`;
+        if (b.type === 'h') return `<div class="zone-subtitle">${escapeHtml(b.text || '')}</div>`;
+        if (b.type === 'ul') {
+          const items = (b.items || []).map((i) => `<li>${renderCellMarkup(i)}</li>`).join('');
+          return `<ul>${items}</ul>`;
+        }
+        return '';
+      }).join('');
+    }
+
+    function renderBadges(badges) {
+      if (!badges || !badges.length) return '';
+      const items = badges.map((b) => {
+        const variant = b.variant ? `badge-${escapeHtml(b.variant)}` : '';
+        return `<span class="badge ${variant}">${escapeHtml(b.label)}</span>`;
+      }).join('');
+      return `<div class="badge-row">${items}</div>`;
+    }
+
+    function renderSection(s) {
+      const wide = s.wide ? ' card-wide' : '';
+      const tag = s.tag ? `<div class="card-tag">${escapeHtml(s.tag)}</div>` : '';
+      const header = `<div class="card-header"><div class="card-title">${escapeHtml(s.title || '')}</div>${tag}</div>`;
+
+      if (s.type === 'table') {
+        const intro = s.intro ? `<p>${escapeHtml(s.intro)}</p>` : '';
+        return `<article class="card${wide}">${header}<div class="card-body">${intro}${renderTable(s.table, s.table_class)}</div></article>`;
+      }
+      if (s.type === 'grouped-table') {
+        const intro = s.intro ? `<p>${escapeHtml(s.intro)}</p>` : '';
+        const groups = (s.groups || []).map((g) =>
+          `<div class="zone-subtitle">${escapeHtml(g.heading || '')}</div>${renderTable(g.table, s.table_class)}`
+        ).join('');
+        if (s.collapsible) {
+          // Render the whole card as a <details>/<summary> dropdown so the user can
+          // collapse it. The summary doubles as the card-header.
+          const open = s.open ? ' open' : '';
+          return `<article class="card${wide} card-collapsible">
+            <details${open} class="card-collapsible-details">
+              <summary class="card-collapsible-summary">
+                <div class="card-title">${escapeHtml(s.title || '')}</div>
+                ${tag}
+                <span class="card-collapsible-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="card-body">${intro}${groups}</div>
+            </details>
+          </article>`;
+        }
+        return `<article class="card${wide}">${header}<div class="card-body">${intro}${groups}</div></article>`;
+      }
+      if (s.type === 'list') {
+        const items = (s.items || []).map((i) => `<li>${renderCellMarkup(i)}</li>`).join('');
+        return `<article class="card${wide}">${header}<div class="card-body"><ul>${items}</ul></div></article>`;
+      }
+      if (s.type === 'heading') {
+        const sub = s.subtext ? `<p>${escapeHtml(s.subtext)}</p>` : '';
+        return `<div class="card-grid-heading">
+          <h2>${escapeHtml(s.text || '')}</h2>
+          ${sub}
+        </div>`;
+      }
+      // 'search' sections are intentionally ignored — global search lives in the sidebar.
+      return '';
+    }
+
+    async function renderExtended(slug) {
+      const mount = document.getElementById('agency-fragment-mount');
+      if (!mount) return;
+      let data;
+      try {
+        // Shared cache from agencies.js — avoids a duplicate fetch.
+        data = await (window.AgencyJSON && window.AgencyJSON.loadExtended
+          ? window.AgencyJSON.loadExtended()
+          : fetch('agency-extended.json').then((r) => r.ok ? r.json() : { agencies: {} }));
+      } catch (e) {
+        return;
+      }
+      const ext = data && data.agencies && data.agencies[slug];
+      if (!ext) return;
+
+      const overviewCard = `
+        <article class="card card-wide">
+          <div class="card-header">
+            <div class="card-title">${escapeHtml(ext.title || 'Overview')}</div>
+            ${ext.tag ? `<div class="card-tag">${escapeHtml(ext.tag)}</div>` : ''}
+          </div>
+          <div class="card-body">
+            ${renderBadges(ext.badges)}
+            ${renderOverviewBody(ext.overview || [])}
+          </div>
+        </article>`;
+
+      const sectionsHtml = (ext.sections || []).map(renderSection).join('');
+      mount.innerHTML = `<section class="card-grid">${overviewCard}${sectionsHtml}</section>`;
+    }
+
+    loadAgency();
+  </script>
+</body>
+</html>

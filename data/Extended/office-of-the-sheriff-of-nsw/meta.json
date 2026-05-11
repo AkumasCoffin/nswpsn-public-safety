@@ -1,0 +1,19 @@
+{
+  "title": "⚖ Office of the Sheriff of NSW",
+  "tag": "Sheriff",
+  "badges": [
+    {"label": "Office of the Sheriff", "variant": "agency"},
+    {"label": "NSW Department of Communities and Justice", "variant": "parent"}
+  ],
+  "overview": [
+    {"type": "p", "text": "The Sheriff's Office of NSW enforces civil orders of NSW courts, provides court security and prisoner escort, and conducts jury management. Sheriff's Officers are sworn personnel with limited authorised powers."},
+    {"type": "h", "text": "Functions"},
+    {"type": "ul", "items": [
+      "Execution of writs and warrants (e.g. property repossession, debt enforcement).",
+      "Court-room and court-house security.",
+      "Jury empanelment and management.",
+      "In-custody escort within court precincts."
+    ]}
+  ],
+  "sections": []
+}
