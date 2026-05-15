@@ -350,6 +350,67 @@ describe('nextFireTimeMs', () => {
   });
 });
 
+describe('resolveSummaryWindow (quiet-hour bucketing)', () => {
+  // AEST = UTC+10 (no DST). Local HH:55 = UTC (HH-10):55. Tests pick a
+  // mid-May 2026 date so the offset is deterministic regardless of DST.
+  const TZ = 'Australia/Sydney';
+
+  it('fires a normal 1h window for active hours', async () => {
+    const { resolveSummaryWindow } = await import('../../../src/services/llm.js');
+    const fire = new Date('2026-05-20T04:55:00.000Z'); // 14:55 local Wed
+    const w = resolveSummaryWindow(fire, TZ);
+    expect(w).not.toBeNull();
+    expect(w!.startUtc.toISOString()).toBe('2026-05-20T04:00:00.000Z');
+    expect(w!.endUtc.toISOString()).toBe('2026-05-20T05:00:00.000Z');
+  });
+
+  it('fires a merged 2h window at the close of the 22-24 bucket', async () => {
+    const { resolveSummaryWindow } = await import('../../../src/services/llm.js');
+    const fire = new Date('2026-05-20T13:55:00.000Z'); // 23:55 local Wed
+    const w = resolveSummaryWindow(fire, TZ);
+    expect(w).not.toBeNull();
+    expect(w!.startUtc.toISOString()).toBe('2026-05-20T12:00:00.000Z');
+    expect(w!.endUtc.toISOString()).toBe('2026-05-20T14:00:00.000Z');
+  });
+
+  it('skips mid-bucket hours', async () => {
+    const { resolveSummaryWindow } = await import('../../../src/services/llm.js');
+    expect(resolveSummaryWindow(new Date('2026-05-20T12:55:00.000Z'), TZ)).toBeNull(); // 22:55 local
+    expect(resolveSummaryWindow(new Date('2026-05-20T14:55:00.000Z'), TZ)).toBeNull(); // 00:55 local
+    expect(resolveSummaryWindow(new Date('2026-05-20T18:55:00.000Z'), TZ)).toBeNull(); // 04:55 local
+  });
+
+  it('fires merged 3h windows at the close of the 00-03 and 03-06 buckets', async () => {
+    const { resolveSummaryWindow } = await import('../../../src/services/llm.js');
+    // 02:55 local Thu = 16:55Z Wed
+    const w1 = resolveSummaryWindow(
+      new Date('2026-05-20T16:55:00.000Z'),
+      TZ,
+    );
+    expect(w1).not.toBeNull();
+    expect(w1!.startUtc.toISOString()).toBe('2026-05-20T14:00:00.000Z');
+    expect(w1!.endUtc.toISOString()).toBe('2026-05-20T17:00:00.000Z');
+
+    // 05:55 local Thu = 19:55Z Wed
+    const w2 = resolveSummaryWindow(
+      new Date('2026-05-20T19:55:00.000Z'),
+      TZ,
+    );
+    expect(w2).not.toBeNull();
+    expect(w2!.startUtc.toISOString()).toBe('2026-05-20T17:00:00.000Z');
+    expect(w2!.endUtc.toISOString()).toBe('2026-05-20T20:00:00.000Z');
+  });
+
+  it('fires normally at 06:55 — first non-bucket hour after the merge', async () => {
+    const { resolveSummaryWindow } = await import('../../../src/services/llm.js');
+    const fire = new Date('2026-05-20T20:55:00.000Z'); // 06:55 local
+    const w = resolveSummaryWindow(fire, TZ);
+    expect(w).not.toBeNull();
+    expect(w!.startUtc.toISOString()).toBe('2026-05-20T20:00:00.000Z');
+    expect(w!.endUtc.toISOString()).toBe('2026-05-20T21:00:00.000Z');
+  });
+});
+
 describe('/api/summaries/trigger', () => {
   it('503s when GEMINI_API_KEY is unset', async () => {
     const { createApp } = await import('../../../src/server.js');
