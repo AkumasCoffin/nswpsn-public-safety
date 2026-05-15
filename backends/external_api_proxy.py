@@ -14870,6 +14870,20 @@ _NSWPF_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Fingerprints of worked examples in prompts/rdio_hourly.txt that Gemini
+# sometimes regurgitates verbatim as if they were real incidents. Each
+# entry is a tuple of lowercase substrings that must ALL appear in the
+# incident's combined title + summary blob for the incident to be dropped.
+# Keep this list in sync with the EXAMPLE blocks in rdio_hourly.txt — when
+# an example is rewritten, ADD the new fingerprint and KEEP the old one for
+# a few weeks (the model may still echo the previous version from cache).
+_EXAMPLE_INCIDENT_FINGERPRINTS = (
+    # Original Example 2 (pre-2026-05-15 revision).
+    ('machinery fire at recycling plant', 'elizabeth street'),
+    # Current Example 2 (2026-05-15+): synthetic hazmat scenario.
+    ('brindwell loop', 'karoneth'),
+)
+
 
 def _validate_structured_against_transcripts(structured, calls):
     """Strip hallucinated content from the model output (new transcripts[] schema).
@@ -14960,8 +14974,16 @@ def _validate_structured_against_transcripts(structured, calls):
     dropped_nswpf = 0
     dropped_bad_cids = 0
     dropped_nswpf_incidents = 0
+    dropped_example_echo = 0
     legacy_timeline_seen = 0
     ALLOWED_AGENCIES = {'FRNSW', 'NSWA', 'RFS', 'SES'}
+
+    def _is_example_echo(inc):
+        blob = ((inc.get('title') or '') + '\n' + (inc.get('summary') or '')).lower()
+        for sig in _EXAMPLE_INCIDENT_FINGERPRINTS:
+            if all(sub in blob for sub in sig):
+                return True
+        return False
 
     incidents_in = [i for i in incidents if isinstance(i, dict)]
 
@@ -15035,6 +15057,14 @@ def _validate_structured_against_transcripts(structured, calls):
         )
         if not has_non_nswpf_transcript and _is_nswpf_text(surface_blob):
             dropped_nswpf_incidents += 1
+            continue
+
+        # Drop incidents whose title+summary echoes a worked example from
+        # prompts/rdio_hourly.txt. Gemini regurgitates these wholesale and
+        # then attaches real current-hour call_ids to them, so the transcript
+        # validator alone won't catch them.
+        if _is_example_echo(inc):
+            dropped_example_echo += 1
             continue
 
         normalised.append(inc)
@@ -15150,6 +15180,8 @@ def _validate_structured_against_transcripts(structured, calls):
         bits.append(f"{dropped_nswpf} NSWPF ref(s)")
     if dropped_nswpf_incidents:
         bits.append(f"{dropped_nswpf_incidents} NSWPF-only incident(s)")
+    if dropped_example_echo:
+        bits.append(f"{dropped_example_echo} prompt-example echo(es)")
     if dropped_dupes:
         bits.append(f"{dropped_dupes} duplicate incident(s)")
     if bits:
