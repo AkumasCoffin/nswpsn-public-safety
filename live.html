@@ -1873,6 +1873,7 @@
             <div class="card-tag card-tag-live">Live</div>
             <div class="card-tag" style="background:rgba(168,85,247,0.15); color:#a855f7;">Gemini</div>
             <div class="card-tag" id="rdio-hourly-slot" style="background:rgba(148,163,184,0.18); color:#cbd5e1; display:none;"></div>
+            <div class="card-tag" id="rdio-hourly-merged" style="background:rgba(245,158,11,0.18); color:#fbbf24; display:none;" title="Quiet hours are merged so the daily Gemini quota holds; the time range above is the full window."></div>
           </div>
         </div>
         <div class="card-body">
@@ -3040,6 +3041,7 @@
         const hourlyEl = document.getElementById('rdio-hourly-summary');
         const hourlyMeta = document.getElementById('rdio-hourly-meta');
         const hourlySlot = document.getElementById('rdio-hourly-slot');
+        const hourlyMerged = document.getElementById('rdio-hourly-merged');
         const hourlyTitle = document.getElementById('rdio-hourly-title');
         if (data.hourly) {
           renderRdioSummary(hourlyEl, data.hourly);
@@ -3057,18 +3059,32 @@
           const timeRange = ps && pe
             ? `${ps.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–${pe.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
             : '';
+          // Quiet-hour buckets merge 2-3h into a single Gemini call to stay
+          // under the daily quota. Span > 1h ⇒ surface a "Merged Nh" pill.
+          const spanH = (ps && pe && !isAdhoc)
+            ? Math.max(1, Math.round((pe.getTime() - ps.getTime()) / 3600000))
+            : 1;
           hourlyMeta.textContent = `${timeRange} · ${data.hourly.call_count} calls · ${ago} min ago`;
-          if (data.hourly.type === 'adhoc') {
+          if (isAdhoc) {
             hourlyTitle.textContent = 'Latest Ad-hoc Summary';
             hourlySlot.textContent = 'Ad-hoc';
             hourlySlot.style.display = '';
+            hourlyMerged.style.display = 'none';
           } else {
-            hourlyTitle.textContent = 'Latest Hourly Summary';
+            hourlyTitle.textContent = spanH > 1
+              ? 'Latest Hourly Summary (quiet-hours merge)'
+              : 'Latest Hourly Summary';
             if (data.hourly.hour_slot) {
               hourlySlot.textContent = `Hour ${String(data.hourly.hour_slot).padStart(2, '0')}`;
               hourlySlot.style.display = '';
             } else {
               hourlySlot.style.display = 'none';
+            }
+            if (spanH > 1) {
+              hourlyMerged.textContent = `Merged ${spanH}h`;
+              hourlyMerged.style.display = '';
+            } else {
+              hourlyMerged.style.display = 'none';
             }
           }
         } else {
