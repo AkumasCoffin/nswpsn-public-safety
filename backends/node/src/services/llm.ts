@@ -950,6 +950,80 @@ function localHourSlot(d: Date): number {
   return h === 0 ? 24 : h;
 }
 
+// 0..23 — what local-clock hour does this UTC instant fall in?
+function localHourOfUtc(d: Date, tz: string): number {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    hour: '2-digit',
+    hour12: false,
+  });
+  const h = Number(fmt.format(d).split(':')[0] ?? '0');
+  return h === 24 ? 0 : h;
+}
+
+// Local-clock quiet-hour merge schedule. Each entry collapses [startHour,
+// endHour) local time into a SINGLE Gemini call instead of one per hour.
+// Hours outside every bucket fire normally (one call per hour). Daily
+// Gemini calls = (24 − sum_of_spans) + count_of_buckets. With the current
+// setup (3 buckets covering 8 hours) we get (24-8)+3 = 19 fires/day —
+// under the 20/day free-tier limit, leaving 1 call of headroom for the
+// startup catchup. Buckets must not cross midnight (00:00 boundary).
+const QUIET_HOUR_BUCKETS: ReadonlyArray<{
+  readonly startHour: number;
+  readonly endHour: number;
+}> = [
+  { startHour: 22, endHour: 24 }, // 10 PM – 12 AM local
+  { startHour: 0, endHour: 3 },   // 12 AM – 3 AM local
+  { startHour: 3, endHour: 6 },   // 3 AM – 6 AM local
+];
+
+function bucketForLocalHour(
+  localStartHour: number,
+): { startHour: number; endHour: number } | null {
+  for (const b of QUIET_HOUR_BUCKETS) {
+    if (localStartHour >= b.startHour && localStartHour < b.endHour) {
+      return { startHour: b.startHour, endHour: b.endHour };
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide what window to summarise at a given fire time. The scheduler
+ * still ticks once an hour (at HH:55 local); this resolves into either:
+ *   - a normal 1h window for hours outside any quiet bucket,
+ *   - a multi-hour window covering the full bucket when the just-ended
+ *     local hour is the LAST hour of a quiet bucket,
+ *   - null when we're mid-bucket and should wait for the bucket to close.
+ *
+ * `fireTime` is the UTC instant the scheduler ticked (≈ HH:55 local).
+ * The just-ended local hour is the one that contains `fireTime` — i.e.
+ * the hour whose start is `localHourStartUtc(fireTime, tz)` and whose
+ * end is +1h after that.
+ */
+export function resolveSummaryWindow(
+  fireTime: Date,
+  tz: string,
+): { startUtc: Date; endUtc: Date } | null {
+  const startedHourUtc = localHourStartUtc(fireTime, tz);
+  const endedHourUtc = new Date(startedHourUtc.getTime() + 60 * 60_000);
+  const localStartHour = localHourOfUtc(startedHourUtc, tz);
+
+  const bucket = bucketForLocalHour(localStartHour);
+  if (!bucket) {
+    return { startUtc: startedHourUtc, endUtc: endedHourUtc };
+  }
+  // The bucket's last hour is the one whose start is `bucket.endHour - 1`.
+  if (localStartHour + 1 !== bucket.endHour) {
+    return null;
+  }
+  const spanHours = bucket.endHour - bucket.startHour;
+  const bucketStartUtc = new Date(
+    endedHourUtc.getTime() - spanHours * 60 * 60_000,
+  );
+  return { startUtc: bucketStartUtc, endUtc: endedHourUtc };
+}
+
 function formatPeriodLabel(start: Date, end: Date): string {
   const fmtBoth = new Intl.DateTimeFormat('en-AU', {
     timeZone: config.SUMMARY_TZ,
@@ -972,8 +1046,15 @@ function formatPeriodLabel(start: Date, end: Date): string {
 }
 
 export interface GenerateHourlyParams {
-  /** UTC instant marking the start of the hour to summarise. */
+  /** UTC instant marking the start of the summary window. */
   hourStartUtc: Date;
+  /**
+   * Optional UTC instant marking the END of the window (exclusive).
+   * Defaults to `hourStartUtc + 1h` — used as-is by the legacy hourly
+   * path. The scheduler passes an explicit end when a quiet-hour bucket
+   * merges 2–3 hours into a single Gemini call.
+   */
+  hourEndUtc?: Date;
   force?: boolean;
   releaseAt?: Date | null;
 }
@@ -983,7 +1064,7 @@ export async function generateRdioHourlySummary(
 ): Promise<{ hour_slot: number; call_count: number } | null> {
   const model = config.LLM_MODEL;
   const start = p.hourStartUtc;
-  const end = new Date(start.getTime() + 60 * 60_000);
+  const end = p.hourEndUtc ?? new Date(start.getTime() + 60 * 60_000);
   const calls = dedupeCalls(await fetchCallsBetween(start, end));
   if (calls.length === 0 && !p.force && !p.releaseAt) {
     log.info({ start: start.toISOString() }, 'hourly: no transcripts, skipping');
@@ -1184,46 +1265,76 @@ export async function runRdioSummaryCatchup(): Promise<void> {
   const now = new Date();
   const tz = config.SUMMARY_TZ;
   const currentHourStart = localHourStartUtc(now, tz);
+  // Previous closed window: starts at currentHourStart - 1h normally, but
+  // if that previous local hour is inside a quiet bucket we widen the
+  // window to the whole bucket. If it's mid-bucket (not the bucket's
+  // last hour), we skip — the next scheduled fire at bucket close will
+  // pick it up.
   const prevHourStart = new Date(currentHourStart.getTime() - 60 * 60_000);
-  try {
-    if (!(await rdioSummaryRowExists(prevHourStart))) {
-      log.info(
-        { hour_start: prevHourStart.toISOString() },
-        'rdio catchup: filling missing previous hour',
+  const prevLocalHour = localHourOfUtc(prevHourStart, tz);
+  const prevBucket = bucketForLocalHour(prevLocalHour);
+  let prevWindowStart: Date | null = prevHourStart;
+  if (prevBucket) {
+    if (prevLocalHour + 1 === prevBucket.endHour) {
+      const spanHours = prevBucket.endHour - prevBucket.startHour;
+      prevWindowStart = new Date(
+        currentHourStart.getTime() - spanHours * 60 * 60_000,
       );
-      await generateRdioHourlySummary({
-        hourStartUtc: prevHourStart,
-        force: true,
-      });
+    } else {
+      prevWindowStart = null;
     }
-  } catch (err) {
-    log.warn(
-      { err: (err as Error).message },
-      'rdio catchup prev-hour error',
-    );
   }
-  if (localMinute(now) >= 55) {
-    const releaseAtUtc = new Date(currentHourStart.getTime() + 60 * 60_000);
+  if (prevWindowStart) {
     try {
-      if (!(await rdioSummaryRowExists(currentHourStart))) {
+      if (!(await rdioSummaryRowExists(prevWindowStart))) {
         log.info(
           {
-            hour_start: currentHourStart.toISOString(),
-            release_at: releaseAtUtc.toISOString(),
+            hour_start: prevWindowStart.toISOString(),
+            hour_end: currentHourStart.toISOString(),
           },
-          'rdio catchup: prefetching current hour',
+          'rdio catchup: filling missing previous window',
         );
         await generateRdioHourlySummary({
-          hourStartUtc: currentHourStart,
+          hourStartUtc: prevWindowStart,
+          hourEndUtc: currentHourStart,
           force: true,
-          releaseAt: releaseAtUtc,
         });
       }
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
-        'rdio catchup current-hour error',
+        'rdio catchup prev-window error',
       );
+    }
+  }
+  if (localMinute(now) >= 55) {
+    // Re-use the scheduler's window resolver so the prefetch matches what
+    // the regular HH:55 fire would do — including skipping mid-bucket.
+    const window = resolveSummaryWindow(now, tz);
+    if (window) {
+      try {
+        if (!(await rdioSummaryRowExists(window.startUtc))) {
+          log.info(
+            {
+              hour_start: window.startUtc.toISOString(),
+              hour_end: window.endUtc.toISOString(),
+              release_at: window.endUtc.toISOString(),
+            },
+            'rdio catchup: prefetching current window',
+          );
+          await generateRdioHourlySummary({
+            hourStartUtc: window.startUtc,
+            hourEndUtc: window.endUtc,
+            force: true,
+            releaseAt: window.endUtc,
+          });
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'rdio catchup current-window error',
+        );
+      }
     }
   }
 }
@@ -1293,27 +1404,44 @@ function nextFireTimeMs(): number {
 }
 
 async function runHourlyJob(): Promise<void> {
-  // Fire-time minute is :55 in SUMMARY_TZ; the hour we summarise starts
-  // at the top of the in-progress LOCAL hour. Rounding in UTC works for
-  // whole-hour zones but breaks for half-hour zones (Adelaide), so we
-  // compute the top of the local hour and convert to UTC.
+  // The scheduler ticks at HH:55 in SUMMARY_TZ. Most ticks fire a normal
+  // 1h summary, but a tick that falls inside a quiet-hour bucket either
+  // skips (mid-bucket — wait for the bucket to close) or fires a merged
+  // multi-hour summary (last hour of the bucket). See QUIET_HOUR_BUCKETS.
+  // Half-hour timezones (Adelaide) are handled by computing the top of
+  // the local hour first and converting to UTC.
   const now = new Date();
   const ms = now.getTime();
-  const hourStartUtc = localHourStartUtc(now, config.SUMMARY_TZ);
-  const releaseAtUtc = new Date(hourStartUtc.getTime() + 60 * 60_000);
+  const window = resolveSummaryWindow(now, config.SUMMARY_TZ);
+  if (!window) {
+    const hourStartUtc = localHourStartUtc(now, config.SUMMARY_TZ);
+    log.info(
+      { hour_start: hourStartUtc.toISOString() },
+      'rdio hourly: skipping (inside quiet-hour bucket; waits for bucket end)',
+    );
+    return;
+  }
+  const spanHours = Math.round(
+    (window.endUtc.getTime() - window.startUtc.getTime()) / 3_600_000,
+  );
   schedulerStats.last_fire_at = Math.floor(ms / 1000);
   schedulerStats.total_fires += 1;
   schedulerStats.last_error = null;
   log.info(
-    { hour_start: hourStartUtc.toISOString() },
+    {
+      hour_start: window.startUtc.toISOString(),
+      hour_end: window.endUtc.toISOString(),
+      span_hours: spanHours,
+    },
     'rdio hourly: firing',
   );
   const t0 = Date.now();
   try {
     const result = await generateRdioHourlySummary({
-      hourStartUtc,
+      hourStartUtc: window.startUtc,
+      hourEndUtc: window.endUtc,
       force: true,
-      releaseAt: releaseAtUtc,
+      releaseAt: window.endUtc,
     });
     schedulerStats.last_result = result;
     schedulerStats.last_run_ms = Date.now() - t0;
