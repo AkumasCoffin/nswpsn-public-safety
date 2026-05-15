@@ -40,6 +40,22 @@ const NSWPF_REPLACE = new RegExp(NSWPF_BODY, 'gi');
 
 const ALLOWED_AGENCIES = new Set(['FRNSW', 'NSWA', 'RFS', 'SES']);
 
+// Fingerprints of worked examples in prompts/rdio_hourly.txt. Gemini
+// sometimes regurgitates one of these example incidents verbatim every hour
+// — the transcript-id check alone leaves the hallucinated shell in place
+// because the LLM staples a real current-hour call_id onto it. Each entry
+// is a list of lowercase substrings that must ALL appear in the incident's
+// combined title + summary blob for the incident to be dropped. Keep this
+// list in sync with the EXAMPLE blocks in rdio_hourly.txt; when rewriting
+// an example, ADD the new fingerprint and KEEP the old one for a few weeks
+// (the model may still echo the previous version from cache).
+const EXAMPLE_INCIDENT_FINGERPRINTS: ReadonlyArray<readonly string[]> = [
+  // Original Example 2 (pre-2026-05-15).
+  ['machinery fire at recycling plant', 'elizabeth street'],
+  // Current Example 2 (2026-05-15+): synthetic hazmat scenario.
+  ['brindwell loop', 'karoneth'],
+];
+
 const DIGIT_WORDS: Record<string, string> = {
   '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
   '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
@@ -79,6 +95,16 @@ function coerceCallId(v: unknown): number | null {
 function isNswpfText(s: unknown): boolean {
   if (typeof s !== 'string' || !s) return false;
   return NSWPF_TEST.test(s);
+}
+
+function isExampleEcho(inc: Record<string, unknown>): boolean {
+  const title = typeof inc['title'] === 'string' ? (inc['title'] as string) : '';
+  const summary = typeof inc['summary'] === 'string' ? (inc['summary'] as string) : '';
+  const blob = `${title}\n${summary}`.toLowerCase();
+  for (const sig of EXAMPLE_INCIDENT_FINGERPRINTS) {
+    if (sig.every((sub) => blob.includes(sub))) return true;
+  }
+  return false;
 }
 
 function redactNswpf(s: string): string {
@@ -168,6 +194,7 @@ export function validateStructuredAgainstTranscripts(
   let droppedNswpf = 0;
   let droppedBadCids = 0;
   let droppedNswpfIncidents = 0;
+  let droppedExampleEcho = 0;
   let legacyTimelineSeen = 0;
 
   const incidentsIn = incidents.filter(isPlainObject) as Array<
@@ -243,6 +270,15 @@ export function validateStructuredAgainstTranscripts(
     );
     if (!hasNonNswpfTranscript && isNswpfText(surfaceBlob)) {
       droppedNswpfIncidents += 1;
+      continue;
+    }
+
+    // Drop incidents whose title+summary echoes a worked example from
+    // prompts/rdio_hourly.txt. Gemini regurgitates these wholesale and
+    // staples real current-hour call_ids onto them, so the transcript
+    // validator alone won't catch them.
+    if (isExampleEcho(inc)) {
+      droppedExampleEcho += 1;
       continue;
     }
 
@@ -361,6 +397,7 @@ export function validateStructuredAgainstTranscripts(
   if (droppedNato) bits.push(`${droppedNato} NATO-alphabet hallucination(s)`);
   if (droppedNswpf) bits.push(`${droppedNswpf} NSWPF ref(s)`);
   if (droppedNswpfIncidents) bits.push(`${droppedNswpfIncidents} NSWPF-only incident(s)`);
+  if (droppedExampleEcho) bits.push(`${droppedExampleEcho} prompt-example echo(es)`);
   if (droppedDupes) bits.push(`${droppedDupes} duplicate incident(s)`);
   if (bits.length > 0) {
     log.warn({ summary: bits.join(', ') }, 'rdio validator dropped');

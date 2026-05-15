@@ -91,6 +91,40 @@ describe('validateStructuredAgainstTranscripts', () => {
     expect(out.incidents[0]!.summary).not.toMatch(/constable/i);
   });
 
+  it('drops incidents that echo the prompt\'s worked examples', () => {
+    const input = {
+      incidents: [
+        // Old Example 2 echo — Gemini was emitting this verbatim every hour.
+        {
+          title: 'Machinery fire at recycling plant',
+          summary:
+            'HP 77 responded Code 3 to a machinery fire at a recycling plant on Elizabeth Street, Newcastle.',
+          transcripts: [{ call_id: 1, text: 'truck responding' }],
+        },
+        // New Example 2 echo — the synthetic Brindwell Loop / Karoneth hazmat.
+        {
+          title: 'Hazmat fuel spill on Brindwell Loop',
+          summary: 'HT 14 responded Code 3 to a diesel spill near Karoneth.',
+          transcripts: [{ call_id: 2, text: 'truck on scene' }],
+        },
+        // Real incident — should survive.
+        {
+          title: 'House fire on King Street Newtown',
+          summary: 'Pumper 7 attended an AFA, no signs of fire.',
+          transcripts: [{ call_id: 3, text: 'pumper 7 investigating' }],
+        },
+      ],
+    };
+    const out = validateStructuredAgainstTranscripts(input, [
+      { call_id: 1 },
+      { call_id: 2 },
+      { call_id: 3 },
+    ]) as { incidents: Array<{ title: string }>; incident_count: number };
+    expect(out.incidents).toHaveLength(1);
+    expect(out.incidents[0]!.title).toMatch(/king street/i);
+    expect(out.incident_count).toBe(1);
+  });
+
   it('drops NSWPF-themed transcript rows', () => {
     const input = {
       incidents: [
