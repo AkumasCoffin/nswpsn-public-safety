@@ -347,6 +347,65 @@ interface ChatResponse {
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+// Compress a Gemini error response body into one short line. The full
+// JSON is hundreds of characters of help URLs + nested quota details that
+// drown the log. We pluck the bits operators actually care about:
+//   - HTTP status
+//   - Gemini error status (e.g. RESOURCE_EXHAUSTED)
+//   - Failing quota metric, if any (e.g. generate_content_free_tier_requests)
+//   - "Retry in Xs" hint, if any
+// Falls back to a short prefix of the raw body when parse fails.
+function summarizeGeminiError(status: number, body: string): string {
+  const head = `HTTP ${status}`;
+  if (!body) return `${head} (empty body)`;
+  try {
+    let data: unknown = JSON.parse(body);
+    if (Array.isArray(data) && data.length > 0) data = data[0];
+    const err =
+      data && typeof data === 'object'
+        ? ((data as Record<string, unknown>)['error'] as
+            | Record<string, unknown>
+            | undefined)
+        : undefined;
+    if (!err) {
+      const truncated = body.replace(/\s+/g, ' ').slice(0, 200);
+      return `${head}: ${truncated}`;
+    }
+    const bits: string[] = [head];
+    const gstatus = err['status'];
+    if (typeof gstatus === 'string' && gstatus) bits.push(gstatus);
+
+    const msg = typeof err['message'] === 'string' ? (err['message'] as string) : '';
+    let quotaMetric = '';
+    const details = err['details'];
+    if (Array.isArray(details)) {
+      for (const det of details) {
+        if (!det || typeof det !== 'object') continue;
+        const violations = (det as Record<string, unknown>)['violations'];
+        if (!Array.isArray(violations)) continue;
+        for (const v of violations) {
+          if (!v || typeof v !== 'object') continue;
+          const qm = (v as Record<string, unknown>)['quotaMetric'];
+          if (typeof qm === 'string' && qm) {
+            quotaMetric = qm.split('/').pop() ?? qm;
+            break;
+          }
+        }
+        if (quotaMetric) break;
+      }
+    }
+    if (quotaMetric) bits.push(quotaMetric);
+
+    const retryMatch = msg.match(/retry in\s*([\d.]+\s*s)/i);
+    if (retryMatch) bits.push(`retry in ${retryMatch[1]!.replace(/\s+/g, '')}`);
+
+    return bits.join(' / ');
+  } catch {
+    const truncated = body.replace(/\s+/g, ' ').slice(0, 200);
+    return `${head}: ${truncated}`;
+  }
+}
+
 export async function callLlm(opts: {
   systemPrompt: string;
   userPrompt: string;
@@ -413,7 +472,7 @@ export async function callLlm(opts: {
         await new Promise((r) => setTimeout(r, wait));
         continue;
       }
-      throw new Error(`Gemini HTTP ${res.status}: ${lastBody}`);
+      throw new Error(`Gemini ${summarizeGeminiError(res.status, lastBody)}`);
     } catch (err) {
       const e = err as Error;
       // AbortError or network issues — retry.
@@ -433,9 +492,11 @@ export async function callLlm(opts: {
       clearTimeout(t);
     }
   }
-  throw new Error(
-    `Gemini still ${lastStatus ?? 'unreachable'} after ${maxAttempts} attempts: ${lastBody || lastErr?.message || ''}`,
-  );
+  const summary =
+    lastStatus !== null
+      ? summarizeGeminiError(lastStatus, lastBody)
+      : lastErr?.message || 'unreachable';
+  throw new Error(`Gemini failed after ${maxAttempts} attempts: ${summary}`);
 }
 
 // ---------------------------------------------------------------------------
