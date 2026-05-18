@@ -4780,9 +4780,20 @@
         const timeLabel = ps && pe
           ? `${ps.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })} → ${pe.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
           : (r.day_date || '');
-        const typeBadge = r.type === 'adhoc'
-          ? '<span style="background:rgba(34,197,94,0.15); color:#22c55e; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;">Ad-hoc</span>'
-          : '<span style="background:rgba(168,85,247,0.15); color:#a855f7; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;">Hourly</span>';
+        // Quiet-hour buckets merge 2-3h windows into a single Gemini call.
+        // For non-adhoc rows, derive the span from period_start/period_end
+        // so the badge labels each row as Hourly / Merged Nh.
+        const spanH = (ps && pe && r.type !== 'adhoc')
+          ? Math.max(1, Math.round((pe.getTime() - ps.getTime()) / 3600000))
+          : 1;
+        let typeBadge;
+        if (r.type === 'adhoc') {
+          typeBadge = '<span style="background:rgba(34,197,94,0.15); color:#22c55e; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;">Ad-hoc</span>';
+        } else if (spanH > 1) {
+          typeBadge = `<span style="background:rgba(245,158,11,0.18); color:#fbbf24; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;" title="Quiet-hour merge — the time range covers ${spanH}h instead of one.">Merged ${spanH}h</span>`;
+        } else {
+          typeBadge = '<span style="background:rgba(168,85,247,0.15); color:#a855f7; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem; text-transform:uppercase;">Hourly</span>';
+        }
         const hourBadge = r.hour_slot
           ? `<span style="background:rgba(148,163,184,0.15); color:#cbd5e1; padding:0.1rem 0.5rem; border-radius:4px; font-size:0.7rem;">Hour ${String(r.hour_slot).padStart(2, '0')}</span>`
           : '';
