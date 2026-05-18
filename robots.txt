@@ -1,3 +1,21 @@
+User-agent: Googlebot
+Allow: /
+# Token-bound pages — would 404 / show stale state without the token.
+Disallow: /reset-password.html
+Disallow: /verify-email.html
+# Authenticated-only pages.
+Disallow: /change-password.html
+Disallow: /dashboard.html
+Disallow: /map-editor.html
+Disallow: /editor-requests.html
+# Internal data + backend artefacts.
+Disallow: /backends/
+Disallow: /data/
+Disallow: /api/
+
+User-agent: Googlebot-Image
+Allow: /
+
 User-agent: *
 # Token-bound pages — would 404 / show stale state without the token.
 Disallow: /reset-password.html
