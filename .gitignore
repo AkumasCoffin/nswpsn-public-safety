@@ -59,3 +59,7 @@ docs/*
 
 # Radio unit reference data (local operator data, not for the public repo).
 backends/reference/
+
+# Auto-refreshed by the CentralWatch fetcher — server overwrites this on each
+# run, so we don't track it to avoid spurious diffs / merge churn.
+backends/data/centralwatch_cameras.json
