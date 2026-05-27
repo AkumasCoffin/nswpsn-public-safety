@@ -5136,7 +5136,9 @@ async function loadPagerData() {
         const essCached = layerCache.essential_energy;
         const needEss = !essCached.data || (now - essCached.timestamp) >= LAYER_CACHE_TTL;
         if (needEss) {
-          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages`).then(r => r.json()).catch(() => ({ outages: [] }));
+          // lite=1 strips polygon geometry — markers don't need them and
+          // the full payload is multi-MB. map.html already uses this.
+          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages?lite=1`).then(r => r.json()).catch(() => ({ outages: [] }));
           layerCache.essential_energy = { data: essentialData, timestamp: now };
         } else {
           essentialData = essCached.data;
