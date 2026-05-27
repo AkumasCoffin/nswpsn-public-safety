@@ -168,7 +168,14 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
     lat: floatParam(q.get('lat')),
     lng: floatParam(q.get('lon')) ?? floatParam(q.get('lng')),
     radiusKm: floatParam(q.get('radius')) ?? 10,
-    unique: q.get('unique') === '1',
+    // unique defaults to true (one row per incident) since that's what
+    // logs.html / dashboard.html and the bot all want. Old default
+    // (unique=0, every snapshot) scans the 2.8M-row parent archive
+    // when the ~3-77K-row sidecar would do; queries dropped from
+    // 5-30s to milliseconds. Callers that genuinely want every poll
+    // snapshot must pass ?unique=0 explicitly — logs.html's
+    // linked-incident proximity lookups already do.
+    unique: q.get('unique') !== '0',
     liveOnly: q.get('live_only') === '1',
     historicalOnly: q.get('historical_only') === '1',
     activeOnly: q.get('active_only') === '1',

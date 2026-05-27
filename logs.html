@@ -3229,8 +3229,9 @@
                 pagerTime = item.fetched_at * 1000;
               }
               
-              // ~20m radius, search all pagers (no unique=1 to include ended ones)
-              const proximityUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&full=1`;
+              // ~20m radius, search all pagers (unique=0 explicit to
+              // include ended ones — backend default is now unique=1)
+              const proximityUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
               const proxRes = await fetch(proximityUrl);
               const proxData = await proxRes.json();
               
@@ -3288,8 +3289,9 @@
                 pagerTime = item.fetched_at * 1000;
               }
               
-              // Search nearby (~20m radius), no unique=1 to include ended incidents
-              const incUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&full=1`;
+              // Search nearby (~20m radius), unique=0 explicit to
+              // include ended incidents (backend default is now unique=1)
+              const incUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
               const incRes = await fetch(incUrl);
               const incData = await incRes.json();
               
@@ -3408,8 +3410,9 @@
             incidentTime = item.fetched_at * 1000;
           }
           
-          // ~20m radius, search all pagers (no unique=1 to include ended ones)
-          const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&full=1`;
+          // ~20m radius, search all pagers (unique=0 explicit to
+          // include ended ones — backend default is now unique=1)
+          const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
           const res = await fetch(url);
           const data = await res.json();
           
