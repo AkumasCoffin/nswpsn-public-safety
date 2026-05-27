@@ -61,6 +61,27 @@ interface QueueItem {
 const HARD_CAP = 50_000; // bound RAM if Postgres goes away briefly
 
 /**
+ * Top-level keys excluded from the dedup hash. These are "noise" fields
+ * that change every poll regardless of whether the underlying incident
+ * actually changed, so including them in the hash forces a fresh INSERT
+ * on every poll and defeats the dedup. Verified by per-field diff query
+ * against archive_power: lastUpdated changed 5,615× in 6h, streets
+ * changed 1,367× (upstream rotates among multiple affected addresses on
+ * the same outage), and title + location_text are derived aliases of
+ * streets (archiveExtract.applyAliases at line 282/290) so they MUST be
+ * stripped here too or they'd re-introduce the noise.
+ *
+ * Fields stay in the data blob — readers still see them via JSONB
+ * projections. Only the dedup-equality check ignores them.
+ */
+const DEDUP_HASH_IGNORE = new Set<string>([
+  'lastUpdated',     // endeavour upstream per-poll timestamp
+  'streets',         // endeavour upstream rotates among affected addresses
+  'title',           // alias of streets / name / headline (derived)
+  'location_text',   // alias of streets / suburb (derived)
+]);
+
+/**
  * Stable hash of a row's data field for write-time dedup. Excludes
  * fields that change every poll regardless of upstream state — those
  * would defeat the dedup if hashed.
@@ -71,7 +92,15 @@ const HARD_CAP = 50_000; // bound RAM if Postgres goes away briefly
  * snapshots per incident).
  */
 function hashRowData(row: ArchiveRow): string {
-  const stable = stableSerialize(row.data);
+  let data: unknown = row.data;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const filtered: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+      if (!DEDUP_HASH_IGNORE.has(k)) filtered[k] = v;
+    }
+    data = filtered;
+  }
+  const stable = stableSerialize(data);
   return createHash('sha1').update(stable).digest('hex').slice(0, 20);
 }
 
