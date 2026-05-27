@@ -636,9 +636,39 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
 // /api/data/history/filters
 // ---------------------------------------------------------------------------
 
-dataHistoryRouter.get('/api/data/history/filters', (c) => {
+// Resolves the time window for /filters from the same params /history
+// accepts: explicit since (epoch secs) > date_from (YYYY-MM-DD or ISO) >
+// hours > days. Missing all of them = "All" (filterCache defaults to
+// DATA_RETENTION_DAYS). Returns the window in hours so the cache key
+// stays simple.
+function parseWindowHours(q: URLSearchParams): number | null {
+  const since = intParam(q.get('since'));
+  const dateFrom = q.get('date_from');
+  const hours = intParam(q.get('hours'));
+  const days = intParam(q.get('days'));
+  const nowSecs = Math.floor(Date.now() / 1000);
+  if (since !== null && since > 0) {
+    const h = Math.ceil((nowSecs - since) / 3600);
+    return h > 0 ? h : null;
+  }
+  if (dateFrom) {
+    const sinceFromDate = parseDateBoundary(dateFrom, false);
+    if (sinceFromDate !== null && sinceFromDate > 0) {
+      const h = Math.ceil((nowSecs - sinceFromDate) / 3600);
+      return h > 0 ? h : null;
+    }
+  }
+  if (hours !== null && hours > 0) return hours;
+  if (days !== null && days > 0) return days * 24;
+  return null;
+}
+
+dataHistoryRouter.get('/api/data/history/filters', async (c) => {
   const sourceFilter = c.req.query('source');
-  return c.json(getFilterFacets(sourceFilter ?? null));
+  const url = new URL(c.req.url);
+  const windowHours = parseWindowHours(url.searchParams);
+  const facets = await getFilterFacets(sourceFilter ?? null, windowHours);
+  return c.json(facets);
 });
 
 // ---------------------------------------------------------------------------

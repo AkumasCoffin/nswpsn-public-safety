@@ -471,12 +471,15 @@ interface ArchiveFacetRow {
   newest: number | null;
 }
 
-/** Window for the incremental facets read. Mirrors the legacy
- *  ARCHIVE_FACET_TABLES windows but applies a single bound to the
- *  pre-aggregated read. 7 days is the wider of the two legacy bounds;
- *  the smaller (1d) was only there to keep the live GROUP BY scan
- *  fast on large partitions. The pre-aggregated table makes that moot. */
-const FACETS_WINDOW_DAYS = 7;
+/** Default time window for /api/data/history/filters when the caller
+ *  doesn't specify one. Matches DATA_RETENTION_DAYS so "no window param"
+ *  means "everything currently stored" — the longest meaningful range
+ *  because rows beyond retention are pruned anyway. */
+const DEFAULT_RETENTION_DAYS = Math.max(
+  1,
+  Number.parseInt(process.env['DATA_RETENTION_DAYS'] ?? '31', 10) || 31,
+);
+const DEFAULT_WINDOW_HOURS = DEFAULT_RETENTION_DAYS * 24;
 
 /**
  * GROUP BY scan over the small archive_* tables. Bounded to the last
@@ -508,7 +511,7 @@ const FACETS_WINDOW_DAYS = 7;
  * Returns null if the sidecar is empty (boot before backfill, or no
  * data in the window) so the caller can fall back to filter_facets_daily.
  */
-async function archiveFacetsFromSidecar(): Promise<{
+async function archiveFacetsFromSidecar(windowHours: number): Promise<{
   typeCounts: Record<string, number>;
   perTypeDims: DimMap;
   oldestUnix: number | null;
@@ -522,9 +525,13 @@ async function archiveFacetsFromSidecar(): Promise<{
     'archive_power',
     'archive_traffic',
     'archive_rfs',
-    // archive_waze deliberately excluded — waze facets still come from
-    // LiveStore (the in-memory wazeIngestCache); including the sidecar
-    // here would double-count.
+    // archive_waze included here too — the sidecar collapses 2.8M append
+    // rows to ~77k unique incidents (~36x smaller), so a windowed
+    // GROUP BY runs in ~100ms cold and sub-ms warm via the response
+    // cache. The previous "waze comes from LiveStore" model returned
+    // 786 active alerts; the sidecar returns the unique-alerts-in-window
+    // count that matches /api/data/history?unique=1.
+    'archive_waze',
   ];
 
   const typeCounts: Record<string, number> = {};
@@ -537,17 +544,17 @@ async function archiveFacetsFromSidecar(): Promise<{
     // last_seen_at fallback (same semantics the unique=1 list uses
     // — see dataHistoryQuery.ts buildUniqueQuery). Backend ingest
     // times deliberately not used here; the user means "incidents
-    // published in the last 7 days", not "rows we polled in the last
-    // 7 days".
+    // published in the last N hours", not "rows we polled in the
+    // last N hours".
     const sql = `
       SELECT a.source,
              a.category,
              a.subcategory,
              COUNT(*)::text AS cnt,
              MIN(COALESCE(l.source_timestamp_unix,
-                          EXTRACT(EPOCH FROM l.latest_fetched_at)::bigint))::bigint AS oldest,
+                          EXTRACT(EPOCH FROM l.last_seen_at)::bigint))::bigint AS oldest,
              MAX(COALESCE(l.source_timestamp_unix,
-                          EXTRACT(EPOCH FROM l.latest_fetched_at)::bigint))::bigint AS newest
+                          EXTRACT(EPOCH FROM l.last_seen_at)::bigint))::bigint AS newest
         FROM ${table}_latest l
         JOIN ${table} a
           ON a.source = l.source
@@ -555,7 +562,7 @@ async function archiveFacetsFromSidecar(): Promise<{
          AND a.fetched_at = l.latest_fetched_at
        WHERE COALESCE(l.source_timestamp_unix,
                       EXTRACT(EPOCH FROM l.last_seen_at)::bigint)
-             >= EXTRACT(EPOCH FROM NOW() - ($1 || ' days')::interval)::bigint
+             >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
        GROUP BY 1, 2, 3
     `;
     let client;
@@ -569,7 +576,7 @@ async function archiveFacetsFromSidecar(): Promise<{
       await client.query('BEGIN');
       try {
         await client.query("SET LOCAL statement_timeout = '30s'");
-        const result = await client.query<ArchiveFacetRow>(sql, [String(FACETS_WINDOW_DAYS)]);
+        const result = await client.query<ArchiveFacetRow>(sql, [String(windowHours)]);
         await client.query('COMMIT');
         for (const row of result.rows) {
           const cnt = parseInt(row.cnt, 10);
@@ -577,7 +584,9 @@ async function archiveFacetsFromSidecar(): Promise<{
           if (DEPRECATED_SOURCES.has(row.source)) continue;
           const alertType = canonicalAlertType(row.source);
           if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
-          if (alertType.startsWith('waze_')) continue;
+          // Waze types are NOT skipped now — archive_waze_latest joins the
+          // table list above, so this loop counts waze unique incidents
+          // alongside the other providers.
 
           typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
           const slot = dimSlotFor(perTypeDims, alertType);
@@ -618,7 +627,7 @@ async function archiveFacetsFromSidecar(): Promise<{
  * null if the table is empty (i.e. backfill hasn't run yet) so the
  * caller can fall back to the legacy archiveFacetsLegacy() path.
  */
-async function archiveFacetsFromDaily(): Promise<{
+async function archiveFacetsFromDaily(windowHours: number): Promise<{
   typeCounts: Record<string, number>;
   perTypeDims: DimMap;
   oldestUnix: number | null;
@@ -626,6 +635,11 @@ async function archiveFacetsFromDaily(): Promise<{
 } | null> {
   const pool = await getPool();
   if (!pool) return null;
+  // Daily table is day-bucketed; convert hours to days (round up so a
+  // 1h window still hits today's bucket). Note: filter_facets_daily has
+  // 14d retention so windows > 336h undercount in this fallback path —
+  // the sidecar path is preferred and doesn't have that limit.
+  const windowDays = Math.max(1, Math.ceil(windowHours / 24));
   const sql = `
     SELECT source,
            category,
@@ -639,7 +653,7 @@ async function archiveFacetsFromDaily(): Promise<{
   `;
   let rows: ArchiveFacetRow[];
   try {
-    const r = await pool.query<ArchiveFacetRow>(sql, [String(FACETS_WINDOW_DAYS)]);
+    const r = await pool.query<ArchiveFacetRow>(sql, [String(windowDays)]);
     rows = r.rows;
   } catch (err) {
     log.warn(
@@ -683,7 +697,7 @@ async function archiveFacetsFromDaily(): Promise<{
   return { typeCounts, perTypeDims, oldestUnix, newestUnix };
 }
 
-async function archiveFacets(): Promise<{
+async function archiveFacets(windowHours: number): Promise<{
   typeCounts: Record<string, number>;
   perTypeDims: DimMap;
   oldestUnix: number | null;
@@ -691,13 +705,13 @@ async function archiveFacets(): Promise<{
 }> {
   // Preferred path: counts from the archive_*_latest sidecars so the
   // dropdown numbers match the unique=1 list. See migration 017.
-  const fromSidecar = await archiveFacetsFromSidecar();
+  const fromSidecar = await archiveFacetsFromSidecar(windowHours);
   if (fromSidecar) return fromSidecar;
 
   // Fallback: filter_facets_daily-based counts. These over-count
   // because the rollup is per-poll, not per-incident — but better
   // than empty dropdowns while the sidecar's backfilling.
-  const fast = await archiveFacetsFromDaily();
+  const fast = await archiveFacetsFromDaily(windowHours);
   if (fast) return fast;
 
   const typeCounts: Record<string, number> = {};
@@ -708,6 +722,10 @@ async function archiveFacets(): Promise<{
   const pool = await getPool();
   if (!pool) return { typeCounts, perTypeDims, oldestUnix, newestUnix };
 
+  // Legacy fallback only runs if both the sidecar and the daily table
+  // are unavailable — extremely rare. Uses the per-table windowDays
+  // from ARCHIVE_FACET_TABLES rather than the user's windowHours to
+  // avoid timing out on hour-grained scans of multi-million-row tables.
   for (const { table, windowDays } of ARCHIVE_FACET_TABLES) {
     const sql = `
       SELECT
@@ -744,8 +762,10 @@ async function archiveFacets(): Promise<{
           if (DEPRECATED_SOURCES.has(row.source)) continue;
           const alertType = canonicalAlertType(row.source);
           if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
-          // Skip waze types — they come from LiveStore, including them
-          // here would double-count.
+          // Note: legacy fallback path still skips waze because this code
+          // path is only reached when both sidecar + daily are unavailable
+          // and ARCHIVE_FACET_TABLES doesn't include archive_waze (it's
+          // too big to scan with a hour/day window).
           if (alertType.startsWith('waze_')) continue;
 
           typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
@@ -824,15 +844,15 @@ function computeFacets(): ComputedFacets {
   return computeFacetsLive();
 }
 
-/** Async entry point used by the periodic refresh: archive scan for
- *  non-waze types + LiveStore for waze. The merged shape is what the
- *  user sees in the dropdown. */
-async function computeFacetsAsync(): Promise<ComputedFacets> {
-  const [waze, archive] = await Promise.all([
-    Promise.resolve(liveWazeFacets()),
-    archiveFacets(),
-  ]);
-  return mergeFacets(waze, archive);
+/** Async entry point. With DB available, queries archive_*_latest
+ *  sidecars (including archive_waze_latest) for unique-incident counts
+ *  in the requested window. Without DB, falls back to a LiveStore walk
+ *  for cold-start / test-without-DB scenarios; windowHours is ignored
+ *  in that fallback because LiveStore has no historical depth. */
+async function computeFacetsAsync(windowHours: number): Promise<ComputedFacets> {
+  const pool = await getPool();
+  if (!pool) return computeFacetsLive();
+  return archiveFacets(windowHours);
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,75 +1035,111 @@ function buildResponse(
 // Cache + scheduler
 // ---------------------------------------------------------------------------
 
-let cached: ComputedFacets | null = null;
+interface CacheEntry {
+  facets: FilterFacets;
+  ts: number;
+}
+// Keyed by `${windowHours}:${sourceFilter || '*'}`. 60s TTL absorbs the
+// hot-path repeat hits (page refresh, multi-pane dashboard) while
+// keeping the per-window staleness window short. Capacity-bounded so a
+// pathological caller can't blow out RAM with thousands of weird
+// window/source permutations.
+const FACETS_TTL_MS = 60_000;
+const FACETS_CACHE_MAX = 64;
+const facetsCache = new Map<string, CacheEntry>();
+
 let lastRefreshAt: number = 0;
 let timer: NodeJS.Timeout | null = null;
 let refreshing = false;
 
-// 5 min: matches python's data_history_filter_cache cadence
-// (external_api_proxy.py:12568+). The DB-backed scan is too heavy
-// for the previous 60s cadence and the values don't change that
-// fast — the dropdown reflects 24h windows.
+// 5 min: keeps the default (no-source, retention window) entry warm so
+// the most common request is always pre-computed. Other window/source
+// combinations are lazy-loaded with the 60s TTL.
 const DEFAULT_REFRESH_MS = 5 * 60_000;
 
-/**
- * Recompute facets. Returns sync (using a LiveStore-only walk so tests
- * and cold reads see immediate results) AND fires off an async archive
- * scan that will replace the non-waze counts when it completes. Idem-
- * potent — concurrent archive scans collapse onto one in-flight call.
- */
-export function refreshFilterCache(): void {
-  try {
-    cached = computeFacets();
-    lastRefreshAt = Math.floor(Date.now() / 1000);
-  } catch (err) {
-    log.error({ err }, 'filterCache: live refresh failed');
-  }
-  // Fire-and-forget archive scan for the historical counts. When the
-  // promise resolves, `cached` is overwritten with the merged shape.
-  void refreshFromArchive();
+function cacheKey(sourceFilter: string | null | undefined, windowHours: number): string {
+  return `${windowHours}:${sourceFilter || '*'}`;
 }
 
-async function refreshFromArchive(): Promise<void> {
+function evictOldestIfFull(): void {
+  while (facetsCache.size > FACETS_CACHE_MAX) {
+    const oldest = facetsCache.keys().next().value;
+    if (oldest === undefined) break;
+    facetsCache.delete(oldest);
+  }
+}
+
+/**
+ * Build and return the filter facets response for the given source +
+ * window. Async — the sidecar query takes ~100ms cold, sub-ms warm
+ * via the 60s TTL cache. windowHours defaults to DATA_RETENTION_DAYS
+ * (the "All" case, since nothing exists beyond retention anyway).
+ */
+export async function getFilterFacets(
+  sourceFilter?: string | null,
+  windowHours?: number | null,
+): Promise<FilterFacets> {
+  const effectiveHours = Math.max(
+    1,
+    windowHours == null || !Number.isFinite(windowHours) ? DEFAULT_WINDOW_HOURS : windowHours,
+  );
+  const key = cacheKey(sourceFilter, effectiveHours);
+  const hit = facetsCache.get(key);
+  const nowMs = Date.now();
+  if (hit && nowMs - hit.ts < FACETS_TTL_MS) {
+    return hit.facets;
+  }
+  let computed: ComputedFacets;
+  try {
+    computed = await computeFacetsAsync(effectiveHours);
+  } catch (err) {
+    log.error({ err: (err as Error).message }, 'filterCache: compute failed, falling back to LiveStore');
+    computed = computeFacetsLive();
+  }
+  const facets = buildResponse(computed, sourceFilter ?? null);
+  facetsCache.set(key, { facets, ts: nowMs });
+  evictOldestIfFull();
+  lastRefreshAt = Math.floor(nowMs / 1000);
+  return facets;
+}
+
+/** Synchronous variant used by tests + cold-start fast path. Reads
+ *  only LiveStore (no DB) — windowHours is ignored. */
+export function getFilterFacetsLive(sourceFilter?: string | null): FilterFacets {
+  return buildResponse(computeFacetsLive(), sourceFilter ?? null);
+}
+
+/**
+ * Pre-warm the default cache entry (no source, retention window). Kept
+ * as a function so the scheduler + tests have a single trigger; lazy
+ * loading via getFilterFacets is the production path.
+ */
+export async function refreshFilterCache(): Promise<void> {
   if (refreshing) return;
   refreshing = true;
   try {
-    const merged = await computeFacetsAsync();
-    cached = merged;
-    lastRefreshAt = Math.floor(Date.now() / 1000);
+    facetsCache.delete(cacheKey(null, DEFAULT_WINDOW_HOURS));
+    await getFilterFacets(null, DEFAULT_WINDOW_HOURS);
   } catch (err) {
-    log.error({ err }, 'filterCache: archive refresh failed');
+    log.error({ err: (err as Error).message }, 'filterCache: refresh failed');
   } finally {
     refreshing = false;
   }
 }
 
-/**
- * Build and return the filter facets response, scoped (optionally) to a
- * single source. **Sync** — returns whatever's in the cache (or a
- * waze-only in-memory fallback on cold start). The async refresh runs
- * in the background and the response stays sub-millisecond.
- */
-export function getFilterFacets(sourceFilter?: string | null): FilterFacets {
-  if (!cached) refreshFilterCache();
-  return buildResponse(cached ?? computeFacets(), sourceFilter ?? null);
-}
-
-/** Wall-clock of the last successful refresh (epoch seconds). */
+/** Wall-clock of the last successful cache write (epoch seconds). */
 export function filterCacheLastRefreshAt(): number {
   return lastRefreshAt;
 }
 
 /**
- * Start the periodic refresh timer. Idempotent — second call is a no-op.
- * Called from index.ts after the routes are wired.
+ * Start the periodic warmup timer. Idempotent — second call is a no-op.
+ * Pre-warms the default entry; everything else is lazy.
  */
 export function startFilterCacheRefresh(intervalMs: number = DEFAULT_REFRESH_MS): void {
   if (timer) return;
-  // First refresh fires sync (LiveStore walk) + async (archive scan)
-  // so the cache is warming while the rest of boot continues.
-  refreshFilterCache();
-  timer = setInterval(() => refreshFilterCache(), intervalMs);
+  void refreshFilterCache();
+  timer = setInterval(() => void refreshFilterCache(), intervalMs);
   timer.unref?.();
 }
 
@@ -1094,10 +1150,11 @@ export function stopFilterCacheRefresh(): void {
   }
 }
 
-/** Test-only: drop the cached snapshot so the next read recomputes. */
+/** Test-only: drop the cached snapshots so the next read recomputes. */
 export function _resetFilterCacheForTests(): void {
-  cached = null;
+  facetsCache.clear();
   lastRefreshAt = 0;
+  refreshing = false;
   if (timer) {
     clearInterval(timer);
     timer = null;
