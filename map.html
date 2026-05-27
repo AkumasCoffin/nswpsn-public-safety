@@ -9836,6 +9836,7 @@ function initPagerHoursFromStorage() {
       aisLayer.clearLayers();
       _aisMarkers.clear();
       let visible = 0;
+      const q = _aisListSearch;
       _aisVessels.forEach((v) => {
         const lat = parseFloat(v.LAT), lon = parseFloat(v.LON);
         if (!isFinite(lat) || !isFinite(lon)) return;
@@ -9853,6 +9854,16 @@ function initPagerHoursFromStorage() {
         // doesn't expose the field.
         const ageMin = _aisVesselAgeMin(v);
         if (ageMin != null && ageMin > aisMaxAgeMin) return;
+        // Search-box filter (same haystack the floating list uses).
+        // Empty query = pass-through so the marker layer matches the
+        // list. We deliberately don't viewport-filter here — the map
+        // should show every match, even off-screen ones the user is
+        // about to pan to.
+        if (q) {
+          const hay = [v.SHIPNAME, v.NAME, v.MMSI, v.IMO, v.DESTINATION, v.CALLSIGN]
+            .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
+          if (!hay.includes(q)) return;
+        }
         const heading = parseFloat(v.HEADING);
         const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
         const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
@@ -9904,7 +9915,10 @@ function initPagerHoursFromStorage() {
 
     function aisListOnSearch(q) {
       _aisListSearch = (q || '').toLowerCase().trim();
-      aisListRender();
+      // _rebuildAis applies the same search filter to map markers, then
+      // calls aisListRender() at the end so the floating list stays in
+      // sync with what's drawn on the map.
+      _rebuildAis();
     }
     window.aisListOnSearch = aisListOnSearch;
 
