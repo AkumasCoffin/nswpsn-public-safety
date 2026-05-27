@@ -2358,8 +2358,8 @@
           const baseUrl = img.dataset.baseUrl;
           if (baseUrl) refreshImageNoCache(img, baseUrl);
         });
-      }, 12000); // 12s interval for live camera updates
-      console.log('📷 Camera image refresh started (12s, no-cache fetch)');
+      }, 15000); // 15s interval for live camera updates
+      console.log('📷 Camera image refresh started (15s, no-cache fetch)');
     }
     
     function stopCameraRefresh() {
@@ -2495,7 +2495,7 @@
       }
       
       doRefresh(); // Immediate refresh (fullscreen single + multi-camera grid)
-      cameraFullscreenRefreshInterval = setInterval(doRefresh, 12000);
+      cameraFullscreenRefreshInterval = setInterval(doRefresh, 15000);
     }
     
     function updateRefreshIndicator() {
