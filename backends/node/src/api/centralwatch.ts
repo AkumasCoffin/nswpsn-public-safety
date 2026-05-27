@@ -19,16 +19,29 @@ import {
 } from '../sources/centralwatch.js';
 import {
   getImage,
+  hasImage,
+  cacheSize,
   STALE_AFTER_MS_EXPORT,
 } from '../services/centralwatchImageCache.js';
 import { log } from '../lib/log.js';
 
 export const centralwatchRouter = new Hono();
 
+// Cameras that the batch image worker can't reach (offline towers, upstream
+// 404s, etc.) get dropped from the public list so the map doesn't show
+// markers that perpetually display the placeholder SVG. Gated on the cache
+// having warmed up at least once — if it's empty we trust the camera roster
+// from the JSON file and return everything, otherwise a cold boot or a
+// blocked Vercel WAF would briefly hide every camera.
+function filterOnline<T extends { id: string }>(list: T[]): T[] {
+  if (cacheSize() === 0) return list;
+  return list.filter((cam) => hasImage(cam.id));
+}
+
 centralwatchRouter.get('/api/centralwatch/cameras', async (c) => {
   try {
     const cameras = await getCentralwatchCameras();
-    return c.json(cameras);
+    return c.json(filterOnline(cameras));
   } catch (err) {
     log.warn(
       { err: (err as Error).message },
@@ -41,7 +54,13 @@ centralwatchRouter.get('/api/centralwatch/cameras', async (c) => {
 centralwatchRouter.get('/api/centralwatch/sites', async (c) => {
   try {
     const sites = await getCentralwatchSites();
-    return c.json(sites);
+    // Drop offline cameras within each site, then drop sites with no
+    // remaining cameras — a tower with all-offline cameras shouldn't
+    // produce a marker.
+    const filtered = sites
+      .map((s) => ({ ...s, cameras: filterOnline(s.cameras) }))
+      .filter((s) => s.cameras.length > 0);
+    return c.json(filtered);
   } catch (err) {
     log.warn(
       { err: (err as Error).message },
