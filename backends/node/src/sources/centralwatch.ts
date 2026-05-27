@@ -24,6 +24,16 @@ const JSON_PATH = path.resolve(
   'data',
   'centralwatch_cameras.json',
 );
+// Static fallback shipped in-repo. Loaded when JSON_PATH is missing — e.g.
+// fresh deploy before the Playwright worker's first successful refresh, or
+// when the Vercel WAF is blocking the worker entirely. Never overwritten by
+// the auto-refresh writer (which only touches JSON_PATH).
+const SEED_PATH = path.resolve(
+  process.cwd(),
+  '..',
+  'data',
+  'centralwatch_cameras.seed.json',
+);
 const REFRESH_INTERVAL_MS = 60_000; // file-reader cache invalidation
 const API_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min — match python
 const API_ENDPOINT = 'https://centralwatch.watchtowers.io/au/api/cameras';
@@ -115,7 +125,11 @@ function joinCameras(raw: RawJson): CentralwatchCamera[] {
 }
 
 async function loadFromDisk(): Promise<CacheEntry | null> {
+  // Prefer the auto-refreshed live file; fall back to the in-repo seed when
+  // the live file is missing (fresh deploy, wiped cache, or the WAF-blocked
+  // worker hasn't produced a refresh yet).
   let stat;
+  let activePath = JSON_PATH;
   try {
     stat = await fs.stat(JSON_PATH);
   } catch (err) {
@@ -124,15 +138,21 @@ async function loadFromDisk(): Promise<CacheEntry | null> {
         { err: (err as Error).message, path: JSON_PATH },
         'centralwatch JSON stat failed',
       );
+      return null;
     }
-    return null;
+    try {
+      stat = await fs.stat(SEED_PATH);
+      activePath = SEED_PATH;
+    } catch {
+      return null;
+    }
   }
   if (cache && stat.mtimeMs === cache.fileMtimeMs) {
     cache.loadedAt = Date.now();
     return cache;
   }
   try {
-    const text = await fs.readFile(JSON_PATH, 'utf8');
+    const text = await fs.readFile(activePath, 'utf8');
     const parsed = JSON.parse(text) as RawJson;
     const cameras = joinCameras(parsed);
     const entry: CacheEntry = {
@@ -145,7 +165,7 @@ async function loadFromDisk(): Promise<CacheEntry | null> {
     return entry;
   } catch (err) {
     log.warn(
-      { err: (err as Error).message },
+      { err: (err as Error).message, path: activePath },
       'centralwatch JSON parse failed',
     );
     return cache;
