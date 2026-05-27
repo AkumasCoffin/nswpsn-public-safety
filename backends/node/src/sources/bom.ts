@@ -6,6 +6,7 @@
  * route at external_api_proxy.py:5519, 5602. Same response shape:
  *   { warnings: [...], count, counts: { land, marine } }
  */
+import { createHash } from 'node:crypto';
 import { fetchText } from './shared/http.js';
 import { asArray, parseXml, textOf } from './shared/xml.js';
 import { registerSource } from '../services/sourceRegistry.js';
@@ -225,9 +226,21 @@ function bomArchiveItems(
   for (const w of snap.warnings) {
     if (!w || typeof w !== 'object') continue;
     const perRowSource = w.category === 'marine' ? 'bom_marine' : 'bom_land';
+    // ArchiveWriter.upsertLatestSidecar drops any row with a null/empty
+    // source_id (archive.ts:474), so BOM warnings never landed in
+    // archive_misc_latest. Derive a stable id per warning: prefer the
+    // upstream link (the IDZ-prefixed BOM URL is unique per product),
+    // fall back to a SHA-1 of title+area so reposts of the same warning
+    // collapse onto the same sidecar row instead of accumulating.
+    const sid =
+      (w.link && w.link.trim()) ||
+      'bom:' + createHash('sha1')
+        .update(`${perRowSource}|${w.title || ''}|${w.area || ''}`)
+        .digest('hex')
+        .slice(0, 16);
     out.push({
       source: perRowSource,
-      source_id: null,
+      source_id: sid,
       fetched_at,
       lat: null,
       lng: null,

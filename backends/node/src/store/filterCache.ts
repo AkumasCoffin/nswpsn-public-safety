@@ -448,6 +448,20 @@ const ARCHIVE_FACET_TABLES: FacetTable[] = [
   { table: 'archive_rfs', windowDays: 1 },
 ];
 
+// node-postgres returns int8/bigint columns as strings by default to
+// avoid silent precision loss above 2^53. The MIN/MAX(...)::bigint
+// projections below are unix epoch seconds — well within Number range —
+// so we parse them on read instead of registering a global type parser
+// (which would change behaviour for the whole process).
+function bigintToNumber(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 interface ArchiveFacetRow {
   source: string;
   category: string | null;
@@ -574,11 +588,13 @@ async function archiveFacetsFromSidecar(): Promise<{
             slot['subcategory']![row.subcategory] =
               (slot['subcategory']![row.subcategory] ?? 0) + cnt;
           }
-          if (typeof row.oldest === 'number') {
-            if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
+          const rowOldest = bigintToNumber(row.oldest);
+          const rowNewest = bigintToNumber(row.newest);
+          if (rowOldest !== null) {
+            if (oldestUnix === null || rowOldest < oldestUnix) oldestUnix = rowOldest;
           }
-          if (typeof row.newest === 'number') {
-            if (newestUnix === null || row.newest > newestUnix) newestUnix = row.newest;
+          if (rowNewest !== null) {
+            if (newestUnix === null || rowNewest > newestUnix) newestUnix = rowNewest;
           }
         }
       } catch (err) {
@@ -655,11 +671,13 @@ async function archiveFacetsFromDaily(): Promise<{
       slot['subcategory']![row.subcategory] =
         (slot['subcategory']![row.subcategory] ?? 0) + cnt;
     }
-    if (typeof row.oldest === 'number') {
-      if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
+    const rowOldest = bigintToNumber(row.oldest);
+    const rowNewest = bigintToNumber(row.newest);
+    if (rowOldest !== null) {
+      if (oldestUnix === null || rowOldest < oldestUnix) oldestUnix = rowOldest;
     }
-    if (typeof row.newest === 'number') {
-      if (newestUnix === null || row.newest > newestUnix) newestUnix = row.newest;
+    if (rowNewest !== null) {
+      if (newestUnix === null || rowNewest > newestUnix) newestUnix = rowNewest;
     }
   }
   return { typeCounts, perTypeDims, oldestUnix, newestUnix };
@@ -740,11 +758,13 @@ async function archiveFacets(): Promise<{
               (slot['subcategory']![row.subcategory] ?? 0) + cnt;
           }
           // status/severity facets dropped — see archiveFacets() docstring.
-          if (typeof row.oldest === 'number') {
-            if (oldestUnix === null || row.oldest < oldestUnix) oldestUnix = row.oldest;
+          const rowOldest = bigintToNumber(row.oldest);
+          const rowNewest = bigintToNumber(row.newest);
+          if (rowOldest !== null) {
+            if (oldestUnix === null || rowOldest < oldestUnix) oldestUnix = rowOldest;
           }
-          if (typeof row.newest === 'number') {
-            if (newestUnix === null || row.newest > newestUnix) newestUnix = row.newest;
+          if (rowNewest !== null) {
+            if (newestUnix === null || rowNewest > newestUnix) newestUnix = rowNewest;
           }
         }
       } catch (err) {
