@@ -755,10 +755,22 @@ export function buildCountSqlForTable(
     }
     const sidecarWhere =
       sidecarAcc.parts.length > 0 ? `WHERE ${sidecarAcc.parts.join(' AND ')}` : '';
+    // live_count from sidecar staleness: an incident is "live" iff its
+    // last_seen_at advanced within the last LIVE_STALE_MINUTES poll
+    // window. Previously we returned live_count = total which pinned
+    // the frontend's "X live / Y ended" pill to "everything live, 0
+    // ended" — visibly wrong on unique=1 lists with old incidents.
+    // The threshold is generous because slow sources (RFS, BOM) only
+    // poll every 5-10 min; 15 min covers 2-3 missed polls before
+    // marking an incident ended.
+    const LIVE_STALE_MINUTES = 15;
     const sql = `
-      SELECT COUNT(*)::bigint AS total, COUNT(*)::bigint AS live_count
+      SELECT COUNT(*)::bigint AS total,
+             COUNT(*) FILTER (
+               WHERE last_seen_at >= NOW() - INTERVAL '${LIVE_STALE_MINUTES} minutes'
+             )::bigint AS live_count
       FROM (
-        SELECT 1 FROM ${table}_latest ${sidecarWhere} LIMIT ${COUNT_CAP}
+        SELECT last_seen_at FROM ${table}_latest ${sidecarWhere} LIMIT ${COUNT_CAP}
       ) sub
     `;
     return { sql, params: sidecarAcc.params, table };

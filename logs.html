@@ -1300,11 +1300,14 @@
     
     // === FILTER LOADING ===
     function getHoursParam() {
-      // Get current hours filter for API calls
-      // -1 = all time (no filter)
+      // Returns the hours window matching the active quick-filter button,
+      // or null for "all time" (omit ?hours= on the request entirely so
+      // the backend falls back to DATA_RETENTION_DAYS).
+      // -1 = all time, 0/missing = treat as default 24h (matches initial
+      //  currentQuickFilter default at line 1175).
       if (currentQuickFilter === -1) return null;
       if (currentQuickFilter > 0) return currentQuickFilter;
-      return 24; // default
+      return 24;
     }
     
     async function loadFilters() {
@@ -3616,7 +3619,11 @@
       document.querySelectorAll('.quick-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.hours === '24');
       });
-      
+
+      // Re-fetch filter dropdowns so their counts reflect the reset
+      // 24h window (otherwise the previous window's numbers stay
+      // visible until the user triggers a different filter change).
+      loadFilters();
       performSearch(1);
     }
     

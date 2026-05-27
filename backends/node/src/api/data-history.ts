@@ -410,7 +410,14 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     // returns the data with total=0; logs.html falls back to "+"
     // pagination instead of jump-to-page.
     const nowMs = Date.now();
-    const countPromise = Promise.all(
+    // Skip the count query entirely when the caller passed ?cursor=.
+    // Cursor pagination doesn't need `total` — the next_cursor in the
+    // response is the only signal it uses. Avoids running the 5-10s
+    // COUNT aggregate on every cursor-paged page click.
+    const skipCount = params.cursor !== null;
+    const countPromise: Promise<Array<{ total: number; live: number }>> = skipCount
+      ? Promise.resolve(plan.queries.map(() => ({ total: 0, live: 0 })))
+      : Promise.all(
       plan.queries.map(async (q) => {
         const cq = buildCountSqlForTable(q.table, params);
         const key = countCacheKey(q.table, cq.sql, cq.params);
@@ -486,9 +493,13 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     return c.json({
       records,
       total,
-      // Both numbers come out of the same single count query as `total`
-      // via FILTER (WHERE data->>'is_live' IN ('1','true','True')).
-      // Capped at the same 50k as `total` per family.
+      // For unique=0 (parent-table count): live_count comes from a
+      // FILTER (WHERE data->>'is_live' ...) on the same query as
+      // `total`. For unique=1 (sidecar count): derived from
+      // last_seen_at staleness (see buildCountSqlForTable). When the
+      // caller paginates with ?cursor=, the count query is skipped
+      // entirely (total/live/ended return 0 — cursor pagination
+      // doesn't use them).
       live_count: liveCount,
       ended_count: endedCount,
       limit: params.limit,
