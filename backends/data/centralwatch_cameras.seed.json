@@ -1,0 +1,148 @@
+{
+  "lastUpdated": "2026-05-27T10:15:00Z",
+  "source": "https://centralwatch.watchtowers.io/au/api/cameras",
+  "_note": "Static seed used by the reader when the auto-refreshed live file is missing. The Playwright worker writes centralwatch_cameras.json (gitignored); this seed is never overwritten and serves as a fallback after a fresh deploy / cache wipe.",
+  "sites": {
+    "8680b57a-3d8d-44a3-ba91-7d48c11a4b4f": {
+      "name": "Mt Wereboldera",
+      "latitude": -35.360458,
+      "longitude": 148.21631,
+      "altitude": 837,
+      "state": "New South Wales"
+    },
+    "e981ffe5-97d2-4d3d-87d2-5cf1ea6a8f5f": {
+      "name": "Mt Tennent",
+      "latitude": -35.550024,
+      "longitude": 149.044696,
+      "altitude": 1386,
+      "state": "Australian Capital Territory"
+    },
+    "abafced4-3357-4333-81c7-b790d8354b9c": {
+      "name": "Bowning Hill",
+      "latitude": -34.777891,
+      "longitude": 148.830716,
+      "altitude": 803,
+      "state": "New South Wales"
+    },
+    "d80245b4-8081-43e9-bbc7-10a1987bcfb4": {
+      "name": "Mobile WatchTower #2",
+      "latitude": -34.551861,
+      "longitude": 146.6105,
+      "altitude": 397,
+      "state": "New South Wales"
+    },
+    "fefca445-fe7e-4cb1-91de-b9afae83f810": {
+      "name": "Mobile WatchTower #1",
+      "latitude": -33.536198,
+      "longitude": 150.625382,
+      "altitude": 544,
+      "state": "New South Wales"
+    },
+    "4e7e615c-1cd4-42e9-ba9c-8dc7dcc77958": {
+      "name": "Mobile WatchTower #4",
+      "latitude": -35.529371,
+      "longitude": 148.771794,
+      "altitude": 1770,
+      "state": "Australian Capital Territory"
+    },
+    "710aa90b-d444-4acc-94c0-024bbf46159d": {
+      "name": "One Tree Hill",
+      "latitude": -35.142196,
+      "longitude": 149.091321,
+      "altitude": 883,
+      "state": "Australian Capital Territory"
+    },
+    "703213c5-a82a-4eef-83e0-49bfbbf82f81": {
+      "name": "Mobile WatchTower #3",
+      "latitude": -35.875014,
+      "longitude": 148.565971,
+      "altitude": 1756,
+      "state": "New South Wales"
+    },
+    "0f2d8e11-d1d0-4384-8ea4-eaf3e74bfce7": {
+      "name": "Mt Youngal",
+      "latitude": -36.394868,
+      "longitude": 148.118588,
+      "altitude": 1528,
+      "state": "New South Wales"
+    },
+    "26f645e5-a0a3-4a2c-801d-039895987f38": {
+      "name": "Galore Hill",
+      "latitude": -35.108797,
+      "longitude": 146.790427,
+      "altitude": 395,
+      "state": "New South Wales"
+    },
+    "3cac5457-c153-49c4-b31d-79316cb6dac9": {
+      "name": "Kowen Forest",
+      "latitude": -35.275066,
+      "longitude": 149.275159,
+      "altitude": 882,
+      "state": "Australian Capital Territory"
+    },
+    "bfdcea9c-d050-41e4-a630-4d8e04f7cead": {
+      "name": "Mt Flakney",
+      "latitude": -35.289092,
+      "longitude": 147.430019,
+      "altitude": 549,
+      "state": "New South Wales"
+    },
+    "fb066bb2-6c48-4586-ae26-8bbde5f228b1": {
+      "name": "Mt Coree",
+      "latitude": -35.307321,
+      "longitude": 148.810202,
+      "altitude": 1424,
+      "state": "Australian Capital Territory"
+    },
+    "ecea1aa5-bfa6-40a4-a78a-9269f35a2bba": {
+      "name": "Mt Ingebyra",
+      "latitude": -36.643886,
+      "longitude": 148.456218,
+      "altitude": 1429,
+      "state": "New South Wales"
+    },
+    "dc06f6b8-563c-4d5f-be98-3e9af68df5bc": {
+      "name": "Big Talbingo Mountain",
+      "latitude": -35.616309,
+      "longitude": 148.331454,
+      "altitude": 1387,
+      "state": "New South Wales"
+    },
+    "e7d60c56-4d2d-45e3-9c6d-9b9116b8e7ec": {
+      "name": "Mt Stromlo",
+      "latitude": -35.31624,
+      "longitude": 149.010609,
+      "altitude": 789,
+      "state": "Australian Capital Territory"
+    }
+  },
+  "cameras": [
+    { "id": "a584943e-1613-4bee-b240-d1d14f6ff9eb", "name": "Mt Ginini - Sentry", "siteId": "4e7e615c-1cd4-42e9-ba9c-8dc7dcc77958", "time": "2026-05-27T10:00:11.018Z" },
+    { "id": "e0d70761-c049-4e0e-a1ee-442c7988bdbd", "name": "Mt Ginini - Guard", "siteId": "4e7e615c-1cd4-42e9-ba9c-8dc7dcc77958", "time": "2026-05-27T10:00:11.434Z" },
+    { "id": "0b51e2da-156a-4906-a303-9d37ffa6120c", "name": "One Tree Hill - Guard", "siteId": "710aa90b-d444-4acc-94c0-024bbf46159d", "time": "2026-05-27T10:15:01.382Z" },
+    { "id": "85d5dd4a-81a9-41ce-9cd8-9175da046cc8", "name": "Mt Tantangara - Guard", "siteId": "703213c5-a82a-4eef-83e0-49bfbbf82f81", "time": "2026-05-27T08:00:03.854Z" },
+    { "id": "40c25b7c-baa6-42f6-a453-d40f09add46f", "name": "Big Talbingo - Guard", "siteId": "dc06f6b8-563c-4d5f-be98-3e9af68df5bc", "time": "2026-05-27T10:15:01.834Z" },
+    { "id": "f46b4406-2169-4547-8abc-6e622c0df250", "name": "Bowning Hill - Sentry", "siteId": "abafced4-3357-4333-81c7-b790d8354b9c", "time": "2026-05-27T10:15:02.924Z" },
+    { "id": "bd70d798-7591-46a9-9e62-cc0b6aa5386e", "name": "Mt Coree - Sentry", "siteId": "fb066bb2-6c48-4586-ae26-8bbde5f228b1", "time": "2026-05-27T10:15:03.030Z" },
+    { "id": "a6fb7024-e090-4e99-b4f4-6952c6f7f40e", "name": "Mt Ingebyra - Guard", "siteId": "ecea1aa5-bfa6-40a4-a78a-9269f35a2bba", "time": "2026-05-27T10:15:03.059Z" },
+    { "id": "b8f45c36-869b-42e4-b146-018c60475489", "name": "Bowning Hill - Guard", "siteId": "abafced4-3357-4333-81c7-b790d8354b9c", "time": "2026-05-27T10:15:00.533Z" },
+    { "id": "0c0bd91f-8498-4236-9be7-785c80ea8c89", "name": "Stromlo - Sentry", "siteId": "e7d60c56-4d2d-45e3-9c6d-9b9116b8e7ec", "time": "2026-05-27T10:15:02.969Z" },
+    { "id": "8ba6c383-dc8a-4640-8c23-8424af64b6a2", "name": "Kowen Forest - Guard", "siteId": "3cac5457-c153-49c4-b31d-79316cb6dac9", "time": "2026-05-27T10:15:02.569Z" },
+    { "id": "f3e501b6-865b-41fb-98e4-8e85aae3303b", "name": "Mt Tantangara - Sentry", "siteId": "703213c5-a82a-4eef-83e0-49bfbbf82f81", "time": "2026-05-27T08:00:04.080Z" },
+    { "id": "81a2f2d5-4db1-4f07-9b79-0d5ea4ebf43f", "name": "Kurrajong Heights - Sentry", "siteId": "fefca445-fe7e-4cb1-91de-b9afae83f810", "time": "2026-05-14T06:56:26.232Z" },
+    { "id": "a50e3525-13d0-4486-92f0-e3d7950d4f40", "name": "Kurrajong Heights - Guard", "siteId": "fefca445-fe7e-4cb1-91de-b9afae83f810", "time": "2026-05-14T06:56:25.282Z" },
+    { "id": "7344e0ee-1baf-4d07-930d-f0aab8a42086", "name": "Mt Coree - Guard", "siteId": "fb066bb2-6c48-4586-ae26-8bbde5f228b1", "time": "2026-05-27T10:15:01.207Z" },
+    { "id": "eb7cbd99-4819-4e80-83c5-8391be383cd3", "name": "Mt Youngal - Guard", "siteId": "0f2d8e11-d1d0-4384-8ea4-eaf3e74bfce7", "time": "2026-05-27T10:15:01.838Z" },
+    { "id": "97dd53b8-d338-41de-bc57-791044d57055", "name": "Square Knob - Guard", "siteId": "d80245b4-8081-43e9-bbc7-10a1987bcfb4", "time": "2026-05-27T10:15:03.249Z" },
+    { "id": "0afbd08e-f28c-4bd8-a8b2-82b7a1c573de", "name": "Mt Tennent - Sentry", "siteId": "e981ffe5-97d2-4d3d-87d2-5cf1ea6a8f5f", "time": "2026-05-27T10:15:03.000Z" },
+    { "id": "b1737cb4-425a-4e27-aa86-9fbb5f212636", "name": "Mt Flakney - Guard", "siteId": "bfdcea9c-d050-41e4-a630-4d8e04f7cead", "time": "2026-05-27T10:15:02.764Z" },
+    { "id": "a8932434-bfd0-4ef1-84c0-78d82702b3be", "name": "Galore Hill - Guard", "siteId": "26f645e5-a0a3-4a2c-801d-039895987f38", "time": "2026-05-27T10:15:01.331Z" },
+    { "id": "e89e50ed-de30-4725-b0c8-00cf2e5e6368", "name": "Mt Tennent - Guard", "siteId": "e981ffe5-97d2-4d3d-87d2-5cf1ea6a8f5f", "time": "2026-05-27T10:15:01.232Z" },
+    { "id": "08f03c2b-ad3d-465b-b743-327af01c164f", "name": "Wereboldera - Guard", "siteId": "8680b57a-3d8d-44a3-ba91-7d48c11a4b4f", "time": "2026-05-27T10:15:03.178Z" },
+    { "id": "50505d5c-56c0-43eb-9c81-807920c177ee", "name": "Square Knob - Sentry", "siteId": "d80245b4-8081-43e9-bbc7-10a1987bcfb4", "time": "2026-05-27T10:15:03.031Z" },
+    { "id": "9ee9cbc0-7d6a-4e69-8ce4-8c2505ba9d46", "name": "Wereboldera - Sentry", "siteId": "8680b57a-3d8d-44a3-ba91-7d48c11a4b4f", "time": "2026-05-27T10:15:02.959Z" },
+    { "id": "8a03d61b-3c64-4415-a690-d30766a7f634", "name": "Mt Flakney - Sentry", "siteId": "bfdcea9c-d050-41e4-a630-4d8e04f7cead", "time": "2026-05-27T10:15:03.087Z" },
+    { "id": "b92b1083-fbf5-4dcd-8deb-def54e21ea28", "name": "One Tree Hill - Sentry", "siteId": "710aa90b-d444-4acc-94c0-024bbf46159d", "time": "2026-05-27T10:15:03.212Z" },
+    { "id": "f5a6435f-9c53-41b5-bd5d-96d4d01a37f6", "name": "Kowen Forest - Sentry", "siteId": "3cac5457-c153-49c4-b31d-79316cb6dac9", "time": "2026-05-27T10:15:03.109Z" }
+  ]
+}
