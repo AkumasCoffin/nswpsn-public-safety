@@ -107,9 +107,14 @@ const ACTIVE_PLANNED_STATUSES = new Set([
   'REPAIR CONTROL ROOM',
 ]);
 
-/** Memo so the three pollers don't each pay the network cost. */
+/** Memo so the three pollers don't each pay the network cost. Bumped
+ *  from 30s → 90s — endeavour_current ticks every 60s (active mode)
+ *  so a 30s memo was always stale by the time the next call hit it.
+ *  90s comfortably covers the active interval while staying well under
+ *  the 300s idle cadence, so planned/maintenance pollers still get
+ *  fresh data when they tick. */
 let _memo: { at: number; data: EndeavourSplit } | null = null;
-const MEMO_TTL_MS = 30_000; // matches Python's 30s in-process cache
+const MEMO_TTL_MS = 90_000;
 
 function titleCase(s: string): string {
   // Equivalent of Python's str.title() for the suburb field. Capitalises
