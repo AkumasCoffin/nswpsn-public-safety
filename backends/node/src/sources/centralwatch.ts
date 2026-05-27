@@ -2,13 +2,14 @@
  * Central Watch fire-tower cameras.
  *
  * Now owned end-to-end by the Node backend. The refresh loop fetches the
- * upstream camera list every 30 minutes via the Playwright browser worker
+ * upstream camera list every 6 hours via the Playwright browser worker
  * (which solves the Vercel Security Checkpoint), normalises the response,
- * and atomically writes backends/data/centralwatch_cameras.json. The
- * file readers below stay backwards-compatible — when the writer is
- * disabled (no Playwright / CENTRALWATCH_DISABLED=true), the readers
- * still serve the last-good JSON file so deploys without chromium keep
- * working.
+ * and atomically writes backends/data/centralwatch_cameras.json. The camera
+ * roster is near-static — new sites land once every few weeks at most — so
+ * we don't burn the Vercel WAF budget on more frequent polls. The file
+ * readers below stay backwards-compatible — when the writer is disabled
+ * (no Playwright / CENTRALWATCH_DISABLED=true), the readers still serve
+ * the last-good JSON file so deploys without chromium keep working.
  *
  * Mirrors python `_refresh_centralwatch_data` and `_update_centralwatch_json`
  * (external_api_proxy.py:8321-8438).
@@ -25,7 +26,7 @@ const JSON_PATH = path.resolve(
   'centralwatch_cameras.json',
 );
 const REFRESH_INTERVAL_MS = 60_000; // file-reader cache invalidation
-const API_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min — match python
+const API_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 h (4×/day) — roster is near-static
 const API_ENDPOINT = 'https://centralwatch.watchtowers.io/au/api/cameras';
 
 export interface CentralwatchSite {
@@ -370,9 +371,9 @@ export function startCentralwatchRefreshLoop(): void {
       refreshInFlight = false;
     }
   };
-  // Run on a 5-min cadence; the 30-min throttle inside `tick` keeps
-  // the actual upstream traffic to once per half-hour but lets us
-  // recover quickly from a missed window after a restart.
+  // Tick every 5 min; the 6-hour throttle inside `tick` caps actual
+  // upstream traffic to ~4 calls/day, but the fast tick lets us recover
+  // quickly after a restart or a transient browser failure.
   refreshTimer = setInterval(() => void tick(), 5 * 60 * 1000);
   // First tick a few seconds after boot to let the browser settle.
   setTimeout(() => void tick(), 5_000);
