@@ -2766,8 +2766,15 @@
     let policeSubLayers = {};
     // Hazards: flat marker list lets us re-project into sub-layers when
     // the source filter (livetraffic / waze) flips, without refetching.
-    const _hazardMarkers = []; // [{marker, type, source}]
+    // subtypeLabel is the human-readable label from formatWazeType()
+    // for waze markers (null for livetraffic) — drives the per-subtype
+    // pill filter under the Traffic Hazards floating menu.
+    const _hazardMarkers = []; // [{marker, type, source, subtypeLabel}]
     const _hazardSelectedSources = new Set(['livetraffic', 'waze']);
+    // Waze subtype labels (formatWazeType output) the user has toggled
+    // OFF. Empty = everything visible. Livetraffic markers ignore this
+    // set — they have no subtypeLabel and pass through unconditionally.
+    const _hazardExcludedSubtypes = new Set();
 
     // Roadwork — filtered by classified type rather than by source. The
     // raw feeds carry inconsistent type labels (mainCategory /
@@ -3879,57 +3886,71 @@
         .replace(/'/g, '&#39;');
     }
 
-    // Format Waze type/subtype strings into clean readable text
+    // Format Waze type/subtype strings into clean readable text.
+    // Explicit overrides fix titleCase artefacts ("Stand Still Traffic"
+    // → "Standstill Traffic") and disambiguate near-duplicates
+    // (HAZARD_ON_ROAD_CAR_STOPPED vs HAZARD_ON_SHOULDER_CAR_STOPPED).
+    const WAZE_LABEL_OVERRIDES = {
+      POLICE: 'Visible',
+      POLICE_VISIBLE: 'Visible',
+      POLICE_HIDING: 'Hiding',
+      POLICE_WITH_MOBILE_CAMERA: 'Mobile Camera',
+      ACCIDENT: 'Accident',
+      ACCIDENT_MINOR: 'Minor Accident',
+      ACCIDENT_MAJOR: 'Major Accident',
+      ROAD_CLOSED: 'Road Closed',
+      ROAD_CLOSED_EVENT: 'Event Closure',
+      ROAD_CLOSED_CONSTRUCTION: 'Roadwork Closure',
+      ROAD_CLOSED_HAZARD: 'Hazard Closure',
+      JAM: 'Traffic Jam',
+      JAM_STAND_STILL_TRAFFIC: 'Standstill Traffic',
+      JAM_HEAVY_TRAFFIC: 'Heavy Traffic',
+      JAM_MODERATE_TRAFFIC: 'Moderate Traffic',
+      JAM_LIGHT_TRAFFIC: 'Light Traffic',
+      HAZARD: 'Hazard',
+      HAZARD_ON_ROAD: 'Hazard on Road',
+      HAZARD_ON_ROAD_OBJECT: 'Object on Road',
+      HAZARD_ON_ROAD_POT_HOLE: 'Pothole',
+      HAZARD_ON_ROAD_CONSTRUCTION: 'Roadwork',
+      HAZARD_ON_ROAD_LANE_CLOSED: 'Lane Closed',
+      HAZARD_ON_ROAD_ICE: 'Ice on Road',
+      HAZARD_ON_ROAD_CAR_STOPPED: 'Car Stopped on Road',
+      HAZARD_ON_ROAD_TRAFFIC_LIGHT_FAULT: 'Traffic Light Fault',
+      HAZARD_ON_SHOULDER: 'Hazard on Shoulder',
+      HAZARD_ON_SHOULDER_CAR_STOPPED: 'Car Stopped on Shoulder',
+      HAZARD_ON_SHOULDER_ANIMALS: 'Animals on Shoulder',
+      HAZARD_ON_SHOULDER_MISSING_SIGN: 'Missing Sign',
+      HAZARD_WEATHER: 'Weather Hazard',
+      HAZARD_WEATHER_FLOOD: 'Flooded Road',
+      HAZARD_WEATHER_FOG: 'Fog',
+      HAZARD_WEATHER_HAIL: 'Hail',
+      HAZARD_WEATHER_HEAVY_RAIN: 'Heavy Rain',
+      HAZARD_WEATHER_HEAVY_SNOW: 'Heavy Snow',
+      HAZARD_WEATHER_HURRICANE: 'Hurricane',
+      HAZARD_WEATHER_TORNADO: 'Tornado',
+      HAZARD_WEATHER_MONSOON: 'Monsoon',
+      HAZARD_WEATHER_FREEZING_RAIN: 'Freezing Rain',
+      HAZARD_WEATHER_HEAT_WAVE: 'Heat Wave',
+      CONSTRUCTION: 'Roadwork',
+      CONSTRUCTION_MINOR: 'Minor Roadwork',
+      CONSTRUCTION_MAJOR: 'Major Roadwork',
+    };
     function formatWazeType(rawType) {
       if (!rawType) return '';
       const str = String(rawType).toUpperCase();
-      
-      // Police types
-      if (str === 'POLICE_HIDING') return 'Hiding';
-      if (str === 'POLICE_VISIBLE') return 'Visible';
-      if (str === 'POLICE_WITH_MOBILE_CAMERA') return 'Mobile Camera';
-      if (str === 'POLICE') return 'Visible';
-      
-      // Hazard types - remove prefix and clean up
-      if (str.startsWith('HAZARD_WEATHER_')) return str.replace('HAZARD_WEATHER_', '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-      if (str.startsWith('HAZARD_ON_ROAD_')) {
-        const sub = str.replace('HAZARD_ON_ROAD_', '');
-        if (sub === 'POT_HOLE') return 'Pothole';
-        if (sub === 'CONSTRUCTION') return 'Construction';
-        if (sub === 'OBJECT') return 'Object on Road';
-        return sub.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      if (WAZE_LABEL_OVERRIDES[str]) return WAZE_LABEL_OVERRIDES[str];
+      // Strip the common prefix so the residual is what the user actually
+      // cares about, then title-case it. Any future waze subtype string
+      // still renders cleanly without needing a code change.
+      let cleaned = str;
+      const prefixes = [
+        'HAZARD_WEATHER_', 'HAZARD_ON_ROAD_', 'HAZARD_ON_SHOULDER_',
+        'JAM_', 'ACCIDENT_', 'CONSTRUCTION_', 'ROAD_CLOSED_',
+      ];
+      for (const p of prefixes) {
+        if (cleaned.startsWith(p)) { cleaned = cleaned.slice(p.length); break; }
       }
-      if (str.startsWith('HAZARD_ON_SHOULDER_')) {
-        const sub = str.replace('HAZARD_ON_SHOULDER_', '');
-        if (sub === 'CAR_STOPPED') return 'Car Stopped';
-        return sub.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-      }
-      if (str === 'HAZARD_ON_ROAD') return 'Hazard';
-      if (str === 'HAZARD_WEATHER') return 'Weather';
-      if (str === 'HAZARD') return 'Hazard';
-      
-      // Road closed types
-      if (str === 'ROAD_CLOSED_EVENT') return 'Event';
-      if (str === 'ROAD_CLOSED_CONSTRUCTION') return 'Construction';
-      if (str === 'ROAD_CLOSED_HAZARD') return 'Hazard';
-      if (str === 'ROAD_CLOSED') return 'Road Closed';
-      
-      // Accident types
-      if (str === 'ACCIDENT_MINOR') return 'Minor Accident';
-      if (str === 'ACCIDENT_MAJOR') return 'Major Accident';
-      if (str === 'ACCIDENT') return 'Accident';
-      
-      // Jam/traffic types
-      if (str === 'JAM') return 'Traffic Jam';
-      if (str.startsWith('JAM_')) return str.replace('JAM_', '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-      
-      // Construction/roadwork types
-      if (str === 'CONSTRUCTION') return 'Construction';
-      if (str === 'CONSTRUCTION_MINOR') return 'Minor Works';
-      if (str === 'CONSTRUCTION_MAJOR') return 'Major Works';
-      
-      // Fallback: remove underscores and title case
-      return str.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      return cleaned.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
     }
 
     // Haversine distance in metres (used for pager↔pager clustering by distance)
@@ -6843,13 +6864,15 @@ function initPagerHoursFromStorage() {
     }
 
     /** Rebuild the per-type sub-layers from the flat hazards list,
-     *  honouring the source filter. Call after a load or after the
-     *  user toggles a source pill. */
+     *  honouring source + (waze-only) subtype filters. Call after a
+     *  load or after the user toggles a source / subtype pill. */
     function _rebuildHazardSubLayers() {
       // Reset every typed sub-layer's contents.
       Object.values(hazardSubLayers).forEach((sl) => sl.clearLayers());
       for (const m of _hazardMarkers) {
         if (!_hazardSelectedSources.has(m.source)) continue;
+        if (m.source === 'waze' && m.subtypeLabel
+            && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
         const sl = hazardSubLayers[m.type];
         if (sl) sl.addLayer(m.marker);
       }
@@ -6861,6 +6884,12 @@ function initPagerHoursFromStorage() {
       refreshActiveFilterPanel();
     }
     window.toggleHazardSourcePill = toggleHazardSourcePill;
+    window.toggleHazardSubtypePill = function (label) {
+      if (_hazardExcludedSubtypes.has(label)) _hazardExcludedSubtypes.delete(label);
+      else _hazardExcludedSubtypes.add(label);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    };
     
     function togglePoliceFilter(type, checked) {
       policeFilters[type] = checked;
@@ -7368,8 +7397,11 @@ function initPagerHoursFromStorage() {
             return createMarkerIcon('fa-solid fa-car-burst', '#ef4444', pulse);
           }
           
-          // Traffic jams - purple
-          if (wazeType === 'JAM') {
+          // Traffic jams - purple. Cover the full JAM_* subtype family
+          // (JAM_HEAVY_TRAFFIC, JAM_STAND_STILL_TRAFFIC, etc) so
+          // jam-flavoured hazards always render the jam icon regardless
+          // of which wazeType bucket they landed in.
+          if (wazeType === 'JAM' || subtype.startsWith('JAM_')) {
             return createMarkerIcon('fa-solid fa-bars-staggered', '#a855f7', pulse);
           }
           
@@ -7410,7 +7442,7 @@ function initPagerHoursFromStorage() {
           if (subtype.includes('FLOOD') || subtype.includes('RAIN') || subtype.includes('MONSOON')) {
             return createMarkerIcon('fa-solid fa-water', '#3b82f6', pulse);
           }
-          if (subtype.includes('ICE') || subtype.includes('FREEZING')) {
+          if (subtype.includes('ICE') || subtype.includes('FREEZING') || subtype.includes('SNOW')) {
             return createMarkerIcon('fa-solid fa-snowflake', '#06b6d4', pulse);
           }
           if (subtype.includes('HAIL')) {
@@ -7729,7 +7761,7 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker, type: category, source: 'livetraffic' });
+              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null });
               totalCount++;
             }
           });
@@ -7737,7 +7769,7 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Traffic incidents error', e);
       }
-      
+
       try {
         // Use cached Waze data if available, otherwise fetch
         // Add point hazards (accidents, road closures, hazards) - using data already fetched
@@ -7748,11 +7780,11 @@ function initPagerHoursFromStorage() {
               const [lon, lat] = feature.geometry.coordinates;
               const props = feature.properties || {};
               props.source = 'waze'; // Ensure source is set for Waze data
-              
+
               // Skip flood-type hazards - they belong on the Floods layer
               const _subtype = (props.wazeSubtype || '').toUpperCase();
               if (_subtype.includes('FLOOD')) return;
-              
+
               const category = getHazardCategory(props);
               const icon = L.divIcon({
                 className: 'custom-pin',
@@ -7766,7 +7798,8 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker, type: category, source: 'waze' });
+              const subtypeLabel = formatWazeType(props.wazeSubtype || props.wazeType || '') || null;
+              _hazardMarkers.push({ marker, type: category, source: 'waze', subtypeLabel });
               totalCount++;
             }
           });
@@ -7795,7 +7828,7 @@ function initPagerHoursFromStorage() {
                 sticky: true,
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze' });
+              _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze', subtypeLabel: 'Traffic Jam' });
               jamCount++;
             }
           });
@@ -8993,13 +9026,17 @@ function initPagerHoursFromStorage() {
         ];
         // Per-type and per-source counts — only count markers from
         // sources that are currently selected so the type counts reflect
-        // what's actually visible on the map.
+        // what's actually visible on the map. Type counts also respect
+        // the waze subtype exclusion set, so toggling a subtype pill
+        // updates the parent type count too.
         const typeCounts = { accident: 0, hazard: 0, closures: 0 };
         let ltCount = 0, wzCount = 0;
         for (const m of _hazardMarkers) {
           if (m.source === 'livetraffic') ltCount++;
           else if (m.source === 'waze') wzCount++;
           if (!_hazardSelectedSources.has(m.source)) continue;
+          if (m.source === 'waze' && m.subtypeLabel
+              && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
           if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
         }
         const typePills = items.map((it) => {
@@ -9010,12 +9047,41 @@ function initPagerHoursFromStorage() {
           ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
           ${_ffPill(_hazardSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleHazardSourcePill('waze')")}
         `;
+        // Waze subtype pills — shown only when Waze is the active source.
+        // Counts respect the current source + type filters so totals
+        // align with what's on the map. Sorted by count desc; capped at
+        // 24 pills so a noisy long tail doesn't overflow the panel.
+        let subtypeBlock = '';
+        if (_hazardSelectedSources.has('waze')) {
+          const subtypeCounts = new Map();
+          for (const m of _hazardMarkers) {
+            if (m.source !== 'waze' || !m.subtypeLabel) continue;
+            if (!hazardFilters[m.type]) continue;
+            subtypeCounts.set(m.subtypeLabel, (subtypeCounts.get(m.subtypeLabel) || 0) + 1);
+          }
+          if (subtypeCounts.size > 0) {
+            const sorted = [...subtypeCounts.entries()]
+              .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+              .slice(0, 24);
+            const pills = sorted.map(([label, n]) => {
+              const active = !_hazardExcludedSubtypes.has(label);
+              // label may contain quotes — keep the inline onclick safe.
+              const safe = label.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+              return _ffPill(active, `${label} (${n.toLocaleString()})`, `toggleHazardSubtypePill('${safe}')`);
+            }).join('');
+            subtypeBlock = `
+              <div class="ff-section-label">Waze subtype</div>
+              <div class="floating-filter-pills">${pills}</div>
+            `;
+          }
+        }
         return `
           <h4><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> Traffic Hazards</h4>
           <div class="ff-section-label">Source</div>
           <div class="floating-filter-pills">${sourcePills}</div>
           <div class="ff-section-label">Type</div>
           <div class="floating-filter-pills">${typePills}</div>
+          ${subtypeBlock}
         `;
       },
     };
