@@ -55,6 +55,7 @@ import {
 import { ensurePerfIndexes } from './services/indexBuilder.js';
 import { startCleanupLoop, stopCleanupLoop } from './services/cleanup.js';
 import { scheduleArchiveLatestBackfill } from './services/archiveLatestBackfill.js';
+import { scheduleArchiveLatestDimsBackfill } from './services/archiveLatestDimsBackfill.js';
 import { scheduleArchiveLatestRecompute } from './services/archiveLatestRecompute.js';
 import {
   startPoliceHeatmapCacheRefresh,
@@ -100,6 +101,7 @@ async function preflight(): Promise<void> {
   startCleanupLoop(); // hourly partition-drop + stats-snapshot prune
   startPoliceHeatmapCacheRefresh(); // 10-min materialised heatmap (mirrors python)
   scheduleArchiveLatestBackfill(); // one-shot backfill of archive_*_latest sidecars (migration 017)
+  scheduleArchiveLatestDimsBackfill(); // one-shot backfill of category/subcategory on sidecars (migration 021)
   scheduleArchiveLatestRecompute(); // one-shot recompute of latest_fetched_at to reflect actual change times
 
   // Prewarm: fire every source's first poll in parallel and await with
