@@ -576,6 +576,25 @@ function pickNum(d: Record<string, unknown>, k: string): number | null {
   return null;
 }
 
+// Liveness threshold: an incident is "live" iff last_seen_at advanced
+// within the last N seconds. Matches buildCountSqlForTable's
+// LIVE_STALE_MINUTES (15 min) so the per-row is_live derivation lines
+// up with the aggregate live_count returned alongside.
+const LIVE_STALE_SECONDS = 15 * 60;
+
+/** Derive is_live from the sidecar's last_seen timestamp (preferred)
+ *  with a fallback to the legacy `data->>'is_live'` read for archive
+ *  rows that pre-date the staleness rework (their lastSeen will be
+ *  null on the response). Defaults to true to match Python's behaviour
+ *  when neither signal is present. */
+function deriveIsLive(lastSeen: number | null, data: Record<string, unknown>): boolean {
+  if (lastSeen !== null && Number.isFinite(lastSeen)) {
+    const ageSecs = Math.floor(Date.now() / 1000) - lastSeen;
+    return ageSecs <= LIVE_STALE_SECONDS;
+  }
+  return pickBool(data, 'is_live', true);
+}
+
 function pickBool(d: Record<string, unknown>, k: string, fallback: boolean): boolean {
   const v = d[k];
   if (typeof v === 'boolean') return v;
@@ -640,11 +659,12 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     severity: pickStr(data, 'severity'),
     data: includeData ? data : {},
     is_active: pickBool(data, 'is_active', false),
-    // Python defaulted is_live=true when the column was NULL. The new
-    // schema doesn't carry an is_live column at all; absence in the JSON
-    // means "we never tagged this snapshot", which for the latest row
-    // is effectively "still live". Default-true matches Python.
-    is_live: pickBool(data, 'is_live', true),
+    // is_live is now derived from sidecar staleness instead of read
+    // from the JSONB blob: an incident is "live" iff its last_seen_at
+    // advanced within the last LIVE_STALE_MINUTES poll window. Falls
+    // back to the legacy JSONB read for old archive rows that pre-date
+    // the staleness rework (their last_seen will be null on the row).
+    is_live: deriveIsLive(lastSeen, data),
     last_seen: lastSeen,
     last_seen_iso: sydneyIsoFromUnix(lastSeen),
   };
@@ -989,6 +1009,10 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       severity: pickStr(r.data, 'severity'),
       data: r.data,
       is_active: pickBool(r.data, 'is_active', false),
+      // Per-snapshot view: each row is a poll snapshot, not the
+      // sidecar's "latest known state". Use the legacy JSONB read
+      // (works for old tombstoned rows) defaulting to true (no
+      // is_live in data = "this snapshot was live at fetch time").
       is_live: pickBool(r.data, 'is_live', true),
       last_seen: pickNum(r.data, 'last_seen'),
       last_seen_iso: sydneyIsoFromUnix(pickNum(r.data, 'last_seen')),

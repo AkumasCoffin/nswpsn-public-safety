@@ -26,7 +26,6 @@ import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { getWriterPool } from '../db/pool.js';
-import { computeFlushTimeTombstones } from '../services/archiveLiveness.js';
 
 export type ArchiveTable =
   | 'archive_waze'
@@ -252,32 +251,13 @@ export class ArchiveWriter {
       }
     }
 
-    // Liveness diff at flush time: for each table bucket, compute
-    // tombstones for source_ids that were live before this flush but
-    // aren't in the incoming rows. ONE SELECT per table covers every
-    // non-exempt source in the bucket, instead of one-per-source-per-
-    // poll. Tombstones append to the same bucket so they ride the
-    // single multi-VALUES INSERT below — no extra round-trips.
-    const fetchedAtNow = Math.floor(Date.now() / 1000);
-    await Promise.all(
-      Array.from(buckets.entries()).map(async ([table, rows]) => {
-        try {
-          const tombstones = await computeFlushTimeTombstones({
-            pool,
-            table,
-            rows,
-            fetchedAt: fetchedAtNow,
-          });
-          if (tombstones.length > 0) rows.push(...tombstones);
-        } catch (err) {
-          // Liveness failures must never block the live INSERT.
-          log.warn(
-            { err: (err as Error).message, table },
-            'ArchiveWriter: liveness diff failed (non-fatal)',
-          );
-        }
-      }),
-    );
+    // Tombstone INSERTs removed: liveness is now derived at read time
+    // from the sidecar's last_seen_at (the writer's upsert below
+    // always advances it). If an incident stops appearing in polls,
+    // last_seen_at goes stale and the reader's `is_live` derivation
+    // flips to false. No more "we noticed it ended" rows accumulating
+    // in the parent archive — those rows added ~25% to the archive
+    // volume for no semantic value the sidecar can't already provide.
 
     // Run per-table inserts in parallel — previously the for-of loop
     // serialised them, so a slow archive_waze flush blocked the small

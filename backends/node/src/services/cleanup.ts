@@ -26,7 +26,6 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
-import { sweepStaleAsEnded } from './archiveLiveness.js';
 
 const DEFAULT_INTERVAL_SECS = Number.parseInt(
   process.env['DATA_CLEANUP_INTERVAL_SECS'] ?? '3600',
@@ -312,20 +311,12 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
     // already knows the retention policy for that table).
     statsPruned = await pruneOldSnapshots();
 
-    // 4. Tombstone any source_id whose latest live archive row is
-    // >1h old. Catches the case where a poller has been failing for
-    // an hour+ (so the per-poll diff hasn't run) and disappeared
-    // incidents would otherwise stay live until partition drop.
-    let staleSwept = 0;
-    try {
-      const pool = await getPool();
-      if (pool) staleSwept = await sweepStaleAsEnded(pool);
-    } catch (err) {
-      log.warn(
-        { err: (err as Error).message },
-        'cleanup: stale-as-ended sweep failed (non-fatal)',
-      );
-    }
+    // 4. Stale-as-ended sweep removed — liveness is now derived from
+    // the sidecar's last_seen_at column at read time. A stuck poller
+    // means last_seen_at simply doesn't advance, so the reader's
+    // is_live derivation naturally turns false after the staleness
+    // threshold. No tombstone INSERTs to maintain.
+    const staleSwept = 0;
 
     stats.lastRunAt = Math.floor(Date.now() / 1000);
     stats.lastHistoryDeleted = rowsDeleted;
