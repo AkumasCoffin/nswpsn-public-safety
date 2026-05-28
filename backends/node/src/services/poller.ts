@@ -19,7 +19,6 @@ import { archiveWriter } from '../store/archive.js';
 import { log } from '../lib/log.js';
 import { backoffSeconds } from '../sources/shared/backoff.js';
 import { defaultArchiveItems } from './archiveExtract.js';
-import { stampLiveRow } from './archiveLiveness.js';
 import {
   allSources,
   familyTable,
@@ -169,18 +168,16 @@ async function runOnceInner(src: SourceDefinition): Promise<void> {
       // data_history source values and the SOURCE_TO_FAMILY lookup
       // in dataHistoryQuery resolves to the right archive table.
       const archiveSource = src.archiveSource ?? src.name;
-      const rawRows = src.archiveItems
+      const rows = src.archiveItems
         ? src.archiveItems(data, fetchedAt, archiveSource)
         : defaultArchiveItems(archiveSource, data, fetchedAt);
-      // Stamp is_live=true on every live row so /api/data/history's
-      // count query (`(data->>'is_live') IN ('1','true','True')`) sees
-      // them, and the archive writer's flush-time diff has something
-      // to compare against.
-      const rows = rawRows.map(stampLiveRow);
+      // No more is_live stamping — liveness is derived at read time
+      // from the sidecar's last_seen_at column. If an incident keeps
+      // appearing in polls, its last_seen_at advances and readers
+      // treat it as live; when polls stop including it, last_seen_at
+      // goes stale and readers derive ended. No tombstone INSERTs into
+      // the parent archive needed.
       const tbl = familyTable(src.family);
-      // No per-poll diff here — archiveLiveness runs once per archive
-      // table per flush in the writer's flush() (one DB SELECT for
-      // every queued source instead of one per source per poll).
       for (const row of rows) {
         archiveWriter.push(tbl, row);
       }
