@@ -205,11 +205,21 @@ export function isRoadworkAlert(a: WazeAlert): boolean {
   return t === 'CONSTRUCTION' || s.includes('CONSTRUCTION');
 }
 
-export function isHazardAlert(a: WazeAlert): boolean {
+export function isJamAlert(a: WazeAlert): boolean {
+  // JAM-typed alerts represent jam endpoints / slowdowns and belong with
+  // the waze_jam polyline bucket. Previously rolled up into waze_hazard
+  // which made the Hazards subcategory list contain JAM_HEAVY_TRAFFIC /
+  // JAM_STAND_STILL_TRAFFIC alongside actual road hazards. Checked before
+  // isHazardAlert so the jam-class wins.
   if (isPoliceAlert(a) || isRoadworkAlert(a)) return false;
   const t = String((a as Record<string, unknown>)['type'] ?? '').toUpperCase();
-  // Same set Python uses: HAZARD / ACCIDENT / JAM / ROAD_CLOSED.
-  return (
-    t === 'HAZARD' || t === 'ACCIDENT' || t === 'JAM' || t === 'ROAD_CLOSED'
-  );
+  return t === 'JAM';
+}
+
+export function isHazardAlert(a: WazeAlert): boolean {
+  if (isPoliceAlert(a) || isRoadworkAlert(a) || isJamAlert(a)) return false;
+  const t = String((a as Record<string, unknown>)['type'] ?? '').toUpperCase();
+  // JAM removed — see isJamAlert. ROAD_CLOSED stays because a closed
+  // road IS a hazard and there's no dedicated closure bucket.
+  return t === 'HAZARD' || t === 'ACCIDENT' || t === 'ROAD_CLOSED';
 }
