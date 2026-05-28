@@ -470,24 +470,32 @@ export class ArchiveWriter {
     // multiple rows for the same incident, but we only need one
     // SELECT per pair.
     const seenKey = new Set<string>();
-    const params: unknown[] = [];
-    const placeholders: string[] = [];
+    const sources: string[] = [];
+    const sourceIds: string[] = [];
     for (const e of hashed) {
       if (e.row.source_id == null || e.row.source_id === '') continue;
       const key = `${e.row.source}${e.row.source_id}`;
       if (seenKey.has(key)) continue;
       seenKey.add(key);
-      placeholders.push(`($${params.length + 1}, $${params.length + 2})`);
-      params.push(e.row.source, e.row.source_id);
+      sources.push(e.row.source);
+      sourceIds.push(e.row.source_id);
     }
     const out = new Map<string, string>();
-    if (placeholders.length === 0) return out;
+    if (sources.length === 0) return out;
+    // unnest($1::text[], $2::text[]) replaces the prior tuple-IN list.
+    // Old shape sent 2 params per (source, source_id), so a 5k-incident
+    // waze flush meant 10k params; Postgres switches join strategies
+    // around 1k tuples and slows down. The array form sends exactly 2
+    // params no matter how many keys we're looking up — planner caches
+    // the plan once and reuses it forever.
     const sql = `
       SELECT source, source_id, data_hash
         FROM ${table}_latest
-       WHERE (source, source_id) IN (${placeholders.join(',')})
+       WHERE (source, source_id) IN (
+         SELECT s, sid FROM unnest($1::text[], $2::text[]) AS u(s, sid)
+       )
     `;
-    const r = await client.query(sql, params);
+    const r = await client.query(sql, [sources, sourceIds]);
     for (const row of r.rows) {
       if (row.data_hash != null) {
         out.set(`${row.source}${row.source_id}`, row.data_hash);
