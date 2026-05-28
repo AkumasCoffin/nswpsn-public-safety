@@ -466,6 +466,8 @@ interface ArchiveFacetRow {
   source: string;
   category: string | null;
   subcategory: string | null;
+  status: string | null;
+  severity: string | null;
   cnt: string;
   oldest: number | null;
   newest: number | null;
@@ -535,20 +537,27 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
   ];
 
   // Sidecar-only query — category + subcategory live on the sidecar
-  // itself now (migration 021), so no JOIN-to-parent needed for the
-  // dim breakdown. Single SQL works at every window size; the previous
-  // wide/narrow split and the 30s timeout on archive_waze JOINs at
-  // wide windows are both gone.
+  // itself now (migration 021); status + severity live on it via
+  // migration 022. No JOIN-to-parent needed for the dim breakdown.
+  // Single SQL works at every window size.
   //
   // During the dims backfill window (first few minutes after deploy of
-  // migration 021), some sidecar rows still have NULL category. They
+  // migration 021/022), some sidecar rows still have NULL category. They
   // contribute to typeCounts but their NULL category is skipped by the
   // truthy check below, so they don't appear as a phantom "uncategorised"
   // dim entry. Once backfill drains they show up correctly.
+  //
+  // GROUP BY includes status + severity so the dim breakdown can surface
+  // them in the dropdown — RFS uses status (Out of control / Being
+  // controlled / etc.) and BOM uses severity (severe / warning / watch /
+  // advice). Both are bounded enums per source so the GROUP BY
+  // cardinality is small (well under 100 distinct tuples per table).
   const sqlFor = (table: ArchiveTable): string => `
     SELECT source,
            COALESCE(category, '')    AS category,
            COALESCE(subcategory, '') AS subcategory,
+           COALESCE(status, '')      AS status,
+           COALESCE(severity, '')    AS severity,
            COUNT(*)::text AS cnt,
            MIN(COALESCE(source_timestamp_unix,
                         EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS oldest,
@@ -558,7 +567,7 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
      WHERE COALESCE(source_timestamp_unix,
                     EXTRACT(EPOCH FROM last_seen_at)::bigint)
            >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
-     GROUP BY 1, 2, 3
+     GROUP BY 1, 2, 3, 4, 5
   `;
 
   // Run the 5 per-table queries in parallel. Each takes its own pool
@@ -601,6 +610,12 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
             if (row.subcategory && !/^\d+$/.test(row.subcategory)) {
               slot['subcategory']![row.subcategory] =
                 (slot['subcategory']![row.subcategory] ?? 0) + cnt;
+            }
+            if (row.status) {
+              slot['status']![row.status] = (slot['status']![row.status] ?? 0) + cnt;
+            }
+            if (row.severity) {
+              slot['severity']![row.severity] = (slot['severity']![row.severity] ?? 0) + cnt;
             }
             const rowOldest = bigintToNumber(row.oldest);
             const rowNewest = bigintToNumber(row.newest);
