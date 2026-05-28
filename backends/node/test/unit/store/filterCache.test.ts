@@ -103,18 +103,22 @@ describe('filterCache', () => {
   });
 
   it('case-insensitively merges duplicate values, preserving the dominant casing', () => {
+    // Include a second category so the merged dim has ≥2 entries and
+    // doesn't get dropped by the trivial-dim filter in buildResponse
+    // (a single-value 100%-of-total dim is treated as a constant).
     liveStore.set('rfs', [
       { category: 'Bushfire' },
       { category: 'Bushfire' },
       { category: 'BUSHFIRE' },
+      { category: 'Grass Fire' },
     ]);
     const rfsType = findType(findProvider(getFilterFacetsLive(), 'rfs'), 'rfs');
     const merged = rfsType?.categories ?? [];
-    // Only one row — the case variants collapsed.
-    expect(merged).toHaveLength(1);
+    // Two distinct buckets after case merge.
+    expect(merged).toHaveLength(2);
+    const bushfire = merged.find((c) => c.value === 'Bushfire');
     // Dominant casing wins (2× "Bushfire" beats 1× "BUSHFIRE").
-    expect(merged[0]?.value).toBe('Bushfire');
-    expect(merged[0]?.count).toBe(3);
+    expect(bushfire?.count).toBe(3);
   });
 
   it('scopes response to a single provider when `source` filter is given', () => {

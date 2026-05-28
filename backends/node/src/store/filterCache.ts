@@ -52,10 +52,16 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   endeavour_planned: 'endeavour_planned',
   endeavour: 'endeavour_current',
   ausgrid: 'ausgrid',
-  essential_current: 'essential_planned',
-  essential_planned: 'essential_planned',
+  // current.kml carries BOTH planned + unplanned outages — essential.ts
+  // routes them to raw sources essential_planned and essential_current
+  // respectively. Both fold into the single alert_type 'essential_current'
+  // ("Current Outages"); the planned/unplanned split lives in the
+  // category dim (outageType). The previous mapping labelled this as
+  // "Planned Outages" which was misleading for the unplanned half.
+  essential_current: 'essential_current',
+  essential_planned: 'essential_current',
   essential_future: 'essential_future',
-  essential: 'essential_planned',
+  essential: 'essential_current',
   waze_hazard: 'waze_hazard',
   waze_jam: 'waze_jam',
   waze_police: 'waze_police',
@@ -87,7 +93,7 @@ const ALERT_TYPE_PROVIDER: Record<string, [string, string]> = {
   endeavour_current: ['endeavour', 'Current Outages'],
   endeavour_planned: ['endeavour', 'Planned Outages'],
   ausgrid: ['ausgrid', 'Outages'],
-  essential_planned: ['essential', 'Planned Outages'],
+  essential_current: ['essential', 'Current Outages'],
   essential_future: ['essential', 'Future Outages'],
   waze_hazard: ['waze', 'Hazards'],
   waze_jam: ['waze', 'Traffic Jams'],
@@ -134,7 +140,7 @@ const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
     'traffic_majorevent',
   ],
   endeavour: ['endeavour_current', 'endeavour_planned'],
-  essential: ['essential_planned', 'essential_future'],
+  essential: ['essential_current', 'essential_future'],
   waze: ['waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork'],
 };
 
@@ -964,6 +970,48 @@ function toSortedFacetList(d: Record<string, number>, cap?: number): FacetEntry[
   return cap ? entries.slice(0, cap) : entries;
 }
 
+/**
+ * Drop a dim array that is a useless filter. A dim provides no filtering
+ * value when it has exactly one entry and either:
+ *   - the count covers ≥80% of the type total (effectively a constant
+ *     for every row in the type — e.g. essential_future.subcategory is
+ *     always "scheduled"), or
+ *   - the single value's normalised form matches the alert_type
+ *     basename or display name (e.g. traffic_incident.category is
+ *     "Incident" — same name as the type).
+ * Returns the input untouched otherwise.
+ */
+function normaliseLabel(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function dropTrivialDim(
+  dim: FacetEntry[],
+  typeTotal: number,
+  alertType: string,
+  typeName: string,
+): FacetEntry[] {
+  if (dim.length !== 1) return dim;
+  const entry = dim[0];
+  if (!entry) return dim;
+  // Rule B1 — single value covers ~all rows. Threshold 80% accommodates
+  // backfill gaps (NULL category rows that haven't healed yet).
+  if (typeTotal > 0 && entry.count / typeTotal >= 0.8) return [];
+  // Rule B2 — value duplicates the alert_type name. basename is what's
+  // after the provider prefix (traffic_incident → incident); name is
+  // the human label ("Incidents"). Normalise both sides so "Major
+  // Event" matches alert_type "traffic_majorevent".
+  const norm = normaliseLabel(entry.value);
+  const basename = alertType.includes('_')
+    ? alertType.split('_').slice(1).join('')
+    : alertType;
+  if (norm === normaliseLabel(basename)) return [];
+  if (norm === normaliseLabel(typeName)) return [];
+  // Stem match: drop trailing s/es/ing so "Incident" matches "Incidents".
+  const stem = (s: string): string => s.replace(/(ies|es|s|ing)$/, '');
+  if (stem(norm) === stem(normaliseLabel(typeName))) return [];
+  return dim;
+}
+
 function resolveFilterTarget(
   sourceFilter: string | null | undefined,
 ): { alertType: string; provider: string } | null {
@@ -1009,14 +1057,19 @@ function buildResponse(
       if (!provType) continue;
       const cnt = typeCounts[alertType] ?? 0;
       const dims = perTypeDims[alertType] ?? {};
+      const typeName = provType[1];
+      const rawCategories = toSortedFacetList(dims['category'] ?? {});
+      const rawSubcategories = toSortedFacetList(dims['subcategory'] ?? {}, 100);
+      const rawStatuses = toSortedFacetList(dims['status'] ?? {});
+      const rawSeverities = toSortedFacetList(dims['severity'] ?? {});
       typesOut.push({
         alert_type: alertType,
-        name: provType[1],
+        name: typeName,
         count: cnt,
-        categories: toSortedFacetList(dims['category'] ?? {}),
-        subcategories: toSortedFacetList(dims['subcategory'] ?? {}, 100),
-        statuses: toSortedFacetList(dims['status'] ?? {}),
-        severities: toSortedFacetList(dims['severity'] ?? {}),
+        categories: dropTrivialDim(rawCategories, cnt, alertType, typeName),
+        subcategories: dropTrivialDim(rawSubcategories, cnt, alertType, typeName),
+        statuses: dropTrivialDim(rawStatuses, cnt, alertType, typeName),
+        severities: dropTrivialDim(rawSeverities, cnt, alertType, typeName),
       });
     }
     providersMap[provider] = typesOut;
