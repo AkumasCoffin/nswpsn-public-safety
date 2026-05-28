@@ -1,17 +1,20 @@
 /**
- * One-shot backfill for the category/subcategory columns added to the
- * archive_*_latest sidecars in migration 021. Existing sidecar rows
- * have NULL category/subcategory until the writer naturally re-touches
- * them on the next data_hash change, which could be days for stable
- * incidents. This task copies the values from the parent row that the
- * sidecar's latest_fetched_at points at.
+ * One-shot backfill for sidecar columns promoted from JSONB:
+ *   - Migration 021 added category, subcategory
+ *   - Migration 022 added title, location_text, status, severity,
+ *     is_active
+ *
+ * Existing sidecar rows have NULL in these columns until the writer
+ * naturally re-touches them on the next data_hash change, which could
+ * be days for stable incidents. This task copies all of them from the
+ * parent row that the sidecar's latest_fetched_at points at.
  *
  * Runs once at startup, opportunistically and in the background. Each
  * chunk is a single UPDATE...FROM so the work happens server-side and
- * Node doesn't carry rows. Idempotent — the WHERE category IS NULL
- * guard means a finished table is a no-op.
+ * Node doesn't carry rows. Idempotent — the WHERE guard skips already-
+ * populated rows.
  *
- * Skip behaviour: counts NULL rows up-front; if zero, table is done.
+ * Skip behaviour: counts pending rows up-front; if zero, table is done.
  */
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
@@ -39,9 +42,16 @@ interface BackfillStats {
   ms: number;
 }
 
+// A row needs backfill if ANY of the promoted columns is NULL AND the
+// parent has a value for it. Approximated cheaply by checking
+// category IS NULL OR title IS NULL — most sources populate at least
+// one of these, so this catches both 021 (category) and 022 (title +
+// status + severity + ...) backfill targets in one pass.
 async function nullCount(pool: Pool, table: string): Promise<number> {
   const r = await pool.query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n FROM ${table}_latest WHERE category IS NULL`,
+    `SELECT COUNT(*)::text AS n
+       FROM ${table}_latest
+      WHERE category IS NULL OR title IS NULL`,
   );
   return Number(r.rows[0]?.n ?? '0');
 }
@@ -68,16 +78,31 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
       // writers can interleave. FOR UPDATE SKIP LOCKED would be ideal
       // but pg doesn't support it on the subselect of an UPDATE...FROM;
       // the loop simply re-runs if a row got grabbed concurrently.
+      // Backfill both 021 (category/subcategory — parent columns) and
+      // 022 (title/location_text/status/severity/is_active — extracted
+      // from parent's data JSONB). The CASE on is_active uses the same
+      // truthy-string semantics as extractBoolField in archive.ts so
+      // backfilled values match what the writer would produce going
+      // forward.
       const r = await client.query<{ updated: string }>(
         `WITH batch AS (
            SELECT source, source_id, latest_fetched_at
            FROM ${table}_latest
-           WHERE category IS NULL
+           WHERE category IS NULL OR title IS NULL
            LIMIT $1
          )
          UPDATE ${table}_latest l
-            SET category    = a.category,
-                subcategory = a.subcategory
+            SET category      = a.category,
+                subcategory   = a.subcategory,
+                title         = NULLIF(a.data->>'title', ''),
+                location_text = NULLIF(a.data->>'location_text', ''),
+                status        = NULLIF(a.data->>'status', ''),
+                severity      = NULLIF(a.data->>'severity', ''),
+                is_active     = CASE
+                  WHEN a.data->>'is_active' IN ('1','true','True','TRUE') THEN true
+                  WHEN a.data->>'is_active' IN ('0','false','False','FALSE') THEN false
+                  ELSE NULL
+                END
            FROM batch b
            JOIN ${table} a
              ON a.source = b.source
