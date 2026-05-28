@@ -247,6 +247,75 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     );
     sidecarAcc.params.push(p.until);
   }
+  // Predicates that were previously post-JOIN on parent JSONB now hit
+  // sidecar columns directly (migrations 021 + 022). Applying them in
+  // the CTE means the JOIN does less work and the planner can use the
+  // partial indexes on (source, status / severity / is_active).
+  if (p.category && p.category.length > 0) {
+    const placeholders = p.category.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.category.length === 1
+        ? `category = ${placeholders[0]}`
+        : `category IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.category) sidecarAcc.params.push(v);
+  }
+  if (p.subcategory && p.subcategory.length > 0) {
+    const placeholders = p.subcategory.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.subcategory.length === 1
+        ? `subcategory = ${placeholders[0]}`
+        : `subcategory IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.subcategory) sidecarAcc.params.push(v);
+  }
+  if (p.status && p.status.length > 0) {
+    const placeholders = p.status.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.status.length === 1
+        ? `status = ${placeholders[0]}`
+        : `status IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.status) sidecarAcc.params.push(v);
+  }
+  if (p.severity && p.severity.length > 0) {
+    const placeholders = p.severity.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.severity.length === 1
+        ? `severity = ${placeholders[0]}`
+        : `severity IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.severity) sidecarAcc.params.push(v);
+  }
+  if (p.activeOnly) {
+    // Sidecar column. NULL means "writer hasn't backfilled yet" — treat
+    // as visible (default-true) so we don't hide incidents during the
+    // brief 022 backfill window.
+    sidecarAcc.parts.push(`(is_active IS NULL OR is_active = true)`);
+  }
+  if (p.search) {
+    const ph = `$${sidecarAcc.params.length + 1}`;
+    sidecarAcc.parts.push(`(title ILIKE ${ph} OR location_text ILIKE ${ph})`);
+    sidecarAcc.params.push(`%${p.search}%`);
+  }
+  if (p.title) {
+    sidecarAcc.parts.push(`title ILIKE $${sidecarAcc.params.length + 1}`);
+    sidecarAcc.params.push(`%${p.title}%`);
+  }
+  if (p.location) {
+    sidecarAcc.parts.push(
+      `location_text ILIKE $${sidecarAcc.params.length + 1}`,
+    );
+    sidecarAcc.params.push(`%${p.location}%`);
+  }
 
   // CTE row budget — must cover (offset + limit) plus headroom for
   // post-JOIN filter drops. 2x multiplier on the fetch target handles
@@ -258,42 +327,18 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     sidecarAcc.parts.length > 0 ? `WHERE ${sidecarAcc.parts.join(' AND ')}` : '';
 
   // ---- parent filters (post-JOIN) ----
+  // The only filters that stay post-JOIN are those that need fields
+  // not (yet) on the sidecar:
+  //   - sinceSource / untilSource (data->>'source_timestamp_unix' —
+  //     duplicates the indexed sidecar column source_timestamp_unix
+  //     but only when the upstream supplies one)
+  //   - liveOnly / historicalOnly (data->>'is_live' — Phase 3
+  //     staleness rework hasn't landed; the column is still in JSONB)
+  //   - lat/lng radius (sidecar doesn't carry coords)
+  //   - cursor seek (uses fetched_at + id from parent)
   // Renumber placeholders so parent params start AFTER sidecar params.
-  // Helper appends to parentAcc with offset.
   const offset = (): number => sidecarAcc.params.length + parentAcc.params.length;
 
-  if (p.category && p.category.length > 0) {
-    const placeholders = p.category.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      p.category.length === 1
-        ? `a.category = ${placeholders[0]}`
-        : `a.category IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.category) parentAcc.params.push(v);
-  }
-  if (p.subcategory && p.subcategory.length > 0) {
-    const placeholders = p.subcategory.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      p.subcategory.length === 1
-        ? `a.subcategory = ${placeholders[0]}`
-        : `a.subcategory IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.subcategory) parentAcc.params.push(v);
-  }
-  if (p.status && p.status.length > 0) {
-    const placeholders = p.status.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      `(a.data->>'status') IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.status) parentAcc.params.push(v);
-  }
-  if (p.severity && p.severity.length > 0) {
-    const placeholders = p.severity.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      `(a.data->>'severity') IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.severity) parentAcc.params.push(v);
-  }
   if (p.sinceSource !== null) {
     parentAcc.parts.push(
       `((a.data->>'source_timestamp_unix')::bigint) >= $${offset() + 1}`,
@@ -306,28 +351,10 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     );
     parentAcc.params.push(p.untilSource);
   }
-  if (p.activeOnly) {
-    parentAcc.parts.push(`(a.data->>'is_active' IN ('1','true','True'))`);
-  }
   if (p.liveOnly) {
     parentAcc.parts.push(`(a.data->>'is_live' IN ('1','true','True'))`);
   } else if (p.historicalOnly) {
     parentAcc.parts.push(`(a.data->>'is_live' IN ('0','false','False'))`);
-  }
-  if (p.search) {
-    const ph = `$${offset() + 1}`;
-    parentAcc.parts.push(
-      `((a.data->>'title') ILIKE ${ph} OR (a.data->>'location_text') ILIKE ${ph})`,
-    );
-    parentAcc.params.push(`%${p.search}%`);
-  }
-  if (p.title) {
-    parentAcc.parts.push(`(a.data->>'title') ILIKE $${offset() + 1}`);
-    parentAcc.params.push(`%${p.title}%`);
-  }
-  if (p.location) {
-    parentAcc.parts.push(`(a.data->>'location_text') ILIKE $${offset() + 1}`);
-    parentAcc.params.push(`%${p.location}%`);
   }
   if (p.lat !== null && p.lng !== null) {
     const latDelta = p.radiusKm / 111.0;
@@ -778,6 +805,71 @@ export function buildCountSqlForTable(
         `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.until);
+    }
+    // Apply the same post-JOIN-filter set the data query (buildUniqueQuery)
+    // now applies on the sidecar — so total / live_count honour them
+    // instead of always reporting the unfiltered roll-up.
+    if (p.category && p.category.length > 0) {
+      const placeholders = p.category.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.category.length === 1
+          ? `category = ${placeholders[0]}`
+          : `category IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.category) sidecarAcc.params.push(v);
+    }
+    if (p.subcategory && p.subcategory.length > 0) {
+      const placeholders = p.subcategory.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.subcategory.length === 1
+          ? `subcategory = ${placeholders[0]}`
+          : `subcategory IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.subcategory) sidecarAcc.params.push(v);
+    }
+    if (p.status && p.status.length > 0) {
+      const placeholders = p.status.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.status.length === 1
+          ? `status = ${placeholders[0]}`
+          : `status IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.status) sidecarAcc.params.push(v);
+    }
+    if (p.severity && p.severity.length > 0) {
+      const placeholders = p.severity.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.severity.length === 1
+          ? `severity = ${placeholders[0]}`
+          : `severity IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.severity) sidecarAcc.params.push(v);
+    }
+    if (p.activeOnly) {
+      sidecarAcc.parts.push(`(is_active IS NULL OR is_active = true)`);
+    }
+    if (p.search) {
+      const ph = `$${sidecarAcc.params.length + 1}`;
+      sidecarAcc.parts.push(`(title ILIKE ${ph} OR location_text ILIKE ${ph})`);
+      sidecarAcc.params.push(`%${p.search}%`);
+    }
+    if (p.title) {
+      sidecarAcc.parts.push(`title ILIKE $${sidecarAcc.params.length + 1}`);
+      sidecarAcc.params.push(`%${p.title}%`);
+    }
+    if (p.location) {
+      sidecarAcc.parts.push(
+        `location_text ILIKE $${sidecarAcc.params.length + 1}`,
+      );
+      sidecarAcc.params.push(`%${p.location}%`);
     }
     const sidecarWhere =
       sidecarAcc.parts.length > 0 ? `WHERE ${sidecarAcc.parts.join(' AND ')}` : '';
