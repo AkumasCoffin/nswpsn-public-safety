@@ -511,16 +511,6 @@ const DEFAULT_WINDOW_HOURS = DEFAULT_RETENTION_DAYS * 24;
  * Returns null if the sidecar is empty (boot before backfill, or no
  * data in the window) so the caller can fall back to filter_facets_daily.
  */
-// Above this window size, the sidecar→parent JOIN for dim breakdown
-// scans tens of thousands of rows and times out at 30s on archive_waze
-// (76k sidecar rows × per-row PK lookup ≈ 38s). For windowHours >
-// DIM_BREAKDOWN_MAX_HOURS we skip the JOIN entirely and return
-// type-level counts only — the dropdown still shows accurate provider
-// counts, just no per-category drill-down. Narrow windows (<= 7d) still
-// get the full JOIN with dims. Phase 5 (promoting category/subcategory
-// to the sidecar) eliminates this limit entirely.
-const DIM_BREAKDOWN_MAX_HOURS = 168; // 7 days
-
 async function archiveFacetsFromSidecar(windowHours: number): Promise<{
   typeCounts: Record<string, number>;
   perTypeDims: DimMap;
@@ -544,48 +534,32 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
     'archive_waze',
   ];
 
-  const wide = windowHours > DIM_BREAKDOWN_MAX_HOURS;
-
-  // Build per-table SQL. Two forms based on the wide/narrow flag —
-  // wide skips the JOIN-to-parent (category/subcategory dim breakdown
-  // costs tens of seconds on archive_waze at 31d), narrow includes it
-  // for the rich drop-down at ≤7d windows.
-  const sqlFor = (table: ArchiveTable): string =>
-    wide
-      ? `
-      SELECT source,
-             ''::text AS category,
-             ''::text AS subcategory,
-             COUNT(*)::text AS cnt,
-             MIN(COALESCE(source_timestamp_unix,
-                          EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS oldest,
-             MAX(COALESCE(source_timestamp_unix,
-                          EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS newest
-        FROM ${table}_latest
-       WHERE COALESCE(source_timestamp_unix,
-                      EXTRACT(EPOCH FROM last_seen_at)::bigint)
-             >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
-       GROUP BY 1
-    `
-      : `
-      SELECT a.source,
-             a.category,
-             a.subcategory,
-             COUNT(*)::text AS cnt,
-             MIN(COALESCE(l.source_timestamp_unix,
-                          EXTRACT(EPOCH FROM l.last_seen_at)::bigint))::bigint AS oldest,
-             MAX(COALESCE(l.source_timestamp_unix,
-                          EXTRACT(EPOCH FROM l.last_seen_at)::bigint))::bigint AS newest
-        FROM ${table}_latest l
-        JOIN ${table} a
-          ON a.source = l.source
-         AND a.source_id = l.source_id
-         AND a.fetched_at = l.latest_fetched_at
-       WHERE COALESCE(l.source_timestamp_unix,
-                      EXTRACT(EPOCH FROM l.last_seen_at)::bigint)
-             >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
-       GROUP BY 1, 2, 3
-    `;
+  // Sidecar-only query — category + subcategory live on the sidecar
+  // itself now (migration 021), so no JOIN-to-parent needed for the
+  // dim breakdown. Single SQL works at every window size; the previous
+  // wide/narrow split and the 30s timeout on archive_waze JOINs at
+  // wide windows are both gone.
+  //
+  // During the dims backfill window (first few minutes after deploy of
+  // migration 021), some sidecar rows still have NULL category. They
+  // contribute to typeCounts but their NULL category is skipped by the
+  // truthy check below, so they don't appear as a phantom "uncategorised"
+  // dim entry. Once backfill drains they show up correctly.
+  const sqlFor = (table: ArchiveTable): string => `
+    SELECT source,
+           COALESCE(category, '')    AS category,
+           COALESCE(subcategory, '') AS subcategory,
+           COUNT(*)::text AS cnt,
+           MIN(COALESCE(source_timestamp_unix,
+                        EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS oldest,
+           MAX(COALESCE(source_timestamp_unix,
+                        EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS newest
+      FROM ${table}_latest
+     WHERE COALESCE(source_timestamp_unix,
+                    EXTRACT(EPOCH FROM last_seen_at)::bigint)
+           >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
+     GROUP BY 1, 2, 3
+  `;
 
   // Run the 5 per-table queries in parallel. Each takes its own pool
   // connection; with the default pool size (10) all 5 fit. Cuts cold-
