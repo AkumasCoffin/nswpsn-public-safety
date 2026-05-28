@@ -625,12 +625,14 @@ export class ArchiveWriter {
             category = CASE
               WHEN ${table}_latest.category IS NULL
                 OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                OR EXCLUDED.category IS DISTINCT FROM ${table}_latest.category
                 THEN EXCLUDED.category
               ELSE ${table}_latest.category
             END,
             subcategory = CASE
               WHEN ${table}_latest.subcategory IS NULL
                 OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                OR EXCLUDED.subcategory IS DISTINCT FROM ${table}_latest.subcategory
                 THEN EXCLUDED.subcategory
               ELSE ${table}_latest.subcategory
             END,
