@@ -511,6 +511,16 @@ const DEFAULT_WINDOW_HOURS = DEFAULT_RETENTION_DAYS * 24;
  * Returns null if the sidecar is empty (boot before backfill, or no
  * data in the window) so the caller can fall back to filter_facets_daily.
  */
+// Above this window size, the sidecar→parent JOIN for dim breakdown
+// scans tens of thousands of rows and times out at 30s on archive_waze
+// (76k sidecar rows × per-row PK lookup ≈ 38s). For windowHours >
+// DIM_BREAKDOWN_MAX_HOURS we skip the JOIN entirely and return
+// type-level counts only — the dropdown still shows accurate provider
+// counts, just no per-category drill-down. Narrow windows (<= 7d) still
+// get the full JOIN with dims. Phase 5 (promoting category/subcategory
+// to the sidecar) eliminates this limit entirely.
+const DIM_BREAKDOWN_MAX_HOURS = 168; // 7 days
+
 async function archiveFacetsFromSidecar(windowHours: number): Promise<{
   typeCounts: Record<string, number>;
   perTypeDims: DimMap;
@@ -534,19 +544,30 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
     'archive_waze',
   ];
 
-  const typeCounts: Record<string, number> = {};
-  const perTypeDims: DimMap = {};
-  let oldestUnix: number | null = null;
-  let newestUnix: number | null = null;
+  const wide = windowHours > DIM_BREAKDOWN_MAX_HOURS;
 
-  for (const table of tables) {
-    // Window on the upstream source's own publish timestamp with
-    // last_seen_at fallback (same semantics the unique=1 list uses
-    // — see dataHistoryQuery.ts buildUniqueQuery). Backend ingest
-    // times deliberately not used here; the user means "incidents
-    // published in the last N hours", not "rows we polled in the
-    // last N hours".
-    const sql = `
+  // Build per-table SQL. Two forms based on the wide/narrow flag —
+  // wide skips the JOIN-to-parent (category/subcategory dim breakdown
+  // costs tens of seconds on archive_waze at 31d), narrow includes it
+  // for the rich drop-down at ≤7d windows.
+  const sqlFor = (table: ArchiveTable): string =>
+    wide
+      ? `
+      SELECT source,
+             ''::text AS category,
+             ''::text AS subcategory,
+             COUNT(*)::text AS cnt,
+             MIN(COALESCE(source_timestamp_unix,
+                          EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS oldest,
+             MAX(COALESCE(source_timestamp_unix,
+                          EXTRACT(EPOCH FROM last_seen_at)::bigint))::bigint AS newest
+        FROM ${table}_latest
+       WHERE COALESCE(source_timestamp_unix,
+                      EXTRACT(EPOCH FROM last_seen_at)::bigint)
+             >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
+       GROUP BY 1
+    `
+      : `
       SELECT a.source,
              a.category,
              a.subcategory,
@@ -565,53 +586,92 @@ async function archiveFacetsFromSidecar(windowHours: number): Promise<{
              >= EXTRACT(EPOCH FROM NOW() - ($1 || ' hours')::interval)::bigint
        GROUP BY 1, 2, 3
     `;
-    let client;
-    try {
-      client = await pool.connect();
-    } catch (err) {
-      log.warn({ err: (err as Error).message, table }, 'filterCache (sidecar): pool acquire failed');
-      continue;
-    }
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query("SET LOCAL statement_timeout = '30s'");
-        const result = await client.query<ArchiveFacetRow>(sql, [String(windowHours)]);
-        await client.query('COMMIT');
-        for (const row of result.rows) {
-          const cnt = parseInt(row.cnt, 10);
-          if (!Number.isFinite(cnt) || cnt <= 0) continue;
-          if (DEPRECATED_SOURCES.has(row.source)) continue;
-          const alertType = canonicalAlertType(row.source);
-          if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
-          // Waze types are NOT skipped now — archive_waze_latest joins the
-          // table list above, so this loop counts waze unique incidents
-          // alongside the other providers.
 
-          typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
-          const slot = dimSlotFor(perTypeDims, alertType);
-          if (row.category) {
-            slot['category']![row.category] = (slot['category']![row.category] ?? 0) + cnt;
-          }
-          if (row.subcategory && !/^\d+$/.test(row.subcategory)) {
-            slot['subcategory']![row.subcategory] =
-              (slot['subcategory']![row.subcategory] ?? 0) + cnt;
-          }
-          const rowOldest = bigintToNumber(row.oldest);
-          const rowNewest = bigintToNumber(row.newest);
-          if (rowOldest !== null) {
-            if (oldestUnix === null || rowOldest < oldestUnix) oldestUnix = rowOldest;
-          }
-          if (rowNewest !== null) {
-            if (newestUnix === null || rowNewest > newestUnix) newestUnix = rowNewest;
-          }
-        }
+  // Run the 5 per-table queries in parallel. Each takes its own pool
+  // connection; with the default pool size (10) all 5 fit. Cuts cold-
+  // cache wall time from ~5× serial to max(individual). On a saturated
+  // host (concurrent archive flushes + marinetraffic browser worker)
+  // this drops 20s waits to ~5s.
+  const perTable = await Promise.all(
+    tables.map(async (table) => {
+      const acc: {
+        typeCounts: Record<string, number>;
+        perTypeDims: DimMap;
+        oldestUnix: number | null;
+        newestUnix: number | null;
+      } = { typeCounts: {}, perTypeDims: {}, oldestUnix: null, newestUnix: null };
+      let client;
+      try {
+        client = await pool.connect();
       } catch (err) {
-        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
-        log.warn({ err: (err as Error).message, table }, 'filterCache (sidecar): query failed');
+        log.warn({ err: (err as Error).message, table }, 'filterCache (sidecar): pool acquire failed');
+        return acc;
       }
-    } finally {
-      client.release();
+      try {
+        await client.query('BEGIN');
+        try {
+          await client.query("SET LOCAL statement_timeout = '30s'");
+          const result = await client.query<ArchiveFacetRow>(sqlFor(table), [String(windowHours)]);
+          await client.query('COMMIT');
+          for (const row of result.rows) {
+            const cnt = parseInt(row.cnt, 10);
+            if (!Number.isFinite(cnt) || cnt <= 0) continue;
+            if (DEPRECATED_SOURCES.has(row.source)) continue;
+            const alertType = canonicalAlertType(row.source);
+            if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
+            acc.typeCounts[alertType] = (acc.typeCounts[alertType] ?? 0) + cnt;
+            const slot = dimSlotFor(acc.perTypeDims, alertType);
+            if (row.category) {
+              slot['category']![row.category] = (slot['category']![row.category] ?? 0) + cnt;
+            }
+            if (row.subcategory && !/^\d+$/.test(row.subcategory)) {
+              slot['subcategory']![row.subcategory] =
+                (slot['subcategory']![row.subcategory] ?? 0) + cnt;
+            }
+            const rowOldest = bigintToNumber(row.oldest);
+            const rowNewest = bigintToNumber(row.newest);
+            if (rowOldest !== null) {
+              if (acc.oldestUnix === null || rowOldest < acc.oldestUnix) acc.oldestUnix = rowOldest;
+            }
+            if (rowNewest !== null) {
+              if (acc.newestUnix === null || rowNewest > acc.newestUnix) acc.newestUnix = rowNewest;
+            }
+          }
+        } catch (err) {
+          try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+          log.warn({ err: (err as Error).message, table }, 'filterCache (sidecar): query failed');
+        }
+      } finally {
+        client.release();
+      }
+      return acc;
+    }),
+  );
+
+  // Merge per-table partials. typeCounts add; perTypeDims add; date range widens.
+  const typeCounts: Record<string, number> = {};
+  const perTypeDims: DimMap = {};
+  let oldestUnix: number | null = null;
+  let newestUnix: number | null = null;
+  for (const t of perTable) {
+    for (const [k, v] of Object.entries(t.typeCounts)) {
+      typeCounts[k] = (typeCounts[k] ?? 0) + v;
+    }
+    for (const [alertType, dims] of Object.entries(t.perTypeDims)) {
+      const slot = dimSlotFor(perTypeDims, alertType);
+      for (const dimName of ['category', 'subcategory', 'status', 'severity'] as const) {
+        const src = dims[dimName] ?? {};
+        const dst = slot[dimName]!;
+        for (const [val, n] of Object.entries(src)) {
+          dst[val] = (dst[val] ?? 0) + n;
+        }
+      }
+    }
+    if (t.oldestUnix !== null) {
+      if (oldestUnix === null || t.oldestUnix < oldestUnix) oldestUnix = t.oldestUnix;
+    }
+    if (t.newestUnix !== null) {
+      if (newestUnix === null || t.newestUnix > newestUnix) newestUnix = t.newestUnix;
     }
   }
 
