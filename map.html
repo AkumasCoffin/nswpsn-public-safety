@@ -2691,10 +2691,29 @@
     // Track data hashes to prevent unnecessary redraws (no flashing)
     const layerDataHashes = {};
     
-    // Simple hash function for comparing data
+    // Cheap dirty-check for "did the data change since last refresh".
+    // Earlier revisions did a full JSON.stringify+rolling-hash over the
+    // entire payload — for Endeavour/Essential outages (multi-MB lite=1
+    // responses) that's tens-of-ms of unnecessary CPU on every 60s
+    // refresh tick. Most payloads change in either feature count or the
+    // upstream lastUpdated timestamp; both are cheap to read.
+    //
+    // Falls back to a full stringify only when neither features.length
+    // nor a top-level timestamp is available (small responses where the
+    // stringify is cheap anyway).
     function hashData(data) {
       if (!data) return null;
       try {
+        const featLen =
+          (data.features && data.features.length) ??
+          (data.outages && data.outages.length) ??
+          (Array.isArray(data) ? data.length : null);
+        const ts =
+          data.lastUpdated || data.updated_at || data.generated_at || data.timestamp || null;
+        if (featLen !== null || ts) {
+          return `${featLen ?? ''}|${ts ?? ''}`;
+        }
+        // Fallback for shapes we don't recognise — full stringify hash.
         const str = JSON.stringify(data);
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
