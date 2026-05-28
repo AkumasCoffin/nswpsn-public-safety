@@ -650,6 +650,32 @@ export function buildCountSqlForTable(
     acc.parts.push(`fetched_at <= to_timestamp($${acc.params.length + 1})`);
     acc.params.push(p.until);
   }
+  // sinceSource / untilSource — match buildSqlForTable. Previously
+  // omitted here, causing `total` to over-report when the caller
+  // narrowed the data query with these JSONB time filters.
+  if (p.sinceSource !== null) {
+    acc.parts.push(
+      `((data->>'source_timestamp_unix')::bigint) >= $${acc.params.length + 1}`,
+    );
+    acc.params.push(p.sinceSource);
+  }
+  if (p.untilSource !== null) {
+    acc.parts.push(
+      `((data->>'source_timestamp_unix')::bigint) <= $${acc.params.length + 1}`,
+    );
+    acc.params.push(p.untilSource);
+  }
+  // activeOnly / liveOnly / historicalOnly — also previously omitted.
+  // Without these, `live_count / ended_count` derived in the route
+  // were inconsistent with the actual `records` returned.
+  if (p.activeOnly) {
+    acc.parts.push(`(data->>'is_active' IN ('1','true','True'))`);
+  }
+  if (p.liveOnly) {
+    acc.parts.push(`(data->>'is_live' IN ('1','true','True'))`);
+  } else if (p.historicalOnly) {
+    acc.parts.push(`(data->>'is_live' IN ('0','false','False'))`);
+  }
   if (p.search) {
     acc.parts.push(
       `(data->>'title' ILIKE $${acc.params.length + 1} OR (data->>'location_text') ILIKE $${acc.params.length + 1})`,
