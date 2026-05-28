@@ -91,6 +91,39 @@ const DEDUP_HASH_IGNORE = new Set<string>([
  * states of a single incident (collision space ~10^24 vs handful of
  * snapshots per incident).
  */
+/**
+ * Pull a string value out of a (potentially) JSONB-ish data blob. Used
+ * by upsertLatestSidecar to populate the title/location_text/status/
+ * severity columns added in migration 022 — those fields used to live
+ * inside `data` and got extracted at read time with `(data->>'key')`,
+ * which doesn't use indexes. Storing them top-level on the sidecar
+ * lets WHERE clauses hit a real index.
+ */
+function extractStrField(data: unknown, key: string): string | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const v = (data as Record<string, unknown>)[key];
+  if (typeof v === 'string' && v.length > 0) return v;
+  return null;
+}
+
+/** Same shape as extractStrField but for boolean-ish values. Accepts
+ *  native booleans, '0'/'1' strings, and 'true'/'false' (any case) so
+ *  the writer doesn't reject upstream payloads that serialise the
+ *  field as a string. is_active falls back to null when absent — the
+ *  reader's truthy check treats null as "unknown, default visible". */
+function extractBoolField(data: unknown, key: string): boolean | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const v = (data as Record<string, unknown>)[key];
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const t = v.trim().toLowerCase();
+    if (t === '1' || t === 'true') return true;
+    if (t === '0' || t === 'false') return false;
+  }
+  return null;
+}
+
 function hashRowData(row: ArchiveRow): string {
   let data: unknown = row.data;
   if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -499,6 +532,11 @@ export class ArchiveWriter {
         source_ts_unix: number | null;
         category: string | null;
         subcategory: string | null;
+        title: string | null;
+        location_text: string | null;
+        status: string | null;
+        severity: string | null;
+        is_active: boolean | null;
       }
     >();
     for (const e of hashed) {
@@ -515,20 +553,31 @@ export class ArchiveWriter {
           source_ts_unix: e.row.source_timestamp_unix ?? null,
           category: e.row.category ?? null,
           subcategory: e.row.subcategory ?? null,
+          title: extractStrField(e.row.data, 'title'),
+          location_text: extractStrField(e.row.data, 'location_text'),
+          status: extractStrField(e.row.data, 'status'),
+          severity: extractStrField(e.row.data, 'severity'),
+          is_active: extractBoolField(e.row.data, 'is_active'),
         });
       }
     }
     if (map.size === 0) return;
 
-    // 8 params per row: source, source_id, fetched_at (×2 — also
+    // 13 params per row: source, source_id, fetched_at (×2 — also
     // becomes last_seen_at on first insert), data_hash, source_ts_unix,
-    // category, subcategory.
+    // category, subcategory, title, location_text, status, severity,
+    // is_active.
     const placeholders: string[] = [];
     const params: unknown[] = [];
     let i = 0;
     for (const v of map.values()) {
       placeholders.push(
-        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text, $${i + 6}::bigint, $${i + 7}::text, $${i + 8}::text)`,
+        `($${i + 1}::text, $${i + 2}::text, ` +
+          `to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), ` +
+          `$${i + 5}::text, $${i + 6}::bigint, ` +
+          `$${i + 7}::text, $${i + 8}::text, ` +
+          `$${i + 9}::text, $${i + 10}::text, ` +
+          `$${i + 11}::text, $${i + 12}::text, $${i + 13}::boolean)`,
       );
       params.push(
         v.source,
@@ -539,22 +588,27 @@ export class ArchiveWriter {
         v.source_ts_unix,
         v.category,
         v.subcategory,
+        v.title,
+        v.location_text,
+        v.status,
+        v.severity,
+        v.is_active,
       );
-      i += 8;
+      i += 13;
     }
-    // last_seen_at always advances. latest_fetched_at + data_hash +
-    // source_timestamp_unix + category + subcategory advance only when
-    // EXCLUDED.data_hash differs from the stored one — so a stable
-    // incident polled 1000 times keeps a single archive row, the
-    // sidecar's source-side timestamp stays pinned to whenever the
-    // upstream actually updated it, and last_seen_at advances every
-    // poll. category/subcategory ride the same condition: they're
-    // "snapshot at last meaningful change" for the same reason as
-    // source_timestamp_unix.
+    // last_seen_at always advances. Everything else (latest_fetched_at,
+    // data_hash, source_timestamp_unix, category, subcategory, title,
+    // location_text, status, severity, is_active) refreshes only when
+    // EXCLUDED.data_hash differs from the stored hash — i.e. when the
+    // upstream actually published a new state for this incident. A
+    // stable incident polled 1000 times keeps a single archive row;
+    // the sidecar's display fields stay pinned to whenever the
+    // upstream last changed them.
     const sql = `
       INSERT INTO ${table}_latest
         (source, source_id, latest_fetched_at, last_seen_at, data_hash,
-         source_timestamp_unix, category, subcategory)
+         source_timestamp_unix, category, subcategory,
+         title, location_text, status, severity, is_active)
       VALUES ${placeholders.join(',')}
       ON CONFLICT (source, source_id) DO UPDATE
         SET last_seen_at = GREATEST(${table}_latest.last_seen_at, EXCLUDED.last_seen_at),
@@ -582,6 +636,31 @@ export class ArchiveWriter {
               WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.subcategory
               ELSE ${table}_latest.subcategory
+            END,
+            title = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.title
+              ELSE ${table}_latest.title
+            END,
+            location_text = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.location_text
+              ELSE ${table}_latest.location_text
+            END,
+            status = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.status
+              ELSE ${table}_latest.status
+            END,
+            severity = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.severity
+              ELSE ${table}_latest.severity
+            END,
+            is_active = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.is_active
+              ELSE ${table}_latest.is_active
             END
     `;
     await client.query(sql, params);
