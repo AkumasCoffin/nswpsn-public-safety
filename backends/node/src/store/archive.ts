@@ -584,14 +584,20 @@ export class ArchiveWriter {
       );
       i += 13;
     }
-    // last_seen_at always advances. Everything else (latest_fetched_at,
-    // data_hash, source_timestamp_unix, category, subcategory, title,
-    // location_text, status, severity, is_active) refreshes only when
-    // EXCLUDED.data_hash differs from the stored hash — i.e. when the
-    // upstream actually published a new state for this incident. A
-    // stable incident polled 1000 times keeps a single archive row;
-    // the sidecar's display fields stay pinned to whenever the
-    // upstream last changed them.
+    // last_seen_at always advances. data_hash + latest_fetched_at refresh
+    // only when EXCLUDED.data_hash differs from the stored hash — i.e.
+    // when the upstream actually published a new state for this incident.
+    // A stable incident polled 1000 times keeps a single archive row.
+    //
+    // Display fields (category, subcategory, title, location_text, status,
+    // severity, is_active, source_timestamp_unix) ALSO refresh when the
+    // stored value is NULL — this self-heals sidecar rows that were
+    // created before migrations 021/022 added these columns and have been
+    // NULL ever since because the upstream's data_hash hasn't drifted.
+    // For active incidents the next poll fills them in; HOT updates stay
+    // intact in the dominant case (incident already populated + unchanged)
+    // because the CASE returns the same value and Postgres treats that
+    // as a no-op write.
     const sql = `
       INSERT INTO ${table}_latest
         (source, source_id, latest_fetched_at, last_seen_at, data_hash,
@@ -611,42 +617,50 @@ export class ArchiveWriter {
               ELSE ${table}_latest.data_hash
             END,
             source_timestamp_unix = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.source_timestamp_unix IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.source_timestamp_unix
               ELSE ${table}_latest.source_timestamp_unix
             END,
             category = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.category IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.category
               ELSE ${table}_latest.category
             END,
             subcategory = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.subcategory IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.subcategory
               ELSE ${table}_latest.subcategory
             END,
             title = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.title IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.title
               ELSE ${table}_latest.title
             END,
             location_text = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.location_text IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.location_text
               ELSE ${table}_latest.location_text
             END,
             status = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.status IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.status
               ELSE ${table}_latest.status
             END,
             severity = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.severity IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.severity
               ELSE ${table}_latest.severity
             END,
             is_active = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.is_active IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.is_active
               ELSE ${table}_latest.is_active
             END
