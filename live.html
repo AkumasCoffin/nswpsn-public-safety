@@ -3098,27 +3098,38 @@
       }
     }
 
+    // In-flight guard so a slow loadAllStats() doesn't get re-entered
+    // when the interval timer fires before the previous tick finished.
+    // Without this, two concurrent refreshes can race on the shared
+    // apiDataCache fields and post stale data into the DOM.
+    let _refreshInFlight = false;
     async function refreshAllData() {
-      // Reset cache for fresh data
-      apiDataCache.timestamp = Date.now();
-      apiDataCache.traffic = null;
-      apiDataCache.bom = null;
-      apiDataCache.beachwatch = null;
-      apiDataCache.beachsafe = null;
-      apiDataCache.endeavour = null;
-      apiDataCache.essential = null;
+      if (_refreshInFlight) return;
+      _refreshInFlight = true;
+      try {
+        // Reset cache for fresh data
+        apiDataCache.timestamp = Date.now();
+        apiDataCache.traffic = null;
+        apiDataCache.bom = null;
+        apiDataCache.beachwatch = null;
+        apiDataCache.beachsafe = null;
+        apiDataCache.endeavour = null;
+        apiDataCache.essential = null;
 
-      // Load stats first (this makes the API calls) — stats update is safe, no layout shift
-      await loadAllStats();
+        // Load stats first (this makes the API calls) — stats update is safe, no layout shift
+        await loadAllStats();
 
-      // Only refresh detail cards if user is near the top of the page
-      // When scrolled down, the innerHTML replacement causes jarring layout shifts
-      const scrolledDown = window.scrollY > 400;
-      if (!scrolledDown) {
-        loadLatestPower();
-        loadLatestTraffic();
-        loadLatestBOM();
-        loadLatestBeaches();
+        // Only refresh detail cards if user is near the top of the page
+        // When scrolled down, the innerHTML replacement causes jarring layout shifts
+        const scrolledDown = window.scrollY > 400;
+        if (!scrolledDown) {
+          loadLatestPower();
+          loadLatestTraffic();
+          loadLatestBOM();
+          loadLatestBeaches();
+        }
+      } finally {
+        _refreshInFlight = false;
       }
     }
     

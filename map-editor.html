@@ -2246,10 +2246,21 @@
     // Track data hashes to prevent unnecessary redraws (no flashing)
     const layerDataHashes = {};
     
-    // Simple hash function for comparing data
+    // Cheap dirty-check for "did the data change". See map.html for the
+    // full rationale. Reads features.length / a top-level timestamp
+    // instead of stringify+hashing the whole payload.
     function hashData(data) {
       if (!data) return null;
       try {
+        const featLen =
+          (data.features && data.features.length) ??
+          (data.outages && data.outages.length) ??
+          (Array.isArray(data) ? data.length : null);
+        const ts =
+          data.lastUpdated || data.updated_at || data.generated_at || data.timestamp || null;
+        if (featLen !== null || ts) {
+          return `${featLen ?? ''}|${ts ?? ''}`;
+        }
         const str = JSON.stringify(data);
         let hash = 0;
         for (let i = 0; i < str.length; i++) {

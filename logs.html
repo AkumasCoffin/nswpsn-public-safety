@@ -4232,10 +4232,22 @@
     }
     
     // === REVERSE GEOCODING ===
+    // Nominatim's public instance asks for max 1 req/sec; we serialize
+    // requests through a simple promise chain so a user rapidly opening
+    // many panels doesn't trip rate-limiting / get the IP banned.
     const geocodeCache = {};
+    let _geocodeQueue = Promise.resolve();
+    function _geocodeThrottle() {
+      const wait = new Promise((r) => setTimeout(r, 1100));
+      const next = _geocodeQueue.then(() => wait);
+      _geocodeQueue = next.catch(() => {});
+      return next;
+    }
     async function reverseGeocode(lat, lng) {
       const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
       if (geocodeCache[key]) return geocodeCache[key];
+      await _geocodeThrottle();
+      if (geocodeCache[key]) return geocodeCache[key]; // recheck after wait
       try {
         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
           headers: { 'Accept': 'application/json' }
