@@ -497,6 +497,8 @@ export class ArchiveWriter {
         fetched_at: number;
         hash: string;
         source_ts_unix: number | null;
+        category: string | null;
+        subcategory: string | null;
       }
     >();
     for (const e of hashed) {
@@ -511,30 +513,48 @@ export class ArchiveWriter {
           fetched_at: e.row.fetched_at,
           hash: e.hash,
           source_ts_unix: e.row.source_timestamp_unix ?? null,
+          category: e.row.category ?? null,
+          subcategory: e.row.subcategory ?? null,
         });
       }
     }
     if (map.size === 0) return;
 
+    // 8 params per row: source, source_id, fetched_at (×2 — also
+    // becomes last_seen_at on first insert), data_hash, source_ts_unix,
+    // category, subcategory.
     const placeholders: string[] = [];
     const params: unknown[] = [];
     let i = 0;
     for (const v of map.values()) {
       placeholders.push(
-        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text, $${i + 6}::bigint)`,
+        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text, $${i + 6}::bigint, $${i + 7}::text, $${i + 8}::text)`,
       );
-      params.push(v.source, v.source_id, v.fetched_at, v.fetched_at, v.hash, v.source_ts_unix);
-      i += 6;
+      params.push(
+        v.source,
+        v.source_id,
+        v.fetched_at,
+        v.fetched_at,
+        v.hash,
+        v.source_ts_unix,
+        v.category,
+        v.subcategory,
+      );
+      i += 8;
     }
     // last_seen_at always advances. latest_fetched_at + data_hash +
-    // source_timestamp_unix advance only when EXCLUDED.data_hash
-    // differs from the stored one — so a stable incident polled 1000
-    // times keeps a single archive row, the sidecar's source-side
-    // timestamp stays pinned to whenever the upstream actually
-    // updated it, and last_seen_at advances every poll.
+    // source_timestamp_unix + category + subcategory advance only when
+    // EXCLUDED.data_hash differs from the stored one — so a stable
+    // incident polled 1000 times keeps a single archive row, the
+    // sidecar's source-side timestamp stays pinned to whenever the
+    // upstream actually updated it, and last_seen_at advances every
+    // poll. category/subcategory ride the same condition: they're
+    // "snapshot at last meaningful change" for the same reason as
+    // source_timestamp_unix.
     const sql = `
       INSERT INTO ${table}_latest
-        (source, source_id, latest_fetched_at, last_seen_at, data_hash, source_timestamp_unix)
+        (source, source_id, latest_fetched_at, last_seen_at, data_hash,
+         source_timestamp_unix, category, subcategory)
       VALUES ${placeholders.join(',')}
       ON CONFLICT (source, source_id) DO UPDATE
         SET last_seen_at = GREATEST(${table}_latest.last_seen_at, EXCLUDED.last_seen_at),
@@ -552,6 +572,16 @@ export class ArchiveWriter {
               WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.source_timestamp_unix
               ELSE ${table}_latest.source_timestamp_unix
+            END,
+            category = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.category
+              ELSE ${table}_latest.category
+            END,
+            subcategory = CASE
+              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.subcategory
+              ELSE ${table}_latest.subcategory
             END
     `;
     await client.query(sql, params);
