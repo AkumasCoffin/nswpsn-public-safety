@@ -30,7 +30,10 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { getRdioPool, resolveLabels, getUnitLabel, ensureUnitLabelsLoaded } from './rdio.js';
 import { getPool } from '../db/pool.js';
-import { validateStructuredAgainstTranscripts } from './rdioValidator.js';
+import {
+  polishStructuredIncidents,
+  validateStructuredAgainstTranscripts,
+} from './rdioValidator.js';
 
 const LLM_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -1265,6 +1268,9 @@ export async function generateRdioHourlySummary(
       try {
         if (config.RDIO_REBUILDER_ENABLED) {
           structured = rebuildIncidents(structured, inputMap);
+          structured = polishStructuredIncidents(
+            structured,
+          ) as Record<string, unknown> | null;
         } else {
           structured = validateStructuredAgainstTranscripts(
             structured,
@@ -1359,6 +1365,9 @@ export async function generateRdioRecentSummary(
     try {
       if (config.RDIO_REBUILDER_ENABLED) {
         structured = rebuildIncidents(structured, inputMap);
+        structured = polishStructuredIncidents(
+          structured,
+        ) as Record<string, unknown> | null;
       } else {
         structured = validateStructuredAgainstTranscripts(
           structured,
