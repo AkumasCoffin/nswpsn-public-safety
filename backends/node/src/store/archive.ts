@@ -2,9 +2,11 @@
  * ArchiveWriter — the archive half of the new architecture.
  *
  * Append-only batched insert into the per-source `archive_*` tables.
- * **No UPDATE statements ever.** No `is_live`/`is_latest` columns. The
- * write side does exactly one thing: every poll snapshot becomes one
- * INSERT, batched with siblings for the same flush window.
+ * **No UPDATE statements on the parent tables.** The write side does
+ * exactly one thing: every poll snapshot becomes one INSERT, batched
+ * with siblings for the same flush window. (The `_latest` sidecar
+ * does carry one UPSERT per flush — that's where mutable per-incident
+ * state lives.)
  *
  * Replaces Python's _archive_buffer + _archive_writer_loop. Kept the
  * same shape (push to in-RAM buffer, drain on a timer, single writer)
@@ -251,13 +253,11 @@ export class ArchiveWriter {
       }
     }
 
-    // Tombstone INSERTs removed: liveness is now derived at read time
-    // from the sidecar's last_seen_at (the writer's upsert below
-    // always advances it). If an incident stops appearing in polls,
-    // last_seen_at goes stale and the reader's `is_live` derivation
-    // flips to false. No more "we noticed it ended" rows accumulating
-    // in the parent archive — those rows added ~25% to the archive
-    // volume for no semantic value the sidecar can't already provide.
+    // Tombstone INSERTs removed: incident state lives on the sidecar
+    // (the writer's upsert below always advances last_seen_at). No
+    // more "we noticed it ended" rows accumulating in the parent
+    // archive — those rows added ~25% to the archive volume for no
+    // semantic value the sidecar can't already provide.
 
     // Run per-table inserts in parallel — previously the for-of loop
     // serialised them, so a slow archive_waze flush blocked the small
@@ -805,10 +805,11 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // APPEND-ONLY writes — pure INSERT, no UPDATE. is_latest and
-    // is_live columns dropped in migration 013 after they caused
-    // chronic I/O contention and write timeouts. is_live truthy
-    // semantics are now derived from JSONB at read time only.
+    // APPEND-ONLY writes — pure INSERT, no UPDATE on the parent.
+    // The is_latest / is_live columns added in migration 012 were
+    // dropped in 013 after they caused chronic I/O contention and
+    // write timeouts; mutable per-incident state now lives on the
+    // _latest sidecar.
     const cols = [
       'source',
       'source_id',

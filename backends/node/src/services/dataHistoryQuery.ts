@@ -13,9 +13,9 @@
  *   lat DOUBLE PRECISION, lng DOUBLE PRECISION, category TEXT,
  *   subcategory TEXT, data JSONB
  *
- * **No is_live / is_latest columns** in the new schema. unique=1 maps to
- * `DISTINCT ON (source, source_id) ORDER BY source, source_id, fetched_at DESC`
- * inside a subquery, then the outer query re-sorts by fetched_at.
+ * unique=1 maps to `DISTINCT ON (source, source_id) ORDER BY source,
+ * source_id, fetched_at DESC` inside a subquery, then the outer query
+ * re-sorts by fetched_at.
  *
  * Several Python filters used to hit indexed top-level columns
  * (status, severity, title, location_text, source_timestamp_unix). In
@@ -603,9 +603,10 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
     // Filter routing:
     //   - source / since / until / sourceId — applied on the sidecar
     //     (all columns the sidecar carries).
-    //   - everything else (category, subcategory, status, severity,
-    //     title/location/search, lat/lng radius, JSONB liveOnly etc.)
-    //     — applied post-JOIN on parent columns.
+    //   - everything else (lat/lng radius, JSONB sinceSource/
+    //     untilSource, cursor seek) — applied post-JOIN on parent
+    //     columns. Sidecar-resident dims (category, subcategory,
+    //     status, severity, title, location_text) hit the sidecar.
     //
     // For the common ?unique=1&hours=24 workload only sidecar filters
     // apply, so we hit the (latest_fetched_at DESC) index directly

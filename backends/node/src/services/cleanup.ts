@@ -311,11 +311,9 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
     // already knows the retention policy for that table).
     statsPruned = await pruneOldSnapshots();
 
-    // 4. Stale-as-ended sweep removed — liveness is now derived from
-    // the sidecar's last_seen_at column at read time. A stuck poller
-    // means last_seen_at simply doesn't advance, so the reader's
-    // is_live derivation naturally turns false after the staleness
-    // threshold. No tombstone INSERTs to maintain.
+    // 4. Stale-as-ended sweep removed — the sidecar's last_seen_at
+    // column carries "we still see this in polls" semantics. No
+    // tombstone INSERTs to maintain.
     const staleSwept = 0;
 
     stats.lastRunAt = Math.floor(Date.now() / 1000);
