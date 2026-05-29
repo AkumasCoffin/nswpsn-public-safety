@@ -52,8 +52,10 @@ const ALLOWED_AGENCIES = new Set(['FRNSW', 'NSWA', 'RFS', 'SES']);
 const EXAMPLE_INCIDENT_FINGERPRINTS: ReadonlyArray<readonly string[]> = [
   // Original Example 2 (pre-2026-05-15).
   ['machinery fire at recycling plant', 'elizabeth street'],
-  // Current Example 2 (2026-05-15+): synthetic hazmat scenario.
+  // Hazmat synthetic (2026-05-15+).
   ['brindwell loop', 'karoneth'],
+  // Hazmat synthetic (2026-05-29+, post-rebuilder rewrite).
+  ['vesperton loop', 'maracine'],
 ];
 
 const DIGIT_WORDS: Record<string, string> = {
