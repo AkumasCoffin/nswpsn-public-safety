@@ -882,14 +882,20 @@ export function buildCountSqlForTable(
     // poll every 5-10 min; 15 min covers 2-3 missed polls before
     // marking an incident ended.
     const LIVE_STALE_MINUTES = 15;
+    // No COUNT_CAP for the sidecar path — `_latest` carries one row
+    // per (source, source_id), bounded by the number of distinct
+    // incidents the upstream feed currently knows about (tens of
+    // thousands, not the millions in the parent partitions). Counting
+    // it directly is sub-second on an indexed table, and the previous
+    // 50k cap was silently truncating the total on the waze sidecar
+    // (~83k rows) — that's what made logs.html report 64k when the
+    // filters endpoint summed past 90k.
     const sql = `
       SELECT COUNT(*)::bigint AS total,
              COUNT(*) FILTER (
                WHERE last_seen_at >= NOW() - INTERVAL '${LIVE_STALE_MINUTES} minutes'
              )::bigint AS live_count
-      FROM (
-        SELECT last_seen_at FROM ${table}_latest ${sidecarWhere} LIMIT ${COUNT_CAP}
-      ) sub
+      FROM ${table}_latest ${sidecarWhere}
     `;
     return { sql, params: sidecarAcc.params, table };
   }
