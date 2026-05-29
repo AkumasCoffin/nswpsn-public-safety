@@ -31,6 +31,10 @@ import { log } from '../lib/log.js';
 import { getRdioPool, resolveLabels, getUnitLabel, ensureUnitLabelsLoaded } from './rdio.js';
 import { getPool } from '../db/pool.js';
 import { polishStructuredIncidents } from './rdioValidator.js';
+import {
+  ensureSpellcheckerLoaded,
+  spellcheckTranscript,
+} from './rdioSpell.js';
 
 const LLM_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -266,6 +270,8 @@ export async function formatRdioPrompt(
   inputMap: Map<number, RdioInputRow>;
 }> {
   await ensureUnitLabelsLoaded();
+  await ensureSpellcheckerLoaded();
+  let totalSpellChanges = 0;
   type GroupKey = string;
   const groups = new Map<
     GroupKey,
@@ -300,8 +306,21 @@ export async function formatRdioPrompt(
       );
       sampleLogged = true;
     }
-    const text = extractTranscriptText(row.transcript);
-    if (!text) continue;
+    const rawText = extractTranscriptText(row.transcript);
+    if (!rawText) continue;
+    // Conservative spell-check (en-AU + rdio_units.csv label corpus +
+    // rdio_lexicon.txt). Both the LLM input and the displayed
+    // transcript see the same corrected string so we don't store one
+    // version and feed Gemini another. See services/rdioSpell.ts for
+    // the gates that make this safe for callsigns / place names.
+    const { corrected: text, changes } = spellcheckTranscript(rawText);
+    if (changes.length > 0) {
+      totalSpellChanges += changes.length;
+      log.debug(
+        { call_id: row.call_id, changes },
+        'rdio spell: corrections applied',
+      );
+    }
     const { systemLabel, talkgroupLabel } = await resolveLabels(
       row.system,
       row.talkgroup,
@@ -341,6 +360,13 @@ export async function formatRdioPrompt(
       });
     }
     totalChars += text.length;
+  }
+
+  if (totalSpellChanges > 0) {
+    log.info(
+      { corrections: totalSpellChanges, calls: calls.length },
+      'rdio spell: hourly summary',
+    );
   }
 
   const lines: string[] = [`Period: ${periodLabel}`, ''];

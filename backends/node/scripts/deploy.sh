@@ -27,6 +27,12 @@ echo "[deploy] git pull…"
 git pull --ff-only
 
 cd "$NODE_DIR"
+# Install any newly-added deps from package.json so the build can find
+# them. Includes dev deps because tsc + @types are dev-scoped and the
+# prestart hook runs `tsc`. `npm ci` would be stricter but bails out on
+# any node_modules drift, which is too brittle for a one-shot deploy.
+echo "[deploy] npm install…"
+npm install --no-audit --no-fund
 echo "[deploy] npm run build…"
 npm run build
 
