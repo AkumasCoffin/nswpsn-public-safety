@@ -467,17 +467,22 @@ export function rebuildIncidents(
       const row = inputMap.get(id)!;
       return { call_id: row.call_id, time: row.time, text: row.text };
     });
-    const unitMap = new Map<number, string | null>();
+    // Build units[] as a deduped string array — the friendly label
+    // from rdio_units.csv when known, "UID:<n>" otherwise. live.html /
+    // logs.html both render units via
+    //   typeof u === 'string' ? u : (u.id || u.label || '?')
+    // so a string array drops straight in. An earlier draft of this
+    // function emitted {uid,label} objects, which both frontends
+    // rendered as "?".
+    const unitSeen = new Set<number>();
+    const unitList: string[] = [];
     for (const id of valid) {
       const row = inputMap.get(id)!;
-      if (row.uid !== null && !unitMap.has(row.uid)) {
-        unitMap.set(row.uid, row.unit_label);
-      }
+      if (row.uid === null || unitSeen.has(row.uid)) continue;
+      unitSeen.add(row.uid);
+      unitList.push(row.unit_label ?? `UID:${row.uid}`);
     }
-    obj['units'] = Array.from(unitMap.entries()).map(([uid, label]) => ({
-      uid,
-      label,
-    }));
+    obj['units'] = unitList;
     out.push(obj);
   }
   structured['incidents'] = out;

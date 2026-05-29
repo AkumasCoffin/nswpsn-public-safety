@@ -216,9 +216,11 @@ describe('rebuildIncidents', () => {
     expect(trs).toHaveLength(3);
     expect(trs[0]).toEqual({ call_id: 100, time: '10:00:01', text: 'truck en route' });
     expect(trs[2]!['text']).toBe('arriving on scene'); // verbatim, not "ALSO POLISHED"
-    const units = incs[0]!['units'] as Array<Record<string, unknown>>;
-    expect(units).toHaveLength(2);
-    expect(units.map((u) => u['uid']).sort()).toEqual([2010282, 2019977]);
+    // units[] is a deduped string array. UID 2010282 has a label in
+    // the input map; UID 2019977 does not, so it falls back to
+    // "UID:<n>". Order follows first-seen order in member_call_ids.
+    const units = incs[0]!['units'] as unknown[];
+    expect(units).toEqual(['RFS - Greenwall Point 1', 'UID:2019977']);
     expect(out['incident_count']).toBe(1);
   });
 
