@@ -2860,8 +2860,15 @@
       }
       const people = inc.people_count > 0 ? `${inc.people_count} pax` : '';
       const vehicles = Array.isArray(inc.vehicles) && inc.vehicles.length ? inc.vehicles.map(v => escHTML(v)).join(', ') : '';
+      // Units can arrive as: string (current rebuilder + legacy Gemini),
+      // {label, uid} (transient bug from the rebuilder rollout), or
+      // {id, ...} (deep-legacy dict shape). Prefer label > id > '?'.
       const unitList = Array.isArray(inc.units) && inc.units.length
-        ? inc.units.map(u => escHTML(typeof u === 'string' ? u : (u.id || '?'))).join(', ')
+        ? inc.units.map(u => escHTML(
+            typeof u === 'string'
+              ? u
+              : ((u && (u.label || u.id)) || '?')
+          )).join(', ')
         : '';
       // Window: new schema is window.{start,end}; legacy used first_heard/last_heard.
       const winStart = (inc.window && inc.window.start) || inc.first_heard || '';
