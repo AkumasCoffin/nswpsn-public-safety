@@ -3886,6 +3886,91 @@
         .replace(/'/g, '&#39;');
     }
 
+    // ----- Beach-style tooltip helpers (shared by hazard / jam / roadwork
+    // / police / flood tooltips so they match the beach layer styling). -----
+    // Wrap a sectioned tooltip in the dark themed container.
+    function _ttWrap(headerHtml, bodyHtml) {
+      return `<div style="max-width:360px; font-family: system-ui, sans-serif; color:#e2e8f0; line-height:1.4;">`
+        + headerHtml + bodyHtml + `</div>`;
+    }
+    // Tooltip header — icon + title + optional colored source pill.
+    // titleColor drives the title text; pillBg/pillFg/pillText are
+    // the source badge (e.g. WAZE green / LIVE TRAFFIC blue).
+    function _ttHeader(iconClass, title, titleColor, pillBg, pillFg, pillText) {
+      let h = `<div style="font-size:15px; font-weight:700; color:${titleColor}; margin-bottom:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">`;
+      h += `<i class="${iconClass}"></i> ${escapeHtml(title)}`;
+      if (pillText) {
+        h += ` <span style="background:${pillBg}; color:${pillFg}; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:700; letter-spacing:0.3px;">${escapeHtml(pillText)}</span>`;
+      }
+      return h + `</div>`;
+    }
+    // Sectioned box like the beach tooltip: tinted background, small
+    // uppercase header, freeform body html. rgb is "R,G,B" so we can
+    // build the rgba() tints without hex math.
+    function _ttSection(label, color, rgb, bodyHtml) {
+      return `<div style="padding:6px 8px; background:rgba(${rgb},0.08); border-radius:6px; margin-bottom:8px;">`
+        + `<div style="color:${color}; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px; text-transform:uppercase;">${label}</div>`
+        + bodyHtml + `</div>`;
+    }
+    // Stat tile used inside a section (e.g. Speed / Length / Delay,
+    // or Type / Subtype). Render multiple in a row by wrapping them
+    // in a flex/grid container.
+    function _ttTile(label, value, valueColor) {
+      return `<div style="background:rgba(255,255,255,0.06); padding:4px 8px; border-radius:4px; text-align:center;">`
+        + `<div style="color:#94a3b8; font-size:9px; font-weight:600; letter-spacing:0.3px; text-transform:uppercase; margin-bottom:1px;">${escapeHtml(label)}</div>`
+        + `<div style="color:${valueColor}; font-size:12px; font-weight:600;">${escapeHtml(value)}</div>`
+        + `</div>`;
+    }
+    // Format a lat/lon pair for the Location section. Returns '' if
+    // either is missing or NaN so the caller can skip the line.
+    function _ttCoords(lat, lon) {
+      const a = Number(lat), b = Number(lon);
+      if (!isFinite(a) || !isFinite(b)) return '';
+      return `${a.toFixed(5)}, ${b.toFixed(5)}`;
+    }
+    // Build the LOCATION section used by every traffic tooltip:
+    // Street, Suburb/City, and lat/lon coordinates.
+    function _ttLocationSection(street, suburb, lat, lon) {
+      const coords = _ttCoords(lat, lon);
+      if (!street && !suburb && !coords) return '';
+      let body = '';
+      if (street) body += `<div style="color:#fff; font-size:12px; font-weight:600;"><i class="fa-solid fa-road" style="margin-right:4px; color:#f59e0b;"></i>${escapeHtml(street)}</div>`;
+      if (suburb) body += `<div style="color:#cbd5e1; font-size:11px; margin-top:2px;">${escapeHtml(suburb)}</div>`;
+      if (coords) body += `<div style="color:#94a3b8; font-size:10px; margin-top:3px; font-family:'SF Mono', Menlo, monospace;"><i class="fa-solid fa-crosshairs" style="margin-right:4px;"></i>${coords}</div>`;
+      return _ttSection('Location', '#f59e0b', '245,158,11', body);
+    }
+    // Build the TYPE / SUBTYPE section. Pass already-formatted strings
+    // (e.g. via formatWazeType) — this helper does no normalisation so
+    // both Waze and LiveTraffic feeds slot in cleanly.
+    function _ttTypeSection(typeLabel, subtypeLabel, accentColor, accentRgb) {
+      const t = typeLabel ? String(typeLabel).trim() : '';
+      const s = subtypeLabel ? String(subtypeLabel).trim() : '';
+      if (!t && !s) return '';
+      // Suppress duplicate subtype when it matches type exactly.
+      const showSub = s && s.toLowerCase() !== t.toLowerCase();
+      let body = `<div style="display:grid; grid-template-columns:repeat(${showSub ? 2 : 1}, 1fr); gap:4px;">`;
+      body += _ttTile('Type', t || '—', accentColor);
+      if (showSub) body += _ttTile('Subtype', s, accentColor);
+      body += `</div>`;
+      return _ttSection('Classification', accentColor, accentRgb, body);
+    }
+    // Build the TIMING section. Any of reported/end/updated can be null.
+    function _ttTimingSection(reportedISO, endISO, updatedISO) {
+      const fmt = (iso) => {
+        if (!iso) return '';
+        try { const d = new Date(iso); return isNaN(d.getTime()) ? '' : d.toLocaleString(); }
+        catch (e) { return ''; }
+      };
+      const r = fmt(reportedISO), e = fmt(endISO);
+      const u = (updatedISO && updatedISO !== reportedISO) ? fmt(updatedISO) : '';
+      if (!r && !e && !u) return '';
+      let body = '';
+      if (r) body += `<div style="color:#e2e8f0; font-size:11px;">Reported: ${r}</div>`;
+      if (e) body += `<div style="color:#7dd3fc; font-size:11px; margin-top:2px;">Expected end: ${e}</div>`;
+      if (u) body += `<div style="color:#64748b; font-size:10px; margin-top:3px;"><i class="fa-solid fa-rotate" style="margin-right:4px;"></i>Updated: ${u}</div>`;
+      return _ttSection('Timing', '#64748b', '100,116,139', body);
+    }
+
     // Format Waze type/subtype strings into clean readable text.
     // Explicit overrides fix titleCase artefacts ("Stand Still Traffic"
     // → "Standstill Traffic") and disambiguate near-duplicates
@@ -7494,237 +7579,126 @@ function initPagerHoursFromStorage() {
         return createMarkerIcon('fa-solid fa-circle-exclamation', '#ef4444', pulse);
       }
       
-      // Build tooltip for hazard (Waze or LiveTraffic) - styled like outage tooltips
-      function buildHazardTooltip(props) {
+      // Beach-style hazard tooltip — same sectioned layout for both
+      // Waze and LiveTraffic feeds. Coordinates come from the calling
+      // marker so the Location section can include them.
+      function buildHazardTooltip(props, lat, lon) {
         const isWaze = props.source === 'waze';
-        const headerColor = isWaze ? '#25d366' : '#3b82f6';
-        const badgeColor = isWaze ? '#25d366' : '#3b82f6';
-        const badgeText = isWaze ? 'WAZE' : 'LIVE TRAFFIC';
-        const badgeTextColor = isWaze ? '#000' : '#fff';
-        
-        let html = `<div style="max-width:320px; font-family:'Inter', system-ui, -apple-system, sans-serif; line-height:1.4;">`;
-        
-        // Header with source badge
-        html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">`;
         const hazardHeader = [props.displayType, props.headline, props.mainCategory].find(v => !isLowQualityText(v)) || 'Traffic Hazard';
-        html += `<span style="color:${headerColor}; font-size:13px; font-weight:600;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:4px;"></i>${escapeHtml(hazardHeader)}</span>`;
-        html += `<span style="background:${badgeColor}; color:${badgeTextColor}; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">${badgeText}</span>`;
-        html += `</div>`;
-        
+        const header = _ttHeader(
+          'fa-solid fa-triangle-exclamation',
+          hazardHeader,
+          isWaze ? '#25d366' : '#3b82f6',
+          isWaze ? '#25d366' : '#3b82f6',
+          isWaze ? '#000' : '#fff',
+          isWaze ? 'WAZE' : 'LIVE TRAFFIC'
+        );
+
+        let body = '';
+
+        // Description / advice block, when the feed gives us a sentence
+        // that isn't already captured by the title.
+        const descText = isWaze
+          ? (props.title && props.title !== props.displayType ? props.title : '')
+          : (props.adviceA || '');
+        const descExtra = isWaze ? '' : (props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '');
+        if (descText || descExtra) {
+          let descHtml = '';
+          if (descText) descHtml += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(descText)}</div>`;
+          if (descExtra) descHtml += `<div style="color:#cbd5e1; font-size:11px; margin-top:4px;">${escapeHtml(descExtra)}</div>`;
+          body += _ttSection('Details', '#67e8f9', '103,232,249', descHtml);
+        }
+
+        // Location: Street + suburb + coords. Waze ships these as
+        // street/city; LiveTraffic uses roads/suburb. Fall back to
+        // props.location when Waze didn't include a structured street.
+        const street = isWaze ? (props.street || props.location || '') : (props.roads || '');
+        const suburb = isWaze ? (props.city || '') : (props.suburb || '');
+        body += _ttLocationSection(street, suburb, lat, lon);
+
+        // Type / Subtype — formatted for both feeds so the labels read
+        // as English.
+        let typeLabel = '', subtypeLabel = '';
         if (isWaze) {
-          // Waze hazard details
-          if (props.title && props.title !== props.displayType) {
-            html += `<div style="margin-bottom:8px; padding:8px 10px; background:rgba(37,211,102,0.1); border-radius:5px; border-left:2px solid #25d366;">`;
-            html += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.title)}</div>`;
-            html += `</div>`;
-          }
-          
-          // Location section
-          if (props.location) {
-            html += `<div style="margin-bottom:10px;">`;
-            html += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-            html += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.location)}</div>`;
-            html += `</div>`;
-          }
-          
-          // Type/Subtype and confirmations side by side
-          const wazeType = props.wazeType || '';
-          const wazeSubtype = props.wazeSubtype || '';
-          if (wazeType || wazeSubtype || props.thumbsUp > 0) {
-            html += `<div style="display:flex; gap:8px; margin-bottom:10px;">`;
-            
-            if (wazeType || wazeSubtype) {
-              const formattedType = formatWazeType(wazeSubtype || wazeType);
-              html += `<div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              html += `<div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>`;
-              html += `<div style="color:#fb923c; font-size:11px; font-weight:600;">${escapeHtml(formattedType)}</div>`;
-              html += `</div>`;
-            }
-            
-            if (props.thumbsUp > 0) {
-              html += `<div style="background:rgba(74,222,128,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              html += `<div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Confirmed</div>`;
-              html += `<div style="color:#4ade80; font-size:13px; font-weight:700;"><i class="fa-solid fa-thumbs-up" style="margin-right:3px; font-size:10px;"></i>${props.thumbsUp}</div>`;
-              html += `</div>`;
-            }
-            
-            html += `</div>`;
-          }
-          
-          // Reliability score if available
-          if (props.reliability > 0) {
-            html += `<div style="color:#94a3b8; font-size:10px; margin-bottom:6px;"><i class="fa-solid fa-star" style="margin-right:4px; color:#fbbf24;"></i>Reliability: ${props.reliability}/10</div>`;
-          }
-          
+          typeLabel = formatWazeType(props.wazeType || '');
+          subtypeLabel = formatWazeType(props.wazeSubtype || '');
         } else {
-          // Live Traffic NSW details
-          if (props.adviceA) {
-            html += `<div style="margin-bottom:8px; padding:8px 10px; background:rgba(59,130,246,0.1); border-radius:5px; border-left:2px solid #3b82f6;">`;
-            html += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.adviceA)}</div>`;
-            if (props.adviceB && props.adviceB !== props.adviceA) {
-              html += `<div style="color:#cbd5e1; font-size:11px; margin-top:4px;">${escapeHtml(props.adviceB)}</div>`;
-            }
-            html += `</div>`;
-          }
-          
-          // Location section
-          if (props.roads || props.suburb) {
-            html += `<div style="margin-bottom:10px;">`;
-            html += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-            if (props.roads) html += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.roads)}</div>`;
-            if (props.suburb) html += `<div style="color:#94a3b8; font-size:11px;">${escapeHtml(props.suburb)}</div>`;
-            html += `</div>`;
-          }
-          
-          // Category and impact side by side
-          if (props.mainCategory || props.subCategoryB) {
-            html += `<div style="display:flex; gap:8px; margin-bottom:10px;">`;
-            
-            if (props.mainCategory) {
-              html += `<div style="background:rgba(239,68,68,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              html += `<div style="color:#fca5a5; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Category</div>`;
-              html += `<div style="color:#f87171; font-size:11px; font-weight:600;">${escapeHtml(props.mainCategory)}</div>`;
-              html += `</div>`;
-            }
-            
-            if (props.subCategoryB) {
-              html += `<div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              html += `<div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>`;
-              html += `<div style="color:#fb923c; font-size:11px; font-weight:600;">${escapeHtml(props.subCategoryB)}</div>`;
-              html += `</div>`;
-            }
-            
-            html += `</div>`;
-          }
-          
-          // Affected lanes/roads
-          if (props.impactingNetwork || props.arrangement) {
-            html += `<div style="color:#7dd3fc; font-size:11px; margin-bottom:6px;">`;
-            html += `<i class="fa-solid fa-road" style="margin-right:4px;"></i>`;
-            html += escapeHtml(props.impactingNetwork || props.arrangement);
-            html += `</div>`;
-          }
+          typeLabel = props.mainCategory || '';
+          subtypeLabel = props.subCategoryB || '';
         }
-        
-        // Timing section
-        if (props.created || props.lastUpdated || props.end) {
-          html += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">`;
-          html += `<div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>Timing</div>`;
-          
-          if (props.created) {
-            try {
-              const startDate = new Date(props.created);
-              if (!isNaN(startDate.getTime())) {
-                html += `<div style="color:#e2e8f0; font-size:11px;">Reported: ${startDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-          }
-          
-          if (props.end) {
-            try {
-              const endDate = new Date(props.end);
-              if (!isNaN(endDate.getTime())) {
-                html += `<div style="color:#7dd3fc; font-size:11px; margin-top:2px;">Expected End: ${endDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-          }
-          
-          if (props.lastUpdated && props.lastUpdated !== props.created) {
-            try {
-              const updateDate = new Date(props.lastUpdated);
-              if (!isNaN(updateDate.getTime())) {
-                html += `<div style="color:#64748b; font-size:10px; margin-top:3px;"><i class="fa-solid fa-rotate" style="margin-right:4px;"></i>Updated: ${updateDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-          }
-          
-          html += `</div>`;
+        body += _ttTypeSection(typeLabel, subtypeLabel, '#fb923c', '251,146,60');
+
+        // Waze-only crowdsourced confidence row.
+        if (isWaze && (props.thumbsUp > 0 || props.reliability > 0)) {
+          let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
+          if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
+          if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
+          conf += `</div>`;
+          body += _ttSection('Confidence', '#86efac', '74,222,128', conf);
         }
-        
-        html += `</div>`;
-        return html;
+
+        // LiveTraffic-only "what does this do to the road" line.
+        if (!isWaze && (props.impactingNetwork || props.arrangement)) {
+          body += _ttSection(
+            'Network impact', '#7dd3fc', '125,211,252',
+            `<div style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-road" style="margin-right:4px;"></i>${escapeHtml(props.impactingNetwork || props.arrangement)}</div>`
+          );
+        }
+
+        body += _ttTimingSection(props.created, props.end, props.lastUpdated);
+
+        return _ttWrap(header, body);
       }
       
-      // Build tooltip for jam polyline - styled like outage tooltips
-      function buildJamTooltip(props) {
+      // Beach-style jam tooltip. lat/lon point at the midpoint of the
+      // jam polyline so the Location section can show coordinates.
+      function buildJamTooltip(props, lat, lon) {
         const level = props.level || 0;
         const severityText = level >= 4 ? 'Heavy Traffic' : level >= 2 ? 'Moderate Traffic' : 'Light Traffic';
         const severityColor = level >= 4 ? '#ef4444' : level >= 2 ? '#f97316' : '#eab308';
-        
-        let html = `<div style="max-width:320px; font-family:'Inter', system-ui, -apple-system, sans-serif; line-height:1.4;">`;
-        
-        // Header with Waze badge
-        html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">`;
-        html += `<span style="color:${severityColor}; font-size:13px; font-weight:600;"><i class="fa-solid fa-car-burst" style="margin-right:4px;"></i>${severityText}</span>`;
-        html += `<span style="background:#25d366; color:#000; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">WAZE</span>`;
-        html += `</div>`;
-        
-        // Location section
-        if (props.street || props.city) {
-          html += `<div style="margin-bottom:10px;">`;
-          html += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-          if (props.street) html += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.street)}</div>`;
-          if (props.city) html += `<div style="color:#94a3b8; font-size:11px;">${escapeHtml(props.city)}</div>`;
-          html += `</div>`;
-        }
-        
-        // Speed/Length/Delay in grid
-        if (props.speed || props.lengthKm || props.delayMins > 0) {
-          html += `<div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">`;
-          
-          if (props.speed !== undefined) {
+
+        const header = _ttHeader(
+          'fa-solid fa-car-burst', severityText, severityColor,
+          '#25d366', '#000', 'WAZE'
+        );
+
+        let body = '';
+        body += _ttLocationSection(props.street || '', props.city || '', lat, lon);
+
+        // Type / Subtype — jams map to a fixed Type (Traffic Jam) with
+        // the severity bucket as the Subtype, so the Classification
+        // section is consistent with the hazard tooltip.
+        body += _ttTypeSection('Traffic Jam', severityText, severityColor, '168,85,247');
+
+        // Metrics: speed / length / delay.
+        const hasMetrics = (props.speed !== undefined && props.speed !== null) || props.lengthKm || props.delayMins > 0;
+        if (hasMetrics) {
+          const tiles = [];
+          if (props.speed !== undefined && props.speed !== null) {
             const speedColor = props.speed < 20 ? '#ef4444' : props.speed < 40 ? '#f97316' : '#22c55e';
-            html += `<div style="background:rgba(${props.speed < 20 ? '239,68,68' : props.speed < 40 ? '249,115,22' : '34,197,94'},0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:70px;">`;
-            html += `<div style="color:#94a3b8; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Speed</div>`;
-            html += `<div style="color:${speedColor}; font-size:13px; font-weight:700;"><i class="fa-solid fa-gauge-high" style="margin-right:3px; font-size:10px;"></i>${props.speed} km/h</div>`;
-            html += `</div>`;
+            tiles.push(_ttTile('Speed', `${props.speed} km/h`, speedColor));
           }
-          
-          if (props.lengthKm) {
-            html += `<div style="background:rgba(148,163,184,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:70px;">`;
-            html += `<div style="color:#94a3b8; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Length</div>`;
-            html += `<div style="color:#cbd5e1; font-size:13px; font-weight:600;"><i class="fa-solid fa-ruler" style="margin-right:3px; font-size:10px;"></i>${props.lengthKm} km</div>`;
-            html += `</div>`;
-          }
-          
-          if (props.delayMins > 0) {
-            html += `<div style="background:rgba(239,68,68,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:70px;">`;
-            html += `<div style="color:#fca5a5; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Delay</div>`;
-            html += `<div style="color:#f87171; font-size:13px; font-weight:700;"><i class="fa-solid fa-clock" style="margin-right:3px; font-size:10px;"></i>${props.delayMins} min</div>`;
-            html += `</div>`;
-          }
-          
-          html += `</div>`;
-        }
-        
-        // Severity level indicator
-        if (level > 0) {
-          html += `<div style="margin-bottom:8px;">`;
-          html += `<div style="color:#64748b; font-size:10px; margin-bottom:4px;">Severity: ${level}/5</div>`;
-          html += `<div style="display:flex; gap:2px;">`;
-          for (let i = 1; i <= 5; i++) {
-            const barColor = i <= level ? (level >= 4 ? '#ef4444' : level >= 2 ? '#f97316' : '#eab308') : 'rgba(148,163,184,0.2)';
-            html += `<div style="width:20%; height:4px; border-radius:2px; background:${barColor};"></div>`;
-          }
-          html += `</div>`;
-          html += `</div>`;
-        }
-        
-        // Timing section
-        if (props.created) {
-          html += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">`;
-          html += `<div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>Timing</div>`;
-          try {
-            const startDate = new Date(props.created);
-            if (!isNaN(startDate.getTime())) {
-              html += `<div style="color:#e2e8f0; font-size:11px;">Reported: ${startDate.toLocaleString()}</div>`;
+          if (props.lengthKm) tiles.push(_ttTile('Length', `${props.lengthKm} km`, '#cbd5e1'));
+          if (props.delayMins > 0) tiles.push(_ttTile('Delay', `${props.delayMins} min`, '#f87171'));
+          const cols = tiles.length;
+          let metricsHtml = `<div style="display:grid; grid-template-columns:repeat(${cols}, 1fr); gap:4px;">${tiles.join('')}</div>`;
+
+          // Severity bar 1..5
+          if (level > 0) {
+            metricsHtml += `<div style="margin-top:6px; display:flex; align-items:center; gap:8px;">`;
+            metricsHtml += `<span style="color:#94a3b8; font-size:10px; font-weight:600;">Level ${level}/5</span>`;
+            metricsHtml += `<div style="flex:1; display:flex; gap:2px;">`;
+            for (let i = 1; i <= 5; i++) {
+              const barColor = i <= level ? severityColor : 'rgba(148,163,184,0.2)';
+              metricsHtml += `<div style="flex:1; height:5px; border-radius:2px; background:${barColor};"></div>`;
             }
-          } catch(e) {}
-          html += `</div>`;
+            metricsHtml += `</div></div>`;
+          }
+          body += _ttSection('Traffic', severityColor, '168,85,247', metricsHtml);
         }
-        
-        html += `</div>`;
-        return html;
+
+        body += _ttTimingSection(props.created, null, null);
+        return _ttWrap(header, body);
       }
       
       // Get jam color based on severity level
@@ -7756,7 +7730,7 @@ function initPagerHoursFromStorage() {
               });
               const category = getHazardCategory(props);
               const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildHazardTooltip(props), {
+              marker.bindTooltip(buildHazardTooltip(props, lat, lon), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
@@ -7793,7 +7767,7 @@ function initPagerHoursFromStorage() {
                 iconAnchor: [12, 12]
               });
               const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildHazardTooltip(props), {
+              marker.bindTooltip(buildHazardTooltip(props, lat, lon), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
@@ -7824,7 +7798,8 @@ function initPagerHoursFromStorage() {
                 lineJoin: 'round'
               });
 
-              polyline.bindTooltip(buildJamTooltip(props), {
+              const jamMid = latLngs[Math.floor(latLngs.length / 2)] || latLngs[0];
+              polyline.bindTooltip(buildJamTooltip(props, jamMid[0], jamMid[1]), {
                 sticky: true,
                 opacity: 0.95
               });
@@ -7933,68 +7908,32 @@ function initPagerHoursFromStorage() {
               });
               const marker = L.marker([lat, lon], { icon }).addTo(policeSubLayers[category]);
               
-              // Build police tooltip - styled like outage tooltips
-              let tooltip = `<div style="max-width:320px; font-family:'Inter', system-ui, -apple-system, sans-serif; line-height:1.4;">`;
-              
-              // Determine police type for display
-              const policeType = subtype.includes('camera') ? 'Speed Camera' : 
+              // Beach-style police tooltip — shares header/section helpers
+              // with hazard/roadwork so a Waze-fed pin reads the same
+              // whether the user lands on Police, Hazards, or Roadwork.
+              const policeType = subtype.includes('camera') ? 'Speed Camera' :
                                  subtype.includes('hiding') ? 'Police (Hidden)' : 'Police (Visible)';
-              
-              // Header with Waze badge
-              tooltip += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">`;
-              tooltip += `<span style="color:#3b82f6; font-size:13px; font-weight:600;"><i class="fa-solid fa-shield-halved" style="margin-right:4px;"></i>${escapeHtml(policeType)}</span>`;
-              tooltip += `<span style="background:#25d366; color:#000; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">WAZE</span>`;
-              tooltip += `</div>`;
-              
-              // Location section
-              if (props.location) {
-                tooltip += `<div style="margin-bottom:10px;">`;
-                tooltip += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-                tooltip += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.location)}</div>`;
-                tooltip += `</div>`;
+              const policeHeader = _ttHeader(
+                'fa-solid fa-shield-halved', policeType, '#3b82f6',
+                '#25d366', '#000', 'WAZE'
+              );
+              let policeBody = '';
+              policeBody += _ttLocationSection(props.street || props.location || '', props.city || '', lat, lon);
+              policeBody += _ttTypeSection(
+                formatWazeType(props.wazeType || 'POLICE'),
+                formatWazeType(props.wazeSubtype || ''),
+                '#60a5fa', '59,130,246'
+              );
+              if (props.thumbsUp > 0 || props.reliability > 0) {
+                let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
+                if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
+                if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
+                conf += `</div>`;
+                policeBody += _ttSection('Confidence', '#86efac', '74,222,128', conf);
               }
-              
-              // Type and confirmations side by side - always show type for police
-              const wazeSubtype = props.wazeSubtype || '';
-              const wazeType = props.wazeType || 'POLICE';
-              const formattedPoliceType = formatWazeType(wazeSubtype || wazeType);
-              
-              tooltip += `<div style="display:flex; gap:8px; margin-bottom:10px;">`;
-              
-              tooltip += `<div style="background:rgba(59,130,246,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              tooltip += `<div style="color:#93c5fd; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>`;
-              tooltip += `<div style="color:#60a5fa; font-size:11px; font-weight:600;">${escapeHtml(formattedPoliceType)}</div>`;
-              tooltip += `</div>`;
-              
-              if (props.thumbsUp > 0) {
-                tooltip += `<div style="background:rgba(74,222,128,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-                tooltip += `<div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Confirmed</div>`;
-                tooltip += `<div style="color:#4ade80; font-size:13px; font-weight:700;"><i class="fa-solid fa-thumbs-up" style="margin-right:3px; font-size:10px;"></i>${props.thumbsUp}</div>`;
-                tooltip += `</div>`;
-              }
-              
-              tooltip += `</div>`;
-              
-              // Reliability score if available
-              if (props.reliability > 0) {
-                tooltip += `<div style="color:#94a3b8; font-size:10px; margin-bottom:6px;"><i class="fa-solid fa-star" style="margin-right:4px; color:#fbbf24;"></i>Reliability: ${props.reliability}/10</div>`;
-              }
-              
-              // Timing section
-              if (props.created) {
-                tooltip += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">`;
-                tooltip += `<div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>Timing</div>`;
-                try {
-                  const startDate = new Date(props.created);
-                  if (!isNaN(startDate.getTime())) {
-                    tooltip += `<div style="color:#e2e8f0; font-size:11px;">Reported: ${startDate.toLocaleString()}</div>`;
-                  }
-                } catch(e) {}
-                tooltip += `</div>`;
-              }
-              
-              tooltip += `</div>`;
-              
+              policeBody += _ttTimingSection(props.created, null, null);
+              const tooltip = _ttWrap(policeHeader, policeBody);
+
               marker.bindTooltip(tooltip, {
                 direction: 'top',
                 offset: [0, -10],
@@ -8091,201 +8030,94 @@ function initPagerHoursFromStorage() {
         return titleCaseLocal(t);
       };
       
-      // Build tooltip for roadwork (Waze or LiveTraffic) - styled like outage tooltips
-      function buildRoadworkTooltip(props) {
+      // Beach-style roadwork tooltip (Waze + LiveTraffic). Same layout
+      // as buildHazardTooltip with an extra Schedule tile when the
+      // LiveTraffic feed includes a periods[] array.
+      function buildRoadworkTooltip(props, lat, lon) {
         const isWaze = props.source === 'waze';
-        const headerColor = isWaze ? '#f97316' : '#eab308';
-        const badgeColor = isWaze ? '#25d366' : '#3b82f6';
-        const badgeText = isWaze ? 'WAZE' : 'LIVE TRAFFIC';
-        const badgeTextColor = isWaze ? '#000' : '#fff';
-        
-        let html = `<div style="max-width:320px; font-family:'Inter', system-ui, -apple-system, sans-serif; line-height:1.4;">`;
-        
-        // Header with source badge
-        html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">`;
         const roadworkHeader = [props.displayType, props.headline, props.mainCategory].find(v => !isLowQualityText(v)) || 'Roadwork';
-        html += `<span style="color:${headerColor}; font-size:13px; font-weight:600;"><i class="fa-solid fa-person-digging" style="margin-right:4px;"></i>${escapeHtml(roadworkHeader)}</span>`;
-        html += `<span style="background:${badgeColor}; color:${badgeTextColor}; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">${badgeText}</span>`;
-        html += `</div>`;
-        
+        const header = _ttHeader(
+          'fa-solid fa-person-digging', roadworkHeader,
+          isWaze ? '#f97316' : '#eab308',
+          isWaze ? '#25d366' : '#3b82f6',
+          isWaze ? '#000' : '#fff',
+          isWaze ? 'WAZE' : 'LIVE TRAFFIC'
+        );
+
+        let body = '';
+
+        const descText = isWaze
+          ? (props.title && props.title !== props.displayType ? props.title : '')
+          : (props.adviceA || '');
+        const descExtra = isWaze ? '' : (props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '');
+        if (descText || descExtra) {
+          let descHtml = '';
+          if (descText) descHtml += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(descText)}</div>`;
+          if (descExtra) descHtml += `<div style="color:#cbd5e1; font-size:11px; margin-top:4px;">${escapeHtml(descExtra)}</div>`;
+          body += _ttSection('Details', '#fcd34d', '252,211,77', descHtml);
+        }
+
+        const street = isWaze ? (props.street || props.location || '') : (props.roads || '');
+        const suburb = isWaze ? (props.city || '') : (props.suburb || '');
+        body += _ttLocationSection(street, suburb, lat, lon);
+
+        let typeLabel = '', subtypeLabel = '';
         if (isWaze) {
-          // Waze roadwork details
-          if (props.title && props.title !== props.displayType) {
-            html += `<div style="margin-bottom:8px; padding:8px 10px; background:rgba(249,115,22,0.1); border-radius:5px; border-left:2px solid #f97316;">`;
-            html += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.title)}</div>`;
-            html += `</div>`;
-          }
-          
-          // Location section
-          if (props.location) {
-            html += `<div style="margin-bottom:10px;">`;
-            html += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-            html += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.location)}</div>`;
-            html += `</div>`;
-          }
-          
-          // Type and confirmations side by side
-          const wazeType = props.wazeType || '';
-          const wazeSubtype = props.wazeSubtype || '';
-          if (wazeType || wazeSubtype || props.thumbsUp > 0) {
-            html += `<div style="display:flex; gap:8px; margin-bottom:10px;">`;
-            
-            if (wazeType || wazeSubtype) {
-              const formattedType = formatWazeType(wazeSubtype || wazeType);
-              html += `<div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              html += `<div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>`;
-              html += `<div style="color:#fb923c; font-size:11px; font-weight:600;">${escapeHtml(formattedType)}</div>`;
-              html += `</div>`;
-            }
-            
-            if (props.thumbsUp > 0) {
-              html += `<div style="background:rgba(74,222,128,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              html += `<div style="color:#86efac; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Confirmed</div>`;
-              html += `<div style="color:#4ade80; font-size:13px; font-weight:700;"><i class="fa-solid fa-thumbs-up" style="margin-right:3px; font-size:10px;"></i>${props.thumbsUp}</div>`;
-              html += `</div>`;
-            }
-            
-            html += `</div>`;
-          }
-          
-          // Reliability
-          if (props.reliability > 0) {
-            html += `<div style="color:#94a3b8; font-size:10px; margin-bottom:6px;"><i class="fa-solid fa-star" style="margin-right:4px; color:#fbbf24;"></i>Reliability: ${props.reliability}/10</div>`;
-          }
-          
-          // Timing section
-          if (props.created) {
-            html += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">`;
-            html += `<div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>Timing</div>`;
-            try {
-              const startDate = new Date(props.created);
-              if (!isNaN(startDate.getTime())) {
-                html += `<div style="color:#e2e8f0; font-size:11px;">Reported: ${startDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-            html += `</div>`;
-          }
-          
-          html += `</div>`;
-          return html;
+          typeLabel = formatWazeType(props.wazeType || '');
+          subtypeLabel = formatWazeType(props.wazeSubtype || '');
+        } else {
+          typeLabel = props.mainCategory || '';
+          subtypeLabel = props.subCategoryB || '';
         }
-        
-        // Live Traffic NSW roadwork
-        if (props.adviceA) {
-          html += `<div style="margin-bottom:8px; padding:8px 10px; background:rgba(234,179,8,0.1); border-radius:5px; border-left:2px solid #eab308;">`;
-          html += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(props.adviceA)}</div>`;
-          if (props.adviceB && props.adviceB !== props.adviceA) {
-            html += `<div style="color:#cbd5e1; font-size:11px; margin-top:4px;">${escapeHtml(props.adviceB)}</div>`;
-          }
-          html += `</div>`;
-        }
-        
-        // Location section
-        if (props.roads || props.suburb) {
-          html += `<div style="margin-bottom:10px;">`;
-          html += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-          if (props.roads) html += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.roads)}</div>`;
-          if (props.suburb) html += `<div style="color:#94a3b8; font-size:11px;">${escapeHtml(props.suburb)}</div>`;
-          html += `</div>`;
-        }
-        
-        // Category and type side by side
-        if (props.mainCategory || props.subCategoryB || props.periods) {
-          html += `<div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">`;
-          
-          if (props.mainCategory) {
-            html += `<div style="background:rgba(234,179,8,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:80px;">`;
-            html += `<div style="color:#fde047; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Category</div>`;
-            html += `<div style="color:#eab308; font-size:11px; font-weight:600;">${escapeHtml(props.mainCategory)}</div>`;
-            html += `</div>`;
-          }
-          
-          if (props.subCategoryB) {
-            html += `<div style="background:rgba(251,146,60,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:80px;">`;
-            html += `<div style="color:#fdba74; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>`;
-            html += `<div style="color:#fb923c; font-size:11px; font-weight:600;">${escapeHtml(props.subCategoryB)}</div>`;
-            html += `</div>`;
-          }
-          
-          if (props.periods && Array.isArray(props.periods) && props.periods.length > 0) {
-            // Abbreviate day names
-            const shortDay = d => {
-              if (!d) return '';
-              const abbr = { 
-                'Monday': 'Mon', 'Tuesday': 'Tue', 'Wednesday': 'Wed', 'Thursday': 'Thu', 
-                'Friday': 'Fri', 'Saturday': 'Sat', 'Sunday': 'Sun',
-                'Weekday': 'Wkday', 'Weekend': 'Wkend', 'Daily': 'Daily'
-              };
-              return abbr[d] || d;
+        body += _ttTypeSection(typeLabel, subtypeLabel, '#fb923c', '251,146,60');
+
+        // LiveTraffic-only schedule block (periods[]).
+        if (!isWaze && Array.isArray(props.periods) && props.periods.length > 0) {
+          const shortDay = d => {
+            if (!d) return '';
+            const abbr = {
+              'Monday': 'Mon', 'Tuesday': 'Tue', 'Wednesday': 'Wed', 'Thursday': 'Thu',
+              'Friday': 'Fri', 'Saturday': 'Sat', 'Sunday': 'Sun',
+              'Weekday': 'Wkday', 'Weekend': 'Wkend', 'Daily': 'Daily'
             };
-            
-            // Format periods - each period is an object with fromDay, toDay, startTime, finishTime
-            const periodsText = props.periods.slice(0, 2).map(p => {
-              if (p.fromDay && p.startTime && p.finishTime) {
-                const from = shortDay(p.fromDay);
-                const to = shortDay(p.toDay);
-                const days = (!to || from === to) ? from : `${from}-${to}`;
-                return `${days} ${p.startTime}-${p.finishTime}`;
-              }
-              return '';
-            }).filter(Boolean).join(', ');
-            
-            if (periodsText) {
-              html += `<div style="background:rgba(148,163,184,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1; min-width:100px;">`;
-              html += `<div style="color:#94a3b8; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Schedule</div>`;
-              html += `<div style="color:#cbd5e1; font-size:10px; font-weight:500;">${escapeHtml(periodsText)}${props.periods.length > 2 ? '...' : ''}</div>`;
-              html += `</div>`;
+            return abbr[d] || d;
+          };
+          const periodsText = props.periods.slice(0, 2).map(p => {
+            if (p.fromDay && p.startTime && p.finishTime) {
+              const from = shortDay(p.fromDay);
+              const to = shortDay(p.toDay);
+              const days = (!to || from === to) ? from : `${from}-${to}`;
+              return `${days} ${p.startTime}-${p.finishTime}`;
             }
+            return '';
+          }).filter(Boolean).join(', ');
+          if (periodsText) {
+            body += _ttSection(
+              'Schedule', '#cbd5e1', '148,163,184',
+              `<div style="color:#e2e8f0; font-size:11px;">${escapeHtml(periodsText)}${props.periods.length > 2 ? '…' : ''}</div>`
+            );
           }
-          
-          html += `</div>`;
         }
-        
-        // Impact/arrangement info
-        if (props.impactingNetwork || props.arrangement) {
-          html += `<div style="color:#7dd3fc; font-size:11px; margin-bottom:6px;">`;
-          html += `<i class="fa-solid fa-road" style="margin-right:4px;"></i>`;
-          html += escapeHtml(props.impactingNetwork || props.arrangement);
-          html += `</div>`;
+
+        // Waze-only confidence row.
+        if (isWaze && (props.thumbsUp > 0 || props.reliability > 0)) {
+          let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
+          if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
+          if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
+          conf += `</div>`;
+          body += _ttSection('Confidence', '#86efac', '74,222,128', conf);
         }
-        
-        // Timing section
-        if (props.created || props.lastUpdated || props.start || props.end) {
-          html += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">`;
-          html += `<div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>Timing</div>`;
-          
-          if (props.start || props.created) {
-            try {
-              const startDate = new Date(props.start || props.created);
-              if (!isNaN(startDate.getTime())) {
-                html += `<div style="color:#e2e8f0; font-size:11px;">Started: ${startDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-          }
-          
-          if (props.end) {
-            try {
-              const endDate = new Date(props.end);
-              if (!isNaN(endDate.getTime())) {
-                html += `<div style="color:#7dd3fc; font-size:11px; margin-top:2px;">Ends: ${endDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-          }
-          
-          if (props.lastUpdated && props.lastUpdated !== props.created) {
-            try {
-              const updateDate = new Date(props.lastUpdated);
-              if (!isNaN(updateDate.getTime())) {
-                html += `<div style="color:#64748b; font-size:10px; margin-top:3px;"><i class="fa-solid fa-rotate" style="margin-right:4px;"></i>Updated: ${updateDate.toLocaleString()}</div>`;
-              }
-            } catch(e) {}
-          }
-          
-          html += `</div>`;
+
+        if (!isWaze && (props.impactingNetwork || props.arrangement)) {
+          body += _ttSection(
+            'Network impact', '#7dd3fc', '125,211,252',
+            `<div style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-road" style="margin-right:4px;"></i>${escapeHtml(props.impactingNetwork || props.arrangement)}</div>`
+          );
         }
-        
-        html += `</div>`;
-        return html;
+
+        body += _ttTimingSection(props.start || props.created, props.end, props.lastUpdated);
+
+        return _ttWrap(header, body);
       }
       
       // Helper for roadwork icons
@@ -8309,7 +8141,7 @@ function initPagerHoursFromStorage() {
                 iconAnchor: [12, 12]
               });
               const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildRoadworkTooltip(props), {
+              marker.bindTooltip(buildRoadworkTooltip(props, lat, lon), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
@@ -8340,7 +8172,7 @@ function initPagerHoursFromStorage() {
                 iconAnchor: [12, 12]
               });
               const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildRoadworkTooltip(props), {
+              marker.bindTooltip(buildRoadworkTooltip(props, lat, lon), {
                 direction: 'top',
                 offset: [0, -10],
                 opacity: 0.95
@@ -8495,38 +8327,29 @@ function initPagerHoursFromStorage() {
               const [lon, lat] = feature.geometry.coordinates;
               const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
               
-              // Build Waze-style flood tooltip
-              let tooltip = `<div style="max-width:320px; font-family:'Inter', system-ui, -apple-system, sans-serif; line-height:1.4;">`;
-              tooltip += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">`;
-              tooltip += `<span style="color:#06b6d4; font-size:13px; font-weight:600;"><i class="fa-solid fa-water" style="margin-right:4px;"></i>${escapeHtml(props.displayType || 'Hazard Weather Flood')}</span>`;
-              tooltip += `<span style="background:#25d366; color:#000; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">WAZE</span>`;
-              tooltip += `</div>`;
-              if (props.location) {
-                tooltip += `<div style="margin-bottom:10px;">`;
-                tooltip += `<div style="color:#f59e0b; font-weight:600; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px;"><i class="fa-solid fa-location-dot" style="margin-right:4px;"></i>Location</div>`;
-                tooltip += `<div style="color:#fff; font-size:12px;">${escapeHtml(props.location)}</div>`;
-                tooltip += `</div>`;
+              // Beach-style Waze flood tooltip.
+              const floodHeader = _ttHeader(
+                'fa-solid fa-water',
+                props.displayType || 'Hazard Weather Flood',
+                '#06b6d4',
+                '#25d366', '#000', 'WAZE'
+              );
+              let floodBody = '';
+              floodBody += _ttLocationSection(props.street || props.location || '', props.city || '', lat, lon);
+              floodBody += _ttTypeSection(
+                formatWazeType(props.wazeType || ''),
+                formatWazeType(props.wazeSubtype || ''),
+                '#06b6d4', '6,182,212'
+              );
+              if (props.thumbsUp > 0 || props.reliability > 0) {
+                let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
+                if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
+                if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
+                conf += `</div>`;
+                floodBody += _ttSection('Confidence', '#86efac', '74,222,128', conf);
               }
-              const formattedType = formatWazeType(props.wazeSubtype || props.wazeType || '');
-              tooltip += `<div style="display:flex; gap:8px; margin-bottom:10px;">`;
-              tooltip += `<div style="background:rgba(6,182,212,0.12); padding:6px 10px; border-radius:5px; text-align:center; flex:1;">`;
-              tooltip += `<div style="color:#67e8f9; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">Type</div>`;
-              tooltip += `<div style="color:#06b6d4; font-size:11px; font-weight:600;">${escapeHtml(formattedType)}</div>`;
-              tooltip += `</div>`;
-              tooltip += `</div>`;
-              if (props.reliability > 0) {
-                tooltip += `<div style="color:#94a3b8; font-size:10px; margin-bottom:6px;"><i class="fa-solid fa-star" style="margin-right:4px; color:#fbbf24;"></i>Reliability: ${props.reliability}/10</div>`;
-              }
-              if (props.created) {
-                tooltip += `<div style="border-top:1px solid rgba(148,163,184,0.2); padding-top:8px; margin-top:4px;">`;
-                tooltip += `<div style="color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fa-regular fa-clock" style="margin-right:4px;"></i>Timing</div>`;
-                try {
-                  const d = new Date(props.created);
-                  if (!isNaN(d.getTime())) tooltip += `<div style="color:#e2e8f0; font-size:11px;">Reported: ${d.toLocaleString()}</div>`;
-                } catch(e) {}
-                tooltip += `</div>`;
-              }
-              tooltip += `</div>`;
+              floodBody += _ttTimingSection(props.created, null, null);
+              const tooltip = _ttWrap(floodHeader, floodBody);
               
               const icon = L.divIcon({
                 className: 'custom-pin',
