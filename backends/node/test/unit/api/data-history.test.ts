@@ -41,7 +41,7 @@ function row(over: Partial<PoolMockRow>): PoolMockRow {
     lng: 151.21,
     category: 'Bushfire',
     subcategory: null,
-    data: { title: 'Test', is_live: true },
+    data: { title: 'Test' },
     ...over,
   };
 }
@@ -83,8 +83,6 @@ describe('GET /api/data/history', () => {
     expect(records).toHaveLength(2);
     expect(records[0]?.['source']).toBe('rfs');
     expect(records[0]?.['title']).toBe('Test');
-    // is_live derived from data->>is_live; should default true.
-    expect(records[0]?.['is_live']).toBe(true);
     // latitude/longitude legacy keys, mapped from lat/lng columns.
     expect(records[0]?.['latitude']).toBe(-33.86);
     expect(records[0]?.['longitude']).toBe(151.21);
@@ -321,8 +319,8 @@ describe('GET /api/data/history/incident/:source/:source_id', () => {
       if (sql.includes('statement_timeout')) return { rows: [] };
       return {
         rows: [
-          row({ id: 1, fetched_at_epoch: 1_700_000_000, data: { title: 'a', is_live: false } }),
-          row({ id: 2, fetched_at_epoch: 1_700_000_500, data: { title: 'b', is_live: true } }),
+          row({ id: 1, fetched_at_epoch: 1_700_000_000, data: { title: 'a' } }),
+          row({ id: 2, fetched_at_epoch: 1_700_000_500, data: { title: 'b' } }),
         ],
       };
     });
@@ -334,8 +332,6 @@ describe('GET /api/data/history/incident/:source/:source_id', () => {
     expect(body['source']).toBe('rfs');
     expect(body['source_id']).toBe('inc-1');
     expect(body['snapshots']).toBe(2);
-    // Last record has is_live=true so the rollup should be true.
-    expect(body['is_live']).toBe(true);
     const history = body['history'] as Array<Record<string, unknown>>;
     expect(history).toHaveLength(2);
     // Full data blob is included on incident endpoint.
