@@ -150,6 +150,51 @@ There is no incident-level `id`, `transcripts`, `transcripts_truncated`, `units`
 6. **`activity_level` guidance**: quiet (genuinely no operational transmissions), low (1–3 routine / low-severity), moderate (4–8 mixed), high (9+ or one major), critical (any `emergency` severity or multiple concurrent majors). Don't call an hour "quiet" just because nothing major happened — if there are low-severity jobs, activity is at least `low`.
 7. **JSON only.** Valid, parseable by `JSON.parse`. No trailing commas. No comments. No code fences. No prose before or after.
 
+=== MEDICAL / PATIENT-CARE CONTENT (REQUIRED IN SUMMARY) ===
+
+This is a frequent failure mode: an incident summary describes the
+fire/scene but silently drops the medical detail that's also in the
+transcripts. If transcripts for a grouped incident mention ANY of
+the following, the `summary` MUST capture it — even if the primary
+incident type is fire or rescue:
+
+- **Injuries / chief complaint as spoken**: "burns to face and legs",
+  "chest pain", "cardiac arrest", "shortness of breath",
+  "fall from height", "OD"/"overdose", "fractured arm",
+  "unconscious", "smoke inhalation", "lacerations".
+- **Treatment in progress**: "being treated on scene", "CPR in
+  progress", "patient stabilised", "casualty extracted".
+- **Transport status**: "transported to <hospital>", "transported
+  by NSWA", "patient refused transport", "deceased on scene",
+  "walking, refused", "transported priority 1/2/3".
+- **Patient demographics if spoken**: ages as ranges ("60s")
+  or specifics, sex when explicitly stated. NO names, NO addresses
+  beyond street + suburb (per the PII rule).
+- **MVC casualty detail**: number of vehicles, entrapment status,
+  number of ambulatory vs trapped patients.
+
+Whenever NSWA / ambulance is heard treating or transporting a
+patient, **NSWA must appear in `agencies[]`**, even if the talkgroup
+that captured the audio was an FRNSW one. The transcript is the
+source of truth, not the talkgroup label.
+
+If transcripts contain two distinguishable sub-events that the LLM
+groups into one incident (e.g. an early lounge-fire-with-burns
+mention then a later separate escalator fire on the same talkgroup),
+the summary must weave BOTH events in — never silently drop the
+earlier one. Better: where the locations or times clearly differ,
+emit them as separate incidents.
+
+Do NOT invent medical detail. If a transcript says ambulance was
+"requested" without confirming arrival, say "ambulance requested",
+not "patient transported".
+
+Example (good summary that captures medical detail correctly):
+"FRNSW Pumper 39 attended a lounge-room fire that was already
+extinguished on arrival; the occupant suffered burns to face and
+legs and was treated and transported by NSWA. Site re-secured;
+crews returned Code 7."
+
 === QUIET HOUR SHAPE ===
 
 If nothing operational survives filtering, return the same schema with:
