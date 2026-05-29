@@ -138,6 +138,170 @@ describe('formatRdioPrompt', () => {
     expect(totalChars).toBe(0);
     expect(prompt).not.toContain('===');
   });
+
+  it('emits an inputMap keyed by call_id with verbatim text + uid + context', async () => {
+    const { formatRdioPrompt } = await import('../../../src/services/llm.js');
+    const calls = [
+      {
+        call_id: 100,
+        date_time: new Date('2026-04-25T01:00:00Z'),
+        system: 1,
+        talkgroup: 50,
+        transcript: 'fire reported',
+        source: 2010282,
+        sources: null,
+      },
+      {
+        call_id: 101,
+        date_time: new Date('2026-04-25T01:01:00Z'),
+        system: 2,
+        talkgroup: 80,
+        transcript: 'all clear',
+        source: null,
+        sources: null,
+      },
+    ];
+    const { inputMap } = await formatRdioPrompt(calls, 'p');
+    expect(inputMap.size).toBe(2);
+    const row100 = inputMap.get(100);
+    expect(row100?.text).toBe('fire reported');
+    expect(row100?.uid).toBe(2010282);
+    expect(row100?.context).toBe('Sys 1 — TG 50');
+    const row101 = inputMap.get(101);
+    expect(row101?.uid).toBeNull();
+    expect(row101?.text).toBe('all clear');
+  });
+});
+
+describe('rebuildIncidents', () => {
+  const mkInputMap = (): Map<number, import('../../../src/services/llm.js').RdioInputRow> => {
+    const m = new Map<number, import('../../../src/services/llm.js').RdioInputRow>();
+    m.set(100, {
+      call_id: 100, time: '10:00:01', text: 'truck en route',
+      uid: 2010282, unit_label: 'RFS - Greenwall Point 1', context: 'PSN — RFS',
+    });
+    m.set(101, {
+      call_id: 101, time: '10:00:30', text: 'second unit responding',
+      uid: 2010282, unit_label: 'RFS - Greenwall Point 1', context: 'PSN — RFS',
+    });
+    m.set(102, {
+      call_id: 102, time: '10:01:00', text: 'arriving on scene',
+      uid: 2019977, unit_label: null, context: 'PSN — RFS',
+    });
+    return m;
+  };
+
+  it('rebuilds transcripts + units from inputMap, ignoring LLM-emitted text', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    const input = mkInputMap();
+    const structured = {
+      incidents: [
+        {
+          title: 'Fire on George St',
+          summary: 'crews respond',
+          member_call_ids: [100, 101, 102],
+          // LLM emitted these — must be discarded and rebuilt from inputMap.
+          transcripts: [
+            { call_id: 100, text: 'POLISHED VERSION' },
+            { call_id: 101, text: 'ALSO POLISHED' },
+          ],
+          units: [{ uid: 999, label: 'Fabricated Unit' }],
+        },
+      ],
+    };
+    const out = rebuildIncidents(structured, input);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    expect(incs).toHaveLength(1);
+    const trs = incs[0]!['transcripts'] as Array<Record<string, unknown>>;
+    expect(trs).toHaveLength(3);
+    expect(trs[0]).toEqual({ call_id: 100, time: '10:00:01', text: 'truck en route' });
+    expect(trs[2]!['text']).toBe('arriving on scene'); // verbatim, not "ALSO POLISHED"
+    const units = incs[0]!['units'] as Array<Record<string, unknown>>;
+    expect(units).toHaveLength(2);
+    expect(units.map((u) => u['uid']).sort()).toEqual([2010282, 2019977]);
+    expect(out['incident_count']).toBe(1);
+  });
+
+  it('drops unknown call_ids and warns', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    const input = mkInputMap();
+    const structured = {
+      incidents: [
+        {
+          title: 'mixed',
+          member_call_ids: [100, 999, 102, 12345],
+        },
+      ],
+    };
+    const out = rebuildIncidents(structured, input);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    expect(incs[0]!['member_call_ids']).toEqual([100, 102]);
+    const trs = incs[0]!['transcripts'] as unknown[];
+    expect(trs).toHaveLength(2);
+  });
+
+  it('drops incidents that end up empty after filtering', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    const input = mkInputMap();
+    const structured = {
+      incidents: [
+        { title: 'real', member_call_ids: [100] },
+        { title: 'fabricated', member_call_ids: [999, 888] },
+        { title: 'no ids at all', member_call_ids: [] },
+      ],
+    };
+    const out = rebuildIncidents(structured, input);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    expect(incs).toHaveLength(1);
+    expect(incs[0]!['title']).toBe('real');
+    expect(out['incident_count']).toBe(1);
+  });
+
+  it('falls back to transcripts[].call_id when member_call_ids is missing (legacy schema)', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    const input = mkInputMap();
+    const structured = {
+      incidents: [
+        {
+          title: 'legacy shape',
+          // No member_call_ids — read call_ids from transcripts[].
+          transcripts: [
+            { call_id: 100, text: 'whatever' },
+            { call_id: '101', text: 'string id' }, // numeric coerce
+            { call_id: 999, text: 'fabricated' },
+          ],
+        },
+      ],
+    };
+    const out = rebuildIncidents(structured, input);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    expect(incs[0]!['member_call_ids']).toEqual([100, 101]);
+    const trs = incs[0]!['transcripts'] as unknown[];
+    expect(trs).toHaveLength(2);
+  });
+
+  it('sorts transcripts chronologically by input-map time', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    const input = mkInputMap();
+    const structured = {
+      incidents: [
+        { title: 'reverse order', member_call_ids: [102, 100, 101] },
+      ],
+    };
+    const out = rebuildIncidents(structured, input);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    const trs = incs[0]!['transcripts'] as Array<Record<string, unknown>>;
+    expect(trs.map((t) => t['call_id'])).toEqual([100, 101, 102]);
+  });
+
+  it('passes through if incidents is not an array', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    const input = mkInputMap();
+    const structured = { incidents: 'nope', other: 1 };
+    const out = rebuildIncidents(structured, input);
+    expect(out['incidents']).toBe('nope');
+    expect(out['other']).toBe(1);
+  });
 });
 
 describe('dedupeCalls', () => {
