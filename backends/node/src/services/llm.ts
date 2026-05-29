@@ -30,10 +30,7 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { getRdioPool, resolveLabels, getUnitLabel, ensureUnitLabelsLoaded } from './rdio.js';
 import { getPool } from '../db/pool.js';
-import {
-  polishStructuredIncidents,
-  validateStructuredAgainstTranscripts,
-} from './rdioValidator.js';
+import { polishStructuredIncidents } from './rdioValidator.js';
 
 const LLM_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -1271,17 +1268,10 @@ export async function generateRdioHourlySummary(
     }
     if (structured) {
       try {
-        if (config.RDIO_REBUILDER_ENABLED) {
-          structured = rebuildIncidents(structured, inputMap);
-          structured = polishStructuredIncidents(
-            structured,
-          ) as Record<string, unknown> | null;
-        } else {
-          structured = validateStructuredAgainstTranscripts(
-            structured,
-            calls,
-          ) as Record<string, unknown> | null;
-        }
+        structured = rebuildIncidents(structured, inputMap);
+        structured = polishStructuredIncidents(
+          structured,
+        ) as Record<string, unknown> | null;
       } catch (err) {
         log.warn(
           { err: (err as Error).message },
@@ -1368,17 +1358,10 @@ export async function generateRdioRecentSummary(
   }
   if (structured) {
     try {
-      if (config.RDIO_REBUILDER_ENABLED) {
-        structured = rebuildIncidents(structured, inputMap);
-        structured = polishStructuredIncidents(
-          structured,
-        ) as Record<string, unknown> | null;
-      } else {
-        structured = validateStructuredAgainstTranscripts(
-          structured,
-          calls,
-        ) as Record<string, unknown> | null;
-      }
+      structured = rebuildIncidents(structured, inputMap);
+      structured = polishStructuredIncidents(
+        structured,
+      ) as Record<string, unknown> | null;
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
