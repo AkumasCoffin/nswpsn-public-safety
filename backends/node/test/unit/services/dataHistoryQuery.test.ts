@@ -36,8 +36,6 @@ function defaultParams(overrides: Partial<DataHistoryParams> = {}): DataHistoryP
     lng: null,
     radiusKm: 10,
     unique: false,
-    liveOnly: false,
-    historicalOnly: false,
     activeOnly: false,
     order: 'DESC',
     limit: 100,
@@ -160,15 +158,6 @@ describe('buildSqlForTable — JSONB filters', () => {
     expect(q.params).toContain('%hwy%');
   });
 
-  it('live_only filters on data->>is_live truthy variants', () => {
-    const q = buildSqlForTable(
-      'archive_traffic',
-      defaultParams({ liveOnly: true }),
-    );
-    expect(q.sql).toContain("data->>'is_live' IN");
-    expect(q.sql).toContain("'1'");
-    expect(q.sql).toContain("'true'");
-  });
 });
 
 describe('buildSqlForTable — time, geo, cursor', () => {
