@@ -236,10 +236,35 @@ function formatLocalTime(d: Date | null): string {
   }
 }
 
+/**
+ * One row in the server-authoritative input map. Built alongside the
+ * Gemini prompt so the rebuilder can reattach verbatim transcripts and
+ * units to the LLM's incident groupings without trusting anything
+ * Gemini emits beyond `member_call_ids[]`. Keyed by call_id in the
+ * returned `inputMap`.
+ */
+export interface RdioInputRow {
+  call_id: number;
+  /** Local-tz formatted time string ("HH:MM:SS"), already display-ready. */
+  time: string;
+  /** Verbatim transcript text from rdio-scanner. */
+  text: string;
+  /** Numeric radio-unit ID extracted from rdioScannerCalls.source / sources[]. */
+  uid: number | null;
+  /** Human label for `uid` from rdio_units.csv. Null when the UID isn't known. */
+  unit_label: string | null;
+  /** "<systemLabel> — <talkgroupLabel>" — useful for tooltips later. */
+  context: string;
+}
+
 export async function formatRdioPrompt(
   calls: RdioCallRow[],
   periodLabel: string,
-): Promise<{ prompt: string; totalChars: number }> {
+): Promise<{
+  prompt: string;
+  totalChars: number;
+  inputMap: Map<number, RdioInputRow>;
+}> {
   await ensureUnitLabelsLoaded();
   type GroupKey = string;
   const groups = new Map<
@@ -255,6 +280,7 @@ export async function formatRdioPrompt(
       }>;
     }
   >();
+  const inputMap = new Map<number, RdioInputRow>();
   let totalChars = 0;
   let sampleLogged = false;
   for (const row of calls) {
@@ -299,6 +325,21 @@ export async function formatRdioPrompt(
       radioId,
       callId: row.call_id,
     });
+    // Populate the rebuilder's lookup table. First write wins per
+    // call_id — duplicate rows for the same call (rare but possible if
+    // dedupeCalls didn't merge them) would otherwise overwrite with the
+    // shorter row. The dedupe at the orchestrator level should already
+    // have handled this, but the guard is cheap.
+    if (!inputMap.has(row.call_id)) {
+      inputMap.set(row.call_id, {
+        call_id: row.call_id,
+        time: formatLocalTime(row.date_time),
+        text,
+        uid: radioId,
+        unit_label: radioId ? getUnitLabel(radioId) : null,
+        context: `${sysLabel} — ${tgDisplay}`,
+      });
+    }
     totalChars += text.length;
   }
 
@@ -329,7 +370,122 @@ export async function formatRdioPrompt(
   if (prompt.length > SUMMARY_MAX_PROMPT_CHARS) {
     prompt = `${prompt.slice(0, SUMMARY_MAX_PROMPT_CHARS)}\n\n[... truncated ...]`;
   }
-  return { prompt, totalChars };
+  return { prompt, totalChars, inputMap };
+}
+
+// ---------------------------------------------------------------------------
+// Rebuilder — replaces Gemini's emitted transcripts/units with server-
+// authoritative rows from the input map. See plan in dev-beta thread.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull a list of member call_ids out of a single incident object. New
+ * schema (post-prompt-rewrite): `member_call_ids: number[]`. Legacy
+ * schema (pre-rewrite, still in use during the rollout window):
+ * derive from `transcripts[].call_id`. Both forms accepted so the
+ * rebuilder can run against unchanged Gemini output behind the flag.
+ */
+function extractMemberCallIds(inc: Record<string, unknown>): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  const push = (v: unknown): void => {
+    if (v === null || v === undefined || v === '') return;
+    const n = typeof v === 'number' ? v : Number(v);
+    if (!Number.isFinite(n)) return;
+    const id = Math.trunc(n);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+  };
+  const explicit = inc['member_call_ids'];
+  if (Array.isArray(explicit)) {
+    for (const v of explicit) push(v);
+    return out;
+  }
+  const trs = inc['transcripts'];
+  if (Array.isArray(trs)) {
+    for (const t of trs) {
+      if (t && typeof t === 'object' && !Array.isArray(t)) {
+        push((t as Record<string, unknown>)['call_id']);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Rebuild `structured.incidents[]` so every transcript line and unit
+ * entry is server-authoritative. Gemini's `member_call_ids` (or
+ * legacy `transcripts[].call_id`) is the only thing read from the LLM
+ * output; the text, time, UID, and label are looked up in `inputMap`.
+ *
+ * Drops:
+ *   - call_ids absent from `inputMap` (Gemini fabrications) with a
+ *     warn line so we can track hallucination rate;
+ *   - incidents whose member set is empty after the filter — there's
+ *     nothing to display and the live page would render a blank row.
+ *
+ * Mutates `structured` in place. Returns the same reference so the
+ * caller can chain validators.
+ */
+export function rebuildIncidents(
+  structured: Record<string, unknown>,
+  inputMap: Map<number, RdioInputRow>,
+): Record<string, unknown> {
+  const incidents = structured['incidents'];
+  if (!Array.isArray(incidents)) return structured;
+  const out: Array<Record<string, unknown>> = [];
+  let droppedUnknown = 0;
+  let droppedEmpty = 0;
+  for (const inc of incidents) {
+    if (!inc || typeof inc !== 'object' || Array.isArray(inc)) continue;
+    const obj = inc as Record<string, unknown>;
+    const ids = extractMemberCallIds(obj);
+    const valid: number[] = [];
+    for (const id of ids) {
+      if (inputMap.has(id)) valid.push(id);
+      else droppedUnknown += 1;
+    }
+    if (valid.length === 0) {
+      droppedEmpty += 1;
+      continue;
+    }
+    obj['member_call_ids'] = valid;
+    // Sort by time using the unix dt embedded in the input row's order —
+    // input map insertion order matches transcript chronological order
+    // because formatRdioPrompt walks calls in dt order. Stable sort on
+    // valid[] via the input-row time string keeps ties deterministic.
+    valid.sort((a, b) => {
+      const ta = inputMap.get(a)!.time;
+      const tb = inputMap.get(b)!.time;
+      return ta < tb ? -1 : ta > tb ? 1 : a - b;
+    });
+    obj['transcripts'] = valid.map((id) => {
+      const row = inputMap.get(id)!;
+      return { call_id: row.call_id, time: row.time, text: row.text };
+    });
+    const unitMap = new Map<number, string | null>();
+    for (const id of valid) {
+      const row = inputMap.get(id)!;
+      if (row.uid !== null && !unitMap.has(row.uid)) {
+        unitMap.set(row.uid, row.unit_label);
+      }
+    }
+    obj['units'] = Array.from(unitMap.entries()).map(([uid, label]) => ({
+      uid,
+      label,
+    }));
+    out.push(obj);
+  }
+  structured['incidents'] = out;
+  structured['incident_count'] = out.length;
+  if (droppedUnknown > 0 || droppedEmpty > 0) {
+    log.warn(
+      { droppedUnknown, droppedEmpty, kept: out.length },
+      'rdio rebuilder: filtered structured incidents',
+    );
+  }
+  return structured;
 }
 
 // ---------------------------------------------------------------------------
@@ -1071,7 +1227,10 @@ export async function generateRdioHourlySummary(
     return null;
   }
   const periodLabel = formatPeriodLabel(start, end);
-  const { prompt, totalChars } = await formatRdioPrompt(calls, periodLabel);
+  const { prompt, totalChars, inputMap } = await formatRdioPrompt(
+    calls,
+    periodLabel,
+  );
   let summaryText: string;
   let structured: Record<string, unknown> | null = null;
   if (calls.length === 0) {
@@ -1104,14 +1263,18 @@ export async function generateRdioHourlySummary(
     }
     if (structured) {
       try {
-        structured = validateStructuredAgainstTranscripts(
-          structured,
-          calls,
-        ) as Record<string, unknown> | null;
+        if (config.RDIO_REBUILDER_ENABLED) {
+          structured = rebuildIncidents(structured, inputMap);
+        } else {
+          structured = validateStructuredAgainstTranscripts(
+            structured,
+            calls,
+          ) as Record<string, unknown> | null;
+        }
       } catch (err) {
         log.warn(
           { err: (err as Error).message },
-          'rdio validator threw; persisting un-validated structured',
+          'rdio polish threw; persisting un-validated structured',
         );
       }
     }
@@ -1176,7 +1339,10 @@ export async function generateRdioRecentSummary(
   const startUtc = calls[0]?.date_time ?? new Date();
   const endUtc = calls[calls.length - 1]?.date_time ?? new Date();
   const periodLabel = `Last ${calls.length} transcripts (${formatPeriodLabel(startUtc, endUtc)})`;
-  const { prompt, totalChars } = await formatRdioPrompt(calls, periodLabel);
+  const { prompt, totalChars, inputMap } = await formatRdioPrompt(
+    calls,
+    periodLabel,
+  );
   let summaryText = '';
   let structured: Record<string, unknown> | null = null;
   try {
@@ -1191,14 +1357,18 @@ export async function generateRdioRecentSummary(
   }
   if (structured) {
     try {
-      structured = validateStructuredAgainstTranscripts(
-        structured,
-        calls,
-      ) as Record<string, unknown> | null;
+      if (config.RDIO_REBUILDER_ENABLED) {
+        structured = rebuildIncidents(structured, inputMap);
+      } else {
+        structured = validateStructuredAgainstTranscripts(
+          structured,
+          calls,
+        ) as Record<string, unknown> | null;
+      }
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
-        'rdio validator threw; persisting un-validated structured',
+        'rdio polish threw; persisting un-validated structured',
       );
     }
   }

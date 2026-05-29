@@ -189,6 +189,18 @@ const Schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((s) => s === 'true'),
+
+  // Rebuilder feature flag for the rdio hourly summary path. When
+  // true, the LLM's emitted transcripts/units are discarded and
+  // re-attached server-side from the input map keyed by call_id (see
+  // services/llm.ts rebuildIncidents). When false (default), the
+  // legacy validateStructuredAgainstTranscripts polish runs. Lets us
+  // ship the rewrite in stages: code first behind the flag, then a
+  // prompt rewrite, then a flag flip, then cleanup.
+  RDIO_REBUILDER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
 });
 
 const parsed = Schema.safeParse(process.env);
