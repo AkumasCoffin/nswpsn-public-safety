@@ -202,14 +202,6 @@
       color: #e2e8f0;
     }
     
-    .stats-bar .live-count {
-      color: #22c55e;
-    }
-    
-    .stats-bar .ended-count {
-      color: #64748b;
-    }
-    
     /* Results Container */
     .results-container {
       display: flex;
@@ -254,15 +246,6 @@
       background: linear-gradient(135deg, rgba(30, 58, 138, 0.3) 0%, rgba(30, 41, 59, 0.8) 100%);
     }
     
-    .incident-card.live {
-      border-left: 3px solid #22c55e;
-    }
-    
-    .incident-card.ended {
-      border-left: 3px solid #475569;
-      opacity: 0.75;
-    }
-    
     .incident-icon {
       font-size: 1.3rem;
       width: 36px;
@@ -305,26 +288,6 @@
       align-items: flex-end;
       gap: 0.2rem;
       flex-shrink: 0;
-    }
-    
-    .status-badge {
-      font-size: 0.6rem;
-      font-weight: 600;
-      padding: 0.2rem 0.5rem;
-      border-radius: 4px;
-      text-transform: uppercase;
-    }
-    
-    .status-badge.live {
-      background: rgba(34, 197, 94, 0.2);
-      color: #22c55e;
-      border: 1px solid rgba(34, 197, 94, 0.3);
-    }
-    
-    .status-badge.ended {
-      background: rgba(100, 116, 139, 0.2);
-      color: #94a3b8;
-      border: 1px solid rgba(100, 116, 139, 0.3);
     }
     
     .incident-time {
@@ -976,15 +939,6 @@
         <input type="hidden" id="filter-subcategory" value="">
       </div>
       
-      <div class="filter-group">
-        <label class="filter-label">Live / Ended</label>
-        <select id="filter-status" class="filter-select">
-          <option value="">All</option>
-          <option value="live">Live Only</option>
-          <option value="ended">Ended Only</option>
-        </select>
-      </div>
-      
       <div class="filter-group" id="incident-status-group" style="display: none;">
         <label class="filter-label" id="incident-status-label">Status</label>
         <div class="custom-dropdown" id="status-dropdown">
@@ -1055,8 +1009,6 @@
     <!-- Stats Bar -->
     <div class="stats-bar">
       <span><i class="fas fa-database"></i> Total: <strong id="stats-total">--</strong></span>
-      <span><i class="fas fa-broadcast-tower"></i> Live: <strong id="stats-live" class="live-count">--</strong></span>
-      <span><i class="fas fa-archive"></i> Ended: <strong id="stats-ended" class="ended-count">--</strong></span>
       <span class="refresh-indicator"><i class="fas fa-circle"></i> Last updated: <span id="last-refresh">--</span></span>
     </div>
 
@@ -1121,8 +1073,6 @@
     let currentPage = 1;
     let totalPages = 1;
     let totalResults = 0;
-    let totalLiveCount = 0;
-    let totalEndedCount = 0;
     let isLoading = false;
     let selectedIncident = null;
     // Cursor returned by the backend with the previous page's response.
@@ -1201,45 +1151,6 @@
       renderResults();
     }
     
-    // Helper: Check if a pager hit should be considered "live" (< 1 hour old)
-    function isPagerLive(item) {
-      if (item.source !== 'pager') return item.is_live;
-      
-      // Use source_timestamp_unix (incident time), not last_seen
-      // Pager API always returns all hits, so last_seen keeps updating
-      let timestamp = item.source_timestamp_unix;
-      
-      // Fallbacks if source_timestamp_unix is missing
-      if (!timestamp && item.source_timestamp) {
-        // source_timestamp might be a unix timestamp as string or ISO date
-        const ts = item.source_timestamp;
-        if (!isNaN(Number(ts))) {
-          // It's a numeric string (unix timestamp)
-          timestamp = Number(ts);
-          // Handle milliseconds vs seconds
-          if (timestamp > 1e12) timestamp = timestamp / 1000;
-        } else {
-          // Try parsing as ISO date
-          const parsed = new Date(ts);
-          if (!isNaN(parsed.getTime())) {
-            timestamp = parsed.getTime() / 1000;
-          }
-        }
-      }
-      
-      // Final fallback to fetched_at
-      if (!timestamp) {
-        timestamp = item.fetched_at;
-      }
-      
-      if (timestamp && typeof timestamp === 'number') {
-        const oneHourAgo = Date.now() - (60 * 60 * 1000);
-        return (timestamp * 1000) >= oneHourAgo;
-      }
-      
-      // Fallback to database is_live flag
-      return item.is_live;
-    }
     
     function updateViewedCount() {
       const countEl = document.querySelector('.viewed-count');
@@ -2387,7 +2298,6 @@
       }
       
       const typeFilter = document.getElementById('filter-subcategory').value;
-      const liveEndedFilter = document.getElementById('filter-status').value;
       const incidentStatus = document.getElementById('filter-incident-status').value;
       const alertLevel = document.getElementById('filter-alert-level').value;
       const dateFrom = document.getElementById('filter-date-from').value;
@@ -2408,13 +2318,6 @@
         } else {
           params.set('subcategory', typeFilter);
         }
-      }
-      
-      // Live/Ended filter
-      if (liveEndedFilter === 'live') {
-        params.set('live_only', '1');
-      } else if (liveEndedFilter === 'ended') {
-        params.set('historical_only', '1');
       }
       
       // Incident status filter
@@ -2465,11 +2368,9 @@
         }
 
         const data = await res.json();
-        console.log('API response:', { total: data.total, live: data.live_count, ended: data.ended_count, recordCount: data.records?.length });
+        console.log('API response:', { total: data.total, recordCount: data.records?.length });
 
         totalResults = data.total || 0;
-        totalLiveCount = data.live_count || 0;
-        totalEndedCount = data.ended_count || 0;
         totalPages = Math.ceil(totalResults / pageSize) || 1;
         let recs = data.records || [];
         if (reverseDisplay) {
@@ -2582,12 +2483,7 @@
       }
       
       if (currentPageResults.length === 0) {
-        const status = document.getElementById('filter-status').value;
-        let msg = 'No incidents found matching your filters.';
-        if (status === 'ended') {
-          msg = 'No ended incidents found. Incidents are marked as "ended" when they stop appearing in API responses.';
-        }
-        showEmpty(msg);
+        showEmpty('No incidents found matching your filters.');
         return;
       }
       
@@ -2595,9 +2491,6 @@
       
       let html = '';
       currentPageResults.forEach((item, idx) => {
-        // Fix pager is_live: use incident time (not last_seen which keeps updating)
-        const isLive = isPagerLive(item);
-        
         const icon = getSourceIcon(item.source, item.subcategory);
         const sourceName = formatSourceName(item.source);
         const data = item.data || {};
@@ -2835,7 +2728,7 @@
         }
         
         html += `
-          <div class="incident-card ${isLive ? 'live' : 'ended'} ${viewed ? 'viewed' : ''} ${selectedIncident?.id === item.id ? 'selected' : ''}" 
+          <div class="incident-card ${viewed ? 'viewed' : ''} ${selectedIncident?.id === item.id ? 'selected' : ''}"
                onclick="selectIncident(${idx})" data-idx="${idx}" data-source-id="${escapeHtml(item.source_id || '')}">
             <div class="incident-icon">${icon}</div>
             <div class="incident-content">
@@ -2849,7 +2742,6 @@
               ${extraDetails ? `<div class="incident-details" style="font-size:10px; margin-top:4px; line-height:1.4;">${extraDetails}</div>` : ''}
             </div>
             <div class="incident-status">
-              <span class="status-badge ${isLive ? 'live' : 'ended'}">${isLive ? 'Live' : 'Ended'}</span>
               <span class="incident-time">${time}</span>
               ${reportedTime ? `<span class="incident-reported">${escapeHtml(reportedTime.split(',')[0])}</span>` : ''}
             </div>
@@ -2863,13 +2755,7 @@
     
     function updateStats() {
       const totalEl = document.getElementById('stats-total');
-      const liveEl = document.getElementById('stats-live');
-      const endedEl = document.getElementById('stats-ended');
-      
-      // Use API-provided counts (not loaded items count)
       if (totalEl) totalEl.textContent = totalResults.toLocaleString();
-      if (liveEl) liveEl.textContent = totalLiveCount.toLocaleString();
-      if (endedEl) endedEl.textContent = totalEndedCount.toLocaleString();
     }
     
     function updateLastRefresh() {
@@ -3602,7 +3488,6 @@
       if (typeOptionsContainer) typeOptionsContainer.innerHTML = '';
       
       resetSubcategoryDropdown('All Categories');
-      document.getElementById('filter-status').value = '';
       resetStatusDropdown();
       resetAlertLevelDropdown();
       document.getElementById('filter-date-from').value = '';
@@ -3638,13 +3523,11 @@
       const provider = document.getElementById('filter-provider').value;
       const source = document.getElementById('filter-source').value;
       const subcategory = document.getElementById('filter-subcategory').value;
-      const status = document.getElementById('filter-status').value;
       const search = document.getElementById('filter-search').value;
-      
+
       if (provider) params.set('provider', provider);
       if (source) params.set('source', source);
       if (subcategory) params.set('subcategory', subcategory);
-      if (status) params.set('status', status);
       if (search) params.set('search', search);
       if (currentQuickFilter > 0) params.set('hours', currentQuickFilter);
       if (currentQuickFilter === -1) params.set('hours', 'all');
@@ -3796,21 +3679,15 @@
       const sourceIcon = getSourceIcon(source);
       const sourceName = formatSourceName(source);
       
-      // Determine badge based on source
+      // Determine badge based on source. Only RFS surfaces a status badge
+      // (alert level) in the detail panel — all other sources stay clean.
       let badge = '';
-      // Fix pager is_live: use incident time (not last_seen which keeps updating)
-      const isLive = isPagerLive(item);
-      
       if (source === 'rfs') {
         const alertLevel = data.ALERT_LEVEL || item.severity || '';
         if (alertLevel) {
           const alertColor = getAlertLevelColor(alertLevel);
           badge = `<span style="background:${alertColor}; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase;">${escapeHtml(alertLevel)}</span>`;
         }
-      } else if (isLive !== undefined) {
-        const liveColor = isLive ? '#22c55e' : '#64748b';
-        const liveText = isLive ? 'LIVE' : 'ENDED';
-        badge = `<span style="background:${liveColor}; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600;">${liveText}</span>`;
       }
       
       html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:10px;">
@@ -4374,9 +4251,6 @@
           }
         }
       }
-      if (params.has('status')) {
-        document.getElementById('filter-status').value = params.get('status');
-      }
       if (params.has('search')) {
         document.getElementById('filter-search').value = params.get('search');
       }
@@ -4439,7 +4313,6 @@
         }
         
         const typeFilter = document.getElementById('filter-subcategory')?.value || '';
-        const liveEndedFilter = document.getElementById('filter-status')?.value || '';
         const dateFrom = document.getElementById('filter-date-from')?.value || '';
         const dateTo = document.getElementById('filter-date-to')?.value || '';
         const search = document.getElementById('filter-search')?.value?.trim() || '';
@@ -4459,9 +4332,6 @@
             params.set('subcategory', typeFilter);
           }
         }
-        
-        if (liveEndedFilter === 'live') params.set('live_only', '1');
-        else if (liveEndedFilter === 'ended') params.set('historical_only', '1');
         
         // Incident status filter
         if (incidentStatus) {
@@ -4489,8 +4359,6 @@
 
         // Update counts (these are full query counts from backend)
         totalResults = data.total || 0;
-        totalLiveCount = data.live_count || 0;
-        totalEndedCount = data.ended_count || 0;
         totalPages = Math.ceil(totalResults / pageSize) || 1;
 
         let newRecords = data.records || [];
