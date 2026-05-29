@@ -176,8 +176,6 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
     // snapshot must pass ?unique=0 explicitly — logs.html's
     // linked-incident proximity lookups already do.
     unique: q.get('unique') !== '0',
-    liveOnly: q.get('live_only') === '1',
-    historicalOnly: q.get('historical_only') === '1',
     activeOnly: q.get('active_only') === '1',
     order,
     limit,
@@ -200,8 +198,6 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   // frontend logs page.
   if (since !== null) rawFilters['since'] = sydneyIsoFromUnix(since);
   if (until !== null) rawFilters['until'] = sydneyIsoFromUnix(until);
-  if (params.liveOnly) rawFilters['live_only'] = true;
-  if (params.historicalOnly) rawFilters['historical_only'] = true;
   if (params.unique) rawFilters['unique'] = true;
 
   return { params, rawFilters };
@@ -357,8 +353,6 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     return c.json({
       records: [],
       total: 0,
-      live_count: 0,
-      ended_count: 0,
       limit: params.limit,
       offset: params.offset,
       count: 0,
@@ -402,17 +396,16 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
       }),
     );
-    // Per-family count returns total + live_count in one round-trip.
-    // ended is derived as `total - live` to match formatRecord's
-    // truthy-default semantics for missing is_live.
+    // Per-family count: just `total`. The Live/Ended split is gone
+    // (see the is_live removal); the count query now returns a single
+    // bigint and the response surfaces only `total`.
     //
     // 2-min LRU cache: page-jumper clicks all hit the same WHERE
     // clause (only LIMIT/OFFSET differ, and the count query strips
     // both) so we re-use the previous result instead of re-running
-    // the 5-10s aggregate per page click. 30s was too short to span
-    // a typical paginating session; bumped to 120s.
+    // the 5-10s aggregate per page click.
     //
-    // Count uses a 15s timeout (vs 60s for the data query) so a
+    // Count uses a 15s timeout (vs 30s for the data query) so a
     // stuck count never blocks the route. On timeout the route
     // returns the data with total=0; logs.html falls back to "+"
     // pagination instead of jump-to-page.
@@ -422,8 +415,8 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     // response is the only signal it uses. Avoids running the 5-10s
     // COUNT aggregate on every cursor-paged page click.
     const skipCount = params.cursor !== null;
-    const countPromise: Promise<Array<{ total: number; live: number }>> = skipCount
-      ? Promise.resolve(plan.queries.map(() => ({ total: 0, live: 0 })))
+    const countPromise: Promise<number[]> = skipCount
+      ? Promise.resolve(plan.queries.map(() => 0))
       : Promise.all(
       plan.queries.map(async (q) => {
         const cq = buildCountSqlForTable(q.table, params);
@@ -434,13 +427,8 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
         try {
           const r = await runWithTimeout(pool, cq.sql, cq.params, 15);
-          const row = r.rows[0] as
-            | { total?: string | number; live_count?: string | number }
-            | undefined;
-          const count = {
-            total: Number(row?.total ?? 0),
-            live: Number(row?.live_count ?? 0),
-          };
+          const row = r.rows[0] as { total?: string | number } | undefined;
+          const count = Number(row?.total ?? 0);
           // Bound the cache: drop oldest when over capacity. Map's
           // insertion order makes this O(1) per eviction.
           if (countCache.size >= COUNT_CACHE_MAX) {
@@ -461,17 +449,15 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
             if (oldestKey !== undefined) countCache.delete(oldestKey);
           }
           countCache.set(key, {
-            count: { total: 0, live: 0 },
+            count: 0,
             ts: nowMs - (COUNT_CACHE_TTL_MS - 30_000),
           });
-          return { total: 0, live: 0 };
+          return 0;
         }
       }),
     );
     const [results, counts] = await Promise.all([dataPromise, countPromise]);
-    const total = counts.reduce((a, b) => a + b.total, 0);
-    const liveCount = counts.reduce((a, b) => a + b.live, 0);
-    const endedCount = Math.max(0, total - liveCount);
+    const total = counts.reduce((a, b) => a + b, 0);
 
     let merged: ArchiveQueryRow[];
     if (results.length === 1) {
@@ -500,15 +486,6 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     return c.json({
       records,
       total,
-      // For unique=0 (parent-table count): live_count comes from a
-      // FILTER (WHERE data->>'is_live' ...) on the same query as
-      // `total`. For unique=1 (sidecar count): derived from
-      // last_seen_at staleness (see buildCountSqlForTable). When the
-      // caller paginates with ?cursor=, the count query is skipped
-      // entirely (total/live/ended return 0 — cursor pagination
-      // doesn't use them).
-      live_count: liveCount,
-      ended_count: endedCount,
       limit: params.limit,
       offset: params.offset,
       count: records.length,
@@ -539,7 +516,6 @@ interface FormattedRecord {
   severity: string | null;
   data: Record<string, unknown>;
   is_active: boolean;
-  is_live: boolean;
   last_seen: number | null;
   last_seen_iso: string | null;
 }
@@ -574,25 +550,6 @@ function pickNum(d: Record<string, unknown>, k: string): number | null {
     return Number.isFinite(n) ? n : null;
   }
   return null;
-}
-
-// Liveness threshold: an incident is "live" iff last_seen_at advanced
-// within the last N seconds. Matches buildCountSqlForTable's
-// LIVE_STALE_MINUTES (15 min) so the per-row is_live derivation lines
-// up with the aggregate live_count returned alongside.
-const LIVE_STALE_SECONDS = 15 * 60;
-
-/** Derive is_live from the sidecar's last_seen timestamp (preferred)
- *  with a fallback to the legacy `data->>'is_live'` read for archive
- *  rows that pre-date the staleness rework (their lastSeen will be
- *  null on the response). Defaults to true to match Python's behaviour
- *  when neither signal is present. */
-function deriveIsLive(lastSeen: number | null, data: Record<string, unknown>): boolean {
-  if (lastSeen !== null && Number.isFinite(lastSeen)) {
-    const ageSecs = Math.floor(Date.now() / 1000) - lastSeen;
-    return ageSecs <= LIVE_STALE_SECONDS;
-  }
-  return pickBool(data, 'is_live', true);
 }
 
 function pickBool(d: Record<string, unknown>, k: string, fallback: boolean): boolean {
@@ -659,12 +616,6 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     severity: pickStr(data, 'severity'),
     data: includeData ? data : {},
     is_active: pickBool(data, 'is_active', false),
-    // is_live is now derived from sidecar staleness instead of read
-    // from the JSONB blob: an incident is "live" iff its last_seen_at
-    // advanced within the last LIVE_STALE_MINUTES poll window. Falls
-    // back to the legacy JSONB read for old archive rows that pre-date
-    // the staleness rework (their last_seen will be null on the row).
-    is_live: deriveIsLive(lastSeen, data),
     last_seen: lastSeen,
     last_seen_iso: sydneyIsoFromUnix(lastSeen),
   };
@@ -736,7 +687,7 @@ const SOURCES_STATS_TTL_MS = 5 * 60_000;
 // re-run the 5-10s COUNT(*) FILTER aggregate each time. Bounded at
 // 256 entries to avoid runaway growth from heavy filter-permutation
 // traffic.
-interface CountCacheEntry { count: { total: number; live: number }; ts: number; }
+interface CountCacheEntry { count: number; ts: number; }
 const countCache = new Map<string, CountCacheEntry>();
 const COUNT_CACHE_TTL_MS = 120_000;
 const COUNT_CACHE_MAX = 256;
@@ -949,7 +900,6 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
     return c.json({
       source,
       source_id: sourceId,
-      is_live: false,
       snapshots: 0,
       history: [],
     });
@@ -981,8 +931,6 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       lng: null,
       radiusKm: 10,
       unique: false,
-      liveOnly: false,
-      historicalOnly: false,
       activeOnly: false,
       order: 'ASC',
       limit: 5000,
@@ -1009,22 +957,13 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       severity: pickStr(r.data, 'severity'),
       data: r.data,
       is_active: pickBool(r.data, 'is_active', false),
-      // Per-snapshot view: each row is a poll snapshot, not the
-      // sidecar's "latest known state". Use the legacy JSONB read
-      // (works for old tombstoned rows) defaulting to true (no
-      // is_live in data = "this snapshot was live at fetch time").
-      is_live: pickBool(r.data, 'is_live', true),
       last_seen: pickNum(r.data, 'last_seen'),
       last_seen_iso: sydneyIsoFromUnix(pickNum(r.data, 'last_seen')),
     }));
 
-    const isCurrentlyLive =
-      history.length > 0 ? (history[history.length - 1]?.is_live ?? false) : false;
-
     return c.json({
       source,
       source_id: sourceId,
-      is_live: isCurrentlyLive,
       snapshots: history.length,
       history,
     });
