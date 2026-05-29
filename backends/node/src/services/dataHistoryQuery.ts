@@ -227,23 +227,31 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   }
   // Time-window filter uses the SOURCE'S OWN publish timestamp
   // (source_timestamp_unix on the sidecar — see migration 020),
-  // falling back to latest_fetched_at when the upstream payload
-  // didn't expose a usable timestamp. After the recompute task
-  // settles, latest_fetched_at is "when this incident's data last
-  // actually changed" — a meaningful chronological proxy when the
-  // source itself doesn't publish a timestamp (e.g. waze_jam,
-  // ausgrid). last_seen_at deliberately NOT in the fallback chain:
-  // it advances every poll, so for any live incident it's "now" and
-  // makes the entire list cluster at the top.
+  // falling back to last_seen_at when the upstream payload didn't
+  // expose a usable timestamp. last_seen_at = "we still see this
+  // incident in our polls", which is the natural meaning of "in the
+  // last N hours" — a stable waze incident polled all day stays
+  // visible in a 24h window even if its latest_fetched_at is days
+  // old.
+  //
+  // This matches /api/data/history/filters' time filter; previously
+  // the data path used latest_fetched_at here, which silently
+  // dropped ~15% of waze rows from logs.html's total while /filters
+  // still reported them.
+  //
+  // Note: this is the WHERE filter only. The SELECT's effective_ts
+  // (and the ORDER BY built from it below) still falls back to
+  // latest_fetched_at so the result isn't a stack of identical
+  // "now" timestamps for stable incidents.
   if (p.since !== null) {
     sidecarAcc.parts.push(
-      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.since);
   }
   if (p.until !== null) {
     sidecarAcc.parts.push(
-      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.until);
   }
@@ -793,16 +801,18 @@ export function buildCountSqlForTable(
       sidecarAcc.params.push(p.sourceId);
     }
     // Match the unique=1 data query — filter on the source's own
-    // publish timestamp with last_seen_at fallback.
+    // publish timestamp with last_seen_at fallback. last_seen_at
+    // mirrors the /filters facet query (filterCache.ts) so the per-
+    // source counts there sum to this `total`.
     if (p.since !== null) {
       sidecarAcc.parts.push(
-        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.since);
     }
     if (p.until !== null) {
       sidecarAcc.parts.push(
-        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.until);
     }
