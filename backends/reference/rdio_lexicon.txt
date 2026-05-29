@@ -1,0 +1,232 @@
+# rdio spell-check allow-list. Words listed here will NEVER be
+# "corrected" by the spell-checker — useful for callsigns, NSW place
+# names, agency acronyms, and other domain words the en-AU Hunspell
+# dictionary doesn't ship with.
+#
+# Rules:
+#   - One word per line.
+#   - Lines starting with '#' are comments.
+#   - Case is ignored (the loader lowercases everything).
+#   - Anything that's already in the en-AU dictionary, in
+#     rdio_units.csv labels, or that matches a "looks like a proper
+#     noun / acronym / callsign" gate inside rdioSpell.ts is already
+#     skipped — you only need to add words here when you see a real
+#     correction land that you don't want repeated.
+#
+# Operator workflow: see a bad correction in the logs (debug-level
+#   "rdio spell: corrections applied"). Add the original word here.
+#   Restart api-node. Done.
+
+# === Agency / radio core ===
+nswpf
+nswpsn
+frnsw
+nswa
+rfs
+ses
+vkg
+vka
+polair
+firecom
+firecomms
+afa
+mvc
+mva
+hazmat
+epa
+sca
+fireground
+talkgroup
+hi-vis
+hivis
+
+# === Prowords and incident codes ===
+roger
+copy
+affirm
+affirmative
+negative
+disregard
+standby
+proword
+prowords
+codeword
+codewords
+
+# === Sydney metro suburbs (common Whisper trouble cases) ===
+bondi
+coogee
+maroubra
+mascot
+botany
+randwick
+kensington
+zetland
+waterloo
+alexandria
+redfern
+glebe
+ultimo
+pyrmont
+chippendale
+darlinghurst
+surry
+mosman
+neutral
+cremorne
+chatswood
+strathfield
+burwood
+ashfield
+marrickville
+leichhardt
+newtown
+camperdown
+parramatta
+westmead
+auburn
+homebush
+liverpool
+campbelltown
+ingleburn
+minto
+macquarie
+penrith
+katoomba
+blacktown
+mt
+druitt
+prospect
+kingswood
+
+# === Illawarra / South Coast ===
+wollongong
+bulli
+woonona
+corrimal
+fairy
+thirroul
+helensburgh
+unanderra
+dapto
+albion
+shellharbour
+kiama
+berry
+nowra
+bomaderry
+huskisson
+shoalhaven
+vincentia
+sussex
+ulladulla
+batemans
+moruya
+narooma
+bega
+merimbula
+eden
+
+# === Central Coast ===
+gosford
+wyong
+tuggerah
+erina
+terrigal
+avoca
+toukley
+forresters
+
+# === Hunter / Newcastle ===
+newcastle
+maitland
+cessnock
+singleton
+muswellbrook
+scone
+tomago
+karuah
+
+# === Northern Rivers / North Coast ===
+lismore
+ballina
+casino
+grafton
+yamba
+kempsey
+taree
+tuncurry
+forster
+nambucca
+macksville
+bellingen
+coffs
+
+# === Western NSW ===
+bathurst
+orange
+dubbo
+mudgee
+wellington
+forbes
+parkes
+cowra
+lithgow
+katoomba
+
+# === Southern Highlands / Snowy ===
+bowral
+mittagong
+moss
+robertson
+goulburn
+cooma
+jindabyne
+tumut
+
+# === Riverina / Far West ===
+wagga
+albury
+griffith
+hay
+deniliquin
+bourke
+broken
+
+# === Common highways / arterials ===
+hume
+princes
+pacific
+mitchell
+newell
+olympic
+sturt
+castlereagh
+putty
+wakehurst
+oxford
+parramatta
+victoria
+king
+
+# === Common but not-in-dict radio words ===
+backup
+backups
+turnout
+turnouts
+respond
+responder
+responders
+dispatch
+dispatcher
+dispatchers
+crewing
+crewed
+ambo
+ambos
+firefighter
+firefighters
+volie
+volies
+rms
+rms's

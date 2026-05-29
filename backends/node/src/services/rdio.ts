@@ -193,6 +193,13 @@ export function getUnitLabel(rid: number | null | undefined): string | null {
   return unitLabels.get(Number(rid)) ?? null;
 }
 
+/** Iterable of every loaded unit label (post `ensureUnitLabelsLoaded`). Used
+ *  by the spell-check service to seed its allow-list with brigade / station
+ *  names so they aren't flagged as misspellings. */
+export function allUnitLabels(): Iterable<string> {
+  return unitLabels.values();
+}
+
 // ---------------------------------------------------------------------------
 // Test seams
 // ---------------------------------------------------------------------------
