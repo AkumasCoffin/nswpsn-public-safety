@@ -7,8 +7,8 @@
  * partitioned per-family archive tables.
  *
  * New schema: 5 archive_* tables (waze/traffic/rfs/power/misc), each
- * append-only, monthly RANGE-partitioned by fetched_at, no
- * is_live/is_latest columns. See src/db/migrations/002_archive_partitions.sql.
+ * append-only, monthly RANGE-partitioned by fetched_at. See
+ * src/db/migrations/002_archive_partitions.sql.
  *
  * The big handler routes to the minimum set of family tables given the
  * `?source=` filter. Single-family case = one indexed query. Multi-family
@@ -396,9 +396,8 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
       }),
     );
-    // Per-family count: just `total`. The Live/Ended split is gone
-    // (see the is_live removal); the count query now returns a single
-    // bigint and the response surfaces only `total`.
+    // Per-family count: a single `total` bigint that the route sums
+    // across families.
     //
     // 2-min LRU cache: page-jumper clicks all hit the same WHERE
     // clause (only LIMIT/OFFSET differ, and the count query strips

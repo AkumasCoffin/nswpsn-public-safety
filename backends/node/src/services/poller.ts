@@ -171,11 +171,8 @@ async function runOnceInner(src: SourceDefinition): Promise<void> {
       const rows = src.archiveItems
         ? src.archiveItems(data, fetchedAt, archiveSource)
         : defaultArchiveItems(archiveSource, data, fetchedAt);
-      // No more is_live stamping — liveness is derived at read time
-      // from the sidecar's last_seen_at column. If an incident keeps
-      // appearing in polls, its last_seen_at advances and readers
-      // treat it as live; when polls stop including it, last_seen_at
-      // goes stale and readers derive ended. No tombstone INSERTs into
+      // Per-incident liveness lives on the sidecar's last_seen_at
+      // column — bumped on every UPSERT. No tombstone INSERTs into
       // the parent archive needed.
       const tbl = familyTable(src.family);
       for (const row of rows) {
