@@ -130,9 +130,6 @@ export interface DataHistoryParams {
   radiusKm: number;
 
   unique: boolean;
-  /** Mirrors Python `live_only` / `historical_only` — implemented best-effort against JSONB. */
-  liveOnly: boolean;
-  historicalOnly: boolean;
   activeOnly: boolean;
 
   order: SortDir;
@@ -340,8 +337,6 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   //   - sinceSource / untilSource (data->>'source_timestamp_unix' —
   //     duplicates the indexed sidecar column source_timestamp_unix
   //     but only when the upstream supplies one)
-  //   - liveOnly / historicalOnly (data->>'is_live' — Phase 3
-  //     staleness rework hasn't landed; the column is still in JSONB)
   //   - lat/lng radius (sidecar doesn't carry coords)
   //   - cursor seek (uses fetched_at + id from parent)
   // Renumber placeholders so parent params start AFTER sidecar params.
@@ -358,11 +353,6 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
       `((a.data->>'source_timestamp_unix')::bigint) <= $${offset() + 1}`,
     );
     parentAcc.params.push(p.untilSource);
-  }
-  if (p.liveOnly) {
-    parentAcc.parts.push(`(a.data->>'is_live' IN ('1','true','True'))`);
-  } else if (p.historicalOnly) {
-    parentAcc.parts.push(`(a.data->>'is_live' IN ('0','false','False'))`);
   }
   if (p.lat !== null && p.lng !== null) {
     const latDelta = p.radiusKm / 111.0;
@@ -519,12 +509,6 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
     acc.parts.push(
       `(data->>'is_active' IN ('1','true','True'))`,
     );
-  }
-
-  if (p.liveOnly) {
-    acc.parts.push(`(data->>'is_live' IN ('1','true','True'))`);
-  } else if (p.historicalOnly) {
-    acc.parts.push(`(data->>'is_live' IN ('0','false','False'))`);
   }
 
   if (p.search) {
@@ -700,16 +684,11 @@ export function buildCountSqlForTable(
     );
     acc.params.push(p.untilSource);
   }
-  // activeOnly / liveOnly / historicalOnly — also previously omitted.
-  // Without these, `live_count / ended_count` derived in the route
-  // were inconsistent with the actual `records` returned.
+  // activeOnly — previously omitted from the count, which left
+  // `total` inconsistent with the actual `records` returned for
+  // callers passing ?active_only=1.
   if (p.activeOnly) {
     acc.parts.push(`(data->>'is_active' IN ('1','true','True'))`);
-  }
-  if (p.liveOnly) {
-    acc.parts.push(`(data->>'is_live' IN ('1','true','True'))`);
-  } else if (p.historicalOnly) {
-    acc.parts.push(`(data->>'is_live' IN ('0','false','False'))`);
   }
   if (p.search) {
     acc.parts.push(
@@ -755,35 +734,16 @@ export function buildCountSqlForTable(
   // rows, which on archive_waze (millions of rows across many monthly
   // partitions) blows past the 60s budget even for a 50k cap. With it,
   // the planner walks the index from now backwards and stops at 50k.
-  // SELECT shape: total + live_count (FILTER over `data->>'is_live'`).
-  // ended_count is computed in JS as `total - live_count` to match
-  // formatRecord's truthy-default semantics (missing is_live → live).
-  // Inferring ended from `is_live IN ('0','false','False')` would
-  // silently drop rows with no is_live key.
-  //
-  // Both columns ride through the doubly-nested LIMIT pattern so the
-  // 50k cap still bounds the index walk before DISTINCT runs.
+  // SELECT shape: a single bigint `total`. The 50k cap rides through
+  // the doubly-nested LIMIT pattern so the index walk stops at 50k
+  // before the outer COUNT runs.
   const COUNT_CAP = 50_000;
-  // ROLLED BACK from is_live/is_latest filtering — see buildSqlForTable
-  // for context. Back to bounded count using the (fetched_at DESC)
-  // index. live_count derived from JSONB at extract time; per-row
-  // overhead is fine because the LIMIT bounds the scan.
-  const IS_LIVE_PRED = `(data->>'is_live') IN ('1','true','True')`;
-  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live_truthy)::bigint AS live_count`;
 
   if (p.unique) {
     // Sidecar-driven unique count (migration 017). Sidecar carries
     // (source, source_id, latest_fetched_at) — exactly the columns
     // we filter on for time + source. Anything else (category,
     // JSONB fields, lat/lng radius) only the parent has.
-    //
-    // Trade-off: live_count is set to total here. The previous count
-    // path bounded-scanned the parent and FILTERed by data->>'is_live',
-    // which gave an accurate live/ended split — but it ran 10s+ on
-    // archive_waze under ingest pressure. Counting the sidecar is
-    // O(matching_rows) and finishes in milliseconds; the small
-    // regression (frontend's "X live, Y ended" pill always shows
-    // ended=0 for unique=1 lists) is acceptable for the latency win.
     const sidecarAcc: ConditionAcc = { parts: [], params: [] };
     if (p.sources && p.sources.length > 0) pushIn(sidecarAcc, 'source', p.sources);
     const explicitlyAskedForDeprecated2 =
@@ -817,8 +777,8 @@ export function buildCountSqlForTable(
       sidecarAcc.params.push(p.until);
     }
     // Apply the same post-JOIN-filter set the data query (buildUniqueQuery)
-    // now applies on the sidecar — so total / live_count honour them
-    // instead of always reporting the unfiltered roll-up.
+    // now applies on the sidecar — so `total` honours them instead of
+    // always reporting the unfiltered roll-up.
     if (p.category && p.category.length > 0) {
       const placeholders = p.category.map(
         (_, i) => `$${sidecarAcc.params.length + i + 1}`,
@@ -883,36 +843,22 @@ export function buildCountSqlForTable(
     }
     const sidecarWhere =
       sidecarAcc.parts.length > 0 ? `WHERE ${sidecarAcc.parts.join(' AND ')}` : '';
-    // live_count from sidecar staleness: an incident is "live" iff its
-    // last_seen_at advanced within the last LIVE_STALE_MINUTES poll
-    // window. Previously we returned live_count = total which pinned
-    // the frontend's "X live / Y ended" pill to "everything live, 0
-    // ended" — visibly wrong on unique=1 lists with old incidents.
-    // The threshold is generous because slow sources (RFS, BOM) only
-    // poll every 5-10 min; 15 min covers 2-3 missed polls before
-    // marking an incident ended.
-    const LIVE_STALE_MINUTES = 15;
     // No COUNT_CAP for the sidecar path — `_latest` carries one row
     // per (source, source_id), bounded by the number of distinct
     // incidents the upstream feed currently knows about (tens of
     // thousands, not the millions in the parent partitions). Counting
-    // it directly is sub-second on an indexed table, and the previous
-    // 50k cap was silently truncating the total on the waze sidecar
-    // (~83k rows) — that's what made logs.html report 64k when the
-    // filters endpoint summed past 90k.
-    const sql = `
-      SELECT COUNT(*)::bigint AS total,
-             COUNT(*) FILTER (
-               WHERE last_seen_at >= NOW() - INTERVAL '${LIVE_STALE_MINUTES} minutes'
-             )::bigint AS live_count
-      FROM ${table}_latest ${sidecarWhere}
-    `;
+    // it directly is sub-second on an indexed table.
+    const sql = `SELECT COUNT(*)::bigint AS total FROM ${table}_latest ${sidecarWhere}`;
     return { sql, params: sidecarAcc.params, table };
   }
 
-  const sql = `${aggLine}
+  // Unique=0 parent count: bounded scan via idx_archive_*_ts so
+  // archive_waze (millions of rows across monthly partitions) can't
+  // burn the 60s statement_timeout. The frontend's page-jumper only
+  // ever navigates the first ~5000 pages anyway.
+  const sql = `SELECT COUNT(*)::bigint AS total
        FROM (
-         SELECT ${IS_LIVE_PRED} AS is_live_truthy
+         SELECT 1
          FROM ${table} ${whereClause}
          ORDER BY fetched_at DESC
          LIMIT ${COUNT_CAP}
