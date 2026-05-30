@@ -404,6 +404,17 @@ export async function formatRdioPrompt(
 // authoritative rows from the input map. See plan in dev-beta thread.
 // ---------------------------------------------------------------------------
 
+/** Cap on how many transcript rows are rendered per incident. A multi-
+ *  agency job can pull hundreds of transmissions; the live.html /
+ *  logs.html cards aren't built for that and the operator gets the
+ *  most value out of dispatch context + resolution. We keep the first
+ *  TRANSCRIPTS_HEAD_KEEP and the last TRANSCRIPTS_TAIL_KEEP rows
+ *  chronologically; the full member_call_ids list still rides along
+ *  in the response so callers with real reason to inspect more can. */
+const TRANSCRIPTS_CAP = 10;
+const TRANSCRIPTS_HEAD_KEEP = 8;
+const TRANSCRIPTS_TAIL_KEEP = 2;
+
 /**
  * Pull a list of member call_ids out of a single incident object. New
  * schema (post-prompt-rewrite): `member_call_ids: number[]`. Legacy
@@ -486,10 +497,28 @@ export function rebuildIncidents(
       const tb = inputMap.get(b)!.time;
       return ta < tb ? -1 : ta > tb ? 1 : a - b;
     });
-    obj['transcripts'] = valid.map((id) => {
+    // Cap displayed transcripts at TRANSCRIPTS_CAP (first 8 chronologically
+    // + last 2) so a 100-row multi-agency job doesn't blow out the
+    // hourly-summary card on live.html / logs.html. The full
+    // member_call_ids array stays in the response so callers can fetch
+    // additional transcripts if they want; only the rendered list is
+    // trimmed. Both frontends already render transcripts_truncated /
+    // transcripts_total — they'll show "Showing 10 of 123" automatically.
+    const displayedIds =
+      valid.length > TRANSCRIPTS_CAP
+        ? [
+            ...valid.slice(0, TRANSCRIPTS_HEAD_KEEP),
+            ...valid.slice(-TRANSCRIPTS_TAIL_KEEP),
+          ]
+        : valid;
+    obj['transcripts'] = displayedIds.map((id) => {
       const row = inputMap.get(id)!;
       return { call_id: row.call_id, time: row.time, text: row.text };
     });
+    if (valid.length > TRANSCRIPTS_CAP) {
+      obj['transcripts_truncated'] = true;
+      obj['transcripts_total'] = valid.length;
+    }
     // Build units[] as a deduped string array — the friendly label
     // from rdio_units.csv when known, "UID:<n>" otherwise. live.html /
     // logs.html both render units via

@@ -296,6 +296,75 @@ describe('rebuildIncidents', () => {
     expect(trs.map((t) => t['call_id'])).toEqual([100, 101, 102]);
   });
 
+  it('caps transcripts at 10 when more rows are present, keeps full member_call_ids', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    type Row = import('../../../src/services/llm.js').RdioInputRow;
+    const bigMap = new Map<number, Row>();
+    // 23 rows. After truncation we expect first 8 + last 2 = 10
+    // rendered, but member_call_ids stays as 23.
+    for (let i = 0; i < 23; i++) {
+      const id = 1000 + i;
+      const hh = 10 + Math.floor(i / 60);
+      const mm = i % 60;
+      bigMap.set(id, {
+        call_id: id,
+        time: `${hh}:${String(mm).padStart(2, '0')}:00`,
+        text: `row ${i}`,
+        uid: null,
+        unit_label: null,
+        context: 'PSN',
+      });
+    }
+    const structured = {
+      incidents: [
+        {
+          title: 'big',
+          summary: '...',
+          member_call_ids: Array.from(bigMap.keys()),
+        },
+      ],
+    };
+    const out = rebuildIncidents(structured, bigMap);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    expect((incs[0]!['member_call_ids'] as number[]).length).toBe(23);
+    const trs = incs[0]!['transcripts'] as Array<Record<string, unknown>>;
+    expect(trs).toHaveLength(10);
+    // First 8 are rows 0..7 (call_ids 1000..1007); last 2 are rows
+    // 21..22 (call_ids 1021..1022).
+    expect(trs.map((t) => t['call_id'])).toEqual([
+      1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1021, 1022,
+    ]);
+    expect(incs[0]!['transcripts_truncated']).toBe(true);
+    expect(incs[0]!['transcripts_total']).toBe(23);
+  });
+
+  it('does not set transcripts_truncated when at or below the cap', async () => {
+    const { rebuildIncidents } = await import('../../../src/services/llm.js');
+    type Row = import('../../../src/services/llm.js').RdioInputRow;
+    const m = new Map<number, Row>();
+    for (let i = 0; i < 10; i++) {
+      m.set(1000 + i, {
+        call_id: 1000 + i,
+        time: `10:${String(i).padStart(2, '0')}:00`,
+        text: `r${i}`,
+        uid: null,
+        unit_label: null,
+        context: 'PSN',
+      });
+    }
+    const structured = {
+      incidents: [
+        { title: 'exactly 10', member_call_ids: Array.from(m.keys()) },
+      ],
+    };
+    const out = rebuildIncidents(structured, m);
+    const incs = out['incidents'] as Array<Record<string, unknown>>;
+    const trs = incs[0]!['transcripts'] as unknown[];
+    expect(trs).toHaveLength(10);
+    expect(incs[0]!['transcripts_truncated']).toBeUndefined();
+    expect(incs[0]!['transcripts_total']).toBeUndefined();
+  });
+
   it('passes through if incidents is not an array', async () => {
     const { rebuildIncidents } = await import('../../../src/services/llm.js');
     const input = mkInputMap();
