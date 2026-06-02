@@ -113,25 +113,47 @@ class CentralwatchBrowser {
   }
 
   private async doInit(): Promise<void> {
+    // Prefer playwright-extra + stealth plugin (patches navigator.webdriver,
+    // WebGL fingerprint, navigator.plugins, chrome.runtime, iframe
+    // contentWindow detection). Vercel's bot WAF grades these aggressively —
+    // without stealth, the challenge "passes" (title changes) but no auth
+    // cookie is set and every fetch 429s. marinetrafficBrowser.ts uses the
+    // same pattern for Cloudflare; both deps are already in package.json.
     let pw: PwModule;
+    let stealthEnabled = false;
     try {
-      // Dynamic import so a missing playwright dep doesn't break boot.
-      // We funnel through a string variable so TS doesn't try to resolve
-      // the module at compile time — playwright is an optional runtime
-      // dep, not present in node_modules during typecheck.
-      const moduleId = 'playwright';
-      const mod = (await import(moduleId)) as unknown as PwModule;
-      pw = mod;
-    } catch (err) {
-      log.warn(
-        { err: (err as Error).message },
-        'playwright not installed — centralwatch image proxy will serve placeholder only',
-      );
-      this.ready = false;
-      return;
+      const peId = 'playwright-extra';
+      const peMod = (await import(peId)) as unknown as PwModule & {
+        chromium: { use: (plugin: unknown) => void };
+      };
+      try {
+        const stealthId = 'puppeteer-extra-plugin-stealth';
+        const stealthMod = (await import(stealthId)) as { default: () => unknown };
+        peMod.chromium.use(stealthMod.default());
+        stealthEnabled = true;
+      } catch (stealthErr) {
+        log.warn(
+          { err: (stealthErr as Error).message },
+          'centralwatch: playwright-extra found but stealth plugin missing — running without it',
+        );
+      }
+      pw = peMod;
+    } catch {
+      try {
+        const moduleId = 'playwright';
+        const mod = (await import(moduleId)) as unknown as PwModule;
+        pw = mod;
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'playwright not installed — centralwatch image proxy will serve placeholder only',
+        );
+        this.ready = false;
+        return;
+      }
     }
 
-    log.info('centralwatch: launching headless chromium...');
+    log.info({ stealthEnabled }, 'centralwatch: launching headless chromium...');
 
     const browser = (await pw.chromium.launch({
       headless: true,
@@ -151,7 +173,7 @@ class CentralwatchBrowser {
 
     const context = (await browser.newContext({
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
       viewport: { width: 1920, height: 1080 },
       locale: 'en-AU',
       timezoneId: 'Australia/Sydney',
@@ -167,7 +189,7 @@ class CentralwatchBrowser {
 
     const page = (await context.newPage()) as {
       addInitScript: (script: string) => Promise<void>;
-      goto: (url: string, opts: { timeout: number }) => Promise<unknown>;
+      goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
       waitForFunction: (
         fn: string,
         arg: unknown,
@@ -183,73 +205,89 @@ class CentralwatchBrowser {
       'Object.defineProperty(navigator, "webdriver", {get: () => undefined})',
     );
 
-    try {
-      await page.goto(VERCEL_LANDING_URL, { timeout: 45000 });
+    // Run the landing+prewarm sequence up to 3 times. Vercel sometimes lets
+    // the title flip ("solved") without actually dropping the auth cookie —
+    // we treat cookieCount===0 as a failed solve and retry. cookieCount > 0
+    // is our success signal (mirrors marinetraffic's cf_clearance check).
+    let cookieNames: string[] = [];
+    let solved = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await page.waitForFunction(
-          '() => !document.title.includes("Vercel") && !document.title.includes("Security")',
-          undefined,
-          { timeout: 30000 },
-        );
-        log.info('centralwatch: vercel challenge solved');
-      } catch {
-        const title = await page.title();
-        log.warn({ title }, 'centralwatch: vercel challenge timeout');
-      }
-      await page.waitForTimeout(2000);
-      // Pre-warm the API endpoint: navigate the page to /au/api/cameras
-      // so the browser solves the WAF challenge for the JSON path. The
-      // landing-page solve doesn't transfer to the API path on its own,
-      // and every fetchJson call inside the page would otherwise get a
-      // 429 + Vercel Security Checkpoint HTML body. After this navigate,
-      // page.evaluate fetch() to the same URL reuses the WAF-passed
-      // browser context.
-      try {
-        await page.goto(API_PREWARM_URL, { timeout: 30000 });
+        await page.goto(VERCEL_LANDING_URL, {
+          timeout: 45000,
+          waitUntil: 'domcontentloaded',
+        });
         try {
           await page.waitForFunction(
             '() => !document.title.includes("Vercel") && !document.title.includes("Security")',
             undefined,
-            { timeout: 20000 },
+            { timeout: 30000 },
           );
         } catch {
-          // If the API URL doesn't render a non-challenge document.title
-          // (it's JSON, browsers may set the title to the URL), don't
-          // treat that as a failure — the WAF cookie is still set.
+          const title = await page.title();
+          log.warn(
+            { attempt, title },
+            'centralwatch: vercel challenge title-wait timeout',
+          );
         }
-        await page.waitForTimeout(1000);
-        log.info('centralwatch: api endpoint prewarmed');
+        await page.waitForTimeout(2000);
+        // Pre-warm the API endpoint: navigating the page to /au/api/cameras
+        // forces the WAF to solve for that path too. The landing solve does
+        // not transfer to the API path on its own, and every fetchJson call
+        // would otherwise get a 429 + Vercel HTML body.
+        try {
+          await page.goto(API_PREWARM_URL, {
+            timeout: 30000,
+            waitUntil: 'domcontentloaded',
+          });
+          try {
+            await page.waitForFunction(
+              '() => !document.title.includes("Vercel") && !document.title.includes("Security")',
+              undefined,
+              { timeout: 20000 },
+            );
+          } catch {
+            // JSON pages may have a URL-as-title in some browsers — not fatal.
+          }
+          await page.waitForTimeout(1000);
+        } catch (err) {
+          log.warn(
+            { attempt, err: (err as Error).message },
+            'centralwatch: api prewarm failed',
+          );
+        }
+        const cookies = await context.cookies('https://centralwatch.watchtowers.io');
+        cookieNames = cookies.map((c) => c.name);
+        if (cookies.length > 0) {
+          log.info(
+            { attempt, cookieCount: cookies.length, cookieNames },
+            'centralwatch: browser ready',
+          );
+          solved = true;
+          break;
+        }
+        log.warn(
+          { attempt },
+          'centralwatch: challenge passed title-check but no cookies set — retrying',
+        );
+        // Brief backoff before retrying — Vercel sometimes blocks rapid re-tries.
+        await page.waitForTimeout(3000);
       } catch (err) {
         log.warn(
-          { err: (err as Error).message },
-          'centralwatch: api prewarm failed (will retry on first fetch)',
+          { attempt, err: (err as Error).message },
+          'centralwatch: failed to load landing page',
         );
       }
-      const cookies = await context.cookies('https://centralwatch.watchtowers.io');
-      log.info(
-        { cookieCount: cookies.length },
-        'centralwatch: browser ready',
-      );
-    } catch (err) {
+    }
+
+    if (!solved) {
       log.warn(
-        { err: (err as Error).message },
-        'centralwatch: failed to load landing page — degrading',
+        { cookieNames },
+        'centralwatch: gave up after 3 attempts — degrading to cache-only',
       );
-      try {
-        await page.close();
-      } catch {
-        // ignore
-      }
-      try {
-        await context.close();
-      } catch {
-        // ignore
-      }
-      try {
-        await browser.close();
-      } catch {
-        // ignore
-      }
+      try { await page.close(); } catch { /* ignore */ }
+      try { await context.close(); } catch { /* ignore */ }
+      try { await browser.close(); } catch { /* ignore */ }
       this.ready = false;
       return;
     }
@@ -681,7 +719,7 @@ class CentralwatchBrowser {
     if (!this.ready || this.shuttingDown) return;
     await this.runExclusive(async () => {
       const page = this.page as {
-        goto: (url: string, opts: { timeout: number }) => Promise<unknown>;
+        goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
         waitForFunction: (
           fn: string,
           arg: unknown,
@@ -689,22 +727,50 @@ class CentralwatchBrowser {
         ) => Promise<unknown>;
         waitForTimeout: (ms: number) => Promise<void>;
       };
+      const context = this.context as {
+        cookies: (url: string) => Promise<Array<{ name: string }>>;
+      };
       try {
-        await page.goto(VERCEL_LANDING_URL, { timeout: 45000 });
-        await page.waitForFunction(
-          '() => !document.title.includes("Vercel")',
-          undefined,
-          { timeout: 30000 },
-        );
+        await page.goto(VERCEL_LANDING_URL, {
+          timeout: 45000,
+          waitUntil: 'domcontentloaded',
+        });
+        try {
+          await page.waitForFunction(
+            '() => !document.title.includes("Vercel")',
+            undefined,
+            { timeout: 30000 },
+          );
+        } catch {
+          // title-wait timeout is non-fatal — cookie check below is authoritative
+        }
         await page.waitForTimeout(2000);
         // Re-prewarm the API path so /au/api/cameras stays WAF-solved.
         try {
-          await page.goto(API_PREWARM_URL, { timeout: 30000 });
+          await page.goto(API_PREWARM_URL, {
+            timeout: 30000,
+            waitUntil: 'domcontentloaded',
+          });
           await page.waitForTimeout(1000);
         } catch {
           // best-effort
         }
-        log.info('centralwatch: browser session refreshed');
+        const cookies = await context.cookies('https://centralwatch.watchtowers.io');
+        if (cookies.length === 0) {
+          // A refresh that drops all cookies is worse than skipping the
+          // refresh — fetchJson will start 429ing immediately. Flag the
+          // session as not-ready so the read path falls back to the
+          // last-good JSON; next init() / restart re-solves cleanly.
+          log.warn(
+            'centralwatch: refresh produced 0 cookies — degrading to cache-only until restart',
+          );
+          this.ready = false;
+          return;
+        }
+        log.info(
+          { cookieCount: cookies.length },
+          'centralwatch: browser session refreshed',
+        );
       } catch (err) {
         log.warn(
           { err: (err as Error).message },

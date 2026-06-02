@@ -2,9 +2,11 @@
  * ArchiveWriter — the archive half of the new architecture.
  *
  * Append-only batched insert into the per-source `archive_*` tables.
- * **No UPDATE statements ever.** No `is_live`/`is_latest` columns. The
- * write side does exactly one thing: every poll snapshot becomes one
- * INSERT, batched with siblings for the same flush window.
+ * **No UPDATE statements on the parent tables.** The write side does
+ * exactly one thing: every poll snapshot becomes one INSERT, batched
+ * with siblings for the same flush window. (The `_latest` sidecar
+ * does carry one UPSERT per flush — that's where mutable per-incident
+ * state lives.)
  *
  * Replaces Python's _archive_buffer + _archive_writer_loop. Kept the
  * same shape (push to in-RAM buffer, drain on a timer, single writer)
@@ -26,7 +28,6 @@ import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { getWriterPool } from '../db/pool.js';
-import { computeFlushTimeTombstones } from '../services/archiveLiveness.js';
 
 export type ArchiveTable =
   | 'archive_waze'
@@ -61,6 +62,27 @@ interface QueueItem {
 const HARD_CAP = 50_000; // bound RAM if Postgres goes away briefly
 
 /**
+ * Top-level keys excluded from the dedup hash. These are "noise" fields
+ * that change every poll regardless of whether the underlying incident
+ * actually changed, so including them in the hash forces a fresh INSERT
+ * on every poll and defeats the dedup. Verified by per-field diff query
+ * against archive_power: lastUpdated changed 5,615× in 6h, streets
+ * changed 1,367× (upstream rotates among multiple affected addresses on
+ * the same outage), and title + location_text are derived aliases of
+ * streets (archiveExtract.applyAliases at line 282/290) so they MUST be
+ * stripped here too or they'd re-introduce the noise.
+ *
+ * Fields stay in the data blob — readers still see them via JSONB
+ * projections. Only the dedup-equality check ignores them.
+ */
+const DEDUP_HASH_IGNORE = new Set<string>([
+  'lastUpdated',     // endeavour upstream per-poll timestamp
+  'streets',         // endeavour upstream rotates among affected addresses
+  'title',           // alias of streets / name / headline (derived)
+  'location_text',   // alias of streets / suburb (derived)
+]);
+
+/**
  * Stable hash of a row's data field for write-time dedup. Excludes
  * fields that change every poll regardless of upstream state — those
  * would defeat the dedup if hashed.
@@ -70,8 +92,49 @@ const HARD_CAP = 50_000; // bound RAM if Postgres goes away briefly
  * states of a single incident (collision space ~10^24 vs handful of
  * snapshots per incident).
  */
+/**
+ * Pull a string value out of a (potentially) JSONB-ish data blob. Used
+ * by upsertLatestSidecar to populate the title/location_text/status/
+ * severity columns added in migration 022 — those fields used to live
+ * inside `data` and got extracted at read time with `(data->>'key')`,
+ * which doesn't use indexes. Storing them top-level on the sidecar
+ * lets WHERE clauses hit a real index.
+ */
+function extractStrField(data: unknown, key: string): string | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const v = (data as Record<string, unknown>)[key];
+  if (typeof v === 'string' && v.length > 0) return v;
+  return null;
+}
+
+/** Same shape as extractStrField but for boolean-ish values. Accepts
+ *  native booleans, '0'/'1' strings, and 'true'/'false' (any case) so
+ *  the writer doesn't reject upstream payloads that serialise the
+ *  field as a string. is_active falls back to null when absent — the
+ *  reader's truthy check treats null as "unknown, default visible". */
+function extractBoolField(data: unknown, key: string): boolean | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const v = (data as Record<string, unknown>)[key];
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const t = v.trim().toLowerCase();
+    if (t === '1' || t === 'true') return true;
+    if (t === '0' || t === 'false') return false;
+  }
+  return null;
+}
+
 function hashRowData(row: ArchiveRow): string {
-  const stable = stableSerialize(row.data);
+  let data: unknown = row.data;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const filtered: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+      if (!DEDUP_HASH_IGNORE.has(k)) filtered[k] = v;
+    }
+    data = filtered;
+  }
+  const stable = stableSerialize(data);
   return createHash('sha1').update(stable).digest('hex').slice(0, 20);
 }
 
@@ -190,32 +253,11 @@ export class ArchiveWriter {
       }
     }
 
-    // Liveness diff at flush time: for each table bucket, compute
-    // tombstones for source_ids that were live before this flush but
-    // aren't in the incoming rows. ONE SELECT per table covers every
-    // non-exempt source in the bucket, instead of one-per-source-per-
-    // poll. Tombstones append to the same bucket so they ride the
-    // single multi-VALUES INSERT below — no extra round-trips.
-    const fetchedAtNow = Math.floor(Date.now() / 1000);
-    await Promise.all(
-      Array.from(buckets.entries()).map(async ([table, rows]) => {
-        try {
-          const tombstones = await computeFlushTimeTombstones({
-            pool,
-            table,
-            rows,
-            fetchedAt: fetchedAtNow,
-          });
-          if (tombstones.length > 0) rows.push(...tombstones);
-        } catch (err) {
-          // Liveness failures must never block the live INSERT.
-          log.warn(
-            { err: (err as Error).message, table },
-            'ArchiveWriter: liveness diff failed (non-fatal)',
-          );
-        }
-      }),
-    );
+    // Tombstone INSERTs removed: incident state lives on the sidecar
+    // (the writer's upsert below always advances last_seen_at). No
+    // more "we noticed it ended" rows accumulating in the parent
+    // archive — those rows added ~25% to the archive volume for no
+    // semantic value the sidecar can't already provide.
 
     // Run per-table inserts in parallel — previously the for-of loop
     // serialised them, so a slow archive_waze flush blocked the small
@@ -408,24 +450,32 @@ export class ArchiveWriter {
     // multiple rows for the same incident, but we only need one
     // SELECT per pair.
     const seenKey = new Set<string>();
-    const params: unknown[] = [];
-    const placeholders: string[] = [];
+    const sources: string[] = [];
+    const sourceIds: string[] = [];
     for (const e of hashed) {
       if (e.row.source_id == null || e.row.source_id === '') continue;
       const key = `${e.row.source}${e.row.source_id}`;
       if (seenKey.has(key)) continue;
       seenKey.add(key);
-      placeholders.push(`($${params.length + 1}, $${params.length + 2})`);
-      params.push(e.row.source, e.row.source_id);
+      sources.push(e.row.source);
+      sourceIds.push(e.row.source_id);
     }
     const out = new Map<string, string>();
-    if (placeholders.length === 0) return out;
+    if (sources.length === 0) return out;
+    // unnest($1::text[], $2::text[]) replaces the prior tuple-IN list.
+    // Old shape sent 2 params per (source, source_id), so a 5k-incident
+    // waze flush meant 10k params; Postgres switches join strategies
+    // around 1k tuples and slows down. The array form sends exactly 2
+    // params no matter how many keys we're looking up — planner caches
+    // the plan once and reuses it forever.
     const sql = `
       SELECT source, source_id, data_hash
         FROM ${table}_latest
-       WHERE (source, source_id) IN (${placeholders.join(',')})
+       WHERE (source, source_id) IN (
+         SELECT s, sid FROM unnest($1::text[], $2::text[]) AS u(s, sid)
+       )
     `;
-    const r = await client.query(sql, params);
+    const r = await client.query(sql, [sources, sourceIds]);
     for (const row of r.rows) {
       if (row.data_hash != null) {
         out.set(`${row.source}${row.source_id}`, row.data_hash);
@@ -468,6 +518,13 @@ export class ArchiveWriter {
         fetched_at: number;
         hash: string;
         source_ts_unix: number | null;
+        category: string | null;
+        subcategory: string | null;
+        title: string | null;
+        location_text: string | null;
+        status: string | null;
+        severity: string | null;
+        is_active: boolean | null;
       }
     >();
     for (const e of hashed) {
@@ -482,30 +539,70 @@ export class ArchiveWriter {
           fetched_at: e.row.fetched_at,
           hash: e.hash,
           source_ts_unix: e.row.source_timestamp_unix ?? null,
+          category: e.row.category ?? null,
+          subcategory: e.row.subcategory ?? null,
+          title: extractStrField(e.row.data, 'title'),
+          location_text: extractStrField(e.row.data, 'location_text'),
+          status: extractStrField(e.row.data, 'status'),
+          severity: extractStrField(e.row.data, 'severity'),
+          is_active: extractBoolField(e.row.data, 'is_active'),
         });
       }
     }
     if (map.size === 0) return;
 
+    // 13 params per row: source, source_id, fetched_at (×2 — also
+    // becomes last_seen_at on first insert), data_hash, source_ts_unix,
+    // category, subcategory, title, location_text, status, severity,
+    // is_active.
     const placeholders: string[] = [];
     const params: unknown[] = [];
     let i = 0;
     for (const v of map.values()) {
       placeholders.push(
-        `($${i + 1}::text, $${i + 2}::text, to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), $${i + 5}::text, $${i + 6}::bigint)`,
+        `($${i + 1}::text, $${i + 2}::text, ` +
+          `to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), ` +
+          `$${i + 5}::text, $${i + 6}::bigint, ` +
+          `$${i + 7}::text, $${i + 8}::text, ` +
+          `$${i + 9}::text, $${i + 10}::text, ` +
+          `$${i + 11}::text, $${i + 12}::text, $${i + 13}::boolean)`,
       );
-      params.push(v.source, v.source_id, v.fetched_at, v.fetched_at, v.hash, v.source_ts_unix);
-      i += 6;
+      params.push(
+        v.source,
+        v.source_id,
+        v.fetched_at,
+        v.fetched_at,
+        v.hash,
+        v.source_ts_unix,
+        v.category,
+        v.subcategory,
+        v.title,
+        v.location_text,
+        v.status,
+        v.severity,
+        v.is_active,
+      );
+      i += 13;
     }
-    // last_seen_at always advances. latest_fetched_at + data_hash +
-    // source_timestamp_unix advance only when EXCLUDED.data_hash
-    // differs from the stored one — so a stable incident polled 1000
-    // times keeps a single archive row, the sidecar's source-side
-    // timestamp stays pinned to whenever the upstream actually
-    // updated it, and last_seen_at advances every poll.
+    // last_seen_at always advances. data_hash + latest_fetched_at refresh
+    // only when EXCLUDED.data_hash differs from the stored hash — i.e.
+    // when the upstream actually published a new state for this incident.
+    // A stable incident polled 1000 times keeps a single archive row.
+    //
+    // Display fields (category, subcategory, title, location_text, status,
+    // severity, is_active, source_timestamp_unix) ALSO refresh when the
+    // stored value is NULL — this self-heals sidecar rows that were
+    // created before migrations 021/022 added these columns and have been
+    // NULL ever since because the upstream's data_hash hasn't drifted.
+    // For active incidents the next poll fills them in; HOT updates stay
+    // intact in the dominant case (incident already populated + unchanged)
+    // because the CASE returns the same value and Postgres treats that
+    // as a no-op write.
     const sql = `
       INSERT INTO ${table}_latest
-        (source, source_id, latest_fetched_at, last_seen_at, data_hash, source_timestamp_unix)
+        (source, source_id, latest_fetched_at, last_seen_at, data_hash,
+         source_timestamp_unix, category, subcategory,
+         title, location_text, status, severity, is_active)
       VALUES ${placeholders.join(',')}
       ON CONFLICT (source, source_id) DO UPDATE
         SET last_seen_at = GREATEST(${table}_latest.last_seen_at, EXCLUDED.last_seen_at),
@@ -520,9 +617,54 @@ export class ArchiveWriter {
               ELSE ${table}_latest.data_hash
             END,
             source_timestamp_unix = CASE
-              WHEN EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+              WHEN ${table}_latest.source_timestamp_unix IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
                 THEN EXCLUDED.source_timestamp_unix
               ELSE ${table}_latest.source_timestamp_unix
+            END,
+            category = CASE
+              WHEN ${table}_latest.category IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                OR EXCLUDED.category IS DISTINCT FROM ${table}_latest.category
+                THEN EXCLUDED.category
+              ELSE ${table}_latest.category
+            END,
+            subcategory = CASE
+              WHEN ${table}_latest.subcategory IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                OR EXCLUDED.subcategory IS DISTINCT FROM ${table}_latest.subcategory
+                THEN EXCLUDED.subcategory
+              ELSE ${table}_latest.subcategory
+            END,
+            title = CASE
+              WHEN ${table}_latest.title IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.title
+              ELSE ${table}_latest.title
+            END,
+            location_text = CASE
+              WHEN ${table}_latest.location_text IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.location_text
+              ELSE ${table}_latest.location_text
+            END,
+            status = CASE
+              WHEN ${table}_latest.status IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.status
+              ELSE ${table}_latest.status
+            END,
+            severity = CASE
+              WHEN ${table}_latest.severity IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.severity
+              ELSE ${table}_latest.severity
+            END,
+            is_active = CASE
+              WHEN ${table}_latest.is_active IS NULL
+                OR EXCLUDED.data_hash IS DISTINCT FROM ${table}_latest.data_hash
+                THEN EXCLUDED.is_active
+              ELSE ${table}_latest.is_active
             END
     `;
     await client.query(sql, params);
@@ -663,10 +805,11 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // APPEND-ONLY writes — pure INSERT, no UPDATE. is_latest and
-    // is_live columns dropped in migration 013 after they caused
-    // chronic I/O contention and write timeouts. is_live truthy
-    // semantics are now derived from JSONB at read time only.
+    // APPEND-ONLY writes — pure INSERT, no UPDATE on the parent.
+    // The is_latest / is_live columns added in migration 012 were
+    // dropped in 013 after they caused chronic I/O contention and
+    // write timeouts; mutable per-incident state now lives on the
+    // _latest sidecar.
     const cols = [
       'source',
       'source_id',

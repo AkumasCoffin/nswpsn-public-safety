@@ -449,9 +449,9 @@ systemRouter.get('/api/admin/db/active-queries', async (c) => {
 });
 
 // /api/admin/db/cleanup-duplicates — python's implementation worked on
-// the deprecated `data_history` table (which is_live=1 dedup needed).
-// The new partitioned archive_* schema is append-only with no
-// duplicate-row problem, so this endpoint is a no-op stub on Node.
+// the deprecated `data_history` table. The new partitioned archive_*
+// schema is append-only with no duplicate-row problem, so this
+// endpoint is a no-op stub on Node.
 systemRouter.post('/api/admin/db/cleanup-duplicates', (c) =>
   c.json(
     {

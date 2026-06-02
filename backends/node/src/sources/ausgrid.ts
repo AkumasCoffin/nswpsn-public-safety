@@ -253,7 +253,17 @@ function ausgridArchiveItems(
   return out;
 }
 
+// Ausgrid's webapi/* endpoints have returned 404 for months. Polling
+// would just hit the dead URL every 1-3 min forever and inflate the
+// degraded-source panel. Re-enable by setting AUSGRID_DISABLED=false
+// (default 'true') once the upstream API is fixed or a replacement is
+// found. The default is 'true' so the dead poll doesn't fire even on
+// fresh deploys with no env override.
+const AUSGRID_DISABLED =
+  (process.env['AUSGRID_DISABLED'] ?? 'true').toLowerCase() !== 'false';
+
 export function register(): void {
+  if (AUSGRID_DISABLED) return;
   registerSource<AusgridOutagesPayload>({
     name: 'ausgrid',
     family: 'power',

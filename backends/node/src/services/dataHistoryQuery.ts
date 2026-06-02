@@ -13,9 +13,9 @@
  *   lat DOUBLE PRECISION, lng DOUBLE PRECISION, category TEXT,
  *   subcategory TEXT, data JSONB
  *
- * **No is_live / is_latest columns** in the new schema. unique=1 maps to
- * `DISTINCT ON (source, source_id) ORDER BY source, source_id, fetched_at DESC`
- * inside a subquery, then the outer query re-sorts by fetched_at.
+ * unique=1 maps to `DISTINCT ON (source, source_id) ORDER BY source,
+ * source_id, fetched_at DESC` inside a subquery, then the outer query
+ * re-sorts by fetched_at.
  *
  * Several Python filters used to hit indexed top-level columns
  * (status, severity, title, location_text, source_timestamp_unix). In
@@ -130,9 +130,6 @@ export interface DataHistoryParams {
   radiusKm: number;
 
   unique: boolean;
-  /** Mirrors Python `live_only` / `historical_only` — implemented best-effort against JSONB. */
-  liveOnly: boolean;
-  historicalOnly: boolean;
   activeOnly: boolean;
 
   order: SortDir;
@@ -227,25 +224,102 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   }
   // Time-window filter uses the SOURCE'S OWN publish timestamp
   // (source_timestamp_unix on the sidecar — see migration 020),
-  // falling back to latest_fetched_at when the upstream payload
-  // didn't expose a usable timestamp. After the recompute task
-  // settles, latest_fetched_at is "when this incident's data last
-  // actually changed" — a meaningful chronological proxy when the
-  // source itself doesn't publish a timestamp (e.g. waze_jam,
-  // ausgrid). last_seen_at deliberately NOT in the fallback chain:
-  // it advances every poll, so for any live incident it's "now" and
-  // makes the entire list cluster at the top.
+  // falling back to last_seen_at when the upstream payload didn't
+  // expose a usable timestamp. last_seen_at = "we still see this
+  // incident in our polls", which is the natural meaning of "in the
+  // last N hours" — a stable waze incident polled all day stays
+  // visible in a 24h window even if its latest_fetched_at is days
+  // old.
+  //
+  // This matches /api/data/history/filters' time filter; previously
+  // the data path used latest_fetched_at here, which silently
+  // dropped ~15% of waze rows from logs.html's total while /filters
+  // still reported them.
+  //
+  // Note: this is the WHERE filter only. The SELECT's effective_ts
+  // (and the ORDER BY built from it below) still falls back to
+  // latest_fetched_at so the result isn't a stack of identical
+  // "now" timestamps for stable incidents.
   if (p.since !== null) {
     sidecarAcc.parts.push(
-      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.since);
   }
   if (p.until !== null) {
     sidecarAcc.parts.push(
-      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
     );
     sidecarAcc.params.push(p.until);
+  }
+  // Predicates that were previously post-JOIN on parent JSONB now hit
+  // sidecar columns directly (migrations 021 + 022). Applying them in
+  // the CTE means the JOIN does less work and the planner can use the
+  // partial indexes on (source, status / severity / is_active).
+  if (p.category && p.category.length > 0) {
+    const placeholders = p.category.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.category.length === 1
+        ? `category = ${placeholders[0]}`
+        : `category IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.category) sidecarAcc.params.push(v);
+  }
+  if (p.subcategory && p.subcategory.length > 0) {
+    const placeholders = p.subcategory.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.subcategory.length === 1
+        ? `subcategory = ${placeholders[0]}`
+        : `subcategory IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.subcategory) sidecarAcc.params.push(v);
+  }
+  if (p.status && p.status.length > 0) {
+    const placeholders = p.status.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.status.length === 1
+        ? `status = ${placeholders[0]}`
+        : `status IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.status) sidecarAcc.params.push(v);
+  }
+  if (p.severity && p.severity.length > 0) {
+    const placeholders = p.severity.map(
+      (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+    );
+    sidecarAcc.parts.push(
+      p.severity.length === 1
+        ? `severity = ${placeholders[0]}`
+        : `severity IN (${placeholders.join(',')})`,
+    );
+    for (const v of p.severity) sidecarAcc.params.push(v);
+  }
+  if (p.activeOnly) {
+    // Sidecar column. NULL means "writer hasn't backfilled yet" — treat
+    // as visible (default-true) so we don't hide incidents during the
+    // brief 022 backfill window.
+    sidecarAcc.parts.push(`(is_active IS NULL OR is_active = true)`);
+  }
+  if (p.search) {
+    const ph = `$${sidecarAcc.params.length + 1}`;
+    sidecarAcc.parts.push(`(title ILIKE ${ph} OR location_text ILIKE ${ph})`);
+    sidecarAcc.params.push(`%${p.search}%`);
+  }
+  if (p.title) {
+    sidecarAcc.parts.push(`title ILIKE $${sidecarAcc.params.length + 1}`);
+    sidecarAcc.params.push(`%${p.title}%`);
+  }
+  if (p.location) {
+    sidecarAcc.parts.push(
+      `location_text ILIKE $${sidecarAcc.params.length + 1}`,
+    );
+    sidecarAcc.params.push(`%${p.location}%`);
   }
 
   // CTE row budget — must cover (offset + limit) plus headroom for
@@ -258,42 +332,16 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     sidecarAcc.parts.length > 0 ? `WHERE ${sidecarAcc.parts.join(' AND ')}` : '';
 
   // ---- parent filters (post-JOIN) ----
+  // The only filters that stay post-JOIN are those that need fields
+  // not (yet) on the sidecar:
+  //   - sinceSource / untilSource (data->>'source_timestamp_unix' —
+  //     duplicates the indexed sidecar column source_timestamp_unix
+  //     but only when the upstream supplies one)
+  //   - lat/lng radius (sidecar doesn't carry coords)
+  //   - cursor seek (uses fetched_at + id from parent)
   // Renumber placeholders so parent params start AFTER sidecar params.
-  // Helper appends to parentAcc with offset.
   const offset = (): number => sidecarAcc.params.length + parentAcc.params.length;
 
-  if (p.category && p.category.length > 0) {
-    const placeholders = p.category.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      p.category.length === 1
-        ? `a.category = ${placeholders[0]}`
-        : `a.category IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.category) parentAcc.params.push(v);
-  }
-  if (p.subcategory && p.subcategory.length > 0) {
-    const placeholders = p.subcategory.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      p.subcategory.length === 1
-        ? `a.subcategory = ${placeholders[0]}`
-        : `a.subcategory IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.subcategory) parentAcc.params.push(v);
-  }
-  if (p.status && p.status.length > 0) {
-    const placeholders = p.status.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      `(a.data->>'status') IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.status) parentAcc.params.push(v);
-  }
-  if (p.severity && p.severity.length > 0) {
-    const placeholders = p.severity.map((_, i) => `$${offset() + i + 1}`);
-    parentAcc.parts.push(
-      `(a.data->>'severity') IN (${placeholders.join(',')})`,
-    );
-    for (const v of p.severity) parentAcc.params.push(v);
-  }
   if (p.sinceSource !== null) {
     parentAcc.parts.push(
       `((a.data->>'source_timestamp_unix')::bigint) >= $${offset() + 1}`,
@@ -305,29 +353,6 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
       `((a.data->>'source_timestamp_unix')::bigint) <= $${offset() + 1}`,
     );
     parentAcc.params.push(p.untilSource);
-  }
-  if (p.activeOnly) {
-    parentAcc.parts.push(`(a.data->>'is_active' IN ('1','true','True'))`);
-  }
-  if (p.liveOnly) {
-    parentAcc.parts.push(`(a.data->>'is_live' IN ('1','true','True'))`);
-  } else if (p.historicalOnly) {
-    parentAcc.parts.push(`(a.data->>'is_live' IN ('0','false','False'))`);
-  }
-  if (p.search) {
-    const ph = `$${offset() + 1}`;
-    parentAcc.parts.push(
-      `((a.data->>'title') ILIKE ${ph} OR (a.data->>'location_text') ILIKE ${ph})`,
-    );
-    parentAcc.params.push(`%${p.search}%`);
-  }
-  if (p.title) {
-    parentAcc.parts.push(`(a.data->>'title') ILIKE $${offset() + 1}`);
-    parentAcc.params.push(`%${p.title}%`);
-  }
-  if (p.location) {
-    parentAcc.parts.push(`(a.data->>'location_text') ILIKE $${offset() + 1}`);
-    parentAcc.params.push(`%${p.location}%`);
   }
   if (p.lat !== null && p.lng !== null) {
     const latDelta = p.radiusKm / 111.0;
@@ -486,12 +511,6 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
     );
   }
 
-  if (p.liveOnly) {
-    acc.parts.push(`(data->>'is_live' IN ('1','true','True'))`);
-  } else if (p.historicalOnly) {
-    acc.parts.push(`(data->>'is_live' IN ('0','false','False'))`);
-  }
-
   if (p.search) {
     const ph = `$${acc.params.length + 1}`;
     acc.parts.push(`((data->>'title') ILIKE ${ph} OR (data->>'location_text') ILIKE ${ph})`);
@@ -584,9 +603,10 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
     // Filter routing:
     //   - source / since / until / sourceId — applied on the sidecar
     //     (all columns the sidecar carries).
-    //   - everything else (category, subcategory, status, severity,
-    //     title/location/search, lat/lng radius, JSONB liveOnly etc.)
-    //     — applied post-JOIN on parent columns.
+    //   - everything else (lat/lng radius, JSONB sinceSource/
+    //     untilSource, cursor seek) — applied post-JOIN on parent
+    //     columns. Sidecar-resident dims (category, subcategory,
+    //     status, severity, title, location_text) hit the sidecar.
     //
     // For the common ?unique=1&hours=24 workload only sidecar filters
     // apply, so we hit the (latest_fetched_at DESC) index directly
@@ -650,6 +670,27 @@ export function buildCountSqlForTable(
     acc.parts.push(`fetched_at <= to_timestamp($${acc.params.length + 1})`);
     acc.params.push(p.until);
   }
+  // sinceSource / untilSource — match buildSqlForTable. Previously
+  // omitted here, causing `total` to over-report when the caller
+  // narrowed the data query with these JSONB time filters.
+  if (p.sinceSource !== null) {
+    acc.parts.push(
+      `((data->>'source_timestamp_unix')::bigint) >= $${acc.params.length + 1}`,
+    );
+    acc.params.push(p.sinceSource);
+  }
+  if (p.untilSource !== null) {
+    acc.parts.push(
+      `((data->>'source_timestamp_unix')::bigint) <= $${acc.params.length + 1}`,
+    );
+    acc.params.push(p.untilSource);
+  }
+  // activeOnly — previously omitted from the count, which left
+  // `total` inconsistent with the actual `records` returned for
+  // callers passing ?active_only=1.
+  if (p.activeOnly) {
+    acc.parts.push(`(data->>'is_active' IN ('1','true','True'))`);
+  }
   if (p.search) {
     acc.parts.push(
       `(data->>'title' ILIKE $${acc.params.length + 1} OR (data->>'location_text') ILIKE $${acc.params.length + 1})`,
@@ -694,35 +735,16 @@ export function buildCountSqlForTable(
   // rows, which on archive_waze (millions of rows across many monthly
   // partitions) blows past the 60s budget even for a 50k cap. With it,
   // the planner walks the index from now backwards and stops at 50k.
-  // SELECT shape: total + live_count (FILTER over `data->>'is_live'`).
-  // ended_count is computed in JS as `total - live_count` to match
-  // formatRecord's truthy-default semantics (missing is_live → live).
-  // Inferring ended from `is_live IN ('0','false','False')` would
-  // silently drop rows with no is_live key.
-  //
-  // Both columns ride through the doubly-nested LIMIT pattern so the
-  // 50k cap still bounds the index walk before DISTINCT runs.
+  // SELECT shape: a single bigint `total`. The 50k cap rides through
+  // the doubly-nested LIMIT pattern so the index walk stops at 50k
+  // before the outer COUNT runs.
   const COUNT_CAP = 50_000;
-  // ROLLED BACK from is_live/is_latest filtering — see buildSqlForTable
-  // for context. Back to bounded count using the (fetched_at DESC)
-  // index. live_count derived from JSONB at extract time; per-row
-  // overhead is fine because the LIMIT bounds the scan.
-  const IS_LIVE_PRED = `(data->>'is_live') IN ('1','true','True')`;
-  const aggLine = `SELECT COUNT(*)::bigint AS total, COUNT(*) FILTER (WHERE is_live_truthy)::bigint AS live_count`;
 
   if (p.unique) {
     // Sidecar-driven unique count (migration 017). Sidecar carries
     // (source, source_id, latest_fetched_at) — exactly the columns
     // we filter on for time + source. Anything else (category,
     // JSONB fields, lat/lng radius) only the parent has.
-    //
-    // Trade-off: live_count is set to total here. The previous count
-    // path bounded-scanned the parent and FILTERed by data->>'is_live',
-    // which gave an accurate live/ended split — but it ran 10s+ on
-    // archive_waze under ingest pressure. Counting the sidecar is
-    // O(matching_rows) and finishes in milliseconds; the small
-    // regression (frontend's "X live, Y ended" pill always shows
-    // ended=0 for unique=1 lists) is acceptable for the latency win.
     const sidecarAcc: ConditionAcc = { parts: [], params: [] };
     if (p.sources && p.sources.length > 0) pushIn(sidecarAcc, 'source', p.sources);
     const explicitlyAskedForDeprecated2 =
@@ -740,33 +762,104 @@ export function buildCountSqlForTable(
       sidecarAcc.params.push(p.sourceId);
     }
     // Match the unique=1 data query — filter on the source's own
-    // publish timestamp with last_seen_at fallback.
+    // publish timestamp with last_seen_at fallback. last_seen_at
+    // mirrors the /filters facet query (filterCache.ts) so the per-
+    // source counts there sum to this `total`.
     if (p.since !== null) {
       sidecarAcc.parts.push(
-        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) >= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.since);
     }
     if (p.until !== null) {
       sidecarAcc.parts.push(
-        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
+        `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM last_seen_at)::bigint) <= $${sidecarAcc.params.length + 1}`,
       );
       sidecarAcc.params.push(p.until);
     }
+    // Apply the same post-JOIN-filter set the data query (buildUniqueQuery)
+    // now applies on the sidecar — so `total` honours them instead of
+    // always reporting the unfiltered roll-up.
+    if (p.category && p.category.length > 0) {
+      const placeholders = p.category.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.category.length === 1
+          ? `category = ${placeholders[0]}`
+          : `category IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.category) sidecarAcc.params.push(v);
+    }
+    if (p.subcategory && p.subcategory.length > 0) {
+      const placeholders = p.subcategory.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.subcategory.length === 1
+          ? `subcategory = ${placeholders[0]}`
+          : `subcategory IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.subcategory) sidecarAcc.params.push(v);
+    }
+    if (p.status && p.status.length > 0) {
+      const placeholders = p.status.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.status.length === 1
+          ? `status = ${placeholders[0]}`
+          : `status IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.status) sidecarAcc.params.push(v);
+    }
+    if (p.severity && p.severity.length > 0) {
+      const placeholders = p.severity.map(
+        (_, i) => `$${sidecarAcc.params.length + i + 1}`,
+      );
+      sidecarAcc.parts.push(
+        p.severity.length === 1
+          ? `severity = ${placeholders[0]}`
+          : `severity IN (${placeholders.join(',')})`,
+      );
+      for (const v of p.severity) sidecarAcc.params.push(v);
+    }
+    if (p.activeOnly) {
+      sidecarAcc.parts.push(`(is_active IS NULL OR is_active = true)`);
+    }
+    if (p.search) {
+      const ph = `$${sidecarAcc.params.length + 1}`;
+      sidecarAcc.parts.push(`(title ILIKE ${ph} OR location_text ILIKE ${ph})`);
+      sidecarAcc.params.push(`%${p.search}%`);
+    }
+    if (p.title) {
+      sidecarAcc.parts.push(`title ILIKE $${sidecarAcc.params.length + 1}`);
+      sidecarAcc.params.push(`%${p.title}%`);
+    }
+    if (p.location) {
+      sidecarAcc.parts.push(
+        `location_text ILIKE $${sidecarAcc.params.length + 1}`,
+      );
+      sidecarAcc.params.push(`%${p.location}%`);
+    }
     const sidecarWhere =
       sidecarAcc.parts.length > 0 ? `WHERE ${sidecarAcc.parts.join(' AND ')}` : '';
-    const sql = `
-      SELECT COUNT(*)::bigint AS total, COUNT(*)::bigint AS live_count
-      FROM (
-        SELECT 1 FROM ${table}_latest ${sidecarWhere} LIMIT ${COUNT_CAP}
-      ) sub
-    `;
+    // No COUNT_CAP for the sidecar path — `_latest` carries one row
+    // per (source, source_id), bounded by the number of distinct
+    // incidents the upstream feed currently knows about (tens of
+    // thousands, not the millions in the parent partitions). Counting
+    // it directly is sub-second on an indexed table.
+    const sql = `SELECT COUNT(*)::bigint AS total FROM ${table}_latest ${sidecarWhere}`;
     return { sql, params: sidecarAcc.params, table };
   }
 
-  const sql = `${aggLine}
+  // Unique=0 parent count: bounded scan via idx_archive_*_ts so
+  // archive_waze (millions of rows across monthly partitions) can't
+  // burn the 60s statement_timeout. The frontend's page-jumper only
+  // ever navigates the first ~5000 pages anyway.
+  const sql = `SELECT COUNT(*)::bigint AS total
        FROM (
-         SELECT ${IS_LIVE_PRED} AS is_live_truthy
+         SELECT 1
          FROM ${table} ${whereClause}
          ORDER BY fetched_at DESC
          LIMIT ${COUNT_CAP}

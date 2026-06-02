@@ -57,5 +57,15 @@ docs/*
 !docs/waze-userscript-manual.user.js
 !docs/uptime-kuma-monitors.md
 
-# Radio unit reference data (local operator data, not for the public repo).
-backends/reference/
+# Radio unit reference data (local operator data, not for the public
+# repo). Patterns match individual files rather than the whole dir so
+# tracked files (rdio_lexicon.txt) can live alongside.
+backends/reference/*.csv
+backends/reference/unit_callsigns*
+# Note: the spell-check baseline lexicon (rdio_lexicon.txt) IS shipped
+# in the repo — NSW place names, agency lexicon, prowords. Operators
+# can extend on the host without committing; see services/rdioSpell.ts.
+
+# Auto-refreshed by the CentralWatch fetcher — server overwrites this on each
+# run, so we don't track it to avoid spurious diffs / merge churn.
+backends/data/centralwatch_cameras.json

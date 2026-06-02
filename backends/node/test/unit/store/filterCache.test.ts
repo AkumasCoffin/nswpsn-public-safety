@@ -1,16 +1,18 @@
 /**
  * Tests for the in-memory filter facet aggregator. We seed the
- * LiveStore with synthetic snapshots, force a refresh, and assert the
- * computed shape against the contract Python's
- * `_build_filters_response` defines.
+ * LiveStore with synthetic snapshots and read the LiveStore-only
+ * variant (`getFilterFacetsLive`) which has no DB dependency. The
+ * production async path (`getFilterFacets`) goes through the same
+ * `buildResponse` shaping plus an archive_*_latest sidecar query —
+ * its semantics are covered indirectly by sources/* tests and direct
+ * end-to-end tests against the real DB.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { liveStore } from '../../../src/store/live.js';
 import {
   _resetFilterCacheForTests,
   canonicalAlertType,
-  getFilterFacets,
-  refreshFilterCache,
+  getFilterFacetsLive,
   type ProviderFacets,
   type TypeFacets,
 } from '../../../src/store/filterCache.js';
@@ -34,8 +36,7 @@ describe('filterCache', () => {
   });
 
   it('returns the full provider list when LiveStore is empty', () => {
-    refreshFilterCache();
-    const facets = getFilterFacets();
+    const facets = getFilterFacetsLive();
     // 10 providers: rfs, bom, livetraffic, endeavour, ausgrid, essential,
     // waze, pager, user, rdio.
     expect(facets.providers).toHaveLength(10);
@@ -52,8 +53,7 @@ describe('filterCache', () => {
       { category: 'Bushfire', status: 'Watch and Act' },
       { category: 'Hazard Reduction', status: 'Advice' },
     ]);
-    refreshFilterCache();
-    const facets = getFilterFacets();
+    const facets = getFilterFacetsLive();
     const rfs = findProvider(facets, 'rfs');
     expect(rfs?.count).toBe(3);
     const rfsType = findType(rfs, 'rfs');
@@ -70,8 +70,7 @@ describe('filterCache', () => {
       { subcategory: '1160008', category: 'NSWFR' },
       { subcategory: 'Welfare', category: 'NSWFR' },
     ]);
-    refreshFilterCache();
-    const pager = findProvider(getFilterFacets(), 'pager');
+    const pager = findProvider(getFilterFacetsLive(), 'pager');
     const pagerType = findType(pager, 'pager');
     const subs = pagerType?.subcategories.map((s) => s.value);
     expect(subs).toContain('Welfare');
@@ -86,8 +85,7 @@ describe('filterCache', () => {
         { properties: { category: 'HAZARD', severity: 'Minor' } },
       ],
     });
-    refreshFilterCache();
-    const lt = findProvider(getFilterFacets(), 'livetraffic');
+    const lt = findProvider(getFilterFacetsLive(), 'livetraffic');
     const incidents = findType(lt, 'traffic_incident');
     expect(incidents?.count).toBe(3);
     const crash = incidents?.categories.find((c) => c.value === 'CRASH');
@@ -99,33 +97,34 @@ describe('filterCache', () => {
       alerts: [{ category: 'POLICE' }, { category: 'POLICE' }],
       jams: [],
     });
-    refreshFilterCache();
-    const waze = findProvider(getFilterFacets(), 'waze');
+    const waze = findProvider(getFilterFacetsLive(), 'waze');
     const police = findType(waze, 'waze_police');
     expect(police?.count).toBe(2);
   });
 
   it('case-insensitively merges duplicate values, preserving the dominant casing', () => {
+    // Include a second category so the merged dim has ≥2 entries and
+    // doesn't get dropped by the trivial-dim filter in buildResponse
+    // (a single-value 100%-of-total dim is treated as a constant).
     liveStore.set('rfs', [
       { category: 'Bushfire' },
       { category: 'Bushfire' },
       { category: 'BUSHFIRE' },
+      { category: 'Grass Fire' },
     ]);
-    refreshFilterCache();
-    const rfsType = findType(findProvider(getFilterFacets(), 'rfs'), 'rfs');
+    const rfsType = findType(findProvider(getFilterFacetsLive(), 'rfs'), 'rfs');
     const merged = rfsType?.categories ?? [];
-    // Only one row — the case variants collapsed.
-    expect(merged).toHaveLength(1);
+    // Two distinct buckets after case merge.
+    expect(merged).toHaveLength(2);
+    const bushfire = merged.find((c) => c.value === 'Bushfire');
     // Dominant casing wins (2× "Bushfire" beats 1× "BUSHFIRE").
-    expect(merged[0]?.value).toBe('Bushfire');
-    expect(merged[0]?.count).toBe(3);
+    expect(bushfire?.count).toBe(3);
   });
 
   it('scopes response to a single provider when `source` filter is given', () => {
     liveStore.set('rfs', [{ category: 'Bushfire' }]);
     liveStore.set('waze_police', { alerts: [{ category: 'POLICE' }], jams: [] });
-    refreshFilterCache();
-    const facets = getFilterFacets('waze_police');
+    const facets = getFilterFacetsLive('waze_police');
     expect(facets.providers).toHaveLength(1);
     expect(facets.providers[0]?.key).toBe('waze');
     expect(facets.providers[0]?.types).toHaveLength(1);
@@ -133,15 +132,13 @@ describe('filterCache', () => {
   });
 
   it('returns empty providers when source filter doesn\'t match anything', () => {
-    refreshFilterCache();
-    const facets = getFilterFacets('nonsense_source_xyz');
+    const facets = getFilterFacetsLive('nonsense_source_xyz');
     expect(facets.providers).toEqual([]);
   });
 
   it('exposes liveStore snapshot timestamps as date_range', () => {
     liveStore.set('rfs', [{ category: 'Bushfire' }]);
-    refreshFilterCache();
-    const facets = getFilterFacets();
+    const facets = getFilterFacetsLive();
     expect(typeof facets.date_range.oldest_unix).toBe('number');
     expect(typeof facets.date_range.newest_unix).toBe('number');
     expect(facets.date_range.oldest).not.toBeNull();

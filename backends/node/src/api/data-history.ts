@@ -7,8 +7,8 @@
  * partitioned per-family archive tables.
  *
  * New schema: 5 archive_* tables (waze/traffic/rfs/power/misc), each
- * append-only, monthly RANGE-partitioned by fetched_at, no
- * is_live/is_latest columns. See src/db/migrations/002_archive_partitions.sql.
+ * append-only, monthly RANGE-partitioned by fetched_at. See
+ * src/db/migrations/002_archive_partitions.sql.
  *
  * The big handler routes to the minimum set of family tables given the
  * `?source=` filter. Single-family case = one indexed query. Multi-family
@@ -168,9 +168,14 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
     lat: floatParam(q.get('lat')),
     lng: floatParam(q.get('lon')) ?? floatParam(q.get('lng')),
     radiusKm: floatParam(q.get('radius')) ?? 10,
-    unique: q.get('unique') === '1',
-    liveOnly: q.get('live_only') === '1',
-    historicalOnly: q.get('historical_only') === '1',
+    // unique defaults to true (one row per incident) since that's what
+    // logs.html / dashboard.html and the bot all want. Old default
+    // (unique=0, every snapshot) scans the 2.8M-row parent archive
+    // when the ~3-77K-row sidecar would do; queries dropped from
+    // 5-30s to milliseconds. Callers that genuinely want every poll
+    // snapshot must pass ?unique=0 explicitly — logs.html's
+    // linked-incident proximity lookups already do.
+    unique: q.get('unique') !== '0',
     activeOnly: q.get('active_only') === '1',
     order,
     limit,
@@ -193,8 +198,6 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   // frontend logs page.
   if (since !== null) rawFilters['since'] = sydneyIsoFromUnix(since);
   if (until !== null) rawFilters['until'] = sydneyIsoFromUnix(until);
-  if (params.liveOnly) rawFilters['live_only'] = true;
-  if (params.historicalOnly) rawFilters['historical_only'] = true;
   if (params.unique) rawFilters['unique'] = true;
 
   return { params, rawFilters };
@@ -350,8 +353,6 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     return c.json({
       records: [],
       total: 0,
-      live_count: 0,
-      ended_count: 0,
       limit: params.limit,
       offset: params.offset,
       count: 0,
@@ -395,22 +396,27 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
       }),
     );
-    // Per-family count returns total + live_count in one round-trip.
-    // ended is derived as `total - live` to match formatRecord's
-    // truthy-default semantics for missing is_live.
+    // Per-family count: a single `total` bigint that the route sums
+    // across families.
     //
     // 2-min LRU cache: page-jumper clicks all hit the same WHERE
     // clause (only LIMIT/OFFSET differ, and the count query strips
     // both) so we re-use the previous result instead of re-running
-    // the 5-10s aggregate per page click. 30s was too short to span
-    // a typical paginating session; bumped to 120s.
+    // the 5-10s aggregate per page click.
     //
-    // Count uses a 15s timeout (vs 60s for the data query) so a
+    // Count uses a 15s timeout (vs 30s for the data query) so a
     // stuck count never blocks the route. On timeout the route
     // returns the data with total=0; logs.html falls back to "+"
     // pagination instead of jump-to-page.
     const nowMs = Date.now();
-    const countPromise = Promise.all(
+    // Skip the count query entirely when the caller passed ?cursor=.
+    // Cursor pagination doesn't need `total` — the next_cursor in the
+    // response is the only signal it uses. Avoids running the 5-10s
+    // COUNT aggregate on every cursor-paged page click.
+    const skipCount = params.cursor !== null;
+    const countPromise: Promise<number[]> = skipCount
+      ? Promise.resolve(plan.queries.map(() => 0))
+      : Promise.all(
       plan.queries.map(async (q) => {
         const cq = buildCountSqlForTable(q.table, params);
         const key = countCacheKey(q.table, cq.sql, cq.params);
@@ -420,13 +426,8 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
         }
         try {
           const r = await runWithTimeout(pool, cq.sql, cq.params, 15);
-          const row = r.rows[0] as
-            | { total?: string | number; live_count?: string | number }
-            | undefined;
-          const count = {
-            total: Number(row?.total ?? 0),
-            live: Number(row?.live_count ?? 0),
-          };
+          const row = r.rows[0] as { total?: string | number } | undefined;
+          const count = Number(row?.total ?? 0);
           // Bound the cache: drop oldest when over capacity. Map's
           // insertion order makes this O(1) per eviction.
           if (countCache.size >= COUNT_CACHE_MAX) {
@@ -447,17 +448,15 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
             if (oldestKey !== undefined) countCache.delete(oldestKey);
           }
           countCache.set(key, {
-            count: { total: 0, live: 0 },
+            count: 0,
             ts: nowMs - (COUNT_CACHE_TTL_MS - 30_000),
           });
-          return { total: 0, live: 0 };
+          return 0;
         }
       }),
     );
     const [results, counts] = await Promise.all([dataPromise, countPromise]);
-    const total = counts.reduce((a, b) => a + b.total, 0);
-    const liveCount = counts.reduce((a, b) => a + b.live, 0);
-    const endedCount = Math.max(0, total - liveCount);
+    const total = counts.reduce((a, b) => a + b, 0);
 
     let merged: ArchiveQueryRow[];
     if (results.length === 1) {
@@ -486,11 +485,6 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     return c.json({
       records,
       total,
-      // Both numbers come out of the same single count query as `total`
-      // via FILTER (WHERE data->>'is_live' IN ('1','true','True')).
-      // Capped at the same 50k as `total` per family.
-      live_count: liveCount,
-      ended_count: endedCount,
       limit: params.limit,
       offset: params.offset,
       count: records.length,
@@ -521,7 +515,6 @@ interface FormattedRecord {
   severity: string | null;
   data: Record<string, unknown>;
   is_active: boolean;
-  is_live: boolean;
   last_seen: number | null;
   last_seen_iso: string | null;
 }
@@ -622,11 +615,6 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     severity: pickStr(data, 'severity'),
     data: includeData ? data : {},
     is_active: pickBool(data, 'is_active', false),
-    // Python defaulted is_live=true when the column was NULL. The new
-    // schema doesn't carry an is_live column at all; absence in the JSON
-    // means "we never tagged this snapshot", which for the latest row
-    // is effectively "still live". Default-true matches Python.
-    is_live: pickBool(data, 'is_live', true),
     last_seen: lastSeen,
     last_seen_iso: sydneyIsoFromUnix(lastSeen),
   };
@@ -636,9 +624,39 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
 // /api/data/history/filters
 // ---------------------------------------------------------------------------
 
-dataHistoryRouter.get('/api/data/history/filters', (c) => {
+// Resolves the time window for /filters from the same params /history
+// accepts: explicit since (epoch secs) > date_from (YYYY-MM-DD or ISO) >
+// hours > days. Missing all of them = "All" (filterCache defaults to
+// DATA_RETENTION_DAYS). Returns the window in hours so the cache key
+// stays simple.
+function parseWindowHours(q: URLSearchParams): number | null {
+  const since = intParam(q.get('since'));
+  const dateFrom = q.get('date_from');
+  const hours = intParam(q.get('hours'));
+  const days = intParam(q.get('days'));
+  const nowSecs = Math.floor(Date.now() / 1000);
+  if (since !== null && since > 0) {
+    const h = Math.ceil((nowSecs - since) / 3600);
+    return h > 0 ? h : null;
+  }
+  if (dateFrom) {
+    const sinceFromDate = parseDateBoundary(dateFrom, false);
+    if (sinceFromDate !== null && sinceFromDate > 0) {
+      const h = Math.ceil((nowSecs - sinceFromDate) / 3600);
+      return h > 0 ? h : null;
+    }
+  }
+  if (hours !== null && hours > 0) return hours;
+  if (days !== null && days > 0) return days * 24;
+  return null;
+}
+
+dataHistoryRouter.get('/api/data/history/filters', async (c) => {
   const sourceFilter = c.req.query('source');
-  return c.json(getFilterFacets(sourceFilter ?? null));
+  const url = new URL(c.req.url);
+  const windowHours = parseWindowHours(url.searchParams);
+  const facets = await getFilterFacets(sourceFilter ?? null, windowHours);
+  return c.json(facets);
 });
 
 // ---------------------------------------------------------------------------
@@ -668,7 +686,7 @@ const SOURCES_STATS_TTL_MS = 5 * 60_000;
 // re-run the 5-10s COUNT(*) FILTER aggregate each time. Bounded at
 // 256 entries to avoid runaway growth from heavy filter-permutation
 // traffic.
-interface CountCacheEntry { count: { total: number; live: number }; ts: number; }
+interface CountCacheEntry { count: number; ts: number; }
 const countCache = new Map<string, CountCacheEntry>();
 const COUNT_CACHE_TTL_MS = 120_000;
 const COUNT_CACHE_MAX = 256;
@@ -881,7 +899,6 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
     return c.json({
       source,
       source_id: sourceId,
-      is_live: false,
       snapshots: 0,
       history: [],
     });
@@ -913,8 +930,6 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       lng: null,
       radiusKm: 10,
       unique: false,
-      liveOnly: false,
-      historicalOnly: false,
       activeOnly: false,
       order: 'ASC',
       limit: 5000,
@@ -941,18 +956,13 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       severity: pickStr(r.data, 'severity'),
       data: r.data,
       is_active: pickBool(r.data, 'is_active', false),
-      is_live: pickBool(r.data, 'is_live', true),
       last_seen: pickNum(r.data, 'last_seen'),
       last_seen_iso: sydneyIsoFromUnix(pickNum(r.data, 'last_seen')),
     }));
 
-    const isCurrentlyLive =
-      history.length > 0 ? (history[history.length - 1]?.is_live ?? false) : false;
-
     return c.json({
       source,
       source_id: sourceId,
-      is_live: isCurrentlyLive,
       snapshots: history.length,
       history,
     });

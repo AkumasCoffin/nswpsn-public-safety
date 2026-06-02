@@ -71,13 +71,13 @@ const INDEXES: IndexSpec[] = [
 ];
 
 /**
- * Indexes to actively DROP. Earlier revisions added partial indexes on
- * `(data->>'is_live') IN ('1','true','True')` to speed up the live-only
- * filter, but the JSONB extraction inside the WHERE clause forced
- * per-row JSON parsing during every INSERT — production showed
- * archive_power INSERTs of 1.3k rows taking 60s+. The indexes weren't
- * pulling their weight on read-side either (the planner often picked
- * the regular `(source, fetched_at DESC)` index with a Filter step
+ * Indexes to actively DROP. Earlier revisions added partial indexes
+ * on JSONB-extracted predicates to speed up filtered reads, but the
+ * JSONB extraction inside the WHERE clause forced per-row JSON
+ * parsing during every INSERT — production showed archive_power
+ * INSERTs of 1.3k rows taking 60s+. The indexes weren't pulling
+ * their weight on read-side either (the planner often picked the
+ * regular `(source, fetched_at DESC)` index with a Filter step
  * anyway). Dropping them frees up write throughput.
  */
 const DROP_INDEXES = [
@@ -237,12 +237,11 @@ const BACKFILLS: BackfillSpec[] = [
                   ON CONFLICT (day, archive, source, category, subcategory) DO NOTHING`,
     }),
   ),
-  // NOTE: is_live and is_latest backfills disabled. The is_latest
-  // approach created untenable I/O contention — the bulk UPDATE
-  // creating ~366k dead tuples on archive_waze made every query
-  // (writes, reads, heatmap aggregation) compete for disk. Reverted
-  // to bounded DISTINCT ON in the read path. Columns still exist
-  // in the schema (migration 012) but reads no longer filter them.
+  // NOTE: the is_latest backfill from migration 012 was disabled
+  // and the columns dropped in migration 013. The bulk UPDATE created
+  // ~366k dead tuples on archive_waze; every query (writes, reads,
+  // heatmap aggregation) competed for disk. Bounded DISTINCT ON in
+  // the read path is what we use now.
 ];
 
 let inFlight: Promise<void> | null = null;

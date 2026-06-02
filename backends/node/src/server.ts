@@ -63,6 +63,12 @@ const QUIET_PATHS_RE =
 
 const SLOW_REQUEST_MS = 500;
 
+// In dev, log every 2xx/3xx request at `info` so operators see the live
+// stream. In production the default LOG_LEVEL=info would flood the log
+// with browser polls + dashboard fetches, so successful requests stay at
+// `debug` (set LOG_LEVEL=debug to surface them when needed).
+const VERBOSE_REQUEST_LOG = process.env['NODE_ENV'] !== 'production';
+
 /**
  * Classify the request origin from headers. The discord bot sets
  * `User-Agent: NSWPSNBot/1.0` (and sometimes `X-Client-Type: discord-bot`)
@@ -82,7 +88,8 @@ function classifyClient(ua: string, xClient: string): 'bot' | 'browser' | 'other
  * Replacement for Hono's built-in logger. Differences:
  *   - 2xx + 3xx on QUIET_PATHS_RE are silent
  *   - 2xx + 3xx slower than SLOW_REQUEST_MS log at info ("slow")
- *   - other 2xx + 3xx log at debug (silent unless LOG_LEVEL=debug)
+ *   - other 2xx + 3xx log at info in dev, debug in production
+ *     (production-default LOG_LEVEL=info would otherwise flood the log)
  *   - 4xx logs at info ("client error")
  *   - 5xx logs at warn ("server error")
  *   - OPTIONS preflights are silent (huge volume, no signal)
@@ -123,6 +130,10 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
   if (QUIET_PATHS_RE.test(path)) return;
   if (ms >= SLOW_REQUEST_MS) {
     log.info(`slow ${line}`);
+    return;
+  }
+  if (VERBOSE_REQUEST_LOG) {
+    log.info(line);
     return;
   }
   log.debug(line);

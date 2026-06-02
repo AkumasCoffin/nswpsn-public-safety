@@ -189,6 +189,7 @@ const Schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((s) => s === 'true'),
+
 });
 
 const parsed = Schema.safeParse(process.env);

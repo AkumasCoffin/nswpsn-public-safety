@@ -36,8 +36,6 @@ function defaultParams(overrides: Partial<DataHistoryParams> = {}): DataHistoryP
     lng: null,
     radiusKm: 10,
     unique: false,
-    liveOnly: false,
-    historicalOnly: false,
     activeOnly: false,
     order: 'DESC',
     limit: 100,
@@ -160,15 +158,6 @@ describe('buildSqlForTable — JSONB filters', () => {
     expect(q.params).toContain('%hwy%');
   });
 
-  it('live_only filters on data->>is_live truthy variants', () => {
-    const q = buildSqlForTable(
-      'archive_traffic',
-      defaultParams({ liveOnly: true }),
-    );
-    expect(q.sql).toContain("data->>'is_live' IN");
-    expect(q.sql).toContain("'1'");
-    expect(q.sql).toContain("'true'");
-  });
 });
 
 describe('buildSqlForTable — time, geo, cursor', () => {
@@ -227,21 +216,24 @@ describe('buildSqlForTable — time, geo, cursor', () => {
 });
 
 describe('buildSqlForTable — unique=1', () => {
-  it('uses bounded DISTINCT ON when unique=1', () => {
-    // Rolled back from is_latest filter (which created I/O contention
-    // killing writes). The unique=1 path now bounds the inner scan
-    // by fetched_at DESC LIMIT 50000, then DISTINCT ON in-memory.
+  it('uses the sidecar + LATERAL JOIN pattern when unique=1 (migration 017)', () => {
+    // unique=1 reads from archive_*_latest (the sidecar with one row
+    // per incident) via a `top_keys` CTE, then CROSS JOIN LATERAL to
+    // the parent for the full record. The previous DISTINCT ON
+    // bounded-scan approach was replaced because it timed out at 30s
+    // on archive_waze under ingest load.
     const q = buildSqlForTable(
       'archive_waze',
       defaultParams({ unique: true, sources: ['waze_police'] }),
     );
-    expect(q.sql).toContain('DISTINCT ON (source, source_id)');
-    expect(q.sql).toContain('LIMIT 50000');
+    expect(q.sql).toContain('archive_waze_latest');
+    expect(q.sql).toContain('top_keys');
+    expect(q.sql).toContain('CROSS JOIN LATERAL');
   });
 
-  it('non-unique queries do NOT use DISTINCT ON', () => {
+  it('non-unique queries do NOT use the sidecar', () => {
     const q = buildSqlForTable('archive_waze', defaultParams());
-    expect(q.sql).not.toContain('DISTINCT ON');
+    expect(q.sql).not.toContain('archive_waze_latest');
   });
 });
 
