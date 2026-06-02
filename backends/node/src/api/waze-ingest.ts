@@ -25,6 +25,7 @@ import {
   isPoliceAlert,
   isRoadworkAlert,
   isHazardAlert,
+  isJamAlert,
 } from '../services/wazeAlerts.js';
 import { log } from '../lib/log.js';
 
@@ -33,12 +34,30 @@ export const wazeIngestRouter = new Hono();
 function alertSource(a: WazeAlert): string | null {
   if (isPoliceAlert(a)) return 'waze_police';
   if (isRoadworkAlert(a)) return 'waze_roadwork';
+  if (isJamAlert(a)) return 'waze_jam';
   if (isHazardAlert(a)) return 'waze_hazard';
-  // Bare-type 'POLICE' / 'CONSTRUCTION' / 'HAZARD' alerts are caught
-  // above; anything else (e.g. JAM-typed alerts that aren't already
-  // classified) we drop because the live read path doesn't surface
-  // them and archiving would just bloat the table.
+  // Everything classified above; anything else (an unrecognised type)
+  // we drop because the live read path doesn't surface them and
+  // archiving would just bloat the table.
   return null;
+}
+
+/**
+ * Per-source category override. The raw `type` field stored on the row
+ * is useful only for waze_hazard (where HAZARD / ACCIDENT / ROAD_CLOSED
+ * is a meaningful distinction). Every other bucket has a single
+ * effective category — overriding here turns the filter dropdown's
+ * "category" dimension from a useless echo of the alert_type
+ * ("category: POLICE" for waze_police) into a clean display value.
+ */
+function categoryForSource(source: string, rawType: string | null): string | null {
+  switch (source) {
+    case 'waze_police':   return 'Police';
+    case 'waze_roadwork': return 'Roadwork';
+    case 'waze_jam':      return 'Traffic Jam';
+    case 'waze_hazard':   return rawType ?? null;
+    default:              return rawType ?? null;
+  }
 }
 
 function alertLatLng(a: WazeAlert): { lat: number | null; lng: number | null } {
@@ -108,7 +127,7 @@ function archiveAlertsAndJams(alerts: WazeAlert[], jams: WazeJam[]): number {
       fetched_at: fetchedAt,
       lat,
       lng,
-      category: type ?? null,
+      category: categoryForSource(source, type),
       subcategory,
       // The data blob mirrors what defaultArchiveItems would produce
       // for a GeoJSON Feature.properties: top-level title/subtype/etc
@@ -127,7 +146,7 @@ function archiveAlertsAndJams(alerts: WazeAlert[], jams: WazeJam[]): number {
       fetched_at: fetchedAt,
       lat,
       lng,
-      category: 'JAM',
+      category: 'Traffic Jam',
       subcategory: null,
       data: j as unknown as Record<string, unknown>,
     };

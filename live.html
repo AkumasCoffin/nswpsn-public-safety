@@ -2860,8 +2860,15 @@
       }
       const people = inc.people_count > 0 ? `${inc.people_count} pax` : '';
       const vehicles = Array.isArray(inc.vehicles) && inc.vehicles.length ? inc.vehicles.map(v => escHTML(v)).join(', ') : '';
+      // Units can arrive as: string (current rebuilder + legacy Gemini),
+      // {label, uid} (transient bug from the rebuilder rollout), or
+      // {id, ...} (deep-legacy dict shape). Prefer label > id > '?'.
       const unitList = Array.isArray(inc.units) && inc.units.length
-        ? inc.units.map(u => escHTML(typeof u === 'string' ? u : (u.id || '?'))).join(', ')
+        ? inc.units.map(u => escHTML(
+            typeof u === 'string'
+              ? u
+              : ((u && (u.label || u.id)) || '?')
+          )).join(', ')
         : '';
       // Window: new schema is window.{start,end}; legacy used first_heard/last_heard.
       const winStart = (inc.window && inc.window.start) || inc.first_heard || '';
@@ -3098,27 +3105,38 @@
       }
     }
 
+    // In-flight guard so a slow loadAllStats() doesn't get re-entered
+    // when the interval timer fires before the previous tick finished.
+    // Without this, two concurrent refreshes can race on the shared
+    // apiDataCache fields and post stale data into the DOM.
+    let _refreshInFlight = false;
     async function refreshAllData() {
-      // Reset cache for fresh data
-      apiDataCache.timestamp = Date.now();
-      apiDataCache.traffic = null;
-      apiDataCache.bom = null;
-      apiDataCache.beachwatch = null;
-      apiDataCache.beachsafe = null;
-      apiDataCache.endeavour = null;
-      apiDataCache.essential = null;
+      if (_refreshInFlight) return;
+      _refreshInFlight = true;
+      try {
+        // Reset cache for fresh data
+        apiDataCache.timestamp = Date.now();
+        apiDataCache.traffic = null;
+        apiDataCache.bom = null;
+        apiDataCache.beachwatch = null;
+        apiDataCache.beachsafe = null;
+        apiDataCache.endeavour = null;
+        apiDataCache.essential = null;
 
-      // Load stats first (this makes the API calls) — stats update is safe, no layout shift
-      await loadAllStats();
+        // Load stats first (this makes the API calls) — stats update is safe, no layout shift
+        await loadAllStats();
 
-      // Only refresh detail cards if user is near the top of the page
-      // When scrolled down, the innerHTML replacement causes jarring layout shifts
-      const scrolledDown = window.scrollY > 400;
-      if (!scrolledDown) {
-        loadLatestPower();
-        loadLatestTraffic();
-        loadLatestBOM();
-        loadLatestBeaches();
+        // Only refresh detail cards if user is near the top of the page
+        // When scrolled down, the innerHTML replacement causes jarring layout shifts
+        const scrolledDown = window.scrollY > 400;
+        if (!scrolledDown) {
+          loadLatestPower();
+          loadLatestTraffic();
+          loadLatestBOM();
+          loadLatestBeaches();
+        }
+      } finally {
+        _refreshInFlight = false;
       }
     }
     

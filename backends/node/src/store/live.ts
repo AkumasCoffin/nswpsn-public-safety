@@ -4,9 +4,9 @@
  * Holds the *current* state of every source in memory. All `/api/*` live
  * endpoints (waze/police, rfs/incidents, traffic/incidents, etc.) read
  * from here — never from Postgres. That separation is the point: the
- * old Python backend put live state and archive in the same `data_history`
- * table with `is_live`/`is_latest` UPDATE columns, and the resulting
- * write contention was the root cause of every cascade we fought today.
+ * old Python backend put live state and archive in the same table with
+ * UPDATE-driven liveness columns, and the resulting write contention
+ * was the root cause of every cascade we fought today.
  *
  * Disk persistence is per-source under {STATE_DIR}/<source>.json. Atomic
  * via tempfile + rename so we never see a partial file. On startup,
