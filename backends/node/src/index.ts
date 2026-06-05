@@ -53,7 +53,7 @@ import {
   stopStatsArchiver,
 } from './services/statsArchiver.js';
 import { ensurePerfIndexes } from './services/indexBuilder.js';
-import { startCleanupLoop, stopCleanupLoop } from './services/cleanup.js';
+import { startCleanupLoop, stopCleanupLoop, ensureArchivePartitions } from './services/cleanup.js';
 import { scheduleArchiveLatestBackfill } from './services/archiveLatestBackfill.js';
 import { scheduleArchiveLatestDimsBackfill } from './services/archiveLatestDimsBackfill.js';
 import { scheduleArchiveLatestRecompute } from './services/archiveLatestRecompute.js';
@@ -93,6 +93,15 @@ async function preflight(): Promise<void> {
   registerAllPowerSources(); // endeavour, ausgrid, essential
 
   liveStore.startPersistLoop();
+  // Ensure this month's (and next month's) archive partitions exist
+  // before the writer starts flushing — otherwise the first flush after
+  // a month rollover fails with "no partition found for row" (23514).
+  // Best-effort: the hourly cleanup loop also re-runs this.
+  try {
+    await ensureArchivePartitions();
+  } catch (err) {
+    log.error({ err }, 'boot: ensureArchivePartitions failed');
+  }
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
   startFilterCacheRefresh(); // 5-min archive-backed facet refresh for /api/data/history/filters
