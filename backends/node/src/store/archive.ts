@@ -36,6 +36,19 @@ export type ArchiveTable =
   | 'archive_power'
   | 'archive_misc';
 
+/**
+ * Namespace key for the per-`_latest`-table advisory lock that
+ * serialises every sidecar mutation. The live writer's upsert and the
+ * one-shot backfills (archiveLatestDimsBackfill / archiveLatestBackfill)
+ * all take `pg_advisory_xact_lock(SIDECAR_LOCK_NAMESPACE, hashtext(
+ * '<table>_latest'))` before touching the sidecar, so they take turns
+ * rather than interleaving row locks in opposite orders and deadlocking
+ * (SQLSTATE 40P01). Sorting/ORDER BY can't guarantee a shared lock order
+ * across an INSERT…ON CONFLICT and an UPDATE…FROM — a mutex can.
+ * Uncontended (after the one-shot backfills finish) it's a no-op.
+ */
+export const SIDECAR_LOCK_NAMESPACE = 0x51de; // "sidecar"
+
 export interface ArchiveRow {
   source: string; // e.g. 'waze_police', 'rfs', 'traffic_incident'
   source_id?: string | null;
@@ -410,6 +423,15 @@ export class ArchiveWriter {
           }
         }
 
+        // Serialise the sidecar write against the one-shot backfills.
+        // Taken late (parent inserts already done) so the lock window is
+        // just the sidecar/heatmap/facets tail of the txn; released at
+        // COMMIT. See SIDECAR_LOCK_NAMESPACE.
+        await client.query(
+          'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+          [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
+        );
+
         // Always UPSERT the sidecar so last_seen_at advances even when
         // the data was unchanged. Sets latest_fetched_at + data_hash
         // only when EXCLUDED.data_hash differs from the stored one
@@ -551,6 +573,26 @@ export class ArchiveWriter {
     }
     if (map.size === 0) return;
 
+    // Deterministic lock order. Every concurrent transaction that writes
+    // ${table}_latest — this upsert, archiveLatestDimsBackfill's UPDATE,
+    // archiveLatestBackfill's INSERT — must acquire row locks on
+    // (source, source_id) in the SAME order, or two batches that overlap
+    // on a key deadlock (SQLSTATE 40P01 "deadlock detected" while
+    // inserting an index tuple in archive_*_latest). For INSERT ... ON
+    // CONFLICT, lock acquisition follows the VALUES order, so sorting the
+    // tuples by the conflict key here pins this side of the contract.
+    const ordered = [...map.values()].sort((a, b) =>
+      a.source === b.source
+        ? a.source_id < b.source_id
+          ? -1
+          : a.source_id > b.source_id
+            ? 1
+            : 0
+        : a.source < b.source
+          ? -1
+          : 1,
+    );
+
     // 13 params per row: source, source_id, fetched_at (×2 — also
     // becomes last_seen_at on first insert), data_hash, source_ts_unix,
     // category, subcategory, title, location_text, status, severity,
@@ -558,7 +600,7 @@ export class ArchiveWriter {
     const placeholders: string[] = [];
     const params: unknown[] = [];
     let i = 0;
-    for (const v of map.values()) {
+    for (const v of ordered) {
       placeholders.push(
         `($${i + 1}::text, $${i + 2}::text, ` +
           `to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), ` +

@@ -18,7 +18,7 @@
  *
  * Critical: /api/check-admin/<user_id> MUST include the
  *   tabs: { requests, users, dev }
- * block — dashboard.html and editor-requests.html key off it. See the
+ * block — dashboard.html and staff.html key off it. See the
  * test suite for the exact assertions.
  *
  * Approval flow: when `create_account: true`, python POSTs to the

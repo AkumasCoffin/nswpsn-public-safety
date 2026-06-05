@@ -19,6 +19,7 @@
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { SIDECAR_LOCK_NAMESPACE } from '../store/archive.js';
 
 const ARCHIVE_TABLES = [
   'archive_waze',
@@ -65,12 +66,25 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
     ms: 0,
   };
 
+  // A deadlock (40P01) means another sidecar writer won the race; the
+  // chunk rolled back untouched and just needs re-running, not aborting
+  // the whole table. Bounded retries with a short backoff guard against
+  // a pathological live-lock.
+  const MAX_DEADLOCK_RETRIES = 5;
+  let deadlockRetries = 0;
   for (;;) {
     const client = await pool.connect();
     let updated = 0;
+    let retryDeadlock = false;
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL statement_timeout = '60s'");
+      // Serialise against the live writer's sidecar upsert — same lock it
+      // takes. Holds for this chunk only; released at COMMIT/ROLLBACK.
+      await client.query(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+        [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
+      );
 
       // CTE picks a chunk of NULL-category sidecar rows, joins to the
       // parent on the latest_fetched_at pointer, then updates the
@@ -89,6 +103,10 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
            SELECT source, source_id, latest_fetched_at
            FROM ${table}_latest
            WHERE category IS NULL OR title IS NULL
+           -- Lock sidecar rows in (source, source_id) order to match the
+           -- live writer's upsert and the sidecar backfill; without a
+           -- shared order, overlapping batches deadlock (SQLSTATE 40P01).
+           ORDER BY source, source_id
            LIMIT $1
          )
          UPDATE ${table}_latest l
@@ -118,15 +136,32 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
 
       stats.chunks += 1;
       stats.rowsUpdated += updated;
+      deadlockRetries = 0; // progress made — reset the retry budget
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch { /* ignore */ }
-      log.warn(
-        { err: (err as Error).message, table, chunks: stats.chunks },
-        'archiveLatestDimsBackfill: chunk failed; stopping for this table',
-      );
-      break;
+      const code = (err as { code?: string }).code;
+      if (code === '40P01' && deadlockRetries < MAX_DEADLOCK_RETRIES) {
+        retryDeadlock = true;
+        deadlockRetries += 1;
+        log.info(
+          { table, attempt: deadlockRetries, chunks: stats.chunks },
+          'archiveLatestDimsBackfill: deadlock, retrying chunk',
+        );
+      } else {
+        log.warn(
+          { err: (err as Error).message, code, table, chunks: stats.chunks },
+          'archiveLatestDimsBackfill: chunk failed; stopping for this table',
+        );
+        break;
+      }
     } finally {
       client.release();
+    }
+
+    if (retryDeadlock) {
+      // Short escalating backoff before re-running the same chunk.
+      await new Promise((r) => setTimeout(r, 250 * deadlockRetries));
+      continue;
     }
 
     if (updated === 0) break; // table done

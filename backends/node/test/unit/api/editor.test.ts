@@ -451,7 +451,7 @@ describe('GET /api/check-admin/:userId', () => {
     expect(body['is_owner']).toBe(false);
   });
 
-  it('response includes the exact keys editor-requests.html and dashboard.html depend on', async () => {
+  it('response includes the exact keys staff.html and dashboard.html depend on', async () => {
     resultQueue = [{ rows: [{ role: 'owner' }] }];
     const app = makeApp();
     const res = await app.request('/api/check-admin/u-owner-2');
