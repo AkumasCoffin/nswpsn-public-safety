@@ -247,9 +247,12 @@ export async function buildNotification(c: BurstCandidate): Promise<Notification
   const title = `Major radio activity — ${tgName} (${sysName})`;
   const click = callUrl(c.latestId);
 
-  const header = matched.length ? `🔑 ${matched.join(', ')}\n\n` : '';
+  // Body is markdown (ntfy renders it when the `Markdown: yes` header is
+  // set). Bare URLs aren't auto-linked, so every call link is emitted as
+  // a [label](url) markdown link to make it tappable.
+  const header = matched.length ? `🔑 **Keywords:** ${matched.join(', ')}\n\n` : '';
   const summary =
-    `${c.n} calls on ${tgName} (${sysName}) in ` +
+    `**${c.n} calls** on ${tgName} (${sysName}) in ` +
     `${config.RDIO_BURST_WINDOW_MIN} min${urgent ? ' ⚠️' : ''}\n`;
 
   let lines = '';
@@ -258,7 +261,8 @@ export async function buildNotification(c: BurstCandidate): Promise<Notification
     const t = (call.transcript ?? '').trim();
     if (!t) continue;
     const url = callUrl(call.id);
-    const entry = `\n[${fmtTime(call.dt)}] ${t}${url ? `\n${url}` : ''}\n`;
+    const link = url ? `\n[▶ Open call ${call.id}](${url})` : '';
+    const entry = `\n**[${fmtTime(call.dt)}]** ${t}${link}\n`;
     if (header.length + summary.length + lines.length + entry.length > MAX_BODY_CHARS) {
       break;
     }
@@ -304,7 +308,15 @@ export async function publishToNtfy(
     Tags: n.tags.join(','),
     Markdown: 'yes',
   };
-  if (n.click) headers['Click'] = asciiHeader(n.click);
+  if (n.click) {
+    // Click = whole-notification tap target. Actions adds an explicit
+    // tappable button. Both work on mobile (where markdown links don't
+    // render — ntfy markdown is web-app only), so the call link is
+    // reachable on every client.
+    const url = asciiHeader(n.click);
+    headers['Click'] = url;
+    headers['Actions'] = `view, Open latest call, ${url}`;
+  }
   if (config.NTFY_TOKEN) headers['Authorization'] = `Bearer ${config.NTFY_TOKEN}`;
   try {
     const res = await fetch(`${base}/${t}`, {
