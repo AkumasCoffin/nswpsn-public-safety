@@ -112,6 +112,54 @@ async function findExpiredPartitions(
 }
 
 /**
+ * Extend the partition runway forward: ensure the current and next
+ * month's partition exists on every archive_* table. Idempotent —
+ * ensure_archive_partition() is a no-op when the partition is already
+ * there (see migrations 002/010).
+ *
+ * This is the "nightly job (added later)" that migration 002's header
+ * promised but was never wired up: migration 002 seeds only the month
+ * it runs in + the following month, and the cleanup loop only ever
+ * DROPS old partitions. Without this, once the calendar rolls into a
+ * month with no pre-seeded partition every INSERT fails with
+ * "no partition of relation ... found for row" (SQLSTATE 23514).
+ *
+ * Called both at boot (before the ArchiveWriter starts flushing) and
+ * at the top of every cleanup pass, so the runway always stays at
+ * least one month ahead of "now".
+ */
+export async function ensureArchivePartitions(): Promise<number> {
+  const pool = await getPool();
+  if (!pool) return 0;
+  // First of this month and first of next month, computed in UTC to
+  // match the TIMESTAMPTZ partition bounds (which are UTC).
+  const now = new Date();
+  const thisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  const dates = [thisMonth.toISOString().slice(0, 10), nextMonth.toISOString().slice(0, 10)];
+  let ensured = 0;
+  const client = await pool.connect();
+  try {
+    for (const table of ARCHIVE_TABLES) {
+      for (const d of dates) {
+        try {
+          await client.query('SELECT ensure_archive_partition($1, $2::date)', [table, d]);
+          ensured += 1;
+        } catch (err) {
+          log.error(
+            { err: (err as Error).message, table, for_date: d },
+            'ensureArchivePartitions: failed to ensure partition',
+          );
+        }
+      }
+    }
+  } finally {
+    client.release();
+  }
+  return ensured;
+}
+
+/**
  * One cleanup pass. Idempotent — running twice in a row finds nothing
  * to delete the second time.
  */
@@ -140,6 +188,22 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       // Long timeout — partition drop is fast but the surrounding
       // SELECT against pg_class can take a moment on busy DBs.
       await client.query('SET statement_timeout = 0');
+
+      // 0. Extend the runway forward before anything else. If a month
+      // rollover left the current month without a partition, inserts
+      // are already failing — re-create it here so writes recover on
+      // the next ArchiveWriter flush without waiting for a redeploy.
+      try {
+        const ensured = await ensureArchivePartitions();
+        if (ensured > 0) {
+          log.info({ ensured }, 'cleanup: ensured archive partitions');
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'cleanup: partition-ensure failed',
+        );
+      }
 
       // 1. Drop expired archive_* partitions.
       const expired = await findExpiredPartitions(client, cutoff);
