@@ -243,17 +243,23 @@ export async function buildNotification(c: BurstCandidate): Promise<Notification
   const { matched, urgent } = analyzeKeywords(c.allText);
 
   const priority: Notification['priority'] = urgent ? 'urgent' : 'high';
-  const tags = urgent ? ['rotating_light', 'fire'] : ['radio'];
+  // Emoji is carried by the Tags header (ASCII shortcodes), NEVER the
+  // body. A raw unicode emoji in the message body suppresses ntfy's
+  // web-app markdown rendering (ntfy #1410), which is why the keyword
+  // body — which used to lead with 🔑 — showed raw **markdown** while the
+  // emoji-free no-keyword body rendered fine.
+  const tags = urgent ? ['rotating_light', 'warning'] : ['radio'];
   const title = `Major radio activity — ${tgName} (${sysName})`;
   const click = callUrl(c.latestId);
 
   // Body is markdown (ntfy renders it when the `Markdown: yes` header is
   // set). Bare URLs aren't auto-linked, so every call link is emitted as
-  // a [label](url) markdown link to make it tappable.
-  const header = matched.length ? `🔑 **Keywords:** ${matched.join(', ')}\n\n` : '';
+  // a [label](url) markdown link. Keep the body strictly ASCII markdown —
+  // no raw emoji (see the tags note above).
+  const header = matched.length ? `**Keywords:** ${matched.join(', ')}\n\n` : '';
   const summary =
     `**${c.n} calls** on ${tgName} (${sysName}) in ` +
-    `${config.RDIO_BURST_WINDOW_MIN} min${urgent ? ' ⚠️' : ''}\n`;
+    `${config.RDIO_BURST_WINDOW_MIN} min${urgent ? ' — **URGENT**' : ''}\n`;
 
   let lines = '';
   let shown = 0;
