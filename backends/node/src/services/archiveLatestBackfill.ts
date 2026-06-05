@@ -19,6 +19,7 @@
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { SIDECAR_LOCK_NAMESPACE } from '../store/archive.js';
 
 const ARCHIVE_TABLES = [
   'archive_waze',
@@ -85,6 +86,13 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL statement_timeout = '120s'");
+      // Serialise against the live writer's sidecar upsert — same lock it
+      // takes — so this backfill INSERT and the writer take turns instead
+      // of deadlocking on ${table}_latest. Released at COMMIT/ROLLBACK.
+      await client.query(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+        [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
+      );
 
       // Find this chunk's id range. We scan until we have CHUNK_SIZE
       // candidate rows or run out.
@@ -114,7 +122,12 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
          ),
          ins AS (
            INSERT INTO ${table}_latest (source, source_id, latest_fetched_at)
+           -- ORDER BY the conflict key so this INSERT acquires sidecar
+           -- row locks in the same order as the live writer's upsert and
+           -- the dims backfill — otherwise overlapping batches deadlock
+           -- (SQLSTATE 40P01) on archive_*_latest.
            SELECT source, source_id, latest_fetched_at FROM src
+             ORDER BY source, source_id
            ON CONFLICT (source, source_id) DO UPDATE
              SET latest_fetched_at = EXCLUDED.latest_fetched_at
              WHERE ${table}_latest.latest_fetched_at < EXCLUDED.latest_fetched_at
