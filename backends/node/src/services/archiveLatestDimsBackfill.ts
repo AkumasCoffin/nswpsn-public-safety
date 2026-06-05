@@ -19,6 +19,7 @@
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { SIDECAR_LOCK_NAMESPACE } from '../store/archive.js';
 
 const ARCHIVE_TABLES = [
   'archive_waze',
@@ -78,6 +79,12 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL statement_timeout = '60s'");
+      // Serialise against the live writer's sidecar upsert — same lock it
+      // takes. Holds for this chunk only; released at COMMIT/ROLLBACK.
+      await client.query(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+        [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
+      );
 
       // CTE picks a chunk of NULL-category sidecar rows, joins to the
       // parent on the latest_fetched_at pointer, then updates the

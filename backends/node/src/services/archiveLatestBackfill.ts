@@ -19,6 +19,7 @@
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { SIDECAR_LOCK_NAMESPACE } from '../store/archive.js';
 
 const ARCHIVE_TABLES = [
   'archive_waze',
@@ -85,6 +86,13 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL statement_timeout = '120s'");
+      // Serialise against the live writer's sidecar upsert — same lock it
+      // takes — so this backfill INSERT and the writer take turns instead
+      // of deadlocking on ${table}_latest. Released at COMMIT/ROLLBACK.
+      await client.query(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+        [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
+      );
 
       // Find this chunk's id range. We scan until we have CHUNK_SIZE
       // candidate rows or run out.

@@ -36,6 +36,19 @@ export type ArchiveTable =
   | 'archive_power'
   | 'archive_misc';
 
+/**
+ * Namespace key for the per-`_latest`-table advisory lock that
+ * serialises every sidecar mutation. The live writer's upsert and the
+ * one-shot backfills (archiveLatestDimsBackfill / archiveLatestBackfill)
+ * all take `pg_advisory_xact_lock(SIDECAR_LOCK_NAMESPACE, hashtext(
+ * '<table>_latest'))` before touching the sidecar, so they take turns
+ * rather than interleaving row locks in opposite orders and deadlocking
+ * (SQLSTATE 40P01). Sorting/ORDER BY can't guarantee a shared lock order
+ * across an INSERT…ON CONFLICT and an UPDATE…FROM — a mutex can.
+ * Uncontended (after the one-shot backfills finish) it's a no-op.
+ */
+export const SIDECAR_LOCK_NAMESPACE = 0x51de; // "sidecar"
+
 export interface ArchiveRow {
   source: string; // e.g. 'waze_police', 'rfs', 'traffic_incident'
   source_id?: string | null;
@@ -409,6 +422,15 @@ export class ArchiveWriter {
             await this.insertChunk(client, table, slice);
           }
         }
+
+        // Serialise the sidecar write against the one-shot backfills.
+        // Taken late (parent inserts already done) so the lock window is
+        // just the sidecar/heatmap/facets tail of the txn; released at
+        // COMMIT. See SIDECAR_LOCK_NAMESPACE.
+        await client.query(
+          'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+          [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
+        );
 
         // Always UPSERT the sidecar so last_seen_at advances even when
         // the data was unchanged. Sets latest_fetched_at + data_hash
