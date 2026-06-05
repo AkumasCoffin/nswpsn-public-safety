@@ -551,6 +551,26 @@ export class ArchiveWriter {
     }
     if (map.size === 0) return;
 
+    // Deterministic lock order. Every concurrent transaction that writes
+    // ${table}_latest — this upsert, archiveLatestDimsBackfill's UPDATE,
+    // archiveLatestBackfill's INSERT — must acquire row locks on
+    // (source, source_id) in the SAME order, or two batches that overlap
+    // on a key deadlock (SQLSTATE 40P01 "deadlock detected" while
+    // inserting an index tuple in archive_*_latest). For INSERT ... ON
+    // CONFLICT, lock acquisition follows the VALUES order, so sorting the
+    // tuples by the conflict key here pins this side of the contract.
+    const ordered = [...map.values()].sort((a, b) =>
+      a.source === b.source
+        ? a.source_id < b.source_id
+          ? -1
+          : a.source_id > b.source_id
+            ? 1
+            : 0
+        : a.source < b.source
+          ? -1
+          : 1,
+    );
+
     // 13 params per row: source, source_id, fetched_at (×2 — also
     // becomes last_seen_at on first insert), data_hash, source_ts_unix,
     // category, subcategory, title, location_text, status, severity,
@@ -558,7 +578,7 @@ export class ArchiveWriter {
     const placeholders: string[] = [];
     const params: unknown[] = [];
     let i = 0;
-    for (const v of map.values()) {
+    for (const v of ordered) {
       placeholders.push(
         `($${i + 1}::text, $${i + 2}::text, ` +
           `to_timestamp($${i + 3}::bigint), to_timestamp($${i + 4}::bigint), ` +

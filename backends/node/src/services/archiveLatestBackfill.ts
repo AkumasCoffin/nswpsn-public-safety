@@ -114,7 +114,12 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
          ),
          ins AS (
            INSERT INTO ${table}_latest (source, source_id, latest_fetched_at)
+           -- ORDER BY the conflict key so this INSERT acquires sidecar
+           -- row locks in the same order as the live writer's upsert and
+           -- the dims backfill — otherwise overlapping batches deadlock
+           -- (SQLSTATE 40P01) on archive_*_latest.
            SELECT source, source_id, latest_fetched_at FROM src
+             ORDER BY source, source_id
            ON CONFLICT (source, source_id) DO UPDATE
              SET latest_fetched_at = EXCLUDED.latest_fetched_at
              WHERE ${table}_latest.latest_fetched_at < EXCLUDED.latest_fetched_at
