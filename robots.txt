@@ -63,7 +63,7 @@ Disallow: /verify-email.html
 Disallow: /change-password.html
 Disallow: /dashboard.html
 Disallow: /map-editor.html
-Disallow: /editor-requests.html
+Disallow: /staff.html
 # Internal data + backend artefacts.
 Disallow: /backends/
 Disallow: /data/
@@ -82,7 +82,7 @@ Disallow: /verify-email.html
 Disallow: /change-password.html
 Disallow: /dashboard.html
 Disallow: /map-editor.html
-Disallow: /editor-requests.html
+Disallow: /staff.html
 # Internal data + backend artefacts.
 Disallow: /backends/
 Disallow: /data/

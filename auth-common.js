@@ -249,7 +249,7 @@ async function checkAuthState() {
       
       // User Management button - for team_member or owner
       if (roleData.is_team_member || roleData.is_owner) {
-        buttons += `<a href="editor-requests.html" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.8rem; text-decoration:none;">
+        buttons += `<a href="staff.html" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.8rem; text-decoration:none;">
           <i class="fas fa-users-cog"></i> User Management
         </a>`;
       }
