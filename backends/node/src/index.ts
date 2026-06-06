@@ -67,6 +67,10 @@ import {
 } from './services/activityMode.js';
 import { registerAllSources } from './sources/registerAll.js';
 import { registerAllPowerSources } from './sources/registerPower.js';
+import {
+  startRdioIncidentAlertLoop,
+  stopRdioIncidentAlertLoop,
+} from './services/rdioIncidentAlerts.js';
 
 // Pre-flight: hydrate the live store, run migrations, register every
 // source, and start the persist + flush + poll + activity-mode loops
@@ -112,6 +116,7 @@ async function preflight(): Promise<void> {
   scheduleArchiveLatestBackfill(); // one-shot backfill of archive_*_latest sidecars (migration 017)
   scheduleArchiveLatestDimsBackfill(); // one-shot backfill of category/subcategory on sidecars (migration 021)
   scheduleArchiveLatestRecompute(); // one-shot recompute of latest_fetched_at to reflect actual change times
+  startRdioIncidentAlertLoop(); // rdio burst → ntfy push (gated by RDIO_INCIDENT_ALERTS_ENABLED)
 
   // Prewarm: fire every source's first poll in parallel and await with
   // a bounded timeout. Mirrors python's `prewarm_loop` initial pass —
@@ -214,6 +219,7 @@ async function shutdown(signal: string) {
     stopStatsArchiver();
     stopCleanupLoop();
     stopRdioSummaryScheduler();
+    stopRdioIncidentAlertLoop();
     // Centralwatch: stop the loops first so they don't enqueue more
     // browser jobs, then close the browser worker.
     stopCentralwatchRefreshLoop();

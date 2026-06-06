@@ -190,6 +190,68 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // ---------------------------------------------------------------------
+  // rdio → ntfy "major incident" push notifier (services/rdioIncidentAlerts).
+  // Detects bursts of radio traffic per talkgroup off the rdio-scanner DB
+  // and publishes ONE push per incident to a single ntfy topic. Everything
+  // here is optional/flagged so the feature stays dark until configured —
+  // the loop refuses to start unless ENABLED + base URL + topic are set.
+  // ---------------------------------------------------------------------
+
+  // Base URL of the (self-hosted) ntfy server, no trailing slash.
+  // e.g. https://ntfy.forcequit.xyz
+  NTFY_BASE_URL: z.string().optional(),
+  // Topic everyone subscribes to for major incidents. e.g. nswpsn-major
+  NTFY_TOPIC: z.string().optional(),
+  // Bearer access token, only if the topic is read/write-protected.
+  // ntfy generates these as `tk_...`. Leave unset for an open topic.
+  NTFY_TOKEN: z.string().optional(),
+
+  // Master on/off for the detector loop. Off by default.
+  RDIO_INCIDENT_ALERTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+  // How often the detector polls the rdio DB, in seconds.
+  RDIO_ALERT_POLL_SECS: z
+    .string()
+    .default('20')
+    .transform((s) => Number.parseInt(s, 10)),
+  // Rolling window (minutes) over which calls-per-talkgroup is counted.
+  RDIO_BURST_WINDOW_MIN: z
+    .string()
+    .default('5')
+    .transform((s) => Number.parseInt(s, 10)),
+  // A talkgroup with >= this many transcribed calls inside the window is a
+  // "burst" candidate (the sustained-traffic = large-incident signal).
+  RDIO_BURST_THRESHOLD: z
+    .string()
+    .default('6')
+    .transform((s) => Number.parseInt(s, 10)),
+  // After firing for a talkgroup, suppress re-alerts for this many minutes
+  // so one incident = one push.
+  RDIO_ALERT_COOLDOWN_MIN: z
+    .string()
+    .default('20')
+    .transform((s) => Number.parseInt(s, 10)),
+  // When true, a burst must ALSO contain one of the incident keywords to
+  // fire — filters out routine busy-channel chatter. Default false: a
+  // burst alone is enough.
+  RDIO_ALERT_REQUIRE_KEYWORD: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+  // Comma-separated incident keyword list — the SINGLE source of truth for
+  // what triggers an alert (when RDIO_ALERT_REQUIRE_KEYWORD=true) and what's
+  // shown in the push. NO built-in defaults: unset/empty = no keywords, so
+  // with the keyword gate on nothing fires until you set this.
+  RDIO_ALERT_KEYWORDS: z.string().optional(),
+  // Comma-separated URGENT keyword list. These ONLY bump an already-firing
+  // alert from 'high' to 'urgent' priority — they never trigger an alert on
+  // their own and are never shown. NO built-in defaults: unset/empty = no
+  // urgent escalation (everything stays 'high').
+  RDIO_ALERT_URGENT_KEYWORDS: z.string().optional(),
+
 });
 
 const parsed = Schema.safeParse(process.env);
