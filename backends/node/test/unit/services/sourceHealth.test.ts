@@ -136,6 +136,22 @@ describe('getSourceHealthSnapshot', () => {
     const row = getSourceHealthSnapshot().find((r) => r.name === 'rfs');
     expect(row?.label).toBe('RFS incidents');
   });
+
+  it('hides non-incident reference sources (cameras / radar) from the panel', () => {
+    // These feed the live map but produce no alerts, so they shouldn't
+    // clutter the admin source-health panel.
+    registerSource({
+      name: 'traffic_cameras',
+      family: 'traffic',
+      intervalActiveMs: 60_000,
+      intervalIdleMs: 120_000,
+      fetch: async () => ({}),
+    });
+    const rows = getSourceHealthSnapshot();
+    expect(rows.find((r) => r.name === 'traffic_cameras')).toBeUndefined();
+    // Real alert sources are still present.
+    expect(rows.find((r) => r.name === 'rfs')).toBeDefined();
+  });
 });
 
 describe('clearSourceErrors', () => {
