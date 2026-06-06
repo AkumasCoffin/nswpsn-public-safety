@@ -3921,10 +3921,12 @@ function renderWizardStep3() {
     'Select the alert types to include. You can optionally enable the pager channel too.'));
 
   container.appendChild(el('div', { class: 'select-row' }, [
-    el('span', {}, `${w.types.size} selected`),
+    // Pager is a selectable channel alongside the alert types, so it counts
+    // toward the total and is included in Select all / Clear all.
+    el('span', {}, `${w.types.size + (w.pagerEnabled ? 1 : 0)} selected`),
     el('span', { style: 'flex:1' }),
-    el('button', { class: 'link-btn', onclick: () => { _DASH_ALERT_TYPES.forEach(k => w.types.add(k)); renderWizardBodyOnly(); } }, 'Select all'),
-    el('button', { class: 'link-btn', onclick: () => { w.types.clear(); renderWizardBodyOnly(); } }, 'Clear all'),
+    el('button', { class: 'link-btn', onclick: () => { _DASH_ALERT_TYPES.forEach(k => w.types.add(k)); w.pagerEnabled = true; renderWizardBodyOnly(); } }, 'Select all'),
+    el('button', { class: 'link-btn', onclick: () => { w.types.clear(); w.pagerEnabled = false; renderWizardBodyOnly(); } }, 'Clear all'),
   ]));
 
   const list = el('div', { class: 'provider-list' });
