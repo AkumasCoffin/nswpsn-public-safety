@@ -3953,21 +3953,28 @@ function renderWizardStep3() {
       },
     }));
   }
-  container.appendChild(list);
+  // Pager — rendered as a provider section in the same list so it reads
+  // identically to the other alert sources (icon, count, expandable chip).
+  // It's backed by the standalone pager_enabled flag rather than w.types,
+  // since it's a capcode channel, not an alert_type — the section's single
+  // "Messages" chip and power toggle both map to that flag.
+  const pagerProvider = {
+    key: 'pager', name: 'Pager', icon: 'pager', color: '#8b5cf6',
+    types: [{ key: 'pager', label: 'Messages' }],
+  };
+  const pagerSel = new Set(w.pagerEnabled ? ['pager'] : []);
+  const pagerExpanded = _wizardProviderOpen.has('pager')
+    ? !!_wizardProviderOpen.get('pager')
+    : !!w.pagerEnabled;
+  list.appendChild(_renderProviderSection(pagerProvider, pagerSel, {
+    presetId: '__wizard__',
+    expanded: pagerExpanded,
+    onExpand: (open) => { _wizardProviderOpen.set('pager', !!open); renderWizardBodyOnly(); },
+    onToggleType: () => { w.pagerEnabled = !w.pagerEnabled; renderWizardBodyOnly(); },
+    onSelectAll: (turnOn) => { w.pagerEnabled = !!turnOn; renderWizardBodyOnly(); },
+  }));
 
-  // Pager flag — kept as a standalone toggle so the visual mapping stays
-  // "providers expand into types" while pager (capcode-driven) sits
-  // alongside as a non-provider channel.
-  const pagerWrap = el('div', { style: 'margin-top:0.6rem' });
-  pagerWrap.appendChild(el('label', {
-    class: 'type-opt' + (w.pagerEnabled ? ' selected' : ''),
-  }, [
-    el('input', { type: 'checkbox', checked: w.pagerEnabled ? 'checked' : false,
-      onchange: (e) => { w.pagerEnabled = !!e.target.checked; renderWizardBodyOnly(); } }),
-    el('span', {}, 'Pager messages'),
-    el('span', { style: 'margin-left:auto;color:var(--text-soft);font-family:monospace;font-size:0.7rem' }, 'pager'),
-  ]));
-  container.appendChild(pagerWrap);
+  container.appendChild(list);
   return container;
 }
 
