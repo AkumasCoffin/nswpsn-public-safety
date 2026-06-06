@@ -241,10 +241,16 @@ const Schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((s) => s === 'true'),
-  // Comma-separated override for the incident keyword list (used by the
-  // require-keyword filter and for body highlighting). Unset = built-in
-  // default list in rdioIncidentAlerts.ts.
+  // Comma-separated incident keyword list — the SINGLE source of truth for
+  // what triggers an alert (when RDIO_ALERT_REQUIRE_KEYWORD=true) and what's
+  // shown in the push. NO built-in defaults: unset/empty = no keywords, so
+  // with the keyword gate on nothing fires until you set this.
   RDIO_ALERT_KEYWORDS: z.string().optional(),
+  // Comma-separated URGENT keyword list. These ONLY bump an already-firing
+  // alert from 'high' to 'urgent' priority — they never trigger an alert on
+  // their own and are never shown. NO built-in defaults: unset/empty = no
+  // urgent escalation (everything stays 'high').
+  RDIO_ALERT_URGENT_KEYWORDS: z.string().optional(),
 
 });
 

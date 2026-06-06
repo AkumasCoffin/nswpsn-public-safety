@@ -68,7 +68,10 @@ async function main(): Promise<void> {
       `talkgroup=${talkgroup ?? 'any'}  limit=${limit}`,
   );
   console.log(`  live require_keyword=${config.RDIO_ALERT_REQUIRE_KEYWORD}`);
-  console.log(`  keyword list: ${incidentKeywords().join(', ')}`);
+  const kw = incidentKeywords();
+  console.log(
+    `  keyword list (.env): ${kw.length ? kw.join(', ') : '(none — set RDIO_ALERT_KEYWORDS)'}`,
+  );
   console.log(`  mode: ${send ? `SEND → topic "${topic}"` : 'DRY RUN (no push)'}`);
   console.log(RULE);
 

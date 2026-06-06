@@ -32,46 +32,12 @@ import { log } from '../lib/log.js';
 import { getPool } from '../db/pool.js';
 import { getRdioPool, isRdioConfigured, resolveLabels } from './rdio.js';
 
-// Keywords that escalate a burst to URGENT priority and bypass the
-// optional require-keyword gate — radio phrases that mean "this is
-// serious right now" regardless of call volume. Matched as lowercase
-// substrings, so 'fire' also hits 'bushfire'/'firefighter'.
-const URGENT_KEYWORDS = [
-  'mayday',
-  'mass casualty',
-  'm.c.i',
-  ' mci',
-  'multiple casualt',
-  'persons trapped',
-  'person trapped',
-  'building collapse',
-  'structure collapse',
-  'explosion',
-  'working fire',
-  'fully involved',
-  'second alarm',
-  'third alarm',
-  'strike team',
-  'evacuat',
-];
-
-// Default "incident keyword" list — used by the require-keyword gate and
-// shown in the notification. Overridable via RDIO_ALERT_KEYWORDS.
-const DEFAULT_INCIDENT_KEYWORDS = [
-  'structure fire',
-  'house fire',
-  'building fire',
-  'fire',
-  'rescue',
-  'mva',
-  'accident',
-  'hazmat',
-  'gas leak',
-  'crash',
-  'entrapment',
-  'casualt',
-  'collapse',
-];
+// NO hardcoded keyword lists. Both the incident (trigger) list and the
+// urgent (priority-only) list come exclusively from the .env —
+// RDIO_ALERT_KEYWORDS and RDIO_ALERT_URGENT_KEYWORDS. If a list is unset,
+// it's empty: nothing the operator didn't configure can ever match. With
+// RDIO_ALERT_REQUIRE_KEYWORD=true and no incident keywords set, the loop
+// never fires (it warns about this at startup).
 
 const MAX_ALERTS_PER_TICK = 5;
 // ntfy's default max message size is 4096 bytes; keep the body under that
@@ -95,10 +61,18 @@ export interface BurstCandidate {
 }
 
 export interface KeywordHit {
-  /** Distinct configured keyword tokens that matched, in display form. */
+  /** Incident-list keywords that matched — the trigger + display set. */
   matched: string[];
-  /** True if any URGENT keyword matched. */
+  /** True if any URGENT-list keyword matched (priority escalation only). */
   urgent: boolean;
+}
+
+function parseKeywordEnv(raw: string | undefined): string[] | null {
+  if (raw === undefined) return null; // unset → caller uses its default
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
 }
 
 export interface Notification {
@@ -115,31 +89,35 @@ let timer: NodeJS.Timeout | null = null;
 let running = false;
 let bootstrapped = false;
 
+/** Incident keywords — the SOLE trigger gate + display set. Comes only
+ *  from RDIO_ALERT_KEYWORDS; empty when unset (no built-in defaults). */
 export function incidentKeywords(): string[] {
-  const raw = config.RDIO_ALERT_KEYWORDS;
-  if (!raw) return DEFAULT_INCIDENT_KEYWORDS;
-  const parsed = raw
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length > 0);
-  return parsed.length > 0 ? parsed : DEFAULT_INCIDENT_KEYWORDS;
+  return parseKeywordEnv(config.RDIO_ALERT_KEYWORDS) ?? [];
 }
 
-/** Which keywords (incident + urgent) appear in the burst's transcripts. */
+/** URGENT keywords — priority escalation only, never a trigger and never
+ *  displayed. Comes only from RDIO_ALERT_URGENT_KEYWORDS; empty when
+ *  unset (so everything stays 'high' until you configure it). */
+export function urgentKeywords(): string[] {
+  return parseKeywordEnv(config.RDIO_ALERT_URGENT_KEYWORDS) ?? [];
+}
+
+/** Match a burst's transcripts. `matched` is the incident list only — it
+ *  is the trigger gate AND the displayed set, so nothing the operator
+ *  didn't list (e.g. the urgent terms) can ever fire or show. `urgent`
+ *  comes from the separate urgent list and only affects priority. */
 export function analyzeKeywords(allText: string): KeywordHit {
   const text = allText.toLowerCase();
-  const matched = new Set<string>();
-  let urgent = false;
+  const matched: string[] = [];
+  const seen = new Set<string>();
   for (const k of incidentKeywords()) {
-    if (text.includes(k)) matched.add(k.trim());
-  }
-  for (const k of URGENT_KEYWORDS) {
-    if (text.includes(k)) {
-      matched.add(k.trim());
-      urgent = true;
+    if (text.includes(k) && !seen.has(k)) {
+      seen.add(k);
+      matched.push(k);
     }
   }
-  return { matched: [...matched], urgent };
+  const urgent = urgentKeywords().some((k) => text.includes(k));
+  return { matched, urgent };
 }
 
 /** ntfy requires ASCII header values; transcripts/labels can carry the
@@ -450,6 +428,13 @@ export function startRdioIncidentAlertLoop(): void {
   if (!config.NTFY_BASE_URL || !config.NTFY_TOPIC) {
     log.warn('rdio incident alerts: NTFY_BASE_URL/NTFY_TOPIC unset — not starting');
     return;
+  }
+  if (config.RDIO_ALERT_REQUIRE_KEYWORD && incidentKeywords().length === 0) {
+    log.warn(
+      'rdio incident alerts: RDIO_ALERT_REQUIRE_KEYWORD=true but ' +
+        'RDIO_ALERT_KEYWORDS is empty — nothing will ever fire. Set ' +
+        'RDIO_ALERT_KEYWORDS or turn the keyword gate off.',
+    );
   }
   const secs = Math.max(5, config.RDIO_ALERT_POLL_SECS);
   setTimeout(() => void runRdioIncidentAlertsOnce(), 10_000).unref?.();
