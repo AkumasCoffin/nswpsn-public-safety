@@ -61,6 +61,7 @@ def is_bot_owner(user_id: int) -> bool:
 # helps — kept in sync with the dashboard PROVIDERS list and data_history).
 ALERT_TYPES = {
     'rfs': 'RFS Major Incidents',
+    'firms': 'FIRMS Fire Hotspots',
     'bom_land': 'BOM Land Warnings',
     'bom_marine': 'BOM Marine Warnings',
     'traffic_incident': 'Traffic Incidents',

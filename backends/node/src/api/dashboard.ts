@@ -81,6 +81,7 @@ const ADMINISTRATOR = 0x8n;
 // Mirror of discord-bot/bot.py ALERT_TYPES (python line 16156-16167).
 const ALERT_TYPES: readonly string[] = [
   'rfs',
+  'firms',
   'bom_land', 'bom_marine',
   'traffic_incident', 'traffic_roadwork', 'traffic_flood',
   'traffic_fire', 'traffic_majorevent',

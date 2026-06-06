@@ -16187,6 +16187,7 @@ def _dash_is_admin(session):
 # dashboard must work without importing bot.py (different process).
 _DASH_ALERT_TYPES = [
     'rfs',
+    'firms',
     'bom_land', 'bom_marine',
     'traffic_incident', 'traffic_roadwork', 'traffic_flood',
     'traffic_fire', 'traffic_majorevent',

@@ -37,8 +37,11 @@ class AlertPoller:
         #     returns None on non-200).
         #   - 'waze_jam' shares the hazards feed (waze backend returns hazards
         #     and jams together; we route per-feature in _extract_items).
+        #   - 'firms' returns thousands of satellite fire pixels; _extract_items
+        #     collapses them into ~100m clusters per pass (see _cluster_firms).
         self.endpoints = {
             'rfs': '/api/rfs/incidents',
+            'firms': '/api/firms/hotspots',
             'bom_land': '/api/bom/warnings',
             'bom_marine': '/api/bom/warnings',
             'traffic_incident': '/api/traffic/incidents',
@@ -94,7 +97,19 @@ class AlertPoller:
             props = item.get('properties', {})
             guid = props.get('guid', '') or props.get('link', '') or props.get('title', '')
             return f"rfs_{guid}_{props.get('status', '')}"
-        
+
+        elif alert_type == 'firms':
+            # One alert per ~100m cluster per satellite pass. cluster_glat/glon
+            # are the snapped grid cell (set in _cluster_firms); acq_date+
+            # acq_time identify the pass, so a later pass over the same cell
+            # produces a new id and re-alerts (once per new pass).
+            props = item.get('properties', {})
+            glat = props.get('cluster_glat')
+            glon = props.get('cluster_glon')
+            sat = props.get('satellite_tag') or props.get('satellite') or ''
+            acq = f"{props.get('acq_date', '')}{props.get('acq_time', '')}"
+            return f"firms_{glat}_{glon}_{sat}_{acq}"
+
         elif alert_type.startswith('bom_'):
             # Use title + issued date (shared shape between bom_land/bom_marine)
             return f"{alert_type}_{item.get('title', '')}_{item.get('issued', '')}"
@@ -174,6 +189,12 @@ class AlertPoller:
                 # RFS uses updatedISO (ISO format with timezone)
                 props = item.get('properties', {})
                 ts = props.get('updatedISO') or props.get('updated') or ''
+                if ts:
+                    return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+
+            elif alert_type == 'firms':
+                # acq_datetime is the satellite acquisition time (ISO UTC).
+                ts = item.get('properties', {}).get('acq_datetime', '')
                 if ts:
                     return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
 
@@ -286,7 +307,61 @@ class AlertPoller:
         
         # Extract just the items (discard timestamps used for sorting)
         return [item for _, item in recent_items]
-    
+
+    def _cluster_firms(self, features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collapse FIRMS pixel detections into ~100m clusters per satellite pass.
+
+        A single satellite pass over an active fire lights up many adjacent
+        375m pixels; alerting on each would flood channels. We snap every
+        detection to a ~100m grid (3 decimal places ≈ 110m) and group by
+        (grid cell, satellite, acquisition time) so all pixels from one pass
+        over one spot collapse to a single alert. The representative pixel is
+        the one with the highest fire-radiative-power (FRP); cluster_count and
+        cluster_max_frp summarise the rest. A later pass over the same cell has
+        a different acquisition time, so it re-alerts (once per new pass).
+        """
+        GRID = 3  # decimal places ≈ 110m
+        clusters: Dict[tuple, Dict[str, Any]] = {}
+        for f in features:
+            props = f.get('properties') or {}
+            lat = props.get('latitude')
+            lon = props.get('longitude')
+            if lat is None or lon is None:
+                continue
+            try:
+                glat = round(float(lat), GRID)
+                glon = round(float(lon), GRID)
+            except (TypeError, ValueError):
+                continue
+            sat = props.get('satellite_tag') or props.get('satellite') or ''
+            key = (glat, glon, sat,
+                   props.get('acq_date', ''), props.get('acq_time', ''))
+            try:
+                frp = float(props.get('frp') or 0)
+            except (TypeError, ValueError):
+                frp = 0.0
+            c = clusters.get(key)
+            if c is None:
+                clusters[key] = {'glat': glat, 'glon': glon,
+                                 'rep': f, 'count': 1, 'max_frp': frp}
+            else:
+                c['count'] += 1
+                if frp > c['max_frp']:
+                    c['max_frp'] = frp
+                    c['rep'] = f  # keep the most intense pixel as representative
+
+        out: List[Dict[str, Any]] = []
+        for c in clusters.values():
+            rep = dict(c['rep'])
+            props = dict(rep.get('properties') or {})
+            props['cluster_count'] = c['count']
+            props['cluster_max_frp'] = c['max_frp']
+            props['cluster_glat'] = c['glat']
+            props['cluster_glon'] = c['glon']
+            rep['properties'] = props
+            out.append(rep)
+        return out
+
     async def check_alerts(self) -> List[Dict[str, Any]]:
         """Check all alert types for new alerts"""
         new_alerts = []
@@ -636,6 +711,12 @@ class AlertPoller:
         if alert_type == 'rfs':
             # GeoJSON format
             return data.get('features', [])
+
+        elif alert_type == 'firms':
+            # NASA FIRMS hotspots — GeoJSON FeatureCollection of satellite fire
+            # pixels. Cluster to ~100m so one fire = one alert (see
+            # _cluster_firms); each returned item is a cluster representative.
+            return self._cluster_firms(data.get('features', []) or [])
 
         elif alert_type == 'bom_land':
             # Single BOM endpoint returns both land + marine; route per-item.

@@ -290,6 +290,7 @@ class EmbedBuilder:
     # Color scheme for different alert types
     COLORS = {
         'rfs': 0xFF4500,
+        'firms': 0xF97316,           # Orange — matches the map's Fire Hotspots layer
         'traffic_fire': 0xFF6347,
         'bom_land': 0x1E90FF,
         'bom_marine': 0x4169E1,
@@ -377,6 +378,7 @@ class EmbedBuilder:
     
     ICONS = {
         'rfs': '🔥',
+        'firms': '🛰️',
         'bom_land': '⛈️',
         'bom_marine': '🌊',
         'traffic_incident': '🚗',
@@ -416,6 +418,8 @@ class EmbedBuilder:
         
         if alert_type == 'rfs':
             return self._build_rfs_embed(data, previous_message=previous_message)
+        elif alert_type == 'firms':
+            return self._build_firms_embed(data)
         elif alert_type.startswith('bom_'):
             return self._build_bom_embed(data, alert_type)
         elif alert_type.startswith('traffic_'):
@@ -614,7 +618,62 @@ class EmbedBuilder:
 
         embed.set_footer(text="NSW RFS • Rural Fire Service")
         return embed
-    
+
+    def _build_firms_embed(self, data: Dict[str, Any]) -> discord.Embed:
+        """Build embed for a NASA FIRMS satellite fire-hotspot cluster."""
+        props = data.get('properties', {})
+        lat = props.get('latitude')
+        lon = props.get('longitude')
+        confidence = str(props.get('confidence', '')).strip()
+        frp = props.get('cluster_max_frp', props.get('frp'))
+        count = props.get('cluster_count', 1)
+        satellite = props.get('satellite_tag') or props.get('satellite') or ''
+        instrument = props.get('instrument', '')
+        daynight = props.get('daynight', '')
+        acq = props.get('acq_datetime', '')
+
+        embed_timestamp = parse_timestamp_to_datetime(acq) or datetime.now()
+        embed = discord.Embed(
+            title="🛰️ Fire Hotspot Detected",
+            color=self.COLORS.get('firms', 0xF97316),
+            timestamp=embed_timestamp,
+        )
+
+        if lat is not None and lon is not None:
+            embed.add_field(name="📍 Location",
+                            value=f"`{float(lat):.4f}, {float(lon):.4f}`", inline=False)
+
+        conf_badges = {'high': '🔴 High', 'nominal': '🟠 Nominal', 'low': '🟡 Low'}
+        cb = conf_badges.get(confidence.lower())
+        if cb:
+            embed.add_field(name="Confidence", value=cb, inline=True)
+
+        if is_valid_value(frp):
+            try:
+                embed.add_field(name="🔥 Intensity",
+                                value=f"{float(frp):.0f} MW (FRP)", inline=True)
+            except (TypeError, ValueError):
+                pass
+
+        if isinstance(count, int) and count > 1:
+            embed.add_field(name="Detections", value=f"{count} pixels", inline=True)
+
+        if satellite:
+            sat_label = f"{instrument} {satellite}".strip() if instrument else satellite
+            embed.add_field(name="🛰️ Satellite", value=sat_label, inline=True)
+
+        if daynight:
+            embed.add_field(name="Pass",
+                            value='☀️ Day' if str(daynight).upper().startswith('D') else '🌙 Night',
+                            inline=True)
+
+        if lat is not None and lon is not None:
+            map_url = build_map_url(lat, lon, label="Fire Hotspot", layer="firms")
+            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
+
+        embed.set_footer(text="NASA FIRMS • Satellite-detected thermal anomaly")
+        return embed
+
     def _build_bom_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
         """Build embed for BOM warnings"""
         title = strip_html(data.get('title', 'Weather Warning'))
@@ -2436,6 +2495,8 @@ class EmbedBuilder:
 
         if alert_type == 'rfs':
             return self.build_rfs_container(data, previous_message=previous_message)
+        elif alert_type == 'firms':
+            return self.build_firms_container(data)
         elif alert_type.startswith('bom_'):
             return self.build_bom_container(data)
         elif alert_type.startswith('traffic_'):
@@ -2563,6 +2624,69 @@ class EmbedBuilder:
             )
 
         self._append_container_footer(container, footer_bits, source="NSW RFS")
+        return container
+
+    # ---- FIRMS (satellite fire hotspots) -----------------------
+    def build_firms_container(self, data: Dict[str, Any]):
+        """Components V2 container for a NASA FIRMS satellite fire-hotspot cluster."""
+        props = data.get('properties', {})
+        lat = props.get('latitude')
+        lon = props.get('longitude')
+        confidence = str(props.get('confidence', '')).strip()
+        frp = props.get('cluster_max_frp', props.get('frp'))
+        count = props.get('cluster_count', 1)
+        satellite = props.get('satellite_tag') or props.get('satellite') or ''
+        instrument = props.get('instrument', '')
+        daynight = props.get('daynight', '')
+        acq = props.get('acq_datetime', '')
+
+        color = self.COLORS.get('firms', 0xF97316)
+        container = discord.ui.Container(accent_colour=color)
+        container.add_item(discord.ui.TextDisplay(content="### 🛰️ Fire Hotspot Detected"))
+
+        # FIRMS only gives coordinates — no place name.
+        if lat is not None and lon is not None:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"📍 `{float(lat):.4f}, {float(lon):.4f}`")
+            ))
+
+        meta_bits = []
+        conf_badges = {'high': '🔴 High', 'nominal': '🟠 Nominal', 'low': '🟡 Low'}
+        cb = conf_badges.get(confidence.lower())
+        if cb:
+            meta_bits.append(f"Confidence: {cb}")
+        if is_valid_value(frp):
+            try:
+                meta_bits.append(f"🔥 {float(frp):.0f} MW FRP")
+            except (TypeError, ValueError):
+                pass
+        if isinstance(count, int) and count > 1:
+            meta_bits.append(f"{count} detections")
+        if meta_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' · '.join(meta_bits))
+            ))
+
+        sat_bits = []
+        if satellite:
+            sat_bits.append(f"🛰️ {instrument} {satellite}".strip()
+                            if instrument else f"🛰️ {satellite}")
+        if daynight:
+            sat_bits.append('☀️ Day' if str(daynight).upper().startswith('D') else '🌙 Night')
+        if sat_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' · '.join(sat_bits))
+            ))
+
+        footer_bits = []
+        dt_acq = parse_timestamp_to_datetime(acq)
+        if dt_acq:
+            footer_bits.append(f"🕐 <t:{int(dt_acq.timestamp())}:R>")
+        if lat is not None and lon is not None:
+            map_url = build_map_url(lat, lon, label="Fire Hotspot", layer="firms")
+            footer_bits.append(f"[🗺️ Map]({map_url})")
+
+        self._append_container_footer(container, footer_bits, source="NASA FIRMS")
         return container
 
     # ---- BOM ---------------------------------------------------
