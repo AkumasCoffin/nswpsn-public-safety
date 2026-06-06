@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "capture-fixtures": "tsx --env-file-if-exists=../.env scripts/capture-fixtures.ts",
+    "ntfy-test": "tsx --env-file-if-exists=../.env scripts/test-ntfy-detection.ts",
     "migrate": "tsx --env-file-if-exists=../.env src/db/migrate.ts",
     "migrate-history": "node --env-file-if-exists=../.env scripts/migrate-history.mjs"
   },
