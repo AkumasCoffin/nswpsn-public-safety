@@ -26,6 +26,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
 import { log } from '../lib/log.js';
 import { getBotDbPool } from './botDb.js';
+import { botGet } from './discordApi.js';
 
 // --- Constants (mirror python lines 16131-16138) -----------------------------
 export const DASH_SESSION_COOKIE = 'nswpsn_dash_sess';
@@ -463,36 +464,103 @@ export function isAdmin(session: DashSession | null | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Bot guild ids (python lines 16633-16663) — 30 s cache around
-// `SELECT DISTINCT guild_id FROM alert_presets`.
+// Bot guild ids — which servers the bot is actually in. 30 s cache.
+//
+// Source of truth is the bot's LIVE Discord guild membership
+// (`/users/@me/guilds`): a guild "has the bot" the instant the bot joins,
+// regardless of whether anyone's saved a preset yet. The preset-derived
+// set (`SELECT DISTINCT guild_id FROM alert_presets`) is unioned in as a
+// fallback for when Discord is unreachable / the bot token is missing /
+// the bot is in more guilds than we paginate through.
+//
+// Previously this was preset-derived ONLY, which created a chicken-and-egg
+// trap: a freshly-invited server with zero presets never appeared, so the
+// dashboard told the user "no servers with the bot" and gave them no way
+// to create that first preset.
 // ---------------------------------------------------------------------------
 
 const BOT_GUILD_IDS_TTL_MS = 30_000;
 let botGuildIdsCache: { ts: number; data: Set<string> } = { ts: 0, data: new Set() };
+let botGuildIdsInflight: Promise<Set<string>> | null = null;
+
+/** Fetch the bot's full guild list from Discord, paginating past the
+ *  200-per-page cap. Returns null when the API is unavailable (no token,
+ *  network error, non-200) so the caller falls back to the DB set. A
+ *  later-page failure returns whatever was collected so far. */
+async function fetchLiveBotGuildIds(): Promise<Set<string> | null> {
+  const ids = new Set<string>();
+  let after = '';
+  // Discord caps /users/@me/guilds at 200 per page; loop until a short
+  // page. The 100-iteration ceiling is a runaway guard (≈20k guilds).
+  for (let page = 0; page < 100; page++) {
+    const path = `/users/@me/guilds?limit=200${after ? `&after=${after}` : ''}`;
+    let res;
+    try {
+      res = await botGet<Array<{ id?: string | number }>>(path);
+    } catch (err) {
+      log.warn({ err }, 'dashboard getBotGuildIds: live guild fetch threw');
+      res = null;
+    }
+    if (!res || res.status !== 200 || !Array.isArray(res.body)) {
+      return ids.size > 0 ? ids : null;
+    }
+    const rows = res.body;
+    for (const g of rows) {
+      if (g && g.id != null) ids.add(String(g.id));
+    }
+    if (rows.length < 200) break;
+    const last = rows[rows.length - 1];
+    if (!last || last.id == null) break;
+    after = String(last.id);
+  }
+  return ids;
+}
+
+async function computeBotGuildIds(): Promise<Set<string>> {
+  const live = await fetchLiveBotGuildIds();
+  const ids = new Set<string>(live ?? []);
+
+  const pool: Pool | null = await getBotDbPool();
+  if (pool) {
+    try {
+      const res = await pool.query<{ guild_id: string | number }>(
+        'SELECT DISTINCT guild_id FROM alert_presets',
+      );
+      for (const r of res.rows) ids.add(String(r.guild_id));
+    } catch (err) {
+      log.error({ err }, 'dashboard getBotGuildIds db error');
+    }
+  } else if (live === null) {
+    log.warn('dashboard getBotGuildIds: no live Discord data and BOT_DATA_DATABASE_URL not set');
+  }
+
+  // Don't cache an empty set when BOTH sources were unavailable — that
+  // would pin "no servers" for the whole TTL. Keep serving the previous
+  // snapshot instead. (A live 200 with an empty array IS a legit empty.)
+  if (ids.size === 0 && live === null) {
+    return new Set(botGuildIdsCache.data);
+  }
+
+  botGuildIdsCache = { ts: Date.now(), data: ids };
+  return ids;
+}
 
 export async function getBotGuildIds(): Promise<Set<string>> {
   const now = Date.now();
   if (now - botGuildIdsCache.ts < BOT_GUILD_IDS_TTL_MS) {
     return new Set(botGuildIdsCache.data);
   }
-  const pool: Pool | null = await getBotDbPool();
-  if (!pool) {
-    log.warn('dashboard getBotGuildIds: BOT_DATA_DATABASE_URL not set');
-    return new Set();
+  // Coalesce concurrent cache-miss callers onto a single live fetch so a
+  // burst of dashboard requests doesn't fan out into N Discord calls.
+  if (!botGuildIdsInflight) {
+    botGuildIdsInflight = computeBotGuildIds().finally(() => {
+      botGuildIdsInflight = null;
+    });
   }
-  try {
-    const res = await pool.query<{ guild_id: string | number }>(
-      'SELECT DISTINCT guild_id FROM alert_presets',
-    );
-    const ids = new Set(res.rows.map((r) => String(r.guild_id)));
-    botGuildIdsCache = { ts: Date.now(), data: ids };
-    return ids;
-  } catch (err) {
-    log.error({ err }, 'dashboard getBotGuildIds error');
-    return new Set();
-  }
+  return new Set(await botGuildIdsInflight);
 }
 
 export function _resetBotGuildIdsCacheForTests(): void {
   botGuildIdsCache = { ts: 0, data: new Set() };
+  botGuildIdsInflight = null;
 }
