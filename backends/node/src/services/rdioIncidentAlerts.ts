@@ -315,13 +315,11 @@ export async function publishToNtfy(
     Markdown: 'yes',
   };
   if (n.click) {
-    // Click = whole-notification tap target. Actions adds an explicit
-    // tappable button. Both work on mobile (where markdown links don't
-    // render — ntfy markdown is web-app only), so the call link is
-    // reachable on every client.
-    const url = asciiHeader(n.click);
-    headers['Click'] = url;
-    headers['Actions'] = `view, Open latest call, ${url}`;
+    // Deliberately NO `Click` header: tapping the notification should just
+    // open it (to read the transcript), not jump to a call. Opening a call
+    // is opt-in via this explicit action button, which also works on
+    // mobile where the body's markdown links don't render.
+    headers['Actions'] = `view, Open latest call, ${asciiHeader(n.click)}`;
   }
   if (config.NTFY_TOKEN) headers['Authorization'] = `Bearer ${config.NTFY_TOKEN}`;
   try {
