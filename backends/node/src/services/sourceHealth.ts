@@ -45,7 +45,27 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   waze:              { soft: 600,  hard: 1800, label: 'Waze' },
   pager:             { soft: 1200, hard: 3600, label: 'Pagermon' },
   rdio:              { soft: 3900, hard: 12600, label: 'rdio-scanner' },
+  // FIRMS NRT updates every few hours; loose thresholds match its cadence.
+  firms_hotspots:    { soft: 3600, hard: 10800, label: 'NASA FIRMS hotspots' },
 };
+
+// Reference / static data sources that are polled for the live map but
+// don't represent alertable incidents. They're shown nowhere in the bot's
+// alert flow, so listing them in the admin "Data sources" health panel just
+// adds noise (and surfaces raw snake_case names with no friendly label).
+// Mirror of the poller's SKIP_ARCHIVE set (services/poller.ts) — the same
+// "not an incident feed" class — kept as an explicit local copy so the
+// health panel owns its own display policy.
+const NON_INCIDENT_SOURCES = new Set<string>([
+  'traffic_cameras',
+  'aviation_cameras',
+  'centralwatch_cameras',
+  'weather_current',
+  'weather_radar',
+  'ausgrid_stats',
+  'beachsafe',
+  'beachwatch',
+]);
 
 const DEFAULT_SOFT_S = 300;
 const DEFAULT_HARD_S = 900;
@@ -102,6 +122,9 @@ export function getSourceHealthSnapshot(): SourceHealthRow[] {
   const now = Math.floor(Date.now() / 1000);
   const out: SourceHealthRow[] = [];
   for (const m of getSourceMetrics()) {
+    // Skip reference/static feeds (cameras, radar tiles, beach data) — they
+    // produce no alerts, so they don't belong in the alert source-health panel.
+    if (NON_INCIDENT_SOURCES.has(m.name)) continue;
     const cfg = thresholdsFor(m.name);
     const age = m.last_ok_at ? now - m.last_ok_at : null;
     out.push({
