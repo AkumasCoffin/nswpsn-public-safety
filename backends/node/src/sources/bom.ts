@@ -22,6 +22,11 @@ export interface BomWarning {
   title: string;
   type: string;
   category: BomCategory;
+  // Title-derived warning classification (Flood / Severe Weather / Wind /
+  // Thunderstorm / …). This is the user-facing "subtype" the dashboard
+  // chips show and the Discord bot filters on (subtype_filters[bom_*]),
+  // so it MUST equal the archive `subcategory` written in bomArchiveItems.
+  warningType: string;
   severity: BomSeverity;
   description: string;
   area: string;
@@ -93,6 +98,7 @@ export async function fetchBom(): Promise<BomSnapshot> {
         title,
         type: typeof typeAttr === 'string' && typeAttr ? typeAttr : category,
         category,
+        warningType: extractBomWarningType(title),
         severity,
         description,
         area: textOf(w, 'area'),
@@ -118,6 +124,7 @@ export async function fetchBom(): Promise<BomSnapshot> {
         title,
         type: category,
         category,
+        warningType: extractBomWarningType(title),
         severity,
         description,
         area: '',
@@ -245,7 +252,11 @@ function bomArchiveItems(
       lat: null,
       lng: null,
       category: w.category,
-      subcategory: extractBomWarningType(w.title || ''),
+      // Same value exposed as `warningType` on the live feed so the
+      // dashboard chips, this catalogue dim, and the bot's subtype token
+      // all agree. Fall back to recomputing for any warning that somehow
+      // reached here without the field populated.
+      subcategory: w.warningType || extractBomWarningType(w.title || ''),
       data: { ...w, title: w.title || w.area || perRowSource },
     });
   }

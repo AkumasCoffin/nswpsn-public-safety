@@ -2657,15 +2657,31 @@ function fetchFilterCatalogue() {
 
 // Per-alert-type choice of which catalogue field to draw subtype options
 // from — mirrors what the bot's _alert_subtype_token() extracts from each
-// alert. Waze stores its meaningful sub-classifications in `subcategory`
-// (HAZARD_WEATHER_FOG, POLICE_HIDING, etc.), so pulling from `categories`
-// would surface the parent label ("Hazard", "Police") which is redundant
-// with the chip's own name. Other sources use the category column.
+// alert. The chip value a user picks is compared verbatim against that
+// token, so the field here MUST be the catalogue dim that holds those
+// exact values, or every selection silently filters out all alerts.
+//
+//   waze_*      subcategory = `subtype` (HAZARD_WEATHER_FOG, POLICE_HIDING)
+//   rfs         subcategory = `fireType` (Bush Fire, Grass Fire, MVA/Transport).
+//               `categories` is alertLevel (Advice/Planned Burn) — that's
+//               the separate Severity dimension, not the subtype.
+//   bom_*       subcategory = `warningType` (Flood, Severe Weather, Wind).
+//               `categories` is only land/marine, already split per provider.
+//   traffic_*   subcategory = `incidentType` (CRASH, BREAKDOWN, …).
+// Everything else (user_incident, …) uses the category column.
 const _SUBTYPE_FIELDS_BY_TYPE = {
   waze_hazard:   ['subcategories'],
   waze_jam:      ['subcategories'],
   waze_police:   ['subcategories'],
   waze_roadwork: ['subcategories'],
+  rfs:           ['subcategories'],
+  bom_land:      ['subcategories'],
+  bom_marine:    ['subcategories'],
+  traffic_incident:   ['subcategories'],
+  traffic_roadwork:   ['subcategories'],
+  traffic_flood:      ['subcategories'],
+  traffic_fire:       ['subcategories'],
+  traffic_majorevent: ['subcategories'],
 };
 const _SUBTYPE_FIELDS_DEFAULT = ['categories'];
 
