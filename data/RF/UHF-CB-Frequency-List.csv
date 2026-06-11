@@ -1,0 +1,81 @@
+Channel,Frequency (MHz),Usage
+1,476.4250,Duplex – Repeater Output
+2,476.4500,Duplex – Repeater Output
+3,476.4750,Duplex – Repeater Output
+4,476.5000,Duplex – Repeater Output
+5,476.5250,Duplex – Repeater Output – (Emergency Use Only)
+6,476.5500,Duplex – Repeater Output
+7,476.5750,Duplex – Repeater Output
+8,476.6000,Duplex – Repeater Output
+9,476.6250,"Simplex – General Use"
+10,476.6500,Simplex – 4WD Drivers, Convoys, Clubs & National Parks
+11,476.6750,Simplex  – Call Channel
+12,476.7000,"Simplex – General Use"
+13,476.7250,"Simplex – General Use"
+14,476.7500,"Simplex – General Use"
+15,476.7750,"Simplex – General Use"
+16,476.8000,"Simplex – General Use"
+17,476.8250,"Simplex – General Use"
+18,476.8500,Simplex – Caravan & Camper Convoy Channel
+19,476.8750,"Simplex – General Use"
+20,476.9000,"Simplex – General Use"
+21,476.9250,"Simplex – General Use"
+22,476.9500,Data Only (No Voice – No Packet)
+23,476.9750,Data Only (No Voice – No Packet)
+24,477.0000,"Simplex – General Use"
+25,477.0250,"Simplex – General Use"
+26,477.0500,"Simplex – General Use"
+27,477.0750,"Simplex – General Use"
+28,477.1000,"Simplex – General Use"
+29,477.1250,Simplex – Pacific Hwy (NSW), Bruce Hwy (QLD) – Road Channel
+30,477.1500,Simplex – UHF CB Broadcasts
+31,477.1750,Repeater Input
+32,477.2000,Repeater Input
+33,477.2250,Repeater Input
+34,477.2500,Repeater Input
+35,477.2750,Repeater Input – (Emergency Use Only)
+36,477.3000,Repeater Input
+37,477.3250,Repeater Input
+38,477.3500,Repeater Input
+39,477.3750,"Simplex – General Use"
+40,477.4000,Simplex – Highway Channel
+41,476.4375,Duplex – Repeater Output
+42,476.4625,Duplex – Repeater Output
+43,476.4875,Duplex – Repeater Output
+44,476.5125,Duplex – Repeater Output
+45,476.5375,Duplex – Repeater Output
+46,476.5625,Duplex – Repeater Output
+47,476.5875,Duplex – Repeater Output
+48,476.6125,Duplex – Repeater Output
+49,476.6375,"Simplex – General Use"
+50,476.6625,"Simplex – General Use"
+51,476.6875,"Simplex – General Use"
+52,476.7125,"Simplex – General Use"
+53,476.7375,"Simplex – General Use"
+54,476.7625,"Simplex – General Use"
+55,476.7875,"Simplex – General Use"
+56,476.8125,"Simplex – General Use"
+57,476.8375,"Simplex – General Use"
+58,476.8625,"Simplex – General Use"
+59,476.8875,"Simplex – General Use"
+60,476.9125,"Simplex – General Use"
+61,476.9375,Reserved For Future Expansion
+62,476.9625,Reserved For Future Expansion
+63,476.9875,Reserved For Future Expansion
+64,477.0125,"Simplex – General Use"
+65,477.0375,"Simplex – General Use"
+66,477.0625,"Simplex – General Use"
+67,477.0875,"Simplex – General Use"
+68,477.1125,"Simplex – General Use"
+69,477.1375,"Simplex – General Use"
+70,477.1625,"Simplex – General Use"
+71,477.1875,Repeater Input
+72,477.2125,Repeater Input
+73,477.2375,Repeater Input
+74,477.2625,Repeater Input
+75,477.2875,Repeater Input
+76,477.3125,Repeater Input
+77,477.3375,Repeater Input
+78,477.3625,Repeater Input
+79,477.3875,"Simplex – General Use"
+80,477.4125,"Simplex – General Use"
