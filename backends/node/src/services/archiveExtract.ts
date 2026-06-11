@@ -246,7 +246,13 @@ function extractCategoryFields(
       props['subtype'] ??
       props['subType'] ??
       props['fireType'] ??
-      props['cause'],
+      props['cause'] ??
+      // Live Traffic features carry `incidentType` (CRASH, BREAKDOWN,
+      // BUSHFIRE, …) — the field the Discord bot's subtype_filters match
+      // on. Recording it here is what makes the dashboard's traffic
+      // subtype chips populate; only traffic features have this key so it
+      // never affects other sources.
+      props['incidentType'],
   );
   // For waze pins specifically: when the upstream alert has a type
   // but no subtype (e.g. a bare type='POLICE' with no further detail),

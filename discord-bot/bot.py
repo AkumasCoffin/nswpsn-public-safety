@@ -61,6 +61,7 @@ def is_bot_owner(user_id: int) -> bool:
 # helps — kept in sync with the dashboard PROVIDERS list and data_history).
 ALERT_TYPES = {
     'rfs': 'RFS Major Incidents',
+    'firms': 'FIRMS Fire Hotspots',
     'bom_land': 'BOM Land Warnings',
     'bom_marine': 'BOM Marine Warnings',
     'traffic_incident': 'Traffic Incidents',
@@ -268,9 +269,13 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
 def _alert_subtype_token(alert_type: str, alert_data: dict):
     """Return the alert's per-type sub-classification, or None if not applicable.
 
-    Each source uses a different field name:
-      rfs              → properties.category   ("Bush Fire", "Grass Fire", "Hazard Reduction")
-      bom_*            → properties.category or top-level category   ("Severe Weather", "Wind", ...)
+    Each source uses a different field name. These MUST line up with the
+    catalogue dim the dashboard draws its subtype chips from (see
+    dashboard.html `_SUBTYPE_FIELDS_BY_TYPE`) and with what the backend
+    archives — otherwise a chosen chip never matches a token and silently
+    filters out every alert.
+      rfs              → properties.fireType   ("Bush Fire", "Grass Fire", "MVA/Transport", ...)
+      bom_*            → warningType           ("Flood", "Severe Weather", "Wind", ...)
       traffic_*        → properties.incidentType  ("CRASH", "BREAKDOWN", "BUSHFIRE", ...)
       waze_*           → subtype                  ("HAZARD_WEATHER_FOG", "POLICE_HIDING", ...)
       user_incident    → category
@@ -279,11 +284,17 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
     if not isinstance(alert_data, dict):
         return None
     if alert_type == 'rfs':
+        # fireType is the incident sub-classification; the RFS feed has no
+        # `category`. (alertLevel — Advice/Watch & Act/Emergency — is the
+        # separate severity dimension, handled by alert_passes_severity.)
         props = alert_data.get('properties') or {}
-        return (str(props.get('category') or '').strip()) or None
+        return (str(props.get('fireType') or '').strip()) or None
     if alert_type and alert_type.startswith('bom_'):
+        # warningType is the title-derived classification the backend now
+        # exposes on each warning. `category` is only "land"/"marine"
+        # (already split into bom_land/bom_marine) so it's no use here.
         props = alert_data.get('properties') or {}
-        raw = props.get('category') or alert_data.get('category')
+        raw = (alert_data.get('warningType') or props.get('warningType'))
         return (str(raw or '').strip()) or None
     if alert_type and alert_type.startswith('traffic_'):
         props = alert_data.get('properties') or {}

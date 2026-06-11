@@ -1416,6 +1416,10 @@ const PROVIDERS = [
     types: [
       { key: 'rfs', label: 'Major Incidents' },
     ] },
+  { key: 'firms',       name: 'NASA FIRMS',             icon: 'fire',  color: '#f97316',
+    types: [
+      { key: 'firms', label: 'Fire Hotspots' },
+    ] },
   { key: 'bom',         name: 'Bureau of Meteorology',  icon: 'cloud', color: '#3b82f6',
     types: [
       { key: 'bom_land',   label: 'Land Warnings' },
@@ -2657,15 +2661,31 @@ function fetchFilterCatalogue() {
 
 // Per-alert-type choice of which catalogue field to draw subtype options
 // from — mirrors what the bot's _alert_subtype_token() extracts from each
-// alert. Waze stores its meaningful sub-classifications in `subcategory`
-// (HAZARD_WEATHER_FOG, POLICE_HIDING, etc.), so pulling from `categories`
-// would surface the parent label ("Hazard", "Police") which is redundant
-// with the chip's own name. Other sources use the category column.
+// alert. The chip value a user picks is compared verbatim against that
+// token, so the field here MUST be the catalogue dim that holds those
+// exact values, or every selection silently filters out all alerts.
+//
+//   waze_*      subcategory = `subtype` (HAZARD_WEATHER_FOG, POLICE_HIDING)
+//   rfs         subcategory = `fireType` (Bush Fire, Grass Fire, MVA/Transport).
+//               `categories` is alertLevel (Advice/Planned Burn) — that's
+//               the separate Severity dimension, not the subtype.
+//   bom_*       subcategory = `warningType` (Flood, Severe Weather, Wind).
+//               `categories` is only land/marine, already split per provider.
+//   traffic_*   subcategory = `incidentType` (CRASH, BREAKDOWN, …).
+// Everything else (user_incident, …) uses the category column.
 const _SUBTYPE_FIELDS_BY_TYPE = {
   waze_hazard:   ['subcategories'],
   waze_jam:      ['subcategories'],
   waze_police:   ['subcategories'],
   waze_roadwork: ['subcategories'],
+  rfs:           ['subcategories'],
+  bom_land:      ['subcategories'],
+  bom_marine:    ['subcategories'],
+  traffic_incident:   ['subcategories'],
+  traffic_roadwork:   ['subcategories'],
+  traffic_flood:      ['subcategories'],
+  traffic_fire:       ['subcategories'],
+  traffic_majorevent: ['subcategories'],
 };
 const _SUBTYPE_FIELDS_DEFAULT = ['categories'];
 
@@ -3905,10 +3925,12 @@ function renderWizardStep3() {
     'Select the alert types to include. You can optionally enable the pager channel too.'));
 
   container.appendChild(el('div', { class: 'select-row' }, [
-    el('span', {}, `${w.types.size} selected`),
+    // Pager is a selectable channel alongside the alert types, so it counts
+    // toward the total and is included in Select all / Clear all.
+    el('span', {}, `${w.types.size + (w.pagerEnabled ? 1 : 0)} selected`),
     el('span', { style: 'flex:1' }),
-    el('button', { class: 'link-btn', onclick: () => { _DASH_ALERT_TYPES.forEach(k => w.types.add(k)); renderWizardBodyOnly(); } }, 'Select all'),
-    el('button', { class: 'link-btn', onclick: () => { w.types.clear(); renderWizardBodyOnly(); } }, 'Clear all'),
+    el('button', { class: 'link-btn', onclick: () => { _DASH_ALERT_TYPES.forEach(k => w.types.add(k)); w.pagerEnabled = true; renderWizardBodyOnly(); } }, 'Select all'),
+    el('button', { class: 'link-btn', onclick: () => { w.types.clear(); w.pagerEnabled = false; renderWizardBodyOnly(); } }, 'Clear all'),
   ]));
 
   const list = el('div', { class: 'provider-list' });
@@ -3937,21 +3959,28 @@ function renderWizardStep3() {
       },
     }));
   }
-  container.appendChild(list);
+  // Pager — rendered as a provider section in the same list so it reads
+  // identically to the other alert sources (icon, count, expandable chip).
+  // It's backed by the standalone pager_enabled flag rather than w.types,
+  // since it's a capcode channel, not an alert_type — the section's single
+  // "Messages" chip and power toggle both map to that flag.
+  const pagerProvider = {
+    key: 'pager', name: 'Pager', icon: 'pager', color: '#8b5cf6',
+    types: [{ key: 'pager', label: 'Messages' }],
+  };
+  const pagerSel = new Set(w.pagerEnabled ? ['pager'] : []);
+  const pagerExpanded = _wizardProviderOpen.has('pager')
+    ? !!_wizardProviderOpen.get('pager')
+    : !!w.pagerEnabled;
+  list.appendChild(_renderProviderSection(pagerProvider, pagerSel, {
+    presetId: '__wizard__',
+    expanded: pagerExpanded,
+    onExpand: (open) => { _wizardProviderOpen.set('pager', !!open); renderWizardBodyOnly(); },
+    onToggleType: () => { w.pagerEnabled = !w.pagerEnabled; renderWizardBodyOnly(); },
+    onSelectAll: (turnOn) => { w.pagerEnabled = !!turnOn; renderWizardBodyOnly(); },
+  }));
 
-  // Pager flag — kept as a standalone toggle so the visual mapping stays
-  // "providers expand into types" while pager (capcode-driven) sits
-  // alongside as a non-provider channel.
-  const pagerWrap = el('div', { style: 'margin-top:0.6rem' });
-  pagerWrap.appendChild(el('label', {
-    class: 'type-opt' + (w.pagerEnabled ? ' selected' : ''),
-  }, [
-    el('input', { type: 'checkbox', checked: w.pagerEnabled ? 'checked' : false,
-      onchange: (e) => { w.pagerEnabled = !!e.target.checked; renderWizardBodyOnly(); } }),
-    el('span', {}, 'Pager messages'),
-    el('span', { style: 'margin-left:auto;color:var(--text-soft);font-family:monospace;font-size:0.7rem' }, 'pager'),
-  ]));
-  container.appendChild(pagerWrap);
+  container.appendChild(list);
   return container;
 }
 

@@ -32,11 +32,11 @@ module.exports = {
       kill_timeout: 10_000
     }
 
-    // Legacy python backend was here ('API-Proxy', external_api_proxy.py).
-    // Removed when the Node port reached parity. The python source is
-    // still in this directory for reference/rollback; to bring it back:
-    //   pm2 start external_api_proxy.py --interpreter python3 --name API-Proxy
-    // and stop the node app first to free port 3000.
+    // Legacy python backend ('API-Proxy', external_api_proxy.py) used to
+    // run here. It was retired when the Node port reached parity and the
+    // python source has since been removed from the repo. Recover it from
+    // git history (e.g. `git show <rev>:backends/external_api_proxy.py`)
+    // if a rollback is ever needed.
   ]
 };
 
