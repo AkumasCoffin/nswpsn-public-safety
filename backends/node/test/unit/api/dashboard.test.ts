@@ -237,20 +237,55 @@ describe('/api/dashboard/me', () => {
     expect(body.guilds[0]?.manage_channels).toBe(true); // perms=8 = ADMIN
     expect(body.bot_invite_url).toContain('discord.com/oauth2/authorize');
   });
+
+  it('reports has_bot=true for a guild the bot is in even with zero presets', async () => {
+    // Regression: getBotGuildIds used to derive membership solely from
+    // SELECT DISTINCT guild_id FROM alert_presets, so a freshly-invited
+    // server with no presets reported has_bot=false — the dashboard then
+    // showed "no servers with the bot" and hid the create-preset path.
+    const cookie = makeSessionCookie('42');
+    // Bot's live guild list includes 111; alert_presets has no rows yet.
+    botGetMock.mockImplementation(async (path: string) => {
+      if (String(path).startsWith('/users/@me/guilds')) {
+        return { status: 200, body: [{ id: '111' }], retryAfter: null };
+      }
+      return { status: 200, body: [], retryAfter: null };
+    });
+    queryQueue.push({ rows: [] }); // alert_presets: zero presets
+
+    const app = makeApp();
+    const res = await app.request('/api/dashboard/me', {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      guilds: Array<{ id: string; has_bot: boolean }>;
+    };
+    expect(body.guilds[0]?.id).toBe('111');
+    expect(body.guilds[0]?.has_bot).toBe(true);
+  });
 });
 
 describe('GET /guilds/:id/channels', () => {
   it('proxies through botGet and filters to text channel types', async () => {
     const cookie = makeSessionCookie('42');
-    queryQueue.push({ rows: [{ guild_id: '111' }] }); // bot guild ids
-    botGetMock.mockResolvedValueOnce({
-      status: 200,
-      body: [
-        { id: '1', name: 'general', type: 0, position: 1, parent_id: null },
-        { id: '2', name: 'voice', type: 2, position: 0, parent_id: null }, // dropped
-        { id: '3', name: 'announce', type: 5, position: 2, parent_id: '99' },
-      ],
-      retryAfter: null,
+    queryQueue.push({ rows: [{ guild_id: '111' }] }); // bot guild ids (DB fallback)
+    // getBotGuildIds fetches the bot's live guild list first; make that
+    // unavailable so this test exercises the alert_presets DB fallback
+    // queued above. The /channels call returns the actual channel list.
+    botGetMock.mockImplementation(async (path: string) => {
+      if (String(path).startsWith('/users/@me/guilds')) {
+        return { status: 502, body: null, retryAfter: null };
+      }
+      return {
+        status: 200,
+        body: [
+          { id: '1', name: 'general', type: 0, position: 1, parent_id: null },
+          { id: '2', name: 'voice', type: 2, position: 0, parent_id: null }, // dropped
+          { id: '3', name: 'announce', type: 5, position: 2, parent_id: '99' },
+        ],
+        retryAfter: null,
+      };
     });
     const app = makeApp();
     const res = await app.request('/api/dashboard/guilds/111/channels', {
