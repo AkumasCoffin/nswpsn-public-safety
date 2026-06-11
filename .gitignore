@@ -69,3 +69,7 @@ backends/reference/unit_callsigns*
 # Auto-refreshed by the CentralWatch fetcher — server overwrites this on each
 # run, so we don't track it to avoid spurious diffs / merge churn.
 backends/data/centralwatch_cameras.json
+
+# Local Firefox profile for the Waze userscript ingest browser — cookies,
+# cache, and sqlite session state. Machine-local; never committed.
+backends/data/.waze-browser-profile/
