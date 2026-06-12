@@ -2765,17 +2765,42 @@ function _matchSubtypeGroup(token, defs) {
   return best;
 }
 
+// Waze hazard tokens carry a secondary qualifier right after the class
+// prefix — ON_ROAD / ON_SHOULDER / WEATHER. ON_ROAD is the default
+// context so we drop it ("Pot hole", not "On road pot hole"); the others
+// are kept as a short suffix so meaning survives and the two CAR_STOPPED
+// variants don't collide (ON_ROAD → "Car stopped", ON_SHOULDER → "Car
+// stopped (shoulder)"). A bare qualifier keeps its own label ("On road",
+// "Weather").
+const _SUBTYPE_QUALIFIERS = [
+  { prefix: 'ON_ROAD',     suffix: '' },
+  { prefix: 'ON_SHOULDER', suffix: ' (shoulder)' },
+  { prefix: 'WEATHER',     suffix: '' },
+];
+
 // Once a chip lives under its class header, the class prefix is redundant
-// noise. Strip it so the chip reads cleanly:
-//   HAZARD_ON_ROAD_POT_HOLE  (under "Hazards")       → "On road pot hole"
-//   POLICE_WITH_MOBILE_CAMERA (under "Police")        → "With mobile camera"
-//   JAM_HEAVY_TRAFFIC        (under "Traffic jams")   → "Heavy traffic"
+// noise. Strip it (plus any secondary qualifier above) so the chip reads
+// cleanly:
+//   HAZARD_ON_ROAD_POT_HOLE       (under "Hazards")     → "Pot hole"
+//   HAZARD_ON_SHOULDER_CAR_STOPPED (under "Hazards")     → "Car stopped (shoulder)"
+//   HAZARD_WEATHER_FOG            (under "Hazards")     → "Fog"
+//   POLICE_WITH_MOBILE_CAMERA     (under "Police")      → "With mobile camera"
+//   JAM_HEAVY_TRAFFIC             (under "Traffic jams")→ "Heavy traffic"
 // A bare class token (ACCIDENT / ROAD_CLOSED / JAM) has nothing left after
 // stripping — label it "General" (the unqualified member of that class).
 function _subtypeChipLabel(token, key) {
   if (token === key) return 'General';
-  const rest = token.startsWith(key + '_') ? token.slice(key.length + 1) : token;
-  return humanizeSubtype(rest) || 'General';
+  let rest = token.startsWith(key + '_') ? token.slice(key.length + 1) : token;
+  let suffix = '';
+  for (const q of _SUBTYPE_QUALIFIERS) {
+    if (rest === q.prefix) return humanizeSubtype(rest);   // bare qualifier
+    if (rest.startsWith(q.prefix + '_')) {
+      rest = rest.slice(q.prefix.length + 1);
+      suffix = q.suffix;
+      break;
+    }
+  }
+  return (humanizeSubtype(rest) || 'General') + suffix;
 }
 
 // Given the catalogue + alert_type, return ordered subtype groups
