@@ -2752,34 +2752,50 @@ const _SUBTYPE_GROUP_DEFS = {
 // Match a subtype token to the longest owning prefix across `defs`.
 // A key matches when the token equals it or starts with `${key}_`, so
 // ROAD_CLOSED claims ROAD_CLOSED and ROAD_CLOSED_EVENT but never a
-// hypothetical ROADWORK. Returns the matching group def or null.
+// hypothetical ROADWORK. Returns { group, key } or null.
 function _matchSubtypeGroup(token, defs) {
-  let best = null;   // { group, len }
+  let best = null;   // { group, key }
   for (const g of defs) {
     for (const key of g.keys) {
       if (token === key || token.startsWith(key + '_')) {
-        if (!best || key.length > best.len) best = { group: g, len: key.length };
+        if (!best || key.length > best.key.length) best = { group: g, key };
       }
     }
   }
-  return best ? best.group : null;
+  return best;
+}
+
+// Once a chip lives under its class header, the class prefix is redundant
+// noise. Strip it so the chip reads cleanly:
+//   HAZARD_ON_ROAD_POT_HOLE  (under "Hazards")       → "On road pot hole"
+//   POLICE_WITH_MOBILE_CAMERA (under "Police")        → "With mobile camera"
+//   JAM_HEAVY_TRAFFIC        (under "Traffic jams")   → "Heavy traffic"
+// A bare class token (ACCIDENT / ROAD_CLOSED / JAM) has nothing left after
+// stripping — label it "General" (the unqualified member of that class).
+function _subtypeChipLabel(token, key) {
+  if (token === key) return 'General';
+  const rest = token.startsWith(key + '_') ? token.slice(key.length + 1) : token;
+  return humanizeSubtype(rest) || 'General';
 }
 
 // Given the catalogue + alert_type, return ordered subtype groups
-//   [{ label, values: [token, ...] }, ...]
+//   [{ label, items: [{ value, label }, ...] }, ...]
 // or null when the type has no grouping config (caller renders flat).
-// Empty groups are omitted; `values` keep catalogue (count-desc) order.
+// `value` is the raw token (stored/filtered); `label` is the cleaned,
+// prefix-stripped display text. Empty groups are omitted; items keep
+// catalogue (count-desc) order.
 function subtypeGroupsFor(catalogue, alertType) {
   const defs = _SUBTYPE_GROUP_DEFS[alertType];
   if (!defs) return null;
   const buckets = new Map(defs.map(g => [g.label, []]));
   for (const v of subtypeOptionsFor(catalogue, alertType)) {
-    const g = _matchSubtypeGroup(v, defs);
-    if (g) buckets.get(g.label).push(v);   // else: unowned token, dropped
+    const m = _matchSubtypeGroup(v, defs);
+    if (m) buckets.get(m.group.label).push({ value: v, label: _subtypeChipLabel(v, m.key) });
+    // else: unowned token (e.g. JAM_* under waze_hazard) — dropped.
   }
   return defs
-    .map(g => ({ label: g.label, values: buckets.get(g.label) }))
-    .filter(g => g.values.length > 0);
+    .map(g => ({ label: g.label, items: buckets.get(g.label) }))
+    .filter(g => g.items.length > 0);
 }
 
 // Look up the provider display name for a canonical alert_type.
@@ -2802,11 +2818,13 @@ function humanizeSubtype(v) {
   // Already human: no underscores and contains a lowercase letter
   // (e.g. "Bush Fire", "MVA/Transport", "overhead line damage").
   if (!v.includes('_') && /[a-z]/.test(v)) return v;
-  return v.split(/[_\s]+/).filter(Boolean).map((word) => {
-    // Preserve short all-caps tokens as acronyms (MVA, BOM, ID).
-    if (/^[A-Z0-9]{1,3}$/.test(word)) return word;
-    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-  }).join(' ');
+  // Title-case each word. We deliberately don't try to preserve short
+  // all-caps tokens as acronyms — in this data the short tokens are plain
+  // words (FOG, POT, CAR, ICE, ON), and the one acronym that matters
+  // ("MVA/Transport") already has lowercase so it hits the guard above.
+  return v.split(/[_\s]+/).filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
 }
 
 function presetFilters(preset) {
@@ -3441,7 +3459,10 @@ function renderFiltersCard(preset) {
         // One selectable chip for a subtype token. `orphan` marks a saved
         // selection that's no longer offered (aged out, or a dropped leak)
         // — it removes itself on click instead of just toggling off.
-        const makeChip = (v, orphan) => {
+        // `label` overrides the display text (grouped chips pass the
+        // prefix-stripped label); the raw token stays in the title.
+        const makeChip = (v, orphan, label) => {
+          const text = (label != null ? label : humanizeSubtype(v)) + (orphan ? ' *' : '');
           const chip = el('button', {
             type: 'button',
             class: 'chip subtype-chip' + (subtypeSelections[at].has(v) ? ' active' : '')
@@ -3449,7 +3470,7 @@ function renderFiltersCard(preset) {
             title: orphan
               ? `${v} — not currently in the data catalogue; click to remove.`
               : v,
-          }, humanizeSubtype(v) + (orphan ? ' *' : ''));
+          }, text);
           chip.onclick = (e) => {
             e.preventDefault();
             if (subtypeSelections[at].has(v)) {
@@ -3475,9 +3496,9 @@ function renderFiltersCard(preset) {
           chipBox.style.gap = '0.55rem';
           for (const g of groups) {
             const groupChips = el('div', { class: 'subtype-group-chips' });
-            for (const v of g.values) {
-              displayed.add(v);
-              groupChips.appendChild(makeChip(v, false));
+            for (const item of g.items) {
+              displayed.add(item.value);
+              groupChips.appendChild(makeChip(item.value, false, item.label));
             }
             chipBox.appendChild(el('div', { class: 'subtype-group' }, [
               el('div', { class: 'subtype-group-head' }, g.label),
