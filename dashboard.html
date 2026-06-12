@@ -402,6 +402,19 @@
       opacity: 0.7;
     }
 
+    /* Subtype filter chips — grouped under their main-type class (Waze). */
+    .subtype-chip { font-size: 0.72rem; padding: 0.2rem 0.55rem; }
+    .chip.orphan { opacity: 0.6; border-style: dashed; }
+    .subtype-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    .subtype-group-head {
+      font-size: 0.62rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding-bottom: 0.18rem;
+      border-bottom: 1px dashed rgba(148,163,184,0.18);
+    }
+    .subtype-group-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+
     /* Provider-grouped alert-type selector (used by editor + wizard). */
     .provider-list {
       display: flex; flex-direction: column;
@@ -2713,6 +2726,62 @@ function subtypeOptionsFor(catalogue, alertType) {
     .map(([v]) => v);
 }
 
+// Waze subtypes nest under a small set of top-level classes ("main
+// types"). Group the subtype chips under that class so the filter reads
+// as class → variants (Accidents → Accident / Accident (major) / …).
+// Each group lists the subtype-token prefixes it owns; a token is filed
+// under the group whose prefix is the LONGEST match. Prefixes mirror the
+// Waze classifiers in backends/node/src/services/wazeAlerts.ts
+// (isHazardAlert / isJamAlert / isPoliceAlert / isRoadworkAlert).
+//
+// Any waze subtype that matches no owned prefix is DROPPED from the row.
+// In practice that's the JAM_* tokens lingering under waze_hazard from
+// rows ingested before the 2026-05-28 JAM→waze_jam split (commit cad4f27)
+// — they belong to waze_jam's "Traffic jams" group, not Hazards.
+const _SUBTYPE_GROUP_DEFS = {
+  waze_hazard: [
+    { label: 'Accidents',     keys: ['ACCIDENT'] },
+    { label: 'Hazards',       keys: ['HAZARD'] },
+    { label: 'Road closures', keys: ['ROAD_CLOSED'] },
+  ],
+  waze_jam:      [{ label: 'Traffic jams', keys: ['JAM'] }],
+  waze_police:   [{ label: 'Police',       keys: ['POLICE'] }],
+  waze_roadwork: [{ label: 'Roadwork',     keys: ['HAZARD_ON_ROAD_CONSTRUCTION', 'CONSTRUCTION', 'ROADWORK'] }],
+};
+
+// Match a subtype token to the longest owning prefix across `defs`.
+// A key matches when the token equals it or starts with `${key}_`, so
+// ROAD_CLOSED claims ROAD_CLOSED and ROAD_CLOSED_EVENT but never a
+// hypothetical ROADWORK. Returns the matching group def or null.
+function _matchSubtypeGroup(token, defs) {
+  let best = null;   // { group, len }
+  for (const g of defs) {
+    for (const key of g.keys) {
+      if (token === key || token.startsWith(key + '_')) {
+        if (!best || key.length > best.len) best = { group: g, len: key.length };
+      }
+    }
+  }
+  return best ? best.group : null;
+}
+
+// Given the catalogue + alert_type, return ordered subtype groups
+//   [{ label, values: [token, ...] }, ...]
+// or null when the type has no grouping config (caller renders flat).
+// Empty groups are omitted; `values` keep catalogue (count-desc) order.
+function subtypeGroupsFor(catalogue, alertType) {
+  const defs = _SUBTYPE_GROUP_DEFS[alertType];
+  if (!defs) return null;
+  const buckets = new Map(defs.map(g => [g.label, []]));
+  for (const v of subtypeOptionsFor(catalogue, alertType)) {
+    const g = _matchSubtypeGroup(v, defs);
+    if (g) buckets.get(g.label).push(v);   // else: unowned token, dropped
+  }
+  return defs
+    .map(g => ({ label: g.label, values: buckets.get(g.label) }))
+    .filter(g => g.values.length > 0);
+}
+
 // Look up the provider display name for a canonical alert_type.
 // Used to disambiguate rows like "Roadwork" (Waze vs Traffic).
 function providerNameForAlertType(alertType) {
@@ -3369,46 +3438,74 @@ function renderFiltersCard(preset) {
             ? `${subtypeSelections[at].size} selected`
             : 'all subtypes';
         };
-        for (const v of opts) {
-          const isSel = subtypeSelections[at].has(v);
+        // One selectable chip for a subtype token. `orphan` marks a saved
+        // selection that's no longer offered (aged out, or a dropped leak)
+        // — it removes itself on click instead of just toggling off.
+        const makeChip = (v, orphan) => {
           const chip = el('button', {
             type: 'button',
-            class: 'chip' + (isSel ? ' active' : ''),
-            style: 'cursor:pointer;font-size:0.72rem;padding:0.2rem 0.55rem;',
-            title: v,
-          }, humanizeSubtype(v));
+            class: 'chip subtype-chip' + (subtypeSelections[at].has(v) ? ' active' : '')
+              + (orphan ? ' orphan' : ''),
+            title: orphan
+              ? `${v} — not currently in the data catalogue; click to remove.`
+              : v,
+          }, humanizeSubtype(v) + (orphan ? ' *' : ''));
           chip.onclick = (e) => {
             e.preventDefault();
             if (subtypeSelections[at].has(v)) {
               subtypeSelections[at].delete(v);
               chip.classList.remove('active');
+              if (orphan) chip.remove();
             } else {
               subtypeSelections[at].add(v);
               chip.classList.add('active');
             }
             updateSummary();
           };
-          chipBox.appendChild(chip);
+          return chip;
+        };
+
+        const groups = subtypeGroupsFor(catalogue, at);
+        const displayed = new Set();
+        if (groups) {
+          // Grouped (Waze): each main-type class gets a header + its
+          // variant chips. Stack the groups vertically.
+          chipBox.style.flexDirection = 'column';
+          chipBox.style.alignItems = 'stretch';
+          chipBox.style.gap = '0.55rem';
+          for (const g of groups) {
+            const groupChips = el('div', { class: 'subtype-group-chips' });
+            for (const v of g.values) {
+              displayed.add(v);
+              groupChips.appendChild(makeChip(v, false));
+            }
+            chipBox.appendChild(el('div', { class: 'subtype-group' }, [
+              el('div', { class: 'subtype-group-head' }, g.label),
+              groupChips,
+            ]));
+          }
+        } else {
+          // Flat (RFS / BOM / traffic): single wrapped chip row.
+          for (const v of opts) {
+            displayed.add(v);
+            chipBox.appendChild(makeChip(v, false));
+          }
         }
-        // Pre-existing selections that aren't in the catalogue (rare —
-        // user previously selected a value that since stopped appearing
-        // in data_history). Surface them as orphan chips so the user
-        // can deselect, but mark them.
-        for (const v of subtypeSelections[at]) {
-          if (!opts.includes(v)) {
-            const chip = el('button', {
-              type: 'button',
-              class: 'chip active',
-              style: 'cursor:pointer;font-size:0.72rem;padding:0.2rem 0.55rem;opacity:0.65;',
-              title: `${v} — not currently in the data catalogue; click to remove.`,
-            }, humanizeSubtype(v) + ' *');
-            chip.onclick = (e) => {
-              e.preventDefault();
-              subtypeSelections[at].delete(v);
-              chip.remove();
-              updateSummary();
-            };
-            chipBox.appendChild(chip);
+        // Saved selections not shown above — value aged out of the
+        // catalogue, or a leaked token we now drop (e.g. a JAM_* saved
+        // under waze_hazard before the split). Surface as removable
+        // orphans so nothing stays silently stuck in the filter.
+        const orphans = [...subtypeSelections[at]].filter(v => !displayed.has(v));
+        if (orphans.length) {
+          if (groups) {
+            const orphanChips = el('div', { class: 'subtype-group-chips' });
+            for (const v of orphans) orphanChips.appendChild(makeChip(v, true));
+            chipBox.appendChild(el('div', { class: 'subtype-group' }, [
+              el('div', { class: 'subtype-group-head' }, 'Other'),
+              orphanChips,
+            ]));
+          } else {
+            for (const v of orphans) chipBox.appendChild(makeChip(v, true));
           }
         }
       }
