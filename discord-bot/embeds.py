@@ -41,6 +41,103 @@ def is_valid_value(value: Any) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Waze subtype label cleanup — mirrors the dashboard's subtype-filter chips
+# (dashboard.html: humanizeSubtype / _SUBTYPE_GROUP_DEFS / _SUBTYPE_QUALIFIERS
+# / _subtypeChipLabel). The raw Waze subtype enums (HAZARD_ON_ROAD_POT_HOLE,
+# POLICE_WITH_MOBILE_CAMERA, JAM_HEAVY_TRAFFIC) read as SCREAMING_SNAKE noise
+# in an embed. We split each token into a class ("Hazard", "Accident",
+# "Road closure", "Traffic jam", "Police", "Roadwork") and a cleaned variant
+# ("Pot hole", "Major", "With mobile camera"), so the bot reads the same way
+# the dashboard does. Kept in sync by hand — there's no shared module across
+# the Node frontend and the Python bot.
+# ---------------------------------------------------------------------------
+
+# alert_type -> ordered (token-prefix, class label). For waze_hazard the
+# class depends on which prefix the subtype carries; the others are single.
+_WAZE_SUBTYPE_CLASSES = {
+    'waze_hazard': [
+        ('ACCIDENT', 'Accident'),
+        ('HAZARD', 'Hazard'),
+        ('ROAD_CLOSED', 'Road closure'),
+    ],
+    'waze_jam': [('JAM', 'Traffic jam')],
+    'waze_police': [('POLICE', 'Police')],
+    'waze_roadwork': [
+        ('HAZARD_ON_ROAD_CONSTRUCTION', 'Roadwork'),
+        ('CONSTRUCTION', 'Roadwork'),
+        ('ROADWORK', 'Roadwork'),
+    ],
+}
+
+# Secondary qualifier right after the class prefix. ON_ROAD is the default
+# road context so it's dropped (bare -> no extra detail); the others are
+# kept so meaning survives and the two CAR_STOPPED variants stay distinct.
+# Tuple: (prefix, suffix, bare_variant) where '' bare means "no detail".
+_WAZE_SUBTYPE_QUALIFIERS = [
+    ('ON_ROAD', '', ''),
+    ('ON_SHOULDER', ' (shoulder)', 'On shoulder'),
+    ('WEATHER', '', 'Weather'),
+]
+
+
+def humanize_subtype(v: str) -> str:
+    """Title-case a SCREAMING_SNAKE enum, leaving already-human text alone."""
+    if not isinstance(v, str) or not v:
+        return v or ''
+    if '_' not in v and any(c.islower() for c in v):
+        return v
+    return ' '.join(
+        w[:1].upper() + w[1:].lower()
+        for w in re.split(r'[_\s]+', v) if w
+    )
+
+
+def _waze_match_class(token: str, defs):
+    """Longest-prefix match of a subtype token to its class. -> (key, label)."""
+    best = None
+    for key, label in defs:
+        if token == key or token.startswith(key + '_'):
+            if best is None or len(key) > len(best[0]):
+                best = (key, label)
+    return best
+
+
+def waze_subtype_labels(alert_type: str, subtype: str):
+    """Return (class_label, variant) for a Waze subtype token.
+
+    class_label is the main type ("Hazard"); variant is the cleaned detail
+    ("Pot hole") or '' when the token is the generic member of its class.
+    Falls back to (None, humanized) for non-Waze / unrecognised tokens.
+    """
+    defs = _WAZE_SUBTYPE_CLASSES.get(alert_type)
+    # Coerce defensively — the feed *should* hand us a string, but a stray
+    # numeric/None subtype must never raise and sink the whole alert batch.
+    subtype = str(subtype) if subtype not in (None, '') else ''
+    token = subtype.strip().upper()
+    if not defs or not token:
+        return (None, humanize_subtype(subtype))
+    match = _waze_match_class(token, defs)
+    if not match:
+        return (None, humanize_subtype(subtype))
+    key, class_label = match
+    if token == key:
+        return (class_label, '')  # bare class — generic member
+    rest = token[len(key) + 1:] if token.startswith(key + '_') else token
+    suffix = ''
+    for prefix, qsuffix, bare in _WAZE_SUBTYPE_QUALIFIERS:
+        if rest == prefix:
+            return (class_label, bare)
+        if rest.startswith(prefix + '_'):
+            rest = rest[len(prefix) + 1:]
+            suffix = qsuffix
+            break
+    variant = humanize_subtype(rest)
+    if not variant or variant == 'General':
+        return (class_label, '')
+    return (class_label, variant + suffix)
+
+
 def parse_timestamp_to_datetime(ts_value: Any) -> Optional[datetime]:
     """Parse various timestamp formats into a datetime object.
     
@@ -835,7 +932,8 @@ class EmbedBuilder:
     
     def _build_waze_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
         """Build embed for Waze alerts (hazards, police, roadwork)"""
-        props = data.get('properties', {})
+        data = data or {}
+        props = data.get('properties') or {}
         
         # Get type info
         waze_type = props.get('wazeType', '')
@@ -867,9 +965,14 @@ class EmbedBuilder:
             'waze_roadwork': 'Waze Roadwork',
         }
         type_label = type_labels.get(alert_type, 'Waze Alert')
-        
-        # Use display type or subtype for more specific title
-        if display_type and display_type != 'Unknown':
+
+        # Clean class + variant from the raw subtype (mirrors the dashboard
+        # chips). Heading shows the class; the specific variant moves to the
+        # "Type" field below so neither reads as SCREAMING_SNAKE.
+        class_label, variant = waze_subtype_labels(alert_type, waze_subtype)
+        if class_label:
+            embed_title = f"{icon} {class_label}"
+        elif display_type and display_type != 'Unknown':
             embed_title = f"{icon} {display_type}"
         else:
             embed_title = f"{icon} {type_label}"
@@ -895,9 +998,9 @@ class EmbedBuilder:
             if loc_parts:
                 embed.add_field(name="📍 Location", value=", ".join(loc_parts)[:1024], inline=False)
         
-        # Alert type details
-        if is_valid_value(waze_subtype) and waze_subtype.lower() != display_type.lower():
-            embed.add_field(name="Type", value=waze_subtype.replace('_', ' ').title(), inline=True)
+        # Alert type details — the cleaned, class-stripped variant.
+        if variant:
+            embed.add_field(name="Type", value=variant, inline=True)
         
         # Reliability score
         if reliability and reliability > 0:
@@ -2838,7 +2941,8 @@ class EmbedBuilder:
     # ---- Waze --------------------------------------------------
     def build_waze_container(self, data: Dict[str, Any], alert_type: str):
         """Components V2 container for Waze hazards / police / roadwork."""
-        props = data.get('properties', {})
+        data = data or {}
+        props = data.get('properties') or {}
         waze_subtype = props.get('wazeSubtype', '')
         display_type = props.get('displayType', '')
         title = strip_html(props.get('title', ''))
@@ -2859,8 +2963,15 @@ class EmbedBuilder:
             'waze_roadwork': 'Waze Roadwork',
         }
         type_label = type_labels.get(alert_type, 'Waze Alert')
-        heading = (f"### {icon} {display_type}" if display_type and display_type != 'Unknown'
-                   else f"### {icon} {type_label}")
+        # Cleaned class + variant from the raw subtype (mirrors the dashboard
+        # chips); heading shows the class, variant goes to the meta row below.
+        class_label, variant = waze_subtype_labels(alert_type, waze_subtype)
+        if class_label:
+            heading = f"### {icon} {class_label}"
+        elif display_type and display_type != 'Unknown':
+            heading = f"### {icon} {display_type}"
+        else:
+            heading = f"### {icon} {type_label}"
 
         container = discord.ui.Container(accent_colour=color)
         container.add_item(discord.ui.TextDisplay(content=heading))
@@ -2882,8 +2993,8 @@ class EmbedBuilder:
                 ))
 
         meta_bits = []
-        if is_valid_value(waze_subtype) and waze_subtype.lower() != display_type.lower():
-            meta_bits.append(f"Type: {waze_subtype.replace('_', ' ').title()}")
+        if variant:
+            meta_bits.append(f"Type: {variant}")
         if reliability and reliability > 0:
             meta_bits.append(f"Reliability: {min(100, reliability)}%")
         if thumbs_up and thumbs_up > 0:

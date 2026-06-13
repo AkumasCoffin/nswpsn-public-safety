@@ -292,7 +292,8 @@ interface ComputedFacets {
 /**
  * Categorise a single waze alert into one of the four alert_types we
  * surface in the filter dropdown. Mirrors the isPoliceAlert /
- * isRoadworkAlert / isHazardAlert helpers in services/wazeAlerts —
+ * isRoadworkAlert / isJamAlert / isHazardAlert helpers in
+ * services/wazeAlerts (and the ingest split in api/waze-ingest) —
  * duplicated here to avoid a cross-module cycle (filterCache shouldn't
  * import from a route's service layer).
  */
@@ -301,6 +302,10 @@ function wazeAlertType(rec: Record<string, unknown>): string {
   const s = String(rec['subtype'] ?? '').toUpperCase();
   if (t === 'POLICE' || s.includes('POLICE')) return 'waze_police';
   if (t === 'CONSTRUCTION' || s.includes('CONSTRUCTION')) return 'waze_roadwork';
+  // JAM-typed alert points belong with the waze_jam bucket, not Hazards.
+  // Checked after police/roadwork so those classes win — matches the
+  // isJamAlert precedence + the 2026-05-28 ingest split (commit cad4f27).
+  if (t === 'JAM') return 'waze_jam';
   return 'waze_hazard';
 }
 
