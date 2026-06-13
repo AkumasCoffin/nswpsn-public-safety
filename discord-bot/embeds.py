@@ -977,10 +977,16 @@ class EmbedBuilder:
         # Reliability/thumbs up
         thumbs_up = props.get('thumbsUp', 0)
         reliability = props.get('reliability', 0)
-        
+        # Jam-specific richness from parseWazeJam (only present on jams).
+        severity = strip_html(str(props.get('severity', '') or ''))
+        speed_kmh = props.get('speedKMH', props.get('speed'))
+        delay_mins = props.get('delayMins')
+        delay_secs = props.get('delay')
+        length_m = props.get('length')
+
         # Time
         created = props.get('created', '')
-        
+
         # Get icon and color for this alert type
         icon = self.ICONS.get(alert_type, '⚠️')
         color = self.COLORS.get(alert_type, 0xEAB308)
@@ -1028,11 +1034,25 @@ class EmbedBuilder:
                 embed.add_field(name="📍 Location", value=", ".join(loc_parts)[:1024], inline=False)
         
         
+        # Jam details (severity / speed / delay / length).
+        if is_valid_value(severity):
+            embed.add_field(name="Severity", value=severity, inline=True)
+        if isinstance(speed_kmh, (int, float)) and speed_kmh > 0:
+            embed.add_field(name="🚗 Speed", value=f"{round(speed_kmh)} km/h", inline=True)
+        _dmin = (delay_mins if isinstance(delay_mins, (int, float)) and delay_mins
+                 else round(delay_secs / 60) if isinstance(delay_secs, (int, float)) and delay_secs
+                 else None)
+        if _dmin:
+            embed.add_field(name="⏱️ Delay", value=f"+{_dmin} min", inline=True)
+        if isinstance(length_m, (int, float)) and length_m > 0:
+            length_str = f"{length_m / 1000:.1f} km" if length_m >= 1000 else f"{round(length_m)} m"
+            embed.add_field(name="📏 Length", value=length_str, inline=True)
+
         # Reliability score
         if reliability and reliability > 0:
             reliability_pct = min(100, reliability)
             embed.add_field(name="Reliability", value=f"{reliability_pct}%", inline=True)
-        
+
         # Thumbs up (confirmations)
         if thumbs_up and thumbs_up > 0:
             embed.add_field(name="👍 Confirmations", value=str(thumbs_up), inline=True)
@@ -1042,21 +1062,28 @@ class EmbedBuilder:
         if formatted_time:
             embed.add_field(name="🕐 Reported", value=formatted_time, inline=True)
         
-        # Map link
+        # Map link. Point alerts carry [lon, lat]; jams are a LineString
+        # ([[lon,lat], …]) — use the line midpoint so the link resolves.
         geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
+        coords = geometry.get('coordinates') if isinstance(geometry, dict) else None
+        lon = lat = None
+        if isinstance(coords, list) and coords:
+            if isinstance(coords[0], (list, tuple)):
+                mid = coords[len(coords) // 2]
+                if isinstance(mid, (list, tuple)) and len(mid) >= 2:
+                    lon, lat = mid[0], mid[1]
+            elif len(coords) >= 2:
                 lon, lat = coords[0], coords[1]
-                layer_map = {
-                    'waze_hazard':   'hazards',
-                    'waze_jam':      'jams',
-                    'waze_police':   'police',
-                    'waze_roadwork': 'roadwork',
-                }
-                layer = layer_map.get(alert_type, 'hazards')
-                map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
-                embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
+        if lat is not None and lon is not None:
+            layer_map = {
+                'waze_hazard':   'hazards',
+                'waze_jam':      'jams',
+                'waze_police':   'police',
+                'waze_roadwork': 'roadwork',
+            }
+            layer = layer_map.get(alert_type, 'hazards')
+            map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
+            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
 
         embed.set_footer(text="Waze Community Reports")
         return embed
@@ -2979,6 +3006,12 @@ class EmbedBuilder:
         thumbs_up = props.get('thumbsUp', 0)
         reliability = props.get('reliability', 0)
         created = props.get('created', '')
+        # Jam-specific richness from parseWazeJam (only present on jams).
+        severity = strip_html(str(props.get('severity', '') or ''))
+        speed_kmh = props.get('speedKMH', props.get('speed'))
+        delay_mins = props.get('delayMins')
+        delay_secs = props.get('delay')
+        length_m = props.get('length')
 
         icon = self.ICONS.get(alert_type, '⚠️')
         color = self.COLORS.get(alert_type, 0xEAB308)
@@ -3021,6 +3054,19 @@ class EmbedBuilder:
                 ))
 
         meta_bits = []
+        # Jam details first — the most useful info for a traffic jam.
+        if is_valid_value(severity):
+            meta_bits.append(severity)
+        if isinstance(speed_kmh, (int, float)) and speed_kmh > 0:
+            meta_bits.append(f"🚗 {round(speed_kmh)} km/h")
+        _dmin = (delay_mins if isinstance(delay_mins, (int, float)) and delay_mins
+                 else round(delay_secs / 60) if isinstance(delay_secs, (int, float)) and delay_secs
+                 else None)
+        if _dmin:
+            meta_bits.append(f"⏱️ +{_dmin} min delay")
+        if isinstance(length_m, (int, float)) and length_m > 0:
+            meta_bits.append(f"📏 {length_m / 1000:.1f} km" if length_m >= 1000
+                             else f"📏 {round(length_m)} m")
         if reliability and reliability > 0:
             meta_bits.append(f"Reliability: {min(100, reliability)}%")
         if thumbs_up and thumbs_up > 0:
