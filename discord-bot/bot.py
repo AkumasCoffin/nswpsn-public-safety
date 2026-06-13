@@ -218,11 +218,17 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
             or (alert_type or '').startswith('waze_'):
         geom = alert_data.get('geometry') or {}
         coords = geom.get('coordinates') if isinstance(geom, dict) else None
-        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
-            try:
-                return (float(coords[1]), float(coords[0]))
-            except (TypeError, ValueError):
-                return (None, None)
+        if isinstance(coords, (list, tuple)) and len(coords) >= 1:
+            # LineString (waze jams): list of [lng,lat] pairs — use the
+            # midpoint so the geofilter has a real point to test.
+            if isinstance(coords[0], (list, tuple)):
+                mid = coords[len(coords) // 2]
+                coords = mid if isinstance(mid, (list, tuple)) else coords
+            if len(coords) >= 2:
+                try:
+                    return (float(coords[1]), float(coords[0]))
+                except (TypeError, ValueError):
+                    return (None, None)
         return (None, None)
 
     # FIRMS hotspots: coords live in properties.latitude/longitude, with a
