@@ -402,6 +402,19 @@
       opacity: 0.7;
     }
 
+    /* Subtype filter chips — grouped under their main-type class (Waze). */
+    .subtype-chip { font-size: 0.72rem; padding: 0.2rem 0.55rem; }
+    .chip.orphan { opacity: 0.6; border-style: dashed; }
+    .subtype-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    .subtype-group-head {
+      font-size: 0.62rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding-bottom: 0.18rem;
+      border-bottom: 1px dashed rgba(148,163,184,0.18);
+    }
+    .subtype-group-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+
     /* Provider-grouped alert-type selector (used by editor + wizard). */
     .provider-list {
       display: flex; flex-direction: column;
@@ -2713,6 +2726,112 @@ function subtypeOptionsFor(catalogue, alertType) {
     .map(([v]) => v);
 }
 
+// Waze subtypes nest under a small set of top-level classes ("main
+// types"). Group the subtype chips under that class so the filter reads
+// as class → variants (Accidents → Accident / Accident (major) / …).
+// Each group lists the subtype-token prefixes it owns; a token is filed
+// under the group whose prefix is the LONGEST match. Prefixes mirror the
+// Waze classifiers in backends/node/src/services/wazeAlerts.ts
+// (isHazardAlert / isJamAlert / isPoliceAlert / isRoadworkAlert).
+//
+// Any waze subtype that matches no owned prefix is DROPPED from the row.
+// In practice that's the JAM_* tokens lingering under waze_hazard from
+// rows ingested before the 2026-05-28 JAM→waze_jam split (commit cad4f27)
+// — they belong to waze_jam's "Traffic jams" group, not Hazards.
+const _SUBTYPE_GROUP_DEFS = {
+  waze_hazard: [
+    { label: 'Accidents',     keys: ['ACCIDENT'] },
+    { label: 'Hazards',       keys: ['HAZARD'] },
+    { label: 'Road closures', keys: ['ROAD_CLOSED'] },
+  ],
+  waze_jam:      [{ label: 'Traffic jams', keys: ['JAM'] }],
+  waze_police:   [{ label: 'Police',       keys: ['POLICE'] }],
+  waze_roadwork: [{ label: 'Roadwork',     keys: ['HAZARD_ON_ROAD_CONSTRUCTION', 'CONSTRUCTION', 'ROADWORK'] }],
+};
+
+// Match a subtype token to the longest owning prefix across `defs`.
+// A key matches when the token equals it or starts with `${key}_`, so
+// ROAD_CLOSED claims ROAD_CLOSED and ROAD_CLOSED_EVENT but never a
+// hypothetical ROADWORK. Returns { group, key } or null.
+function _matchSubtypeGroup(token, defs) {
+  let best = null;   // { group, key }
+  for (const g of defs) {
+    for (const key of g.keys) {
+      if (token === key || token.startsWith(key + '_')) {
+        if (!best || key.length > best.key.length) best = { group: g, key };
+      }
+    }
+  }
+  return best;
+}
+
+// Waze hazard tokens carry a secondary qualifier right after the class
+// prefix — ON_ROAD / ON_SHOULDER / WEATHER. ON_ROAD is the default
+// context so we drop it ("Pot hole", not "On road pot hole"); the others
+// are kept as a short suffix so meaning survives and the two CAR_STOPPED
+// variants don't collide (ON_ROAD → "Car stopped", ON_SHOULDER → "Car
+// stopped (shoulder)"). A bare qualifier keeps its own label ("On road",
+// "Weather").
+// `bare` is the label when the token is exactly the qualifier with nothing
+// after it. ON_ROAD is the default road context, so a bare HAZARD_ON_ROAD
+// is just a generic hazard → "General" (it then merges with the bare
+// HAZARD chip, see subtypeGroupsFor). The others stay meaningful.
+const _SUBTYPE_QUALIFIERS = [
+  { prefix: 'ON_ROAD',     suffix: '',            bare: 'General' },
+  { prefix: 'ON_SHOULDER', suffix: ' (shoulder)', bare: 'On shoulder' },
+  { prefix: 'WEATHER',     suffix: '',            bare: 'Weather' },
+];
+
+// Once a chip lives under its class header, the class prefix is redundant
+// noise. Strip it (plus any secondary qualifier above) so the chip reads
+// cleanly:
+//   HAZARD_ON_ROAD_POT_HOLE       (under "Hazards")     → "Pot hole"
+//   HAZARD_ON_SHOULDER_CAR_STOPPED (under "Hazards")     → "Car stopped (shoulder)"
+//   HAZARD_WEATHER_FOG            (under "Hazards")     → "Fog"
+//   POLICE_WITH_MOBILE_CAMERA     (under "Police")      → "With mobile camera"
+//   JAM_HEAVY_TRAFFIC             (under "Traffic jams")→ "Heavy traffic"
+// A bare class token (ACCIDENT / ROAD_CLOSED / JAM) has nothing left after
+// stripping — label it "General" (the unqualified member of that class).
+function _subtypeChipLabel(token, key) {
+  if (token === key) return 'General';
+  let rest = token.startsWith(key + '_') ? token.slice(key.length + 1) : token;
+  let suffix = '';
+  for (const q of _SUBTYPE_QUALIFIERS) {
+    if (rest === q.prefix) return q.bare;   // bare qualifier
+    if (rest.startsWith(q.prefix + '_')) {
+      rest = rest.slice(q.prefix.length + 1);
+      suffix = q.suffix;
+      break;
+    }
+  }
+  return (humanizeSubtype(rest) || 'General') + suffix;
+}
+
+// Given the catalogue + alert_type, return ordered subtype groups
+//   [{ label, items: [{ values: [token, ...], label }, ...] }, ...]
+// or null when the type has no grouping config (caller renders flat).
+// `values` are the raw tokens (stored/filtered); `label` is the cleaned
+// display text. Tokens that clean to the SAME label within a group merge
+// into one chip (e.g. HAZARD + HAZARD_ON_ROAD both → "General"), so one
+// click whitelists every underlying token. Empty groups are omitted;
+// items keep catalogue (count-desc) order of first appearance.
+function subtypeGroupsFor(catalogue, alertType) {
+  const defs = _SUBTYPE_GROUP_DEFS[alertType];
+  if (!defs) return null;
+  const buckets = new Map(defs.map(g => [g.label, new Map()]));   // label -> (chipLabel -> {values,label})
+  for (const v of subtypeOptionsFor(catalogue, alertType)) {
+    const m = _matchSubtypeGroup(v, defs);
+    if (!m) continue;   // unowned token (e.g. JAM_* under waze_hazard) — dropped
+    const items = buckets.get(m.group.label);
+    const label = _subtypeChipLabel(v, m.key);
+    if (items.has(label)) items.get(label).values.push(v);
+    else items.set(label, { values: [v], label });
+  }
+  return defs
+    .map(g => ({ label: g.label, items: [...buckets.get(g.label).values()] }))
+    .filter(g => g.items.length > 0);
+}
+
 // Look up the provider display name for a canonical alert_type.
 // Used to disambiguate rows like "Roadwork" (Waze vs Traffic).
 function providerNameForAlertType(alertType) {
@@ -2720,6 +2839,26 @@ function providerNameForAlertType(alertType) {
     if ((p.types || []).some(t => t.key === alertType)) return p.name;
   }
   return '';
+}
+
+// Turn a raw subtype enum into a readable chip label. The catalogue mixes
+// SCREAMING_SNAKE_CASE feeds (Waze: ROAD_CLOSED, HAZARD_ON_ROAD_POT_HOLE;
+// Traffic: CRASH, BREAKDOWN) with already-human values (RFS: "Bush Fire",
+// "MVA/Transport"; BOM: "Severe Weather"). Only reformat the shouty ones;
+// leave anything that already reads naturally untouched. The raw value is
+// still what gets stored/filtered — this only changes display text.
+function humanizeSubtype(v) {
+  if (typeof v !== 'string' || !v) return v || '';
+  // Already human: no underscores and contains a lowercase letter
+  // (e.g. "Bush Fire", "MVA/Transport", "overhead line damage").
+  if (!v.includes('_') && /[a-z]/.test(v)) return v;
+  // Title-case each word. We deliberately don't try to preserve short
+  // all-caps tokens as acronyms — in this data the short tokens are plain
+  // words (FOG, POT, CAR, ICE, ON), and the one acronym that matters
+  // ("MVA/Transport") already has lowercase so it hits the guard above.
+  return v.split(/[_\s]+/).filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
 }
 
 function presetFilters(preset) {
@@ -3351,45 +3490,80 @@ function renderFiltersCard(preset) {
             ? `${subtypeSelections[at].size} selected`
             : 'all subtypes';
         };
-        for (const v of opts) {
-          const isSel = subtypeSelections[at].has(v);
+        // One selectable chip covering one or more raw subtype tokens
+        // (grouped chips can merge several tokens under one label, e.g.
+        // "General" → [HAZARD, HAZARD_ON_ROAD]). Active when every token
+        // is selected; clicking adds or removes them as a unit. `orphan`
+        // marks a saved selection that's no longer offered — it removes
+        // itself on click. `label` overrides the display text; the raw
+        // tokens stay in the title.
+        const makeChip = (values, label, orphan) => {
+          const vals = Array.isArray(values) ? values : [values];
+          const isActive = () => vals.every(v => subtypeSelections[at].has(v));
+          const text = (label != null ? label : humanizeSubtype(vals[0])) + (orphan ? ' *' : '');
           const chip = el('button', {
             type: 'button',
-            class: 'chip' + (isSel ? ' active' : ''),
-            style: 'cursor:pointer;font-size:0.72rem;padding:0.2rem 0.55rem;',
-          }, v);
+            class: 'chip subtype-chip' + (isActive() ? ' active' : '') + (orphan ? ' orphan' : ''),
+            title: orphan
+              ? `${vals.join(', ')} — not currently in the data catalogue; click to remove.`
+              : vals.join(', '),
+          }, text);
           chip.onclick = (e) => {
             e.preventDefault();
-            if (subtypeSelections[at].has(v)) {
-              subtypeSelections[at].delete(v);
+            if (isActive()) {
+              for (const v of vals) subtypeSelections[at].delete(v);
               chip.classList.remove('active');
+              if (orphan) chip.remove();
             } else {
-              subtypeSelections[at].add(v);
+              for (const v of vals) subtypeSelections[at].add(v);
               chip.classList.add('active');
             }
             updateSummary();
           };
-          chipBox.appendChild(chip);
+          return chip;
+        };
+
+        const groups = subtypeGroupsFor(catalogue, at);
+        const displayed = new Set();
+        if (groups) {
+          // Grouped (Waze): each main-type class gets a header + its
+          // variant chips. Stack the groups vertically.
+          chipBox.style.flexDirection = 'column';
+          chipBox.style.alignItems = 'stretch';
+          chipBox.style.gap = '0.55rem';
+          for (const g of groups) {
+            const groupChips = el('div', { class: 'subtype-group-chips' });
+            for (const item of g.items) {
+              for (const v of item.values) displayed.add(v);
+              groupChips.appendChild(makeChip(item.values, item.label, false));
+            }
+            chipBox.appendChild(el('div', { class: 'subtype-group' }, [
+              el('div', { class: 'subtype-group-head' }, g.label),
+              groupChips,
+            ]));
+          }
+        } else {
+          // Flat (RFS / BOM / traffic): single wrapped chip row.
+          for (const v of opts) {
+            displayed.add(v);
+            chipBox.appendChild(makeChip([v], null, false));
+          }
         }
-        // Pre-existing selections that aren't in the catalogue (rare —
-        // user previously selected a value that since stopped appearing
-        // in data_history). Surface them as orphan chips so the user
-        // can deselect, but mark them.
-        for (const v of subtypeSelections[at]) {
-          if (!opts.includes(v)) {
-            const chip = el('button', {
-              type: 'button',
-              class: 'chip active',
-              style: 'cursor:pointer;font-size:0.72rem;padding:0.2rem 0.55rem;opacity:0.65;',
-              title: 'Not currently in the data catalogue — click to remove.',
-            }, v + ' *');
-            chip.onclick = (e) => {
-              e.preventDefault();
-              subtypeSelections[at].delete(v);
-              chip.remove();
-              updateSummary();
-            };
-            chipBox.appendChild(chip);
+        // Saved selections not shown above — value aged out of the
+        // catalogue, or a leaked token we now drop (e.g. a JAM_* saved
+        // under waze_hazard before the split). Surface as removable
+        // orphans so nothing stays silently stuck in the filter.
+        const orphans = [...subtypeSelections[at]].filter(v => !displayed.has(v));
+        if (orphans.length) {
+          if (groups) {
+            const orphanChips = el('div', { class: 'subtype-group-chips' });
+            for (const v of orphans) orphanChips.appendChild(makeChip([v], null, true));
+            chipBox.appendChild(el('div', { class: 'subtype-group' }, [
+              el('div', { class: 'subtype-group-head' }, 'Other'),
+              orphanChips,
+            ]));
+          } else {
+            for (const v of orphans) chipBox.appendChild(makeChip([v], null, true));
           }
         }
       }
