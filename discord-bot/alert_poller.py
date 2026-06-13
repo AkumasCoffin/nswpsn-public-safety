@@ -278,34 +278,42 @@ class AlertPoller:
             Filtered list of recent items only (limited), sorted oldest-first
         """
         recent_items = []
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
-        
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=max_age_minutes)
+
         for item in items:
-            props = item.get('properties', {})
+            props = item.get('properties', {}) or {}
             created_str = props.get('created', '')
-            
-            if not created_str:
-                # No timestamp - skip to avoid old data
-                continue
-            
-            try:
-                # Parse ISO timestamp (2025-01-07T14:30:00Z format)
-                created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
-                if created_dt >= cutoff:
-                    recent_items.append((created_dt, item))
-            except (ValueError, TypeError):
-                # Can't parse timestamp - skip
-                continue
-        
-        # Sort by timestamp (oldest first) for chronological posting
+            created_dt = None
+            if created_str:
+                try:
+                    # Parse ISO timestamp (2026-01-07T14:30:00Z format).
+                    created_dt = datetime.fromisoformat(str(created_str).replace('Z', '+00:00'))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    created_dt = None
+
+            if created_dt is None:
+                # No usable timestamp. Waze JAMS routinely lack pubMillis,
+                # so `created` is empty — the old "skip if no timestamp"
+                # rule silently dropped every jam (and any roadwork without
+                # a date). Don't drop them: treat as "now" so they still
+                # post. The first-poll bootstrap + seen-dedup prevent
+                # floods, so an undated alert still only fires once.
+                recent_items.append((now, item))
+            elif created_dt >= cutoff:
+                recent_items.append((created_dt, item))
+            # else: older than the age window — drop (hazard/police path).
+
+        # Sort oldest-first for chronological posting.
         recent_items.sort(key=lambda x: x[0])
-        
-        # Limit to max_items to prevent flooding, take oldest first
+
+        # Cap per cycle to prevent flooding.
         if len(recent_items) > max_items:
             logger.debug(f"  → Limiting Waze from {len(recent_items)} to {max_items} items")
             recent_items = recent_items[:max_items]
-        
-        # Extract just the items (discard timestamps used for sorting)
+
         return [item for _, item in recent_items]
 
     def _cluster_firms(self, features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
