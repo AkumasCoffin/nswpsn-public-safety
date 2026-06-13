@@ -111,9 +111,12 @@ def waze_subtype_labels(alert_type: str, subtype: str):
     Falls back to (None, humanized) for non-Waze / unrecognised tokens.
     """
     defs = _WAZE_SUBTYPE_CLASSES.get(alert_type)
-    token = (subtype or '').strip().upper()
+    # Coerce defensively — the feed *should* hand us a string, but a stray
+    # numeric/None subtype must never raise and sink the whole alert batch.
+    subtype = str(subtype) if subtype not in (None, '') else ''
+    token = subtype.strip().upper()
     if not defs or not token:
-        return (None, humanize_subtype(subtype or ''))
+        return (None, humanize_subtype(subtype))
     match = _waze_match_class(token, defs)
     if not match:
         return (None, humanize_subtype(subtype))
@@ -929,7 +932,8 @@ class EmbedBuilder:
     
     def _build_waze_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
         """Build embed for Waze alerts (hazards, police, roadwork)"""
-        props = data.get('properties', {})
+        data = data or {}
+        props = data.get('properties') or {}
         
         # Get type info
         waze_type = props.get('wazeType', '')
@@ -2937,7 +2941,8 @@ class EmbedBuilder:
     # ---- Waze --------------------------------------------------
     def build_waze_container(self, data: Dict[str, Any], alert_type: str):
         """Components V2 container for Waze hazards / police / roadwork."""
-        props = data.get('properties', {})
+        data = data or {}
+        props = data.get('properties') or {}
         waze_subtype = props.get('wazeSubtype', '')
         display_type = props.get('displayType', '')
         title = strip_html(props.get('title', ''))

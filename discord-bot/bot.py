@@ -1324,9 +1324,20 @@ class NSWPSNBot(commands.Bot):
             primary_incident_guid = None
             primary_incident_status = None
             for it in items:
-                container = self.embed_builder.build_alert_container(
-                    it['alert'], previous_message=it['previous_message'],
-                )
+                # Build per alert inside a guard: a single malformed alert
+                # must never raise out of the loop and drop every other
+                # alert queued for this channel.
+                try:
+                    container = self.embed_builder.build_alert_container(
+                        it['alert'], previous_message=it['previous_message'],
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to build container for %s alert %s — skipping",
+                        (it.get('alert') or {}).get('type'),
+                        (it.get('alert') or {}).get('id'),
+                    )
+                    continue
                 containers.append(container)
                 if primary_incident_guid is None and it['incident_guid']:
                     primary_incident_guid = it['incident_guid']
