@@ -410,10 +410,20 @@ class AlertPoller:
                 batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
                 await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                 items = []
+            elif alert_type in ('waze_jam', 'waze_roadwork'):
+                # Jams and roadwork are lower-volume and frequently
+                # persistent (construction zones, sustained congestion):
+                # their upstream `created` time can be hours/days old, so
+                # the 15-min recency window used for hazards/police would
+                # silently drop every one. Rely on the first-poll bootstrap
+                # + seen-dedup for novelty; keep only the per-cycle cap
+                # (huge age window = no age drop, just the count limit).
+                items = self._filter_recent_waze(items, max_age_minutes=525600, max_items=15)
+                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} after cap (no age limit)")
             elif alert_type.startswith('waze_'):
-                # Steady-state waze still has anti-flood: only alert on
-                # last 15 min, max 5 per cycle. Waze has thousands of
-                # reports; without this it'd dominate every channel.
+                # waze_hazard / waze_police: high-volume, transient reports.
+                # Anti-flood: only alert on last 15 min, max 5 per cycle —
+                # Waze has thousands of these; without it they'd dominate.
                 items = self._filter_recent_waze(items, max_age_minutes=15, max_items=5)
                 logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} recent (last 15min, max 5)")
             else:
@@ -770,9 +780,15 @@ class AlertPoller:
             return out
 
         elif alert_type == 'waze_jam':
-            features = data.get('features', []) or []
-            out = []
-            for f in features:
+            # The /api/waze/hazards response carries jam polylines under a
+            # separate `jams` key (parseWazeJam features); `features` holds
+            # only hazards since the 2026-05-28 JAM→waze_jam ingest split.
+            # Reading `features` here returned nothing, so jam alerts never
+            # fired — pull from `jams` instead.
+            out = list(data.get('jams', []) or [])
+            # Defensive: also catch any JAM-typed alert that lands in
+            # `features` (pre-split / edge data).
+            for f in (data.get('features', []) or []):
                 props = f.get('properties') or {}
                 wtype = (props.get('wazeType')
                          or props.get('displayType')

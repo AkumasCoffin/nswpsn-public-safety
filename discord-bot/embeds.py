@@ -3010,19 +3010,28 @@ class EmbedBuilder:
             footer_bits.append(f"🕐 <t:{int(dt_created.timestamp())}:R>")
 
         geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
+        coords = geometry.get('coordinates') if isinstance(geometry, dict) else None
+        lon = lat = None
+        if isinstance(coords, list) and coords:
+            if isinstance(coords[0], (list, tuple)):
+                # LineString (jams): list of [lon, lat] pairs — use the
+                # midpoint so the map link is a real coordinate, not a pair.
+                mid = coords[len(coords) // 2]
+                if isinstance(mid, (list, tuple)) and len(mid) >= 2:
+                    lon, lat = mid[0], mid[1]
+            elif len(coords) >= 2:
+                # Point: [lon, lat].
                 lon, lat = coords[0], coords[1]
-                layer_map = {
-                    'waze_hazard':   'hazards',
-                    'waze_jam':      'jams',
-                    'waze_police':   'police',
-                    'waze_roadwork': 'roadwork',
-                }
-                layer = layer_map.get(alert_type, 'hazards')
-                map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
-                footer_bits.append(f"[🗺️ Map]({map_url})")
+        if lat is not None and lon is not None:
+            layer_map = {
+                'waze_hazard':   'hazards',
+                'waze_jam':      'jams',
+                'waze_police':   'police',
+                'waze_roadwork': 'roadwork',
+            }
+            layer = layer_map.get(alert_type, 'hazards')
+            map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
+            footer_bits.append(f"[🗺️ Map]({map_url})")
 
         self._append_container_footer(container, footer_bits, source="Waze")
         return container
