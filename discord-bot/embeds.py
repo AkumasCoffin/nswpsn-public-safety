@@ -115,8 +115,14 @@ def waze_subtype_labels(alert_type: str, subtype: str):
     # numeric/None subtype must never raise and sink the whole alert batch.
     subtype = str(subtype) if subtype not in (None, '') else ''
     token = subtype.strip().upper()
-    if not defs or not token:
+    if not defs:
         return (None, humanize_subtype(subtype))
+    if not token:
+        # No token at all (e.g. a jam polyline, or a bare alert). A
+        # single-class type (jam / police / roadwork) still has an
+        # unambiguous class; multi-class waze_hazard can't be resolved
+        # without one, so the caller falls back.
+        return (defs[0][1], '') if len(defs) == 1 else (None, '')
     match = _waze_match_class(token, defs)
     if not match:
         return (None, humanize_subtype(subtype))
@@ -136,6 +142,26 @@ def waze_subtype_labels(alert_type: str, subtype: str):
     if not variant or variant == 'General':
         return (class_label, '')
     return (class_label, variant + suffix)
+
+
+def waze_heading_label(alert_type: str, subtype: str):
+    """One self-descriptive heading for a Waze alert. The subtype already
+    implies the main type, so we show a single combined label instead of a
+    class heading plus a separate "Type" field:
+
+        HAZARD_ON_ROAD_POT_HOLE   -> "Hazard — Pot hole"
+        ACCIDENT_MAJOR            -> "Accident — Major"
+        POLICE_WITH_MOBILE_CAMERA -> "Police — With mobile camera"
+        ACCIDENT (no subtype)     -> "Accident"
+        a jam polyline            -> "Traffic jam"
+
+    Returns None for an unrecognised type/subtype so the caller can fall
+    back to displayType / the generic source label.
+    """
+    cls, variant = waze_subtype_labels(alert_type, subtype)
+    if not cls:
+        return None
+    return f"{cls} — {variant}" if variant else cls
 
 
 def parse_timestamp_to_datetime(ts_value: Any) -> Optional[datetime]:
@@ -966,12 +992,13 @@ class EmbedBuilder:
         }
         type_label = type_labels.get(alert_type, 'Waze Alert')
 
-        # Clean class + variant from the raw subtype (mirrors the dashboard
-        # chips). Heading shows the class; the specific variant moves to the
-        # "Type" field below so neither reads as SCREAMING_SNAKE.
-        class_label, variant = waze_subtype_labels(alert_type, waze_subtype)
-        if class_label:
-            embed_title = f"{icon} {class_label}"
+        # Single subtype-based heading (the subtype already includes the
+        # main type, so we don't show the class separately + a Type field).
+        # Use subtype, falling back to the raw type so a bare ROAD_CLOSED /
+        # ACCIDENT still resolves its class (mirrors the filter token).
+        head = waze_heading_label(alert_type, waze_subtype or waze_type)
+        if head:
+            embed_title = f"{icon} {head}"
         elif display_type and display_type != 'Unknown':
             embed_title = f"{icon} {display_type}"
         else:
@@ -998,9 +1025,6 @@ class EmbedBuilder:
             if loc_parts:
                 embed.add_field(name="📍 Location", value=", ".join(loc_parts)[:1024], inline=False)
         
-        # Alert type details — the cleaned, class-stripped variant.
-        if variant:
-            embed.add_field(name="Type", value=variant, inline=True)
         
         # Reliability score
         if reliability and reliability > 0:
@@ -2944,6 +2968,7 @@ class EmbedBuilder:
         data = data or {}
         props = data.get('properties') or {}
         waze_subtype = props.get('wazeSubtype', '')
+        waze_type = props.get('wazeType', '')
         display_type = props.get('displayType', '')
         title = strip_html(props.get('title', ''))
         street = strip_html(props.get('street', ''))
@@ -2963,11 +2988,12 @@ class EmbedBuilder:
             'waze_roadwork': 'Waze Roadwork',
         }
         type_label = type_labels.get(alert_type, 'Waze Alert')
-        # Cleaned class + variant from the raw subtype (mirrors the dashboard
-        # chips); heading shows the class, variant goes to the meta row below.
-        class_label, variant = waze_subtype_labels(alert_type, waze_subtype)
-        if class_label:
-            heading = f"### {icon} {class_label}"
+        # Single subtype-based heading (the subtype already includes the
+        # main type, so no separate class heading + "Type" meta bit).
+        # Fall back to the raw type so a bare ROAD_CLOSED/ACCIDENT resolves.
+        head = waze_heading_label(alert_type, waze_subtype or waze_type)
+        if head:
+            heading = f"### {icon} {head}"
         elif display_type and display_type != 'Unknown':
             heading = f"### {icon} {display_type}"
         else:
@@ -2993,8 +3019,6 @@ class EmbedBuilder:
                 ))
 
         meta_bits = []
-        if variant:
-            meta_bits.append(f"Type: {variant}")
         if reliability and reliability > 0:
             meta_bits.append(f"Reliability: {min(100, reliability)}%")
         if thumbs_up and thumbs_up > 0:
