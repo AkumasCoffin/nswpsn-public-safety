@@ -277,7 +277,9 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
       rfs              → properties.fireType   ("Bush Fire", "Grass Fire", "MVA/Transport", ...)
       bom_*            → warningType           ("Flood", "Severe Weather", "Wind", ...)
       traffic_*        → properties.incidentType  ("CRASH", "BREAKDOWN", "BUSHFIRE", ...)
-      waze_*           → subtype                  ("HAZARD_WEATHER_FOG", "POLICE_HIDING", ...)
+      waze_*           → properties.wazeSubtype, else properties.wazeType
+                         ("HAZARD_WEATHER_FOG", "POLICE_HIDING", "ACCIDENT_MAJOR",
+                         or the bare type "ACCIDENT" when there's no subtype)
       user_incident    → category
     For unsupported types, returns None — subtype_filters has no effect on them.
     """
@@ -300,7 +302,20 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
         props = alert_data.get('properties') or {}
         return (str(props.get('incidentType') or '').strip()) or None
     if alert_type and alert_type.startswith('waze_'):
-        raw = alert_data.get('subtype') or alert_data.get('type')
+        # The poller passes the GeoJSON feature, whose raw Waze type/subtype
+        # live under properties.wazeType / properties.wazeSubtype — the
+        # feature's top-level `type` is the literal "Feature" and there is no
+        # top-level `subtype`. Mirror the ingest's
+        # `subcategory = rawSubtype || rawType` (api/waze-ingest.ts) so the
+        # token matches the catalogue values the dashboard whitelists
+        # (ACCIDENT, ACCIDENT_MAJOR, POLICE_VISIBLE, HAZARD_ON_ROAD_POT_HOLE…).
+        props = alert_data.get('properties') or {}
+        raw = props.get('wazeSubtype') or props.get('wazeType')
+        if not raw:
+            # Fallback for a raw-alert shape (top-level type/subtype); never
+            # emit the GeoJSON literal "Feature" as a token.
+            t = alert_data.get('type')
+            raw = alert_data.get('subtype') or (t if t != 'Feature' else None)
         return (str(raw or '').strip()) or None
     if alert_type == 'user_incident':
         raw = alert_data.get('category') or alert_data.get('type')
