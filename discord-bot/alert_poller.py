@@ -410,22 +410,20 @@ class AlertPoller:
                 batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
                 await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                 items = []
-            elif alert_type in ('waze_jam', 'waze_roadwork'):
-                # Jams and roadwork are lower-volume and frequently
-                # persistent (construction zones, sustained congestion):
-                # their upstream `created` time can be hours/days old, so
-                # the 15-min recency window used for hazards/police would
-                # silently drop every one. Rely on the first-poll bootstrap
-                # + seen-dedup for novelty; keep only the per-cycle cap
-                # (huge age window = no age drop, just the count limit).
-                items = self._filter_recent_waze(items, max_age_minutes=525600, max_items=15)
-                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} after cap (no age limit)")
             elif alert_type.startswith('waze_'):
-                # waze_hazard / waze_police: high-volume, transient reports.
-                # Anti-flood: only alert on last 15 min, max 5 per cycle —
-                # Waze has thousands of these; without it they'd dominate.
-                items = self._filter_recent_waze(items, max_age_minutes=15, max_items=5)
-                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} recent (last 15min, max 5)")
+                # All Waze types: do NOT drop by upstream `created` age.
+                # Persistent alerts — road closures and weather hazards
+                # (waze_hazard), construction (waze_roadwork), sustained
+                # jams (waze_jam) — carry created times hours/days old, so
+                # the old 15-min window silently dropped every one. The
+                # first-poll bootstrap (marks everything seen, no alert) +
+                # seen-dedup (each alert fires once) already prevent floods;
+                # we keep only a per-cycle cap so a burst can't dominate a
+                # channel in one cycle. Higher cap for the chattier
+                # hazard/police feeds; lower volume otherwise.
+                cap = 8 if alert_type in ('waze_hazard', 'waze_police') else 15
+                items = self._filter_recent_waze(items, max_age_minutes=525600, max_items=cap)
+                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} after cap (no age limit)")
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
 
