@@ -102,6 +102,32 @@ describe('filterCache', () => {
     expect(police?.count).toBe(2);
   });
 
+  it('routes JAM-typed waze alert points to waze_jam, not waze_hazard', () => {
+    // Bbox-keyed 'waze' snapshot exercises the wazeAlertType classifier.
+    // A JAM-typed alert point must count under waze_jam (alongside jam
+    // polylines), never inflate the Hazards bucket — mirrors the ingest
+    // split so the live facets match the DB-backed catalogue.
+    liveStore.set('waze', {
+      bboxes: {
+        '0': {
+          alerts: [
+            { uuid: 'a1', type: 'JAM', subtype: 'JAM_HEAVY_TRAFFIC' },
+            { uuid: 'a2', type: 'HAZARD', subtype: 'HAZARD_ON_ROAD_POT_HOLE' },
+            { uuid: 'a3', type: 'ACCIDENT' },
+          ],
+          jams: [{ uuid: 'j1' }],
+        },
+      },
+    });
+    const waze = findProvider(getFilterFacetsLive(), 'waze');
+    // waze_jam = 1 JAM-typed alert point + 1 jam polyline.
+    expect(findType(waze, 'waze_jam')?.count).toBe(2);
+    // waze_hazard = HAZARD + ACCIDENT only; the JAM alert is excluded.
+    expect(findType(waze, 'waze_hazard')?.count).toBe(2);
+    const hazardSubs = findType(waze, 'waze_hazard')?.subcategories.map((s) => s.value) ?? [];
+    expect(hazardSubs).not.toContain('JAM_HEAVY_TRAFFIC');
+  });
+
   it('case-insensitively merges duplicate values, preserving the dominant casing', () => {
     // Include a second category so the merged dim has ≥2 entries and
     // doesn't get dropped by the trivial-dim filter in buildResponse
