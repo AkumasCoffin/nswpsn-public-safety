@@ -145,13 +145,14 @@ def waze_subtype_labels(alert_type: str, subtype: str):
 
 
 def waze_heading_label(alert_type: str, subtype: str):
-    """One heading for a Waze alert, leading with the SUBTYPE (the most
-    informative part) and falling back to the main type when no subtype
-    was supplied. Same rule for every Waze type:
+    """One heading for a Waze alert: the full subtype (type word kept +
+    the detail), falling back to just the main type when no subtype was
+    supplied. Same rule for every Waze type:
 
-        HAZARD_ON_ROAD_POT_HOLE   -> "Pot Hole"
-        ACCIDENT_MAJOR            -> "Major"
-        POLICE_WITH_MOBILE_CAMERA -> "With Mobile Camera"
+        POLICE_HIDING             -> "Police Hiding"
+        POLICE_WITH_MOBILE_CAMERA -> "Police With Mobile Camera"
+        ACCIDENT_MAJOR            -> "Accident Major"
+        HAZARD_ON_ROAD_POT_HOLE   -> "Hazard Pot Hole"
         ACCIDENT (no subtype)     -> "Accident"     (type fallback)
         ROAD_CLOSED (no subtype)  -> "Road closure" (type fallback)
         a jam polyline            -> "Traffic jam"  (type fallback)
@@ -162,7 +163,7 @@ def waze_heading_label(alert_type: str, subtype: str):
     cls, variant = waze_subtype_labels(alert_type, subtype)
     if not cls:
         return None
-    return variant or cls
+    return f"{cls} {variant}" if variant else cls
 
 
 def parse_timestamp_to_datetime(ts_value: Any) -> Optional[datetime]:
