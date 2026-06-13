@@ -578,7 +578,12 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   // For the single-table fast path the outer plan applies LIMIT/OFFSET
   // directly. Here we always pass through both — the buildPlan helper
   // decides which path to use.
-  const fetchSize = p.cursor ? p.limit : p.offset + p.limit;
+  // Fetch ONE row beyond the page so the route can tell "exactly a full
+  // page" (no more) from "a full page with more behind it" and only emit
+  // a next_cursor when another row provably exists. (The unique=1 path
+  // below has its own cteLimit headroom, so this only affects the
+  // non-unique SELECT.)
+  const fetchSize = (p.cursor ? p.limit : p.offset + p.limit) + 1;
   const limitClause = `LIMIT $${acc.params.length + 1}`;
   acc.params.push(fetchSize);
 

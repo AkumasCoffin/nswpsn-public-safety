@@ -85,8 +85,10 @@ describe('buildSqlForTable — basics', () => {
     // Only the implicit deprecated-source NOT IN filter is present.
     expect(q.sql).toContain('source NOT IN');
     expect(q.sql).toMatch(/ORDER BY fetched_at DESC, id DESC/);
-    // Params: deprecated source name + LIMIT placeholder for offset+limit=100.
-    expect(q.params[q.params.length - 1]).toBe(100);
+    // Params: deprecated source name + LIMIT placeholder. fetchSize is
+    // offset+limit (0+100) PLUS one sentinel row used to detect a further
+    // page, so the LIMIT is 101.
+    expect(q.params[q.params.length - 1]).toBe(101);
   });
 
   it('honours include_data flag', () => {
