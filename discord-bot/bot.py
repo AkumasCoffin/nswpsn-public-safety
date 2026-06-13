@@ -1083,6 +1083,14 @@ class NSWPSNBot(commands.Bot):
         import aiohttp
         sent = 0
         errors = []
+
+        async def _send_container(cont):
+            # Send via a Components-V2 LayoutView (same path as live alerts)
+            # so the map link renders as a Link Button, not markdown.
+            view = discord.ui.LayoutView(timeout=None)
+            view.add_item(cont)
+            await channel.send(view=view)
+
         if atype == 'all':
             types_to_fetch = list(self.poller.endpoints.keys()) + ['pager', 'user_incident', 'radio_summary']
         else:
@@ -1116,8 +1124,7 @@ class NSWPSNBot(commands.Bot):
                     for msg in messages[:3]:
                         parsed = self.poller._format_api_pager(msg)
                         if parsed:
-                            embed = self.embed_builder.build_pager_embed(parsed)
-                            await channel.send(embed=embed)
+                            await _send_container(self.embed_builder.build_pager_container(parsed))
                             sent += 1
                             await asyncio.sleep(0.5)
                     if not messages:
@@ -1126,8 +1133,7 @@ class NSWPSNBot(commands.Bot):
                     incidents = await self.poller._fetch_user_incidents()
                     for inc in incidents[:3]:
                         alert = {'type': 'user_incident', 'data': inc}
-                        embed = self.embed_builder.build_alert_embed(alert)
-                        await channel.send(embed=embed)
+                        await _send_container(self.embed_builder.build_alert_container(alert))
                         sent += 1
                         await asyncio.sleep(0.5)
                     if not incidents:
@@ -1144,8 +1150,7 @@ class NSWPSNBot(commands.Bot):
                     items = self.poller._extract_items(t, data)
                     for item in items[:2]:
                         alert = {'type': t, 'data': item}
-                        embed = self.embed_builder.build_alert_embed(alert)
-                        await channel.send(embed=embed)
+                        await _send_container(self.embed_builder.build_alert_container(alert))
                         sent += 1
                         await asyncio.sleep(0.5)
                     if not items:
