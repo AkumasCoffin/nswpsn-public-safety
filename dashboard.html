@@ -2772,10 +2772,14 @@ function _matchSubtypeGroup(token, defs) {
 // variants don't collide (ON_ROAD → "Car stopped", ON_SHOULDER → "Car
 // stopped (shoulder)"). A bare qualifier keeps its own label ("On road",
 // "Weather").
+// `bare` is the label when the token is exactly the qualifier with nothing
+// after it. ON_ROAD is the default road context, so a bare HAZARD_ON_ROAD
+// is just a generic hazard → "General" (it then merges with the bare
+// HAZARD chip, see subtypeGroupsFor). The others stay meaningful.
 const _SUBTYPE_QUALIFIERS = [
-  { prefix: 'ON_ROAD',     suffix: '' },
-  { prefix: 'ON_SHOULDER', suffix: ' (shoulder)' },
-  { prefix: 'WEATHER',     suffix: '' },
+  { prefix: 'ON_ROAD',     suffix: '',            bare: 'General' },
+  { prefix: 'ON_SHOULDER', suffix: ' (shoulder)', bare: 'On shoulder' },
+  { prefix: 'WEATHER',     suffix: '',            bare: 'Weather' },
 ];
 
 // Once a chip lives under its class header, the class prefix is redundant
@@ -2793,7 +2797,7 @@ function _subtypeChipLabel(token, key) {
   let rest = token.startsWith(key + '_') ? token.slice(key.length + 1) : token;
   let suffix = '';
   for (const q of _SUBTYPE_QUALIFIERS) {
-    if (rest === q.prefix) return humanizeSubtype(rest);   // bare qualifier
+    if (rest === q.prefix) return q.bare;   // bare qualifier
     if (rest.startsWith(q.prefix + '_')) {
       rest = rest.slice(q.prefix.length + 1);
       suffix = q.suffix;
@@ -2804,22 +2808,27 @@ function _subtypeChipLabel(token, key) {
 }
 
 // Given the catalogue + alert_type, return ordered subtype groups
-//   [{ label, items: [{ value, label }, ...] }, ...]
+//   [{ label, items: [{ values: [token, ...], label }, ...] }, ...]
 // or null when the type has no grouping config (caller renders flat).
-// `value` is the raw token (stored/filtered); `label` is the cleaned,
-// prefix-stripped display text. Empty groups are omitted; items keep
-// catalogue (count-desc) order.
+// `values` are the raw tokens (stored/filtered); `label` is the cleaned
+// display text. Tokens that clean to the SAME label within a group merge
+// into one chip (e.g. HAZARD + HAZARD_ON_ROAD both → "General"), so one
+// click whitelists every underlying token. Empty groups are omitted;
+// items keep catalogue (count-desc) order of first appearance.
 function subtypeGroupsFor(catalogue, alertType) {
   const defs = _SUBTYPE_GROUP_DEFS[alertType];
   if (!defs) return null;
-  const buckets = new Map(defs.map(g => [g.label, []]));
+  const buckets = new Map(defs.map(g => [g.label, new Map()]));   // label -> (chipLabel -> {values,label})
   for (const v of subtypeOptionsFor(catalogue, alertType)) {
     const m = _matchSubtypeGroup(v, defs);
-    if (m) buckets.get(m.group.label).push({ value: v, label: _subtypeChipLabel(v, m.key) });
-    // else: unowned token (e.g. JAM_* under waze_hazard) — dropped.
+    if (!m) continue;   // unowned token (e.g. JAM_* under waze_hazard) — dropped
+    const items = buckets.get(m.group.label);
+    const label = _subtypeChipLabel(v, m.key);
+    if (items.has(label)) items.get(label).values.push(v);
+    else items.set(label, { values: [v], label });
   }
   return defs
-    .map(g => ({ label: g.label, items: buckets.get(g.label) }))
+    .map(g => ({ label: g.label, items: [...buckets.get(g.label).values()] }))
     .filter(g => g.items.length > 0);
 }
 
@@ -3481,29 +3490,32 @@ function renderFiltersCard(preset) {
             ? `${subtypeSelections[at].size} selected`
             : 'all subtypes';
         };
-        // One selectable chip for a subtype token. `orphan` marks a saved
-        // selection that's no longer offered (aged out, or a dropped leak)
-        // — it removes itself on click instead of just toggling off.
-        // `label` overrides the display text (grouped chips pass the
-        // prefix-stripped label); the raw token stays in the title.
-        const makeChip = (v, orphan, label) => {
-          const text = (label != null ? label : humanizeSubtype(v)) + (orphan ? ' *' : '');
+        // One selectable chip covering one or more raw subtype tokens
+        // (grouped chips can merge several tokens under one label, e.g.
+        // "General" → [HAZARD, HAZARD_ON_ROAD]). Active when every token
+        // is selected; clicking adds or removes them as a unit. `orphan`
+        // marks a saved selection that's no longer offered — it removes
+        // itself on click. `label` overrides the display text; the raw
+        // tokens stay in the title.
+        const makeChip = (values, label, orphan) => {
+          const vals = Array.isArray(values) ? values : [values];
+          const isActive = () => vals.every(v => subtypeSelections[at].has(v));
+          const text = (label != null ? label : humanizeSubtype(vals[0])) + (orphan ? ' *' : '');
           const chip = el('button', {
             type: 'button',
-            class: 'chip subtype-chip' + (subtypeSelections[at].has(v) ? ' active' : '')
-              + (orphan ? ' orphan' : ''),
+            class: 'chip subtype-chip' + (isActive() ? ' active' : '') + (orphan ? ' orphan' : ''),
             title: orphan
-              ? `${v} — not currently in the data catalogue; click to remove.`
-              : v,
+              ? `${vals.join(', ')} — not currently in the data catalogue; click to remove.`
+              : vals.join(', '),
           }, text);
           chip.onclick = (e) => {
             e.preventDefault();
-            if (subtypeSelections[at].has(v)) {
-              subtypeSelections[at].delete(v);
+            if (isActive()) {
+              for (const v of vals) subtypeSelections[at].delete(v);
               chip.classList.remove('active');
               if (orphan) chip.remove();
             } else {
-              subtypeSelections[at].add(v);
+              for (const v of vals) subtypeSelections[at].add(v);
               chip.classList.add('active');
             }
             updateSummary();
@@ -3522,8 +3534,8 @@ function renderFiltersCard(preset) {
           for (const g of groups) {
             const groupChips = el('div', { class: 'subtype-group-chips' });
             for (const item of g.items) {
-              displayed.add(item.value);
-              groupChips.appendChild(makeChip(item.value, false, item.label));
+              for (const v of item.values) displayed.add(v);
+              groupChips.appendChild(makeChip(item.values, item.label, false));
             }
             chipBox.appendChild(el('div', { class: 'subtype-group' }, [
               el('div', { class: 'subtype-group-head' }, g.label),
@@ -3534,7 +3546,7 @@ function renderFiltersCard(preset) {
           // Flat (RFS / BOM / traffic): single wrapped chip row.
           for (const v of opts) {
             displayed.add(v);
-            chipBox.appendChild(makeChip(v, false));
+            chipBox.appendChild(makeChip([v], null, false));
           }
         }
         // Saved selections not shown above — value aged out of the
@@ -3545,13 +3557,13 @@ function renderFiltersCard(preset) {
         if (orphans.length) {
           if (groups) {
             const orphanChips = el('div', { class: 'subtype-group-chips' });
-            for (const v of orphans) orphanChips.appendChild(makeChip(v, true));
+            for (const v of orphans) orphanChips.appendChild(makeChip([v], null, true));
             chipBox.appendChild(el('div', { class: 'subtype-group' }, [
               el('div', { class: 'subtype-group-head' }, 'Other'),
               orphanChips,
             ]));
           } else {
-            for (const v of orphans) chipBox.appendChild(makeChip(v, true));
+            for (const v of orphans) chipBox.appendChild(makeChip([v], null, true));
           }
         }
       }
