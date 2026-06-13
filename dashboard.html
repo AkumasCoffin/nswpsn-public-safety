@@ -1846,6 +1846,9 @@ function discordColorToHex(color) {
 function render() {
   renderTopbar();
   const root = qs('app-root');
+  // Tear down any live geofilter maps before wiping the DOM, so their
+  // Leaflet instances + window listeners don't leak across re-renders.
+  destroyGeofilterMaps();
   if (!state.user) {
     root.innerHTML = '';
     root.appendChild(renderAuthCard());
@@ -2932,8 +2935,21 @@ function filtersSummary(preset) {
    - ring    — click center, drag to set radius, release to commit.
    - polygon — click to add vertices (3+); "Finish" commits.
 */
+// Live geofilter map instances, so render() can tear them down before it
+// wipes #app-root. Each makeGeofilterMap binds window-level listeners and a
+// Leaflet map; without an explicit teardown they'd leak (orphaned map +
+// duplicate global listeners) on every re-render.
+const _geofilterMaps = new Set();
+function destroyGeofilterMaps() {
+  for (const m of Array.from(_geofilterMaps)) {
+    try { m.destroy(); } catch (e) { /* ignore */ }
+  }
+  _geofilterMaps.clear();
+}
+
 function makeGeofilterMap(preset, initialGeofilter) {
   const mapId = 'bbox-map-' + preset.id + '-' + Math.random().toString(36).slice(2, 7);
+  const _cleanup = [];   // teardown thunks (window listeners); run by destroy()
   const hint = el('div', { class: 'bbox-map-hint' }, '');
   const mapDiv = el('div', { class: 'bbox-map', id: mapId }, [hint]);
   const coords = el('div', { class: 'bbox-coords' });
@@ -3254,11 +3270,15 @@ function makeGeofilterMap(preset, initialGeofilter) {
       const ctrl = !!(e.ctrlKey || e.metaKey);
       setCtrlPan(ctrl && drawMode);
     };
+    const onBlur = () => setCtrlPan(false);
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
     // Reset on blur — if the user alt-tabs while holding Ctrl, the keyup
     // event won't fire and the map would be stuck in pan mode.
-    window.addEventListener('blur', () => setCtrlPan(false));
+    window.addEventListener('blur', onBlur);
+    _cleanup.push(() => window.removeEventListener('keydown', onKey));
+    _cleanup.push(() => window.removeEventListener('keyup', onKey));
+    _cleanup.push(() => window.removeEventListener('blur', onBlur));
 
     setTimeout(() => { if (map) map.invalidateSize(); }, 120);
   }
@@ -3303,9 +3323,10 @@ function makeGeofilterMap(preset, initialGeofilter) {
       }
     });
     ro.observe(mapDiv);
+    _cleanup.push(() => ro.disconnect());
   }
 
-  return {
+  const api = {
     dom: wrap,
     get: () => current ? JSON.parse(JSON.stringify(current)) : null,
     set: (gf) => {
@@ -3330,7 +3351,17 @@ function makeGeofilterMap(preset, initialGeofilter) {
       }
     },
     invalidate: () => { if (map) map.invalidateSize(); },
+    // Remove window listeners + the Leaflet map. Called by
+    // destroyGeofilterMaps() before render() wipes the DOM.
+    destroy: () => {
+      for (const fn of _cleanup) { try { fn(); } catch (e) { /* ignore */ } }
+      _cleanup.length = 0;
+      _geofilterMaps.delete(api);
+      if (map) { try { map.remove(); } catch (e) { /* ignore */ } map = null; }
+    },
   };
+  _geofilterMaps.add(api);
+  return api;
 }
 
 function renderFiltersCard(preset) {
