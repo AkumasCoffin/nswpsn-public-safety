@@ -225,6 +225,23 @@ def _alert_lat_lng(alert_type: str, alert_data: dict):
                 return (None, None)
         return (None, None)
 
+    # FIRMS hotspots: coords live in properties.latitude/longitude, with a
+    # snapped cluster_glat/glon fallback set by the clusterer.
+    if alert_type == 'firms':
+        props = alert_data.get('properties') or {}
+        lat = props.get('latitude')
+        lng = props.get('longitude')
+        if lat is None:
+            lat = props.get('cluster_glat')
+        if lng is None:
+            lng = props.get('cluster_glon')
+        try:
+            if lat is not None and lng is not None:
+                return (float(lat), float(lng))
+        except (TypeError, ValueError):
+            pass
+        return (None, None)
+
     # User incidents store lat/lng at top level.
     if alert_type == 'user_incident':
         try:
@@ -453,9 +470,12 @@ def preset_alert_matches(preset: dict, alert_type: str, alert_data: dict) -> boo
         gf = {'type': 'bbox', **f['bbox']}
     if isinstance(gf, dict):
         lat, lng = _alert_lat_lng(alert_type, alert_data)
-        if lat is None or lng is None:
-            return False
-        if not _geofilter_contains(gf, lat, lng):
+        # Pass-through when the alert has no coordinates — same policy as
+        # the severity/subtype gates above. A geofilter can't meaningfully
+        # test a location-less alert (e.g. state-wide BOM warnings, which
+        # have no point geometry), so don't silently drop every such alert
+        # just because a region was set on the preset.
+        if lat is not None and lng is not None and not _geofilter_contains(gf, lat, lng):
             return False
 
     return True
