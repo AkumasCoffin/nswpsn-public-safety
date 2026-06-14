@@ -658,6 +658,23 @@ class NSWPSNBot(commands.Bot):
         self._permission_error_channels[channel_id] = now
         return should_log
 
+    def _describe_channel(self, channel, channel_id: int) -> str:
+        """Human-readable '#channel in "Guild" (id)' for log messages.
+
+        Falls back progressively when names aren't available (e.g. a
+        deleted channel on a 404): channel arg → cache lookup → bare id.
+        """
+        ch = channel if channel is not None else self.get_channel(channel_id)
+        if ch is not None:
+            ch_name = getattr(ch, 'name', None)
+            guild = getattr(ch, 'guild', None)
+            guild_name = getattr(guild, 'name', None)
+            if ch_name and guild_name:
+                return f'#{ch_name} in "{guild_name}" ({channel_id})'
+            if ch_name:
+                return f'#{ch_name} ({channel_id})'
+        return f'channel {channel_id}'
+
     async def setup_hook(self):
         """Called when the bot is starting up"""
         logger.info("Setting up bot...")
@@ -888,14 +905,16 @@ class NSWPSNBot(commands.Bot):
                     # events still run their own cleanup paths.
                     if self._record_send_error(channel_id):
                         logger.warning(
-                            f"Channel {channel_id} returned 404 (preset {config_id}) — "
-                            f"channel may be deleted or inaccessible. Not auto-removing; "
-                            f"delete the preset from the dashboard if permanent."
+                            f"{self._describe_channel(channel, channel_id)} returned 404 "
+                            f"(preset {config_id}) — channel may be deleted or inaccessible. "
+                            f"Not auto-removing; delete the preset from the dashboard if permanent."
                         )
                 except discord.Forbidden:
                     # Debounce permission error logging to reduce spam
                     if self._record_send_error(channel_id):
-                        logger.warning(f"No permission to send to channel {channel_id}")
+                        logger.warning(
+                            f"No permission to send to {self._describe_channel(channel, channel_id)}"
+                        )
                 except discord.HTTPException as e:
                     if e.status == 429:  # Rate limited
                         logger.warning(f"Rate limited, re-queuing message")
