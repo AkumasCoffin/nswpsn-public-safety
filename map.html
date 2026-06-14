@@ -813,6 +813,20 @@
       #sidebar-map-filters-slot .weather-panel.sidebar-filter-hidden {
         display: none !important;
       }
+      /* AIS vessel list: render inline in the sidebar (not a floating map
+         overlay) on mobile. Visible only while open (i.e. AIS layer on). */
+      #sidebar-map-filters-slot .ais-list-panel {
+        position: relative !important;
+        top: auto !important; right: auto !important; left: auto !important; bottom: auto !important;
+        transform: none !important;
+        width: 100% !important;
+        max-width: none !important;
+        max-height: 50vh !important;
+        margin-bottom: 1rem;
+        z-index: auto !important;
+      }
+      #sidebar-map-filters-slot .ais-list-panel:not(.open) { display: none !important; }
+      #sidebar-map-filters-slot .ais-list-panel.open { display: flex !important; }
       #sidebar-map-filters-slot .filter-panel::before,
       #sidebar-map-filters-slot .weather-panel::before {
         display: none;
@@ -2164,6 +2178,23 @@
         <label><input type="checkbox" id="chk-ais-st-other" checked onchange="toggleAisStatus('other', this.checked)" style="accent-color:#0284c7;"> Other</label>
         <div id="ais-status-line" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;">No vessels loaded yet.</div>
       </div>
+      <!-- AIS vessel list — kept INSIDE this wrapper so it relocates into the
+           mobile sidebar instead of overlaying the map. On desktop the wrapper
+           stays in .map-container and .ais-list-panel keeps its floating
+           overlay positioning; the sidebar override CSS makes it inline on
+           mobile. Populated/refreshed by aisListRender(). -->
+      <div class="ais-list-panel" id="ais-list-panel">
+        <div class="ais-list-header">
+          <i class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
+          <h4>AIS Vessels</h4>
+          <span class="ais-list-count" id="ais-list-count">0</span>
+          <button class="ais-list-close" onclick="closeAisListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ais-list-search">
+          <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="aisListOnSearch(this.value)">
+        </div>
+        <div class="ais-list-body" id="ais-list-body"></div>
+      </div>
       </div><!-- /map-filters-for-sidebar -->
 
       <div class="map-type-controls">
@@ -2240,21 +2271,6 @@
         </div>
       </div>
 
-      <!-- Floating list of AIS vessels currently visible in the map view.
-           Populated/refreshed by aisListRender() whenever the AIS data
-           or filters or map bounds change. -->
-      <div class="ais-list-panel" id="ais-list-panel">
-        <div class="ais-list-header">
-          <i class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
-          <h4>AIS Vessels</h4>
-          <span class="ais-list-count" id="ais-list-count">0</span>
-          <button class="ais-list-close" onclick="closeAisListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        <div class="ais-list-search">
-          <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="aisListOnSearch(this.value)">
-        </div>
-        <div class="ais-list-body" id="ais-list-body"></div>
-      </div>
     </div>
   </main>
 
