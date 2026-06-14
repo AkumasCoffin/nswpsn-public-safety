@@ -659,10 +659,13 @@ class NSWPSNBot(commands.Bot):
         return should_log
 
     def _describe_channel(self, channel, channel_id: int) -> str:
-        """Human-readable '#channel in "Guild" (id)' for log messages.
+        """Human-readable '#channel in "Guild" (owner: …, channel id)' for
+        log messages.
 
         Falls back progressively when names aren't available (e.g. a
         deleted channel on a 404): channel arg → cache lookup → bare id.
+        The owner name needs the member cached; otherwise we show the
+        owner id, which the guild always carries.
         """
         ch = channel if channel is not None else self.get_channel(channel_id)
         if ch is not None:
@@ -670,7 +673,18 @@ class NSWPSNBot(commands.Bot):
             guild = getattr(ch, 'guild', None)
             guild_name = getattr(guild, 'name', None)
             if ch_name and guild_name:
-                return f'#{ch_name} in "{guild_name}" ({channel_id})'
+                owner = getattr(guild, 'owner', None)
+                owner_id = getattr(guild, 'owner_id', None)
+                owner_name = getattr(owner, 'name', None) or getattr(owner, 'display_name', None)
+                if owner_name and owner_id:
+                    owner_str = f'{owner_name} ({owner_id})'
+                elif owner_name:
+                    owner_str = owner_name
+                elif owner_id:
+                    owner_str = f'id {owner_id}'
+                else:
+                    owner_str = 'unknown'
+                return f'#{ch_name} in "{guild_name}" (owner: {owner_str}, channel {channel_id})'
             if ch_name:
                 return f'#{ch_name} ({channel_id})'
         return f'channel {channel_id}'
