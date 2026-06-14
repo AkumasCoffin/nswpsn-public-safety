@@ -117,19 +117,23 @@
       .map-type-controls { bottom: 20px; left: 10px; }
       .map-type-controls .btn-toggle { font-size: 0.7rem; padding: 5px 10px; }
       
-      /* Move zoom controls below layer toggles on mobile */
-      .leaflet-top.leaflet-left {
+      /* Zoom control is top-RIGHT (added with position:'topright'), so push
+         the right column — not the empty left one — below the full-width
+         layer-toggles bar on mobile. */
+      .leaflet-top.leaflet-left,
+      .leaflet-top.leaflet-right {
         top: 55px !important;
       }
     }
-    
+
     @media (max-width: 480px) {
       .layer-toggles { padding: 6px 8px; gap: 4px; }
       .btn-toggle { font-size: 0.62rem; padding: 4px 6px; gap: 4px; }
       .dot-indicator { width: 5px; height: 5px; min-width: 5px; min-height: 5px; }
       
-      /* Move zoom controls further down on smaller screens */
-      .leaflet-top.leaflet-left {
+      /* Smaller screens: the toggles bar is a touch shorter. */
+      .leaflet-top.leaflet-left,
+      .leaflet-top.leaflet-right {
         top: 50px !important;
       }
     }
