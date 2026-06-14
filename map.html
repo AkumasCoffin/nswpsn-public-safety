@@ -1996,6 +1996,14 @@
         <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')"><span class="dot-indicator" style="background:#14b8a6;"></span> Repeaters</button>
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')"><span class="dot-indicator" style="background:#0284c7;"></span> AIS Ships</button>
       </div>
+      <!-- Mobile settings backdrop -->
+      <div class="settings-backdrop" id="settings-backdrop"></div>
+      <!-- Filter panels wrapper - moved to sidebar on mobile -->
+      <div id="map-filters-for-sidebar">
+      <!-- Fire Hotspots satellite filter — kept INSIDE this wrapper so it
+           relocates into the mobile sidebar with the other panels instead
+           of overlaying the map. Desktop hides it via the media query and
+           renders the firms filter in the floating panel instead. -->
       <div id="firms-controls" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid rgba(249,115,22,0.35);border-radius:8px;background:rgba(20,12,4,0.55);">
         <div style="font-size:10px;color:#fdba74;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;font-weight:600;">
           <i class="fa-solid fa-satellite" style="margin-right:5px;"></i>Satellite filter
@@ -2011,10 +2019,6 @@
         </label>
         <div id="firms-source-status" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;"></div>
       </div>
-      <!-- Mobile settings backdrop -->
-      <div class="settings-backdrop" id="settings-backdrop"></div>
-      <!-- Filter panels wrapper - moved to sidebar on mobile -->
-      <div id="map-filters-for-sidebar">
       <!-- Weather Panel -->
       <div class="weather-panel" id="weather-panel">
         <h4>🌦️ Weather Layers</h4>
