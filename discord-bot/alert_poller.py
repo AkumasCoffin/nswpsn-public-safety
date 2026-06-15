@@ -262,20 +262,25 @@ class AlertPoller:
         # Fallback to current time
         return datetime.now(timezone.utc)
     
-    def _filter_recent_waze(self, items: List[Dict[str, Any]], max_age_minutes: int = 15, max_items: int = 5) -> List[Dict[str, Any]]:
-        """Filter Waze items to only include very recent reports.
-        
-        Waze has thousands of active reports at any time. This filter ensures
-        we only alert on truly new reports (last 15 minutes) and limits the
-        number per poll cycle to prevent spam.
-        
+    def _filter_recent_waze(self, items: List[Dict[str, Any]], max_age_minutes: int = 15, max_items: int = 0) -> List[Dict[str, Any]]:
+        """Order Waze items for posting (and optionally bound them).
+
+        Novelty is handled by seen-dedup + the first-poll bootstrap, so by
+        default this emits EVERY item, just sorted oldest-first for
+        chronological posting (and treating undated items — e.g. jams with
+        no pubMillis — as "now" so they aren't lost).
+
         Args:
             items: List of Waze GeoJSON features
-            max_age_minutes: Maximum age in minutes to include (default 15)
-            max_items: Maximum items to return per cycle (default 5)
-        
+            max_age_minutes: Drop items whose `created` is older than this.
+                The callers pass a huge value (effectively no age limit) so
+                persistent jams/roadwork/closures still post.
+            max_items: Optional per-cycle cap. 0 (default) = no cap, emit
+                everything. When >0, keep the NEWEST max_items so new alerts
+                aren't starved by stale ones.
+
         Returns:
-            Filtered list of recent items only (limited), sorted oldest-first
+            Items sorted oldest-first.
         """
         recent_items = []
         now = datetime.now(timezone.utc)
@@ -306,18 +311,14 @@ class AlertPoller:
                 recent_items.append((created_dt, item))
             # else: older than the age window — drop (hazard/police path).
 
-        # Cap per cycle to prevent flooding — keep the NEWEST max_items, not
-        # the oldest. With no age limit the pool is every active alert, so
-        # taking the oldest returned the same stale, already-seen items every
-        # cycle and starved brand-new alerts: the cap happens before the
-        # unseen check, so new (newer) hazards/police never got looked at and
-        # never fired. Select newest, then re-sort oldest-first so the batch
-        # still posts chronologically.
-        if len(recent_items) > max_items:
+        # Optional per-cycle cap. 0 = emit everything (default). When set,
+        # keep the NEWEST max_items so new alerts aren't starved by stale
+        # ones (the cap runs before the unseen check).
+        if max_items and len(recent_items) > max_items:
             logger.debug(f"  → Limiting Waze from {len(recent_items)} to newest {max_items}")
             recent_items.sort(key=lambda x: x[0], reverse=True)
             recent_items = recent_items[:max_items]
-        recent_items.sort(key=lambda x: x[0])
+        recent_items.sort(key=lambda x: x[0])  # oldest-first for posting
 
         return [item for _, item in recent_items]
 
@@ -424,19 +425,16 @@ class AlertPoller:
                 await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                 items = []
             elif alert_type.startswith('waze_'):
-                # All Waze types: do NOT drop by upstream `created` age.
-                # Persistent alerts — road closures and weather hazards
-                # (waze_hazard), construction (waze_roadwork), sustained
-                # jams (waze_jam) — carry created times hours/days old, so
-                # the old 15-min window silently dropped every one. The
-                # first-poll bootstrap (marks everything seen, no alert) +
-                # seen-dedup (each alert fires once) already prevent floods;
-                # we keep only a per-cycle cap so a burst can't dominate a
-                # channel in one cycle. Higher cap for the chattier
-                # hazard/police feeds; lower volume otherwise.
-                cap = 8 if alert_type in ('waze_hazard', 'waze_police') else 15
-                items = self._filter_recent_waze(items, max_age_minutes=525600, max_items=cap)
-                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} after cap (no age limit)")
+                # All Waze types: emit EVERY new alert — no age drop and no
+                # per-cycle cap. Persistent alerts (road closures, weather
+                # hazards, construction, sustained jams) carry old `created`
+                # times, so we don't age-filter them; and we don't cap, so
+                # nothing is held back. The first-poll bootstrap (marks
+                # everything seen, no alert) + seen-dedup (each fires once)
+                # prevent floods, and the batched dispatch chunks many alerts
+                # into few messages. This just orders them for posting.
+                items = self._filter_recent_waze(items, max_age_minutes=525600)
+                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} new candidates (no cap)")
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
 
