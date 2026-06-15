@@ -307,10 +307,40 @@
           <div class="card-title"><i class="fa-solid fa-bullhorn"></i> Waze</div>
           <div class="card-tag">Traffic</div>
         </div>
-        <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 2rem;">
-          <p style="margin-bottom:0.6rem; grid-column: 1 / -1;">Community-reported traffic data including hazards, police sightings, accidents, traffic jams, and road closures across NSW.</p>
-          <p><strong>Data:</strong> Traffic hazards, police alerts, accidents, potholes, road closures, traffic jams, roadwork</p>
-          <p><strong>Source:</strong> <a href="https://www.waze.com/live-map" target="_blank">waze.com</a></p>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Crowd-sourced live traffic reports submitted by Waze drivers across NSW. Reports are ingested in near real-time, plotted on the incident map and pushed to the Discord bot. Being community-submitted, they often surface incidents faster than official feeds — but are less verified, so they're flagged as community reports.</p>
+          <p><strong>Data:</strong> Reported alert type, sub-type, street/location, report age</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#60a5fa;">Police</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Visible &amp; hidden police, speed traps</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Accidents</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Minor &amp; major crashes</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">Hazards</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">On-road, shoulder &amp; weather hazards</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#eab308;">Potholes</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Road surface damage</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#a855f7;">Road Closures</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Blocked &amp; closed roads</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Traffic Jams</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Live congestion &amp; delays</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#38bdf8;">Roadwork</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Construction &amp; maintenance</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.waze.com/live-map" target="_blank">waze.com</a></p>
         </div>
       </article>
 
@@ -344,10 +374,36 @@
           <div class="card-title"><i class="fa-solid fa-triangle-exclamation"></i> Bureau of Meteorology</div>
           <div class="card-tag">Weather</div>
         </div>
-        <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 2rem;">
-          <p style="margin-bottom:0.6rem; grid-column: 1 / -1;">Official weather warnings for NSW including severe weather, storm, flood, fire weather and marine warnings.</p>
-          <p><strong>Data:</strong> Land warnings, marine warnings, general alerts, severity levels</p>
-          <p><strong>Source:</strong> <a href="http://www.bom.gov.au/" target="_blank">bom.gov.au</a></p>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Official weather warnings issued by the Australian Government's Bureau of Meteorology for NSW. Covers both land-based and coastal/marine warnings, each carrying a severity level so the most serious alerts can be prioritised on the map and in notifications.</p>
+          <p><strong>Data:</strong> Warning title, type, area, severity level, issue/expiry times</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">Severe Weather</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Damaging winds &amp; heavy rain</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#a855f7;">Thunderstorms</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Severe storm cells &amp; hail</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#3b82f6;">Flood Warnings</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Riverine &amp; flash flooding</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Fire Weather</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Total fire ban conditions</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#06b6d4;">Marine Warnings</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Coastal winds &amp; gales</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#eab308;">Heatwave</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Extreme heat advice</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="http://www.bom.gov.au/" target="_blank">bom.gov.au</a></p>
         </div>
       </article>
 
@@ -357,10 +413,36 @@
           <div class="card-title"><i class="fa-solid fa-fire"></i> NSW Rural Fire Service</div>
           <div class="card-tag">Emergency</div>
         </div>
-        <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 2rem;">
-          <p style="margin-bottom:0.6rem; grid-column: 1 / -1;">Major bushfire incidents and current Fire Danger Ratings by district.</p>
-          <p><strong>Data:</strong> Incident locations, alert levels, fire status, FDR ratings, fire bans</p>
-          <p><strong>Source:</strong> <a href="https://www.rfs.nsw.gov.au/" target="_blank">rfs.nsw.gov.au</a></p>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live bushfire and grassfire data from the NSW Rural Fire Service. Combines the major-incidents feed — active fires with their alert level, status and mapped fire ground — with the current Fire Danger Ratings by district and any declared Total Fire Bans.</p>
+          <p><strong>Data:</strong> Incident name, location/geometry, alert level, status, size, FDR rating, fire bans</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">Major Incidents</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Active bush &amp; grass fires</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Alert Levels</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Advice · Watch &amp; Act · Emergency</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Fire Status</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Going · Contained · Controlled · Out</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#eab308;">Fire Danger Ratings</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Daily FDR per district</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#dc2626;">Total Fire Bans</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Declared TOBAN districts</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#38bdf8;">Fire Grounds</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Mapped incident locations</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.rfs.nsw.gov.au/" target="_blank">rfs.nsw.gov.au</a></p>
         </div>
       </article>
 
