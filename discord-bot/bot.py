@@ -931,9 +931,31 @@ class NSWPSNBot(commands.Bot):
                         )
                 except discord.HTTPException as e:
                     if e.status == 429:  # Rate limited
-                        logger.warning(f"Rate limited, re-queuing message")
-                        await self.message_queue.put(item)  # Re-queue
-                        await asyncio.sleep(5)  # Wait 5 seconds
+                        # Backstop only — discord.py already waits out per-route
+                        # and global rate limits internally, so this rarely
+                        # fires. When it does, honour Discord's own retry_after
+                        # instead of a fixed guess, and stop sending this cycle.
+                        retry_after = getattr(e, 'retry_after', None)
+                        wait = retry_after if isinstance(retry_after, (int, float)) and retry_after > 0 else 5
+                        logger.warning(
+                            f"Rate limited (429) on channel {channel_id}; backing off {wait:.1f}s"
+                        )
+                        # Re-queue WITHOUT blocking: this loop is the queue's
+                        # only consumer, so `await put()` on a full queue would
+                        # hang forever. Make room by dropping the oldest if
+                        # necessary so the rate-limited message isn't lost.
+                        try:
+                            self.message_queue.put_nowait(item)
+                        except asyncio.QueueFull:
+                            try:
+                                self.message_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            try:
+                                self.message_queue.put_nowait(item)
+                            except asyncio.QueueFull:
+                                pass
+                        await asyncio.sleep(wait)
                         break
                     else:
                         logger.error(f"HTTP error sending message: {e}")
