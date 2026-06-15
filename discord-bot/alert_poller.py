@@ -17,6 +17,14 @@ load_dotenv()
 
 logger = logging.getLogger('nswpsn-bot.poller')
 
+# Freshness window for Waze alerts. Anything whose upstream `created`
+# timestamp is older than this is treated as stale backlog and NOT posted
+# as "new" — this is what stops a region's week-old flood closures from
+# flooding in when the scrape bbox shifts. Jams carry no pubMillis so they
+# are undated → treated as "now" → always pass. Tune to taste: lower = only
+# very fresh alerts; higher = lets older-but-active roadwork/closures through.
+WAZE_MAX_AGE_MINUTES = 360  # 6 hours
+
 
 class AlertPoller:
     def __init__(self, api_base_url: str, api_key: str, database):
@@ -293,9 +301,9 @@ class AlertPoller:
 
         Args:
             items: List of Waze GeoJSON features
-            max_age_minutes: Drop items whose `created` is older than this.
-                The callers pass a huge value (effectively no age limit) so
-                persistent jams/roadwork/closures still post.
+            max_age_minutes: Drop items whose `created` is older than this
+                (WAZE_MAX_AGE_MINUTES). Undated items (jams have no pubMillis)
+                are treated as "now" so they always pass.
             max_items: Optional per-cycle cap. 0 (default) = no cap, emit
                 everything. When >0, keep the NEWEST max_items so new alerts
                 aren't starved by stale ones.
@@ -446,22 +454,34 @@ class AlertPoller:
                 await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                 items = []
             elif alert_type.startswith('waze_'):
-                # All Waze types: emit EVERY new alert — no age drop and no
-                # per-cycle cap. Persistent alerts (road closures, weather
-                # hazards, construction, sustained jams) carry old `created`
-                # times, so we don't age-filter them; and we don't cap, so
-                # nothing is held back. The first-poll bootstrap (marks
-                # everything seen, no alert) + seen-dedup (each fires once)
-                # prevent floods, and the batched dispatch chunks many alerts
-                # into few messages. This just orders them for posting.
-                items = self._filter_recent_waze(items, max_age_minutes=525600)
-                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} new candidates (no cap)")
+                # All Waze types: NO per-cycle cap (emit everything), but DO
+                # drop anything older than the freshness window. A region's
+                # stale backlog (e.g. week-old flood road-closures) enters the
+                # feed when the scrape bbox shifts; without this they'd post as
+                # "new". Jams have no pubMillis → undated → treated as "now" →
+                # always pass. The first-poll bootstrap + seen-dedup still
+                # prevent restart floods and repeats.
+                items = self._filter_recent_waze(items, max_age_minutes=WAZE_MAX_AGE_MINUTES)
+                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} within freshness window")
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
 
-            # Build candidate list and check all at once (single DB query instead of N)
-            candidates = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-            item_by_id = {self._get_alert_id(alert_type, item): item for item in items}
+            # Build candidate list and check all at once (single DB query
+            # instead of N). De-dupe by id WITHIN this cycle: two distinct
+            # items can resolve to the same alert id (the stable-fields
+            # fallback for Waze alerts with no upstream uuid collides when
+            # type/subtype/street/rounded-location match — e.g. several flood
+            # road-closures on the same street). Without de-duping,
+            # filter_unseen_alerts returns that id once per copy and we post
+            # the identical alert several times in one batch.
+            item_by_id = {}
+            candidates = []
+            for item in items:
+                aid = self._get_alert_id(alert_type, item)
+                if aid in item_by_id:
+                    continue
+                item_by_id[aid] = item
+                candidates.append((alert_type, aid))
 
             # Run synchronous DB calls in executor to avoid blocking the event loop
             unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
