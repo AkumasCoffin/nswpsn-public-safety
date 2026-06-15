@@ -306,13 +306,18 @@ class AlertPoller:
                 recent_items.append((created_dt, item))
             # else: older than the age window — drop (hazard/police path).
 
-        # Sort oldest-first for chronological posting.
-        recent_items.sort(key=lambda x: x[0])
-
-        # Cap per cycle to prevent flooding.
+        # Cap per cycle to prevent flooding — keep the NEWEST max_items, not
+        # the oldest. With no age limit the pool is every active alert, so
+        # taking the oldest returned the same stale, already-seen items every
+        # cycle and starved brand-new alerts: the cap happens before the
+        # unseen check, so new (newer) hazards/police never got looked at and
+        # never fired. Select newest, then re-sort oldest-first so the batch
+        # still posts chronologically.
         if len(recent_items) > max_items:
-            logger.debug(f"  → Limiting Waze from {len(recent_items)} to {max_items} items")
+            logger.debug(f"  → Limiting Waze from {len(recent_items)} to newest {max_items}")
+            recent_items.sort(key=lambda x: x[0], reverse=True)
             recent_items = recent_items[:max_items]
+        recent_items.sort(key=lambda x: x[0])
 
         return [item for _, item in recent_items]
 
