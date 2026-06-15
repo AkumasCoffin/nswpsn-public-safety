@@ -321,25 +321,44 @@ def _truncate_container_inplace(container, max_chars: int) -> int:
     return cumulative
 
 
-def chunk_containers_for_message(containers: list, max_chars: int = 3200,
-                                 max_per_message: int = 2) -> list:
+def _container_component_count(container) -> int:
+    """Approximate the number of Components-V2 components a Container uses,
+    including nested children (ActionRow buttons, section accessories).
+    Discord caps a single message at 40 components, so message packing has
+    to budget on this in addition to the char limit."""
+    n = 1  # the container itself
+    try:
+        for child in getattr(container, 'children', []) or []:
+            n += 1
+            for sub in getattr(child, 'children', []) or []:
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
+def chunk_containers_for_message(containers: list, max_chars: int = 3600,
+                                 max_components: int = 36,
+                                 max_per_message: int = 25) -> list:
     """Split Components-V2 Container objects into groups that each fit under
-    Discord's per-message budget.
+    Discord's per-message budget, packing as MANY as fit per message.
 
-    Discord enforces a hard 4000-char limit on the total *displayable text*
-    across all components in one message. That sum includes TextDisplay
-    bodies, button labels, role-ping mentions, and section spacing overhead
-    — `_container_char_size` only counts TextDisplay content, so we leave
-    ~800 chars of headroom (max_chars=3200) to absorb everything else.
+    Discord enforces two hard per-message ceilings: ~4000 chars of total
+    displayable text, and 40 total components. We pack up to both budgets
+    (max_chars=3600 leaves headroom for button labels / role-ping mentions;
+    max_components=36 leaves room for the role-ping TextDisplay added to the
+    first chunk). Packing tightly is what keeps a Waze burst (hundreds of
+    small alerts) from exploding into hundreds of one- or two-alert messages
+    that overflow the send queue. `max_per_message` is just a soft backstop;
+    the char/component budgets normally bind first.
 
-    A *single* container can also exceed the limit on its own (e.g. a busy
-    radio summary incident with 30 transcripts) — when we detect that, we
-    truncate the container in-place rather than letting Discord 400 us.
-    Pack at most 2 containers per message so one busy incident still gets
-    its own room without starving its neighbour."""
+    A *single* container can exceed the char limit on its own (e.g. a busy
+    radio summary) — when detected, truncate it in-place rather than letting
+    Discord 400 us."""
     groups = []
     current = []
     current_size = 0
+    current_components = 0
     for c in containers:
         sz = _container_char_size(c)
         # Defensive: if a single container is over budget, trim it before
@@ -347,16 +366,20 @@ def chunk_containers_for_message(containers: list, max_chars: int = 3200,
         # in its own (size > max_chars) group and Discord rejects the send.
         if sz > max_chars:
             sz = _truncate_container_inplace(c, max_chars)
+        cc = _container_component_count(c)
         would_exceed = current and (
             current_size + sz > max_chars
+            or current_components + cc > max_components
             or len(current) >= max_per_message
         )
         if would_exceed:
             groups.append(current)
             current = []
             current_size = 0
+            current_components = 0
         current.append(c)
         current_size += sz
+        current_components += cc
     if current:
         groups.append(current)
     return groups

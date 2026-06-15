@@ -618,10 +618,15 @@ class NSWPSNBot(commands.Bot):
         self.poller = AlertPoller(API_BASE_URL, API_KEY, self.db)
         self.embed_builder = EmbedBuilder()
         
-        # Rate limiting for Discord API
-        self.message_queue = asyncio.Queue(maxsize=500)
-        self.rate_limit_delay = 0.5  # 500ms between messages
-        self.max_messages_per_batch = 10  # Max messages to send per poll cycle
+        # Rate limiting for Discord API. The queue is a large burst buffer so
+        # a busy Waze cycle (hundreds of messages across many channels) is
+        # never dropped — it drains over subsequent ticks. Per-tick we drain a
+        # big batch and fan it out per channel concurrently; discord.py
+        # enforces the actual per-channel + global rate limits, so this can't
+        # exceed Discord's caps.
+        self.message_queue = asyncio.Queue(maxsize=5000)
+        self.rate_limit_delay = 0.5  # legacy; pacing is now handled by discord.py
+        self.max_messages_per_batch = 100  # messages drained per tick (fanned out per channel)
         
         # Track startup time - don't remove guild configs within first 60 seconds
         # This prevents race conditions during startup where guilds may briefly appear disconnected
@@ -839,134 +844,150 @@ class NSWPSNBot(commands.Bot):
     async def before_poll_pager(self):
         await self.wait_until_ready()
     
+    def _requeue_message(self, item):
+        """Re-queue an item without blocking. The send loop is the queue's
+        only consumer, so `await put()` on a full queue would deadlock; use
+        put_nowait and drop the oldest to make room rather than lose this one."""
+        try:
+            self.message_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            try:
+                self.message_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self.message_queue.put_nowait(item)
+            except asyncio.QueueFull:
+                pass
+
+    async def _send_one_message(self, item):
+        """Send a single queued message. Returns 'sent', 'skip', or
+        'ratelimited' (the channel should re-queue this item and pause)."""
+        channel_id = item['channel_id']
+        view = item.get('view')
+        embeds = None
+        if not view:
+            # `embeds` is canonical; fall back to the legacy single `embed`.
+            embeds = item.get('embeds') or ([item['embed']] if item.get('embed') else [])
+            embeds = embeds[:10]  # Discord hard limit
+        content = item.get('content')
+        config_id = item.get('config_id')
+        channel = None
+        try:
+            channel = self.get_channel(channel_id)
+            if not channel:
+                channel = await self.fetch_channel(channel_id)
+            if not channel:
+                return 'skip'
+            if view is not None:
+                # Components V2 (LayoutView) forbids `content` — role mentions
+                # live inside a TextDisplay in the view instead.
+                message = await channel.send(view=view)
+            else:
+                message = await channel.send(content=content, embeds=embeds)
+
+            alert_type = item.get('alert_type')
+            if alert_type:
+                logger.debug(f"✅ Sent {alert_type} to #{getattr(channel, 'name', '?')}")
+
+            # Save message URL for incident tracking (RFS / user_incident).
+            # Run the DB commit off-thread so a slow commit doesn't block
+            # the gateway heartbeat.
+            incident_guid = item.get('incident_guid')
+            if incident_guid and message:
+                status = item.get('incident_status')
+                message_url = message.jump_url
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.db.save_incident_message(
+                        incident_guid=incident_guid,
+                        channel_id=channel_id,
+                        message_url=message_url,
+                        status=status,
+                    ),
+                )
+            return 'sent'
+        except discord.NotFound:
+            # Channel deleted / inaccessible. Debounce-log; don't auto-remove
+            # (the preset may cover many alert types). Dashboard cleanup path.
+            if self._record_send_error(channel_id):
+                logger.warning(
+                    f"{self._describe_channel(channel, channel_id)} returned 404 "
+                    f"(preset {config_id}) — channel may be deleted or inaccessible. "
+                    f"Not auto-removing; delete the preset from the dashboard if permanent."
+                )
+            return 'skip'
+        except discord.Forbidden:
+            if self._record_send_error(channel_id):
+                logger.warning(
+                    f"No permission to send to {self._describe_channel(channel, channel_id)}"
+                )
+            return 'skip'
+        except discord.HTTPException as e:
+            if getattr(e, 'status', None) == 429:
+                # Backstop — discord.py normally waits out rate limits itself.
+                # Honour Discord's retry_after, then have the channel re-queue.
+                retry_after = getattr(e, 'retry_after', None)
+                wait = retry_after if isinstance(retry_after, (int, float)) and retry_after > 0 else 5
+                logger.warning(f"Rate limited (429) on channel {channel_id}; backing off {wait:.1f}s")
+                await asyncio.sleep(wait)
+                return 'ratelimited'
+            logger.error(f"HTTP error sending message: {e}")
+            return 'skip'
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
+            return 'skip'
+
+    async def _send_channel_batch(self, channel_id, items):
+        """Send one channel's queued items in order. discord.py paces this
+        channel's bucket; on a 429 we re-queue the remainder and stop so the
+        channel resumes next tick. Returns the count actually sent."""
+        sent = 0
+        for idx, item in enumerate(items):
+            status = await self._send_one_message(item)
+            if status == 'sent':
+                sent += 1
+            elif status == 'ratelimited':
+                for remaining in items[idx:]:
+                    self._requeue_message(remaining)
+                break
+            # 'skip' — drop this one, keep going with the channel
+        return sent
+
     @tasks.loop(seconds=1)
     async def process_message_queue(self):
-        """Process queued messages with rate limiting"""
-        messages_sent = 0
-        
-        while not self.message_queue.empty() and messages_sent < self.max_messages_per_batch:
+        """Drain a batch from the queue and send it, fanning out per channel
+        CONCURRENTLY. A single slow/rate-limited channel no longer blocks the
+        others, which is what let a Waze burst overflow the queue. discord.py
+        still enforces per-channel + global rate limits, so concurrency can't
+        exceed Discord's caps — it just keeps every channel making progress."""
+        batch = []
+        while not self.message_queue.empty() and len(batch) < self.max_messages_per_batch:
             try:
-                item = self.message_queue.get_nowait()
-                channel_id = item['channel_id']
-                # `embeds` is the new canonical key — list of up to 10 embeds.
-                # Fall back to the legacy single-embed `embed` key so existing
-                # call sites keep working without touching them.
-                # Components V2 path wins if a view is queued — it replaces
-                # both content embeds AND the legacy `embeds[]` list.
-                view = item.get('view')
-                embeds = None
-                if not view:
-                    embeds = item.get('embeds') or ([item['embed']] if item.get('embed') else [])
-                    embeds = embeds[:10]  # Discord hard limit
-                content = item.get('content')
-                config_id = item.get('config_id')
-                config_type = item.get('config_type', 'alert')
-
-                try:
-                    channel = self.get_channel(channel_id)
-                    if not channel:
-                        channel = await self.fetch_channel(channel_id)
-
-                    if channel:
-                        if view is not None:
-                            # Components V2 (LayoutView) forbids the `content`
-                            # field — role mentions must live inside a
-                            # TextDisplay in the view instead. Discord returns
-                            # 400 Invalid Form Body if content is sent.
-                            message = await channel.send(view=view)
-                        else:
-                            message = await channel.send(content=content, embeds=embeds)
-                        messages_sent += 1
-                        
-                        # Debug logging (alerts are already marked as seen in poller)
-                        alert_type = item.get('alert_type')
-                        if alert_type:
-                            logger.debug(f"✅ Sent {alert_type} to #{channel.name}")
-                        
-                        # Save message URL for incident tracking (RFS alerts).
-                        # Run the DB commit in a thread so a slow Postgres
-                        # commit doesn't block the gateway heartbeat — this
-                        # was the cause of "Shard ID None heartbeat blocked"
-                        # warnings under queue load.
-                        incident_guid = item.get('incident_guid')
-                        if incident_guid and message:
-                            status = item.get('incident_status')
-                            message_url = message.jump_url
-                            loop = asyncio.get_event_loop()
-                            await loop.run_in_executor(
-                                None,
-                                lambda: self.db.save_incident_message(
-                                    incident_guid=incident_guid,
-                                    channel_id=channel_id,
-                                    message_url=message_url,
-                                    status=status,
-                                ),
-                            )
-                        
-                        # Rate limit delay
-                        if not self.message_queue.empty():
-                            await asyncio.sleep(self.rate_limit_delay)
-                            
-                except discord.NotFound:
-                    # 404 is ambiguous: the channel may genuinely be deleted,
-                    # OR it's a transient permissions race / rename / cache
-                    # miss. We used to auto-remove the legacy per-alert-type
-                    # config row, but in the preset world `config_id` points
-                    # at the WHOLE preset (potentially 10+ alert subscriptions).
-                    # Auto-wiping on a single 404 silently blackholed channels,
-                    # so we now just debounce-log and let the user clean up
-                    # via the dashboard. On-guild-remove / on-channel-delete
-                    # events still run their own cleanup paths.
-                    if self._record_send_error(channel_id):
-                        logger.warning(
-                            f"{self._describe_channel(channel, channel_id)} returned 404 "
-                            f"(preset {config_id}) — channel may be deleted or inaccessible. "
-                            f"Not auto-removing; delete the preset from the dashboard if permanent."
-                        )
-                except discord.Forbidden:
-                    # Debounce permission error logging to reduce spam
-                    if self._record_send_error(channel_id):
-                        logger.warning(
-                            f"No permission to send to {self._describe_channel(channel, channel_id)}"
-                        )
-                except discord.HTTPException as e:
-                    if e.status == 429:  # Rate limited
-                        # Backstop only — discord.py already waits out per-route
-                        # and global rate limits internally, so this rarely
-                        # fires. When it does, honour Discord's own retry_after
-                        # instead of a fixed guess, and stop sending this cycle.
-                        retry_after = getattr(e, 'retry_after', None)
-                        wait = retry_after if isinstance(retry_after, (int, float)) and retry_after > 0 else 5
-                        logger.warning(
-                            f"Rate limited (429) on channel {channel_id}; backing off {wait:.1f}s"
-                        )
-                        # Re-queue WITHOUT blocking: this loop is the queue's
-                        # only consumer, so `await put()` on a full queue would
-                        # hang forever. Make room by dropping the oldest if
-                        # necessary so the rate-limited message isn't lost.
-                        try:
-                            self.message_queue.put_nowait(item)
-                        except asyncio.QueueFull:
-                            try:
-                                self.message_queue.get_nowait()
-                            except asyncio.QueueEmpty:
-                                pass
-                            try:
-                                self.message_queue.put_nowait(item)
-                            except asyncio.QueueFull:
-                                pass
-                        await asyncio.sleep(wait)
-                        break
-                    else:
-                        logger.error(f"HTTP error sending message: {e}")
-                        
+                batch.append(self.message_queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
-            except Exception as e:
-                logger.error(f"Error processing message queue: {e}")
-        
-        if messages_sent > 0:
-            logger.info(f"Sent {messages_sent} messages (queue size: {self.message_queue.qsize()})")
+        if not batch:
+            return
+
+        by_channel = {}
+        for item in batch:
+            by_channel.setdefault(item['channel_id'], []).append(item)
+
+        results = await asyncio.gather(
+            *[self._send_channel_batch(cid, items) for cid, items in by_channel.items()],
+            return_exceptions=True,
+        )
+        sent = 0
+        for r in results:
+            if isinstance(r, int):
+                sent += r
+            elif isinstance(r, Exception):
+                logger.error(f"Channel batch error: {r}")
+        if sent:
+            logger.info(f"Sent {sent} messages across {len(by_channel)} channel(s) "
+                        f"(queue size: {self.message_queue.qsize()})")
     
     @process_message_queue.before_loop
     async def before_process_queue(self):
