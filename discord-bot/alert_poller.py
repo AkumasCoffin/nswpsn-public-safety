@@ -28,10 +28,14 @@ WAZE_MAX_AGE_MINUTES = 360  # 6 hours
 # Police dedup window. Waze police are crowd-sourced and churn uuids: the
 # same speed trap is re-reported under many distinct ids within minutes, so
 # keying on the uuid posts the same spot repeatedly. Instead we key police on
-# subtype + a coarse ~110m grid + a time bucket of this length, so repeat
+# subtype + a coarse location grid + a time bucket of this length, so repeat
 # reports of one spot within the window collapse to a single alert while the
 # spot can re-alert in a later window if police are reported there again.
 WAZE_POLICE_DEDUP_MINUTES = 60
+# Location grid for police dedup, in degrees. ~50m (1° lat ≈ 111.3km, so
+# 50m ≈ 0.00045°). Reports snapped to the same cell are treated as the same
+# spot.
+WAZE_POLICE_GRID_DEG = 0.00045
 
 
 class AlertPoller:
@@ -176,7 +180,7 @@ class AlertPoller:
                 # Police churn uuids — the same speed trap is re-reported
                 # under many distinct ids within minutes, so uuid-keyed dedup
                 # posts the same spot repeatedly. Key on subtype + a coarse
-                # ~110m grid + a time bucket so repeat reports of one spot
+                # ~50m grid + a time bucket so repeat reports of one spot
                 # collapse to one alert. The bucket is taken from the report
                 # time (fallback: now) so the SAME report doesn't re-alert
                 # poll-to-poll, but a genuinely new report in a later window
@@ -186,7 +190,9 @@ class AlertPoller:
                 geom = (item.get('geometry') or {}).get('coordinates') or []
                 pt = geom[0] if (geom and isinstance(geom[0], (list, tuple))) else geom
                 try:
-                    loc = f"{round(float(pt[1]), 3)},{round(float(pt[0]), 3)}"
+                    glat = round(float(pt[1]) / WAZE_POLICE_GRID_DEG)
+                    glon = round(float(pt[0]) / WAZE_POLICE_GRID_DEG)
+                    loc = f"{glat},{glon}"
                 except (TypeError, ValueError, IndexError):
                     loc = str(props.get('street', ''))
                 created = props.get('created', '')
