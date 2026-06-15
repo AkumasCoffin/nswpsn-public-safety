@@ -153,10 +153,31 @@ class AlertPoller:
             return hashlib.md5(str(item).encode()).hexdigest()[:16]
 
         elif alert_type.startswith('waze_'):
-            # Waze alerts - use UUID from properties
+            # Waze alerts - use the Waze UUID from properties when present.
             props = item.get('properties', {})
             waze_id = props.get('id', '')
-            return f"{alert_type}_{waze_id}" if waze_id else hashlib.md5(str(item).encode()).hexdigest()[:16]
+            if waze_id:
+                return f"{alert_type}_{waze_id}"
+            # No Waze id — derive a STABLE key from fields that don't change
+            # poll-to-poll. The old md5(str(item)) hashed the WHOLE feature,
+            # whose volatile fields (speed/level/length/thumbs/coord
+            # precision) changed every cycle, so such an alert got a new id
+            # each poll: it was re-sent (duplicates) and slipped past the
+            # bootstrap-seen mark (marked under a now-stale id) -> persistent
+            # "old" alerts kept firing once the per-cycle cap was removed.
+            geom = (item.get('geometry') or {}).get('coordinates') or []
+            pt = geom[0] if (geom and isinstance(geom[0], (list, tuple))) else geom
+            try:
+                loc = f"{round(float(pt[1]), 4)},{round(float(pt[0]), 4)}"
+            except (TypeError, ValueError, IndexError):
+                loc = ''
+            stable = '|'.join([
+                str(props.get('wazeType', '')),
+                str(props.get('wazeSubtype', '')),
+                str(props.get('street', '')),
+                loc,
+            ])
+            return f"{alert_type}_" + hashlib.md5(stable.encode()).hexdigest()[:16]
 
         elif alert_type == 'user_incident':
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
