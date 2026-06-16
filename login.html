@@ -442,7 +442,20 @@
   <script src="config.js"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-    
+
+    // Reject after `ms` so a stalled Supabase auth endpoint surfaces a clear
+    // error instead of leaving the button spinning forever (the auth DB can
+    // be unresponsive even when the page loaded fine).
+    function withTimeout(promise, ms, message) {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message || 'Request timed out')), ms);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    }
+    const AUTH_TIMEOUT_MS = 15000;
+    const AUTH_TIMEOUT_MSG = 'Authentication service is not responding right now. Please try again in a moment.';
+
     // Check if user is already logged in
     async function checkSession() {
       const { data } = await sb.auth.getSession();
@@ -487,8 +500,12 @@
       messageEl.textContent = '';
       
       try {
-        const { data, error } = await sb.auth.signInWithPassword({ email, password });
-        
+        const { data, error } = await withTimeout(
+          sb.auth.signInWithPassword({ email, password }),
+          AUTH_TIMEOUT_MS,
+          AUTH_TIMEOUT_MSG,
+        );
+
         if (error) {
           if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'page' });
           messageEl.className = 'message error';
@@ -514,13 +531,14 @@
         window.location.href = redirect || 'map-editor.html';
         
       } catch (err) {
+        if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'page' });
         messageEl.className = 'message error';
-        messageEl.textContent = 'An error occurred. Please try again.';
+        messageEl.textContent = (err && err.message) || 'An error occurred. Please try again.';
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Sign In';
       }
     }
-    
+
     async function handlePasswordReset(event) {
       event.preventDefault();
       
@@ -539,10 +557,14 @@
       messageEl.textContent = '';
       
       try {
-        const { error } = await sb.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin + '/reset-password.html'
-        });
-        
+        const { error } = await withTimeout(
+          sb.auth.resetPasswordForEmail(email, {
+            redirectTo: window.location.origin + '/reset-password.html'
+          }),
+          AUTH_TIMEOUT_MS,
+          AUTH_TIMEOUT_MSG,
+        );
+
         if (error) {
           messageEl.className = 'message error';
           messageEl.textContent = error.message;
@@ -550,14 +572,14 @@
           submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Reset Link';
           return;
         }
-        
+
         // Show success view
         if (typeof umami !== 'undefined') umami.track('password-reset-request', { method: 'page' });
         showView('reset-success');
-        
+
       } catch (err) {
         messageEl.className = 'message error';
-        messageEl.textContent = 'An error occurred. Please try again.';
+        messageEl.textContent = (err && err.message) || 'An error occurred. Please try again.';
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Reset Link';
       }
