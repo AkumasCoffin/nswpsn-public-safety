@@ -29,10 +29,27 @@ const ARCHIVE_TABLES = [
   'archive_misc',
 ] as const;
 
-const CHUNK_SIZE = 5_000;
-const PAUSE_BETWEEN_CHUNKS_MS = 500;
+// Smaller chunks + a short per-chunk statement_timeout keep each unit of
+// work brief so the backfill never pins the DB. Previously a 5k-row chunk
+// under a 60s timeout could hold the shared sidecar advisory lock long
+// enough to stall the live Waze writer (33s flushes) and cascade every
+// other query into statement-timeout 500s. Tunable via env for ops.
+const CHUNK_SIZE = Math.max(100, Number(process.env['ARCHIVE_DIMS_BACKFILL_CHUNK'] ?? '1000') || 1000);
+const PAUSE_BETWEEN_CHUNKS_MS = 750;
+const CHUNK_STATEMENT_TIMEOUT = process.env['ARCHIVE_DIMS_BACKFILL_TIMEOUT'] ?? '20s';
+const CHUNK_LOCK_TIMEOUT = '3s';
+const MAX_LOCK_MISSES = 20; // defer the table to a later run if the live writer stays busy
+const MAX_CHUNK_FAILS = 3; // give up the table this run after repeated timeouts
 const STARTUP_DELAY_MS = 60_000; // start 1 min after boot — well after
                                   // the existing sidecar backfill
+
+// Ops kill-switch: set ARCHIVE_DIMS_BACKFILL_DISABLED=true to skip the
+// backfill entirely (e.g. while the DB is under pressure). The promoted
+// dim columns just stay NULL — filterCache falls back to its legacy scan.
+function backfillDisabled(): boolean {
+  const v = (process.env['ARCHIVE_DIMS_BACKFILL_DISABLED'] ?? '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
 
 let running = false;
 
@@ -72,20 +89,28 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
   // a pathological live-lock.
   const MAX_DEADLOCK_RETRIES = 5;
   let deadlockRetries = 0;
+  let lockMisses = 0;
+  let chunkFails = 0;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   for (;;) {
     const client = await pool.connect();
     let updated = 0;
-    let retryDeadlock = false;
+    let outcome: 'ok' | 'deadlock' | 'lockmiss' | 'fail' = 'ok';
     try {
       await client.query('BEGIN');
-      await client.query("SET LOCAL statement_timeout = '60s'");
-      // Serialise against the live writer's sidecar upsert — same lock it
-      // takes. Holds for this chunk only; released at COMMIT/ROLLBACK.
-      await client.query(
-        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+      await client.query(`SET LOCAL statement_timeout = '${CHUNK_STATEMENT_TIMEOUT}'`);
+      await client.query(`SET LOCAL lock_timeout = '${CHUNK_LOCK_TIMEOUT}'`);
+      // Cooperative, NON-blocking lock against the live writer's sidecar
+      // upsert. If the writer holds it (heavy ingest), don't queue behind
+      // it — roll back and yield, so the backfill never stalls live data.
+      const lk = await client.query<{ got: boolean }>(
+        'SELECT pg_try_advisory_xact_lock($1, hashtext($2)) AS got',
         [SIDECAR_LOCK_NAMESPACE, `${table}_latest`],
       );
-
+      if (!lk.rows[0]?.got) {
+        await client.query('ROLLBACK');
+        outcome = 'lockmiss';
+      } else {
       // CTE picks a chunk of NULL-category sidecar rows, joins to the
       // parent on the latest_fetched_at pointer, then updates the
       // sidecar. The CTE's LIMIT bounds the lock scope so cleanup +
@@ -129,45 +154,74 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
           WHERE l.source = b.source
             AND l.source_id = b.source_id
          RETURNING 1`,
-        [CHUNK_SIZE],
-      );
-      updated = r.rowCount ?? 0;
-      await client.query('COMMIT');
+          [CHUNK_SIZE],
+        );
+        updated = r.rowCount ?? 0;
+        await client.query('COMMIT');
 
-      stats.chunks += 1;
-      stats.rowsUpdated += updated;
-      deadlockRetries = 0; // progress made — reset the retry budget
+        stats.chunks += 1;
+        stats.rowsUpdated += updated;
+        deadlockRetries = 0; // progress made — reset the retry budget
+      }
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch { /* ignore */ }
       const code = (err as { code?: string }).code;
       if (code === '40P01' && deadlockRetries < MAX_DEADLOCK_RETRIES) {
-        retryDeadlock = true;
+        outcome = 'deadlock';
         deadlockRetries += 1;
         log.info(
           { table, attempt: deadlockRetries, chunks: stats.chunks },
           'archiveLatestDimsBackfill: deadlock, retrying chunk',
         );
       } else {
+        outcome = 'fail';
         log.warn(
           { err: (err as Error).message, code, table, chunks: stats.chunks },
-          'archiveLatestDimsBackfill: chunk failed; stopping for this table',
+          'archiveLatestDimsBackfill: chunk failed',
         );
-        break;
       }
     } finally {
       client.release();
     }
 
-    if (retryDeadlock) {
-      // Short escalating backoff before re-running the same chunk.
-      await new Promise((r) => setTimeout(r, 250 * deadlockRetries));
+    if (outcome === 'lockmiss') {
+      // Live writer holds the lock — back off and try again, but don't
+      // chase it forever; defer the rest of the table to a later run.
+      lockMisses += 1;
+      if (lockMisses > MAX_LOCK_MISSES) {
+        log.info(
+          { table, chunks: stats.chunks },
+          'archiveLatestDimsBackfill: writer busy, deferring table to a later run',
+        );
+        break;
+      }
+      await sleep(1000);
+      continue;
+    }
+    if (outcome === 'deadlock') {
+      await sleep(250 * deadlockRetries);
+      continue;
+    }
+    if (outcome === 'fail') {
+      // Timeout / other error on this chunk. Back off briefly and retry a
+      // few times (smaller chunks usually get through); bail the table if
+      // it keeps failing so we never hammer the DB.
+      chunkFails += 1;
+      if (chunkFails >= MAX_CHUNK_FAILS) {
+        log.warn({ table, chunks: stats.chunks }, 'archiveLatestDimsBackfill: too many chunk failures, stopping table');
+        break;
+      }
+      await sleep(2000);
       continue;
     }
 
+    // Success.
+    lockMisses = 0;
+    chunkFails = 0;
     if (updated === 0) break; // table done
 
     if (PAUSE_BETWEEN_CHUNKS_MS > 0) {
-      await new Promise((r) => setTimeout(r, PAUSE_BETWEEN_CHUNKS_MS));
+      await sleep(PAUSE_BETWEEN_CHUNKS_MS);
     }
   }
 
@@ -177,6 +231,10 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
 
 export async function runArchiveLatestDimsBackfill(): Promise<void> {
   if (running) return;
+  if (backfillDisabled()) {
+    log.info('archiveLatestDimsBackfill: disabled via ARCHIVE_DIMS_BACKFILL_DISABLED, skipping');
+    return;
+  }
   running = true;
   try {
     const pool = await getPool();
