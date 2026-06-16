@@ -4574,38 +4574,90 @@ function _auditValueNode(v, kind) {
   return el('span', { class: 'audit-pill ' + cls }, String(v));
 }
 
-// Build the DOM nodes for an audit entry's `changes` cell.
+// Order-insensitive normalise (mirrors the backend) so a re-ordered list
+// isn't treated as a change when rendering older entries.
+function _auditNorm(v) {
+  if (Array.isArray(v)) return v.map(_auditNorm).sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1));
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v).sort()) o[k] = _auditNorm(v[k]);
+    return o;
+  }
+  return v == null ? null : v;
+}
+
+// Walk two objects and collect only the leaf paths that actually differ.
+function _auditDeepDiff(from, to, path, out) {
+  const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  if (isObj(from) && isObj(to)) {
+    const keys = [...new Set([...Object.keys(from), ...Object.keys(to)])].sort();
+    for (const k of keys) _auditDeepDiff(from[k], to[k], path ? path + ' › ' + k : k, out);
+    return out;
+  }
+  if (JSON.stringify(_auditNorm(from)) !== JSON.stringify(_auditNorm(to))) {
+    out.push({ path, before: from, after: to });
+  }
+  return out;
+}
+
+// Render an array change as just the +added / −removed items (null if the
+// set is unchanged, e.g. only re-ordered).
+function _auditArrayDiffNode(before, after) {
+  const b = (Array.isArray(before) ? before : []).map(String);
+  const a = (Array.isArray(after) ? after : []).map(String);
+  const removed = b.filter(x => !a.includes(x));
+  const added = a.filter(x => !b.includes(x));
+  if (!removed.length && !added.length) return null;
+  const node = el('span', { class: 'audit-pillset' }, []);
+  removed.forEach(x => node.appendChild(el('span', { class: 'audit-pill audit-before' }, '− ' + x)));
+  added.forEach(x => node.appendChild(el('span', { class: 'audit-pill audit-after' }, '+ ' + x)));
+  return node;
+}
+
+// Render one leaf change. Arrays → +/- diff; everything else → before → after.
+// Returns null when nothing meaningful changed (so the caller skips the row).
+function _auditLeafNode(before, after) {
+  if (Array.isArray(before) || Array.isArray(after)) {
+    return _auditArrayDiffNode(before, after);
+  }
+  return el('span', { class: 'audit-vals' }, [
+    _auditValueNode(before, 'before'),
+    el('span', { class: 'audit-arrow' }, '→'),
+    _auditValueNode(after, 'after'),
+  ]);
+}
+
+// Build the DOM nodes for an audit entry's `changes` cell — only what changed.
 function _renderAuditChanges(entry) {
   const ch = entry.changes || {};
   const rows = [];
+  const pushRow = (label, valueNode) => rows.push(
+    el('div', { class: 'audit-change' }, [el('span', { class: 'audit-field' }, label), valueNode]));
+  const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+
   if (entry.action === 'update') {
     for (const [field, d] of Object.entries(ch)) {
-      if (d && typeof d === 'object' && 'from' in d && 'to' in d) {
-        rows.push(el('div', { class: 'audit-change' }, [
-          el('span', { class: 'audit-field' }, _auditFieldLabel(field)),
-          el('span', { class: 'audit-vals' }, [
-            _auditValueNode(d.from, 'before'),
-            el('span', { class: 'audit-arrow' }, '→'),
-            _auditValueNode(d.to, 'after'),
-          ]),
-        ]));
+      if (!(d && typeof d === 'object' && 'from' in d && 'to' in d)) continue;
+      if (isObj(d.from) && isObj(d.to)) {
+        // Drill into the object (filters / overrides) — show only changed leaves.
+        for (const lf of _auditDeepDiff(d.from, d.to, '', [])) {
+          const valNode = _auditLeafNode(lf.before, lf.after);
+          if (!valNode) continue;
+          pushRow(_auditFieldLabel(field) + (lf.path ? ' › ' + lf.path : ''), valNode);
+        }
       } else {
-        rows.push(el('div', { class: 'audit-change' },
-          el('span', { class: 'audit-field' }, _auditFieldLabel(field))));
+        const valNode = _auditLeafNode(d.from, d.to);
+        if (valNode) pushRow(_auditFieldLabel(field), valNode);
       }
     }
-    if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, 'no field change'));
+    if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, 'no effective change'));
     return rows;
   }
+
   // create / delete — snapshot of the preset. Tint by action.
   const kind = entry.action === 'delete' ? 'before' : 'after';
   for (const k of ['alert_types', 'pager_enabled', 'pager_capcodes', 'name', 'channel_id']) {
-    if (k in ch) {
-      rows.push(el('div', { class: 'audit-change' }, [
-        el('span', { class: 'audit-field' }, _auditFieldLabel(k)),
-        el('span', { class: 'audit-vals' }, [_auditValueNode(ch[k], kind)]),
-      ]));
-    }
+    if (k in ch) pushRow(_auditFieldLabel(k), _auditValueNode(ch[k], kind));
   }
   if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, entry.action === 'create' ? 'created' : 'deleted'));
   return rows;
