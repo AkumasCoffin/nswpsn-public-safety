@@ -63,6 +63,7 @@ import {
   getAppInstallCounts,
   getBotToken,
   getGuildMetaBulk,
+  getUserMetaBulk,
   guildIconUrl,
   userAvatarUrl,
 } from '../services/discordApi.js';
@@ -1676,13 +1677,27 @@ async function buildAdminOverview(): Promise<unknown> {
     // guildsRes to know which gids to look up.
     const guildIds = guildsRes.rows.map((r) => String(r.guild_id));
     const metaMap = await getGuildMetaBulk(guildIds);
+    // Resolve guild owner display names so the admin can tell which server
+    // belongs to whom. Owners are usually NOT dashboard users, so look them
+    // up via the bot token (cached). One lookup per distinct owner.
+    const ownerIds = Array.from(
+      new Set(
+        guildIds
+          .map((gid) => metaMap.get(gid)?.owner_id)
+          .filter((v): v is string => Boolean(v)),
+      ),
+    );
+    const ownerMetaMap = await getUserMetaBulk(ownerIds);
     const guildsOut = guildsRes.rows.map((r) => {
       const gid = String(r.guild_id);
       const meta = metaMap.get(gid);
+      const ownerId = meta?.owner_id ?? null;
       return {
         guild_id: gid,
         name: meta?.name ?? '',
         icon_url: meta?.icon_url ?? '',
+        owner_id: ownerId,
+        owner_name: ownerId ? (ownerMetaMap.get(ownerId)?.username ?? '') : '',
         preset_count: Number(r.preset_count ?? 0),
         channel_count: Number(r.channel_count ?? 0),
         pager_presets: Number(r.pager_presets ?? 0),

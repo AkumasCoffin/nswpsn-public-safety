@@ -67,6 +67,7 @@ vi.mock('../../../src/services/discordApi.js', () => ({
   userAvatarUrl: (uid: string | undefined, hash: string | null) =>
     uid && hash ? `https://cdn.discordapp.com/avatars/${uid}/${hash}.png` : null,
   getGuildMetaBulk: (...a: unknown[]) => getGuildMetaBulkMock(...a),
+  getUserMetaBulk: async () => new Map(),
   getAppInstallCounts: (...a: unknown[]) => getAppInstallCountsMock(...a),
   _resetDiscordApiCachesForTests: vi.fn(),
 }));

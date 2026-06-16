@@ -1664,6 +1664,9 @@ async function bootstrap() {
 
 async function selectGuild(gid, fromBoot=false, deepLinkPresetId=null) {
   state.activeGuildId = gid;
+  // Switching guilds clears any *other* admin-opened (foreign) guild so it
+  // stops showing in the switcher/sidebar; keep the one we're opening.
+  _purgeAdminOpenedGuilds(gid);
   state.channels = [];
   state.roles = [];
   state.presets = [];
@@ -4292,6 +4295,12 @@ async function wizardSave() {
 /* -------------------- Admin overview -------------------- */
 
 async function openAdmin() {
+  // Returning to the admin view: drop any foreign guild we opened for editing
+  // so it no longer pollutes the switcher/sidebar, and clear it as active.
+  const _activeWasAdminOpened = (state.guilds || []).some(
+    g => g.admin_opened && String(g.id) === String(state.activeGuildId));
+  _purgeAdminOpenedGuilds(null);
+  if (_activeWasAdminOpened) state.activeGuildId = null;
   state.view = 'admin';
   state.admin = { loading: true, data: null, error: null };
   state.adminSources = { loading: true, data: null, error: null };
@@ -4339,6 +4348,15 @@ function adminOpenGuild(g) {
     });
   }
   selectGuild(gid);
+}
+
+// Drop synthetic admin-opened guilds from the user's own guild list so they
+// don't linger in the guild switcher / sidebar after the admin navigates
+// away. Pass the guild id to keep (the one currently being opened), or null
+// to remove all of them.
+function _purgeAdminOpenedGuilds(keepId) {
+  if (!Array.isArray(state.guilds)) return;
+  state.guilds = state.guilds.filter(g => !g.admin_opened || String(g.id) === String(keepId));
 }
 
 async function loadAdminSources() {
@@ -4415,6 +4433,7 @@ function renderAdmin() {
   const gtbl = el('table', { class: 'admin-table' });
   const ghead = el('thead', {}, el('tr', {}, [
     el('th', {}, 'Guild'),
+    el('th', {}, 'Owner'),
     el('th', {}, 'Presets'),
     el('th', {}, 'Channels'),
     el('th', {}, 'Pager'),
@@ -4430,6 +4449,10 @@ function renderAdmin() {
         g.icon_url ? el('img', { class: 'g-icon', src: g.icon_url, alt: '' }) : null,
         el('span', { class: 'g-name' }, g.name || '—'),
         el('span', { class: 'g-id' }, g.guild_id),
+      ]),
+      el('td', {}, [
+        el('span', {}, g.owner_name ? '@' + g.owner_name : '—'),
+        g.owner_id ? el('span', { class: 'g-id' }, g.owner_id) : null,
       ]),
       el('td', {}, String(g.preset_count)),
       el('td', {}, String(g.channel_count)),
