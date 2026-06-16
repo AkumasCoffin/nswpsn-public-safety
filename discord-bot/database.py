@@ -7,6 +7,7 @@ import os
 import re
 import json
 import logging
+import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -31,9 +32,76 @@ DB_PATH = os.getenv('BOT_DB_PATH', DEFAULT_DB_PATH)
 USE_POSTGRES = bool(BOT_DATABASE_URL)
 if USE_POSTGRES:
     import psycopg2
+    from psycopg2 import pool as pg_pool
     from psycopg2.extras import RealDictCursor, Json
 else:
     import sqlite3
+
+# Max pooled Postgres connections for the bot. The bot offloads sync DB calls
+# to a thread pool (run_in_executor), so this must be thread-safe; keep it
+# small — the bot's query rate is low and a tight cap protects the DB's
+# connection limit. Tunable via env.
+BOT_DB_POOL_MAX = max(2, int(os.getenv('BOT_DB_POOL_MAX', '12')))
+_pool_lock = threading.Lock()
+
+
+class _PooledConnection:
+    """Thin proxy over a pooled psycopg2 connection.
+
+    Everything delegates to the underlying connection EXCEPT:
+      - close() returns the connection to the pool (putconn) instead of
+        physically closing it, after a rollback to clear any open/aborted
+        transaction so the next borrower gets a clean session; and
+      - __del__ returns it as a safety net if a code path forgot to close
+        (or raised before reaching close()).
+
+    This makes every existing `conn = self._connect(); ...; conn.close()`
+    call site pooled AND leak-proof with no other changes: a query error can
+    no longer strand a connection, and we stop reconnecting per query.
+    """
+    __slots__ = ('_raw', '_pool', '_returned')
+
+    def __init__(self, raw, pool):
+        object.__setattr__(self, '_raw', raw)
+        object.__setattr__(self, '_pool', pool)
+        object.__setattr__(self, '_returned', False)
+
+    def close(self):
+        if self._returned:
+            return
+        object.__setattr__(self, '_returned', True)
+        raw = self._raw
+        try:
+            if not raw.closed:
+                raw.rollback()
+        except Exception:
+            pass
+        try:
+            self._pool.putconn(raw)
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, '_raw'), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, '_raw'), name, value)
 
 
 # Allow-list pattern for alert_type values that are string-formatted into
@@ -51,12 +119,35 @@ def _validate_alert_type_key(alert_type: str) -> str:
 class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
-    
+        self._pool = None
+
+    def _get_pool(self):
+        """Lazily create the thread-safe Postgres connection pool. Lazy so the
+        bot still starts if the DB is briefly unreachable at boot — the pool is
+        built on first actual use. connect_timeout bounds a stalled connect so
+        a sick DB surfaces an error instead of hanging the worker thread."""
+        if self._pool is not None:
+            return self._pool
+        with _pool_lock:
+            if self._pool is None:
+                self._pool = pg_pool.ThreadedConnectionPool(
+                    1, BOT_DB_POOL_MAX,
+                    dsn=BOT_DATABASE_URL,
+                    cursor_factory=RealDictCursor,
+                    connect_timeout=10,
+                )
+        return self._pool
+
     def _connect(self):
-        """Create a database connection"""
+        """Borrow a pooled connection (Postgres) or open a SQLite connection.
+
+        Postgres connections come from a shared pool and are wrapped so
+        `conn.close()` returns them to the pool — see _PooledConnection. This
+        keeps the existing call sites unchanged while eliminating per-query
+        reconnect churn and connection leaks on query errors."""
         if USE_POSTGRES:
-            conn = psycopg2.connect(BOT_DATABASE_URL, cursor_factory=RealDictCursor)
-            return conn
+            pool = self._get_pool()
+            return _PooledConnection(pool.getconn(), pool)
         else:
             # timeout = how long sqlite3 will poll while the DB is locked.
             # Under load the event-loop thread and the queue-processor thread
