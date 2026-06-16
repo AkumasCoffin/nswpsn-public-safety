@@ -684,10 +684,23 @@ const AUDIT_FIELDS = [
   'role_ids', 'enabled', 'enabled_ping', 'type_overrides', 'filters',
 ] as const;
 
-// Normalise so order-insensitive fields (arrays of ids/types) compare equal
-// regardless of ordering, and null/undefined collapse together.
+// Deep-normalise so ordering is never mistaken for a change: arrays are
+// sorted (recursively) and object keys are sorted. This means e.g. a preset
+// whose filters.waze_hazard list is merely re-ordered does NOT register as an
+// edit, and the stored from/to render in a stable order. null/undefined
+// collapse together.
 function auditNormalize(v: unknown): unknown {
-  if (Array.isArray(v)) return [...v].map((x) => (x == null ? x : String(x))).sort();
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => auditNormalize(x))
+      .sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1));
+  }
+  if (v && typeof v === 'object') {
+    const src = v as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(src).sort()) out[k] = auditNormalize(src[k]);
+    return out;
+  }
   return v ?? null;
 }
 

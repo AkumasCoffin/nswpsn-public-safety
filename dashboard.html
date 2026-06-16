@@ -1166,6 +1166,35 @@
     .admin-table .g-id { margin-left: 0.5rem; color: var(--text-soft); font-family: monospace; font-size: 0.7rem; }
     .admin-table .mono { font-family: monospace; font-size: 0.78rem; color: var(--text-muted); }
     .admin-table .row-link { cursor: pointer; }
+
+    /* Config audit log — action label + before/after change pills */
+    .audit-action { font-weight: 700; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .audit-action-create { color: #4ade80; }
+    .audit-action-update { color: #fbbf24; }
+    .audit-action-delete { color: #f87171; }
+    .audit-changes-cell { max-width: 560px; }
+    .audit-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.55rem; padding: 0.28rem 0; }
+    .audit-change + .audit-change { border-top: 1px dashed rgba(255,255,255,0.07); }
+    .audit-field { font-weight: 600; color: #cbd5e1; font-size: 0.72rem; min-width: 64px; }
+    .audit-vals { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+    .audit-pillset { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; }
+    .audit-pill {
+      display: inline-block; padding: 0.05rem 0.5rem; border-radius: var(--radius-pill);
+      font-size: 0.72rem; line-height: 1.55; border: 1px solid transparent; white-space: nowrap;
+    }
+    .audit-before  { background: rgba(239,68,68,0.13);  border-color: rgba(239,68,68,0.32);  color: #fca5a5; }
+    .audit-after   { background: rgba(34,197,94,0.13);  border-color: rgba(34,197,94,0.32);  color: #86efac; }
+    .audit-neutral { background: rgba(148,163,184,0.13); border-color: rgba(148,163,184,0.3); color: #cbd5e1; }
+    .audit-empty   { background: rgba(148,163,184,0.07); border: 1px dashed rgba(148,163,184,0.35); color: #94a3b8; font-style: italic; }
+    .audit-arrow   { color: #64748b; font-weight: 700; padding: 0 0.05rem; }
+    .audit-json {
+      font-family: monospace; font-size: 0.68rem; padding: 0.2rem 0.45rem; border-radius: 6px;
+      max-width: 260px; max-height: 110px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      border: 1px solid transparent;
+    }
+    .audit-json.audit-before { background: rgba(239,68,68,0.09);  border-color: rgba(239,68,68,0.25); }
+    .audit-json.audit-after  { background: rgba(34,197,94,0.09);  border-color: rgba(34,197,94,0.25); }
+    .audit-muted { color: #64748b; font-style: italic; font-size: 0.78rem; }
     .admin-pill {
       display: inline-block;
       background: var(--accent-soft);
@@ -4517,34 +4546,69 @@ function renderAdmin() {
 }
 
 // Compact one-line summary of an audit entry's `changes` payload.
-function _formatAuditChanges(entry) {
+const _AUDIT_FIELD_LABELS = {
+  alert_types: 'Alert types', pager_enabled: 'Pager', pager_capcodes: 'Capcodes',
+  role_ids: 'Roles', enabled: 'Enabled', enabled_ping: 'Ping',
+  type_overrides: 'Overrides', filters: 'Filters', name: 'Name', channel_id: 'Channel',
+};
+function _auditFieldLabel(f) { return _AUDIT_FIELD_LABELS[f] || f; }
+
+// Render one audit value as pill(s). kind = 'before' | 'after' | 'neutral'
+// drives the colour (red / green / grey).
+function _auditValueNode(v, kind) {
+  const cls = 'audit-' + kind;
+  if (v === null || v === undefined || v === '') {
+    return el('span', { class: 'audit-pill audit-empty' }, 'none');
+  }
+  if (Array.isArray(v)) {
+    if (!v.length) return el('span', { class: 'audit-pill audit-empty' }, 'empty');
+    return el('span', { class: 'audit-pillset' },
+      v.map(item => el('span', { class: 'audit-pill ' + cls }, String(item))));
+  }
+  if (v === true) return el('span', { class: 'audit-pill ' + cls }, 'on');
+  if (v === false) return el('span', { class: 'audit-pill ' + cls }, 'off');
+  if (typeof v === 'object') {
+    // Complex object (filters / overrides): compact monospace chip, tinted.
+    return el('span', { class: 'audit-json ' + cls }, JSON.stringify(v));
+  }
+  return el('span', { class: 'audit-pill ' + cls }, String(v));
+}
+
+// Build the DOM nodes for an audit entry's `changes` cell.
+function _renderAuditChanges(entry) {
   const ch = entry.changes || {};
-  const fmtVal = (v) => {
-    if (Array.isArray(v)) return v.length ? '[' + v.join(', ') + ']' : '[]';
-    if (v === true) return 'on';
-    if (v === false) return 'off';
-    if (v === null || v === undefined || v === '') return '∅';
-    if (typeof v === 'object') return JSON.stringify(v);
-    return String(v);
-  };
+  const rows = [];
   if (entry.action === 'update') {
-    const parts = [];
     for (const [field, d] of Object.entries(ch)) {
       if (d && typeof d === 'object' && 'from' in d && 'to' in d) {
-        parts.push(`${field}: ${fmtVal(d.from)} → ${fmtVal(d.to)}`);
+        rows.push(el('div', { class: 'audit-change' }, [
+          el('span', { class: 'audit-field' }, _auditFieldLabel(field)),
+          el('span', { class: 'audit-vals' }, [
+            _auditValueNode(d.from, 'before'),
+            el('span', { class: 'audit-arrow' }, '→'),
+            _auditValueNode(d.to, 'after'),
+          ]),
+        ]));
       } else {
-        parts.push(field);
+        rows.push(el('div', { class: 'audit-change' },
+          el('span', { class: 'audit-field' }, _auditFieldLabel(field))));
       }
     }
-    return parts.length ? parts : ['(no field change)'];
+    if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, 'no field change'));
+    return rows;
   }
-  // create / delete — `changes` is a full snapshot. Surface the key fields.
-  const keys = ['alert_types', 'pager_enabled', 'pager_capcodes'];
-  const parts = [];
-  for (const k of keys) {
-    if (k in ch) parts.push(`${k}: ${fmtVal(ch[k])}`);
+  // create / delete — snapshot of the preset. Tint by action.
+  const kind = entry.action === 'delete' ? 'before' : 'after';
+  for (const k of ['alert_types', 'pager_enabled', 'pager_capcodes', 'name', 'channel_id']) {
+    if (k in ch) {
+      rows.push(el('div', { class: 'audit-change' }, [
+        el('span', { class: 'audit-field' }, _auditFieldLabel(k)),
+        el('span', { class: 'audit-vals' }, [_auditValueNode(ch[k], kind)]),
+      ]));
+    }
   }
-  return parts.length ? parts : ['—'];
+  if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, entry.action === 'create' ? 'created' : 'deleted'));
+  return rows;
 }
 
 function renderAdminAudit() {
@@ -4571,7 +4635,6 @@ function renderAdminAudit() {
     return host;
   }
 
-  const ACTION_COLOR = { create: '#4ade80', update: '#fbbf24', delete: '#f87171' };
   const tbl = el('table', { class: 'admin-table' });
   tbl.appendChild(el('thead', {}, el('tr', {}, [
     el('th', {}, 'When'),
@@ -4583,7 +4646,6 @@ function renderAdminAudit() {
   ])));
   const body = el('tbody', {});
   for (const e of entries) {
-    const changeLines = _formatAuditChanges(e);
     body.appendChild(el('tr', {}, [
       el('td', {}, e.created_at ? timeAgo(e.created_at) : '—'),
       el('td', {}, [
@@ -4598,8 +4660,8 @@ function renderAdminAudit() {
         el('span', {}, e.preset_name || '—'),
         e.channel_id ? el('span', { class: 'g-id' }, '#' + e.channel_id) : null,
       ]),
-      el('td', {}, el('span', { style: `color:${ACTION_COLOR[e.action] || 'inherit'}; font-weight:600;` }, e.action)),
-      el('td', { class: 'mono' }, changeLines.map(line => el('div', {}, line))),
+      el('td', {}, el('span', { class: 'audit-action audit-action-' + e.action }, e.action)),
+      el('td', { class: 'audit-changes-cell' }, _renderAuditChanges(e)),
     ]));
   }
   tbl.appendChild(body);
