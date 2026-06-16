@@ -979,6 +979,11 @@
       color: var(--text-soft);
       font-weight: 600;
     }
+    .section-sub {
+      margin: -0.4rem 0 0.7rem;
+      font-size: 0.82rem;
+      color: var(--text-soft);
+    }
 
     .overview-channels { display: grid; gap: 0.7rem; }
     .ov-ch-card {
@@ -4290,16 +4295,50 @@ async function openAdmin() {
   state.view = 'admin';
   state.admin = { loading: true, data: null, error: null };
   state.adminSources = { loading: true, data: null, error: null };
+  state.adminAudit = { loading: true, data: null, error: null };
   if (isMobile()) state.drawerOpen = false;
   render();
-  // Fire both in parallel — sources panel is independent and shouldn't block
-  // the main overview if it lags or errors.
+  // Fire in parallel — each panel is independent and shouldn't block the
+  // others if it lags or errors.
   const overviewP = api('/api/dashboard/admin/overview')
     .then(data => { state.admin = { loading: false, data, error: null }; })
     .catch(e => { state.admin = { loading: false, data: null, error: (e && e.message) || 'Failed to load admin data.' }; });
   const sourcesP = loadAdminSources();
-  await Promise.all([overviewP, sourcesP]);
+  const auditP = loadAdminAudit();
+  await Promise.all([overviewP, sourcesP, auditP]);
   render();
+}
+
+async function loadAdminAudit() {
+  state.adminAudit = { loading: true, data: null, error: null };
+  try {
+    const data = await api('/api/dashboard/admin/audit?limit=100');
+    state.adminAudit = { loading: false, data, error: null };
+  } catch (e) {
+    state.adminAudit = { loading: false, data: null, error: (e && e.message) || 'Failed to load audit log.' };
+  }
+}
+
+// Open any guild's config in the normal editor — admin only. The backend
+// guildGuard grants DASHBOARD_ADMIN_IDS access to every guild, so we just need
+// the guild present in state.guilds for the header/switcher to resolve its
+// name. Inject a synthetic eligible entry if it isn't one of the admin's own.
+function adminOpenGuild(g) {
+  const gid = String(g.guild_id);
+  if (!(state.guilds || []).some(x => String(x.id) === gid)) {
+    state.guilds = state.guilds || [];
+    state.guilds.push({
+      id: gid,
+      name: g.name || gid,
+      icon: null,
+      icon_url: g.icon_url || '',
+      has_bot: true,
+      manage_channels: true,
+      owner: false,
+      admin_opened: true,
+    });
+  }
+  selectGuild(gid);
 }
 
 async function loadAdminSources() {
@@ -4372,6 +4411,7 @@ function renderAdmin() {
 
   // Per-guild table
   wrap.appendChild(el('h3', { class: 'section-head' }, `Guilds (${(d.guilds||[]).length})`));
+  wrap.appendChild(el('div', { class: 'section-sub' }, 'Click a server to open and edit its configs.'));
   const gtbl = el('table', { class: 'admin-table' });
   const ghead = el('thead', {}, el('tr', {}, [
     el('th', {}, 'Guild'),
@@ -4380,11 +4420,12 @@ function renderAdmin() {
     el('th', {}, 'Pager'),
     el('th', {}, 'Muted'),
     el('th', {}, 'Last change'),
+    el('th', {}, ''),
   ]));
   gtbl.appendChild(ghead);
   const gbody = el('tbody', {});
   for (const g of d.guilds || []) {
-    gbody.appendChild(el('tr', {}, [
+    gbody.appendChild(el('tr', { class: 'row-link', title: 'Open this server’s config', onclick: () => adminOpenGuild(g) }, [
       el('td', {}, [
         g.icon_url ? el('img', { class: 'g-icon', src: g.icon_url, alt: '' }) : null,
         el('span', { class: 'g-name' }, g.name || '—'),
@@ -4395,6 +4436,8 @@ function renderAdmin() {
       el('td', {}, String(g.pager_presets)),
       el('td', {}, String(g.muted_presets)),
       el('td', {}, g.last_change ? timeAgo(g.last_change) : '—'),
+      el('td', {}, el('button', { class: 'btn btn-ghost btn-sm', onclick: (e) => { e.stopPropagation(); adminOpenGuild(g); } },
+        [el('i', { class: 'fa-solid fa-pen-to-square' }), ' Open'])),
     ]));
   }
   gtbl.appendChild(gbody);
@@ -4438,6 +4481,9 @@ function renderAdmin() {
   stbl.appendChild(sbody);
   wrap.appendChild(el('div', { class: 'admin-table-wrap' }, stbl));
 
+  // Preset audit log — who changed which config, and what changed.
+  wrap.appendChild(renderAdminAudit());
+
   // Bot controls (sync / test / cleanup) + recent-actions log
   wrap.appendChild(renderBotControls());
 
@@ -4445,6 +4491,97 @@ function renderAdmin() {
   wrap.appendChild(renderBroadcast());
 
   return wrap;
+}
+
+// Compact one-line summary of an audit entry's `changes` payload.
+function _formatAuditChanges(entry) {
+  const ch = entry.changes || {};
+  const fmtVal = (v) => {
+    if (Array.isArray(v)) return v.length ? '[' + v.join(', ') + ']' : '[]';
+    if (v === true) return 'on';
+    if (v === false) return 'off';
+    if (v === null || v === undefined || v === '') return '∅';
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
+  if (entry.action === 'update') {
+    const parts = [];
+    for (const [field, d] of Object.entries(ch)) {
+      if (d && typeof d === 'object' && 'from' in d && 'to' in d) {
+        parts.push(`${field}: ${fmtVal(d.from)} → ${fmtVal(d.to)}`);
+      } else {
+        parts.push(field);
+      }
+    }
+    return parts.length ? parts : ['(no field change)'];
+  }
+  // create / delete — `changes` is a full snapshot. Surface the key fields.
+  const keys = ['alert_types', 'pager_enabled', 'pager_capcodes'];
+  const parts = [];
+  for (const k of keys) {
+    if (k in ch) parts.push(`${k}: ${fmtVal(ch[k])}`);
+  }
+  return parts.length ? parts : ['—'];
+}
+
+function renderAdminAudit() {
+  const a = state.adminAudit || {};
+  const host = el('div', {});
+  host.appendChild(el('div', { class: 'overview-head', style: 'margin-top:1.5rem;' }, [
+    el('h3', { class: 'section-head', style: 'margin:0;' }, 'Config audit log'),
+    el('button', { class: 'btn btn-ghost btn-sm', onclick: () => loadAdminAudit().then(render) },
+      [el('i', { class: 'fa-solid fa-rotate' }), ' Refresh']),
+  ]));
+  host.appendChild(el('div', { class: 'section-sub' }, 'Recent preset create / update / delete events across all servers.'));
+
+  if (a.loading) {
+    host.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading…']));
+    return host;
+  }
+  if (a.error) {
+    host.appendChild(el('div', { class: 'empty' }, [el('i', { class: 'fa-solid fa-triangle-exclamation' }), ' ', a.error]));
+    return host;
+  }
+  const entries = (a.data && a.data.entries) || [];
+  if (!entries.length) {
+    host.appendChild(el('div', { class: 'empty' }, 'No config changes recorded yet.'));
+    return host;
+  }
+
+  const ACTION_COLOR = { create: '#4ade80', update: '#fbbf24', delete: '#f87171' };
+  const tbl = el('table', { class: 'admin-table' });
+  tbl.appendChild(el('thead', {}, el('tr', {}, [
+    el('th', {}, 'When'),
+    el('th', {}, 'Actor'),
+    el('th', {}, 'Server'),
+    el('th', {}, 'Preset'),
+    el('th', {}, 'Action'),
+    el('th', {}, 'Changes'),
+  ])));
+  const body = el('tbody', {});
+  for (const e of entries) {
+    const changeLines = _formatAuditChanges(e);
+    body.appendChild(el('tr', {}, [
+      el('td', {}, e.created_at ? timeAgo(e.created_at) : '—'),
+      el('td', {}, [
+        el('span', {}, '@' + (e.actor_name || '?')),
+        e.actor_id ? el('span', { class: 'g-id' }, e.actor_id) : null,
+      ]),
+      el('td', {}, [
+        e.guild_icon_url ? el('img', { class: 'g-icon', src: e.guild_icon_url, alt: '' }) : null,
+        el('span', { class: 'g-name' }, e.guild_name || e.guild_id),
+      ]),
+      el('td', {}, [
+        el('span', {}, e.preset_name || '—'),
+        e.channel_id ? el('span', { class: 'g-id' }, '#' + e.channel_id) : null,
+      ]),
+      el('td', {}, el('span', { style: `color:${ACTION_COLOR[e.action] || 'inherit'}; font-weight:600;` }, e.action)),
+      el('td', { class: 'mono' }, changeLines.map(line => el('div', {}, line))),
+    ]));
+  }
+  tbl.appendChild(body);
+  host.appendChild(el('div', { class: 'admin-table-wrap' }, tbl));
+  return host;
 }
 
 // State labels mapped to friendlier wording for the source-health panel.

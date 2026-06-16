@@ -19,9 +19,10 @@
  */
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import type { Pool } from 'pg';
 import { randomBytes } from 'node:crypto';
 import { log } from '../lib/log.js';
-import { getBotDbPool, isBotDbConfigured } from '../services/botDb.js';
+import { getBotDbPool, isBotDbConfigured, ensurePresetAuditTable } from '../services/botDb.js';
 import {
   DASH_OAUTH_COOKIE,
   DASH_OAUTH_STATE_TTL_SECS,
@@ -217,6 +218,13 @@ async function guildGuard(
   session: DashSession,
   guildId: string,
 ): Promise<{ entry: GuardEntry } | { err: Response }> {
+  // Dashboard admins (DASHBOARD_ADMIN_IDS) may view and edit any guild's
+  // presets, even guilds they aren't a member of — this powers the admin
+  // "all configs" view. Bypass the membership / Manage-Channels / bot-in-
+  // guild checks for them and hand back a synthetic owner-level entry.
+  if (isAdmin(session)) {
+    return { entry: { id: String(guildId), name: '', permissions: ADMINISTRATOR.toString(), owner: true } };
+  }
   const entry = (session.guilds ?? []).find((g) => String(g.id) === String(guildId));
   if (!entry) {
     return { err: dashErr(c, 'guild_not_found', 'You are not a member of that guild.', 403) };
@@ -664,6 +672,78 @@ function parseRoleIds(raw: unknown): bigint[] | null {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Preset audit log. Every create / update / delete records who changed what,
+// so an unexpected change (e.g. an alert type appearing on a "pager only"
+// preset) is traceable on the admin page. Best-effort — a failure here never
+// blocks the mutation it's recording.
+// ---------------------------------------------------------------------------
+const AUDIT_FIELDS = [
+  'name', 'channel_id', 'alert_types', 'pager_enabled', 'pager_capcodes',
+  'role_ids', 'enabled', 'enabled_ping', 'type_overrides', 'filters',
+] as const;
+
+// Normalise so order-insensitive fields (arrays of ids/types) compare equal
+// regardless of ordering, and null/undefined collapse together.
+function auditNormalize(v: unknown): unknown {
+  if (Array.isArray(v)) return [...v].map((x) => (x == null ? x : String(x))).sort();
+  return v ?? null;
+}
+
+function auditSnapshot(row: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!row) return out;
+  for (const f of AUDIT_FIELDS) out[f] = auditNormalize(row[f]);
+  return out;
+}
+
+function auditDiff(
+  before: Record<string, unknown> | null | undefined,
+  after: Record<string, unknown> | null | undefined,
+): Record<string, { from: unknown; to: unknown }> {
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  for (const f of AUDIT_FIELDS) {
+    const b = auditNormalize(before?.[f]);
+    const a = auditNormalize(after?.[f]);
+    if (JSON.stringify(b) !== JSON.stringify(a)) changes[f] = { from: b, to: a };
+  }
+  return changes;
+}
+
+async function recordPresetAudit(
+  pool: Pool,
+  entry: {
+    presetId: number | null;
+    guildId: string;
+    channelId?: string | null;
+    presetName?: string | null;
+    action: 'create' | 'update' | 'delete';
+    actor: DashSession;
+    changes: Record<string, unknown>;
+  },
+): Promise<void> {
+  try {
+    await ensurePresetAuditTable(pool);
+    await pool.query(
+      `INSERT INTO preset_audit_log
+         (preset_id, guild_id, channel_id, preset_name, action, actor_id, actor_name, changes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+      [
+        entry.presetId,
+        entry.guildId,
+        entry.channelId ?? null,
+        entry.presetName ?? null,
+        entry.action,
+        entry.actor?.uid ?? null,
+        entry.actor?.username ?? null,
+        JSON.stringify(entry.changes ?? {}),
+      ],
+    );
+  } catch (err) {
+    log.warn({ err }, 'recordPresetAudit failed');
+  }
+}
+
 dashboardRouter.get('/api/dashboard/guilds/:guildId/presets', async (c) => {
   const session = await requireSession(c);
   if (session instanceof Response) return session;
@@ -782,7 +862,17 @@ dashboardRouter.post('/api/dashboard/guilds/:guildId/presets', async (c) => {
     if (!r.rows[0]) {
       return dashErr(c, 'db_error', 'INSERT returned no row', 500);
     }
-    return c.json({ preset: rowToPreset(r.rows[0]) }, 201);
+    const created = r.rows[0];
+    await recordPresetAudit(pool, {
+      presetId: Number(created.id),
+      guildId: gid.toString(),
+      channelId: cid.toString(),
+      presetName: name,
+      action: 'create',
+      actor: session,
+      changes: auditSnapshot(created as unknown as Record<string, unknown>),
+    });
+    return c.json({ preset: rowToPreset(created) }, 201);
   } catch (err) {
     if ((err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
       return dashErr(
@@ -927,7 +1017,23 @@ dashboardRouter.patch('/api/dashboard/guilds/:guildId/presets/:presetId', async 
     params.push(presetId, gid.toString());
     const r = await pool.query<PresetRow>(sql, params);
     if (!r.rows[0]) return dashErr(c, 'not_found', 'Preset not found.', 404);
-    return c.json({ preset: rowToPreset(r.rows[0]) });
+    const after = r.rows[0];
+    const changes = auditDiff(
+      ex as unknown as Record<string, unknown>,
+      after as unknown as Record<string, unknown>,
+    );
+    if (Object.keys(changes).length > 0) {
+      await recordPresetAudit(pool, {
+        presetId: presetId,
+        guildId: gid.toString(),
+        channelId: String(after.channel_id),
+        presetName: after.name,
+        action: 'update',
+        actor: session,
+        changes,
+      });
+    }
+    return c.json({ preset: rowToPreset(after) });
   } catch (err) {
     if ((err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
       return dashErr(
@@ -962,6 +1068,11 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/presets/:presetId', async
   const pool = await getBotDbPool();
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
   try {
+    // Snapshot the row before deleting so the audit log keeps what was removed.
+    const before = await pool.query<PresetRow>(
+      `SELECT ${PRESET_COLS} FROM alert_presets WHERE id=$1 AND guild_id=$2`,
+      [presetId, gid.toString()],
+    );
     const r = await pool.query(
       'DELETE FROM alert_presets WHERE id=$1 AND guild_id=$2',
       [presetId, gid.toString()],
@@ -969,6 +1080,16 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/presets/:presetId', async
     if ((r.rowCount ?? 0) === 0) {
       return dashErr(c, 'not_found', 'Preset not found.', 404);
     }
+    const ex = before.rows[0];
+    await recordPresetAudit(pool, {
+      presetId: presetId,
+      guildId: gid.toString(),
+      channelId: ex ? String(ex.channel_id) : null,
+      presetName: ex?.name ?? null,
+      action: 'delete',
+      actor: session,
+      changes: auditSnapshot(ex as unknown as Record<string, unknown>),
+    });
     return c.json({ ok: true });
   } catch (err) {
     log.error({ err }, 'dashboard presets_delete error');
@@ -1677,6 +1798,70 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
     return c.json(r.value);
   } catch (err) {
     log.error({ err }, 'dashboard admin_overview error');
+    return dashErr(c, 'db_error', String((err as Error).message), 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Admin: preset audit log. Recent preset create/update/delete events with the
+// actor + field-level changes, so an unexpected config change is traceable.
+// Optional ?guild=<id> filter, ?limit=<n> (default 100, max 500).
+// ---------------------------------------------------------------------------
+dashboardRouter.get('/api/dashboard/admin/audit', async (c) => {
+  const session = await requireAdmin(c);
+  if (session instanceof Response) return session;
+  const pool = await getBotDbPool();
+  if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
+
+  const url = new URL(c.req.url);
+  const guildFilter = url.searchParams.get('guild');
+  let limit = Number(url.searchParams.get('limit') ?? 100);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 100;
+  limit = Math.min(limit, 500);
+
+  try {
+    await ensurePresetAuditTable(pool);
+    const params: unknown[] = [];
+    let where = '';
+    if (guildFilter) {
+      try {
+        where = 'WHERE guild_id=$1';
+        params.push(BigInt(guildFilter).toString());
+      } catch {
+        return dashErr(c, 'bad_request', 'guild must be numeric.', 400);
+      }
+    }
+    params.push(limit);
+    const r = await pool.query(
+      `SELECT id, preset_id, guild_id, channel_id, preset_name, action,
+              actor_id, actor_name, changes, created_at
+         FROM preset_audit_log ${where}
+        ORDER BY created_at DESC
+        LIMIT $${params.length}`,
+      params,
+    );
+    const guildIds = Array.from(new Set(r.rows.map((row) => String(row.guild_id))));
+    const metaMap = await getGuildMetaBulk(guildIds);
+    const entries = r.rows.map((row) => {
+      const meta = metaMap.get(String(row.guild_id));
+      return {
+        id: Number(row.id),
+        preset_id: row.preset_id == null ? null : Number(row.preset_id),
+        guild_id: String(row.guild_id),
+        guild_name: meta?.name ?? '',
+        guild_icon_url: meta?.icon_url ?? '',
+        channel_id: row.channel_id == null ? null : String(row.channel_id),
+        preset_name: row.preset_name ?? '',
+        action: row.action,
+        actor_id: row.actor_id == null ? null : String(row.actor_id),
+        actor_name: row.actor_name ?? '',
+        changes: row.changes ?? {},
+        created_at: isoOrNull(row.created_at),
+      };
+    });
+    return c.json({ entries, server_time: Math.floor(Date.now() / 1000) });
+  } catch (err) {
+    log.error({ err }, 'dashboard admin_audit error');
     return dashErr(c, 'db_error', String((err as Error).message), 500);
   }
 });

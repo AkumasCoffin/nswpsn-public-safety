@@ -123,6 +123,29 @@ CREATE INDEX IF NOT EXISTS idx_pfl_preset_fired_at ON preset_fire_log(preset_id,
 CREATE INDEX IF NOT EXISTS idx_pfl_fired_at        ON preset_fire_log(fired_at);
 
 -- ------------------------------------------------------------------------
+-- preset_audit_log — one row per dashboard preset create/update/delete,
+-- recording who changed what (actor + field-level from/to diff). Lets the
+-- admin page trace an unexpected config change (e.g. an alert type appearing
+-- on a "pager only" preset). Written by the Node backend's recordPresetAudit;
+-- preset_id is intentionally NOT a FK so delete events survive the row going
+-- away. Mirrored by ensurePresetAuditTable() in backends/node/src/services/botDb.ts.
+-- ------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS preset_audit_log (
+    id          BIGSERIAL PRIMARY KEY,
+    preset_id   BIGINT,
+    guild_id    BIGINT NOT NULL,
+    channel_id  BIGINT,
+    preset_name TEXT,
+    action      TEXT NOT NULL,            -- 'create' | 'update' | 'delete'
+    actor_id    BIGINT,                   -- Discord user id of the dashboard actor
+    actor_name  TEXT,
+    changes     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_preset_audit_created ON preset_audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_preset_audit_guild   ON preset_audit_log(guild_id, created_at DESC);
+
+-- ------------------------------------------------------------------------
 -- dash_sessions — persistent dashboard sessions so logins survive restarts.
 -- Written through by the backend's _dash_session_put / _dash_session_drop.
 -- ------------------------------------------------------------------------
