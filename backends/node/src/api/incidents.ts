@@ -147,11 +147,19 @@ incidentsRouter.get('/api/incidents', async (c) => {
     const activeOnly = url.searchParams.get('active') === 'true';
 
     const result = await withPool(async (pool) => {
-      const sql = activeOnly
-        ? 'SELECT * FROM incidents WHERE expires_at > now() ORDER BY created_at DESC'
-        : 'SELECT * FROM incidents ORDER BY created_at DESC';
-      const r = await pool.query<IncidentRow>(sql);
-      return r.rows.map(normaliseIncident);
+      // Always run the plain, comparison-free query and apply the
+      // active/expiry filter in JS off the `is_live` field that
+      // normaliseIncident already derives. The previous SQL
+      // `WHERE expires_at > now()` 500s when the deployed incidents table
+      // (created by the legacy python init_postgres.py, not migration 001)
+      // stores expires_at as TEXT — `text > timestamptz` has no operator.
+      // Filtering in JS makes active=true exactly as robust as the
+      // unfiltered list (which works), regardless of the column's type.
+      const r = await pool.query<IncidentRow>(
+        'SELECT * FROM incidents ORDER BY created_at DESC',
+      );
+      const rows = r.rows.map(normaliseIncident);
+      return activeOnly ? rows.filter((row) => row['is_live'] === true) : rows;
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     return c.json(result);
