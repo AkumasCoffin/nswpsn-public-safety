@@ -118,6 +118,7 @@ export interface GuildMeta {
   name: string;
   icon_url: string | null;
   member_count: number | null;
+  owner_id: string | null;
 }
 
 const GUILD_META_TTL_MS = 10 * 60 * 1000;
@@ -142,6 +143,7 @@ interface DiscordGuildBody {
   id?: string;
   name?: string;
   icon?: string | null;
+  owner_id?: string;
   approximate_member_count?: number;
   member_count?: number;
 }
@@ -174,6 +176,7 @@ export async function getGuildMeta(guildId: string): Promise<GuildMeta | null> {
       const meta: GuildMeta = {
         name: body.name ?? '',
         icon_url: guildIconUrl(gid, body.icon),
+        owner_id: body.owner_id ? String(body.owner_id) : null,
         member_count:
           typeof body.approximate_member_count === 'number'
             ? body.approximate_member_count
@@ -224,6 +227,73 @@ export async function getGuildMetaBulk(
       const gid = ids[idx]!;
       const meta = await getGuildMeta(gid);
       if (meta) out.set(gid, meta);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT, ids.length) }, worker));
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// User metadata (display name) via the bot token. Used to resolve guild
+// owner ids → names for the admin panel. Cached 30 min — owner display names
+// rarely change and the owner set is small (one per guild).
+// ---------------------------------------------------------------------------
+export interface UserMeta {
+  username: string;
+}
+
+const USER_META_TTL_MS = 30 * 60 * 1000;
+const userMetaCache = new Map<string, { ts: number; data: UserMeta }>();
+const userMetaInflight = new Map<string, Promise<UserMeta | null>>();
+
+interface DiscordUserBody {
+  id?: string;
+  username?: string;
+  global_name?: string | null;
+}
+
+export async function getUserMeta(userId: string): Promise<UserMeta | null> {
+  const uid = String(userId);
+  if (!uid) return null;
+  const now = Date.now();
+  const cached = userMetaCache.get(uid);
+  if (cached && now - cached.ts < USER_META_TTL_MS) return cached.data;
+  if (!getBotToken()) return null;
+
+  const inflight = userMetaInflight.get(uid);
+  if (inflight) return inflight;
+
+  const p = (async (): Promise<UserMeta | null> => {
+    try {
+      const res = await botGet<DiscordUserBody>(`/users/${uid}`);
+      if (res.status !== 200 || !res.body || typeof res.body !== 'object') return null;
+      const b = res.body as DiscordUserBody;
+      const data: UserMeta = { username: String(b.global_name || b.username || '') };
+      userMetaCache.set(uid, { ts: Date.now(), data });
+      return data;
+    } catch (err) {
+      log.warn({ err, uid }, 'getUserMeta failed');
+      return null;
+    } finally {
+      userMetaInflight.delete(uid);
+    }
+  })();
+  userMetaInflight.set(uid, p);
+  return p;
+}
+
+export async function getUserMetaBulk(userIds: Iterable<string>): Promise<Map<string, UserMeta>> {
+  const out = new Map<string, UserMeta>();
+  const ids = Array.from(new Set(Array.from(userIds, (u) => String(u)))).filter(Boolean);
+  if (ids.length === 0 || !getBotToken()) return out;
+  const MAX_CONCURRENT = 8;
+  let i = 0;
+  async function worker(): Promise<void> {
+    while (i < ids.length) {
+      const idx = i++;
+      const uid = ids[idx]!;
+      const m = await getUserMeta(uid);
+      if (m) out.set(uid, m);
     }
   }
   await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT, ids.length) }, worker));
