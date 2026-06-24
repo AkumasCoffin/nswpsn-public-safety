@@ -1195,6 +1195,14 @@
     .audit-json.audit-before { background: rgba(239,68,68,0.09);  border-color: rgba(239,68,68,0.25); }
     .audit-json.audit-after  { background: rgba(34,197,94,0.09);  border-color: rgba(34,197,94,0.25); }
     .audit-muted { color: #64748b; font-style: italic; font-size: 0.78rem; }
+    /* Fixed-height, scrollable audit log (holds up to ~100 entries) with a
+       sticky header row so columns stay labelled while scrolling. */
+    .audit-log-scroll { max-height: 440px; overflow-y: auto; }
+    .audit-log-scroll .admin-table thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--bg-elevated-soft);
+      box-shadow: inset 0 -1px 0 var(--border-subtle);
+    }
     .admin-pill {
       display: inline-block;
       background: var(--accent-soft);
@@ -4717,7 +4725,8 @@ function renderAdminAudit() {
     ]));
   }
   tbl.appendChild(body);
-  host.appendChild(el('div', { class: 'admin-table-wrap' }, tbl));
+  host.appendChild(el('div', { class: 'admin-table-wrap' },
+    el('div', { class: 'audit-log-scroll' }, tbl)));
   return host;
 }
 
