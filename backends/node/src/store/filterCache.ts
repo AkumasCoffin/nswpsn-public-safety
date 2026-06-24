@@ -1194,10 +1194,13 @@ export async function getFilterFacets(
   sourceFilter?: string | null,
   windowHours?: number | null,
 ): Promise<FilterFacets> {
-  const effectiveHours = Math.max(
-    1,
-    windowHours == null || !Number.isFinite(windowHours) ? DEFAULT_WINDOW_HOURS : windowHours,
-  );
+  // Clamp to [1, DEFAULT_WINDOW_HOURS]. Nothing exists beyond retention,
+  // so a larger window is meaningless — and absurd values would otherwise
+  // build degenerate intervals / unbounded cache keys.
+  const effectiveHours =
+    windowHours == null || !Number.isFinite(windowHours)
+      ? DEFAULT_WINDOW_HOURS
+      : Math.min(Math.max(1, windowHours), DEFAULT_WINDOW_HOURS);
   const key = cacheKey(sourceFilter, effectiveHours);
   const hit = facetsCache.get(key);
   const nowMs = Date.now();

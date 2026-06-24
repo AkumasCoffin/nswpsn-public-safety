@@ -383,7 +383,12 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   const dataCol = p.includeData ? 'a.data' : "'{}'::jsonb AS data";
 
   const allParams = [...sidecarAcc.params, ...parentAcc.params];
-  const fetchSize = p.cursor ? p.limit : p.offset + p.limit;
+  // Fetch ONE row beyond the page so the route's hasMore check
+  // (rows.length > offset+limit) can distinguish "exactly a full page"
+  // from "a full page with more behind it" and emit next_cursor only
+  // when another row provably exists — matching the non-unique path.
+  // The cteLimit above carries 2x headroom so the extra row is covered.
+  const fetchSize = (p.cursor ? p.limit : p.offset + p.limit) + 1;
   allParams.push(fetchSize);
   const limitPlaceholder = `$${allParams.length}`;
 

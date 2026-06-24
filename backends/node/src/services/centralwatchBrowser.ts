@@ -321,7 +321,9 @@ class CentralwatchBrowser {
     const next = new Promise<void>((res) => {
       release = res;
     });
-    this.mutex = prev.then(() => next);
+    // Chain on both fulfil + reject so a predecessor that rejected doesn't
+    // poison every later call (next always resolves via release() below).
+    this.mutex = prev.then(() => next, () => next);
     try {
       await prev;
       return await fn();

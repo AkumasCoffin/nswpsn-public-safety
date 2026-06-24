@@ -674,7 +674,7 @@ export async function callLlm(opts: {
         if (finish && !['stop', 'STOP'].includes(finish)) {
           log.warn({ finish }, 'LLM finish_reason non-stop (output may be truncated)');
         }
-        return choice.message.content.trim();
+        return (choice.message.content ?? '').trim();
       }
       lastBody = (await res.text()).slice(0, 1000);
       if (TRANSIENT_STATUSES.has(res.status) && attempt < maxAttempts - 1) {

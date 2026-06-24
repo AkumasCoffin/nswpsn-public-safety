@@ -423,12 +423,13 @@ export async function aggregateNews(
     const [key, feed] = entry;
     if (result.status === 'fulfilled') {
       const arr = result.value;
+      const taken = arr.slice(0, limit);
       sourcesStatus[key] = {
         name: feed.name,
-        count: arr.length,
-        status: arr.length > 0 ? 'ok' : 'empty',
+        count: taken.length,
+        status: taken.length > 0 ? 'ok' : 'empty',
       };
-      for (const item of arr.slice(0, limit)) {
+      for (const item of taken) {
         allItems.push(item);
       }
     } else {
@@ -451,8 +452,11 @@ export async function aggregateNews(
     filtered = allItems.filter((it) => it.category === q.category);
   }
 
+  // Counts are computed from the pre-filter list so the UI can show
+  // totals for categories the user hasn't currently selected (otherwise
+  // every non-selected category reads 0).
   const category_counts = { general: 0, emergency: 0, weather: 0 };
-  for (const it of filtered) {
+  for (const it of allItems) {
     if (it.category in category_counts) {
       category_counts[it.category as keyof typeof category_counts] += 1;
     }
