@@ -56,7 +56,10 @@ def extract_dcl_blocks(script_text: str):
 def main():
     for src_name, slug in PAGES:
         text = Path(src_name).read_text(encoding="utf-8")
-        main_m = re.search(r'<main class="main">(.*?)</main>', text, re.DOTALL)
+        main_m = re.search(r'<main[^>]*class="main"[^>]*>(.*?)</main>', text, re.DOTALL)
+        if not main_m:
+            print(f"{slug}: skip — no <main class=\"main\"> in {src_name}")
+            continue
         inner = main_m.group(1)
         body = re.sub(r'<header class="main-header">.*?</header>', "", inner, count=1, flags=re.DOTALL).strip()
         body = re.sub(r'<div class="main-footer-note">.*?</div>', "", body, flags=re.DOTALL).strip()
@@ -73,6 +76,7 @@ def main():
             fragment += "\n\n<script>\n" + "\n\n".join(keep) + "\n</script>"
 
         out = Path(f"fragments/{slug}.html")
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(fragment, encoding="utf-8")
         print(f"{slug}: {out.stat().st_size} bytes ({len(keep)} script block(s))")
 
