@@ -62,7 +62,16 @@ for (const a of argv) {
     if (Number.isFinite(n) && n > 0) flags.batch = n;
   }
   if (a.startsWith('--table=')) {
-    flags.tables = [a.slice(8)];
+    const t = a.slice(8);
+    // Validate against the allowlist before it reaches any SQL string —
+    // table names are interpolated directly (can't be parameterized).
+    if (!ALL_TABLES.includes(t)) {
+      console.error(
+        `Unknown --table=${t}. Must be one of: ${ALL_TABLES.join(', ')}`,
+      );
+      process.exit(1);
+    }
+    flags.tables = [t];
   }
 }
 

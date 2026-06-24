@@ -8,6 +8,7 @@ nsw-aviation/. Country is derived from the registration prefix.
 Run from the site root: python scripts/merge-aircraft.py
 """
 import csv
+import os
 import re
 from pathlib import Path
 
@@ -64,10 +65,16 @@ def country_for_reg(reg: str) -> str:
         return ""
     r = reg.strip().upper()
     for prefix, country in PREFIX_TABLE:
-        if r.startswith(prefix):
-            # Single-letter prefixes need a digit/dash after to avoid matching e.g. "C-FXYZ"
-            # accidentally hitting "CC" or similar.
-            return country
+        if not r.startswith(prefix):
+            continue
+        # Single-letter prefixes need a digit/dash after to avoid matching e.g.
+        # "C-FXYZ" accidentally hitting a multi-letter country that happens to
+        # share the first letter. Multi-char prefixes use plain startswith.
+        if len(prefix) == 1:
+            nxt = r[len(prefix):len(prefix) + 1]
+            if not (nxt.isdigit() or nxt == "-"):
+                continue
+        return country
     return ""
 
 
@@ -161,7 +168,11 @@ def main():
                     if r.get("Reg"):
                         existing_regs_in_file.add(r["Reg"].strip().upper())
         appended = 0
-        with open(path, "w", newline="", encoding="utf-8") as f:
+        # Write atomically: a crash mid-write must not clobber the existing
+        # file. Write to a temp file in the same dir, then os.replace() it
+        # over the target (atomic on the same filesystem).
+        tmp_path = path.with_name(path.name + ".tmp")
+        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=HEADERS, extrasaction="ignore")
             writer.writeheader()
             for r in existing_rows:
@@ -171,6 +182,7 @@ def main():
                     continue
                 writer.writerow(e)
                 appended += 1
+        os.replace(tmp_path, path)
         print(f"  {fname}: +{appended} ({len(existing_rows)} kept)")
 
 
