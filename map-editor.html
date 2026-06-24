@@ -30,6 +30,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
@@ -4145,6 +4146,14 @@ async function loadPagerData() {
     
     // Authenticated fetch wrapper
     function apiFetch(url, options = {}) {
+      // Block mutating requests until the API key has loaded, otherwise we'd
+      // silently send unauthenticated writes that get rejected/dropped.
+      const method = (options.method || 'GET').toUpperCase();
+      const isMutating = method === 'PUT' || method === 'POST' || method === 'DELETE' || method === 'PATCH';
+      if (isMutating && !API_KEY) {
+        alert('Not ready yet — API key is still loading. Please wait a moment and try again.');
+        return Promise.reject(new Error('apiFetch blocked: API_KEY not loaded'));
+      }
       const headers = {
         ...options.headers,
         ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
@@ -8957,6 +8966,9 @@ async function loadPagerData() {
           // Do not show stub rows on the editor map
           if (inc.is_rfs_stub) return;
 
+          // Skip incidents with invalid coordinates
+          if (!Number.isFinite(+inc.lat) || !Number.isFinite(+inc.lng)) return;
+
           let style = getPinStyle(inc);
           const status = (inc.status || '').toLowerCase();
           let pulseClass = '';
@@ -9019,11 +9031,16 @@ async function loadPagerData() {
             const newPos = e.target.getLatLng();
             // Reverse geocode to get updated location
             const newLocation = await reverseGeocode(newPos.lat, newPos.lng);
-            await apiFetch(`${PROXY_BASE}/api/incidents/${inc.id}`, {
+            const res = await apiFetch(`${PROXY_BASE}/api/incidents/${inc.id}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ lat: newPos.lat, lng: newPos.lng, location: newLocation || '' })
             });
+            if (!res.ok) {
+              alert('Failed to save the new pin location. Reverting.');
+              e.target.setLatLng([inc.lat, inc.lng]);
+              return;
+            }
             // Update location display if this incident is currently selected
             if (selectedId === inc.id && newLocation) {
               document.getElementById('edit-location-text').textContent = newLocation;
@@ -9079,7 +9096,7 @@ async function loadPagerData() {
       document.getElementById('instruction-text').style.display = 'none';
       document.getElementById('edit-id').value = inc.id;
       document.getElementById('edit-id-display').textContent = "ID: " + inc.id.split('-')[0];
-      document.getElementById('edit-title').value = inc.title;
+      document.getElementById('edit-title').value = inc.title || '';
       document.getElementById('edit-desc').value = inc.description || '';
       document.getElementById('edit-expiry').value = "2"; // Default to 2 hours
       document.getElementById('edit-status').value = inc.status || 'Going';
@@ -9162,8 +9179,10 @@ async function loadPagerData() {
 
       loadIncidentLogs(data.id);
       const [lat, lng] = data.point.split(' ').map(Number);
-      map.panTo([lat, lng]);
-      attachPagerSectionToEditor(lat, lng);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        map.panTo([lat, lng]);
+        attachPagerSectionToEditor(lat, lng);
+      }
     }
 
     function getPinStyle(inc) {
@@ -9246,7 +9265,7 @@ async function loadPagerData() {
             </div>
           </div>
           <div class="log-content markdown-body" id="log-text-${log.id}" style="font-size:0.85rem; color:#e2e8f0; line-height:1.4;">
-            ${marked.parse(log.message)}
+            ${DOMPurify.sanitize(marked.parse(log.message))}
           </div>
           <textarea id="log-edit-input-${log.id}" class="form-textarea" style="display:none; font-size:0.85rem; min-height:60px; margin-bottom:0.5rem;">${escapeHtml(log.message)}</textarea>
           <div id="log-edit-actions-${log.id}" style="display:none; gap:0.5rem; margin-bottom:0.5rem;">
@@ -10102,10 +10121,12 @@ async function loadPagerData() {
         })
       });
       const error = res.ok ? null : { message: 'Failed to create incident' };
+      // Always reset add-mode so the next map click doesn't create another
+      // incident, whether the request succeeded or failed.
+      if (addMode) toggleAddMode();
       if (error) {
         alert(error.message);
       } else {
-        toggleAddMode();
         loadIncidents();
       }
     }
@@ -10223,14 +10244,14 @@ async function loadPagerData() {
           const res = await apiFetch(`${PROXY_BASE}/api/w3w/convert-to-coordinates?words=${encodeURIComponent(cleanQuery)}`);
           const data = await res.json();
           if (data.error) {
-            resultsBox.innerHTML = `<div style="padding:0.8rem; color:#fca5a5;">W3W: ${data.error}</div>`;
+            resultsBox.innerHTML = `<div style="padding:0.8rem; color:#fca5a5;">W3W: ${escapeHtml(data.error)}</div>`;
             return;
           }
           if (data.coordinates) {
             resultsBox.innerHTML = '';
             const div = document.createElement('div');
             div.className = 'search-result-item';
-            div.innerHTML = `<span style="color:#e11f26; font-weight:600;">///</span>${data.words} <span style="color:#94a3b8; font-size:0.8em;">(${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)})</span>`;
+            div.innerHTML = `<span style="color:#e11f26; font-weight:600;">///</span>${escapeHtml(data.words)} <span style="color:#94a3b8; font-size:0.8em;">(${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)})</span>`;
             div.onclick = () => {
               // Auto-enable W3W layer if not already on
               if (!w3wEnabled) {
@@ -10254,7 +10275,18 @@ async function loadPagerData() {
                   color: '#e11f26', weight: 2, fillColor: '#e11f26', fillOpacity: 0.3, interactive: true
                 }).addTo(map);
               }
-              w3wHighlight.bindPopup(`<div class="w3w-popup"><div class="w3w-words" onclick="navigator.clipboard.writeText('${data.words}'); this.nextElementSibling.nextElementSibling.style.display='block'; setTimeout(() => this.nextElementSibling.nextElementSibling.style.display='none', 1500)"><span style="color:#e11f26;">///</span>${data.words}</div><div class="w3w-coords">${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)}</div><div class="w3w-copy-msg">✓ Copied!</div></div>`).openPopup();
+              const popupEl = document.createElement('div');
+              popupEl.className = 'w3w-popup';
+              popupEl.innerHTML = `<div class="w3w-words"><span style="color:#e11f26;">///</span>${escapeHtml(data.words)}</div><div class="w3w-coords">${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)}</div><div class="w3w-copy-msg">✓ Copied!</div>`;
+              const wordsEl = popupEl.querySelector('.w3w-words');
+              const copyMsgEl = popupEl.querySelector('.w3w-copy-msg');
+              const w3wWords = data.words;
+              wordsEl.addEventListener('click', () => {
+                navigator.clipboard.writeText(w3wWords);
+                copyMsgEl.style.display = 'block';
+                setTimeout(() => { copyMsgEl.style.display = 'none'; }, 1500);
+              });
+              w3wHighlight.bindPopup(popupEl).openPopup();
               w3wHighlight.on('popupclose', function() {
                 if (w3wHighlight) { map.removeLayer(w3wHighlight); w3wHighlight = null; }
               });
@@ -10834,7 +10866,8 @@ async function loadPagerData() {
       isRefreshing = true;
       updateCountdownDisplay();
       const startTime = Date.now();
-      
+
+      try {
       // Clear the frontend cache to force fresh fetch from backend
       for (const key of Object.keys(layerCache)) {
         layerCache[key].timestamp = 0;
@@ -10881,9 +10914,10 @@ async function loadPagerData() {
       
       const totalTime = Date.now() - startTime;
       console.log(`✅ Refresh done: ${prewarmTime}ms fetch, ${totalTime}ms total`);
-      
-      isRefreshing = false;
-      resetCountdown();
+      } finally {
+        isRefreshing = false;
+        resetCountdown();
+      }
     }
     
     async function manualRefresh() {
@@ -11126,15 +11160,23 @@ async function loadPagerData() {
           const cLat = data.coordinates ? data.coordinates.lat.toFixed(6) : lat.toFixed(6);
           const cLng = data.coordinates ? data.coordinates.lng.toFixed(6) : lng.toFixed(6);
           
-          w3wHighlight.bindPopup(`
-            <div class="w3w-popup">
-              <div class="w3w-words" onclick="navigator.clipboard.writeText('${words}'); document.getElementById('w3w-copy-msg').style.display='block'; setTimeout(() => document.getElementById('w3w-copy-msg').style.display='none', 1500)">
-                <span style="color:#e11f26;">///</span>${words}
+          const popupEl = document.createElement('div');
+          popupEl.className = 'w3w-popup';
+          popupEl.innerHTML = `
+              <div class="w3w-words">
+                <span style="color:#e11f26;">///</span>${escapeHtml(words)}
               </div>
               <div class="w3w-coords">${cLat}, ${cLng}</div>
-              <div class="w3w-copy-msg" id="w3w-copy-msg">✓ Copied!</div>
-            </div>
-          `).openPopup();
+              <div class="w3w-copy-msg">✓ Copied!</div>
+          `;
+          const wordsEl = popupEl.querySelector('.w3w-words');
+          const copyMsgEl = popupEl.querySelector('.w3w-copy-msg');
+          wordsEl.addEventListener('click', () => {
+            navigator.clipboard.writeText(words);
+            copyMsgEl.style.display = 'block';
+            setTimeout(() => { copyMsgEl.style.display = 'none'; }, 1500);
+          });
+          w3wHighlight.bindPopup(popupEl).openPopup();
           // Remove highlight when popup is closed (clicking elsewhere)
           w3wHighlight.on('popupclose', function() {
             if (w3wHighlight) { map.removeLayer(w3wHighlight); w3wHighlight = null; }

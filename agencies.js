@@ -48,7 +48,16 @@
     const slug = (params.get("slug") || "").toLowerCase();
 
     function activate(s) {
-      const link = mount.querySelector(`.agency-item-link[data-slug="${CSS.escape(s)}"]`);
+      let link;
+      if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+        link = mount.querySelector(`.agency-item-link[data-slug="${CSS.escape(s)}"]`);
+      } else {
+        // Fallback for very old browsers lacking CSS.escape.
+        const items = mount.querySelectorAll(".agency-item-link");
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].dataset.slug === s) { link = items[i]; break; }
+        }
+      }
       if (!link) return;
       link.classList.add("active");
       let el = link.closest("details");

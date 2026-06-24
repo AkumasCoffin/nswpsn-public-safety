@@ -1658,9 +1658,13 @@ function confirmDialog(title, body, okLabel='Confirm', okDanger=true) {
       modal.classList.remove('open');
       okBtn.onclick = null;
       qs('confirm-cancel').onclick = null;
+      modal._dismiss = null;
     };
     okBtn.onclick = () => { cleanup(); resolve(true); };
     qs('confirm-cancel').onclick = () => { cleanup(); resolve(false); };
+    // Exposed so the global Escape handler and backdrop-click can dismiss
+    // the dialog *and* resolve the awaiting caller (otherwise it hangs).
+    modal._dismiss = () => { cleanup(); resolve(false); };
     modal.classList.add('open');
   });
 }
@@ -1943,8 +1947,12 @@ function renderTopbar() {
     right.appendChild(inv);
   }
 
+  let defaultAvatarIdx = 0;
+  try {
+    defaultAvatarIdx = Number((BigInt(state.user.id || '0') >> 22n) % 6n);
+  } catch (_) { defaultAvatarIdx = 0; }
   const avatar = state.user.avatar_url
-    || `https://cdn.discordapp.com/embed/avatars/${(parseInt(state.user.id||'0')>>22)%6}.png`;
+    || `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIdx}.png`;
   const chip = document.createElement('div');
   chip.className = 'user-chip';
   chip.innerHTML = `<img src="${escapeHtml(avatar)}" alt="" onerror="this.style.visibility='hidden'"/><span>@${escapeHtml(state.user.username||'user')}</span>`;
@@ -4745,7 +4753,10 @@ let _adminSourcesTimer = null;
 function startAdminSourcesAutoRefresh() {
   if (_adminSourcesTimer) return;
   _adminSourcesTimer = setInterval(async () => {
-    if (state.view !== 'admin') return;
+    // Self-clear if the user has left the admin view by any path
+    // (guild select, overview, wizard, deep-link, logout). Otherwise the
+    // interval leaks and keeps fetching/mutating state every 30s.
+    if (state.view !== 'admin') { stopAdminSourcesAutoRefresh(); return; }
     try {
       await loadAdminSources();
       // Repaint just the sources host so the user's scroll position is preserved.
@@ -5607,7 +5618,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (qs('role-modal').classList.contains('open')) { closeRoleModal(); return; }
     if (qs('confirm-modal').classList.contains('open')) {
-      qs('confirm-modal').classList.remove('open');
+      const m = qs('confirm-modal');
+      if (m._dismiss) m._dismiss(); else m.classList.remove('open');
       return;
     }
     if (state.drawerOpen) { toggleDrawer(false); return; }
@@ -5618,7 +5630,10 @@ qs('role-modal').addEventListener('click', (e) => {
   if (e.target === qs('role-modal')) closeRoleModal();
 });
 qs('confirm-modal').addEventListener('click', (e) => {
-  if (e.target === qs('confirm-modal')) qs('confirm-modal').classList.remove('open');
+  if (e.target === qs('confirm-modal')) {
+    const m = qs('confirm-modal');
+    if (m._dismiss) m._dismiss(); else m.classList.remove('open');
+  }
 });
 window.addEventListener('resize', () => { syncDrawer(); });
 

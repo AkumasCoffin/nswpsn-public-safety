@@ -199,16 +199,18 @@ async function checkAuthState() {
     // User is logged in - fetch their roles
     loggedOutDiv.style.display = 'none';
     loggedInDiv.style.display = 'block';
-    if (emailDiv) emailDiv.textContent = session.user.email;
+    if (emailDiv) emailDiv.textContent = session.user?.email ?? '';
     
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
+      const userId = session.user?.id;
+      if (!userId) return null;
       for (let attempt = 0; attempt <= retries; attempt++) {
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
           
-          const roleCheck = await fetch(`${API_BASE_URL}/api/check-editor/${session.user.id}`, {
+          const roleCheck = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`, {
             signal: controller.signal
           });
           clearTimeout(timeoutId);

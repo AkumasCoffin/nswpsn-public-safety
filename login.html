@@ -456,6 +456,17 @@
     const AUTH_TIMEOUT_MS = 15000;
     const AUTH_TIMEOUT_MSG = 'Authentication service is not responding right now. Please try again in a moment.';
 
+    // Only allow same-origin relative paths as a redirect target to avoid
+    // open-redirect attacks via the `redirect` query param. Reject anything
+    // that isn't a single-slash-prefixed path (no protocol-relative `//`,
+    // no `scheme:` URLs). Falls back to the default when invalid/absent.
+    function safeRedirect(value, fallback) {
+      if (typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.includes(':')) {
+        return value;
+      }
+      return fallback;
+    }
+
     // Check if user is already logged in
     async function checkSession() {
       const { data } = await sb.auth.getSession();
@@ -463,7 +474,7 @@
         // Check if there's a redirect URL
         const urlParams = new URLSearchParams(window.location.search);
         const redirect = urlParams.get('redirect');
-        window.location.href = redirect || 'map-editor.html';
+        window.location.href = safeRedirect(redirect, 'map-editor.html');
       }
     }
     
@@ -528,8 +539,8 @@
         
         const urlParams = new URLSearchParams(window.location.search);
         const redirect = urlParams.get('redirect');
-        window.location.href = redirect || 'map-editor.html';
-        
+        window.location.href = safeRedirect(redirect, 'map-editor.html');
+
       } catch (err) {
         if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'page' });
         messageEl.className = 'message error';
@@ -589,7 +600,7 @@
     document.getElementById('login-password').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        document.getElementById('login-form').dispatchEvent(new Event('submit'));
+        document.getElementById('login-form').requestSubmit();
       }
     });
   </script>

@@ -1126,7 +1126,16 @@
     let dataRetentionDays = 31; // will be updated from API
     
     // Track viewed incidents (persisted in sessionStorage)
-    let viewedIncidents = new Set(JSON.parse(sessionStorage.getItem('viewedIncidents') || '[]'));
+    // Guard against corrupted storage so a bad value can't break page load.
+    function loadViewedIncidents() {
+      try {
+        const parsed = JSON.parse(sessionStorage.getItem('viewedIncidents') || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    let viewedIncidents = new Set(loadViewedIncidents());
     
     // Store providers data for hierarchical filtering
     let providersData = [];
@@ -2728,7 +2737,7 @@
         }
         
         html += `
-          <div class="incident-card ${viewed ? 'viewed' : ''} ${selectedIncident?.id === item.id ? 'selected' : ''}"
+          <div class="incident-card ${viewed ? 'viewed' : ''} ${selectedIncident?.source_id != null && selectedIncident.source_id === item.source_id ? 'selected' : ''}"
                onclick="selectIncident(${idx})" data-idx="${idx}" data-source-id="${escapeHtml(item.source_id || '')}">
             <div class="incident-icon">${icon}</div>
             <div class="incident-content">
@@ -2918,6 +2927,7 @@
         const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1`;
         console.log('History URL:', url);
         const res = await fetch(url);
+        if (!res.ok) throw new Error(`API returned ${res.status}`);
         const data = await res.json();
         
         console.log('History response:', data.records?.length, 'records');
@@ -3088,6 +3098,7 @@
             try {
               const pagerUrl = `${API_BASE}/api/pager/hits?api_key=${API_KEY}&incident_id=${encodeURIComponent(incidentId)}&hours=72&limit=20`;
               const pagerRes = await fetch(pagerUrl);
+              if (!pagerRes.ok) throw new Error(`API returned ${pagerRes.status}`);
               const pagerJson = await pagerRes.json();
               
               if (pagerJson.features && pagerJson.features.length > 0) {
@@ -3119,6 +3130,7 @@
               // include ended ones — backend default is now unique=1)
               const proximityUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
               const proxRes = await fetch(proximityUrl);
+              if (!proxRes.ok) throw new Error(`API returned ${proxRes.status}`);
               const proxData = await proxRes.json();
               
               if (proxData.records && proxData.records.length > 0) {
@@ -3179,6 +3191,7 @@
               // include ended incidents (backend default is now unique=1)
               const incUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
               const incRes = await fetch(incUrl);
+              if (!incRes.ok) throw new Error(`API returned ${incRes.status}`);
               const incData = await incRes.json();
               
               // Filter by time - only incidents within 24 hours of pager time
@@ -3300,8 +3313,9 @@
           // include ended ones — backend default is now unique=1)
           const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
           const res = await fetch(url);
+          if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = await res.json();
-          
+
           // Filter by time - only pagers within 24 hours of incident time
           // Also deduplicate by source_id (keep most recent)
           const twentyFourHoursMs = 24 * 60 * 60 * 1000;
@@ -3389,15 +3403,30 @@
         try {
           const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
           const res = await fetch(url);
+          if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = await res.json();
-          
+
           toast.remove();
-          
+
           if (data.records && data.records.length > 0) {
-            // Add to beginning of current page and re-render
-            currentPageResults.unshift(data.records[0]);
-            renderResults();
-            idx = 0;
+            // Off-page incident: do NOT inject it into currentPageResults —
+            // unshift()/renderResults() would shift every card's data-idx and
+            // corrupt pagination so later selectIncident(idx) clicks map to the
+            // wrong record. Instead surface it directly without touching the
+            // paged array or its indices.
+            const record = data.records[0];
+            markAsViewed(sourceId);
+            updateViewedCount();
+            selectedIncident = record;
+            // Clear any list selection highlight since this record isn't in the list.
+            document.querySelectorAll('.incident-card.selected').forEach(el => el.classList.remove('selected'));
+            if (record.latitude && record.longitude && record.source !== 'ausgrid') {
+              showMapPanel(record);
+            } else {
+              closeMapPanel();
+              selectedIncident = record;
+            }
+            return;
           } else {
             // Not found
             const errorToast = document.createElement('div');
@@ -3413,7 +3442,7 @@
           return;
         }
       }
-      
+
       // Mark as viewed
       markAsViewed(sourceId);
       
@@ -3462,7 +3491,7 @@
         const provider = providersData.find(p => p.name === currentProviderValue);
         if (provider) {
           // Get icon from the option element which has the correct local mapping
-          const opt = document.querySelector(`#provider-options .custom-dropdown-option[data-value="${provider.name}"]`);
+          const opt = document.querySelector(`#provider-options .custom-dropdown-option[data-value="${CSS.escape(provider.name)}"]`);
           const icon = opt?.dataset?.icon || provider.icon || 'circle';
           const color = opt?.dataset?.color || provider.color || '#64748b';
           selectProvider(provider.name, provider.name, icon, color);
@@ -4191,7 +4220,7 @@
         const provider = providersData.find(p => p.name === providerName);
         if (provider) {
           // Get icon from the option element which has the correct local mapping
-          const opt = document.querySelector(`#provider-options .custom-dropdown-option[data-value="${provider.name}"]`);
+          const opt = document.querySelector(`#provider-options .custom-dropdown-option[data-value="${CSS.escape(provider.name)}"]`);
           const icon = opt?.dataset?.icon || provider.icon || 'circle';
           const color = opt?.dataset?.color || provider.color || '#64748b';
           // Use skipTrigger=true to prevent immediate onProviderChange
@@ -4212,7 +4241,7 @@
           await onSourceChange();
           if (params.has('subcategory')) {
             const subcatValue = params.get('subcategory');
-            const subcatOpt = document.querySelector(`#subcategory-options .custom-dropdown-option[data-value="${subcatValue}"]`);
+            const subcatOpt = document.querySelector(`#subcategory-options .custom-dropdown-option[data-value="${CSS.escape(subcatValue)}"]`);
             if (subcatOpt) {
               selectSubcategory(subcatValue, subcatOpt.querySelector('span')?.textContent || subcatValue, subcatOpt.dataset.icon, subcatOpt.dataset.color);
             } else {
@@ -4227,7 +4256,7 @@
           const matchingType = provider.types.find(t => t.source === sourceParam);
           if (matchingType) {
             // Get icon from the option element which has the correct local mapping
-            const opt = document.querySelector(`#provider-options .custom-dropdown-option[data-value="${provider.name}"]`);
+            const opt = document.querySelector(`#provider-options .custom-dropdown-option[data-value="${CSS.escape(provider.name)}"]`);
             const icon = opt?.dataset?.icon || provider.icon || 'circle';
             const color = opt?.dataset?.color || provider.color || '#64748b';
             // Use skipTrigger=true
@@ -4243,7 +4272,7 @@
         await onSourceChange();
         if (params.has('subcategory')) {
           const subcatValue = params.get('subcategory');
-          const subcatOpt = document.querySelector(`#subcategory-options .custom-dropdown-option[data-value="${subcatValue}"]`);
+          const subcatOpt = document.querySelector(`#subcategory-options .custom-dropdown-option[data-value="${CSS.escape(subcatValue)}"]`);
           if (subcatOpt) {
             selectSubcategory(subcatValue, subcatOpt.querySelector('span')?.textContent || subcatValue, subcatOpt.dataset.icon, subcatOpt.dataset.color);
           } else {
@@ -4256,9 +4285,18 @@
       }
       if (params.has('hours')) {
         const hoursParam = params.get('hours');
-        currentQuickFilter = hoursParam === 'all' ? -1 : parseInt(hoursParam);
+        if (hoursParam === 'all') {
+          currentQuickFilter = -1;
+        } else {
+          const parsedHours = parseInt(hoursParam, 10);
+          // Ignore malformed/non-positive values (NaN, 0, negatives) and keep
+          // the existing default rather than corrupting the quick filter state.
+          if (Number.isFinite(parsedHours) && parsedHours > 0) {
+            currentQuickFilter = parsedHours;
+          }
+        }
         document.querySelectorAll('.quick-btn').forEach(btn => {
-          btn.classList.toggle('active', parseInt(btn.dataset.hours) === currentQuickFilter);
+          btn.classList.toggle('active', parseInt(btn.dataset.hours, 10) === currentQuickFilter);
         });
       }
     }
@@ -4280,7 +4318,10 @@
     // Silent refresh - updates current page data without full reload
     async function silentRefresh() {
       if (isLoading) return;
-      
+      // Claim the in-flight lock so a manual performSearch() can't run
+      // concurrently and clobber currentPageResults/nextCursor/lastShownPage.
+      isLoading = true;
+
       // Save current scroll position
       const container = document.getElementById('results-list');
       const scrollTop = container?.scrollTop || window.scrollY;
@@ -4407,9 +4448,11 @@
         
       } catch (e) {
         console.warn('Silent refresh failed:', e);
+      } finally {
+        isLoading = false;
       }
     }
-    
+
     // === RADIO SCANNER SUMMARIES ===
     let summariesPage = 1;
     let summariesLimit = 20;

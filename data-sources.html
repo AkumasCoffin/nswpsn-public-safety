@@ -1130,21 +1130,26 @@
     function toggleSidebar() {
       const sidebar = document.getElementById('sidebar');
       const overlay = document.querySelector('.menu-overlay');
-      sidebar.classList.toggle('open');
-      overlay.classList.toggle('active');
+      if (sidebar) sidebar.classList.toggle('open');
+      if (overlay) overlay.classList.toggle('active');
     }
 
     // ======== HEARTBEAT SYSTEM ========
     const PROXY_BASE = 'https://api.forcequit.xyz';
     let heartbeatTimer = null;
 
-    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+    const PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const PAGE_TYPE = 'data-sources';
@@ -1152,7 +1157,7 @@
 
     async function sendHeartbeat(action = 'ping') {
       try {
-        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${encodeURIComponent(action)}&page_id=${encodeURIComponent(PAGE_ID)}&page_type=${encodeURIComponent(PAGE_TYPE)}&data_page=${IS_DATA_PAGE}`);
       } catch (e) {}
     }
 

@@ -32,7 +32,8 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
 
@@ -4222,7 +4223,7 @@ function initPagerHoursFromStorage() {
             }
           }
           
-          if (lat && lng) {
+          if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
             rfsItems.push({
               id: generateRfsId(props.guid || props.link || `rfs-${idx}`),
               source: 'rfs',
@@ -4370,8 +4371,14 @@ function initPagerHoursFromStorage() {
           if (h.alias) aliasSet.add(h.alias);
           else if (h.capcode) aliasSet.add(h.capcode);
           if (h.agency) agencySet.add(h.agency);
-          if (!latestHit || (h.incident_time && h.incident_time > latestHit.incident_time)) {
+          if (!latestHit) {
             latestHit = h;
+          } else {
+            const hMs = getPagerHitTimestampMs(h);
+            const latestMs = getPagerHitTimestampMs(latestHit);
+            if (hMs !== null && (latestMs === null || hMs > latestMs)) {
+              latestHit = h;
+            }
           }
         });
 
@@ -5216,7 +5223,7 @@ function initPagerHoursFromStorage() {
         if (latestIncidentId) {
           let mostRecentForId = null;
           hits.forEach(h => {
-            if (h.incident_id != latestIncidentId) return;
+            if (String(h.incident_id) !== String(latestIncidentId)) return;
             const ms = getPagerHitTimestampMs(h);
             if (ms !== null && (mostRecentForId === null || ms > mostRecentForId)) {
               mostRecentForId = ms;
@@ -5714,7 +5721,7 @@ function initPagerHoursFromStorage() {
               updatesHtml = `<div class="update-timeline">` + updates.map(u => `
                 <div class="update-item">
                   <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
-                  <div class="update-msg markdown-body">${marked.parse(u.message)}</div>
+                  <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
                 </div>`).join('') + `</div>`;
             } else {
               updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
@@ -5788,7 +5795,7 @@ function initPagerHoursFromStorage() {
             updatesHtml = `<div class="update-timeline">` + updates.map(u => `
               <div class="update-item">
                 <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
-                <div class="update-msg markdown-body">${marked.parse(u.message)}</div>
+                <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
               </div>`).join('') + `</div>`;
           } else {
             updatesHtml = '<div style="font-size:0.85rem; color:var(--text-soft); margin-top:1rem; font-style:italic;">No user updates yet.</div>';
@@ -5804,25 +5811,34 @@ function initPagerHoursFromStorage() {
       else if (lvl.includes('watch')) badgeClass = "pill-orange";
       else if (lvl.includes('advice')) badgeClass = "pill-blue";
 
+      // Only allow http(s) links — drop anything else (javascript:, data:, etc.)
+      let rfsLinkSafe = '';
+      try {
+        const parsed = new URL(data.link, window.location.href);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          rfsLinkSafe = parsed.href;
+        }
+      } catch (_) { /* invalid URL — leave link dropped */ }
+
       let html = `
         <div style="margin-bottom:0.5rem;">
           <span class="pill pill-agency-rfs">NSW RFS FEED</span>
-          <span class="pill ${badgeClass}">${data['ALERT LEVEL'] || 'Incident'}</span>
+          <span class="pill ${badgeClass}">${escapeHtml(data['ALERT LEVEL'] || 'Incident')}</span>
         </div>
-        <h2 style="margin:0 0 0.5rem 0; font-size:1.6rem; color:#fff;">${data.title}</h2>
+        <h2 style="margin:0 0 0.5rem 0; font-size:1.6rem; color:#fff;">${escapeHtml(data.title)}</h2>
         <div style="background:rgba(255,255,255,0.05); padding:1rem; border-radius:0.5rem; margin-bottom:1rem; font-size:0.9rem; line-height:1.6; color:#cbd5e1;">
-          <strong>Location:</strong> ${data['LOCATION'] || 'N/A'}<br>
-          <strong>Status:</strong> ${data['STATUS'] || 'Unknown'}<br>
-          <strong>Type:</strong> ${data['TYPE'] || 'Fire'}<br>
-          <strong>Size:</strong> ${data['SIZE'] || '-'}<br>
-          <strong>Agency:</strong> ${data['RESPONSIBLE AGENCY'] || 'RFS'}
+          <strong>Location:</strong> ${escapeHtml(data['LOCATION'] || 'N/A')}<br>
+          <strong>Status:</strong> ${escapeHtml(data['STATUS'] || 'Unknown')}<br>
+          <strong>Type:</strong> ${escapeHtml(data['TYPE'] || 'Fire')}<br>
+          <strong>Size:</strong> ${escapeHtml(data['SIZE'] || '-')}<br>
+          <strong>Agency:</strong> ${escapeHtml(data['RESPONSIBLE AGENCY'] || 'RFS')}
         </div>
         <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:1rem;">
-          <strong style="color:#a78bfa;">Last Updated:</strong> ${item.updatedISO ? new Date(item.updatedISO).toLocaleString() : (data['UPDATED'] || 'Recently')}
+          <strong style="color:#a78bfa;">Last Updated:</strong> ${escapeHtml(item.updatedISO ? new Date(item.updatedISO).toLocaleString() : (data['UPDATED'] || 'Recently'))}
         </div>
-        <a href="${data.link}" target="_blank" class="btn btn-primary" style="display:inline-block; width:100%; text-align:center; margin-bottom:1.5rem;">
+        ${rfsLinkSafe ? `<a href="${escapeHtml(rfsLinkSafe)}" target="_blank" class="btn btn-primary" style="display:inline-block; width:100%; text-align:center; margin-bottom:1.5rem;">
           View on Fires Near Me
-        </a>
+        </a>` : ''}
         <hr style="border:0; border-top:1px solid var(--border-subtle); margin:0 0 1.5rem 0;">
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log (External)</h3>
         ${updatesHtml}
@@ -5943,14 +5959,14 @@ function initPagerHoursFromStorage() {
           const res = await apiFetch(`${PROXY_BASE}/api/w3w/convert-to-coordinates?words=${encodeURIComponent(cleanQuery)}`);
           const data = await res.json();
           if (data.error) {
-            resultsBox.innerHTML = `<div style="padding:0.8rem; color:#fca5a5;">W3W: ${data.error}</div>`;
+            resultsBox.innerHTML = `<div style="padding:0.8rem; color:#fca5a5;">W3W: ${escapeHtml(data.error)}</div>`;
             return;
           }
           if (data.coordinates) {
             resultsBox.innerHTML = '';
             const div = document.createElement('div');
             div.className = 'search-result-item';
-            div.innerHTML = `<span style="color:#e11f26; font-weight:600;">///</span>${data.words} <span style="color:#94a3b8; font-size:0.8em;">(${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)})</span>`;
+            div.innerHTML = `<span style="color:#e11f26; font-weight:600;">///</span>${escapeHtml(data.words)} <span style="color:#94a3b8; font-size:0.8em;">(${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)})</span>`;
             div.onclick = () => {
               // Auto-enable W3W layer if not already on
               if (!w3wEnabled) {
@@ -5975,7 +5991,20 @@ function initPagerHoursFromStorage() {
                   color: '#e11f26', weight: 2, fillColor: '#e11f26', fillOpacity: 0.3, interactive: true
                 }).addTo(map);
               }
-              w3wHighlight.bindPopup(`<div class="w3w-popup"><div class="w3w-words" onclick="navigator.clipboard.writeText('${data.words}'); this.nextElementSibling.nextElementSibling.style.display='block'; setTimeout(() => this.nextElementSibling.nextElementSibling.style.display='none', 1500)"><span style="color:#e11f26;">///</span>${data.words}</div><div class="w3w-coords">${data.coordinates.lat.toFixed(6)}, ${data.coordinates.lng.toFixed(6)}</div><div class="w3w-copy-msg">✓ Copied!</div></div>`).openPopup();
+              const w3wWords = data.words;
+              w3wHighlight.bindPopup(`<div class="w3w-popup"><div class="w3w-words" data-w3w-copy><span style="color:#e11f26;">///</span>${escapeHtml(w3wWords)}</div><div class="w3w-coords">${escapeHtml(data.coordinates.lat.toFixed(6))}, ${escapeHtml(data.coordinates.lng.toFixed(6))}</div><div class="w3w-copy-msg">✓ Copied!</div></div>`).openPopup();
+              w3wHighlight.on('popupopen', function(e) {
+                const el = e.popup.getElement().querySelector('[data-w3w-copy]');
+                if (!el) return;
+                el.addEventListener('click', function() {
+                  navigator.clipboard.writeText(w3wWords);
+                  const msg = el.parentElement.querySelector('.w3w-copy-msg');
+                  if (msg) {
+                    msg.style.display = 'block';
+                    setTimeout(() => { msg.style.display = 'none'; }, 1500);
+                  }
+                });
+              });
               w3wHighlight.on('popupclose', function() {
                 if (w3wHighlight) { map.removeLayer(w3wHighlight); w3wHighlight = null; }
               });
@@ -6823,7 +6852,7 @@ function initPagerHoursFromStorage() {
         _ensureHexViewportListeners();
         _renderPoliceHexGrid();
         setStats(
-          `${points.length.toLocaleString()} bins · ${data.total_records.toLocaleString()} pings · ${data.days}d window`,
+          `${points.length.toLocaleString()} bins · ${(data.total_records ?? 0).toLocaleString()} pings · ${data.days ?? 0}d window`,
         );
         // Legend min/max are set inside _renderPoliceHexGrid using the
         // actual hex-max (which can be larger than data.max_count after
@@ -10814,7 +10843,7 @@ function initPagerHoursFromStorage() {
         const att = detail.latestAttendance;
         html += `<div style="padding:6px 8px; background:rgba(168,85,247,0.08); border-radius:6px; margin-bottom:8px;">`;
         html += `<div style="color:#c084fc; font-weight:700; font-size:10px; letter-spacing:0.5px; margin-bottom:4px;">👥 ATTENDANCE <span style="color:#94a3b8; font-weight:400;">(${escapeHtml(att.date)})</span></div>`;
-        const latest = att.entries[att.entries.length - 1];
+        const latest = att.entries && att.entries.length ? att.entries[att.entries.length - 1] : null;
         if (latest) {
           html += `<div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:4px;">`;
           html += `<div style="background:rgba(255,255,255,0.06); padding:3px 6px; border-radius:4px; text-align:center;"><span style="color:#e2e8f0; font-size:11px;">🏊 ${latest.swimmers} swimming</span></div>`;
@@ -11277,10 +11306,13 @@ function initPagerHoursFromStorage() {
               const windDir = p.windDirection || 0;
               const windArrow = getWindArrow(windDir);
               const temp = p.temperature;
-              
+              const hasTemp = Number.isFinite(temp);
+
               // Temperature-based color scheme (background, text, border) - 6 colors
               let tempBg, tempText, tempBorder;
-              if (temp >= 35) {
+              if (!hasTemp) {
+                tempBg = 'rgba(71,85,105,0.95)'; tempText = '#e2e8f0'; tempBorder = '#64748b'; // No data - slate
+              } else if (temp >= 35) {
                 tempBg = 'rgba(153,27,27,0.95)'; tempText = '#fecaca'; tempBorder = '#ef4444'; // Hot - red
               } else if (temp >= 30) {
                 tempBg = 'rgba(154,52,18,0.95)'; tempText = '#fed7aa'; tempBorder = '#f97316'; // Warm-hot - orange
@@ -11297,7 +11329,7 @@ function initPagerHoursFromStorage() {
               const icon = L.divIcon({
                 className: 'weather-pin',
                 html: `<div style="background:${tempBg}; border:2px solid ${tempBorder}; border-radius:10px; padding:5px 8px; font-size:12px; color:#fff; white-space:nowrap; box-shadow:0 3px 10px rgba(0,0,0,0.5); display:flex; align-items:center; gap:4px;">
-                  <span style="color:${tempText}; font-weight:700; font-size:14px;">${Math.round(temp)}°</span>
+                  <span style="color:${tempText}; font-weight:700; font-size:14px;">${hasTemp ? Math.round(temp) + '°' : '—'}</span>
                   <span style="font-size:16px; line-height:1;">${windArrow}</span>
                   <span style="color:${tempText}; font-size:11px;">${Math.round(p.windSpeed || 0)}</span>
                 </div>`,
@@ -11308,9 +11340,9 @@ function initPagerHoursFromStorage() {
               const marker = L.marker([lat, lon], { icon }).addTo(weatherLayer);
               
               let tip = `<div style="min-width:160px;">`;
-              tip += `<strong style="font-size:14px;">${p.weatherIcon} ${escapeHtml(p.name)}</strong>`;
+              tip += `<strong style="font-size:14px;">${escapeHtml(p.weatherIcon)} ${escapeHtml(p.name)}</strong>`;
               tip += `<br><span style="color:#fbbf24;">${escapeHtml(p.weatherDescription)}</span>`;
-              tip += `<br><span style="color:${tempBorder};">🌡️ ${temp}°C</span>`;
+              tip += `<br><span style="color:${tempBorder};">🌡️ ${hasTemp ? temp + '°C' : 'N/A'}</span>`;
               if (p.feelsLike != null) tip += ` <span style="color:#9ca3af;">(feels ${p.feelsLike}°)</span>`;
               tip += `<br><span style="color:#67e8f9;">💧 ${p.humidity}% humidity</span>`;
               tip += `<br><span style="color:#a78bfa;">💨 Wind: ${p.windSpeed} km/h ${getWindDirection(windDir)}</span>`;
@@ -11781,13 +11813,27 @@ function initPagerHoursFromStorage() {
           
           w3wHighlight.bindPopup(`
             <div class="w3w-popup">
-              <div class="w3w-words" onclick="navigator.clipboard.writeText('${words}'); document.getElementById('w3w-copy-msg').style.display='block'; setTimeout(() => document.getElementById('w3w-copy-msg').style.display='none', 1500)">
-                <span style="color:#e11f26;">///</span>${words}
+              <div class="w3w-words" data-w3w-copy>
+                <span style="color:#e11f26;">///</span>${escapeHtml(words)}
               </div>
-              <div class="w3w-coords">${cLat}, ${cLng}</div>
+              <div class="w3w-coords">${escapeHtml(cLat)}, ${escapeHtml(cLng)}</div>
               <div class="w3w-copy-msg" id="w3w-copy-msg">✓ Copied!</div>
             </div>
           `).openPopup();
+          // Wire the copy handler without string-building an onclick — the raw
+          // `words` value is captured in this closure, never injected into HTML/JS.
+          w3wHighlight.on('popupopen', function(e) {
+            const el = e.popup.getElement().querySelector('[data-w3w-copy]');
+            if (!el) return;
+            el.addEventListener('click', function() {
+              navigator.clipboard.writeText(words);
+              const msg = document.getElementById('w3w-copy-msg');
+              if (msg) {
+                msg.style.display = 'block';
+                setTimeout(() => { msg.style.display = 'none'; }, 1500);
+              }
+            });
+          });
           // Remove highlight when popup is closed (clicking elsewhere)
           w3wHighlight.on('popupclose', function() {
             if (w3wHighlight) { map.removeLayer(w3wHighlight); w3wHighlight = null; }
