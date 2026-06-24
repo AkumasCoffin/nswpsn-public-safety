@@ -1620,8 +1620,13 @@ class NSWPSNBot(commands.Bot):
             )
             if not effective['enabled']:
                 continue
-            raw_capcodes = preset.get('pager_capcodes') or ''
-            capcode_list = [c.strip().upper() for c in raw_capcodes.split(',') if c.strip()]
+            raw_capcodes = preset.get('pager_capcodes')
+            if isinstance(raw_capcodes, list):
+                capcode_list = [str(c).strip().upper() for c in raw_capcodes if str(c).strip()]
+            elif raw_capcodes:
+                capcode_list = [c.strip().upper() for c in str(raw_capcodes).split(',') if c.strip()]
+            else:
+                capcode_list = []
             preset_plans.append((preset, effective, capcode_list))
 
         # channel_id -> {'containers': [...], 'role_ids_set': set(), 'any_preset_id': ..., 'msg_hashes': [...]}

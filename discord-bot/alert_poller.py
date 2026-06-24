@@ -97,7 +97,7 @@ class AlertPoller:
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=30) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         return await response.json()
                     else:
@@ -238,7 +238,7 @@ class AlertPoller:
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
             incident_id = item.get('id', '')
             logs = item.get('logs', [])
-            latest_log_id = logs[0].get('id', '') if logs else ''
+            latest_log_id = logs[0].get('id', '') if logs and isinstance(logs[0], dict) else ''
             return f"user_{incident_id}_{latest_log_id}"
         
         # Fallback to hash
@@ -758,7 +758,7 @@ class AlertPoller:
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=30) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         incidents = await response.json()
                         if not isinstance(incidents, list):
@@ -795,7 +795,7 @@ class AlertPoller:
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=15) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     if response.status == 200:
                         data = await response.json()
                         return data if isinstance(data, list) else []
@@ -968,7 +968,7 @@ class AlertPoller:
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, params=params, timeout=30) as response:
+                async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         data = await response.json()
                         # API returns GeoJSON FeatureCollection, extract features
