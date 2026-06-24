@@ -115,8 +115,8 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
           LIMIT ${PER_INCIDENT_LOOKBACK}`,
         [entry.source, entry.source_id],
       );
-      await client.query('COMMIT');
       if (parentRes.rows.length === 0) {
+        await client.query('COMMIT');
         skipped += 1;
         continue;
       }
@@ -136,7 +136,12 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
           ? (newest.data as Record<string, unknown>)
           : {};
       const srcTs = extractSourceTimestampUnix(dataObj, entry.source);
-      const upd = await pool.query(
+      // Run the UPDATE on the SAME connection inside the still-open
+      // transaction so the 90s SET LOCAL statement_timeout actually
+      // covers it AND the catch's ROLLBACK is a real rollback (not a
+      // dead no-op against an already-committed tx). COMMIT only after
+      // the write lands.
+      const upd = await client.query(
         `UPDATE ${table}_latest
             SET latest_fetched_at = $1,
                 source_timestamp_unix = COALESCE(source_timestamp_unix, $4)
@@ -145,6 +150,7 @@ async function recomputeOneTable(table: ArchiveTable): Promise<{
             AND (latest_fetched_at <> $1 OR source_timestamp_unix IS NULL)`,
         [earliestSameHash, entry.source, entry.source_id, srcTs],
       );
+      await client.query('COMMIT');
       if ((upd.rowCount ?? 0) > 0) updated += 1;
       else skipped += 1;
     } catch (err) {

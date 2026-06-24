@@ -34,6 +34,10 @@ pgPkg.types.setTypeParser(TIMESTAMP_OID, (str: string) =>
 );
 
 let _pool: Pool | null = null;
+// In-flight init promise — coalesces concurrent first calls so the
+// `await import('pg')` between the null-check and the assignment can't
+// race into building (and leaking) two pools.
+let _poolPromise: Promise<Pool> | null = null;
 
 export function isRdioConfigured(): boolean {
   return Boolean(config.RDIO_DATABASE_URL);
@@ -42,17 +46,23 @@ export function isRdioConfigured(): boolean {
 export async function getRdioPool(): Promise<Pool | null> {
   if (_pool) return _pool;
   if (!config.RDIO_DATABASE_URL) return null;
-  const { Pool: PgPool } = await import('pg');
-  _pool = new PgPool({
-    connectionString: config.RDIO_DATABASE_URL,
-    max: 5,
-    statement_timeout: 30_000,
-    idleTimeoutMillis: 60_000,
-  });
-  _pool.on('error', (err) => {
-    log.error({ err }, 'rdio pg pool error');
-  });
-  return _pool;
+  if (!_poolPromise) {
+    _poolPromise = (async () => {
+      const { Pool: PgPool } = await import('pg');
+      const pool = new PgPool({
+        connectionString: config.RDIO_DATABASE_URL,
+        max: 5,
+        statement_timeout: 30_000,
+        idleTimeoutMillis: 60_000,
+      });
+      pool.on('error', (err) => {
+        log.error({ err }, 'rdio pg pool error');
+      });
+      _pool = pool;
+      return pool;
+    })();
+  }
+  return _poolPromise;
 }
 
 export async function closeRdioPool(): Promise<void> {
@@ -60,6 +70,7 @@ export async function closeRdioPool(): Promise<void> {
     await _pool.end();
     _pool = null;
   }
+  _poolPromise = null;
 }
 
 // ---------------------------------------------------------------------------

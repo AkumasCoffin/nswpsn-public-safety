@@ -213,7 +213,6 @@ export async function runBatchOnce(): Promise<{
         }
       }
     }
-    lastStrategyRetryAt = now;
   } else {
     // Default-fetch mode (we're cooling on DOM); 5min retry timer hasn't
     // come up yet, so go straight to the fetch() path.
@@ -240,6 +239,10 @@ export async function runBatchOnce(): Promise<{
       );
     }
   }
+  // Advance the DOM-retry cooldown regardless of which branch ran — only
+  // updating it in the tryDomFirst branch latched dueForRetry permanently
+  // true once we flipped to fetch, defeating the fetch fast-path.
+  lastStrategyRetryAt = now;
 
   const { evicted, remaining } = cleanup(activeIds);
   // Demoted to debug — 30 s cadence drowns the log otherwise. The

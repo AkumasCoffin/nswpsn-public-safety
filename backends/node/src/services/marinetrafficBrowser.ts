@@ -107,6 +107,9 @@ class MarinetrafficBrowser {
         'marinetraffic browser init failed — degrading',
       );
       this.ready = false;
+      // Reset so a later init() can retry — a transient chromium launch
+      // failure must not permanently disable the worker.
+      this.initPromise = null;
     });
     return this.initPromise;
   }
@@ -242,7 +245,7 @@ class MarinetrafficBrowser {
     this.ready = true;
 
     this.refreshTimer = setInterval(
-      () => void this.refreshSession(),
+      () => void this.refreshSession().catch(() => { /* never let a refresh rejection become unhandled */ }),
       SESSION_REFRESH_INTERVAL_MS,
     );
   }
@@ -265,7 +268,9 @@ class MarinetrafficBrowser {
     const prev = this.mutex;
     let release!: () => void;
     const next = new Promise<void>((res) => { release = res; });
-    this.mutex = prev.then(() => next);
+    // Chain on both fulfil + reject so a predecessor that rejected doesn't
+    // poison every later call (next always resolves via release() below).
+    this.mutex = prev.then(() => next, () => next);
     try {
       await prev;
       return await fn();
