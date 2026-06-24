@@ -1983,7 +1983,7 @@ class EmbedBuilder:
             for agency in agencies:
                 icon_for_agency = ''
                 for key, emoji in agency_icons.items():
-                    if key.lower() in agency.lower():
+                    if key.lower() in str(agency).lower():
                         icon_for_agency = emoji + ' '
                         break
                 agency_list.append(f"{icon_for_agency}{agency}")
@@ -1992,7 +1992,8 @@ class EmbedBuilder:
             ))
 
         if logs and len(logs) > 0:
-            sorted_logs = sorted(logs, key=lambda x: x.get('created_at', ''), reverse=True)
+            dict_logs = [x for x in logs if isinstance(x, dict)]
+            sorted_logs = sorted(dict_logs, key=lambda x: x.get('created_at', ''), reverse=True)
             log_lines = ["**📋 Incident Log**"]
             for log in sorted_logs[:5]:
                 log_ts = log.get('created_at', '')
