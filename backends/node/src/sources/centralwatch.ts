@@ -16,11 +16,20 @@
  */
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { log } from '../lib/log.js';
 import { centralwatchBrowser } from '../services/centralwatchBrowser.js';
 
+// Anchor the data path to this module's directory rather than
+// process.cwd() — otherwise launching from another cwd silently serves
+// zero cameras (ENOENT is swallowed by the readers). This module lives
+// at backends/node/{src,dist}/sources/, so ../../../data reaches
+// backends/data in both the tsx and compiled cases.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const JSON_PATH = path.resolve(
-  process.cwd(),
+  __dirname,
+  '..',
+  '..',
   '..',
   'data',
   'centralwatch_cameras.json',

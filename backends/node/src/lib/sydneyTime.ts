@@ -44,3 +44,37 @@ export function sydneyIsoFromDate(d: Date | null | undefined): string | null {
   if (!d) return null;
   return formatSydneyNaive(d.getTime());
 }
+
+/**
+ * Inverse of formatSydneyNaive: interpret (y, mo, d, hh, mm, ss) as a
+ * wall-clock time in Australia/Sydney and return the epoch SECONDS for
+ * that instant. Used to parse `date_from`/`date_to`/`today` boundaries
+ * that the frontend sends as Sydney wall-clock dates — `new Date('...')`
+ * would instead parse them in the server's local zone (UTC on prod),
+ * shifting the requested day by the Sydney offset (10–11h).
+ *
+ * Works by computing Sydney's UTC offset at the candidate instant via
+ * formatSydneyNaive, then correcting. One refinement iteration handles
+ * the DST-transition days where the offset at the UTC guess differs from
+ * the offset at the resolved instant.
+ */
+export function sydneyUnixFromNaive(
+  y: number,
+  mo: number,
+  d: number,
+  hh = 0,
+  mm = 0,
+  ss = 0,
+): number | null {
+  const wantUTC = Date.UTC(y, mo - 1, d, hh, mm, ss);
+  if (!Number.isFinite(wantUTC)) return null;
+  // offsetMs(ms) = (Sydney wall-clock of ms, read as if UTC) − ms.
+  const offsetMs = (ms: number): number => {
+    const syd = formatSydneyNaive(ms); // 'YYYY-MM-DDTHH:mm:ss' in Sydney
+    const asUtc = Date.parse(`${syd}Z`);
+    return Number.isFinite(asUtc) ? asUtc - ms : 0;
+  };
+  let instant = wantUTC - offsetMs(wantUTC);
+  instant = wantUTC - offsetMs(instant); // refine across DST edges
+  return Math.floor(instant / 1000);
+}

@@ -21,8 +21,21 @@
  * both `POST /api/editor-requests` (public — anyone can submit) and
  * `GET /api/editor-requests` (private — admins only)).
  */
+import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { config } from '../../config.js';
+
+/**
+ * Constant-time string comparison. Guards against length mismatch first
+ * (timingSafeEqual throws on unequal-length buffers); leaking the length
+ * of the secret is not a meaningful side-channel here.
+ */
+function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, 'utf8');
+  const bBuf = Buffer.from(b, 'utf8');
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
 
 // Exact-match public endpoints (no API key required). Mirror of python
 // external_api_proxy.py:5027-5039.
@@ -35,6 +48,11 @@ export const PUBLIC_ENDPOINTS = new Set<string>([
   '/api/waze/ingest',
   '/api/data/history/filters',
   '/api/status',
+  // The cameras collection endpoint itself is public; sub-paths are
+  // covered by the '/api/centralwatch/cameras/' prefix. Listed here as
+  // an exact match so the prefix doesn't over-match sibling routes like
+  // '/api/centralwatch/cameras-admin'.
+  '/api/centralwatch/cameras',
 ]);
 
 // Prefix-match public endpoints — mirrors python's PUBLIC_ENDPOINT_PREFIXES
@@ -42,7 +60,7 @@ export const PUBLIC_ENDPOINTS = new Set<string>([
 export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   '/api/check-editor/',
   '/api/centralwatch/image/',
-  '/api/centralwatch/cameras',
+  '/api/centralwatch/cameras/',
   '/api/dashboard/',
   // Vessel image proxy is loaded via <img src> which can't add the
   // X-API-Key header, so it has to be public (the upstream MT photo
@@ -103,7 +121,7 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
     );
   }
 
-  if (provided !== config.NSWPSN_API_KEY) {
+  if (!safeEqual(provided, config.NSWPSN_API_KEY)) {
     return c.json(
       {
         error: 'Invalid API key',

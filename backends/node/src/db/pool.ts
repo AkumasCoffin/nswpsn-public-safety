@@ -26,6 +26,20 @@ import { config } from '../config.js';
 let _pool: Pool | null = null;
 let _writerPool: Pool | null = null;
 
+// Bound how long pool.connect() waits for a free/established connection.
+// Without this, `pool.connect()` waits FOREVER when Postgres is saturated
+// or refusing connections — which made startup hang indefinitely on the
+// migration preflight (the "stuck after LiveStore hydrated" symptom).
+// 15s is plenty for a healthy DB; on a sick one we fail fast, log, and
+// (since migrations are non-fatal at boot) still bind the port so /api
+// stays observable. Env-tunable.
+const CONNECT_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env['PG_CONNECT_TIMEOUT_MS'] ?? '15000') || 15000,
+);
+const READ_POOL_MAX = Math.max(2, Number(process.env['PG_POOL_MAX'] ?? '40') || 40);
+const WRITER_POOL_MAX = Math.max(2, Number(process.env['PG_WRITER_POOL_MAX'] ?? '8') || 8);
+
 /**
  * Read pool. Sized for concurrent /api/data/history requests (each
  * issues up to 10 queries — 5 families × {data, count}). Bumped from
@@ -41,13 +55,14 @@ export async function getPool(): Promise<Pool | null> {
   const { Pool: PgPool } = await import('pg');
   _pool = new PgPool({
     connectionString: config.DATABASE_URL,
-    max: 40,
+    max: READ_POOL_MAX,
     // Each new connection gets a default statement_timeout. Individual
     // queries can override with SET LOCAL inside a transaction.
     statement_timeout: 30_000,
     // Cap how long a connection sits idle before pg recycles it. Keeps
     // long-lived processes from accumulating zombie sessions.
     idleTimeoutMillis: 60_000,
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
   });
 
   // Surface unexpected pool errors via the structured logger. Without
@@ -76,9 +91,10 @@ export async function getWriterPool(): Promise<Pool | null> {
   const { Pool: PgPool } = await import('pg');
   _writerPool = new PgPool({
     connectionString: config.DATABASE_URL,
-    max: 8,
+    max: WRITER_POOL_MAX,
     statement_timeout: 60_000,
     idleTimeoutMillis: 60_000,
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
   });
   _writerPool.on('error', (err) => {
     // eslint-disable-next-line no-console

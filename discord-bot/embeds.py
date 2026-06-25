@@ -115,8 +115,14 @@ def waze_subtype_labels(alert_type: str, subtype: str):
     # numeric/None subtype must never raise and sink the whole alert batch.
     subtype = str(subtype) if subtype not in (None, '') else ''
     token = subtype.strip().upper()
-    if not defs or not token:
+    if not defs:
         return (None, humanize_subtype(subtype))
+    if not token:
+        # No token at all (e.g. a jam polyline, or a bare alert). A
+        # single-class type (jam / police / roadwork) still has an
+        # unambiguous class; multi-class waze_hazard can't be resolved
+        # without one, so the caller falls back.
+        return (defs[0][1], '') if len(defs) == 1 else (None, '')
     match = _waze_match_class(token, defs)
     if not match:
         return (None, humanize_subtype(subtype))
@@ -136,6 +142,28 @@ def waze_subtype_labels(alert_type: str, subtype: str):
     if not variant or variant == 'General':
         return (class_label, '')
     return (class_label, variant + suffix)
+
+
+def waze_heading_label(alert_type: str, subtype: str):
+    """One heading for a Waze alert: the full subtype (type word kept +
+    the detail), falling back to just the main type when no subtype was
+    supplied. Same rule for every Waze type:
+
+        POLICE_HIDING             -> "Police Hiding"
+        POLICE_WITH_MOBILE_CAMERA -> "Police With Mobile Camera"
+        ACCIDENT_MAJOR            -> "Accident Major"
+        HAZARD_ON_ROAD_POT_HOLE   -> "Hazard Pot Hole"
+        ACCIDENT (no subtype)     -> "Accident"     (type fallback)
+        ROAD_CLOSED (no subtype)  -> "Road closure" (type fallback)
+        a jam polyline            -> "Traffic jam"  (type fallback)
+
+    Returns None for an unrecognised type/subtype so the caller can fall
+    back to displayType / the generic source label.
+    """
+    cls, variant = waze_subtype_labels(alert_type, subtype)
+    if not cls:
+        return None
+    return f"{cls} {variant}" if variant else cls
 
 
 def parse_timestamp_to_datetime(ts_value: Any) -> Optional[datetime]:
@@ -219,26 +247,6 @@ def format_timestamp(ts: str, use_discord_format: bool = True) -> Optional[str]:
         return str(ts) if ts else None
 
 
-def format_timestamp_relative(ts: str) -> Optional[str]:
-    """Format timestamp as relative time (e.g., '2 hours ago')"""
-    if not ts:
-        return None
-    try:
-        dt = None
-        if 'T' in str(ts):
-            dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
-        elif ',' in str(ts) and 'GMT' in str(ts):
-            from email.utils import parsedate_to_datetime
-            dt = parsedate_to_datetime(ts)
-
-        if dt:
-            unix_ts = int(dt.timestamp())
-            return f"<t:{unix_ts}:R>"  # Relative time
-        return str(ts)
-    except (ValueError, TypeError, OSError, AttributeError):
-        return str(ts) if ts else None
-
-
 def build_map_url(lat: float, lon: float, label: str = "", layer: str = "incidents", zoom: int = 15) -> str:
     """Build a URL to the NSW PSN map"""
     label_encoded = quote(label, safe='') if label else ''
@@ -313,25 +321,44 @@ def _truncate_container_inplace(container, max_chars: int) -> int:
     return cumulative
 
 
-def chunk_containers_for_message(containers: list, max_chars: int = 3200,
-                                 max_per_message: int = 2) -> list:
+def _container_component_count(container) -> int:
+    """Approximate the number of Components-V2 components a Container uses,
+    including nested children (ActionRow buttons, section accessories).
+    Discord caps a single message at 40 components, so message packing has
+    to budget on this in addition to the char limit."""
+    n = 1  # the container itself
+    try:
+        for child in getattr(container, 'children', []) or []:
+            n += 1
+            for sub in getattr(child, 'children', []) or []:
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
+def chunk_containers_for_message(containers: list, max_chars: int = 3600,
+                                 max_components: int = 36,
+                                 max_per_message: int = 25) -> list:
     """Split Components-V2 Container objects into groups that each fit under
-    Discord's per-message budget.
+    Discord's per-message budget, packing as MANY as fit per message.
 
-    Discord enforces a hard 4000-char limit on the total *displayable text*
-    across all components in one message. That sum includes TextDisplay
-    bodies, button labels, role-ping mentions, and section spacing overhead
-    — `_container_char_size` only counts TextDisplay content, so we leave
-    ~800 chars of headroom (max_chars=3200) to absorb everything else.
+    Discord enforces two hard per-message ceilings: ~4000 chars of total
+    displayable text, and 40 total components. We pack up to both budgets
+    (max_chars=3600 leaves headroom for button labels / role-ping mentions;
+    max_components=36 leaves room for the role-ping TextDisplay added to the
+    first chunk). Packing tightly is what keeps a Waze burst (hundreds of
+    small alerts) from exploding into hundreds of one- or two-alert messages
+    that overflow the send queue. `max_per_message` is just a soft backstop;
+    the char/component budgets normally bind first.
 
-    A *single* container can also exceed the limit on its own (e.g. a busy
-    radio summary incident with 30 transcripts) — when we detect that, we
-    truncate the container in-place rather than letting Discord 400 us.
-    Pack at most 2 containers per message so one busy incident still gets
-    its own room without starving its neighbour."""
+    A *single* container can exceed the char limit on its own (e.g. a busy
+    radio summary) — when detected, truncate it in-place rather than letting
+    Discord 400 us."""
     groups = []
     current = []
     current_size = 0
+    current_components = 0
     for c in containers:
         sz = _container_char_size(c)
         # Defensive: if a single container is over budget, trim it before
@@ -339,43 +366,20 @@ def chunk_containers_for_message(containers: list, max_chars: int = 3200,
         # in its own (size > max_chars) group and Discord rejects the send.
         if sz > max_chars:
             sz = _truncate_container_inplace(c, max_chars)
+        cc = _container_component_count(c)
         would_exceed = current and (
             current_size + sz > max_chars
+            or current_components + cc > max_components
             or len(current) >= max_per_message
         )
         if would_exceed:
             groups.append(current)
             current = []
             current_size = 0
+            current_components = 0
         current.append(c)
         current_size += sz
-    if current:
-        groups.append(current)
-    return groups
-
-
-def chunk_embeds_for_message(embeds: list, max_chars: int = 5500,
-                             max_per_message: int = 10) -> list:
-    """Split a list of embeds into groups that each fit under Discord's per-
-    message budget (10 embeds + 6000 char total). Default limits leave a bit
-    of headroom so we don't tip over on rounding.
-    Returns a list of lists; every group is send-safe in one call.
-    """
-    groups = []
-    current = []
-    current_size = 0
-    for e in embeds:
-        sz = _embed_char_size(e)
-        would_exceed = current and (
-            current_size + sz > max_chars
-            or len(current) >= max_per_message
-        )
-        if would_exceed:
-            groups.append(current)
-            current = []
-            current_size = 0
-        current.append(e)
-        current_size += sz
+        current_components += cc
     if current:
         groups.append(current)
     return groups
@@ -503,37 +507,6 @@ class EmbedBuilder:
         'general': '📢',
     }
     
-    def build_alert_embed(self, alert: Dict[str, Any], previous_message: Dict[str, Any] = None) -> discord.Embed:
-        """Build an embed for any alert type
-        
-        Args:
-            alert: The alert data
-            previous_message: Optional previous message info for linking (has 'message_url' and 'status')
-        """
-        alert_type = alert.get('type', 'unknown')
-        data = alert.get('data', {})
-        
-        if alert_type == 'rfs':
-            return self._build_rfs_embed(data, previous_message=previous_message)
-        elif alert_type == 'firms':
-            return self._build_firms_embed(data)
-        elif alert_type.startswith('bom_'):
-            return self._build_bom_embed(data, alert_type)
-        elif alert_type.startswith('traffic_'):
-            return self._build_traffic_embed(data, alert_type)
-        elif (alert_type.startswith('endeavour_')
-              or alert_type == 'ausgrid'
-              or alert_type.startswith('essential_')):
-            return self._build_power_embed(data, alert_type)
-        elif alert_type.startswith('waze_'):
-            return self._build_waze_embed(data, alert_type)
-        elif alert_type == 'user_incident':
-            return self._build_user_incident_embed(data, previous_message=previous_message)
-        elif alert_type == 'radio_summary':
-            return self._build_radio_summary_embed(data)
-        else:
-            return self._build_generic_embed(data, alert_type)
-    
     def _parse_rfs_description(self, description: str) -> Dict[str, str]:
         """Parse RFS description text into structured fields
         
@@ -582,917 +555,6 @@ class EmbedBuilder:
         
         return fields
     
-    def _build_rfs_embed(self, data: Dict[str, Any], previous_message: Dict[str, Any] = None) -> discord.Embed:
-        """Build embed for RFS incidents
-        
-        Args:
-            data: The incident data
-            previous_message: Optional previous message info for linking updates
-        """
-        props = data.get('properties', {})
-        
-        title = strip_html(props.get('title', 'Unknown Incident'))
-        link = props.get('link', '')
-        
-        # Get values directly from properties (API already parses them)
-        # Also check for raw description if API didn't parse
-        raw_desc = props.get('description', '') or ''
-        
-        # Use API-parsed values first, fall back to parsing description
-        status = props.get('status', '')
-        location = props.get('location', '')
-        size = props.get('size', '')
-        alert_level = props.get('alertLevel', '')
-        council = props.get('councilArea', '')  # New API field
-        fire_type = props.get('fireType', '')   # New API field
-        updated = props.get('updated', '')      # Display format: "7 Jan 2026 13:35"
-        updated_iso = props.get('updatedISO', '')  # ISO format with timezone
-        responsible_agency = props.get('responsibleAgency', '')  # New API field
-        
-        # If API didn't parse (fields empty) but we have raw description, parse it
-        if raw_desc and not status and not location:
-            parsed = self._parse_rfs_description(raw_desc)
-            alert_level = parsed.get('alert_level', '') or alert_level
-            status = parsed.get('status', '') or status
-            location = parsed.get('location', '') or location
-            size = parsed.get('size', '') or size
-            council = parsed.get('council_area', '') or council
-            fire_type = parsed.get('type', '') or fire_type
-            updated = parsed.get('updated', '') or updated
-        
-        # Clean any values that might have extra text
-        if alert_level and len(alert_level) > 30:
-            # alertLevel is too long - probably contains raw description, extract just the level
-            match = re.match(r'^(Advice|Watch and Act|Emergency Warning|Emergency)', alert_level, re.IGNORECASE)
-            if match:
-                alert_level = match.group(1)
-            else:
-                alert_level = ''
-        
-        # Color based on alert level or status
-        color = self.COLORS['rfs']
-        level_emoji = '🟡'
-        
-        # Determine alert level from status if not set
-        if not alert_level and status:
-            status_lower = status.lower()
-            if 'out of control' in status_lower:
-                alert_level = 'Emergency Warning'
-            elif 'being controlled' in status_lower:
-                alert_level = 'Watch and Act'
-            elif 'under control' in status_lower:
-                alert_level = 'Advice'
-        
-        if alert_level:
-            level_lower = alert_level.lower()
-            if 'emergency' in level_lower:
-                color = 0xFF0000
-                level_emoji = '🔴'
-            elif 'watch' in level_lower:
-                color = 0xFF8C00
-                level_emoji = '🟠'
-            elif 'advice' in level_lower:
-                color = 0xFFD700
-                level_emoji = '🟡'
-        
-        # Use source timestamp for embed (the "updated" time from RFS)
-        embed_timestamp = parse_timestamp_to_datetime(updated_iso) or datetime.now()
-        
-        embed = discord.Embed(
-            title=f"🔥 {title}",
-            color=color,
-            timestamp=embed_timestamp
-        )
-        
-        # Row 1: Alert Level, Status (all inline)
-        if alert_level:
-            embed.add_field(name="⚠️ Alert Level", value=f"{level_emoji} {alert_level}", inline=True)
-        
-        if status:
-            embed.add_field(name="📊 Status", value=status, inline=True)
-        
-        if fire_type:
-            embed.add_field(name="🔥 Type", value=fire_type, inline=True)
-        
-        # Row 2: Size
-        if size:
-            embed.add_field(name="📏 Size", value=size, inline=True)
-        
-        # Location on its own row (not inline)
-        if location:
-            embed.add_field(name="📍 Location", value=location, inline=False)
-        
-        # Council area
-        if council:
-            embed.add_field(name="🏛️ Council Area", value=council, inline=True)
-        
-        # Responsible agency
-        if responsible_agency:
-            embed.add_field(name="🚒 Agency", value=responsible_agency, inline=True)
-        
-        # Map link
-        geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
-                lon, lat = coords[0], coords[1]
-                map_url = build_map_url(lat, lon, label=title, layer="rfs")
-                embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-        
-        if link:
-            embed.add_field(name="ℹ️ More Info", value=f"[View Details]({link})", inline=True)
-        
-        # Link to previous message for this incident (for tracking updates).
-        # Points at the immediately-prior update, so the user can walk the
-        # incident history hop-by-hop instead of jumping back to the original.
-        if previous_message and previous_message.get('message_url'):
-            prev_status = previous_message.get('status') or 'previous'
-            embed.add_field(
-                name="📜 Previous Update",
-                value=f"[Jump to previous update ({prev_status})]({previous_message['message_url']})",
-                inline=False
-            )
-
-        embed.set_footer(text="NSW RFS • Rural Fire Service")
-        return embed
-
-    def _build_firms_embed(self, data: Dict[str, Any]) -> discord.Embed:
-        """Build embed for a NASA FIRMS satellite fire-hotspot cluster."""
-        props = data.get('properties', {})
-        lat = props.get('latitude')
-        lon = props.get('longitude')
-        confidence = str(props.get('confidence', '')).strip()
-        frp = props.get('cluster_max_frp', props.get('frp'))
-        count = props.get('cluster_count', 1)
-        satellite = props.get('satellite_tag') or props.get('satellite') or ''
-        instrument = props.get('instrument', '')
-        daynight = props.get('daynight', '')
-        acq = props.get('acq_datetime', '')
-
-        embed_timestamp = parse_timestamp_to_datetime(acq) or datetime.now()
-        embed = discord.Embed(
-            title="🛰️ Fire Hotspot Detected",
-            color=self.COLORS.get('firms', 0xF97316),
-            timestamp=embed_timestamp,
-        )
-
-        if lat is not None and lon is not None:
-            embed.add_field(name="📍 Location",
-                            value=f"`{float(lat):.4f}, {float(lon):.4f}`", inline=False)
-
-        conf_badges = {'high': '🔴 High', 'nominal': '🟠 Nominal', 'low': '🟡 Low'}
-        cb = conf_badges.get(confidence.lower())
-        if cb:
-            embed.add_field(name="Confidence", value=cb, inline=True)
-
-        if is_valid_value(frp):
-            try:
-                embed.add_field(name="🔥 Intensity",
-                                value=f"{float(frp):.0f} MW (FRP)", inline=True)
-            except (TypeError, ValueError):
-                pass
-
-        if isinstance(count, int) and count > 1:
-            embed.add_field(name="Detections", value=f"{count} pixels", inline=True)
-
-        if satellite:
-            sat_label = f"{instrument} {satellite}".strip() if instrument else satellite
-            embed.add_field(name="🛰️ Satellite", value=sat_label, inline=True)
-
-        if daynight:
-            embed.add_field(name="Pass",
-                            value='☀️ Day' if str(daynight).upper().startswith('D') else '🌙 Night',
-                            inline=True)
-
-        if lat is not None and lon is not None:
-            map_url = build_map_url(lat, lon, label="Fire Hotspot", layer="firms")
-            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-
-        embed.set_footer(text="NASA FIRMS • Satellite-detected thermal anomaly")
-        return embed
-
-    def _build_bom_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
-        """Build embed for BOM warnings"""
-        title = strip_html(data.get('title', 'Weather Warning'))
-        description = strip_html(data.get('description', ''))
-        area = strip_html(data.get('area', ''))
-        issued = data.get('issued', '')
-        expiry = data.get('expiry', '')
-        link = data.get('link', '')
-        category = data.get('category', 'general')  # land, marine, or general
-        severity = data.get('severity', 'info')     # severe, warning, watch, advice, info
-        
-        # Get icon based on category
-        category_icon = self.BOM_CATEGORY_ICONS.get(category, '⚠️')
-        
-        # Get color based on severity (severe overrides category color)
-        if severity == 'severe':
-            color = self.BOM_SEVERITY_COLORS['severe']
-        elif severity == 'warning':
-            color = self.BOM_SEVERITY_COLORS['warning']
-        else:
-            # Use category-based color for lower severity
-            color = self.BOM_CATEGORY_COLORS.get(category, 0x1E90FF)
-        
-        # Build severity badge
-        severity_badges = {
-            'severe': '🔴 SEVERE',
-            'warning': '🟠 WARNING',
-            'watch': '🟡 WATCH',
-            'advice': '🔵 ADVICE',
-            'info': '⚪ INFO',
-        }
-        severity_badge = severity_badges.get(severity, '')
-        
-        # Use source timestamp (issued time from BOM)
-        embed_timestamp = parse_timestamp_to_datetime(issued) or datetime.now()
-        
-        # Build title with category icon
-        embed = discord.Embed(
-            title=f"{category_icon} {title}",
-            description=description[:2000] if description else None,
-            color=color,
-            timestamp=embed_timestamp
-        )
-        
-        # Add severity and category as inline fields
-        if severity_badge:
-            embed.add_field(name="Severity", value=severity_badge, inline=True)
-        
-        embed.add_field(name="Type", value=category.title(), inline=True)
-        
-        if is_valid_value(area):
-            embed.add_field(name="📍 Area", value=area[:1024], inline=False)
-        
-        if is_valid_value(issued):
-            embed.add_field(name="Issued", value=issued, inline=True)
-        
-        if is_valid_value(expiry):
-            embed.add_field(name="Expires", value=expiry, inline=True)
-        
-        if is_valid_value(link):
-            embed.add_field(name="More Info", value=f"[View on BOM]({link})", inline=False)
-        
-        embed.set_footer(text="Bureau of Meteorology")
-        return embed
-    
-    def _build_traffic_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
-        """Build embed for traffic incidents"""
-        props = data.get('properties', {})
-        
-        # Get incident type extracted from title (e.g., HAZARD, CRASH, CHANGED TRAFFIC CONDITIONS)
-        incident_type = props.get('incidentType', '')
-        
-        # Get and clean title (now contains description after type prefix removed)
-        title = props.get('title') or props.get('headline') or props.get('displayName', 'Traffic Alert')
-        title = strip_html(title)
-        
-        subtitle = strip_html(props.get('subtitle', ''))
-        roads = strip_html(str(props.get('roads', '')))
-        advice = strip_html(props.get('otherAdvice', '') or props.get('adviceA', ''))
-        advice_b = strip_html(props.get('adviceB', ''))
-        delay = props.get('expectedDelay', '') or props.get('delay', '')
-        direction = strip_html(props.get('affectedDirection', ''))
-        
-        # Use incident type for icon and color if available
-        incident_type_lower = incident_type.lower() if incident_type else ''
-        
-        # Get icon - check incident type first, then fall back to alert type
-        icon = self.INCIDENT_TYPE_ICONS.get(incident_type_lower, self.ICONS.get(alert_type, '🚗'))
-        
-        # Get color - check incident type first, then fall back to alert type
-        color = self.INCIDENT_TYPE_COLORS.get(incident_type_lower)
-        if not color:
-            # Try partial match for incident type color
-            for type_key, type_color in self.INCIDENT_TYPE_COLORS.items():
-                if type_key in incident_type_lower or incident_type_lower in type_key:
-                    color = type_color
-                    break
-        if not color:
-            color = self.COLORS.get(alert_type, 0xFFA500)
-        
-        # Build embed title with incident type badge if available
-        if incident_type:
-            embed_title = f"{icon} {incident_type}"
-        else:
-            embed_title = f"{icon} Traffic Alert"
-        
-        # Use source timestamp (created or lastUpdated)
-        created_val = props.get('created', '') or props.get('lastUpdated', '')
-        embed_timestamp = parse_timestamp_to_datetime(created_val) or datetime.now()
-        
-        embed = discord.Embed(
-            title=embed_title,
-            color=color,
-            timestamp=embed_timestamp
-        )
-        
-        # Show the title/description as the main content
-        if is_valid_value(title):
-            embed.description = f"**{title}**"
-        
-        if is_valid_value(subtitle) and subtitle != title:
-            if embed.description:
-                embed.description += f"\n{subtitle}"
-            else:
-                embed.description = subtitle
-        
-        if is_valid_value(roads):
-            embed.add_field(name="📍 Location", value=roads[:1024], inline=False)
-        
-        if is_valid_value(direction):
-            embed.add_field(name="Direction", value=direction, inline=True)
-        
-        # Only show delay if it's valid (not -1 or empty)
-        if is_valid_value(delay) and str(delay) != '-1':
-            embed.add_field(name="Expected Delay", value=str(delay), inline=True)
-        
-        # Truncate long advice text nicely
-        if is_valid_value(advice):
-            if len(advice) > 500:
-                advice = advice[:497] + "..."
-            embed.add_field(name="ℹ️ Advice", value=advice, inline=False)
-        
-        if is_valid_value(advice_b):
-            if len(advice_b) > 300:
-                advice_b = advice_b[:297] + "..."
-            embed.add_field(name="Additional Info", value=advice_b, inline=False)
-        
-        # Map link
-        geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
-                lon, lat = coords[0], coords[1]
-                map_url = build_map_url(lat, lon, label=title, layer="incidents")
-                embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-        
-        embed.set_footer(text="Live Traffic NSW")
-        return embed
-    
-    def _build_waze_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
-        """Build embed for Waze alerts (hazards, police, roadwork)"""
-        data = data or {}
-        props = data.get('properties') or {}
-        
-        # Get type info
-        waze_type = props.get('wazeType', '')
-        waze_subtype = props.get('wazeSubtype', '')
-        display_type = props.get('displayType', '')
-        title = strip_html(props.get('title', ''))
-        
-        # Location
-        street = strip_html(props.get('street', ''))
-        city = strip_html(props.get('city', ''))
-        location = strip_html(props.get('location', ''))
-        
-        # Reliability/thumbs up
-        thumbs_up = props.get('thumbsUp', 0)
-        reliability = props.get('reliability', 0)
-        
-        # Time
-        created = props.get('created', '')
-        
-        # Get icon and color for this alert type
-        icon = self.ICONS.get(alert_type, '⚠️')
-        color = self.COLORS.get(alert_type, 0xEAB308)
-        
-        # Build title based on alert type
-        type_labels = {
-            'waze_hazard': 'Waze Hazard',
-            'waze_jam': 'Waze Traffic Jam',
-            'waze_police': 'Waze Police Report',
-            'waze_roadwork': 'Waze Roadwork',
-        }
-        type_label = type_labels.get(alert_type, 'Waze Alert')
-
-        # Clean class + variant from the raw subtype (mirrors the dashboard
-        # chips). Heading shows the class; the specific variant moves to the
-        # "Type" field below so neither reads as SCREAMING_SNAKE.
-        class_label, variant = waze_subtype_labels(alert_type, waze_subtype)
-        if class_label:
-            embed_title = f"{icon} {class_label}"
-        elif display_type and display_type != 'Unknown':
-            embed_title = f"{icon} {display_type}"
-        else:
-            embed_title = f"{icon} {type_label}"
-        
-        # Use source timestamp (Waze created time)
-        embed_timestamp = parse_timestamp_to_datetime(created) or datetime.now()
-        
-        embed = discord.Embed(
-            title=embed_title,
-            color=color,
-            timestamp=embed_timestamp
-        )
-        
-        # Description/title from Waze
-        if is_valid_value(title) and title != display_type:
-            embed.description = title[:2000]
-        
-        # Location
-        if is_valid_value(location):
-            embed.add_field(name="📍 Location", value=location[:1024], inline=False)
-        elif is_valid_value(street) or is_valid_value(city):
-            loc_parts = [p for p in [street, city] if is_valid_value(p)]
-            if loc_parts:
-                embed.add_field(name="📍 Location", value=", ".join(loc_parts)[:1024], inline=False)
-        
-        # Alert type details — the cleaned, class-stripped variant.
-        if variant:
-            embed.add_field(name="Type", value=variant, inline=True)
-        
-        # Reliability score
-        if reliability and reliability > 0:
-            reliability_pct = min(100, reliability)
-            embed.add_field(name="Reliability", value=f"{reliability_pct}%", inline=True)
-        
-        # Thumbs up (confirmations)
-        if thumbs_up and thumbs_up > 0:
-            embed.add_field(name="👍 Confirmations", value=str(thumbs_up), inline=True)
-        
-        # Time reported
-        formatted_time = format_timestamp(created)
-        if formatted_time:
-            embed.add_field(name="🕐 Reported", value=formatted_time, inline=True)
-        
-        # Map link
-        geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
-                lon, lat = coords[0], coords[1]
-                layer_map = {
-                    'waze_hazard':   'hazards',
-                    'waze_jam':      'jams',
-                    'waze_police':   'police',
-                    'waze_roadwork': 'roadwork',
-                }
-                layer = layer_map.get(alert_type, 'hazards')
-                map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
-                embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-
-        embed.set_footer(text="Waze Community Reports")
-        return embed
-    
-    def _build_power_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
-        """Build embed for power outages (Endeavour, Ausgrid, Essential)."""
-        if alert_type == 'ausgrid':
-            return self._build_ausgrid_embed(data)
-        if alert_type.startswith('essential_'):
-            return self._build_essential_embed(data, alert_type)
-        # endeavour_current / endeavour_planned share the same shape
-        return self._build_endeavour_embed(data, alert_type)
-    
-    def _build_endeavour_embed(self, data: Dict[str, Any],
-                               alert_type: str = 'endeavour_current') -> discord.Embed:
-        """Build embed for Endeavour outages (current + planned)."""
-        suburb = data.get('suburb', 'Unknown')
-        streets = strip_html(data.get('streets', ''))
-        customers = data.get('customersAffected', 0)
-        status = data.get('status', '')
-        cause = data.get('cause', '')
-        outage_type = data.get('outageType', 'Unplanned')
-        restoration = data.get('estimatedRestoration', '')
-        start_time = data.get('startTime', '')
-        last_updated = data.get('lastUpdated', '')
-
-        title_prefix = "🔧" if outage_type == 'Planned' else "⚡"
-
-        # Use source timestamp (start time or last updated)
-        source_time = start_time or last_updated
-        embed_timestamp = parse_timestamp_to_datetime(source_time) or datetime.now()
-
-        embed = discord.Embed(
-            title=f"{title_prefix} {outage_type} Outage - {suburb}",
-            color=self.COLORS.get(alert_type, self.COLORS['endeavour_current']),
-            timestamp=embed_timestamp
-        )
-        
-        if is_valid_value(streets):
-            embed.add_field(name="Streets Affected", value=streets[:1024], inline=False)
-        
-        if is_valid_value(customers) and customers > 0:
-            embed.add_field(name="Customers Affected", value=f"**{customers:,}**", inline=True)
-        
-        if is_valid_value(status):
-            embed.add_field(name="Status", value=status, inline=True)
-        
-        if is_valid_value(cause):
-            embed.add_field(name="Cause", value=cause, inline=False)
-        
-        # Format and validate restoration time
-        formatted_restoration = format_timestamp(restoration)
-        if formatted_restoration:
-            embed.add_field(name="Est. Restoration", value=formatted_restoration, inline=True)
-        
-        # Map link
-        lat = data.get('latitude')
-        lon = data.get('longitude')
-        if lat and lon:
-            map_url = build_map_url(lat, lon, label=f"{outage_type} Outage - {suburb}", layer="outages")
-            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-        
-        embed.set_footer(text="Endeavour Energy")
-        return embed
-    
-    def _build_ausgrid_embed(self, data: Dict[str, Any]) -> discord.Embed:
-        """Build embed for Ausgrid outages"""
-        # Ausgrid fields - handle both camelCase and PascalCase
-        suburb = data.get('Suburb') or data.get('suburb', 'Unknown')
-        street = strip_html(data.get('StreetName') or data.get('streetName', ''))
-        customers = data.get('CustomersAffected') or data.get('customersAffected', 0)
-        postcode = data.get('Postcode') or data.get('postcode', '')
-        outage_type = data.get('OutageType') or data.get('outageType', '')
-        cause = data.get('Cause') or data.get('cause', '')
-        start_time = data.get('StartTime') or data.get('startTime', '')
-        est_restore = data.get('EstRestoration') or data.get('estRestoration', '')
-        
-        # P = Planned, U = Unplanned (or full text)
-        is_planned = outage_type in ('P', 'Planned', 'planned')
-        type_text = 'Planned' if is_planned else 'Unplanned'
-        title_prefix = "🔧" if is_planned else "⚡"
-        
-        # Use source timestamp (start time from Ausgrid)
-        embed_timestamp = parse_timestamp_to_datetime(start_time) or datetime.now()
-        
-        embed = discord.Embed(
-            title=f"{title_prefix} {type_text} Outage - {suburb}",
-            color=self.COLORS['ausgrid'],
-            timestamp=embed_timestamp
-        )
-        
-        if is_valid_value(street):
-            embed.add_field(name="📍 Street", value=street[:1024], inline=False)
-        
-        if is_valid_value(postcode):
-            embed.add_field(name="Postcode", value=postcode, inline=True)
-        
-        if is_valid_value(customers) and customers > 0:
-            embed.add_field(name="Customers Affected", value=f"**{customers:,}**", inline=True)
-        
-        if is_valid_value(cause):
-            embed.add_field(name="Cause", value=cause, inline=False)
-        
-        # Format and validate start time
-        formatted_start = format_timestamp(start_time)
-        if formatted_start:
-            embed.add_field(name="Started", value=formatted_start, inline=True)
-        
-        # Format and validate restoration time
-        formatted_restoration = format_timestamp(est_restore)
-        if formatted_restoration:
-            embed.add_field(name="Est. Restoration", value=formatted_restoration, inline=True)
-        
-        # Map link
-        lat = data.get('Latitude') or data.get('latitude')
-        lon = data.get('Longitude') or data.get('longitude')
-        if lat and lon:
-            map_url = build_map_url(lat, lon, label=f"{type_text} Outage - {suburb}", layer="outages")
-            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-        
-        embed.set_footer(text="Ausgrid")
-        return embed
-
-    def _build_essential_embed(self, data: Dict[str, Any],
-                               alert_type: str = 'essential_planned') -> discord.Embed:
-        """Build embed for Essential Energy outages (planned + future).
-
-        Field shape is best-effort — Essential's API contract isn't pinned
-        yet; we read common spellings and fall back to the generic path for
-        anything missing. Mirrors the Endeavour layout so the visual
-        language stays consistent across power providers.
-        """
-        suburb = (data.get('suburb') or data.get('Suburb')
-                  or data.get('locality') or 'Unknown')
-        streets = strip_html(str(
-            data.get('streets') or data.get('streetName')
-            or data.get('StreetName') or data.get('street') or ''
-        ))
-        customers = (data.get('customersAffected')
-                     or data.get('CustomersAffected') or 0)
-        status = data.get('status') or data.get('Status') or ''
-        cause = data.get('cause') or data.get('Cause') or ''
-        start_time = (data.get('startTime') or data.get('StartTime')
-                      or data.get('plannedStart') or '')
-        restoration = (data.get('estimatedRestoration')
-                       or data.get('EstRestoration')
-                       or data.get('expectedRestore') or '')
-        is_future = alert_type == 'essential_future'
-
-        title_prefix = "📅" if is_future else "🔧"
-        type_text = 'Future' if is_future else 'Planned'
-
-        embed_timestamp = parse_timestamp_to_datetime(start_time) or datetime.now()
-        embed = discord.Embed(
-            title=f"{title_prefix} {type_text} Outage - {suburb}",
-            color=self.COLORS.get(alert_type, self.COLORS['essential_planned']),
-            timestamp=embed_timestamp,
-        )
-
-        if is_valid_value(streets):
-            embed.add_field(name="Streets Affected", value=streets[:1024], inline=False)
-        if is_valid_value(customers) and customers > 0:
-            embed.add_field(name="Customers Affected", value=f"**{int(customers):,}**", inline=True)
-        if is_valid_value(status):
-            embed.add_field(name="Status", value=str(status), inline=True)
-        if is_valid_value(cause):
-            embed.add_field(name="Cause", value=str(cause), inline=False)
-        formatted_start = format_timestamp(start_time)
-        if formatted_start:
-            embed.add_field(name="Start", value=formatted_start, inline=True)
-        formatted_restoration = format_timestamp(restoration)
-        if formatted_restoration:
-            embed.add_field(name="Est. Restoration", value=formatted_restoration, inline=True)
-
-        lat = data.get('latitude') or data.get('Latitude')
-        lon = data.get('longitude') or data.get('Longitude')
-        if lat and lon:
-            map_url = build_map_url(lat, lon, label=f"{type_text} Outage - {suburb}", layer="outages")
-            embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-
-        embed.set_footer(text="Essential Energy")
-        return embed
-
-    def _build_generic_embed(self, data: Dict[str, Any], alert_type: str) -> discord.Embed:
-        """Build a generic embed for unknown alert types"""
-        icon = self.ICONS.get(alert_type, '📢')
-        color = self.COLORS.get(alert_type, 0x5865F2)
-        
-        embed = discord.Embed(
-            title=f"{icon} Alert",
-            color=color,
-            timestamp=datetime.now()
-        )
-        
-        for key, value in data.items():
-            if value and key not in ['geometry', 'properties', 'type']:
-                if isinstance(value, (dict, list)):
-                    continue
-                clean_value = strip_html(str(value))
-                if is_valid_value(clean_value):
-                    embed.add_field(
-                        name=key.replace('_', ' ').title(),
-                        value=clean_value[:1024],
-                        inline=True
-                    )
-        
-        return embed
-    
-    def _build_user_incident_embed(self, data: Dict[str, Any], previous_message: Dict[str, Any] = None) -> discord.Embed:
-        """Build embed for user-submitted incidents from Supabase"""
-        title = strip_html(data.get('title', 'User Incident'))
-        location = strip_html(data.get('location', ''))
-        description = strip_html(data.get('description', ''))
-        status = data.get('status', 'Active')
-        size = data.get('size', '')
-        
-        # Type can be an array or string
-        inc_type = data.get('type', '')
-        if isinstance(inc_type, list):
-            type_display = ', '.join(inc_type)
-        else:
-            type_display = str(inc_type) if inc_type else ''
-        
-        # Responding agencies
-        agencies = data.get('responding_agencies', [])
-        if isinstance(agencies, str):
-            agencies = [agencies]
-        
-        # Coordinates
-        lat = data.get('lat')
-        lng = data.get('lng')
-        
-        # Created time
-        created_at = data.get('created_at', '')
-        
-        # Incident logs
-        logs = data.get('logs', [])
-        
-        # Determine color based on type or status
-        color = self.COLORS['user_incident']
-        icon = '📢'
-
-        # Check for fire-related types
-        type_lower = type_display.lower() if type_display else ''
-        if 'fire' in type_lower or 'bush' in type_lower:
-            color = 0xFF4500  # Orange-red for fires
-            icon = '🔥'
-        elif 'flood' in type_lower or 'water' in type_lower:
-            color = 0x00CED1  # Cyan for water
-            icon = '🌊'
-        elif 'crash' in type_lower or 'accident' in type_lower or 'mva' in type_lower:
-            color = 0xEF4444  # Red for crashes
-            icon = '💥'
-        elif 'rescue' in type_lower:
-            color = 0x3B82F6  # Blue for rescue
-            icon = '🚑'
-        elif 'hazmat' in type_lower:
-            color = 0xA855F7  # Purple for hazmat
-            icon = '☣️'
-        elif 'police' in type_lower or 'pursuit' in type_lower:
-            color = 0x1E40AF  # Dark blue for police
-            icon = '🚔'
-        elif 'storm' in type_lower or 'weather' in type_lower:
-            color = 0x6B7280  # Gray for weather
-            icon = '⛈️'
-
-        # Use source timestamp (created_at from Supabase)
-        embed_timestamp = parse_timestamp_to_datetime(created_at) or datetime.now()
-
-        embed = discord.Embed(
-            title=f"{icon} {title}",
-            color=color,
-            timestamp=embed_timestamp
-        )
-
-        # Build description with location
-        desc_parts = []
-        if is_valid_value(location):
-            desc_parts.append(f"📍 **{location}**")
-        if is_valid_value(description):
-            desc_parts.append(description[:500])
-        if desc_parts:
-            embed.description = "\n\n".join(desc_parts)
-
-        # Info row - compact inline fields
-        info_parts = []
-        if is_valid_value(type_display):
-            info_parts.append(("Type", type_display))
-        if is_valid_value(status):
-            info_parts.append(("Status", status))
-        if is_valid_value(size):
-            info_parts.append(("Size", size))
-        
-        for name, value in info_parts:
-            embed.add_field(name=name, value=value, inline=True)
-        
-        # Responding agencies (if any)
-        if agencies and len(agencies) > 0:
-            agency_icons = {
-                'FRNSW': '🚒', 'Fire': '🚒', 'RFS': '🔥',
-                'Ambulance': '🚑', 'NSW Ambulance': '🚑', 'NSWA': '🚑',
-                'Police': '🚔', 'NSWPF': '🚔',
-                'SES': '🦺', 'VRA': '🦺'
-            }
-            agency_list = []
-            for agency in agencies:
-                icon_for_agency = ''
-                for key, emoji in agency_icons.items():
-                    if key.lower() in agency.lower():
-                        icon_for_agency = emoji + ' '
-                        break
-                agency_list.append(f"{icon_for_agency}{agency}")
-            embed.add_field(name="Responding", value=" • ".join(agency_list), inline=False)
-        
-        # Incident logs - cleaner format with Discord timestamps
-        if logs and len(logs) > 0:
-            # Sort logs by created_at descending (newest first)
-            sorted_logs = sorted(logs, key=lambda x: x.get('created_at', ''), reverse=True)
-            log_lines = []
-            for log in sorted_logs[:5]:  # Show max 5 logs
-                log_ts = log.get('created_at', '')
-                log_msg = strip_html(log.get('message', ''))[:200]
-                if log_msg:
-                    # Use Discord timestamp for local time display
-                    dt = parse_timestamp_to_datetime(log_ts)
-                    if dt:
-                        unix_ts = int(dt.timestamp())
-                        time_str = f"<t:{unix_ts}:t>"  # Short time format
-                    else:
-                        time_str = "Unknown time"
-                    log_lines.append(f"**{time_str}** — {log_msg}")
-            
-            if log_lines:
-                logs_text = "\n".join(log_lines)
-                if len(logs) > 5:
-                    logs_text += f"\n*+{len(logs) - 5} more...*"
-                embed.add_field(name="📋 Incident Log", value=logs_text[:1024], inline=False)
-        
-        # Footer row with reported time and map link
-        footer_parts = []
-        
-        # Reported time (Discord timestamp)
-        dt_created = parse_timestamp_to_datetime(created_at)
-        if dt_created:
-            unix_ts = int(dt_created.timestamp())
-            footer_parts.append(f"🕐 Reported <t:{unix_ts}:R>")  # Relative time
-        
-        # Map link
-        if lat and lng:
-            map_url = build_map_url(lat, lng, label=title, layer="user")
-            footer_parts.append(f"[🗺️ View on Map]({map_url})")
-        
-        if footer_parts:
-            embed.add_field(name="\u200b", value=" • ".join(footer_parts), inline=False)
-        
-        # Link to previous message for this incident (for tracking updates).
-        # Points at the immediately-prior update so users can hop through the
-        # incident history one step at a time.
-        if previous_message and previous_message.get('message_url'):
-            prev_status = previous_message.get('status') or 'previous'
-            embed.add_field(
-                name="📜 Previous Update",
-                value=f"[Jump to previous update ({prev_status})]({previous_message['message_url']})",
-                inline=False
-            )
-
-        embed.set_footer(text="NSW PSN • User Submitted Incident")
-        return embed
-    
-    def build_pager_embed(self, msg: Dict[str, Any]) -> discord.Embed:
-        """Build embed for pager messages"""
-        capcode = msg.get('capcode', 'UNKNOWN')
-        station_code = msg.get('station_code', '')
-        incident_id = msg.get('incident_id', '')
-        msg_type = msg.get('type', '')
-        category = msg.get('category', '')
-        alias = msg.get('alias', '')
-        agency = msg.get('agency', '')
-        address = msg.get('address', '')
-        suburb = msg.get('suburb', '')
-        council = msg.get('council', '')
-        postcode = msg.get('postcode', '')
-        coordinates = msg.get('coordinates')
-        timestamp = msg.get('timestamp', '')
-        raw = msg.get('raw', '')
-        
-        # Determine if it's a stop message
-        is_stop = 'stop' in msg_type.lower() if msg_type else False
-        
-        color = self.COLORS['pager_stop'] if is_stop else self.COLORS['pager']
-        icon = '🛑' if is_stop else '📟'
-        
-        # Build title - prefer type, then alias, then generic
-        if is_stop:
-            title = f"{icon} STOP MESSAGE"
-        elif msg_type and msg_type != 'Pager Alert':
-            title = f"{icon} {msg_type}"
-        elif alias:
-            title = f"{icon} {alias}"
-        else:
-            title = f"{icon} Pager Alert"
-        
-        # Use source timestamp from pager message
-        embed_timestamp = parse_timestamp_to_datetime(timestamp) or datetime.now()
-        
-        embed = discord.Embed(
-            title=title,
-            color=color,
-            timestamp=embed_timestamp
-        )
-        
-        # Category/dispatch type (FIRECALL, VEHICLE FIRE, etc.)
-        if is_valid_value(category) and category != msg_type:
-            embed.add_field(name="🚨 Dispatch", value=f"**{category}**", inline=True)
-        
-        # Location info - address, suburb, council
-        location_parts = []
-        if is_valid_value(address):
-            location_parts.append(f"**{address}**")
-        if is_valid_value(suburb):
-            suburb_text = suburb
-            if is_valid_value(postcode):
-                suburb_text += f" {postcode}"
-            location_parts.append(suburb_text)
-        if is_valid_value(council):
-            location_parts.append(council)
-        
-        if location_parts:
-            embed.add_field(name="📍 Location", value="\n".join(location_parts), inline=False)
-        
-        # Reference info - capcode and incident
-        ref_parts = []
-        if is_valid_value(capcode):
-            ref_parts.append(f"**Capcode:** `{capcode}`")
-        if is_valid_value(incident_id):
-            ref_parts.append(f"**Incident:** `{incident_id}`")
-        if is_valid_value(agency):
-            ref_parts.append(f"**Area:** {agency}")
-        if ref_parts:
-            embed.add_field(name="📌 Reference", value="\n".join(ref_parts), inline=True)
-        
-        # Map link
-        if coordinates:
-            lat = coordinates.get('lat')
-            lon = coordinates.get('lon')
-            if lat and lon:
-                label = f"{msg_type} - {incident_id}" if msg_type and incident_id else (msg_type or incident_id or capcode)
-                map_url = build_map_url(lat, lon, label=label, layer="pager")
-                embed.add_field(name="🗺️ Map", value=f"[View on Map]({map_url})", inline=True)
-        
-        # Raw message - collapsed at bottom
-        if is_valid_value(raw) and len(raw) > 10:
-            raw_display = raw[:600] + "..." if len(raw) > 600 else raw
-            embed.add_field(
-                name="📝 Raw Message",
-                value=f"```{raw_display}```",
-                inline=False
-            )
-        
-        embed.set_footer(text="Pagermon (self-hosted) · NSW PSN")
-        return embed
-
     # Severity → embed colour mapping for incident embeds
     _RADIO_SEV_COLORS = {
         'critical': 0xdc2626,
@@ -1506,12 +568,6 @@ class EmbedBuilder:
     }
 
     _RADIO_MAIN_COLOR = 0x8b5cf6  # purple — distinguishes from other alert types
-
-    # 800x1 transparent PNG hosted alongside the frontend assets. Discord sizes
-    # an embed's container to the embedded image width, so attaching a very
-    # wide transparent spacer forces the card to render wide instead of the
-    # default narrow "mobile-friendly" layout.
-    _RADIO_WIDENER_IMAGE = f"{MAP_BASE_URL}/assets/embed-widener.png"
 
     @staticmethod
     def _radio_incidents_from_details(details: Dict[str, Any]) -> list:
@@ -2164,413 +1220,6 @@ class EmbedBuilder:
     _DEV_STATUS_TASKS_COLOR    = 0xf59e0b  # amber — task loops / queue
     _DEV_STATUS_FOOTER_COLOR   = 0x64748b  # slate — footer/version
 
-    def build_radio_summary_embeds(self, data: Dict[str, Any]) -> list:
-        """Return a list of embeds (≤10) for a radio summary alert.
-
-        [0] Main summary embed (title, plain-text summary, footer).
-        [1..N] One embed per incident, colour-coded by severity.
-
-        Kept for backward compatibility — prefer `build_radio_summary_components`
-        when the target client is discord.py 2.6+.
-        """
-        details = data.get('details') or {}
-        if isinstance(details, str):
-            import json as _json
-            try:
-                details = _json.loads(details)
-            except Exception:
-                details = {}
-
-        main = self._build_radio_summary_embed(data, details=details, include_incidents=False)
-        embeds = [main]
-
-        # Discord caps at 10 embeds per message. Reserve [0] for the summary,
-        # which leaves 9 slots for incidents.
-        incidents = self._radio_incidents_from_details(details)
-        for inc in incidents[:9]:
-            embeds.append(self._build_radio_incident_embed(inc))
-        return embeds
-
-    def _build_radio_incident_embed(self, inc: Dict[str, Any]) -> discord.Embed:
-        """One embed per incident inside a radio-summary message.
-
-        Renders the new LLM incident schema (summary / locations[] / agencies[]
-        / codes[] / units[] / window / transcripts[]). Falls back to the legacy
-        timeline[] shape when transcripts[] is absent.
-        """
-        sev = (inc.get('severity') or '').strip().lower()
-        color = self._RADIO_SEV_COLORS.get(sev, self._RADIO_MAIN_COLOR)
-
-        title_part = strip_html(str(inc.get('title') or inc.get('type') or 'Incident'))
-        sev_label = f"[{sev.upper()}] " if sev else ""
-        title = f"🚨 {sev_label}{title_part}"[:256]
-
-        # --- Description: summary + location line + time/status line ---------
-        desc_bits = []
-        body = inc.get('summary') or inc.get('description') or ''
-        if body:
-            desc_bits.append(strip_html(str(body)))
-
-        # locations[] (new) — fall back to legacy singular location/suburb
-        locations = inc.get('locations') or []
-        if isinstance(locations, str):
-            locations = [locations]
-        loc_line = ''
-        if locations:
-            loc_parts = [strip_html(str(l)) for l in locations if l]
-            loc_parts = [p for p in loc_parts if p]
-            if loc_parts:
-                loc_line = f"📍 {', '.join(loc_parts)}"
-        else:
-            legacy_loc = inc.get('location') or inc.get('suburb')
-            if legacy_loc:
-                loc_line = f"📍 {strip_html(str(legacy_loc))}"
-
-        # Time window: prefer window.start/end, else min/max of transcripts[].time
-        window = inc.get('window') or {}
-        win_start = (window.get('start') if isinstance(window, dict) else None) or ''
-        win_end = (window.get('end') if isinstance(window, dict) else None) or ''
-        transcripts = inc.get('transcripts') or []
-        if (not win_start or not win_end) and transcripts:
-            times = [str(t.get('time') or '').strip() for t in transcripts if isinstance(t, dict)]
-            times = [t for t in times if t]
-            if times:
-                if not win_start:
-                    win_start = min(times)
-                if not win_end:
-                    win_end = max(times)
-
-        status = inc.get('status') or ''
-        time_line = ''
-        if win_start and win_end:
-            time_line = f"🕐 {win_start} – {win_end}"
-        elif win_start:
-            time_line = f"🕐 {win_start}"
-        if status:
-            time_line = f"{time_line} · {strip_html(str(status))}" if time_line else f"🕐 {strip_html(str(status))}"
-
-        # Stitch together: summary paragraph, blank line, then loc + time lines
-        tail_lines = [x for x in (loc_line, time_line) if x]
-        if tail_lines:
-            if desc_bits:
-                # Blank line between summary and the metadata block
-                desc_bits.append('\n'.join(tail_lines))
-            else:
-                desc_bits.append('\n'.join(tail_lines))
-        description = '\n\n'.join(desc_bits)[:4000] or '—'
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=color,
-        )
-
-        # --- Units ----------------------------------------------------------
-        units = inc.get('units') or []
-        if units:
-            clean_units = [strip_html(str(u)) for u in units if u]
-            clean_units = [u for u in clean_units if u]
-            if clean_units:
-                units_txt = ', '.join(clean_units)[:1024]
-                embed.add_field(
-                    name="🚒 Units",
-                    value=units_txt,
-                    inline=len(clean_units) <= 3,
-                )
-
-        # --- Codes ----------------------------------------------------------
-        codes = inc.get('codes') or []
-        if codes:
-            clean_codes = [strip_html(str(c)) for c in codes if c]
-            clean_codes = [c for c in clean_codes if c]
-            if clean_codes:
-                embed.add_field(
-                    name="🎯 Codes",
-                    value=', '.join(clean_codes)[:1024],
-                    inline=True,
-                )
-
-        # --- Agencies -------------------------------------------------------
-        agencies = inc.get('agencies') or []
-        if agencies:
-            clean_agencies = [strip_html(str(a)) for a in agencies if a]
-            clean_agencies = [a for a in clean_agencies if a]
-            if clean_agencies:
-                embed.add_field(
-                    name="🛰️ Agencies",
-                    value=', '.join(clean_agencies)[:1024],
-                    inline=True,
-                )
-
-        # --- Transcripts (new schema) or Timeline (legacy) ------------------
-        RADIO_CALL_URL = "https://radio.forcequit.xyz/?call={id}"
-        FIELD_CAP = 1024
-
-        def _build_transcript_lines(raw_lines):
-            """Shrink individual line texts (with trailing '…') until the
-            joined block fits under Discord's 1024-char field cap. Keeps all
-            rows — trims text bodies, never drops whole lines.
-
-            Each element of raw_lines is a tuple (prefix, text) where prefix
-            is the non-truncatable lead (e.g. `\\`00:09\\` [#123](url) `) and
-            text is the truncatable transcript body.
-            """
-            # Start with generous per-line text budget, shrink until it fits.
-            lines = [f"{p}{t}" for p, t in raw_lines]
-            joined = '\n'.join(lines)
-            if len(joined) <= FIELD_CAP:
-                return joined
-
-            # Iteratively clip text bodies. Allocate a per-line text budget.
-            n = len(raw_lines)
-            # Reserve newlines between lines
-            overhead_per_line = sum(len(p) for p, _ in raw_lines) + (n - 1)
-            budget = FIELD_CAP - overhead_per_line
-            if budget < n:  # extreme fallback — prefixes alone already huge
-                return joined[:FIELD_CAP]
-            per_text = max(1, budget // n)
-            trimmed = []
-            for p, t in raw_lines:
-                if len(t) > per_text:
-                    t = t[: max(1, per_text - 1)].rstrip() + '…'
-                trimmed.append(f"{p}{t}")
-            out = '\n'.join(trimmed)
-            # Final safety clamp
-            return out[:FIELD_CAP]
-
-        if transcripts:
-            # New schema: list of {time, call_id, text}
-            TOP_N = 10
-            original_count = inc.get('transcripts_count') or len(transcripts)
-            shown = transcripts[:TOP_N]
-            raw_lines = []
-            for t in shown:
-                if not isinstance(t, dict):
-                    continue
-                ttime = str(t.get('time') or '').strip()
-                text = strip_html(str(t.get('text') or ''))
-                cid = t.get('call_id')
-                try:
-                    cid_int = int(cid)
-                    call_link = f"[#{cid_int}]({RADIO_CALL_URL.format(id=cid_int)})"
-                except (TypeError, ValueError):
-                    call_link = ''
-                time_tag = f"`{ttime}` " if ttime else ''
-                prefix = f"{time_tag}{call_link}{' ' if call_link else ''}"
-                raw_lines.append((prefix, text))
-
-            if raw_lines:
-                body_text = _build_transcript_lines(raw_lines)
-
-                # Append a truncation marker if applicable
-                if inc.get('transcripts_truncated'):
-                    if original_count and original_count > TOP_N:
-                        marker = f"\n-# …Showing top {TOP_N} of {original_count}"
-                    else:
-                        marker = "\n-# …some transcripts omitted"
-                    # Only append if there is room; otherwise trim body to fit
-                    if len(body_text) + len(marker) <= FIELD_CAP:
-                        body_text = body_text + marker
-                    else:
-                        allowed = FIELD_CAP - len(marker)
-                        body_text = body_text[: max(0, allowed)].rstrip() + marker
-
-                embed.add_field(
-                    name=f"📻 Transcripts (top {min(len(shown), TOP_N)})",
-                    value=body_text[:FIELD_CAP] or '—',
-                    inline=False,
-                )
-        else:
-            # Legacy schema: timeline[] with {time, event, call_ids: [...]}
-            timeline = inc.get('timeline') or []
-            if timeline:
-                legacy_lines = []
-                for entry in timeline:
-                    if not isinstance(entry, dict):
-                        continue
-                    etime = str(entry.get('time') or '').strip()
-                    event = strip_html(str(entry.get('event') or ''))
-                    eids = entry.get('call_ids') or []
-                    if not isinstance(eids, (list, tuple)):
-                        eids = [eids]
-                    # One line per call_id (matches old behaviour)
-                    emitted_any = False
-                    for cid in eids:
-                        try:
-                            cid_int = int(cid)
-                        except (TypeError, ValueError):
-                            continue
-                        time_tag = f"`{etime}` " if etime else ''
-                        link = f"[#{cid_int}]({RADIO_CALL_URL.format(id=cid_int)}) "
-                        legacy_lines.append((f"{time_tag}{link}", event))
-                        emitted_any = True
-                    # If an entry has no call_ids, still emit one line
-                    if not emitted_any:
-                        time_tag = f"`{etime}` " if etime else ''
-                        legacy_lines.append((time_tag, event))
-
-                if legacy_lines:
-                    body_text = _build_transcript_lines(legacy_lines[:20])
-                    embed.add_field(
-                        name="📻 Transcripts",
-                        value=body_text[:FIELD_CAP] or '—',
-                        inline=False,
-                    )
-            else:
-                # Final legacy fallback: flat call_ids list
-                call_ids = inc.get('call_ids') or inc.get('calls') or []
-                if call_ids:
-                    links = []
-                    for cid in call_ids[:10]:
-                        try:
-                            cid_int = int(cid)
-                        except (TypeError, ValueError):
-                            continue
-                        links.append(f"[#{cid_int}]({RADIO_CALL_URL.format(id=cid_int)})")
-                    if links:
-                        embed.add_field(
-                            name="📻 Calls",
-                            value=' · '.join(links)[:FIELD_CAP],
-                            inline=False,
-                        )
-
-        return embed
-
-    def _build_radio_summary_embed(self, data: Dict[str, Any],
-                                   details: Dict[str, Any] = None,
-                                   include_incidents: bool = True) -> discord.Embed:
-        """Build embed for rdio-scanner hourly summary alerts.
-
-        `data` is the summary row from /api/summaries/latest (hourly field):
-            { id, type, period_start, period_end, day_date, hour_slot,
-              summary, call_count, details: { incidents: [...] }, ... }
-
-        When `include_incidents=False` the per-incident fields are skipped —
-        used by `build_radio_summary_embeds` which renders them as separate
-        embeds instead.
-        """
-        summary_type = (data.get('type') or 'hourly').lower()
-        day = data.get('day_date') or ''
-        hour_slot = data.get('hour_slot')
-        call_count = data.get('call_count')
-        if details is None:
-            details = data.get('details') or {}
-            if isinstance(details, str):
-                import json as _json
-                try:
-                    details = _json.loads(details)
-                except Exception:
-                    details = {}
-
-        # Build a human-friendly hour range ("11 PM – 12 AM") from the
-        # period_start / period_end ISO strings. Falls back to the hour_slot
-        # number if parsing fails or the row doesn't have period bounds.
-        def _fmt_hour_range(start_iso, end_iso, tz_name):
-            from datetime import datetime as _dt
-            try:
-                start = _dt.fromisoformat(start_iso.replace('Z', '+00:00')) if start_iso else None
-                end = _dt.fromisoformat(end_iso.replace('Z', '+00:00')) if end_iso else None
-                if start is None or end is None:
-                    return None
-                if tz_name:
-                    try:
-                        from zoneinfo import ZoneInfo
-                        tz = ZoneInfo(tz_name)
-                        start = start.astimezone(tz)
-                        end = end.astimezone(tz)
-                    except Exception:
-                        pass
-                fmt = '%-I %p' if os.name != 'nt' else '%#I %p'
-                try:
-                    return f"{start.strftime(fmt)} – {end.strftime(fmt)}"
-                except Exception:
-                    # %-I / %#I not supported — fall back to padded 12-hour.
-                    return f"{start.strftime('%I %p').lstrip('0')} – {end.strftime('%I %p').lstrip('0')}"
-            except Exception:
-                return None
-
-        hour_range = _fmt_hour_range(
-            data.get('period_start'),
-            data.get('period_end'),
-            details.get('tz') or 'Australia/Sydney',
-        )
-
-        if summary_type == 'hourly':
-            if hour_range and day:
-                title = f"📻 Radio Summary — {day} · {hour_range}"
-            elif hour_range:
-                title = f"📻 Radio Summary — {hour_range}"
-            elif hour_slot is not None:
-                # Keep old fallback but use "XX:00 – YY:00" rather than a bare
-                # hour_slot which could render as "24:00".
-                end_h = int(hour_slot) % 24
-                start_h = (end_h - 1) % 24
-                title = f"📻 Radio Summary — {day} · {start_h:02d}:00 – {end_h:02d}:00"
-            else:
-                title = "📻 Radio Summary"
-        elif summary_type == 'adhoc':
-            title = "📻 Radio Summary — Recent Activity"
-        else:
-            title = "📻 Radio Summary"
-
-        # Description: prefer the plain-text summary if present; otherwise
-        # build one from the top few incidents.
-        description = (data.get('summary') or '').strip()
-        if not description:
-            incidents = self._radio_incidents_from_details(details)
-            lines = []
-            for inc in incidents[:5]:
-                t = strip_html(str(inc.get('title') or inc.get('type') or 'Incident'))
-                sev = inc.get('severity')
-                if sev:
-                    t = f"**[{sev}]** {t}"
-                lines.append(f"• {t}")
-            description = '\n'.join(lines) if lines else "No notable activity."
-        if len(description) > 4000:
-            description = description[:3997] + '…'
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=self._RADIO_MAIN_COLOR,
-            timestamp=datetime.now(),
-            url=f"{MAP_BASE_URL}/live.html#radio-summary",
-        )
-
-        # Legacy path: inline up to 3 incidents as fields. Skipped when the
-        # multi-embed builder is rendering — it makes a dedicated embed per
-        # incident instead.
-        if include_incidents:
-            incidents = self._radio_incidents_from_details(details)
-            for inc in incidents[:3]:
-                name_bits = []
-                sev = inc.get('severity')
-                if sev:
-                    name_bits.append(f"[{sev}]")
-                title_part = strip_html(str(inc.get('title') or inc.get('type') or 'Incident'))
-                name_bits.append(title_part)
-                field_name = ' '.join(name_bits)[:256] or 'Incident'
-
-                desc_bits = []
-                loc = inc.get('location') or inc.get('suburb')
-                if loc:
-                    desc_bits.append(f"📍 {strip_html(str(loc))}")
-                body = inc.get('summary') or inc.get('description') or ''
-                if body:
-                    desc_bits.append(strip_html(str(body)))
-                field_val = '\n'.join(desc_bits).strip()[:1024] or '—'
-                embed.add_field(name=field_name, value=field_val, inline=False)
-
-        footer_bits = ["rdio-scanner (self-hosted)"]
-        if call_count:
-            footer_bits.append(f"{call_count} calls")
-        model = data.get('model')
-        if model:
-            footer_bits.append(model)
-        embed.set_footer(text=' · '.join(footer_bits))
-
-        return embed
-
     # ============================================================
     # Per-alert-type Components V2 container builders.
     #
@@ -2944,6 +1593,7 @@ class EmbedBuilder:
         data = data or {}
         props = data.get('properties') or {}
         waze_subtype = props.get('wazeSubtype', '')
+        waze_type = props.get('wazeType', '')
         display_type = props.get('displayType', '')
         title = strip_html(props.get('title', ''))
         street = strip_html(props.get('street', ''))
@@ -2952,6 +1602,12 @@ class EmbedBuilder:
         thumbs_up = props.get('thumbsUp', 0)
         reliability = props.get('reliability', 0)
         created = props.get('created', '')
+        # Jam-specific richness from parseWazeJam (only present on jams).
+        severity = strip_html(str(props.get('severity', '') or ''))
+        speed_kmh = props.get('speedKMH', props.get('speed'))
+        delay_mins = props.get('delayMins')
+        delay_secs = props.get('delay')
+        length_m = props.get('length')
 
         icon = self.ICONS.get(alert_type, '⚠️')
         color = self.COLORS.get(alert_type, 0xEAB308)
@@ -2963,11 +1619,12 @@ class EmbedBuilder:
             'waze_roadwork': 'Waze Roadwork',
         }
         type_label = type_labels.get(alert_type, 'Waze Alert')
-        # Cleaned class + variant from the raw subtype (mirrors the dashboard
-        # chips); heading shows the class, variant goes to the meta row below.
-        class_label, variant = waze_subtype_labels(alert_type, waze_subtype)
-        if class_label:
-            heading = f"### {icon} {class_label}"
+        # Single subtype-based heading (the subtype already includes the
+        # main type, so no separate class heading + "Type" meta bit).
+        # Fall back to the raw type so a bare ROAD_CLOSED/ACCIDENT resolves.
+        head = waze_heading_label(alert_type, waze_subtype or waze_type)
+        if head:
+            heading = f"### {icon} {head}"
         elif display_type and display_type != 'Unknown':
             heading = f"### {icon} {display_type}"
         else:
@@ -2993,8 +1650,19 @@ class EmbedBuilder:
                 ))
 
         meta_bits = []
-        if variant:
-            meta_bits.append(f"Type: {variant}")
+        # Jam details first — the most useful info for a traffic jam.
+        if is_valid_value(severity):
+            meta_bits.append(severity)
+        if isinstance(speed_kmh, (int, float)) and speed_kmh > 0:
+            meta_bits.append(f"🚗 {round(speed_kmh)} km/h")
+        _dmin = (delay_mins if isinstance(delay_mins, (int, float)) and delay_mins
+                 else round(delay_secs / 60) if isinstance(delay_secs, (int, float)) and delay_secs
+                 else None)
+        if _dmin:
+            meta_bits.append(f"⏱️ +{_dmin} min delay")
+        if isinstance(length_m, (int, float)) and length_m > 0:
+            meta_bits.append(f"📏 {length_m / 1000:.1f} km" if length_m >= 1000
+                             else f"📏 {round(length_m)} m")
         if reliability and reliability > 0:
             meta_bits.append(f"Reliability: {min(100, reliability)}%")
         if thumbs_up and thumbs_up > 0:
@@ -3010,19 +1678,28 @@ class EmbedBuilder:
             footer_bits.append(f"🕐 <t:{int(dt_created.timestamp())}:R>")
 
         geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
+        coords = geometry.get('coordinates') if isinstance(geometry, dict) else None
+        lon = lat = None
+        if isinstance(coords, list) and coords:
+            if isinstance(coords[0], (list, tuple)):
+                # LineString (jams): list of [lon, lat] pairs — use the
+                # midpoint so the map link is a real coordinate, not a pair.
+                mid = coords[len(coords) // 2]
+                if isinstance(mid, (list, tuple)) and len(mid) >= 2:
+                    lon, lat = mid[0], mid[1]
+            elif len(coords) >= 2:
+                # Point: [lon, lat].
                 lon, lat = coords[0], coords[1]
-                layer_map = {
-                    'waze_hazard':   'hazards',
-                    'waze_jam':      'jams',
-                    'waze_police':   'police',
-                    'waze_roadwork': 'roadwork',
-                }
-                layer = layer_map.get(alert_type, 'hazards')
-                map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
-                footer_bits.append(f"[🗺️ Map]({map_url})")
+        if lat is not None and lon is not None:
+            layer_map = {
+                'waze_hazard':   'hazards',
+                'waze_jam':      'jams',
+                'waze_police':   'police',
+                'waze_roadwork': 'roadwork',
+            }
+            layer = layer_map.get(alert_type, 'hazards')
+            map_url = build_map_url(lat, lon, label=title or display_type, layer=layer)
+            footer_bits.append(f"[🗺️ Map]({map_url})")
 
         self._append_container_footer(container, footer_bits, source="Waze")
         return container
@@ -3306,7 +1983,7 @@ class EmbedBuilder:
             for agency in agencies:
                 icon_for_agency = ''
                 for key, emoji in agency_icons.items():
-                    if key.lower() in agency.lower():
+                    if key.lower() in str(agency).lower():
                         icon_for_agency = emoji + ' '
                         break
                 agency_list.append(f"{icon_for_agency}{agency}")
@@ -3315,7 +1992,8 @@ class EmbedBuilder:
             ))
 
         if logs and len(logs) > 0:
-            sorted_logs = sorted(logs, key=lambda x: x.get('created_at', ''), reverse=True)
+            dict_logs = [x for x in logs if isinstance(x, dict)]
+            sorted_logs = sorted(dict_logs, key=lambda x: x.get('created_at', ''), reverse=True)
             log_lines = ["**📋 Incident Log**"]
             for log in sorted_logs[:5]:
                 log_ts = log.get('created_at', '')

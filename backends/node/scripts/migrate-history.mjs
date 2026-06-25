@@ -307,7 +307,7 @@ function buildCountSql(sources) {
   const ph = sources.map((_, i) => `$${i + 1}`).join(',');
   let sql = `SELECT COUNT(*)::bigint AS n FROM data_history WHERE source IN (${ph})`;
   if (flags.since) {
-    sql += ` AND fetched_at >= EXTRACT(EPOCH FROM TIMESTAMP $${sources.length + 1})::bigint`;
+    sql += ` AND fetched_at >= EXTRACT(EPOCH FROM $${sources.length + 1}::timestamp)::bigint`;
   }
   return sql;
 }
@@ -324,7 +324,7 @@ function buildInsertSql(family, sources, unitDivisor) {
       : `to_timestamp(fetched_at::double precision)`;
 
   const sinceClause = sinceParam
-    ? ` AND fetched_at >= EXTRACT(EPOCH FROM TIMESTAMP $${sinceParam})::bigint * ${unitDivisor === 1000 ? '1000' : '1'}`
+    ? ` AND fetched_at >= EXTRACT(EPOCH FROM $${sinceParam}::timestamp)::bigint * ${unitDivisor === 1000 ? '1000' : '1'}`
     : '';
 
   // Build a flat JSONB blob so /api/data/history's pickStr(data, 'title')

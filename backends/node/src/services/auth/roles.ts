@@ -46,7 +46,8 @@ export async function getUserRoles(userId: string): Promise<string[]> {
 
   const cached = roleCache.get(userId);
   if (cached && Date.now() - cached.ts < ROLE_CACHE_TTL_MS) {
-    return cached.roles;
+    // Return a copy so callers can't mutate the cached array in place.
+    return [...cached.roles];
   }
 
   const pool = await getPool();
@@ -58,7 +59,8 @@ export async function getUserRoles(userId: string): Promise<string[]> {
   );
   const roles = result.rows.map((r) => r.role);
   roleCache.set(userId, { ts: Date.now(), roles });
-  return roles;
+  // Return a copy so callers can't mutate the array now held in cache.
+  return [...roles];
 }
 
 /**

@@ -34,6 +34,31 @@ declare module 'hono' {
 
 const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
+/**
+ * Verification options for jose's jwtVerify.
+ *
+ * - `algorithms` is always pinned to HS256 to stop alg-confusion attacks
+ *   (e.g. a token forged with alg:none or an asymmetric alg).
+ * - `issuer` / `audience` are only enforced when SUPABASE_URL is
+ *   configured. Supabase issues tokens with iss `<SUPABASE_URL>/auth/v1`
+ *   and aud `authenticated`. When SUPABASE_URL is absent we can't derive
+ *   a reliable issuer, so iss/aud are left unenforced.
+ */
+function jwtVerifyOptions(): {
+  algorithms: string[];
+  issuer?: string;
+  audience?: string;
+} {
+  const opts: { algorithms: string[]; issuer?: string; audience?: string } = {
+    algorithms: ['HS256'],
+  };
+  if (config.SUPABASE_URL) {
+    opts.issuer = `${config.SUPABASE_URL.replace(/\/$/, '')}/auth/v1`;
+    opts.audience = 'authenticated';
+  }
+  return opts;
+}
+
 export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
   const auth = c.req.header('Authorization');
   if (!auth || !auth.startsWith('Bearer ')) {
@@ -58,7 +83,11 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
   }
 
   try {
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(secret),
+      jwtVerifyOptions(),
+    );
     if (typeof payload.sub === 'string' && payload.sub.length > 0) {
       c.set('userId', payload.sub);
     }
@@ -91,7 +120,11 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
     return c.json({ error: 'invalid token' }, 401);
   }
   try {
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(secret),
+      jwtVerifyOptions(),
+    );
     if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
       return c.json({ error: 'invalid token' }, 401);
     }

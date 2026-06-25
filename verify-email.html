@@ -205,7 +205,10 @@
       
       if (hash) {
         hash.split('&').forEach(param => {
-          const [key, value] = param.split('=');
+          const i = param.indexOf('=');
+          if (i === -1) return;
+          const key = param.slice(0, i);
+          const value = param.slice(i + 1);
           if (key && value) {
             params[decodeURIComponent(key)] = decodeURIComponent(value);
           }
@@ -317,7 +320,7 @@
           statusIcon.textContent = '❌';
           statusMessage.className = 'verify-status error';
           
-          if (error.message.includes('expired')) {
+          if (String(error.message || '').includes('expired')) {
             statusMessage.textContent = 'This verification link has expired. Please request a new verification email.';
           } else {
             statusMessage.textContent = `Error: ${error.message || 'Failed to verify email'}`;

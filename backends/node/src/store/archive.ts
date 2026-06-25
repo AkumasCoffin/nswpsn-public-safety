@@ -74,6 +74,18 @@ interface QueueItem {
 
 const HARD_CAP = 50_000; // bound RAM if Postgres goes away briefly
 
+// Max rows per table written in a single flush. A persistent DB slowdown
+// was letting the queue grow to 15k+ rows; each flush then wrapped ALL of
+// them in one transaction that blew the statement_timeout, and the failure
+// re-queued the whole lot — so the next flush was even bigger. That death
+// spiral pinned the DB and starved everything else. Capping per table makes
+// every flush bounded and able to complete; overflow waits for the next
+// 30s cycle, and HARD_CAP still sheds the oldest if the backlog runs away.
+const MAX_PER_TABLE_PER_FLUSH = Math.max(
+  500,
+  Number(process.env['ARCHIVE_MAX_ROWS_PER_TABLE_PER_FLUSH'] ?? '3000') || 3000,
+);
+
 /**
  * Top-level keys excluded from the dedup hash. These are "noise" fields
  * that change every poll regardless of whether the underlying incident
@@ -264,6 +276,21 @@ export class ArchiveWriter {
       } else {
         buckets.set(item.table, [item.row]);
       }
+    }
+
+    // Bound per-table work so a backlog can't build one giant transaction
+    // that times out (and then re-queues even bigger). Defer the overflow
+    // to the next flush cycle.
+    let deferred = 0;
+    for (const [table, rows] of buckets) {
+      if (rows.length > MAX_PER_TABLE_PER_FLUSH) {
+        const overflow = rows.splice(MAX_PER_TABLE_PER_FLUSH);
+        for (const row of overflow) this.push(table, row);
+        deferred += overflow.length;
+      }
+    }
+    if (deferred > 0) {
+      log.info({ deferred, queued: this.queue.length }, 'archive flush: per-table cap hit; deferred overflow to next cycle');
     }
 
     // Tombstone INSERTs removed: incident state lives on the sidecar

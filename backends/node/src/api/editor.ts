@@ -240,10 +240,10 @@ function generateTempPassword(): string {
 
 editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
   const requestIdRaw = c.req.param('id');
-  const requestId = Number.parseInt(requestIdRaw, 10);
-  if (!Number.isFinite(requestId)) {
+  if (!/^\d+$/.test(requestIdRaw)) {
     return c.json({ error: 'Request not found' }, 404);
   }
+  const requestId = Number.parseInt(requestIdRaw, 10);
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const roles = asArrayOfString(data['roles']);
@@ -351,7 +351,10 @@ editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
       notes += ' | Supabase account created';
     } else if (supabaseError) {
       notes += ` | Supabase error: ${supabaseError}`;
-    } else if (createAccount && !config.SUPABASE_SERVICE_ROLE_KEY) {
+    } else if (
+      createAccount &&
+      !(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY)
+    ) {
       notes += ' | Supabase not configured';
     }
 
@@ -385,10 +388,10 @@ editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
 // ---------------------------------------------------------------------------
 editorRouter.post('/api/editor-requests/:id/reject', async (c) => {
   const requestIdRaw = c.req.param('id');
-  const requestId = Number.parseInt(requestIdRaw, 10);
-  if (!Number.isFinite(requestId)) {
+  if (!/^\d+$/.test(requestIdRaw)) {
     return c.json({ error: 'Request not found' }, 404);
   }
+  const requestId = Number.parseInt(requestIdRaw, 10);
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const reason = (data['reason'] as string | undefined) ?? '';

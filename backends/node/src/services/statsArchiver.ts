@@ -28,6 +28,14 @@ import {
 let timer: NodeJS.Timeout | null = null;
 let lastWriteAt = 0;
 let consecutiveErrors = 0;
+// Guards an overlapping tick when a write/prune runs longer than the
+// interval — the async setInterval callback would otherwise re-enter.
+let tickRunning = false;
+// Incrementing tick counter drives the once-an-hour prune gate. Using a
+// counter instead of Math.floor(Date.now()/intervalMs)%12 avoids the
+// clock-alignment fragility where a skipped/early tick mis-aligns the
+// modulo and the prune either never fires or fires twice.
+let ticks = 0;
 
 const ARCHIVE_INTERVAL_MS = 5 * 60_000; // 5 min, matches python
 const RETENTION_DAYS = 7;
@@ -107,13 +115,21 @@ export function startStatsArchiver(intervalMs: number = ARCHIVE_INTERVAL_MS): vo
   // through the first 5-min window.
   setTimeout(() => void writeStatsSnapshot(), 30_000).unref?.();
   timer = setInterval(async () => {
-    await writeStatsSnapshot();
-    // Prune once an hour-ish (every 12 ticks at 5 min cadence).
-    if (Math.floor(Date.now() / intervalMs) % 12 === 0) {
-      const dropped = await pruneOldSnapshots();
-      if (dropped > 0) {
-        log.info({ dropped }, 'stats archiver: pruned old snapshots');
+    // Skip this tick if the previous one is still running — a slow write
+    // or prune must not overlap with the next scheduled tick.
+    if (tickRunning) return;
+    tickRunning = true;
+    try {
+      await writeStatsSnapshot();
+      // Prune once an hour-ish (every 12 ticks at 5 min cadence).
+      if (++ticks % 12 === 0) {
+        const dropped = await pruneOldSnapshots();
+        if (dropped > 0) {
+          log.info({ dropped }, 'stats archiver: pruned old snapshots');
+        }
       }
+    } finally {
+      tickRunning = false;
     }
   }, intervalMs);
   timer.unref?.();
@@ -123,6 +139,8 @@ export function stopStatsArchiver(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
+    ticks = 0;
+    tickRunning = false;
   }
 }
 

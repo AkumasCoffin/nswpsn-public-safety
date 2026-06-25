@@ -59,6 +59,21 @@ const UPDATABLE_FIELDS = [
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
 const JSONB_FIELDS: ReadonlySet<string> = new Set(['type', 'responding_agencies']);
 
+/**
+ * Coerce an untrusted JSON value into a finite coordinate number.
+ * Accepts numbers and numeric strings; returns null for anything that
+ * isn't a finite number so callers can reject/null it rather than
+ * passing strings or NaN through to the geo columns.
+ */
+function coerceCoord(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 interface IncidentRow {
   id: string;
   title: string | null;
@@ -147,11 +162,19 @@ incidentsRouter.get('/api/incidents', async (c) => {
     const activeOnly = url.searchParams.get('active') === 'true';
 
     const result = await withPool(async (pool) => {
-      const sql = activeOnly
-        ? 'SELECT * FROM incidents WHERE expires_at > now() ORDER BY created_at DESC'
-        : 'SELECT * FROM incidents ORDER BY created_at DESC';
-      const r = await pool.query<IncidentRow>(sql);
-      return r.rows.map(normaliseIncident);
+      // Always run the plain, comparison-free query and apply the
+      // active/expiry filter in JS off the `is_live` field that
+      // normaliseIncident already derives. The previous SQL
+      // `WHERE expires_at > now()` 500s when the deployed incidents table
+      // (created by the legacy python init_postgres.py, not migration 001)
+      // stores expires_at as TEXT — `text > timestamptz` has no operator.
+      // Filtering in JS makes active=true exactly as robust as the
+      // unfiltered list (which works), regardless of the column's type.
+      const r = await pool.query<IncidentRow>(
+        'SELECT * FROM incidents ORDER BY created_at DESC',
+      );
+      const rows = r.rows.map(normaliseIncident);
+      return activeOnly ? rows.filter((row) => row['is_live'] === true) : rows;
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     return c.json(result);
@@ -195,8 +218,8 @@ incidentsRouter.post('/api/incidents', async (c) => {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const result = await withPool(async (pool) => {
       const title = (data['title'] as string | undefined) ?? '';
-      const lat = (data['lat'] as number | undefined) ?? 0;
-      const lng = (data['lng'] as number | undefined) ?? 0;
+      const lat = coerceCoord(data['lat']) ?? 0;
+      const lng = coerceCoord(data['lng']) ?? 0;
       const location = (data['location'] as string | undefined) ?? '';
       const typeJson = JSON.stringify(data['type'] ?? []);
       const description = (data['description'] as string | undefined) ?? '';
@@ -246,7 +269,20 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     for (const key of UPDATABLE_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(data, key)) {
         const raw = data[key as UpdatableField];
-        const val = JSONB_FIELDS.has(key) ? JSON.stringify(raw) : raw;
+        let val: unknown;
+        if (JSONB_FIELDS.has(key)) {
+          val = JSON.stringify(raw);
+        } else if (key === 'lat' || key === 'lng') {
+          // Never trust unvalidated JSON straight into the geo columns —
+          // reject non-finite values rather than persisting a string/NaN.
+          const coord = coerceCoord(raw);
+          if (coord === null) {
+            return c.json({ error: `Invalid ${key}` }, 400);
+          }
+          val = coord;
+        } else {
+          val = raw;
+        }
         sets.push(`${key} = $${sets.length + 1}`);
         vals.push(val);
       }

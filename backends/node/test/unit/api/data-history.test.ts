@@ -65,10 +65,13 @@ describe('GET /api/data/history', () => {
   it('returns the records, cursor, and query info', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
+      // limit=2 plus one sentinel row (id 3) so the route can prove a
+      // further page exists and emit next_cursor.
       return {
         rows: [
           row({ id: 5, source: 'rfs', fetched_at_epoch: 1_700_000_500 }),
           row({ id: 4, source: 'rfs', fetched_at_epoch: 1_700_000_400 }),
+          row({ id: 3, source: 'rfs', fetched_at_epoch: 1_700_000_300 }),
         ],
       };
     });

@@ -40,7 +40,12 @@ import {
 } from '../services/cursorPagination.js';
 import { getFilterFacets } from '../store/filterCache.js';
 import type { ArchiveTable } from '../store/archive.js';
-import { sydneyIsoFromUnix, sydneyIsoFromDate } from '../lib/sydneyTime.js';
+import {
+  sydneyIsoFromUnix,
+  sydneyIsoFromDate,
+  sydneyUnixFromNaive,
+  formatSydneyNaive,
+} from '../lib/sydneyTime.js';
 
 export const dataHistoryRouter = new Hono();
 
@@ -79,21 +84,25 @@ function parseDateBoundary(v: string | null | undefined, endOfDay: boolean): num
   if (!v) return null;
   const trimmed = v.trim();
   if (!trimmed) return null;
-  const hasTime = trimmed.includes('T') || trimmed.includes(' ');
-  try {
-    if (hasTime) {
-      const dt = new Date(trimmed.replace(' ', 'T'));
-      const t = dt.getTime();
-      return Number.isFinite(t) ? Math.floor(t / 1000) : null;
-    }
-    // Bare date — pin to local midnight or end-of-day to match Python's
-    // datetime.strptime + replace() semantics.
-    const dt = new Date(`${trimmed}T${endOfDay ? '23:59:59' : '00:00:00'}`);
-    const t = dt.getTime();
-    return Number.isFinite(t) ? Math.floor(t / 1000) : null;
-  } catch {
-    return null;
+  // Interpret bare `YYYY-MM-DD` or `YYYY-MM-DD[ T]HH:mm[:ss]` as
+  // Australia/Sydney wall-clock — the zone this system stores in.
+  // Using `new Date()` here would parse in the server's local zone (UTC
+  // on prod), shifting the requested day by the Sydney offset (10–11h)
+  // and silently dropping the start/end of the day from results.
+  const m = trimmed.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/,
+  );
+  if (m) {
+    const [, y, mo, d, hh, mi, ss] = m;
+    const hasTime = hh !== undefined;
+    const H = hasTime ? Number(hh) : endOfDay ? 23 : 0;
+    const M = hasTime ? Number(mi) : endOfDay ? 59 : 0;
+    const S = hasTime ? (ss !== undefined ? Number(ss) : 0) : endOfDay ? 59 : 0;
+    return sydneyUnixFromNaive(Number(y), Number(mo), Number(d), H, M, S);
   }
+  // Anything else (explicit offset / Z / RFC string) — let Date parse it.
+  const t = new Date(trimmed).getTime();
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
 }
 
 interface ParsedQuery {
@@ -127,9 +136,9 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   if (since === null && hours !== null) since = nowSecs - hours * 3600;
   if (since === null && days !== null) since = nowSecs - days * 86400;
   if (since === null && todayOnly) {
-    const t = new Date();
-    t.setHours(0, 0, 0, 0);
-    since = Math.floor(t.getTime() / 1000);
+    // "Today" in Sydney, not the server's local zone.
+    const sydneyToday = formatSydneyNaive(Date.now()).slice(0, 10);
+    since = parseDateBoundary(sydneyToday, false);
   }
 
   const sinceSource = intParam(q.get('since_source'));
@@ -459,28 +468,31 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     const total = counts.reduce((a, b) => a + b, 0);
 
     let merged: ArchiveQueryRow[];
+    // hasMore is derived from the PRE-slice pool exceeding the page end —
+    // not from `merged.length >= limit`, which fired a phantom next_cursor
+    // on an exactly-full final page (returning an empty next fetch).
+    let hasMore: boolean;
     if (results.length === 1) {
-      // Single-family: the per-table SQL already applied limit + offset
-      // when no cursor was set. Skip merge sort entirely.
       const rows = results[0] ?? [];
       if (params.cursor) {
-        merged = rows;
+        hasMore = rows.length > params.limit;
+        merged = rows.slice(0, params.limit);
       } else {
+        hasMore = rows.length > params.offset + params.limit;
         merged = rows.slice(params.offset, params.offset + params.limit);
       }
     } else {
       // Multi-family: combine, sort by (fetched_at, id), apply offset+limit.
       const all: ArchiveQueryRow[] = [];
       for (const part of results) all.push(...part);
+      hasMore = all.length > plan.effectiveOffset + plan.limit;
       merged = mergeAndPaginate(all, plan);
     }
 
     const records = merged.map((r) => formatRecord(r, params.includeData));
     const last = merged[merged.length - 1];
     const nextCursor =
-      merged.length >= params.limit && last
-        ? encodeCursor(last.fetched_at_epoch, last.id)
-        : null;
+      hasMore && last ? encodeCursor(last.fetched_at_epoch, last.id) : null;
 
     return c.json({
       records,

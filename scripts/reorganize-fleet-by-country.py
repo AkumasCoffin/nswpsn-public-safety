@@ -73,6 +73,11 @@ def main():
 
     headers = headers_seen or ["Reg", "Callsign", "Country", "Make", "Model"]
 
+    # Read+parse meta.json up-front, before deleting anything: if it's
+    # missing or malformed we want to fail *before* unlinking the originals.
+    meta_path = AVIATION_DIR / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
     # Write per-(country, type) CSVs.
     written = 0
     for country, by_type in by_country_type.items():
@@ -86,10 +91,6 @@ def main():
                     writer.writerow({h: r.get(h, "") for h in headers})
             written += 1
 
-    # Remove the old per-type files now that they've been split.
-    for src in source_files:
-        src.unlink()
-
     # Build the country sections list for meta.json (preserve curated order).
     ordered_countries = []
     for c in COUNTRY_ORDER:
@@ -98,9 +99,6 @@ def main():
     for c in sorted(by_country_type.keys()):
         if c not in ordered_countries:
             ordered_countries.append(c)
-
-    meta_path = AVIATION_DIR / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     # Keep operator-based sections (they don't have a `csv` matching fleet-* prefix).
     kept = []
@@ -139,6 +137,12 @@ def main():
 
     meta["sections"] = kept + fleet_sections
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Only now that all new CSVs *and* the new meta.json are on disk is it
+    # safe to remove the old per-type files.
+    for src in source_files:
+        src.unlink()
+
     print(f"Wrote {written} per-(country, type) CSVs.")
     print(f"Removed {len(source_files)} old per-type CSVs.")
     print(f"Countries: {ordered_countries}")

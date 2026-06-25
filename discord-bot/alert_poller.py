@@ -17,6 +17,26 @@ load_dotenv()
 
 logger = logging.getLogger('nswpsn-bot.poller')
 
+# Freshness window for Waze alerts. Anything whose upstream `created`
+# timestamp is older than this is treated as stale backlog and NOT posted
+# as "new" — this is what stops a region's week-old flood closures from
+# flooding in when the scrape bbox shifts. Jams carry no pubMillis so they
+# are undated → treated as "now" → always pass. Tune to taste: lower = only
+# very fresh alerts; higher = lets older-but-active roadwork/closures through.
+WAZE_MAX_AGE_MINUTES = 360  # 6 hours
+
+# Police dedup window. Waze police are crowd-sourced and churn uuids: the
+# same speed trap is re-reported under many distinct ids within minutes, so
+# keying on the uuid posts the same spot repeatedly. Instead we key police on
+# subtype + a coarse location grid + a time bucket of this length, so repeat
+# reports of one spot within the window collapse to a single alert while the
+# spot can re-alert in a later window if police are reported there again.
+WAZE_POLICE_DEDUP_MINUTES = 60
+# Location grid for police dedup, in degrees. ~50m (1° lat ≈ 111.3km, so
+# 50m ≈ 0.00045°). Reports snapped to the same cell are treated as the same
+# spot.
+WAZE_POLICE_GRID_DEG = 0.00045
+
 
 class AlertPoller:
     def __init__(self, api_base_url: str, api_key: str, database):
@@ -77,7 +97,7 @@ class AlertPoller:
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=30) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         return await response.json()
                     else:
@@ -153,16 +173,72 @@ class AlertPoller:
             return hashlib.md5(str(item).encode()).hexdigest()[:16]
 
         elif alert_type.startswith('waze_'):
-            # Waze alerts - use UUID from properties
+            # Waze alerts - use the Waze UUID from properties when present.
             props = item.get('properties', {})
+
+            if alert_type == 'waze_police':
+                # Police churn uuids — the same speed trap is re-reported
+                # under many distinct ids within minutes, so uuid-keyed dedup
+                # posts the same spot repeatedly. Key on subtype + a coarse
+                # ~50m grid + a time bucket so repeat reports of one spot
+                # collapse to one alert. The bucket is taken from the report
+                # time (fallback: now) so the SAME report doesn't re-alert
+                # poll-to-poll, but a genuinely new report in a later window
+                # at the same spot can. Unlike road closures (linear, many
+                # distinct segments) police are point sightings, so coarse
+                # gridding is safe here and applied to police only.
+                geom = (item.get('geometry') or {}).get('coordinates') or []
+                pt = geom[0] if (geom and isinstance(geom[0], (list, tuple))) else geom
+                try:
+                    glat = round(float(pt[1]) / WAZE_POLICE_GRID_DEG)
+                    glon = round(float(pt[0]) / WAZE_POLICE_GRID_DEG)
+                    loc = f"{glat},{glon}"
+                except (TypeError, ValueError, IndexError):
+                    loc = str(props.get('street', ''))
+                created = props.get('created', '')
+                bucket_dt = None
+                if created:
+                    try:
+                        bucket_dt = datetime.fromisoformat(str(created).replace('Z', '+00:00'))
+                        if bucket_dt.tzinfo is None:
+                            bucket_dt = bucket_dt.replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        bucket_dt = None
+                if bucket_dt is None:
+                    bucket_dt = datetime.now(timezone.utc)
+                bucket = int(bucket_dt.timestamp() // (WAZE_POLICE_DEDUP_MINUTES * 60))
+                stable = '|'.join([str(props.get('wazeSubtype', '')), loc, str(bucket)])
+                return "waze_police_" + hashlib.md5(stable.encode()).hexdigest()[:16]
+
             waze_id = props.get('id', '')
-            return f"{alert_type}_{waze_id}" if waze_id else hashlib.md5(str(item).encode()).hexdigest()[:16]
+            if waze_id:
+                return f"{alert_type}_{waze_id}"
+            # No Waze id — derive a STABLE key from fields that don't change
+            # poll-to-poll. The old md5(str(item)) hashed the WHOLE feature,
+            # whose volatile fields (speed/level/length/thumbs/coord
+            # precision) changed every cycle, so such an alert got a new id
+            # each poll: it was re-sent (duplicates) and slipped past the
+            # bootstrap-seen mark (marked under a now-stale id) -> persistent
+            # "old" alerts kept firing once the per-cycle cap was removed.
+            geom = (item.get('geometry') or {}).get('coordinates') or []
+            pt = geom[0] if (geom and isinstance(geom[0], (list, tuple))) else geom
+            try:
+                loc = f"{round(float(pt[1]), 4)},{round(float(pt[0]), 4)}"
+            except (TypeError, ValueError, IndexError):
+                loc = ''
+            stable = '|'.join([
+                str(props.get('wazeType', '')),
+                str(props.get('wazeSubtype', '')),
+                str(props.get('street', '')),
+                loc,
+            ])
+            return f"{alert_type}_" + hashlib.md5(stable.encode()).hexdigest()[:16]
 
         elif alert_type == 'user_incident':
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
             incident_id = item.get('id', '')
             logs = item.get('logs', [])
-            latest_log_id = logs[0].get('id', '') if logs else ''
+            latest_log_id = logs[0].get('id', '') if logs and isinstance(logs[0], dict) else ''
             return f"user_{incident_id}_{latest_log_id}"
         
         # Fallback to hash
@@ -262,50 +338,64 @@ class AlertPoller:
         # Fallback to current time
         return datetime.now(timezone.utc)
     
-    def _filter_recent_waze(self, items: List[Dict[str, Any]], max_age_minutes: int = 15, max_items: int = 5) -> List[Dict[str, Any]]:
-        """Filter Waze items to only include very recent reports.
-        
-        Waze has thousands of active reports at any time. This filter ensures
-        we only alert on truly new reports (last 15 minutes) and limits the
-        number per poll cycle to prevent spam.
-        
+    def _filter_recent_waze(self, items: List[Dict[str, Any]], max_age_minutes: int = 15, max_items: int = 0) -> List[Dict[str, Any]]:
+        """Order Waze items for posting (and optionally bound them).
+
+        Novelty is handled by seen-dedup + the first-poll bootstrap, so by
+        default this emits EVERY item, just sorted oldest-first for
+        chronological posting (and treating undated items — e.g. jams with
+        no pubMillis — as "now" so they aren't lost).
+
         Args:
             items: List of Waze GeoJSON features
-            max_age_minutes: Maximum age in minutes to include (default 15)
-            max_items: Maximum items to return per cycle (default 5)
-        
+            max_age_minutes: Drop items whose `created` is older than this
+                (WAZE_MAX_AGE_MINUTES). Undated items (jams have no pubMillis)
+                are treated as "now" so they always pass.
+            max_items: Optional per-cycle cap. 0 (default) = no cap, emit
+                everything. When >0, keep the NEWEST max_items so new alerts
+                aren't starved by stale ones.
+
         Returns:
-            Filtered list of recent items only (limited), sorted oldest-first
+            Items sorted oldest-first.
         """
         recent_items = []
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
-        
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=max_age_minutes)
+
         for item in items:
-            props = item.get('properties', {})
+            props = item.get('properties', {}) or {}
             created_str = props.get('created', '')
-            
-            if not created_str:
-                # No timestamp - skip to avoid old data
-                continue
-            
-            try:
-                # Parse ISO timestamp (2025-01-07T14:30:00Z format)
-                created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
-                if created_dt >= cutoff:
-                    recent_items.append((created_dt, item))
-            except (ValueError, TypeError):
-                # Can't parse timestamp - skip
-                continue
-        
-        # Sort by timestamp (oldest first) for chronological posting
-        recent_items.sort(key=lambda x: x[0])
-        
-        # Limit to max_items to prevent flooding, take oldest first
-        if len(recent_items) > max_items:
-            logger.debug(f"  → Limiting Waze from {len(recent_items)} to {max_items} items")
+            created_dt = None
+            if created_str:
+                try:
+                    # Parse ISO timestamp (2026-01-07T14:30:00Z format).
+                    created_dt = datetime.fromisoformat(str(created_str).replace('Z', '+00:00'))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    created_dt = None
+
+            if created_dt is None:
+                # No usable timestamp. Waze JAMS routinely lack pubMillis,
+                # so `created` is empty — the old "skip if no timestamp"
+                # rule silently dropped every jam (and any roadwork without
+                # a date). Don't drop them: treat as "now" so they still
+                # post. The first-poll bootstrap + seen-dedup prevent
+                # floods, so an undated alert still only fires once.
+                recent_items.append((now, item))
+            elif created_dt >= cutoff:
+                recent_items.append((created_dt, item))
+            # else: older than the age window — drop (hazard/police path).
+
+        # Optional per-cycle cap. 0 = emit everything (default). When set,
+        # keep the NEWEST max_items so new alerts aren't starved by stale
+        # ones (the cap runs before the unseen check).
+        if max_items and len(recent_items) > max_items:
+            logger.debug(f"  → Limiting Waze from {len(recent_items)} to newest {max_items}")
+            recent_items.sort(key=lambda x: x[0], reverse=True)
             recent_items = recent_items[:max_items]
-        
-        # Extract just the items (discard timestamps used for sorting)
+        recent_items.sort(key=lambda x: x[0])  # oldest-first for posting
+
         return [item for _, item in recent_items]
 
     def _cluster_firms(self, features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -411,17 +501,34 @@ class AlertPoller:
                 await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
                 items = []
             elif alert_type.startswith('waze_'):
-                # Steady-state waze still has anti-flood: only alert on
-                # last 15 min, max 5 per cycle. Waze has thousands of
-                # reports; without this it'd dominate every channel.
-                items = self._filter_recent_waze(items, max_age_minutes=15, max_items=5)
-                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} recent (last 15min, max 5)")
+                # All Waze types: NO per-cycle cap (emit everything), but DO
+                # drop anything older than the freshness window. A region's
+                # stale backlog (e.g. week-old flood road-closures) enters the
+                # feed when the scrape bbox shifts; without this they'd post as
+                # "new". Jams have no pubMillis → undated → treated as "now" →
+                # always pass. The first-poll bootstrap + seen-dedup still
+                # prevent restart floods and repeats.
+                items = self._filter_recent_waze(items, max_age_minutes=WAZE_MAX_AGE_MINUTES)
+                logger.debug(f"  → {alert_type}: {original_count} total, {len(items)} within freshness window")
             else:
                 logger.debug(f"  → {alert_type}: {len(items)} items")
 
-            # Build candidate list and check all at once (single DB query instead of N)
-            candidates = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-            item_by_id = {self._get_alert_id(alert_type, item): item for item in items}
+            # Build candidate list and check all at once (single DB query
+            # instead of N). De-dupe by id WITHIN this cycle: two distinct
+            # items can resolve to the same alert id (the stable-fields
+            # fallback for Waze alerts with no upstream uuid collides when
+            # type/subtype/street/rounded-location match — e.g. several flood
+            # road-closures on the same street). Without de-duping,
+            # filter_unseen_alerts returns that id once per copy and we post
+            # the identical alert several times in one batch.
+            item_by_id = {}
+            candidates = []
+            for item in items:
+                aid = self._get_alert_id(alert_type, item)
+                if aid in item_by_id:
+                    continue
+                item_by_id[aid] = item
+                candidates.append((alert_type, aid))
 
             # Run synchronous DB calls in executor to avoid blocking the event loop
             unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
@@ -651,7 +758,7 @@ class AlertPoller:
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=30) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         incidents = await response.json()
                         if not isinstance(incidents, list):
@@ -688,7 +795,7 @@ class AlertPoller:
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=15) as response:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     if response.status == 200:
                         data = await response.json()
                         return data if isinstance(data, list) else []
@@ -770,9 +877,15 @@ class AlertPoller:
             return out
 
         elif alert_type == 'waze_jam':
-            features = data.get('features', []) or []
-            out = []
-            for f in features:
+            # The /api/waze/hazards response carries jam polylines under a
+            # separate `jams` key (parseWazeJam features); `features` holds
+            # only hazards since the 2026-05-28 JAM→waze_jam ingest split.
+            # Reading `features` here returned nothing, so jam alerts never
+            # fired — pull from `jams` instead.
+            out = list(data.get('jams', []) or [])
+            # Defensive: also catch any JAM-typed alert that lands in
+            # `features` (pre-split / edge data).
+            for f in (data.get('features', []) or []):
                 props = f.get('properties') or {}
                 wtype = (props.get('wazeType')
                          or props.get('displayType')
@@ -855,7 +968,7 @@ class AlertPoller:
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, params=params, timeout=30) as response:
+                async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         data = await response.json()
                         # API returns GeoJSON FeatureCollection, extract features
