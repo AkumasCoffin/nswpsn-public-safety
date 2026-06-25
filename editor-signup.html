@@ -602,6 +602,9 @@
       
       if (hasSetup && hasSetup.value === 'yes') {
         detailsGroup.style.display = 'block';
+      } else {
+        detailsGroup.style.display = 'none';
+        setupDetailsInput.value = '';
       }
     }
     

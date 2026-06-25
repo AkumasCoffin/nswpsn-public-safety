@@ -8964,7 +8964,10 @@ async function loadPagerData() {
         
         const filteredIncidents = incidents.filter(inc => {
           const expiresAt = inc.expires_at ? new Date(inc.expires_at) : null;
-          return expiresAt && expiresAt > now;
+          // Show incidents whose expiry is missing or unparseable; only hide
+          // those with a valid expiry that is in the past.
+          if (!expiresAt || isNaN(expiresAt.getTime())) return true;
+          return expiresAt > now;
         });
         
         filteredIncidents.forEach(inc => {
@@ -9033,23 +9036,37 @@ async function loadPagerData() {
             selectIncident(inc);
           });
           marker.on('dragend', async (e) => {
-            const newPos = e.target.getLatLng();
-            // Reverse geocode to get updated location
-            const newLocation = await reverseGeocode(newPos.lat, newPos.lng);
-            const res = await apiFetch(`${PROXY_BASE}/api/incidents/${inc.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ lat: newPos.lat, lng: newPos.lng, location: newLocation || '' })
-            });
-            if (!res.ok) {
-              alert('Failed to save the new pin location. Reverting.');
+            try {
+              const newPos = e.target.getLatLng();
+              // Reverse geocode to get updated location
+              const newLocation = await reverseGeocode(newPos.lat, newPos.lng);
+              const res = await apiFetch(`${PROXY_BASE}/api/incidents/${inc.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lat: newPos.lat, lng: newPos.lng, location: newLocation || '' })
+              });
+              if (!res.ok) {
+                alert('Failed to save the new pin location. Reverting.');
+                e.target.setLatLng([inc.lat, inc.lng]);
+                return;
+              }
+              // Persist the saved coords on the closure + marker entry so a later
+              // failed drag reverts to the last-saved position, not the original.
+              inc.lat = newPos.lat;
+              inc.lng = newPos.lng;
+              const entry = incidentMarkerEntries.find(en => en.inc === inc);
+              if (entry) {
+                entry.lat = newPos.lat;
+                entry.lon = newPos.lng;
+              }
+              // Update location display if this incident is currently selected
+              if (selectedId === inc.id && newLocation) {
+                document.getElementById('edit-location-text').textContent = newLocation;
+                document.getElementById('location-group').style.display = 'block';
+              }
+            } catch (err) {
+              alert('Failed to save pin location — reverting.');
               e.target.setLatLng([inc.lat, inc.lng]);
-              return;
-            }
-            // Update location display if this incident is currently selected
-            if (selectedId === inc.id && newLocation) {
-              document.getElementById('edit-location-text').textContent = newLocation;
-              document.getElementById('location-group').style.display = 'block';
             }
           });
           markers[inc.id] = marker;
@@ -9123,7 +9140,7 @@ async function loadPagerData() {
 
       const typeInputs = document.querySelectorAll('#type-checkboxes input');
       typeInputs.forEach(cb => cb.checked = false);
-      const incTypes = Array.isArray(inc.type) ? inc.type : [inc.type];
+      const incTypes = Array.isArray(inc.type) ? inc.type : (inc.type ? [inc.type] : []);
       incTypes.forEach(t => {
         const match = Array.from(typeInputs).find(i => i.value === t);
         if (match) match.checked = true;
@@ -11062,7 +11079,7 @@ async function loadPagerData() {
       const w3wPane = map.getPane('w3wPane');
       // Show grid at zoom >= W3W_MIN_ZOOM — below that the squares are sub-pixel
       if (zoom < W3W_MIN_ZOOM) {
-        w3wPane.style.opacity = 0;
+        if (w3wPane) w3wPane.style.opacity = 0;
         w3wGridLayer.clearLayers();
         _w3wLoadedBounds = null;
         _w3wLoadedZoom = null;
@@ -11147,6 +11164,9 @@ async function loadPagerData() {
 
     async function onW3WMapClick(e) {
       if (!w3wEnabled) return;
+      // In add-mode the base map-click handler creates an incident; skip the
+      // W3W lookup so a single click doesn't trigger both behaviours.
+      if (addMode) return;
       if (map.getZoom() < W3W_MIN_ZOOM) return;
       
       const { lat, lng } = e.latlng;

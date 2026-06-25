@@ -2613,7 +2613,7 @@
       }
       
       // Check showMore-based lists
-      const showMoreContainers = ['rfs-incidents-list', 'fdr-list'];
+      const showMoreContainers = ['rfs-incidents-list', 'rfs-fdr-toban-content'];
       for (const containerId of showMoreContainers) {
         const container = document.getElementById(containerId);
         if (container && container.showMore) {
@@ -2659,14 +2659,17 @@
       // Close showMore-based lists
       const showMoreConfigs = [
         { containerId: 'rfs-incidents-list', reloadFn: loadRfsMajorIncidents },
-        { containerId: 'fdr-list', reloadFn: loadRfsFireDangerToban }
+        { containerId: 'rfs-fdr-toban-content', reloadFn: loadRfsFireDangerToban }
       ];
-      
+
       for (const config of showMoreConfigs) {
         const container = document.getElementById(config.containerId);
         if (container && container.showMore) {
           container.showMore = false;
-          config.reloadFn();
+          // Re-render locally from cached data; fall back to a full reload
+          // only if no cached render is available.
+          if (container._render) container._render();
+          else config.reloadFn();
         }
       }
       
@@ -3050,6 +3053,8 @@
         const hourlySlot = document.getElementById('rdio-hourly-slot');
         const hourlyMerged = document.getElementById('rdio-hourly-merged');
         const hourlyTitle = document.getElementById('rdio-hourly-title');
+        // Bail out if the summary markup isn't present so missing nodes can't throw.
+        if (!hourlyEl || !hourlyMeta || !hourlySlot || !hourlyMerged || !hourlyTitle) return;
         if (data.hourly) {
           renderRdioSummary(hourlyEl, data.hourly);
           // For ad-hoc summaries, period_start == period_end (generation time).
@@ -4781,7 +4786,11 @@
         }
         
         const items = [];
-        
+        // Dedup across the incidents/fires/floods/majorEvents feeds, which can
+        // overlap, so the same item isn't rendered twice. Keyed by stable id,
+        // falling back to coordinates.
+        const seenTrafficKeys = new Set();
+
         // Extract incident type from title (matches backend logic)
         const extractIncidentType = (title) => {
           if (!title) return { type: '', cleanTitle: title || '' };
@@ -4889,7 +4898,15 @@
               lng = geom.coordinates[0];
               lat = geom.coordinates[1];
             }
-            
+
+            // Skip duplicates that appear across overlapping feeds.
+            const dedupKey = p.id != null ? `id:${p.id}`
+              : (lat != null && lng != null) ? `geo:${lat},${lng}` : null;
+            if (dedupKey) {
+              if (seenTrafficKeys.has(dedupKey)) return;
+              seenTrafficKeys.add(dedupKey);
+            }
+
             // Get raw title - prefer headline (full text from API) or backend-processed title
             // over displayName (which can be a short/truncated label from the API)
             const rawTitle = getBestTrafficTitle(p);
@@ -5540,11 +5557,15 @@
             'Responding': incidents.filter(i => i.status.toUpperCase().includes("RESPONDING")).length
           };
           
-          // Update summary stats
-          document.getElementById('rfs-total').textContent = total;
-          document.getElementById('rfs-emergency').textContent = emergency;
-          document.getElementById('rfs-watchact').textContent = watchAct;
-          document.getElementById('rfs-advice').textContent = advice;
+          // Update summary stats (guard each node so missing markup can't throw)
+          const rfsTotalEl = document.getElementById('rfs-total');
+          if (rfsTotalEl) rfsTotalEl.textContent = total;
+          const rfsEmergencyEl = document.getElementById('rfs-emergency');
+          if (rfsEmergencyEl) rfsEmergencyEl.textContent = emergency;
+          const rfsWatchActEl = document.getElementById('rfs-watchact');
+          if (rfsWatchActEl) rfsWatchActEl.textContent = watchAct;
+          const rfsAdviceEl = document.getElementById('rfs-advice');
+          if (rfsAdviceEl) rfsAdviceEl.textContent = advice;
           
           // Update chart
           const chartCanvas = document.getElementById('rfs-status-chart');
@@ -5667,19 +5688,25 @@
             // Add show more button
             if (incidents.length > MAX_VISIBLE) {
               container.innerHTML += `
-                <button class="show-more-btn" onclick="this.parentNode.showMore = !this.parentNode.showMore; loadRfsMajorIncidents(); updateCloseAllButtonVisibility();">
+                <button class="show-more-btn" onclick="this.parentNode.showMore = !this.parentNode.showMore; this.parentNode._render && this.parentNode._render(); updateCloseAllButtonVisibility();">
                   ${showingAll ? '<i class="fas fa-chevron-up"></i> Show Less' : `<i class="fas fa-chevron-down"></i> Show All (${incidents.length})`}
                 </button>
               `;
             }
           }
-          
+
+          // Cache a local re-render so Show More/Less toggles don't re-fetch
+          // (a transient fetch failure must not wipe the existing list).
+          container._render = () => { showingAll = container.showMore || false; render(); };
           showingAll = container.showMore || false;
           render();
         })
         .catch(err => {
           console.error(err);
-          container.innerHTML = '<span class="error-state">Unable to load RFS Feed.</span>';
+          // Don't clobber an existing list on a transient re-fetch failure.
+          if (!container.querySelector('.tt-item')) {
+            container.innerHTML = '<span class="error-state">Unable to load RFS Feed.</span>';
+          }
         });
     }
 
@@ -5749,11 +5776,15 @@
           const bansToday = districts.filter(d => d.banToday.toUpperCase() !== 'NO').length;
           const bansTomorrow = districts.filter(d => d.banTomorrow.toUpperCase() !== 'NO').length;
           
-          // Update summary stats
-          document.getElementById('fdr-extreme').textContent = extremeCount;
-          document.getElementById('fdr-high').textContent = highCount;
-          document.getElementById('fdr-bans-today').textContent = bansToday;
-          document.getElementById('fdr-bans-tomorrow').textContent = bansTomorrow;
+          // Update summary stats (guard each node so missing markup can't throw)
+          const fdrExtremeEl = document.getElementById('fdr-extreme');
+          if (fdrExtremeEl) fdrExtremeEl.textContent = extremeCount;
+          const fdrHighEl = document.getElementById('fdr-high');
+          if (fdrHighEl) fdrHighEl.textContent = highCount;
+          const fdrBansTodayEl = document.getElementById('fdr-bans-today');
+          if (fdrBansTodayEl) fdrBansTodayEl.textContent = bansToday;
+          const fdrBansTomorrowEl = document.getElementById('fdr-bans-tomorrow');
+          if (fdrBansTomorrowEl) fdrBansTomorrowEl.textContent = bansTomorrow;
           
           // Update chart
           const chartCanvas = document.getElementById('fdr-chart');
@@ -5885,19 +5916,25 @@
             // Add show more button
             if (districts.length > MAX_VISIBLE) {
               container.innerHTML += `
-                <button class="show-more-btn" onclick="this.parentNode.showMore = !this.parentNode.showMore; loadRfsFireDangerToban(); updateCloseAllButtonVisibility();">
+                <button class="show-more-btn" onclick="this.parentNode.showMore = !this.parentNode.showMore; this.parentNode._render && this.parentNode._render(); updateCloseAllButtonVisibility();">
                   ${showingAll ? '<i class="fas fa-chevron-up"></i> Show Less' : `<i class="fas fa-chevron-down"></i> Show All (${districts.length})`}
                 </button>
               `;
             }
           }
-          
+
+          // Cache a local re-render so Show More/Less toggles don't re-fetch
+          // (a transient fetch failure must not wipe the existing list).
+          container._render = () => { showingAll = container.showMore || false; render(); };
           showingAll = container.showMore || false;
           render();
         })
         .catch(err => {
           console.error(err);
-          container.innerHTML = '<span class="error-state">Unable to load FDR Feed.</span>';
+          // Don't clobber an existing list on a transient re-fetch failure.
+          if (!container.querySelector('.fdr-item')) {
+            container.innerHTML = '<span class="error-state">Unable to load FDR Feed.</span>';
+          }
         });
     }
   </script>

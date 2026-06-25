@@ -2277,6 +2277,11 @@
       isLoading = true;
 
       const previousPage = currentPage;
+      // Snapshot the cursor fast-path state too, so a rejected offset jump can
+      // fully roll back (not just currentPage) and the next sequential click
+      // still has its cursor.
+      const previousCursor = nextCursor;
+      const previousShownPage = lastShownPage;
       currentPage = page;
       showLoading();
 
@@ -2367,6 +2372,8 @@
           if (body && body.error === 'offset_too_large') {
             console.warn('offset cap hit:', body.message);
             currentPage = previousPage;
+            nextCursor = previousCursor;
+            lastShownPage = previousShownPage;
             alert('That page is too far in for offset paging. Try Next/Prev or narrow the date range.');
             return;
           }
@@ -2896,14 +2903,18 @@
         });
       }
       
+      // Capture the selection token so slow fetches for a previously selected
+      // incident can't overwrite the panels after the user switches incidents.
+      const requestToken = item.source_id;
+
       // Fetch incident history and linked incidents in parallel
       await Promise.all([
-        loadIncidentHistory(item),
-        loadLinkedIncidents(item)
+        loadIncidentHistory(item, requestToken),
+        loadLinkedIncidents(item, requestToken)
       ]);
     }
-    
-    async function loadIncidentHistory(item) {
+
+    async function loadIncidentHistory(item, requestToken) {
       const historySection = document.getElementById('incident-history-section');
       if (!historySection) return;
       
@@ -2929,9 +2940,12 @@
         const res = await fetch(url);
         if (!res.ok) throw new Error(`API returned ${res.status}`);
         const data = await res.json();
-        
+
+        // Bail if the user switched incidents while this fetch was in flight.
+        if (selectedIncident?.source_id !== requestToken) return;
+
         console.log('History response:', data.records?.length, 'records');
-        
+
         if (!data.records || data.records.length <= 1) {
           historySection.innerHTML = '';
           return;
@@ -3066,7 +3080,7 @@
       }
     }
     
-    async function loadLinkedIncidents(item) {
+    async function loadLinkedIncidents(item, requestToken) {
       const linkedSection = document.getElementById('linked-incidents-section');
       if (!linkedSection) return;
       
@@ -3366,9 +3380,12 @@
             html += `</div>`;
           }
         }
-        
+
+        // Bail if the user switched incidents while these fetches were in flight.
+        if (selectedIncident?.source_id !== requestToken) return;
+
         linkedSection.innerHTML = html;
-        
+
       } catch (err) {
         console.error('Error loading linked incidents:', err);
         linkedSection.innerHTML = '';
@@ -4439,7 +4456,7 @@
           if (selectedSourceId) {
             const newIdx = currentPageResults.findIndex(r => r.source_id === selectedSourceId);
             if (newIdx >= 0) {
-              const card = document.querySelector(`[data-source-id="${selectedSourceId}"]`);
+              const card = document.querySelector(`[data-source-id="${CSS.escape(selectedSourceId)}"]`);
               if (card) card.classList.add('selected');
               selectedIncident = currentPageResults[newIdx];
             }

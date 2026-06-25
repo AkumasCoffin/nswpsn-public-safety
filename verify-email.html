@@ -258,6 +258,11 @@
       // Check for access token (email verification success)
       if (hashParams.access_token) {
         try {
+          // Both tokens are required to establish a session. If the link is
+          // missing the refresh token, treat it as invalid/expired.
+          if (!hashParams.refresh_token) {
+            throw new Error('This verification link is invalid or has expired. Please request a new one.');
+          }
           // Set the session with the tokens
           const { data, error } = await sb.auth.setSession({
             access_token: hashParams.access_token,
