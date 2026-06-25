@@ -2347,6 +2347,11 @@
     
     // What3Words grid layer
     const w3wGridLayer = L.layerGroup();
+    // Canvas renderer for the grid. Drawing thousands of 3m grid lines as
+    // individual SVG <path> elements was the load bottleneck; a single canvas
+    // is far cheaper to build and to reposition while panning/zooming. Created
+    // lazily so the 'w3wPane' exists by the time it's first used.
+    let w3wGridRenderer = null;
     let w3wEnabled = false;
     let w3wHighlight = null; // Rectangle highlight for W3W selected square
     
@@ -11069,8 +11074,10 @@ async function loadPagerData() {
         return;
       }
       
-      // Fetch a large padded area so small pans don't trigger new requests
-      const fetchBounds = viewBounds.pad(0.6);
+      // Fetch a modestly padded area so small pans don't trigger new requests.
+      // Kept tighter than before (0.4 vs 0.6) to cut the grid-line count per
+      // fetch — the padded area shrinks from ~4.8x to ~3.2x the viewport.
+      const fetchBounds = viewBounds.pad(0.4);
       const sw = fetchBounds.getSouthWest();
       const ne = fetchBounds.getNorthEast();
       const bbox = `${sw.lat},${sw.lng},${ne.lat},${ne.lng}`;
@@ -11104,8 +11111,12 @@ async function loadPagerData() {
               }))
             };
           }
+          if (!w3wGridRenderer) {
+            w3wGridRenderer = L.canvas({ pane: 'w3wPane', padding: 0.4 });
+          }
           const gridGeoJSON = L.geoJSON(geoData, {
             pane: 'w3wPane',
+            renderer: w3wGridRenderer,
             style: {
               color: '#D1D5DB',
               weight: 1,
