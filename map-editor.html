@@ -10954,10 +10954,14 @@ async function loadPagerData() {
     let _w3wGridRequestId = 0; // prevents stale API responses from drawing
     let _w3wLoadedBounds = null; // last fetched bounds — skip refetch if viewport still inside
     let _w3wLoadedZoom = null;   // zoom level of last fetch
+    // Minimum zoom to fetch/draw the grid. Below this a 3m W3W square is barely
+    // a pixel, so the grid was an invisible haze of thousands of lines that was
+    // expensive to fetch and to draw. ~17 is where squares become legible.
+    const W3W_MIN_ZOOM = 17;
 
     function updateW3WCursor() {
       const mapEl = document.getElementById('map');
-      if (w3wEnabled && map.getZoom() >= 15) {
+      if (w3wEnabled && map.getZoom() >= W3W_MIN_ZOOM) {
         mapEl.classList.add('w3w-cursor');
       } else {
         mapEl.classList.remove('w3w-cursor');
@@ -10993,7 +10997,7 @@ async function loadPagerData() {
         map.on('click', onW3WMapClick);
         map.on('zoomstart', onW3WZoomStart);
         map.on('zoomend', onW3WZoomEnd);
-        if (map.getZoom() < 15) {
+        if (map.getZoom() < W3W_MIN_ZOOM) {
           showW3WToast('Zoom in to select a What3Words grid square');
         }
       } else {
@@ -11031,7 +11035,7 @@ async function loadPagerData() {
         w3wHighlight = null;
       }
       // Show or dismiss the zoom-in toast based on current zoom
-      if (zoom < 15) {
+      if (zoom < W3W_MIN_ZOOM) {
         showW3WToast('Zoom in to select a What3Words grid square');
         const w3wPane = map.getPane('w3wPane');
         if (w3wPane) w3wPane.style.opacity = 0;
@@ -11056,8 +11060,8 @@ async function loadPagerData() {
       
       const zoom = map.getZoom();
       const w3wPane = map.getPane('w3wPane');
-      // Show grid at zoom >= 15 — visible when moderately zoomed in
-      if (zoom < 15) {
+      // Show grid at zoom >= W3W_MIN_ZOOM — below that the squares are sub-pixel
+      if (zoom < W3W_MIN_ZOOM) {
         w3wPane.style.opacity = 0;
         w3wGridLayer.clearLayers();
         _w3wLoadedBounds = null;
@@ -11095,38 +11099,38 @@ async function loadPagerData() {
           return;
         }
         
-        // Handle GeoJSON FeatureCollection (format=geojson) or lines array (format=json)
-        if (data.features || data.lines) {
-          let geoData = data;
-          if (data.lines && !data.features) {
-            geoData = {
-              type: 'FeatureCollection',
-              features: data.lines.map(line => ({
-                type: 'Feature',
-                geometry: {
-                  type: 'LineString',
-                  coordinates: [[line.start.lng, line.start.lat], [line.end.lng, line.end.lat]]
-                },
-                properties: {}
-              }))
-            };
-          }
+        // Flatten the grid into ONE multi-segment polyline drawn on a canvas.
+        // Previously L.geoJSON built a separate Leaflet layer object per line
+        // (thousands of them) and rebuilt them on every pan — that object churn,
+        // not the network, was the real cost. One L.polyline with N disjoint
+        // segments collapses it to a single object the canvas blits in one pass.
+        let segments = null;
+        if (data.lines && !data.features) {
+          segments = data.lines.map(line => [
+            [line.start.lat, line.start.lng],
+            [line.end.lat, line.end.lng],
+          ]);
+        } else if (Array.isArray(data.features)) {
+          segments = data.features
+            .filter(f => f && f.geometry && f.geometry.type === 'LineString'
+              && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2)
+            .map(f => f.geometry.coordinates.map(c => [c[1], c[0]]));
+        }
+        if (segments && segments.length) {
           if (!w3wGridRenderer) {
             w3wGridRenderer = L.canvas({ pane: 'w3wPane', padding: 0.4 });
           }
-          const gridGeoJSON = L.geoJSON(geoData, {
+          const gridLine = L.polyline(segments, {
             pane: 'w3wPane',
             renderer: w3wGridRenderer,
-            style: {
-              color: '#D1D5DB',
-              weight: 1,
-              opacity: 0.4,
-              interactive: false
-            }
+            color: '#D1D5DB',
+            weight: 1,
+            opacity: 0.4,
+            interactive: false
           });
           // Swap: clear old, add new in one go — no visible gap
           w3wGridLayer.clearLayers();
-          w3wGridLayer.addLayer(gridGeoJSON);
+          w3wGridLayer.addLayer(gridLine);
           // Remember what we loaded so we can skip redundant fetches
           _w3wLoadedBounds = fetchBounds;
           _w3wLoadedZoom = zoom;
@@ -11140,7 +11144,7 @@ async function loadPagerData() {
 
     async function onW3WMapClick(e) {
       if (!w3wEnabled) return;
-      if (map.getZoom() < 15) return;
+      if (map.getZoom() < W3W_MIN_ZOOM) return;
       
       const { lat, lng } = e.latlng;
       
