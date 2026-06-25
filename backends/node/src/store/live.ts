@@ -33,6 +33,10 @@ export class LiveStore {
   private map = new Map<string, LiveSnapshot>();
   private dirty = new Set<string>();
   private persistTimer: NodeJS.Timeout | null = null;
+  // In-flight guard: prevents overlapping interval ticks from racing on
+  // the same `${source}.json.${pid}.tmp` temp file. Mirrors
+  // ArchiveWriter.flush's `flushing` guard.
+  private persisting = false;
   private dir: string;
   // Hit/miss counters for /api/status. A "hit" is a get() that found
   // a snapshot; "miss" is a get() returning null. Excludes internal
@@ -161,36 +165,46 @@ export class LiveStore {
    */
   async persistDirty(): Promise<{ written: number; errors: number }> {
     if (this.dirty.size === 0) return { written: 0, errors: 0 };
-
+    // In-flight guard: a slow disk can let the next interval tick fire
+    // before this one finishes, racing two writers on the same
+    // `${source}.json.${pid}.tmp` temp file. Bail if already persisting;
+    // the dirty set is preserved so the in-flight (or next) run covers
+    // the work. Mirrors ArchiveWriter.flush's `flushing` pattern.
+    if (this.persisting) return { written: 0, errors: 0 };
+    this.persisting = true;
     try {
-      await mkdir(this.dir, { recursive: true });
-    } catch {
-      /* already exists */
-    }
-
-    // Snapshot the dirty set so concurrent writes don't race with us.
-    const toWrite = Array.from(this.dirty);
-    this.dirty.clear();
-
-    let written = 0;
-    let errors = 0;
-    for (const source of toWrite) {
-      const snap = this.map.get(source);
-      if (!snap) continue; // deleted between mark and flush
-      const finalPath = join(this.dir, `${source}.json`);
-      const tempPath = `${finalPath}.${process.pid}.tmp`;
       try {
-        await writeFile(tempPath, JSON.stringify(snap), 'utf8');
-        await rename(tempPath, finalPath);
-        written += 1;
-      } catch (err) {
-        log.error({ err, source }, 'LiveStore: persist failed');
-        // Re-mark dirty so the next tick retries.
-        this.dirty.add(source);
-        errors += 1;
+        await mkdir(this.dir, { recursive: true });
+      } catch {
+        /* already exists */
       }
+
+      // Snapshot the dirty set so concurrent writes don't race with us.
+      const toWrite = Array.from(this.dirty);
+      this.dirty.clear();
+
+      let written = 0;
+      let errors = 0;
+      for (const source of toWrite) {
+        const snap = this.map.get(source);
+        if (!snap) continue; // deleted between mark and flush
+        const finalPath = join(this.dir, `${source}.json`);
+        const tempPath = `${finalPath}.${process.pid}.tmp`;
+        try {
+          await writeFile(tempPath, JSON.stringify(snap), 'utf8');
+          await rename(tempPath, finalPath);
+          written += 1;
+        } catch (err) {
+          log.error({ err, source }, 'LiveStore: persist failed');
+          // Re-mark dirty so the next tick retries.
+          this.dirty.add(source);
+          errors += 1;
+        }
+      }
+      return { written, errors };
+    } finally {
+      this.persisting = false;
     }
-    return { written, errors };
   }
 }
 

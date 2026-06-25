@@ -211,7 +211,7 @@ async function detectFetchedAtUnit(pool) {
 
 async function migrateFamily(pool, family, sources, unitDivisor) {
   // Count first so we can show progress.
-  const countSql = buildCountSql(sources);
+  const countSql = buildCountSql(sources, unitDivisor);
   const countParams = [...sources];
   if (flags.since) countParams.push(flags.since);
   const countRes = await pool.query(countSql, countParams);
@@ -303,11 +303,13 @@ async function ensurePartitions(pool, family, sources, unitDivisor) {
   );
 }
 
-function buildCountSql(sources) {
+function buildCountSql(sources, unitDivisor) {
   const ph = sources.map((_, i) => `$${i + 1}`).join(',');
   let sql = `SELECT COUNT(*)::bigint AS n FROM data_history WHERE source IN (${ph})`;
   if (flags.since) {
-    sql += ` AND fetched_at >= EXTRACT(EPOCH FROM $${sources.length + 1}::timestamp)::bigint`;
+    // Scale the threshold by the same unit multiplier buildInsertSql uses so
+    // the count matches what's actually inserted (ms DBs store * 1000).
+    sql += ` AND fetched_at >= EXTRACT(EPOCH FROM $${sources.length + 1}::timestamp)::bigint * ${unitDivisor === 1000 ? '1000' : '1'}`;
   }
   return sql;
 }

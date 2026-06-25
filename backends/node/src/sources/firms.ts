@@ -197,10 +197,15 @@ export function parseFirmsCsv(
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
 
     const acqDate = (cells[iAcqDate] ?? '').trim();
-    const acqTime = (cells[iAcqTime] ?? '').trim().padStart(4, '0');
+    // Capture the raw value BEFORE padding — an empty acq_time padStart's
+    // to "0000" and would otherwise sail through the length guard below,
+    // emitting a fake `${acqDate}T00:00:00Z` for rows that carried no
+    // time at all. Only compose the ISO timestamp when a real time exists.
+    const acqTimeRaw = (cells[iAcqTime] ?? '').trim();
+    const acqTime = acqTimeRaw.padStart(4, '0');
     // acq_time is HHMM (24h) UTC. Compose an ISO timestamp.
     const acqIso =
-      acqDate && acqTime.length >= 4
+      acqDate && acqTimeRaw && acqTime.length >= 4
         ? `${acqDate}T${acqTime.slice(0, 2)}:${acqTime.slice(2, 4)}:00Z`
         : '';
 

@@ -27,6 +27,19 @@ export interface BotApiResponse<T = unknown> {
   retryAfter: string | null;
 }
 
+/** Render an error body for logging. Objects go through JSON.stringify so
+ *  we don't log a useless `[object Object]`; falls back to String() for
+ *  primitives and for values JSON can't serialise (e.g. circular refs). */
+function stringifyBody(body: unknown): string {
+  if (body === null || body === undefined) return String(body);
+  if (typeof body !== 'object') return String(body);
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return String(body);
+  }
+}
+
 /** Single GET against the Discord REST API with Bot auth. */
 async function botGetOnce<T>(path: string): Promise<BotApiResponse<T>> {
   const token = getBotToken();
@@ -61,7 +74,7 @@ async function botGetOnce<T>(path: string): Promise<BotApiResponse<T>> {
     const msg =
       body && typeof body === 'object' && 'message' in body
         ? (body as Record<string, unknown>)['message']
-        : String(body).slice(0, 120);
+        : stringifyBody(body).slice(0, 120);
     log.warn({ status: res.status, path, msg }, 'discord bot_api error');
   }
   return {
