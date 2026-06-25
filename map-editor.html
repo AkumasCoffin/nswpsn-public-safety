@@ -10954,10 +10954,10 @@ async function loadPagerData() {
     let _w3wGridRequestId = 0; // prevents stale API responses from drawing
     let _w3wLoadedBounds = null; // last fetched bounds — skip refetch if viewport still inside
     let _w3wLoadedZoom = null;   // zoom level of last fetch
-    // Minimum zoom to fetch/draw the grid. Below this a 3m W3W square is barely
-    // a pixel, so the grid was an invisible haze of thousands of lines that was
-    // expensive to fetch and to draw. 16+ keeps the data volume sane.
-    const W3W_MIN_ZOOM = 16;
+    // Minimum zoom to fetch/draw the grid. Below this a 3m W3W square is only a
+    // pixel or two, so the grid is a dense, slow haze with no real detail. 18 is
+    // where squares are clearly visible (~6px) and the data volume is small.
+    const W3W_MIN_ZOOM = 18;
 
     function updateW3WCursor() {
       const mapEl = document.getElementById('map');
