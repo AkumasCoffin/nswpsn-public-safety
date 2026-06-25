@@ -24,6 +24,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+import database
 from database import Database
 from alert_poller import AlertPoller
 from embeds import EmbedBuilder
@@ -997,9 +998,41 @@ class NSWPSNBot(commands.Bot):
     # Admin action queue drain — runs every 10s, picks up rows written by
     # the dashboard (sync / test / cleanup) and executes them.
     # ------------------------------------------------------------------
+    def _reclaim_stale_bot_actions(self):
+        """Return actions stuck in 'running' (claimed but never completed —
+        e.g. the bot crashed or threw mid-action) back to 'pending' so they
+        can be re-claimed. claim_next_bot_action() only selects 'pending', so
+        without this a stranded row never drains again.
+
+        Implemented at the call site because database.py has no reclaim method
+        and must not be edited; uses its existing connection helper + flag.
+        """
+        if not database.USE_POSTGRES:
+            return 0
+        conn = self.db._connect()
+        try:
+            c = conn.cursor()
+            c.execute('''
+                UPDATE pending_bot_actions
+                   SET status = 'pending', claimed_at = NULL
+                 WHERE status = 'running'
+                   AND claimed_at < now() - interval '5 minutes'
+            ''')
+            n = c.rowcount or 0
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+
     @tasks.loop(seconds=10)
     async def drain_bot_actions(self):
         loop = asyncio.get_event_loop()
+        try:
+            reclaimed = await loop.run_in_executor(None, self._reclaim_stale_bot_actions)
+            if reclaimed:
+                logger.warning(f"drain_bot_actions: reclaimed {reclaimed} stale running action(s)")
+        except Exception as e:
+            logger.warning(f"drain_bot_actions reclaim failed: {e}")
         try:
             action = await loop.run_in_executor(None, self.db.claim_next_bot_action)
         except Exception as e:
@@ -1061,15 +1094,23 @@ class NSWPSNBot(commands.Bot):
             color_int = int(color_hex.lstrip('#'), 16) if color_hex else None
         except ValueError:
             color_int = None
+        # Discord caps the COMBINED title+description+footer at 6000 chars per
+        # embed (separate from the per-field caps of 256/4096/2048). Clamp the
+        # title and footer to their field limits first, then give the
+        # description whatever budget is left so the total never trips a 400.
+        title = title[:256]
+        footer = footer[:2048]
+        desc_budget = max(0, 6000 - len(title) - len(footer))
+        description = description[:desc_budget]
         embed = discord.Embed(
-            title=title[:256] if title else None,
-            description=description[:4000] if description else None,
+            title=title if title else None,
+            description=description if description else None,
             color=color_int if color_int is not None else 0xf97316,
             url=url or None,
             timestamp=datetime.now(timezone.utc),
         )
         if footer:
-            embed.set_footer(text=footer[:2048])
+            embed.set_footer(text=footer)
 
         results = []
         sent_to = set()
