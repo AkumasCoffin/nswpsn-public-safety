@@ -238,7 +238,16 @@ class AlertPoller:
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
             incident_id = item.get('id', '')
             logs = item.get('logs', [])
-            latest_log_id = logs[0].get('id', '') if logs and isinstance(logs[0], dict) else ''
+            # Backend log order isn't guaranteed (embeds.py re-sorts for
+            # display), so pick the newest by created_at/id rather than
+            # trusting logs[0] — otherwise updates can fail to re-fire.
+            dict_logs = [l for l in logs if isinstance(l, dict)]
+            latest_log = max(
+                dict_logs,
+                key=lambda l: (str(l.get('created_at', '')), str(l.get('id', ''))),
+                default=None,
+            ) if dict_logs else None
+            latest_log_id = latest_log.get('id', '') if latest_log else ''
             return f"user_{incident_id}_{latest_log_id}"
         
         # Fallback to hash
@@ -290,6 +299,20 @@ class AlertPoller:
                         if created > 1e12:
                             return datetime.fromtimestamp(created / 1000, tz=timezone.utc)
                         return datetime.fromtimestamp(created, tz=timezone.utc)
+                    # Created can also arrive as a string — try numeric epoch
+                    # first, then ISO, before falling through to "now".
+                    if isinstance(created, str):
+                        s = created.strip()
+                        try:
+                            num = float(s)
+                            if num > 1e12:
+                                return datetime.fromtimestamp(num / 1000, tz=timezone.utc)
+                            return datetime.fromtimestamp(num, tz=timezone.utc)
+                        except ValueError:
+                            try:
+                                return _aware(datetime.fromisoformat(s.replace('Z', '+00:00')))
+                            except ValueError:
+                                pass
 
             elif alert_type.startswith('waze_'):
                 # Waze uses properties.created (ISO format)
