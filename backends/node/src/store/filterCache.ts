@@ -297,7 +297,7 @@ interface ComputedFacets {
  * duplicated here to avoid a cross-module cycle (filterCache shouldn't
  * import from a route's service layer).
  */
-function wazeAlertType(rec: Record<string, unknown>): string {
+function wazeAlertType(rec: Record<string, unknown>): string | null {
   const t = String(rec['type'] ?? '').toUpperCase();
   const s = String(rec['subtype'] ?? '').toUpperCase();
   if (t === 'POLICE' || s.includes('POLICE')) return 'waze_police';
@@ -306,7 +306,13 @@ function wazeAlertType(rec: Record<string, unknown>): string {
   // Checked after police/roadwork so those classes win — matches the
   // isJamAlert precedence + the 2026-05-28 ingest split (commit cad4f27).
   if (t === 'JAM') return 'waze_jam';
-  return 'waze_hazard';
+  // Only HAZARD / ACCIDENT / ROAD_CLOSED are real hazards (mirrors
+  // isHazardAlert). Anything else is one the ingest drops (alertSource
+  // returns null), so return null here too — otherwise an unrecognised
+  // type would be miscounted as waze_hazard in the live facets while the
+  // archive never stored it, making the dropdown count diverge from the list.
+  if (t === 'HAZARD' || t === 'ACCIDENT' || t === 'ROAD_CLOSED') return 'waze_hazard';
+  return null;
 }
 
 /** Pull all alerts + jams from the bbox-keyed waze LiveStore snapshot,
@@ -373,6 +379,7 @@ function computeFacetsLive(): ComputedFacets {
       const { alerts, jams } = wazeRecords(snap.data);
       for (const a of alerts) {
         const at = wazeAlertType(a);
+        if (!at) continue;   // unrecognised type — ingest drops it too
         typeCounts[at] = (typeCounts[at] ?? 0) + 1;
         const slot = dimSlotFor(perTypeDims, at);
         const sub = String(a['subtype'] ?? '').toUpperCase();
@@ -426,6 +433,7 @@ function liveWazeFacets(): ComputedFacets {
   const { alerts, jams } = wazeRecords(snap.data);
   for (const a of alerts) {
     const at = wazeAlertType(a);
+    if (!at) continue;   // unrecognised type — ingest drops it too
     typeCounts[at] = (typeCounts[at] ?? 0) + 1;
     const slot = dimSlotFor(perTypeDims, at);
     const sub = String(a['subtype'] ?? '').toUpperCase();
@@ -1186,10 +1194,13 @@ export async function getFilterFacets(
   sourceFilter?: string | null,
   windowHours?: number | null,
 ): Promise<FilterFacets> {
-  const effectiveHours = Math.max(
-    1,
-    windowHours == null || !Number.isFinite(windowHours) ? DEFAULT_WINDOW_HOURS : windowHours,
-  );
+  // Clamp to [1, DEFAULT_WINDOW_HOURS]. Nothing exists beyond retention,
+  // so a larger window is meaningless — and absurd values would otherwise
+  // build degenerate intervals / unbounded cache keys.
+  const effectiveHours =
+    windowHours == null || !Number.isFinite(windowHours)
+      ? DEFAULT_WINDOW_HOURS
+      : Math.min(Math.max(1, windowHours), DEFAULT_WINDOW_HOURS);
   const key = cacheKey(sourceFilter, effectiveHours);
   const hit = facetsCache.get(key);
   const nowMs = Date.now();

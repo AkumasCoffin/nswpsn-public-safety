@@ -979,6 +979,11 @@
       color: var(--text-soft);
       font-weight: 600;
     }
+    .section-sub {
+      margin: -0.4rem 0 0.7rem;
+      font-size: 0.82rem;
+      color: var(--text-soft);
+    }
 
     .overview-channels { display: grid; gap: 0.7rem; }
     .ov-ch-card {
@@ -1161,6 +1166,43 @@
     .admin-table .g-id { margin-left: 0.5rem; color: var(--text-soft); font-family: monospace; font-size: 0.7rem; }
     .admin-table .mono { font-family: monospace; font-size: 0.78rem; color: var(--text-muted); }
     .admin-table .row-link { cursor: pointer; }
+
+    /* Config audit log — action label + before/after change pills */
+    .audit-action { font-weight: 700; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .audit-action-create { color: #4ade80; }
+    .audit-action-update { color: #fbbf24; }
+    .audit-action-delete { color: #f87171; }
+    .audit-changes-cell { max-width: 560px; }
+    .audit-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.55rem; padding: 0.28rem 0; }
+    .audit-change + .audit-change { border-top: 1px dashed rgba(255,255,255,0.07); }
+    .audit-field { font-weight: 600; color: #cbd5e1; font-size: 0.72rem; min-width: 64px; }
+    .audit-vals { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+    .audit-pillset { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; }
+    .audit-pill {
+      display: inline-block; padding: 0.05rem 0.5rem; border-radius: var(--radius-pill);
+      font-size: 0.72rem; line-height: 1.55; border: 1px solid transparent; white-space: nowrap;
+    }
+    .audit-before  { background: rgba(239,68,68,0.13);  border-color: rgba(239,68,68,0.32);  color: #fca5a5; }
+    .audit-after   { background: rgba(34,197,94,0.13);  border-color: rgba(34,197,94,0.32);  color: #86efac; }
+    .audit-neutral { background: rgba(148,163,184,0.13); border-color: rgba(148,163,184,0.3); color: #cbd5e1; }
+    .audit-empty   { background: rgba(148,163,184,0.07); border: 1px dashed rgba(148,163,184,0.35); color: #94a3b8; font-style: italic; }
+    .audit-arrow   { color: #64748b; font-weight: 700; padding: 0 0.05rem; }
+    .audit-json {
+      font-family: monospace; font-size: 0.68rem; padding: 0.2rem 0.45rem; border-radius: 6px;
+      max-width: 260px; max-height: 110px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      border: 1px solid transparent;
+    }
+    .audit-json.audit-before { background: rgba(239,68,68,0.09);  border-color: rgba(239,68,68,0.25); }
+    .audit-json.audit-after  { background: rgba(34,197,94,0.09);  border-color: rgba(34,197,94,0.25); }
+    .audit-muted { color: #64748b; font-style: italic; font-size: 0.78rem; }
+    /* Fixed-height, scrollable audit log (holds up to ~100 entries) with a
+       sticky header row so columns stay labelled while scrolling. */
+    .audit-log-scroll { max-height: 440px; overflow-y: auto; }
+    .audit-log-scroll .admin-table thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--bg-elevated-soft);
+      box-shadow: inset 0 -1px 0 var(--border-subtle);
+    }
     .admin-pill {
       display: inline-block;
       background: var(--accent-soft);
@@ -1616,9 +1658,13 @@ function confirmDialog(title, body, okLabel='Confirm', okDanger=true) {
       modal.classList.remove('open');
       okBtn.onclick = null;
       qs('confirm-cancel').onclick = null;
+      modal._dismiss = null;
     };
     okBtn.onclick = () => { cleanup(); resolve(true); };
     qs('confirm-cancel').onclick = () => { cleanup(); resolve(false); };
+    // Exposed so the global Escape handler and backdrop-click can dismiss
+    // the dialog *and* resolve the awaiting caller (otherwise it hangs).
+    modal._dismiss = () => { cleanup(); resolve(false); };
     modal.classList.add('open');
   });
 }
@@ -1659,6 +1705,9 @@ async function bootstrap() {
 
 async function selectGuild(gid, fromBoot=false, deepLinkPresetId=null) {
   state.activeGuildId = gid;
+  // Switching guilds clears any *other* admin-opened (foreign) guild so it
+  // stops showing in the switcher/sidebar; keep the one we're opening.
+  _purgeAdminOpenedGuilds(gid);
   state.channels = [];
   state.roles = [];
   state.presets = [];
@@ -1846,6 +1895,9 @@ function discordColorToHex(color) {
 function render() {
   renderTopbar();
   const root = qs('app-root');
+  // Tear down any live geofilter maps before wiping the DOM, so their
+  // Leaflet instances + window listeners don't leak across re-renders.
+  destroyGeofilterMaps();
   if (!state.user) {
     root.innerHTML = '';
     root.appendChild(renderAuthCard());
@@ -1895,8 +1947,12 @@ function renderTopbar() {
     right.appendChild(inv);
   }
 
+  let defaultAvatarIdx = 0;
+  try {
+    defaultAvatarIdx = Number((BigInt(state.user.id || '0') >> 22n) % 6n);
+  } catch (_) { defaultAvatarIdx = 0; }
   const avatar = state.user.avatar_url
-    || `https://cdn.discordapp.com/embed/avatars/${(parseInt(state.user.id||'0')>>22)%6}.png`;
+    || `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIdx}.png`;
   const chip = document.createElement('div');
   chip.className = 'user-chip';
   chip.innerHTML = `<img src="${escapeHtml(avatar)}" alt="" onerror="this.style.visibility='hidden'"/><span>@${escapeHtml(state.user.username||'user')}</span>`;
@@ -2932,8 +2988,21 @@ function filtersSummary(preset) {
    - ring    — click center, drag to set radius, release to commit.
    - polygon — click to add vertices (3+); "Finish" commits.
 */
+// Live geofilter map instances, so render() can tear them down before it
+// wipes #app-root. Each makeGeofilterMap binds window-level listeners and a
+// Leaflet map; without an explicit teardown they'd leak (orphaned map +
+// duplicate global listeners) on every re-render.
+const _geofilterMaps = new Set();
+function destroyGeofilterMaps() {
+  for (const m of Array.from(_geofilterMaps)) {
+    try { m.destroy(); } catch (e) { /* ignore */ }
+  }
+  _geofilterMaps.clear();
+}
+
 function makeGeofilterMap(preset, initialGeofilter) {
   const mapId = 'bbox-map-' + preset.id + '-' + Math.random().toString(36).slice(2, 7);
+  const _cleanup = [];   // teardown thunks (window listeners); run by destroy()
   const hint = el('div', { class: 'bbox-map-hint' }, '');
   const mapDiv = el('div', { class: 'bbox-map', id: mapId }, [hint]);
   const coords = el('div', { class: 'bbox-coords' });
@@ -3254,11 +3323,15 @@ function makeGeofilterMap(preset, initialGeofilter) {
       const ctrl = !!(e.ctrlKey || e.metaKey);
       setCtrlPan(ctrl && drawMode);
     };
+    const onBlur = () => setCtrlPan(false);
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
     // Reset on blur — if the user alt-tabs while holding Ctrl, the keyup
     // event won't fire and the map would be stuck in pan mode.
-    window.addEventListener('blur', () => setCtrlPan(false));
+    window.addEventListener('blur', onBlur);
+    _cleanup.push(() => window.removeEventListener('keydown', onKey));
+    _cleanup.push(() => window.removeEventListener('keyup', onKey));
+    _cleanup.push(() => window.removeEventListener('blur', onBlur));
 
     setTimeout(() => { if (map) map.invalidateSize(); }, 120);
   }
@@ -3303,9 +3376,10 @@ function makeGeofilterMap(preset, initialGeofilter) {
       }
     });
     ro.observe(mapDiv);
+    _cleanup.push(() => ro.disconnect());
   }
 
-  return {
+  const api = {
     dom: wrap,
     get: () => current ? JSON.parse(JSON.stringify(current)) : null,
     set: (gf) => {
@@ -3330,7 +3404,17 @@ function makeGeofilterMap(preset, initialGeofilter) {
       }
     },
     invalidate: () => { if (map) map.invalidateSize(); },
+    // Remove window listeners + the Leaflet map. Called by
+    // destroyGeofilterMaps() before render() wipes the DOM.
+    destroy: () => {
+      for (const fn of _cleanup) { try { fn(); } catch (e) { /* ignore */ } }
+      _cleanup.length = 0;
+      _geofilterMaps.delete(api);
+      if (map) { try { map.remove(); } catch (e) { /* ignore */ } map = null; }
+    },
   };
+  _geofilterMaps.add(api);
+  return api;
 }
 
 function renderFiltersCard(preset) {
@@ -4256,19 +4340,68 @@ async function wizardSave() {
 /* -------------------- Admin overview -------------------- */
 
 async function openAdmin() {
+  // Returning to the admin view: drop any foreign guild we opened for editing
+  // so it no longer pollutes the switcher/sidebar, and clear it as active.
+  const _activeWasAdminOpened = (state.guilds || []).some(
+    g => g.admin_opened && String(g.id) === String(state.activeGuildId));
+  _purgeAdminOpenedGuilds(null);
+  if (_activeWasAdminOpened) state.activeGuildId = null;
   state.view = 'admin';
   state.admin = { loading: true, data: null, error: null };
   state.adminSources = { loading: true, data: null, error: null };
+  state.adminAudit = { loading: true, data: null, error: null };
   if (isMobile()) state.drawerOpen = false;
   render();
-  // Fire both in parallel — sources panel is independent and shouldn't block
-  // the main overview if it lags or errors.
+  // Fire in parallel — each panel is independent and shouldn't block the
+  // others if it lags or errors.
   const overviewP = api('/api/dashboard/admin/overview')
     .then(data => { state.admin = { loading: false, data, error: null }; })
     .catch(e => { state.admin = { loading: false, data: null, error: (e && e.message) || 'Failed to load admin data.' }; });
   const sourcesP = loadAdminSources();
-  await Promise.all([overviewP, sourcesP]);
+  const auditP = loadAdminAudit();
+  await Promise.all([overviewP, sourcesP, auditP]);
   render();
+}
+
+async function loadAdminAudit() {
+  state.adminAudit = { loading: true, data: null, error: null };
+  try {
+    const data = await api('/api/dashboard/admin/audit?limit=100');
+    state.adminAudit = { loading: false, data, error: null };
+  } catch (e) {
+    state.adminAudit = { loading: false, data: null, error: (e && e.message) || 'Failed to load audit log.' };
+  }
+}
+
+// Open any guild's config in the normal editor — admin only. The backend
+// guildGuard grants DASHBOARD_ADMIN_IDS access to every guild, so we just need
+// the guild present in state.guilds for the header/switcher to resolve its
+// name. Inject a synthetic eligible entry if it isn't one of the admin's own.
+function adminOpenGuild(g) {
+  const gid = String(g.guild_id);
+  if (!(state.guilds || []).some(x => String(x.id) === gid)) {
+    state.guilds = state.guilds || [];
+    state.guilds.push({
+      id: gid,
+      name: g.name || gid,
+      icon: null,
+      icon_url: g.icon_url || '',
+      has_bot: true,
+      manage_channels: true,
+      owner: false,
+      admin_opened: true,
+    });
+  }
+  selectGuild(gid);
+}
+
+// Drop synthetic admin-opened guilds from the user's own guild list so they
+// don't linger in the guild switcher / sidebar after the admin navigates
+// away. Pass the guild id to keep (the one currently being opened), or null
+// to remove all of them.
+function _purgeAdminOpenedGuilds(keepId) {
+  if (!Array.isArray(state.guilds)) return;
+  state.guilds = state.guilds.filter(g => !g.admin_opened || String(g.id) === String(keepId));
 }
 
 async function loadAdminSources() {
@@ -4341,29 +4474,38 @@ function renderAdmin() {
 
   // Per-guild table
   wrap.appendChild(el('h3', { class: 'section-head' }, `Guilds (${(d.guilds||[]).length})`));
+  wrap.appendChild(el('div', { class: 'section-sub' }, 'Click a server to open and edit its configs.'));
   const gtbl = el('table', { class: 'admin-table' });
   const ghead = el('thead', {}, el('tr', {}, [
     el('th', {}, 'Guild'),
+    el('th', {}, 'Owner'),
     el('th', {}, 'Presets'),
     el('th', {}, 'Channels'),
     el('th', {}, 'Pager'),
     el('th', {}, 'Muted'),
     el('th', {}, 'Last change'),
+    el('th', {}, ''),
   ]));
   gtbl.appendChild(ghead);
   const gbody = el('tbody', {});
   for (const g of d.guilds || []) {
-    gbody.appendChild(el('tr', {}, [
+    gbody.appendChild(el('tr', { class: 'row-link', title: 'Open this server’s config', onclick: () => adminOpenGuild(g) }, [
       el('td', {}, [
         g.icon_url ? el('img', { class: 'g-icon', src: g.icon_url, alt: '' }) : null,
         el('span', { class: 'g-name' }, g.name || '—'),
         el('span', { class: 'g-id' }, g.guild_id),
+      ]),
+      el('td', {}, [
+        el('span', {}, g.owner_name ? '@' + g.owner_name : '—'),
+        g.owner_id ? el('span', { class: 'g-id' }, g.owner_id) : null,
       ]),
       el('td', {}, String(g.preset_count)),
       el('td', {}, String(g.channel_count)),
       el('td', {}, String(g.pager_presets)),
       el('td', {}, String(g.muted_presets)),
       el('td', {}, g.last_change ? timeAgo(g.last_change) : '—'),
+      el('td', {}, el('button', { class: 'btn btn-ghost btn-sm', onclick: (e) => { e.stopPropagation(); adminOpenGuild(g); } },
+        [el('i', { class: 'fa-solid fa-pen-to-square' }), ' Open'])),
     ]));
   }
   gtbl.appendChild(gbody);
@@ -4407,6 +4549,9 @@ function renderAdmin() {
   stbl.appendChild(sbody);
   wrap.appendChild(el('div', { class: 'admin-table-wrap' }, stbl));
 
+  // Preset audit log — who changed which config, and what changed.
+  wrap.appendChild(renderAdminAudit());
+
   // Bot controls (sync / test / cleanup) + recent-actions log
   wrap.appendChild(renderBotControls());
 
@@ -4414,6 +4559,183 @@ function renderAdmin() {
   wrap.appendChild(renderBroadcast());
 
   return wrap;
+}
+
+// Compact one-line summary of an audit entry's `changes` payload.
+const _AUDIT_FIELD_LABELS = {
+  alert_types: 'Alert types', pager_enabled: 'Pager', pager_capcodes: 'Capcodes',
+  role_ids: 'Roles', enabled: 'Enabled', enabled_ping: 'Ping',
+  type_overrides: 'Overrides', filters: 'Filters', name: 'Name', channel_id: 'Channel',
+};
+function _auditFieldLabel(f) { return _AUDIT_FIELD_LABELS[f] || f; }
+
+// Render one audit value as pill(s). kind = 'before' | 'after' | 'neutral'
+// drives the colour (red / green / grey).
+function _auditValueNode(v, kind) {
+  const cls = 'audit-' + kind;
+  if (v === null || v === undefined || v === '') {
+    return el('span', { class: 'audit-pill audit-empty' }, 'none');
+  }
+  if (Array.isArray(v)) {
+    if (!v.length) return el('span', { class: 'audit-pill audit-empty' }, 'empty');
+    return el('span', { class: 'audit-pillset' },
+      v.map(item => el('span', { class: 'audit-pill ' + cls }, String(item))));
+  }
+  if (v === true) return el('span', { class: 'audit-pill ' + cls }, 'on');
+  if (v === false) return el('span', { class: 'audit-pill ' + cls }, 'off');
+  if (typeof v === 'object') {
+    // Complex object (filters / overrides): compact monospace chip, tinted.
+    return el('span', { class: 'audit-json ' + cls }, JSON.stringify(v));
+  }
+  return el('span', { class: 'audit-pill ' + cls }, String(v));
+}
+
+// Order-insensitive normalise (mirrors the backend) so a re-ordered list
+// isn't treated as a change when rendering older entries.
+function _auditNorm(v) {
+  if (Array.isArray(v)) return v.map(_auditNorm).sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1));
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v).sort()) o[k] = _auditNorm(v[k]);
+    return o;
+  }
+  return v == null ? null : v;
+}
+
+// Walk two objects and collect only the leaf paths that actually differ.
+function _auditDeepDiff(from, to, path, out) {
+  const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  if (isObj(from) && isObj(to)) {
+    const keys = [...new Set([...Object.keys(from), ...Object.keys(to)])].sort();
+    for (const k of keys) _auditDeepDiff(from[k], to[k], path ? path + ' › ' + k : k, out);
+    return out;
+  }
+  if (JSON.stringify(_auditNorm(from)) !== JSON.stringify(_auditNorm(to))) {
+    out.push({ path, before: from, after: to });
+  }
+  return out;
+}
+
+// Render an array change as just the +added / −removed items (null if the
+// set is unchanged, e.g. only re-ordered).
+function _auditArrayDiffNode(before, after) {
+  const b = (Array.isArray(before) ? before : []).map(String);
+  const a = (Array.isArray(after) ? after : []).map(String);
+  const removed = b.filter(x => !a.includes(x));
+  const added = a.filter(x => !b.includes(x));
+  if (!removed.length && !added.length) return null;
+  const node = el('span', { class: 'audit-pillset' }, []);
+  removed.forEach(x => node.appendChild(el('span', { class: 'audit-pill audit-before' }, '− ' + x)));
+  added.forEach(x => node.appendChild(el('span', { class: 'audit-pill audit-after' }, '+ ' + x)));
+  return node;
+}
+
+// Render one leaf change. Arrays → +/- diff; everything else → before → after.
+// Returns null when nothing meaningful changed (so the caller skips the row).
+function _auditLeafNode(before, after) {
+  if (Array.isArray(before) || Array.isArray(after)) {
+    return _auditArrayDiffNode(before, after);
+  }
+  return el('span', { class: 'audit-vals' }, [
+    _auditValueNode(before, 'before'),
+    el('span', { class: 'audit-arrow' }, '→'),
+    _auditValueNode(after, 'after'),
+  ]);
+}
+
+// Build the DOM nodes for an audit entry's `changes` cell — only what changed.
+function _renderAuditChanges(entry) {
+  const ch = entry.changes || {};
+  const rows = [];
+  const pushRow = (label, valueNode) => rows.push(
+    el('div', { class: 'audit-change' }, [el('span', { class: 'audit-field' }, label), valueNode]));
+  const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+
+  if (entry.action === 'update') {
+    for (const [field, d] of Object.entries(ch)) {
+      if (!(d && typeof d === 'object' && 'from' in d && 'to' in d)) continue;
+      if (isObj(d.from) && isObj(d.to)) {
+        // Drill into the object (filters / overrides) — show only changed leaves.
+        for (const lf of _auditDeepDiff(d.from, d.to, '', [])) {
+          const valNode = _auditLeafNode(lf.before, lf.after);
+          if (!valNode) continue;
+          pushRow(_auditFieldLabel(field) + (lf.path ? ' › ' + lf.path : ''), valNode);
+        }
+      } else {
+        const valNode = _auditLeafNode(d.from, d.to);
+        if (valNode) pushRow(_auditFieldLabel(field), valNode);
+      }
+    }
+    if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, 'no effective change'));
+    return rows;
+  }
+
+  // create / delete — snapshot of the preset. Tint by action.
+  const kind = entry.action === 'delete' ? 'before' : 'after';
+  for (const k of ['alert_types', 'pager_enabled', 'pager_capcodes', 'name', 'channel_id']) {
+    if (k in ch) pushRow(_auditFieldLabel(k), _auditValueNode(ch[k], kind));
+  }
+  if (!rows.length) rows.push(el('div', { class: 'audit-muted' }, entry.action === 'create' ? 'created' : 'deleted'));
+  return rows;
+}
+
+function renderAdminAudit() {
+  const a = state.adminAudit || {};
+  const host = el('div', {});
+  host.appendChild(el('div', { class: 'overview-head', style: 'margin-top:1.5rem;' }, [
+    el('h3', { class: 'section-head', style: 'margin:0;' }, 'Config audit log'),
+    el('button', { class: 'btn btn-ghost btn-sm', onclick: () => loadAdminAudit().then(render) },
+      [el('i', { class: 'fa-solid fa-rotate' }), ' Refresh']),
+  ]));
+  host.appendChild(el('div', { class: 'section-sub' }, 'Recent preset create / update / delete events across all servers.'));
+
+  if (a.loading) {
+    host.appendChild(el('div', { class: 'empty' }, [el('span', { class: 'spinner' }), ' Loading…']));
+    return host;
+  }
+  if (a.error) {
+    host.appendChild(el('div', { class: 'empty' }, [el('i', { class: 'fa-solid fa-triangle-exclamation' }), ' ', a.error]));
+    return host;
+  }
+  const entries = (a.data && a.data.entries) || [];
+  if (!entries.length) {
+    host.appendChild(el('div', { class: 'empty' }, 'No config changes recorded yet.'));
+    return host;
+  }
+
+  const tbl = el('table', { class: 'admin-table' });
+  tbl.appendChild(el('thead', {}, el('tr', {}, [
+    el('th', {}, 'When'),
+    el('th', {}, 'Actor'),
+    el('th', {}, 'Server'),
+    el('th', {}, 'Preset'),
+    el('th', {}, 'Action'),
+    el('th', {}, 'Changes'),
+  ])));
+  const body = el('tbody', {});
+  for (const e of entries) {
+    body.appendChild(el('tr', {}, [
+      el('td', {}, e.created_at ? timeAgo(e.created_at) : '—'),
+      el('td', {}, [
+        el('span', {}, '@' + (e.actor_name || '?')),
+        e.actor_id ? el('span', { class: 'g-id' }, e.actor_id) : null,
+      ]),
+      el('td', {}, [
+        e.guild_icon_url ? el('img', { class: 'g-icon', src: e.guild_icon_url, alt: '' }) : null,
+        el('span', { class: 'g-name' }, e.guild_name || e.guild_id),
+      ]),
+      el('td', {}, [
+        el('span', {}, e.preset_name || '—'),
+        e.channel_id ? el('span', { class: 'g-id' }, '#' + e.channel_id) : null,
+      ]),
+      el('td', {}, el('span', { class: 'audit-action audit-action-' + e.action }, e.action)),
+      el('td', { class: 'audit-changes-cell' }, _renderAuditChanges(e)),
+    ]));
+  }
+  tbl.appendChild(body);
+  host.appendChild(el('div', { class: 'admin-table-wrap' },
+    el('div', { class: 'audit-log-scroll' }, tbl)));
+  return host;
 }
 
 // State labels mapped to friendlier wording for the source-health panel.
@@ -4431,7 +4753,10 @@ let _adminSourcesTimer = null;
 function startAdminSourcesAutoRefresh() {
   if (_adminSourcesTimer) return;
   _adminSourcesTimer = setInterval(async () => {
-    if (state.view !== 'admin') return;
+    // Self-clear if the user has left the admin view by any path
+    // (guild select, overview, wizard, deep-link, logout). Otherwise the
+    // interval leaks and keeps fetching/mutating state every 30s.
+    if (state.view !== 'admin') { stopAdminSourcesAutoRefresh(); return; }
     try {
       await loadAdminSources();
       // Repaint just the sources host so the user's scroll position is preserved.
@@ -5293,7 +5618,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (qs('role-modal').classList.contains('open')) { closeRoleModal(); return; }
     if (qs('confirm-modal').classList.contains('open')) {
-      qs('confirm-modal').classList.remove('open');
+      const m = qs('confirm-modal');
+      if (m._dismiss) m._dismiss(); else m.classList.remove('open');
       return;
     }
     if (state.drawerOpen) { toggleDrawer(false); return; }
@@ -5304,7 +5630,10 @@ qs('role-modal').addEventListener('click', (e) => {
   if (e.target === qs('role-modal')) closeRoleModal();
 });
 qs('confirm-modal').addEventListener('click', (e) => {
-  if (e.target === qs('confirm-modal')) qs('confirm-modal').classList.remove('open');
+  if (e.target === qs('confirm-modal')) {
+    const m = qs('confirm-modal');
+    if (m._dismiss) m._dismiss(); else m.classList.remove('open');
+  }
 });
 window.addEventListener('resize', () => { syncDrawer(); });
 

@@ -1126,7 +1126,7 @@
         <label>Temporary Password</label>
         <div class="value">
           <span id="approved-password">-</span>
-          <button class="copy-btn" onclick="copyPassword()">
+          <button class="copy-btn" onclick="copyPassword(event)">
             <i class="fas fa-copy"></i> Copy
           </button>
         </div>
@@ -1154,7 +1154,43 @@
   <script src="config.js"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-    
+
+    // Escape user/backend-supplied strings before interpolating into innerHTML.
+    function escapeHtml(value) {
+      if (value == null) return '';
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    // Render a timestamp that may be either Unix seconds (numbers from the
+    // editor-requests API) or an ISO string (from the users API). Null/garbage
+    // renders as a dash instead of a bogus 1970 date.
+    function fmtDate(value, opts) {
+      const d = toDate(value);
+      if (!d) return '—';
+      return opts && opts.time ? d.toLocaleString() : d.toLocaleDateString();
+    }
+    function toDate(value) {
+      if (value == null || value === '') return null;
+      let d;
+      if (typeof value === 'number') {
+        // Seconds vs ms: anything below ~1e12 is seconds.
+        d = new Date(value < 1e12 ? value * 1000 : value);
+      } else {
+        const asNum = Number(value);
+        if (!Number.isNaN(asNum) && String(value).trim() !== '') {
+          d = new Date(asNum < 1e12 ? asNum * 1000 : asNum);
+        } else {
+          d = new Date(value);
+        }
+      }
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
     let allRequests = [];
     let allUsers = [];
     let currentFilter = 'all';
@@ -1196,7 +1232,8 @@
       document.querySelectorAll('.tab-content').forEach(content => {
         content.classList.remove('active');
       });
-      document.getElementById(`${tab}-tab`).classList.add('active');
+      const tabEl = document.getElementById(`${tab}-tab`);
+      if (tabEl) tabEl.classList.add('active');
 
       // Load data if needed
       if (tab === 'users' && allUsers.length === 0) {
@@ -1281,21 +1318,21 @@
       const cls = opts.statusCls || '';
       const secondary = (opts.secondary || [])
         .filter(s => s && s.value != null && s.value !== '')
-        .map(s => `<span>${s.label} <strong>${s.value}</strong></span>`)
+        .map(s => `<span>${escapeHtml(s.label)} <strong>${escapeHtml(s.value)}</strong></span>`)
         .join('');
       const errorBlock = opts.error
-        ? `<div class="dev-card-error">${opts.error}</div>`
+        ? `<div class="dev-card-error">${escapeHtml(opts.error)}</div>`
         : '';
       return `
         <div class="dev-card ${cls}">
           <div class="dev-card-dot"></div>
           <div class="dev-card-head">
-            <div class="dev-card-icon"><i class="fas fa-${opts.icon || 'circle'}"></i></div>
-            <div class="dev-card-name">${opts.name}</div>
+            <div class="dev-card-icon"><i class="fas fa-${escapeHtml(opts.icon || 'circle')}"></i></div>
+            <div class="dev-card-name">${escapeHtml(opts.name)}</div>
           </div>
           <div class="dev-card-primary">
-            <span class="value">${opts.primary.value}</span>
-            <span class="label">${opts.primary.label}</span>
+            <span class="value">${escapeHtml(opts.primary.value)}</span>
+            <span class="label">${escapeHtml(opts.primary.label)}</span>
           </div>
           ${secondary ? `<div class="dev-card-secondary">${secondary}</div>` : ''}
           ${errorBlock}
@@ -1361,8 +1398,8 @@
       const meta = document.getElementById('dev-overall-meta');
       const sum = data.summary || {};
       meta.innerHTML =
-        `uptime <strong>${_fmtUptime(data.uptime_secs)}</strong> · ` +
-        `mode <strong>${data.mode || '?'}</strong> · ` +
+        `uptime <strong>${escapeHtml(_fmtUptime(data.uptime_secs))}</strong> · ` +
+        `mode <strong>${escapeHtml(data.mode || '?')}</strong> · ` +
         `sources <strong>${sum.sources_ok || 0}/${sum.sources_total || 0}</strong> ok` +
         (sum.sources_down ? `, <strong style="color:var(--danger)">${sum.sources_down} down</strong>` : '') +
         (sum.sources_degraded ? `, <strong style="color:var(--warning)">${sum.sources_degraded} degraded</strong>` : '') +
@@ -1536,17 +1573,28 @@
       
       errorDiv.textContent = '';
       document.getElementById('login-message').textContent = 'Signing in...';
-      
-      const { error } = await sb.auth.signInWithPassword({ email, password });
-      
-      if (error) {
-        errorDiv.textContent = error.message;
+
+      // Disable the submit button while in-flight to prevent double-submit.
+      const loginBtn = document.querySelector('#login-form-container button.btn-primary');
+      if (loginBtn) loginBtn.disabled = true;
+
+      try {
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+
+        if (error) {
+          errorDiv.textContent = error.message;
+          document.getElementById('login-message').textContent = 'Sign in to access Admin';
+          return;
+        }
+
+        // Re-run auth check after successful login
+        await checkAuth();
+      } catch (e) {
+        errorDiv.textContent = (e && e.message) ? e.message : 'Sign in failed. Please try again.';
         document.getElementById('login-message').textContent = 'Sign in to access Admin';
-        return;
+      } finally {
+        if (loginBtn) loginBtn.disabled = false;
       }
-      
-      // Re-run auth check after successful login
-      await checkAuth();
     }
     
     async function checkAuth() {
@@ -1737,9 +1785,9 @@
     }
     
     function updateUserStats() {
-      const editors = allUsers.filter(u => u.roles.some(r => r.role === 'map_editor')).length;
-      const pager = allUsers.filter(u => u.roles.some(r => r.role === 'pager_contributor')).length;
-      const radio = allUsers.filter(u => u.roles.some(r => r.role === 'radio_contributor')).length;
+      const editors = allUsers.filter(u => (u.roles || []).some(r => r.role === 'map_editor')).length;
+      const pager = allUsers.filter(u => (u.roles || []).some(r => r.role === 'pager_contributor')).length;
+      const radio = allUsers.filter(u => (u.roles || []).some(r => r.role === 'radio_contributor')).length;
       
       document.getElementById('stat-users').textContent = allUsers.length;
       document.getElementById('stat-editors').textContent = editors;
@@ -1803,9 +1851,7 @@
       };
       
       const rows = allUsers.map(user => {
-        const createdDate = user.created_at ? new Date(user.created_at) : null;
-        const lastLogin = user.last_sign_in ? new Date(user.last_sign_in) : null;
-        
+
         // Render roles
         let rolesHtml = '';
         if (user.roles && user.roles.length > 0) {
@@ -1819,10 +1865,10 @@
         
         return `
           <tr>
-            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${user.email}</td>
+            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(user.email)}</td>
             <td>${rolesHtml}</td>
-            <td><span class="timestamp">${lastLogin ? lastLogin.toLocaleDateString() : 'Never'}</span></td>
-            <td><span class="timestamp">${createdDate ? createdDate.toLocaleDateString() : '-'}</span></td>
+            <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
+            <td><span class="timestamp">${fmtDate(user.created_at)}</span></td>
             <td>
               <button class="btn btn-secondary btn-sm" onclick="editUserRoles('${user.id}')" title="Edit roles">
                 <i class="fas fa-user-edit"></i>
@@ -1944,9 +1990,6 @@
       }
       
       const rows = filtered.map(req => {
-        const createdDate = new Date(req.created_at * 1000);
-        const reviewedDate = req.reviewed_at ? new Date(req.reviewed_at * 1000) : null;
-        
         // Format request types
         const typeLabels = {
           'editor': '📝 Editor',
@@ -1971,7 +2014,7 @@
           'far_west': 'Far West',
           'interstate': 'Interstate'
         };
-        const regionHtml = regionLabels[req.region] || req.region || '—';
+        const regionHtml = regionLabels[req.region] || escapeHtml(req.region) || '—';
         
         let actionsHtml = '';
         if (req.status === 'pending') {
@@ -2000,10 +2043,10 @@
           <tr>
             <td><span class="status-badge ${req.status}">${req.status}</span></td>
             <td>${typesHtml}</td>
-            <td>${req.email}</td>
-            <td><span class="discord-id">${req.discord_id}</span></td>
+            <td>${escapeHtml(req.email)}</td>
+            <td><span class="discord-id">${escapeHtml(req.discord_id)}</span></td>
             <td>${regionHtml}</td>
-            <td><span class="timestamp">${createdDate.toLocaleDateString()}</span></td>
+            <td><span class="timestamp">${fmtDate(req.created_at)}</span></td>
             <td>${actionsHtml}</td>
           </tr>
         `;
@@ -2166,7 +2209,7 @@
           statusBox.style.background = 'rgba(239, 68, 68, 0.15)';
           statusBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
           statusBox.style.color = '#ef4444';
-          statusBox.innerHTML = `<i class="fas fa-exclamation-circle"></i> Account creation failed: ${data.supabase_error}`;
+          statusBox.innerHTML = `<i class="fas fa-exclamation-circle"></i> Account creation failed: ${escapeHtml(data.supabase_error)}`;
         } else if (!createAccount) {
           statusBox.style.background = 'rgba(100, 116, 139, 0.15)';
           statusBox.style.border = '1px solid rgba(100, 116, 139, 0.4)';
@@ -2322,12 +2365,36 @@
       }
       document.getElementById('detail-background').textContent = bgText;
       
-      document.getElementById('detail-website').innerHTML = req.website 
-        ? `<a href="${req.website}" target="_blank" style="color: var(--accent);">${req.website}</a>`
-        : 'Not provided';
+      // Website: build the anchor safely. Show the URL as text always, but
+      // only make it a clickable link if it's a valid http(s) URL — never
+      // honour javascript:/data: or other schemes from applicant input.
+      const websiteEl = document.getElementById('detail-website');
+      websiteEl.textContent = '';
+      if (req.website) {
+        let validHref = null;
+        try {
+          const parsed = new URL(req.website);
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            validHref = parsed.href;
+          }
+        } catch (_) { /* not a parseable URL */ }
+        if (validHref) {
+          const a = document.createElement('a');
+          a.textContent = req.website;
+          a.href = validHref;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.style.color = 'var(--accent)';
+          websiteEl.appendChild(a);
+        } else {
+          websiteEl.textContent = req.website;
+        }
+      } else {
+        websiteEl.textContent = 'Not provided';
+      }
       document.getElementById('detail-about').textContent = req.about || 'Not provided';
-      document.getElementById('detail-status').innerHTML = `<span class="status-badge ${req.status}">${req.status}</span>`;
-      document.getElementById('detail-date').textContent = new Date(req.created_at * 1000).toLocaleString();
+      document.getElementById('detail-status').innerHTML = `<span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>`;
+      document.getElementById('detail-date').textContent = fmtDate(req.created_at, { time: true });
       
       // Show action buttons if pending
       const actionsDiv = document.getElementById('detail-actions');
@@ -2355,13 +2422,22 @@
       document.getElementById('details-modal').style.display = 'none';
     }
     
-    function copyPassword() {
+    function copyPassword(evt) {
       if (!currentApproval) return;
-      
+
+      const btn = (evt && evt.target && evt.target.closest)
+        ? evt.target.closest('.copy-btn')
+        : document.querySelector('#password-box .copy-btn');
+      if (!btn) return;
+      const originalHtml = btn.innerHTML;
+
       navigator.clipboard.writeText(currentApproval.temp_password).then(() => {
-        const btn = event.target.closest('.copy-btn');
-        const originalHtml = btn.innerHTML;
         btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        setTimeout(() => {
+          btn.innerHTML = originalHtml;
+        }, 2000);
+      }).catch(() => {
+        btn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Copy failed';
         setTimeout(() => {
           btn.innerHTML = originalHtml;
         }, 2000);

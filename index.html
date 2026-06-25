@@ -208,7 +208,10 @@
       // Parse hash parameters
       if (hash) {
         hash.split('&').forEach(param => {
-          const [key, value] = param.split('=');
+          const i = param.indexOf('=');
+          if (i === -1) return;
+          const key = param.slice(0, i);
+          const value = param.slice(i + 1);
           if (key && value) {
             params[decodeURIComponent(key)] = decodeURIComponent(value);
           }
@@ -218,7 +221,10 @@
       // Parse search parameters (override hash if present)
       if (search) {
         search.split('&').forEach(param => {
-          const [key, value] = param.split('=');
+          const i = param.indexOf('=');
+          if (i === -1) return;
+          const key = param.slice(0, i);
+          const value = param.slice(i + 1);
           if (key && value) {
             params[decodeURIComponent(key)] = decodeURIComponent(value);
           }

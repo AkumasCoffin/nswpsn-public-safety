@@ -57,8 +57,12 @@ def main():
         if not meta_path.exists():
             print(f"  skip {agency_dir.name}: no meta.json")
             continue
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        sections = [resolve_section(s, agency_dir) for s in meta.get("sections", [])]
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            sections = [resolve_section(s, agency_dir) for s in meta.get("sections", [])]
+        except Exception as exc:
+            print(f"  WARNING: skip {agency_dir.name}: {exc}")
+            continue
         out["agencies"][agency_dir.name] = {
             "title": meta.get("title", ""),
             "tag": meta.get("tag", ""),

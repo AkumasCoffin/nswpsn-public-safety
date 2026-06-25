@@ -285,7 +285,9 @@ export async function fetchEndeavourSplit(now: Date = new Date()): Promise<Endea
       latitude: lat,
       longitude: lng,
       postcode: enrich.postcode ?? '',
-      hasGPS: Boolean(lat) && Boolean(lng),
+      hasGPS:
+        lat != null && lng != null &&
+        Number.isFinite(lat) && Number.isFinite(lng),
     };
 
     if (isPlanned) {

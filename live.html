@@ -3336,14 +3336,19 @@
       const timeAgo = formatNewsTime(item.timestamp || item.published);
       const categoryClass = item.category || 'general';
       
+      // Only allow a safe Font Awesome <i> icon, else fall back to default
+      const safeIcon = (typeof item.icon === 'string' && /^<i class="fa[srlbd]? fa-[a-z0-9-]+"><\/i>$/.test(item.icon.trim()))
+        ? item.icon
+        : '<i class="fas fa-newspaper"></i>';
+
       return `
-        <a href="${item.link}" target="_blank" rel="noopener noreferrer" 
-           class="news-item ${categoryClass}" 
+        <a href="${safeUrl(item.link)}" target="_blank" rel="noopener noreferrer"
+           class="news-item ${categoryClass}"
            style="text-decoration: none;">
           <div class="news-item-header">
             <div class="news-item-source">
-              <span>${item.icon || '<i class="fas fa-newspaper"></i>'}</span>
-              <span class="news-item-source-badge">${item.source}</span>
+              <span>${safeIcon}</span>
+              <span class="news-item-source-badge">${escapeHtml(item.source)}</span>
             </div>
           </div>
           <div class="news-item-title">${escapeHtml(item.title)}</div>
@@ -3405,6 +3410,18 @@
     function stripHtml(text) {
       if (!text) return '';
       return text.replace(/<[^>]*>/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    }
+
+    // Return an escaped URL only if it uses an http/https scheme, else '#'
+    function safeUrl(url) {
+      if (!url) return '#';
+      try {
+        const u = new URL(url, window.location.href);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return '#';
+        return escapeHtml(url);
+      } catch {
+        return '#';
+      }
     }
     
     // Toggle news feed show all/less
@@ -4635,7 +4652,7 @@
               
               <div class="tt-outage-header">
                 <div class="tt-badges-row" style="margin-bottom:0;">
-                  <span class="tt-badge" style="background:${isMaintenance ? '#f97316' : (isPlanned ? '#a855f7' : '#ef4444')};">${i.type.toUpperCase()}</span>
+                  <span class="tt-badge" style="background:${isMaintenance ? '#f97316' : (isPlanned ? '#a855f7' : '#ef4444')};">${escapeHtml(i.type).toUpperCase()}</span>
                   ${i.provider === 'Essential' ? '<span class="tt-badge" style="background:#06b6d4; font-size:0.55rem;">ESSENTIAL</span>' : ''}
                   <span class="tt-status-text">${i.status || 'Active'}</span>
                 </div>
@@ -4645,13 +4662,13 @@
                 </div>
               </div>
               
-              ${i.streets ? `<div class="tt-detail" style="margin-bottom:0.2rem; word-break:break-word;"><i class="fas fa-map-marker-alt" style="color:#f59e0b;"></i> ${i.streets}</div>` : ''}
-              ${i.cause ? `<div class="tt-cause"><i class="fas fa-exclamation-triangle"></i> ${i.cause}</div>` : ''}
+              ${i.streets ? `<div class="tt-detail" style="margin-bottom:0.2rem; word-break:break-word;"><i class="fas fa-map-marker-alt" style="color:#f59e0b;"></i> ${escapeHtml(i.streets)}</div>` : ''}
+              ${i.cause ? `<div class="tt-cause"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(i.cause)}</div>` : ''}
               
               <div class="tt-meta">
                 ${i.time ? `<span><i class="fas fa-clock"></i> ${formatTimeAgo(i.time)}</span>` : ''}
                 ${hasETA ? `<span style="color:${isOverdue ? '#fca5a5' : '#7dd3fc'};"><i class="fas fa-wrench"></i> ETA: ${etaDate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}${isOverdue ? ' (OVERDUE)' : ''}</span>` : ''}
-                ${i.crewStatus ? `<span style="color:#7dd3fc;"><i class="fas fa-hard-hat"></i> ${i.crewStatus}</span>` : ''}
+                ${i.crewStatus ? `<span style="color:#7dd3fc;"><i class="fas fa-hard-hat"></i> ${escapeHtml(i.crewStatus)}</span>` : ''}
               </div>
             </div>
           `;
@@ -4679,7 +4696,7 @@
               <div class="tt-group-header" onclick="togglePowerGroup('${groupId}')">
                 <div class="tt-group-title-row">
                   <div class="tt-title" style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                    <span style="word-break:break-word;"><i class="fas fa-bolt"></i> ${group.suburb}${group.postcode ? ` <span style="color:#94a3b8; font-weight:400; font-size:0.78rem;">(${group.postcode})</span>` : ''}</span>
+                    <span style="word-break:break-word;"><i class="fas fa-bolt"></i> ${escapeHtml(group.suburb)}${group.postcode ? ` <span style="color:#94a3b8; font-weight:400; font-size:0.78rem;">(${escapeHtml(group.postcode)})</span>` : ''}</span>
                     ${unplannedInGroup > 0 ? `<span class="tt-badge" style="background:#ef4444;">UNPLANNED</span>` : ''}
                     ${maintenanceInGroup > 0 ? `<span class="tt-badge" style="background:#f97316;">MAINTENANCE</span>` : ''}
                     ${plannedInGroup > 0 ? `<span class="tt-badge" style="background:#a855f7;">PLANNED</span>` : ''}
@@ -4690,7 +4707,7 @@
                   </div>
                 </div>
                 
-                ${group.council ? `<div class="tt-group-council"><i class="fas fa-landmark"></i> ${group.council}</div>` : ''}
+                ${group.council ? `<div class="tt-group-council"><i class="fas fa-landmark"></i> ${escapeHtml(group.council)}</div>` : ''}
                 
                 <div class="tt-meta">
                   ${group.totalCustomers > 0 ? `<span class="tt-customers"><i class="fas fa-users"></i> ${group.totalCustomers.toLocaleString()} affected</span>` : ''}
@@ -4971,7 +4988,7 @@
           // Then by time (newest first)
           if (!a.time) return 1;
           if (!b.time) return -1;
-          return b.time - a.time;
+          return new Date(b.time) - new Date(a.time);
         });
         
         if (items.length === 0) {
@@ -5141,7 +5158,7 @@
                 <div class="tt-header">
                   <div class="tt-header-body">
                     <div class="tt-title">
-                      ${i.severity === 1 ? '<i class="fas fa-exclamation-circle" style="color:#ef4444;"></i> ' : ''}${i.title}
+                      ${i.severity === 1 ? '<i class="fas fa-exclamation-circle" style="color:#ef4444;"></i> ' : ''}${escapeHtml(i.title)}
                     </div>
                   </div>
                   <div class="tt-badges">
@@ -5153,22 +5170,22 @@
                 ${i.area ? `
                   <div class="tt-panel amber">
                     <div class="tt-label amber"><i class="fas fa-map-marker-alt"></i> Areas Affected</div>
-                    <div class="tt-detail">${i.area}</div>
+                    <div class="tt-detail">${escapeHtml(i.area)}</div>
                   </div>
                 ` : ''}
                 
                 ${i.description ? `
                   <div class="tt-panel gray">
                     <div class="tt-label gray"><i class="fas fa-clipboard-list"></i> Warning Details</div>
-                    <div class="tt-detail pre-wrap">${i.description}</div>
+                    <div class="tt-detail pre-wrap">${escapeHtml(i.description)}</div>
                   </div>
                 ` : ''}
                 
                 <div class="tt-footer">
                   <div class="tt-meta">
-                    ${i.issued ? `<span><i class="fas fa-calendar-alt"></i> <strong>Issued:</strong> ${i.issued}</span>` : ''}
-                    ${i.expiry ? `<span><i class="fas fa-clock"></i> <strong>Expires:</strong> ${i.expiry}</span>` : ''}
-                    ${i.link ? `<a href="${i.link}" target="_blank"><i class="fas fa-link"></i> View on BOM website</a>` : ''}
+                    ${i.issued ? `<span><i class="fas fa-calendar-alt"></i> <strong>Issued:</strong> ${escapeHtml(i.issued)}</span>` : ''}
+                    ${i.expiry ? `<span><i class="fas fa-clock"></i> <strong>Expires:</strong> ${escapeHtml(i.expiry)}</span>` : ''}
+                    ${i.link ? `<a href="${safeUrl(i.link)}" target="_blank"><i class="fas fa-link"></i> View on BOM website</a>` : ''}
                   </div>
                 </div>
               </div>
@@ -5393,18 +5410,18 @@
               if (waterTemp) metaItems.push(`<span style="color:#22d3ee;">Water: ${Math.round(parseFloat(waterTemp))}°C</span>`);
               if (swell) metaItems.push(`<span style="color:#7dd3fc;">Swell: ${swell}m</span>`);
               if (windSpeed) metaItems.push(`<span style="color:#a5b4fc;">Wind: ${windDir ? windDir + ' ' : ''}${Math.round(parseFloat(windSpeed))}km/h</span>`);
-              if (b.patrolled && b.patrolStart) metaItems.push(`<span style="color:#f97316;">Patrol: ${b.patrolStart}–${b.patrolEnd}</span>`);
+              if (b.patrolled && b.patrolStart) metaItems.push(`<span style="color:#f97316;">Patrol: ${escapeHtml(b.patrolStart)}–${escapeHtml(b.patrolEnd)}</span>`);
               if (forecast) metaItems.push(`<span>Pollution: ${forecastIcon} ${forecast}</span>`);
 
               return `
                 <div class="tt-item tt-beach list-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}"
                      ${hasGPS ? `onclick="openMapAt(${b.lat}, ${b.lng}, '${encodeURIComponent(b.name)}', 'beachwatch')"` : ''}>
                   <div class="tt-beach-row">
-                    <div class="tt-title tt-title-compact"><i class="fas fa-umbrella-beach" style="color:#06b6d4;"></i> ${b.name}</div>
+                    <div class="tt-title tt-title-compact"><i class="fas fa-umbrella-beach" style="color:#06b6d4;"></i> ${escapeHtml(b.name)}</div>
                     ${hasGPS ? '<span class="map-view-btn compact"><i class="fas fa-map-marker-alt"></i></span>' : ''}
                     <div class="tt-beach-badges">
                       ${b.patrolled ? '<span class="pill pill-sub pill-orange"><i class="fas fa-flag"></i> Patrolled</span>' : ''}
-                      ${b.quality ? `<span class="pill pill-sub ${b.qualityClass}">${b.quality}</span>` : ''}
+                      ${b.quality ? `<span class="pill pill-sub ${b.qualityClass}">${escapeHtml(b.quality)}</span>` : ''}
                     </div>
                   </div>
                   ${metaItems.length > 0 ? `<div class="tt-meta">${metaItems.join('')}</div>` : ''}
@@ -5436,7 +5453,7 @@
 
       // Use the API proxy which returns GeoJSON with pre-parsed fields
       apiFetch(`${API_BASE}/api/rfs/incidents`)
-        .then(response => response.json())
+        .then(response => { if (!response.ok) throw new Error(response.status); return response.json(); })
         .then(data => {
           const features = data.features || [];
           
@@ -5615,32 +5632,32 @@
                      ${hasGPS ? `onclick="openMapAt(${inc.lat}, ${inc.lng}, '${encodeURIComponent(inc.title)}', 'rfs')"` : ''}>
                   
                   <div class="tt-header">
-                    <div class="tt-title">${inc.title}</div>
+                    <div class="tt-title">${escapeHtml(inc.title)}</div>
                     ${hasGPS ? '<span class="map-view-btn"><i class="fas fa-map-marker-alt"></i> Map</span>' : ''}
                   </div>
                   
                   <div class="tt-badges-row">
-                    ${inc.level ? `<span class="pill ${levelClass}">${levelIcon} ${inc.level}</span>` : ''}
-                    ${inc.status ? `<span class="pill ${statusClass}">${inc.status}</span>` : ''}
-                    ${inc.type ? `<span class="pill pill-sub pill-soft">${inc.type}</span>` : ''}
+                    ${inc.level ? `<span class="pill ${levelClass}">${levelIcon} ${escapeHtml(inc.level)}</span>` : ''}
+                    ${inc.status ? `<span class="pill ${statusClass}">${escapeHtml(inc.status)}</span>` : ''}
+                    ${inc.type ? `<span class="pill pill-sub pill-soft">${escapeHtml(inc.type)}</span>` : ''}
                   </div>
                   
                   ${inc.location ? `
                     <div class="tt-panel amber">
                       <div class="tt-label amber"><i class="fas fa-map-marker-alt"></i> Location</div>
-                      <div class="tt-detail">${inc.location}</div>
+                      <div class="tt-detail">${escapeHtml(inc.location)}</div>
                     </div>
                   ` : ''}
                   
                   <div class="tt-meta">
-                    ${inc.council ? `<span><i class="fas fa-building"></i> ${inc.council}</span>` : ''}
-                    ${inc.size ? `<span><i class="fas fa-ruler-combined"></i> ${inc.size}</span>` : ''}
-                    ${inc.updated ? `<span><i class="fas fa-clock"></i> ${inc.updated}</span>` : ''}
+                    ${inc.council ? `<span><i class="fas fa-building"></i> ${escapeHtml(inc.council)}</span>` : ''}
+                    ${inc.size ? `<span><i class="fas fa-ruler-combined"></i> ${escapeHtml(inc.size)}</span>` : ''}
+                    ${inc.updated ? `<span><i class="fas fa-clock"></i> ${escapeHtml(inc.updated)}</span>` : ''}
                   </div>
                   
                   <div class="tt-footer">
                     <div class="tt-meta">
-                      <a href="${inc.link}" target="_blank" onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> View on RFS Fires Near Me</a>
+                      <a href="${safeUrl(inc.link)}" target="_blank" onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> View on RFS Fires Near Me</a>
                     </div>
                   </div>
                 </div>
@@ -5675,7 +5692,7 @@
       const MAX_VISIBLE = 8;
 
       fetch("https://www.rfs.nsw.gov.au/feeds/fdrToban.xml")
-        .then(res => res.text())
+        .then(res => { if (!res.ok) throw new Error(res.status); return res.text(); })
         .then(str => new window.DOMParser().parseFromString(str, "text/xml"))
         .then(xml => {
           const districtNodes = Array.from(xml.getElementsByTagName("District"));
@@ -5844,7 +5861,7 @@
               return `
                 <div class="radio-item fdr-item" style="border-left: 3px solid ${borderColor}; background: ${bgColor};">
                   <div class="fdr-item-header">
-                    <span class="fdr-name">${d.name}</span>
+                    <span class="fdr-name">${escapeHtml(d.name)}</span>
                     ${hasBan ? '<span class="fdr-ban-badge"><i class="fas fa-fire"></i> FIRE BAN</span>' : ''}
                   </div>
                   
@@ -5854,12 +5871,12 @@
                     <span class="fdr-day-label">TOMORROW</span>
                     
                     <span class="fdr-metric-label">Rating</span>
-                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getDangerClass(d.dangerToday)}">${d.dangerToday}</span></div>
-                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getDangerClass(d.dangerTomorrow)}">${d.dangerTomorrow}</span></div>
+                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getDangerClass(d.dangerToday)}">${escapeHtml(d.dangerToday)}</span></div>
+                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getDangerClass(d.dangerTomorrow)}">${escapeHtml(d.dangerTomorrow)}</span></div>
                     
                     <span class="fdr-metric-label">Ban</span>
-                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getBanClass(d.banToday)}">${d.banToday}</span></div>
-                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getBanClass(d.banTomorrow)}">${d.banTomorrow}</span></div>
+                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getBanClass(d.banToday)}">${escapeHtml(d.banToday)}</span></div>
+                    <div class="fdr-pill-center"><span class="pill fdr-pill-sm ${getBanClass(d.banTomorrow)}">${escapeHtml(d.banTomorrow)}</span></div>
                   </div>
                 </div>
               `;

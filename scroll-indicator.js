@@ -143,10 +143,10 @@
     activePair = null;
 
     // Position each dot at the same place the thumb sits when that section is
-    // scrolled to the top of the viewport. Both are pct = scrollY/scrollHeight,
-    // which makes dot-and-thumb alignment exact for any document size.
-    const sc = getScroller();
-    const scrollHeight = Math.max(1, sc.scrollHeight);
+    // scrolled to the top of the viewport. Both use scrollY / (docHeight - vh)
+    // (the same denominator updateThumb uses), which makes dot-and-thumb
+    // alignment exact at the bottom of the document for any size.
+    const maxScroll = Math.max(1, getDocScrollHeight() - getViewportHeight());
 
     for (const grp of groups) {
       // Use the topmost element in the row to determine the snap position.
@@ -156,7 +156,7 @@
         const y = el.getBoundingClientRect().top + getScrollY();
         if (y < topMostY) { topMostY = y; topMost = el; }
       }
-      const pct = Math.min(100, Math.max(0, (topMostY / scrollHeight) * 100));
+      const pct = Math.min(100, Math.max(0, (topMostY / maxScroll) * 100));
 
       const titles = grp.els.map(getTitle);
       const titleText = titles.join(" / ");

@@ -77,10 +77,25 @@ describe('GET /api/incidents', () => {
     expect(calls[0]?.sql).not.toContain('expires_at >');
   });
 
-  it('?active=true filters by expires_at', async () => {
+  it('?active=true filters to live rows in JS (no fragile SQL comparison)', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    const past = new Date(Date.now() - 60 * 60 * 1000);
+    nextResult = {
+      rows: [
+        { id: 'live', title: 'a', description: '', lat: 0, lng: 0, location: '', type: [], status: 'Going', size: '-', responding_agencies: [], created_at: future, updated_at: future, expires_at: future, is_rfs_stub: false },
+        { id: 'expired', title: 'b', description: '', lat: 0, lng: 0, location: '', type: [], status: 'Going', size: '-', responding_agencies: [], created_at: past, updated_at: past, expires_at: past, is_rfs_stub: false },
+        { id: 'nullexp', title: 'c', description: '', lat: 0, lng: 0, location: '', type: [], status: 'Going', size: '-', responding_agencies: [], created_at: past, updated_at: past, expires_at: null, is_rfs_stub: false },
+      ],
+    };
     const app = makeApp();
-    await app.request('/api/incidents?active=true');
-    expect(calls[0]?.sql).toContain('expires_at > now()');
+    const res = await app.request('/api/incidents?active=true');
+    expect(res.status).toBe(200);
+    // The handler runs the plain, comparison-free query (robust to the
+    // expires_at column type) and filters on the derived is_live flag.
+    expect(calls[0]?.sql).not.toContain('expires_at >');
+    expect(calls[0]?.sql).toContain('ORDER BY created_at DESC');
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+    expect(body.map((r) => r['id'])).toEqual(['live']);
   });
 
   it('returns 503 when pool is null', async () => {

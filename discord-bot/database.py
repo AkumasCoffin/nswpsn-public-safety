@@ -7,6 +7,7 @@ import os
 import re
 import json
 import logging
+import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -31,9 +32,76 @@ DB_PATH = os.getenv('BOT_DB_PATH', DEFAULT_DB_PATH)
 USE_POSTGRES = bool(BOT_DATABASE_URL)
 if USE_POSTGRES:
     import psycopg2
+    from psycopg2 import pool as pg_pool
     from psycopg2.extras import RealDictCursor, Json
 else:
     import sqlite3
+
+# Max pooled Postgres connections for the bot. The bot offloads sync DB calls
+# to a thread pool (run_in_executor), so this must be thread-safe; keep it
+# small — the bot's query rate is low and a tight cap protects the DB's
+# connection limit. Tunable via env.
+BOT_DB_POOL_MAX = max(2, int(os.getenv('BOT_DB_POOL_MAX', '12')))
+_pool_lock = threading.Lock()
+
+
+class _PooledConnection:
+    """Thin proxy over a pooled psycopg2 connection.
+
+    Everything delegates to the underlying connection EXCEPT:
+      - close() returns the connection to the pool (putconn) instead of
+        physically closing it, after a rollback to clear any open/aborted
+        transaction so the next borrower gets a clean session; and
+      - __del__ returns it as a safety net if a code path forgot to close
+        (or raised before reaching close()).
+
+    This makes every existing `conn = self._connect(); ...; conn.close()`
+    call site pooled AND leak-proof with no other changes: a query error can
+    no longer strand a connection, and we stop reconnecting per query.
+    """
+    __slots__ = ('_raw', '_pool', '_returned')
+
+    def __init__(self, raw, pool):
+        object.__setattr__(self, '_raw', raw)
+        object.__setattr__(self, '_pool', pool)
+        object.__setattr__(self, '_returned', False)
+
+    def close(self):
+        if self._returned:
+            return
+        object.__setattr__(self, '_returned', True)
+        raw = self._raw
+        try:
+            if not raw.closed:
+                raw.rollback()
+        except Exception:
+            pass
+        try:
+            self._pool.putconn(raw)
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, '_raw'), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, '_raw'), name, value)
 
 
 # Allow-list pattern for alert_type values that are string-formatted into
@@ -51,12 +119,35 @@ def _validate_alert_type_key(alert_type: str) -> str:
 class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
-    
+        self._pool = None
+
+    def _get_pool(self):
+        """Lazily create the thread-safe Postgres connection pool. Lazy so the
+        bot still starts if the DB is briefly unreachable at boot — the pool is
+        built on first actual use. connect_timeout bounds a stalled connect so
+        a sick DB surfaces an error instead of hanging the worker thread."""
+        if self._pool is not None:
+            return self._pool
+        with _pool_lock:
+            if self._pool is None:
+                self._pool = pg_pool.ThreadedConnectionPool(
+                    1, BOT_DB_POOL_MAX,
+                    dsn=BOT_DATABASE_URL,
+                    cursor_factory=RealDictCursor,
+                    connect_timeout=10,
+                )
+        return self._pool
+
     def _connect(self):
-        """Create a database connection"""
+        """Borrow a pooled connection (Postgres) or open a SQLite connection.
+
+        Postgres connections come from a shared pool and are wrapped so
+        `conn.close()` returns them to the pool — see _PooledConnection. This
+        keeps the existing call sites unchanged while eliminating per-query
+        reconnect churn and connection leaks on query errors."""
         if USE_POSTGRES:
-            conn = psycopg2.connect(BOT_DATABASE_URL, cursor_factory=RealDictCursor)
-            return conn
+            pool = self._get_pool()
+            return _PooledConnection(pool.getconn(), pool)
         else:
             # timeout = how long sqlite3 will poll while the DB is locked.
             # Under load the event-loop thread and the queue-processor thread
@@ -77,175 +168,177 @@ class Database:
     def init_db(self):
         """Initialize the database tables"""
         conn = self._connect()
-        c = conn.cursor()
+        try:
+            c = conn.cursor()
         
-        if USE_POSTGRES:
-            # PostgreSQL DDL — alert_configs / pager_configs were dropped in
-            # Phase 3 (everything lives in alert_presets now).
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS seen_alerts (
-                    id SERIAL PRIMARY KEY,
-                    alert_type TEXT NOT NULL,
-                    alert_id TEXT NOT NULL,
-                    first_seen TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS')),
-                    UNIQUE(alert_type, alert_id)
-                )
-            ''')
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS seen_pager (
-                    id SERIAL PRIMARY KEY,
-                    message_hash TEXT NOT NULL UNIQUE,
-                    first_seen TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS'))
-                )
-            ''')
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS incident_messages (
-                    id SERIAL PRIMARY KEY,
-                    incident_guid TEXT NOT NULL,
-                    channel_id BIGINT NOT NULL,
-                    message_url TEXT NOT NULL,
-                    status TEXT,
-                    created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS')),
-                    UNIQUE(incident_guid, channel_id, status)
-                )
-            ''')
+            if USE_POSTGRES:
+                # PostgreSQL DDL — alert_configs / pager_configs were dropped in
+                # Phase 3 (everything lives in alert_presets now).
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS seen_alerts (
+                        id SERIAL PRIMARY KEY,
+                        alert_type TEXT NOT NULL,
+                        alert_id TEXT NOT NULL,
+                        first_seen TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS')),
+                        UNIQUE(alert_type, alert_id)
+                    )
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS seen_pager (
+                        id SERIAL PRIMARY KEY,
+                        message_hash TEXT NOT NULL UNIQUE,
+                        first_seen TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS'))
+                    )
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS incident_messages (
+                        id SERIAL PRIMARY KEY,
+                        incident_guid TEXT NOT NULL,
+                        channel_id BIGINT NOT NULL,
+                        message_url TEXT NOT NULL,
+                        status TEXT,
+                        created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS')),
+                        UNIQUE(incident_guid, channel_id, status)
+                    )
+                ''')
 
-            # ------------------------------------------------------------------
-            # Phase 1: alert_presets + mute-state tables (Postgres only — uses
-            # TEXT[], BIGINT[], JSONB, GIN, TIMESTAMPTZ). Mirrors schema_presets.sql.
-            # ------------------------------------------------------------------
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS alert_presets (
-                    id               SERIAL PRIMARY KEY,
-                    guild_id         BIGINT NOT NULL,
-                    channel_id       BIGINT NOT NULL,
-                    name             TEXT NOT NULL,
-                    alert_types      TEXT[] NOT NULL DEFAULT '{}',
-                    pager_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
-                    pager_capcodes   TEXT,
-                    role_ids         BIGINT[] NOT NULL DEFAULT '{}',
-                    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
-                    enabled_ping     BOOLEAN NOT NULL DEFAULT TRUE,
-                    type_overrides   JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    filters          JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    UNIQUE (guild_id, channel_id, name),
-                    CHECK (coalesce(array_length(alert_types, 1), 0) > 0 OR pager_enabled = TRUE)
-                )
-            ''')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_alert_presets_guild       ON alert_presets(guild_id)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_alert_presets_channel     ON alert_presets(guild_id, channel_id)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_alert_presets_alert_types ON alert_presets USING GIN(alert_types)')
+                # ------------------------------------------------------------------
+                # Phase 1: alert_presets + mute-state tables (Postgres only — uses
+                # TEXT[], BIGINT[], JSONB, GIN, TIMESTAMPTZ). Mirrors schema_presets.sql.
+                # ------------------------------------------------------------------
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS alert_presets (
+                        id               SERIAL PRIMARY KEY,
+                        guild_id         BIGINT NOT NULL,
+                        channel_id       BIGINT NOT NULL,
+                        name             TEXT NOT NULL,
+                        alert_types      TEXT[] NOT NULL DEFAULT '{}',
+                        pager_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+                        pager_capcodes   TEXT,
+                        role_ids         BIGINT[] NOT NULL DEFAULT '{}',
+                        enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+                        enabled_ping     BOOLEAN NOT NULL DEFAULT TRUE,
+                        type_overrides   JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        filters          JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (guild_id, channel_id, name),
+                        CHECK (coalesce(array_length(alert_types, 1), 0) > 0 OR pager_enabled = TRUE)
+                    )
+                ''')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_alert_presets_guild       ON alert_presets(guild_id)')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_alert_presets_channel     ON alert_presets(guild_id, channel_id)')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_alert_presets_alert_types ON alert_presets USING GIN(alert_types)')
 
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS channel_mute_state (
-                    guild_id     BIGINT NOT NULL,
-                    channel_id   BIGINT NOT NULL,
-                    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-                    enabled_ping BOOLEAN NOT NULL DEFAULT TRUE,
-                    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (guild_id, channel_id)
-                )
-            ''')
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS guild_mute_state (
-                    guild_id     BIGINT PRIMARY KEY,
-                    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-                    enabled_ping BOOLEAN NOT NULL DEFAULT TRUE,
-                    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-            ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS channel_mute_state (
+                        guild_id     BIGINT NOT NULL,
+                        channel_id   BIGINT NOT NULL,
+                        enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+                        enabled_ping BOOLEAN NOT NULL DEFAULT TRUE,
+                        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (guild_id, channel_id)
+                    )
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS guild_mute_state (
+                        guild_id     BIGINT PRIMARY KEY,
+                        enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+                        enabled_ping BOOLEAN NOT NULL DEFAULT TRUE,
+                        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
 
-            c.execute('''
-                CREATE OR REPLACE FUNCTION trg_touch_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
-                BEGIN NEW.updated_at = now(); RETURN NEW; END;
-                $$
-            ''')
-            c.execute('DROP TRIGGER IF EXISTS alert_presets_touch_updated ON alert_presets')
-            c.execute('DROP TRIGGER IF EXISTS channel_mute_touch_updated  ON channel_mute_state')
-            c.execute('DROP TRIGGER IF EXISTS guild_mute_touch_updated    ON guild_mute_state')
-            c.execute('''
-                CREATE TRIGGER alert_presets_touch_updated BEFORE UPDATE ON alert_presets
-                    FOR EACH ROW EXECUTE FUNCTION trg_touch_updated_at()
-            ''')
-            c.execute('''
-                CREATE TRIGGER channel_mute_touch_updated BEFORE UPDATE ON channel_mute_state
-                    FOR EACH ROW EXECUTE FUNCTION trg_touch_updated_at()
-            ''')
-            c.execute('''
-                CREATE TRIGGER guild_mute_touch_updated BEFORE UPDATE ON guild_mute_state
-                    FOR EACH ROW EXECUTE FUNCTION trg_touch_updated_at()
-            ''')
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS preset_fire_log (
-                    id         BIGSERIAL PRIMARY KEY,
-                    preset_id  INTEGER NOT NULL REFERENCES alert_presets(id) ON DELETE CASCADE,
-                    alert_type TEXT NOT NULL,
-                    fired_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-            ''')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_pfl_preset_fired_at ON preset_fire_log(preset_id, fired_at DESC)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_pfl_fired_at ON preset_fire_log(fired_at)')
+                c.execute('''
+                    CREATE OR REPLACE FUNCTION trg_touch_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN NEW.updated_at = now(); RETURN NEW; END;
+                    $$
+                ''')
+                c.execute('DROP TRIGGER IF EXISTS alert_presets_touch_updated ON alert_presets')
+                c.execute('DROP TRIGGER IF EXISTS channel_mute_touch_updated  ON channel_mute_state')
+                c.execute('DROP TRIGGER IF EXISTS guild_mute_touch_updated    ON guild_mute_state')
+                c.execute('''
+                    CREATE TRIGGER alert_presets_touch_updated BEFORE UPDATE ON alert_presets
+                        FOR EACH ROW EXECUTE FUNCTION trg_touch_updated_at()
+                ''')
+                c.execute('''
+                    CREATE TRIGGER channel_mute_touch_updated BEFORE UPDATE ON channel_mute_state
+                        FOR EACH ROW EXECUTE FUNCTION trg_touch_updated_at()
+                ''')
+                c.execute('''
+                    CREATE TRIGGER guild_mute_touch_updated BEFORE UPDATE ON guild_mute_state
+                        FOR EACH ROW EXECUTE FUNCTION trg_touch_updated_at()
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS preset_fire_log (
+                        id         BIGSERIAL PRIMARY KEY,
+                        preset_id  INTEGER NOT NULL REFERENCES alert_presets(id) ON DELETE CASCADE,
+                        alert_type TEXT NOT NULL,
+                        fired_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_pfl_preset_fired_at ON preset_fire_log(preset_id, fired_at DESC)')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_pfl_fired_at ON preset_fire_log(fired_at)')
 
-            # Admin-triggered actions from the dashboard (/sync, /test, /cleanup).
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS pending_bot_actions (
-                    id            BIGSERIAL PRIMARY KEY,
-                    action        TEXT NOT NULL,
-                    params        JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    status        TEXT NOT NULL DEFAULT 'pending',
-                    requested_by  TEXT,
-                    requested_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    claimed_at    TIMESTAMPTZ,
-                    completed_at  TIMESTAMPTZ,
-                    result        JSONB,
-                    error         TEXT
-                )
-            ''')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_pending_bot_actions_status ON pending_bot_actions(status, requested_at)')
+                # Admin-triggered actions from the dashboard (/sync, /test, /cleanup).
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS pending_bot_actions (
+                        id            BIGSERIAL PRIMARY KEY,
+                        action        TEXT NOT NULL,
+                        params        JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        status        TEXT NOT NULL DEFAULT 'pending',
+                        requested_by  TEXT,
+                        requested_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        claimed_at    TIMESTAMPTZ,
+                        completed_at  TIMESTAMPTZ,
+                        result        JSONB,
+                        error         TEXT
+                    )
+                ''')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_pending_bot_actions_status ON pending_bot_actions(status, requested_at)')
 
-            # Live-DB migration for the per-preset filters column.
-            c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
-        else:
-            # SQLite DDL — alert_configs / pager_configs are gone (Phase 3).
-            # SQLite is also no longer the supported runtime; the bot expects
-            # Postgres. Kept for the seen_alerts/seen_pager/incident_messages
-            # tables in case anyone still imports this module against SQLite.
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS seen_alerts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    alert_type TEXT NOT NULL,
-                    alert_id TEXT NOT NULL,
-                    first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(alert_type, alert_id)
-                )
-            ''')
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS seen_pager (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_hash TEXT NOT NULL UNIQUE,
-                    first_seen TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS incident_messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    incident_guid TEXT NOT NULL,
-                    channel_id INTEGER NOT NULL,
-                    message_url TEXT NOT NULL,
-                    status TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(incident_guid, channel_id, status)
-                )
-            ''')
+                # Live-DB migration for the per-preset filters column.
+                c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
+            else:
+                # SQLite DDL — alert_configs / pager_configs are gone (Phase 3).
+                # SQLite is also no longer the supported runtime; the bot expects
+                # Postgres. Kept for the seen_alerts/seen_pager/incident_messages
+                # tables in case anyone still imports this module against SQLite.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS seen_alerts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        alert_type TEXT NOT NULL,
+                        alert_id TEXT NOT NULL,
+                        first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(alert_type, alert_id)
+                    )
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS seen_pager (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        message_hash TEXT NOT NULL UNIQUE,
+                        first_seen TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS incident_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        incident_guid TEXT NOT NULL,
+                        channel_id INTEGER NOT NULL,
+                        message_url TEXT NOT NULL,
+                        status TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(incident_guid, channel_id, status)
+                    )
+                ''')
         
-        c.execute('CREATE INDEX IF NOT EXISTS idx_seen_alerts_type ON seen_alerts(alert_type)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_seen_pager_hash ON seen_pager(message_hash)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_incident_messages_guid ON incident_messages(incident_guid)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_seen_alerts_type ON seen_alerts(alert_type)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_seen_pager_hash ON seen_pager(message_hash)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_incident_messages_guid ON incident_messages(incident_guid)')
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
         logger.info(f"Database initialized ({'PostgreSQL' if USE_POSTGRES else self.db_path})")
     
@@ -298,19 +391,23 @@ class Database:
         alert_types = list(alert_types or [])
         role_ids = [int(r) for r in (role_ids or [])]
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO alert_presets
-                (guild_id, channel_id, name, alert_types, pager_enabled,
-                 pager_capcodes, role_ids, enabled, enabled_ping)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        ''', (guild_id, channel_id, name, alert_types, pager_enabled,
-              pager_capcodes, role_ids, enabled, enabled_ping))
-        row = c.fetchone()
-        preset_id = row['id']
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO alert_presets
+                    (guild_id, channel_id, name, alert_types, pager_enabled,
+                     pager_capcodes, role_ids, enabled, enabled_ping)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (guild_id, channel_id, name, alert_types, pager_enabled,
+                  pager_capcodes, role_ids, enabled, enabled_ping))
+            row = c.fetchone()
+            if row is None:
+                raise RuntimeError("create_preset: INSERT ... RETURNING id returned no row")
+            preset_id = row['id']
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"Created preset id={preset_id} guild={guild_id} channel={channel_id} name={name!r}")
         return preset_id
 
@@ -318,10 +415,12 @@ class Database:
         """Fetch a single preset by id."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets WHERE id = %s', (preset_id,))
-        row = c.fetchone()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets WHERE id = %s', (preset_id,))
+            row = c.fetchone()
+        finally:
+            conn.close()
         logger.debug(f"get_preset id={preset_id} -> {'hit' if row else 'miss'}")
         return dict(row) if row else None
 
@@ -329,11 +428,13 @@ class Database:
         """Fetch a preset by (guild, channel, name) tuple."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets WHERE guild_id = %s AND channel_id = %s AND name = %s',
-                  (guild_id, channel_id, name))
-        row = c.fetchone()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets WHERE guild_id = %s AND channel_id = %s AND name = %s',
+                      (guild_id, channel_id, name))
+            row = c.fetchone()
+        finally:
+            conn.close()
         logger.debug(f"get_preset_by_name guild={guild_id} channel={channel_id} name={name!r} -> {'hit' if row else 'miss'}")
         return dict(row) if row else None
 
@@ -341,11 +442,13 @@ class Database:
         """All presets in a channel, ordered by name."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets WHERE guild_id = %s AND channel_id = %s ORDER BY name',
-                  (guild_id, channel_id))
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets WHERE guild_id = %s AND channel_id = %s ORDER BY name',
+                      (guild_id, channel_id))
+            rows = c.fetchall()
+        finally:
+            conn.close()
         logger.debug(f"list_presets_in_channel guild={guild_id} channel={channel_id} -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
@@ -353,10 +456,12 @@ class Database:
         """All presets in a guild, ordered by (channel_id, name)."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets WHERE guild_id = %s ORDER BY channel_id, name', (guild_id,))
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets WHERE guild_id = %s ORDER BY channel_id, name', (guild_id,))
+            rows = c.fetchall()
+        finally:
+            conn.close()
         logger.debug(f"list_presets_in_guild guild={guild_id} -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
@@ -364,10 +469,12 @@ class Database:
         """Every preset in every guild."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets ORDER BY guild_id, channel_id, name')
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets ORDER BY guild_id, channel_id, name')
+            rows = c.fetchall()
+        finally:
+            conn.close()
         logger.debug(f"list_all_presets -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
@@ -375,10 +482,12 @@ class Database:
         """All presets subscribed to alert_type (GIN array-contains). Mute state NOT applied."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets WHERE alert_types @> ARRAY[%s]::TEXT[]', (alert_type,))
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets WHERE alert_types @> ARRAY[%s]::TEXT[]', (alert_type,))
+            rows = c.fetchall()
+        finally:
+            conn.close()
         logger.debug(f"get_presets_for_alert_type {alert_type!r} -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
@@ -386,10 +495,12 @@ class Database:
         """All presets with pager_enabled = TRUE."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM alert_presets WHERE pager_enabled = TRUE')
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM alert_presets WHERE pager_enabled = TRUE')
+            rows = c.fetchall()
+        finally:
+            conn.close()
         logger.debug(f"get_presets_for_pager -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
@@ -426,11 +537,13 @@ class Database:
             return False
         params.append(preset_id)
         conn = self._connect()
-        c = conn.cursor()
-        c.execute(f"UPDATE alert_presets SET {', '.join(sets)} WHERE id = %s", params)
-        updated = (c.rowcount or 0) > 0
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute(f"UPDATE alert_presets SET {', '.join(sets)} WHERE id = %s", params)
+            updated = (c.rowcount or 0) > 0
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"update_preset id={preset_id} fields={[s.split(' =')[0] for s in sets]} updated={updated}")
         return updated
 
@@ -442,22 +555,24 @@ class Database:
         _validate_alert_type_key(alert_type)
         path = '{' + alert_type + '}'
         conn = self._connect()
-        c = conn.cursor()
-        if enabled is None and enabled_ping is None:
-            c.execute('UPDATE alert_presets SET type_overrides = type_overrides #- %s WHERE id = %s',
-                      (path, preset_id))
-        else:
-            # Default missing halves to True so stored record is well-formed.
-            value = {
-                'enabled': True if enabled is None else bool(enabled),
-                'enabled_ping': True if enabled_ping is None else bool(enabled_ping),
-            }
-            c.execute(
-                'UPDATE alert_presets SET type_overrides = jsonb_set(type_overrides, %s, %s::jsonb, true) WHERE id = %s',
-                (path, json.dumps(value), preset_id),
-            )
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            if enabled is None and enabled_ping is None:
+                c.execute('UPDATE alert_presets SET type_overrides = type_overrides #- %s WHERE id = %s',
+                          (path, preset_id))
+            else:
+                # Default missing halves to True so stored record is well-formed.
+                value = {
+                    'enabled': True if enabled is None else bool(enabled),
+                    'enabled_ping': True if enabled_ping is None else bool(enabled_ping),
+                }
+                c.execute(
+                    'UPDATE alert_presets SET type_overrides = jsonb_set(type_overrides, %s, %s::jsonb, true) WHERE id = %s',
+                    (path, json.dumps(value), preset_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"set_preset_type_override preset={preset_id} type={alert_type} enabled={enabled} ping={enabled_ping}")
 
     def clear_preset_type_override(self, preset_id: int, alert_type: str):
@@ -466,22 +581,26 @@ class Database:
         _validate_alert_type_key(alert_type)
         path = '{' + alert_type + '}'
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('UPDATE alert_presets SET type_overrides = type_overrides #- %s WHERE id = %s',
-                  (path, preset_id))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('UPDATE alert_presets SET type_overrides = type_overrides #- %s WHERE id = %s',
+                      (path, preset_id))
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"clear_preset_type_override preset={preset_id} type={alert_type}")
 
     def delete_preset(self, preset_id: int) -> bool:
         """Delete one preset by id. Returns True if a row was deleted."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('DELETE FROM alert_presets WHERE id = %s', (preset_id,))
-        deleted = (c.rowcount or 0) > 0
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('DELETE FROM alert_presets WHERE id = %s', (preset_id,))
+            deleted = (c.rowcount or 0) > 0
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"delete_preset id={preset_id} deleted={deleted}")
         return deleted
 
@@ -489,12 +608,14 @@ class Database:
         """Delete every preset in a channel. Returns count deleted."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('DELETE FROM alert_presets WHERE guild_id = %s AND channel_id = %s',
-                  (guild_id, channel_id))
-        count = c.rowcount or 0
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('DELETE FROM alert_presets WHERE guild_id = %s AND channel_id = %s',
+                      (guild_id, channel_id))
+            count = c.rowcount or 0
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"delete_presets_in_channel guild={guild_id} channel={channel_id} deleted={count}")
         return count
 
@@ -506,10 +627,12 @@ class Database:
         """Guild-level mute state. Defaults to (True, True) if no row."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT enabled, enabled_ping FROM guild_mute_state WHERE guild_id = %s', (guild_id,))
-        row = c.fetchone()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT enabled, enabled_ping FROM guild_mute_state WHERE guild_id = %s', (guild_id,))
+            row = c.fetchone()
+        finally:
+            conn.close()
         logger.debug(f"get_guild_mute guild={guild_id} -> {'hit' if row else 'default'}")
         if not row:
             return dict(self._DEFAULT_MUTE)
@@ -536,31 +659,37 @@ class Database:
                 enabled_ping = {upd_ping_sql}
         '''
         conn = self._connect()
-        c = conn.cursor()
-        c.execute(sql, (guild_id, ins_enabled, ins_ping))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute(sql, (guild_id, ins_enabled, ins_ping))
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"set_guild_mute guild={guild_id} enabled={enabled} ping={enabled_ping}")
 
     def clear_guild_mute(self, guild_id: int):
         """Drop guild_mute_state row (i.e. reset to defaults)."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('DELETE FROM guild_mute_state WHERE guild_id = %s', (guild_id,))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('DELETE FROM guild_mute_state WHERE guild_id = %s', (guild_id,))
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"clear_guild_mute guild={guild_id}")
 
     def get_channel_mute(self, guild_id: int, channel_id: int) -> Dict[str, bool]:
         """Channel-level mute state. Defaults to (True, True) if no row."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT enabled, enabled_ping FROM channel_mute_state WHERE guild_id = %s AND channel_id = %s',
-                  (guild_id, channel_id))
-        row = c.fetchone()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT enabled, enabled_ping FROM channel_mute_state WHERE guild_id = %s AND channel_id = %s',
+                      (guild_id, channel_id))
+            row = c.fetchone()
+        finally:
+            conn.close()
         logger.debug(f"get_channel_mute guild={guild_id} channel={channel_id} -> {'hit' if row else 'default'}")
         if not row:
             return dict(self._DEFAULT_MUTE)
@@ -585,31 +714,37 @@ class Database:
                 enabled_ping = {upd_ping_sql}
         '''
         conn = self._connect()
-        c = conn.cursor()
-        c.execute(sql, (guild_id, channel_id, ins_enabled, ins_ping))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute(sql, (guild_id, channel_id, ins_enabled, ins_ping))
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"set_channel_mute guild={guild_id} channel={channel_id} enabled={enabled} ping={enabled_ping}")
 
     def clear_channel_mute(self, guild_id: int, channel_id: int):
         """Drop channel_mute_state row."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('DELETE FROM channel_mute_state WHERE guild_id = %s AND channel_id = %s',
-                  (guild_id, channel_id))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('DELETE FROM channel_mute_state WHERE guild_id = %s AND channel_id = %s',
+                      (guild_id, channel_id))
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"clear_channel_mute guild={guild_id} channel={channel_id}")
 
     def list_channel_mutes(self, guild_id: int) -> List[Dict[str, Any]]:
         """All channel mute rows for a guild."""
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute('SELECT * FROM channel_mute_state WHERE guild_id = %s ORDER BY channel_id', (guild_id,))
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('SELECT * FROM channel_mute_state WHERE guild_id = %s ORDER BY channel_id', (guild_id,))
+            rows = c.fetchall()
+        finally:
+            conn.close()
         logger.debug(f"list_channel_mutes guild={guild_id} -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
@@ -665,13 +800,15 @@ class Database:
             return
         try:
             conn = self._connect()
-            c = conn.cursor()
-            c.executemany(
-                'INSERT INTO preset_fire_log (preset_id, alert_type) VALUES (%s, %s)',
-                [(int(pid), str(at)) for pid, at in rows],
-            )
-            conn.commit()
-            conn.close()
+            try:
+                c = conn.cursor()
+                c.executemany(
+                    'INSERT INTO preset_fire_log (preset_id, alert_type) VALUES (%s, %s)',
+                    [(int(pid), str(at)) for pid, at in rows],
+                )
+                conn.commit()
+            finally:
+                conn.close()
         except Exception as e:
             logger.warning(f"preset_fire_log insert failed: {e}")
 
@@ -679,10 +816,12 @@ class Database:
         if not USE_POSTGRES:
             return
         conn = self._connect()
-        c = conn.cursor()
-        c.execute("DELETE FROM preset_fire_log WHERE fired_at < NOW() - INTERVAL '1 day' * %s", (days,))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute("DELETE FROM preset_fire_log WHERE fired_at < NOW() - INTERVAL '1 day' * %s", (days,))
+            conn.commit()
+        finally:
+            conn.close()
 
     # ==================== BOT ACTION QUEUE ====================
 
@@ -690,27 +829,33 @@ class Database:
                            requested_by: Optional[str] = None) -> int:
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute(
-            'INSERT INTO pending_bot_actions (action, params, requested_by) '
-            'VALUES (%s, %s::jsonb, %s) RETURNING id',
-            (action, json.dumps(params or {}), requested_by),
-        )
-        row = c.fetchone()
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'INSERT INTO pending_bot_actions (action, params, requested_by) '
+                'VALUES (%s, %s::jsonb, %s) RETURNING id',
+                (action, json.dumps(params or {}), requested_by),
+            )
+            row = c.fetchone()
+            if row is None:
+                raise RuntimeError("enqueue_bot_action: INSERT ... RETURNING id returned no row")
+            conn.commit()
+        finally:
+            conn.close()
         return int(row['id'])
 
     def list_bot_actions(self, limit: int = 20) -> List[Dict[str, Any]]:
         self._require_postgres()
         conn = self._connect()
-        c = conn.cursor()
-        c.execute(
-            'SELECT * FROM pending_bot_actions ORDER BY requested_at DESC LIMIT %s',
-            (int(limit),),
-        )
-        rows = c.fetchall()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT * FROM pending_bot_actions ORDER BY requested_at DESC LIMIT %s',
+                (int(limit),),
+            )
+            rows = c.fetchall()
+        finally:
+            conn.close()
         return [dict(r) for r in rows]
 
     def claim_next_bot_action(self) -> Optional[Dict[str, Any]]:
@@ -761,177 +906,205 @@ class Database:
         if not USE_POSTGRES:
             return
         conn = self._connect()
-        c = conn.cursor()
-        c.execute("DELETE FROM pending_bot_actions WHERE requested_at < NOW() - INTERVAL '1 day' * %s",
-                  (days,))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute("DELETE FROM pending_bot_actions WHERE requested_at < NOW() - INTERVAL '1 day' * %s",
+                      (days,))
+            conn.commit()
+        finally:
+            conn.close()
 
     # ==================== SEEN TRACKING METHODS ====================
     
     def is_alert_seen(self, alert_type: str, alert_id: str) -> bool:
         conn = self._connect()
-        c = conn.cursor()
-        p = self._param(1)
-        c.execute(f'SELECT 1 FROM seen_alerts WHERE alert_type = {p} AND alert_id = {p}', (alert_type, alert_id))
-        result = c.fetchone() is not None
-        conn.close()
+        try:
+            c = conn.cursor()
+            p = self._param(1)
+            c.execute(f'SELECT 1 FROM seen_alerts WHERE alert_type = {p} AND alert_id = {p}', (alert_type, alert_id))
+            result = c.fetchone() is not None
+        finally:
+            conn.close()
         return result
     
     def mark_alert_seen(self, alert_type: str, alert_id: str):
         conn = self._connect()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        if USE_POSTGRES:
-            c.execute('INSERT INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (%s, %s, %s) ON CONFLICT (alert_type, alert_id) DO NOTHING', (alert_type, alert_id, now))
-        else:
-            c.execute('INSERT OR IGNORE INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (?, ?, ?)', (alert_type, alert_id, now))
-        conn.commit()
-        conn.close()
-    
+        try:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            if USE_POSTGRES:
+                c.execute('INSERT INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (%s, %s, %s) ON CONFLICT (alert_type, alert_id) DO NOTHING', (alert_type, alert_id, now))
+            else:
+                c.execute('INSERT OR IGNORE INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (?, ?, ?)', (alert_type, alert_id, now))
+            conn.commit()
+        finally:
+            conn.close()
+
     def filter_unseen_alerts(self, alerts: List[tuple]) -> List[tuple]:
         """Given a list of (alert_type, alert_id) tuples, return only those not yet seen.
         Uses a single DB query instead of one per alert."""
         if not alerts:
             return []
         conn = self._connect()
-        c = conn.cursor()
-        if USE_POSTGRES:
-            # Build a VALUES list for a single query
-            values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in alerts)
-            c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
-        else:
-            placeholders = ','.join(['(?,?)'] * len(alerts))
-            flat = [v for pair in alerts for v in pair]
-            c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
-        seen = {(row[0] if isinstance(row, tuple) else row['alert_type'],
-                 row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall()}
-        conn.close()
+        try:
+            c = conn.cursor()
+            if USE_POSTGRES:
+                # Build a VALUES list for a single query
+                values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in alerts)
+                c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
+            else:
+                placeholders = ','.join(['(?,?)'] * len(alerts))
+                flat = [v for pair in alerts for v in pair]
+                c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
+            seen = {(row[0] if isinstance(row, tuple) else row['alert_type'],
+                     row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall()}
+        finally:
+            conn.close()
         return [(at, ai) for at, ai in alerts if (at, ai) not in seen]
 
     def mark_alerts_seen_batch(self, alerts: List[tuple]):
         if not alerts:
             return
         conn = self._connect()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        data = [(alert_type, alert_id, now) for alert_type, alert_id in alerts]
-        if USE_POSTGRES:
-            c.executemany('INSERT INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (%s, %s, %s) ON CONFLICT (alert_type, alert_id) DO NOTHING', data)
-        else:
-            c.executemany('INSERT OR IGNORE INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (?, ?, ?)', data)
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            data = [(alert_type, alert_id, now) for alert_type, alert_id in alerts]
+            if USE_POSTGRES:
+                c.executemany('INSERT INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (%s, %s, %s) ON CONFLICT (alert_type, alert_id) DO NOTHING', data)
+            else:
+                c.executemany('INSERT OR IGNORE INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (?, ?, ?)', data)
+            conn.commit()
+        finally:
+            conn.close()
         logger.debug(f"Batch marked {len(alerts)} alerts as seen")
     
     def is_pager_seen(self, message_hash: str) -> bool:
         conn = self._connect()
-        c = conn.cursor()
-        p = self._param(1)
-        c.execute(f'SELECT 1 FROM seen_pager WHERE message_hash = {p}', (message_hash,))
-        result = c.fetchone() is not None
-        conn.close()
+        try:
+            c = conn.cursor()
+            p = self._param(1)
+            c.execute(f'SELECT 1 FROM seen_pager WHERE message_hash = {p}', (message_hash,))
+            result = c.fetchone() is not None
+        finally:
+            conn.close()
         return result
     
     def mark_pager_seen(self, message_hash: str):
         conn = self._connect()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        if USE_POSTGRES:
-            c.execute('INSERT INTO seen_pager (message_hash, first_seen) VALUES (%s, %s) ON CONFLICT (message_hash) DO NOTHING', (message_hash, now))
-        else:
-            c.execute('INSERT OR IGNORE INTO seen_pager (message_hash, first_seen) VALUES (?, ?)', (message_hash, now))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            if USE_POSTGRES:
+                c.execute('INSERT INTO seen_pager (message_hash, first_seen) VALUES (%s, %s) ON CONFLICT (message_hash) DO NOTHING', (message_hash, now))
+            else:
+                c.execute('INSERT OR IGNORE INTO seen_pager (message_hash, first_seen) VALUES (?, ?)', (message_hash, now))
+            conn.commit()
+        finally:
+            conn.close()
     
     def mark_pager_seen_batch(self, message_hashes: List[str]):
         if not message_hashes:
             return
         conn = self._connect()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        data = [(h, now) for h in message_hashes]
-        if USE_POSTGRES:
-            c.executemany('INSERT INTO seen_pager (message_hash, first_seen) VALUES (%s, %s) ON CONFLICT (message_hash) DO NOTHING', data)
-        else:
-            c.executemany('INSERT OR IGNORE INTO seen_pager (message_hash, first_seen) VALUES (?, ?)', data)
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            data = [(h, now) for h in message_hashes]
+            if USE_POSTGRES:
+                c.executemany('INSERT INTO seen_pager (message_hash, first_seen) VALUES (%s, %s) ON CONFLICT (message_hash) DO NOTHING', data)
+            else:
+                c.executemany('INSERT OR IGNORE INTO seen_pager (message_hash, first_seen) VALUES (?, ?)', data)
+            conn.commit()
+        finally:
+            conn.close()
         logger.debug(f"Batch marked {len(message_hashes)} pager messages as seen")
     
     def cleanup_old_seen(self, days: int = 7):
         conn = self._connect()
-        c = conn.cursor()
-        cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff_str = cutoff.isoformat()
-        
-        if USE_POSTGRES:
-            c.execute("DELETE FROM seen_alerts WHERE (first_seen::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
-            c.execute("DELETE FROM seen_pager WHERE (first_seen::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
-        else:
-            c.execute("DELETE FROM seen_alerts WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
-            c.execute("DELETE FROM seen_pager WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
-        
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            cutoff_str = cutoff.isoformat()
+
+            if USE_POSTGRES:
+                c.execute("DELETE FROM seen_alerts WHERE (first_seen::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
+                c.execute("DELETE FROM seen_pager WHERE (first_seen::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
+            else:
+                c.execute("DELETE FROM seen_alerts WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
+                c.execute("DELETE FROM seen_pager WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
+
+            conn.commit()
+        finally:
+            conn.close()
         logger.info(f"Cleaned up seen records older than {days} days")
     
     # ==================== INCIDENT MESSAGE TRACKING ====================
     
     def save_incident_message(self, incident_guid: str, channel_id: int, message_url: str, status: str = None):
         conn = self._connect()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        if USE_POSTGRES:
-            c.execute('''
-                INSERT INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (incident_guid, channel_id, status) DO UPDATE SET message_url = EXCLUDED.message_url, created_at = EXCLUDED.created_at
-            ''', (incident_guid, channel_id, message_url, status, now))
-        else:
-            c.execute('''
-                INSERT OR REPLACE INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (incident_guid, channel_id, message_url, status, now))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            if USE_POSTGRES:
+                c.execute('''
+                    INSERT INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (incident_guid, channel_id, status) DO UPDATE SET message_url = EXCLUDED.message_url, created_at = EXCLUDED.created_at
+                ''', (incident_guid, channel_id, message_url, status, now))
+            else:
+                c.execute('''
+                    INSERT OR REPLACE INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (incident_guid, channel_id, message_url, status, now))
+            conn.commit()
+        finally:
+            conn.close()
     
     def get_previous_incident_message(self, incident_guid: str, channel_id: int) -> Optional[Dict[str, Any]]:
         conn = self._connect()
-        c = conn.cursor()
-        p = self._param(1)
-        c.execute(f'''SELECT * FROM incident_messages WHERE incident_guid = {p} AND channel_id = {p} ORDER BY created_at DESC LIMIT 1''', (incident_guid, channel_id))
-        row = c.fetchone()
-        conn.close()
+        try:
+            c = conn.cursor()
+            p = self._param(1)
+            c.execute(f'''SELECT * FROM incident_messages WHERE incident_guid = {p} AND channel_id = {p} ORDER BY created_at DESC LIMIT 1''', (incident_guid, channel_id))
+            row = c.fetchone()
+        finally:
+            conn.close()
         return dict(row) if row else None
     
     def get_first_incident_message(self, incident_guid: str, channel_id: int) -> Optional[Dict[str, Any]]:
         conn = self._connect()
-        c = conn.cursor()
-        p = self._param(1)
-        c.execute(f'''SELECT * FROM incident_messages WHERE incident_guid = {p} AND channel_id = {p} ORDER BY created_at ASC LIMIT 1''', (incident_guid, channel_id))
-        row = c.fetchone()
-        conn.close()
+        try:
+            c = conn.cursor()
+            p = self._param(1)
+            c.execute(f'''SELECT * FROM incident_messages WHERE incident_guid = {p} AND channel_id = {p} ORDER BY created_at ASC LIMIT 1''', (incident_guid, channel_id))
+            row = c.fetchone()
+        finally:
+            conn.close()
         return dict(row) if row else None
     
     def get_incident_message_count(self, incident_guid: str, channel_id: int) -> int:
         conn = self._connect()
-        c = conn.cursor()
-        p = self._param(1)
-        c.execute(f'SELECT COUNT(*) AS n FROM incident_messages WHERE incident_guid = {p} AND channel_id = {p}', (incident_guid, channel_id))
-        row = c.fetchone()
-        count = row['n'] if USE_POSTGRES else row[0]
-        conn.close()
+        try:
+            c = conn.cursor()
+            p = self._param(1)
+            c.execute(f'SELECT COUNT(*) AS n FROM incident_messages WHERE incident_guid = {p} AND channel_id = {p}', (incident_guid, channel_id))
+            row = c.fetchone()
+            count = row['n'] if USE_POSTGRES else row[0]
+        finally:
+            conn.close()
         return count
     
     def cleanup_old_incident_messages(self, days: int = 14):
         conn = self._connect()
-        c = conn.cursor()
-        if USE_POSTGRES:
-            c.execute("DELETE FROM incident_messages WHERE (created_at::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
-        else:
-            cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            cutoff_str = cutoff.isoformat()
-            c.execute("DELETE FROM incident_messages WHERE date(created_at) < date(?, '-' || ? || ' days')", (cutoff_str, days))
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            if USE_POSTGRES:
+                c.execute("DELETE FROM incident_messages WHERE (created_at::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
+            else:
+                cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                cutoff_str = cutoff.isoformat()
+                c.execute("DELETE FROM incident_messages WHERE date(created_at) < date(?, '-' || ? || ' days')", (cutoff_str, days))
+            conn.commit()
+        finally:
+            conn.close()

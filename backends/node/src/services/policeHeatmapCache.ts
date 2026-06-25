@@ -376,6 +376,12 @@ export async function refreshPoliceHeatmapCache(): Promise<{ ok: boolean; bins: 
       );
       return { ok: true, bins, ms };
     } finally {
+      // Reset session state we mutated (statement_timeout=0) and drop the
+      // temp table before handing the connection back to the pool — both
+      // are session-scoped and would otherwise leak onto the next borrower.
+      // Errors here are non-fatal: log and still release.
+      try { await client.query('DROP TABLE IF EXISTS police_heatmap_cache_new'); } catch { /* ignore */ }
+      try { await client.query('RESET statement_timeout'); } catch { /* ignore */ }
       client.release();
     }
   } catch (err) {

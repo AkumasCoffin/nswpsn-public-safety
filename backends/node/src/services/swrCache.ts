@@ -33,11 +33,22 @@ export interface SwrOptions<T> {
   onError?: (err: unknown) => void;
 }
 
+/** Hard cap on stored entries. When exceeded, the oldest-inserted entry
+ *  is evicted (Map preserves insertion order, so .keys().next() is the
+ *  oldest). Bounds memory for callers that key on unbounded inputs
+ *  (per-filter/per-query keys) without changing SWR semantics. */
+const DEFAULT_MAX_ENTRIES = 500;
+
 export class SwrCache<T> {
   private readonly entries = new Map<string, CacheEntry<T>>();
   // Coalesce in-flight refreshes per key — concurrent callers share the
   // promise instead of all hitting the upstream at once.
   private readonly inflight = new Map<string, Promise<T>>();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries: number = DEFAULT_MAX_ENTRIES) {
+    this.maxEntries = Math.max(1, maxEntries);
+  }
 
   /**
    * Return cached value if fresh; otherwise return stale value AND kick off
@@ -87,7 +98,16 @@ export class SwrCache<T> {
     const p = (async () => {
       try {
         const v = await fetcher();
+        // Refresh insertion order so the cap evicts the genuinely
+        // least-recently-written key, then store.
+        this.entries.delete(key);
         this.entries.set(key, { value: v, storedAt: Date.now() });
+        // Bound memory: drop the oldest entry once over the cap.
+        while (this.entries.size > this.maxEntries) {
+          const oldest = this.entries.keys().next().value;
+          if (oldest === undefined) break;
+          this.entries.delete(oldest);
+        }
         return v;
       } catch (err) {
         if (opts.onError) {

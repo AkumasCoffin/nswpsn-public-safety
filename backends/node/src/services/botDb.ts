@@ -61,6 +61,43 @@ export async function getBotDbPool(): Promise<Pool | null> {
   return _pool;
 }
 
+/**
+ * Ensure the preset_audit_log table exists in the bot DB. Idempotent and
+ * memoised — the CREATE runs at most once per process. Records every
+ * dashboard preset create/update/delete (who changed what, when) so an
+ * unexpected change (e.g. an alert type appearing on a "pager only" preset)
+ * is traceable. Created lazily from the backend so it doesn't depend on a
+ * bot redeploy; the bot's apply_schema_presets.py defines the same table.
+ */
+let _auditEnsured: Promise<void> | null = null;
+export async function ensurePresetAuditTable(pool: Pool): Promise<void> {
+  if (_auditEnsured) return _auditEnsured;
+  _auditEnsured = (async () => {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS preset_audit_log (
+        id          BIGSERIAL PRIMARY KEY,
+        preset_id   BIGINT,
+        guild_id    BIGINT NOT NULL,
+        channel_id  BIGINT,
+        preset_name TEXT,
+        action      TEXT NOT NULL,
+        actor_id    BIGINT,
+        actor_name  TEXT,
+        changes     JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_preset_audit_created ON preset_audit_log (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_preset_audit_guild ON preset_audit_log (guild_id, created_at DESC);
+    `);
+  })().catch((err) => {
+    // Reset so a later call can retry after a transient failure.
+    _auditEnsured = null;
+    log.warn({ err }, 'ensurePresetAuditTable failed');
+    throw err;
+  });
+  return _auditEnsured;
+}
+
 /** Close the pool — for graceful shutdown. */
 export async function closeBotDbPool(): Promise<void> {
   if (_pool) {
@@ -68,6 +105,7 @@ export async function closeBotDbPool(): Promise<void> {
     _pool = null;
   }
   _initAttempted = false;
+  _auditEnsured = null;
 }
 
 /**
@@ -77,4 +115,5 @@ export async function closeBotDbPool(): Promise<void> {
 export function _setBotDbPoolForTests(p: Pool | null): void {
   _pool = p;
   _initAttempted = true;
+  _auditEnsured = null;
 }
