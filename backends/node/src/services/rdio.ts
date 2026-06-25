@@ -66,11 +66,20 @@ export async function getRdioPool(): Promise<Pool | null> {
 }
 
 export async function closeRdioPool(): Promise<void> {
-  if (_pool) {
-    await _pool.end();
-    _pool = null;
-  }
+  // If an init is in flight, `_pool` may still be null while a live pool is
+  // being built inside `_poolPromise`. Await it and end the resulting pool so
+  // the in-flight init doesn't leak a connection pool past close.
+  const promise = _poolPromise;
+  _pool = null;
   _poolPromise = null;
+  if (promise) {
+    try {
+      const pool = await promise;
+      await pool.end();
+    } catch {
+      /* init or end failed — nothing left to close */
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
