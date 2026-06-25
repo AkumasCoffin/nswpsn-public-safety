@@ -3848,9 +3848,15 @@ async function patchPreset(presetId, patch) {
       render();
     }
   } catch (e) {
-    // Revert
-    replacePreset(prev);
-    render();
+    // Revert only the keys this patch touched, layered onto the *latest* state
+    // so a concurrent in-flight edit to other fields is not clobbered.
+    const latest = presetById(presetId);
+    if (latest) {
+      const reverted = { ...latest };
+      for (const k of Object.keys(patch)) reverted[k] = prev[k];
+      replacePreset(reverted);
+      render();
+    }
     handleApiError(e, 'Failed to update preset.');
   }
 }
@@ -5095,14 +5101,20 @@ function renderTestCard() {
   }
   guildSel.value = botctl.test.guildId || '';
   guildSel.onchange = async (e) => {
-    botctl.test.guildId = e.target.value;
+    const guildId = e.target.value;
+    botctl.test.guildId = guildId;
     botctl.test.channelId = '';
     botctl.test.channels = [];
-    if (botctl.test.guildId) {
+    if (guildId) {
       try {
-        const chans = await api(`/api/dashboard/guilds/${botctl.test.guildId}/channels`);
+        const chans = await api(`/api/dashboard/guilds/${guildId}/channels`);
+        // Bail if the user switched guilds while this fetch was in flight.
+        if (botctl.test.guildId !== guildId) return;
         botctl.test.channels = chans || [];
-      } catch (_) { botctl.test.channels = []; }
+      } catch (_) {
+        if (botctl.test.guildId !== guildId) return;
+        botctl.test.channels = [];
+      }
     }
     refreshTestChannelSelect();
   };
@@ -5453,7 +5465,14 @@ function renderBcastTargets() {
         sel.appendChild(el('option', { value: c.id }, '#' + (c.name || c.id)));
       }
     }
-    if (t.selected_channel_id) sel.value = String(t.selected_channel_id);
+    // Guard against a stale selected_channel_id that no longer exists in the
+    // available options — the native select would silently keep its first
+    // option while we still submit the stale id. Fall back to the first option.
+    if (t.channels && t.channels.length) {
+      const valid = t.channels.some(c => String(c.id) === String(t.selected_channel_id));
+      if (!valid) t.selected_channel_id = t.channels[0].id;
+      sel.value = String(t.selected_channel_id);
+    }
     sel.onchange = (e) => { t.selected_channel_id = e.target.value; render(); };
 
     const auto = t.detected_channel_id && String(t.detected_channel_id) === String(t.selected_channel_id)
@@ -5486,8 +5505,13 @@ function renderBcastTargets() {
 
 function renderBcastResults(res) {
   const wrap = el('div', { style: 'margin-top:1rem' });
-  wrap.appendChild(el('h3', { class: 'section-head' },
-    `Last run: ${res.sent}/${res.total} delivered`));
+  if (res.queued) {
+    wrap.appendChild(el('h3', { class: 'section-head' },
+      `Queued for ${res.total} channel${res.total === 1 ? '' : 's'} — see Recent bot actions`));
+  } else {
+    wrap.appendChild(el('h3', { class: 'section-head' },
+      `Last run: ${res.sent}/${res.total} delivered`));
+  }
   return wrap;
 }
 

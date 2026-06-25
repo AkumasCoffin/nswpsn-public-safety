@@ -5013,7 +5013,7 @@ function initPagerHoursFromStorage() {
           else if (a.includes('NSWAS')) badgeClass = 'pill-agency-amb';
           else if (a.includes('SES')) badgeClass = 'pill-agency-ses';
           else if (a.includes('POLICE')) badgeClass = 'pill-blue';
-          return `<span class="pill ${badgeClass}" style="font-size:0.65rem;">${ag}</span>`;
+          return `<span class="pill ${badgeClass}" style="font-size:0.65rem;">${escapeHtml(ag)}</span>`;
         }).join('');
         
         const st = item.rawDetails.status || item.rawDetails.STATUS || '';
@@ -7778,6 +7778,7 @@ function initPagerHoursFromStorage() {
           trafficData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
               props.source = 'livetraffic'; // Mark source
               const icon = L.divIcon({
@@ -7810,6 +7811,7 @@ function initPagerHoursFromStorage() {
           wazeData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
               props.source = 'waze'; // Ensure source is set for Waze data
 
@@ -7847,7 +7849,8 @@ function initPagerHoursFromStorage() {
               
               // Convert [lon, lat] to [lat, lon] for Leaflet
               const latLngs = jam.geometry.coordinates.map(coord => [coord[1], coord[0]]);
-              
+              if (!latLngs.length) return;
+
               const polyline = L.polyline(latLngs, {
                 color: color,
                 weight: 5,
@@ -7939,6 +7942,7 @@ function initPagerHoursFromStorage() {
         features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
               const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
               const subtype = (props.wazeSubtype || '').toLowerCase();
@@ -8191,6 +8195,7 @@ function initPagerHoursFromStorage() {
           trafficData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
               const icon = L.divIcon({
                 className: 'custom-pin',
@@ -8222,6 +8227,7 @@ function initPagerHoursFromStorage() {
           wazeData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
               const icon = L.divIcon({
                 className: 'custom-pin',
@@ -8316,6 +8322,7 @@ function initPagerHoursFromStorage() {
           data.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
               const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
               const tooltip = buildTrafficTooltip(props);
@@ -8383,8 +8390,9 @@ function initPagerHoursFromStorage() {
               if (!subtype.includes('FLOOD')) return; // Only flood items
               
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
-              
+
               // Beach-style Waze flood tooltip.
               const floodHeader = _ttHeader(
                 'fa-solid fa-water',
@@ -10418,6 +10426,7 @@ function initPagerHoursFromStorage() {
         trafficRes.features.forEach(feature => {
           if (feature.geometry && feature.geometry.coordinates) {
             const [lon, lat] = feature.geometry.coordinates;
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
             const props = feature.properties || {};
             const icon = L.divIcon({
               className: 'custom-pin',
@@ -10467,8 +10476,9 @@ function initPagerHoursFromStorage() {
         aviationRes.features.forEach(feature => {
           if (feature.geometry && feature.geometry.coordinates) {
             const [lon, lat] = feature.geometry.coordinates;
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
             const props = feature.properties || {};
-            
+
             // Different icon style for airport cameras - cyan/teal color scheme
             const icon = L.divIcon({
               className: 'custom-pin',
@@ -10545,8 +10555,9 @@ function initPagerHoursFromStorage() {
         
         // Create one marker per site
         Object.entries(siteGroups).forEach(([siteId, site]) => {
-          const lat = site.latitude;
-          const lon = site.longitude;
+          const lat = Number(site.latitude);
+          const lon = Number(site.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
           const cameraCount = site.cameras.length;
           
           // Orange/fire color scheme for fire watch tower cameras
@@ -10979,6 +10990,7 @@ function initPagerHoursFromStorage() {
         beachwatchData.features.forEach(feature => {
           if (feature.geometry && feature.geometry.coordinates) {
             const [lon, lat] = feature.geometry.coordinates;
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
             const props = feature.properties || {};
             mergedBeaches.push({
               lat, lon,
@@ -11306,6 +11318,7 @@ function initPagerHoursFromStorage() {
           data.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
               const [lon, lat] = feature.geometry.coordinates;
+              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const p = feature.properties || {};
               
               const windDir = p.windDirection || 0;
@@ -11602,6 +11615,7 @@ function initPagerHoursFromStorage() {
     // ==================== WHAT3WORDS ====================
     let _w3wGridDebounce = null;
     let _w3wGridRequestId = 0; // prevents stale API responses from drawing
+    let _w3wClickRequestId = 0; // prevents out-of-order click responses from drawing
     let _w3wLoadedBounds = null; // last fetched bounds — skip refetch if viewport still inside
     let _w3wLoadedZoom = null;   // zoom level of last fetch
     // Minimum zoom to fetch/draw the grid. Below this a 3m W3W square is only a
@@ -11800,10 +11814,15 @@ function initPagerHoursFromStorage() {
       if (map.getZoom() < W3W_MIN_ZOOM) return;
       
       const { lat, lng } = e.latlng;
-      
+
+      // Track this request so stale/out-of-order responses are discarded
+      const requestId = ++_w3wClickRequestId;
+
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/w3w/convert-to-3wa?coordinates=${lat},${lng}`);
+        if (requestId !== _w3wClickRequestId) return; // stale response — discard
         const data = await res.json();
+        if (requestId !== _w3wClickRequestId) return; // stale response — discard
         if (data.error) return;
         
         if (data.words && data.square) {
