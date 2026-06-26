@@ -87,12 +87,22 @@ export async function runMigrations(): Promise<{
       // Migrations may build large indexes / scan multi-million-row
       // tables. The pool's default 30s statement_timeout from
       // db/pool.ts will kill them. Override here to "unlimited" so the
-      // migration runner doesn't fight its own infrastructure. We set
-      // session-level (not LOCAL) so it covers the noTx path too;
-      // tx-mode SET sticks for the BEGIN/COMMIT span only because the
-      // client is released immediately after.
-      await client.query('SET statement_timeout = 0');
-      if (!noTx) await client.query('BEGIN');
+      // migration runner doesn't fight its own infrastructure.
+      //
+      // CRITICAL: this client comes from a pool and is reused. A plain
+      // session-level `SET statement_timeout = 0` survives release() and
+      // leaks an unlimited timeout onto the next borrower of the
+      // connection. So:
+      //   - tx path: `SET LOCAL` scopes the override to the BEGIN/COMMIT
+      //     span and Postgres resets it automatically at COMMIT/ROLLBACK.
+      //   - noTx path: there's no transaction to scope to, so set it
+      //     session-level but `RESET` it in the finally before release.
+      if (!noTx) {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL statement_timeout = 0');
+      } else {
+        await client.query('SET statement_timeout = 0');
+      }
       await client.query(sql);
       await client.query(
         'INSERT INTO schema_migrations (filename) VALUES ($1)',
@@ -111,6 +121,17 @@ export async function runMigrations(): Promise<{
       log.error({ err, file: f }, 'migration failed');
       throw err;
     } finally {
+      // For the noTx path the session-level SET above survives the
+      // statement, so reset it before the client returns to the pool.
+      // (The tx path's SET LOCAL is already gone via COMMIT/ROLLBACK,
+      // but RESET is a harmless no-op there.)
+      if (noTx) {
+        try {
+          await client.query('RESET statement_timeout');
+        } catch {
+          /* best-effort — the leak fix shouldn't mask the real error */
+        }
+      }
       client.release();
     }
   }

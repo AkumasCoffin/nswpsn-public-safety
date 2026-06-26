@@ -189,7 +189,7 @@
     // focus line as the user scrolls down. This matches the dot positioning
     // (offsetTop / scrollHeight), so the active dot is the one the thumb is
     // currently sitting over.
-    const vh = window.innerHeight;
+    const vh = getViewportHeight();
     const scrollY = getScrollY();
     const focusDocY = scrollY + vh * 0.25; // 25% of viewport from top in document coords
 
