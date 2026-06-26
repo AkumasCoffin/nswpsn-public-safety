@@ -461,10 +461,24 @@
     // that isn't a single-slash-prefixed path (no protocol-relative `//`,
     // no `scheme:` URLs). Falls back to the default when invalid/absent.
     function safeRedirect(value, fallback) {
-      if (typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.includes(':')) {
-        return value;
+      if (typeof value !== 'string' || value === '') {
+        return fallback;
       }
-      return fallback;
+      // Must be a path-only relative target. Reject protocol-relative (`//`,
+      // and `/\` which browsers normalize to `//`) and absolute/scheme URLs.
+      if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\') || value.includes('\\') || value.includes(':')) {
+        return fallback;
+      }
+      // Resolve against the current origin and require it to stay same-origin.
+      try {
+        const resolved = new URL(value, window.location.origin);
+        if (resolved.origin !== window.location.origin) {
+          return fallback;
+        }
+        return resolved.pathname + resolved.search + resolved.hash;
+      } catch (e) {
+        return fallback;
+      }
     }
 
     // Check if user is already logged in

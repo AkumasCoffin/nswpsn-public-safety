@@ -31,10 +31,11 @@ const DEFAULT_INTERVAL_SECS = Number.parseInt(
   process.env['DATA_CLEANUP_INTERVAL_SECS'] ?? '3600',
   10,
 );
-const DEFAULT_RETENTION_DAYS = Number.parseInt(
-  process.env['DATA_RETENTION_DAYS'] ?? '31',
-  10,
-);
+const RETENTION_DAYS_FALLBACK = 31;
+const DEFAULT_RETENTION_DAYS = (() => {
+  const n = Number.parseInt(process.env['DATA_RETENTION_DAYS'] ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : RETENTION_DAYS_FALLBACK;
+})();
 
 const ARCHIVE_TABLES = [
   'archive_waze',
@@ -349,10 +350,16 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       // delete sidecar entries for incidents that are still being
       // seen. last_seen_at is the right "is this still alive" signal.
       try {
+        // Guard against a non-numeric DATA_RETENTION_DAYS (→ NaN), which
+        // would otherwise produce `INTERVAL 'NaN days'`, error every DELETE,
+        // and silently disable the sidecar prune. Parameterise the interval
+        // rather than interpolating, so the value is never spliced into SQL.
+        const pruneDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
         for (const t of ARCHIVE_TABLES) {
           const r = await client.query(
             `DELETE FROM ${t}_latest
-              WHERE last_seen_at < (NOW() - INTERVAL '${retentionDays} days')`,
+              WHERE last_seen_at < (NOW() - ($1 || ' days')::interval)`,
+            [String(pruneDays)],
           );
           if ((r.rowCount ?? 0) > 0) {
             log.info(

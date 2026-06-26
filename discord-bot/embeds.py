@@ -1398,9 +1398,14 @@ class EmbedBuilder:
 
         # FIRMS only gives coordinates — no place name.
         if lat is not None and lon is not None:
-            container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(f"📍 `{float(lat):.4f}, {float(lon):.4f}`")
-            ))
+            try:
+                coord_str = f"{float(lat):.4f}, {float(lon):.4f}"
+            except (TypeError, ValueError):
+                coord_str = None
+            if coord_str:
+                container.add_item(discord.ui.TextDisplay(
+                    content=self._clip_text(f"📍 `{coord_str}`")
+                ))
 
         meta_bits = []
         conf_badges = {'high': '🔴 High', 'nominal': '🟠 Nominal', 'low': '🟡 Low'}
@@ -1653,14 +1658,14 @@ class EmbedBuilder:
         # Jam details first — the most useful info for a traffic jam.
         if is_valid_value(severity):
             meta_bits.append(severity)
-        if isinstance(speed_kmh, (int, float)) and speed_kmh > 0:
+        if isinstance(speed_kmh, (int, float)) and speed_kmh >= 0:
             meta_bits.append(f"🚗 {round(speed_kmh)} km/h")
         _dmin = (delay_mins if isinstance(delay_mins, (int, float)) and delay_mins
                  else round(delay_secs / 60) if isinstance(delay_secs, (int, float)) and delay_secs
                  else None)
         if _dmin:
             meta_bits.append(f"⏱️ +{_dmin} min delay")
-        if isinstance(length_m, (int, float)) and length_m > 0:
+        if isinstance(length_m, (int, float)) and length_m >= 0:
             meta_bits.append(f"📏 {length_m / 1000:.1f} km" if length_m >= 1000
                              else f"📏 {round(length_m)} m")
         if reliability and reliability > 0:

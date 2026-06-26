@@ -90,7 +90,7 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
     background_details: row.background_details,
     has_existing_setup: row.has_existing_setup,
     setup_details: row.setup_details,
-    tech_experience: row.tech_experience,
+    tech_experience: splitCsv(row.tech_experience),
     experience_level: row.experience_level,
     status: row.status,
     created_at: row.created_at,

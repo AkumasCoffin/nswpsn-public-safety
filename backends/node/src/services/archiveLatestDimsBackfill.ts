@@ -36,7 +36,25 @@ const ARCHIVE_TABLES = [
 // other query into statement-timeout 500s. Tunable via env for ops.
 const CHUNK_SIZE = Math.max(100, Number(process.env['ARCHIVE_DIMS_BACKFILL_CHUNK'] ?? '1000') || 1000);
 const PAUSE_BETWEEN_CHUNKS_MS = 750;
-const CHUNK_STATEMENT_TIMEOUT = process.env['ARCHIVE_DIMS_BACKFILL_TIMEOUT'] ?? '20s';
+// Validate the env-supplied timeout up front — it's interpolated raw into a
+// `SET LOCAL statement_timeout` and a malformed value would make every chunk
+// throw on the SET, silently disabling the backfill. Only accept the postgres
+// interval forms we expect (bare ms, or a number with ms/s/min suffix).
+const DEFAULT_CHUNK_STATEMENT_TIMEOUT = '20s';
+function validateStatementTimeout(raw: string | undefined): string {
+  const v = (raw ?? '').trim();
+  if (/^\d+(ms|s|min)?$/.test(v)) return v;
+  if (v) {
+    log.warn(
+      { value: raw, fallback: DEFAULT_CHUNK_STATEMENT_TIMEOUT },
+      'archiveLatestDimsBackfill: invalid ARCHIVE_DIMS_BACKFILL_TIMEOUT, using default',
+    );
+  }
+  return DEFAULT_CHUNK_STATEMENT_TIMEOUT;
+}
+const CHUNK_STATEMENT_TIMEOUT = validateStatementTimeout(
+  process.env['ARCHIVE_DIMS_BACKFILL_TIMEOUT'],
+);
 const CHUNK_LOCK_TIMEOUT = '3s';
 const MAX_LOCK_MISSES = 20; // defer the table to a later run if the live writer stays busy
 const MAX_CHUNK_FAILS = 3; // give up the table this run after repeated timeouts
@@ -125,13 +143,26 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
       // forward.
       const r = await client.query<{ updated: string }>(
         `WITH batch AS (
-           SELECT source, source_id, latest_fetched_at
-           FROM ${table}_latest
-           WHERE category IS NULL OR title IS NULL
+           -- Join the parent here and require at least one NULL the parent
+           -- can actually fill. Selecting purely on the sidecar's NULLs (the
+           -- old behaviour) re-picked rows the UPDATE couldn't change —
+           -- either no parent row at latest_fetched_at, or the parent's
+           -- value is itself NULL/empty — so RETURNING kept counting them,
+           -- "updated" never hit 0, and the for(;;) loop never terminated.
+           -- After an update here the row's category/title go non-null and
+           -- it leaves the predicate; permanently-NULL rows are never picked.
+           SELECT l.source, l.source_id, l.latest_fetched_at
+           FROM ${table}_latest l
+           JOIN ${table} a
+             ON a.source = l.source
+            AND a.source_id = l.source_id
+            AND a.fetched_at = l.latest_fetched_at
+           WHERE (l.category IS NULL AND a.category IS NOT NULL)
+              OR (l.title    IS NULL AND NULLIF(a.data->>'title', '') IS NOT NULL)
            -- Lock sidecar rows in (source, source_id) order to match the
            -- live writer's upsert and the sidecar backfill; without a
            -- shared order, overlapping batches deadlock (SQLSTATE 40P01).
-           ORDER BY source, source_id
+           ORDER BY l.source, l.source_id
            LIMIT $1
          )
          UPDATE ${table}_latest l

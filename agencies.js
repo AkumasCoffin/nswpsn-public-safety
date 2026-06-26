@@ -205,8 +205,12 @@
     if (!q) return escapeHtml(text);
     const tokens = q.split(/\s+/).filter(Boolean);
     if (!tokens.length) return escapeHtml(text);
-    // Build a pattern that matches any of the tokens (case-insensitive)
-    const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    // Match against the HTML-escaped text, so HTML-escape the tokens too before
+    // building the pattern. Otherwise a token like "amp"/"lt"/"#39" could match
+    // inside an injected entity (e.g. "&amp;") and split it with <mark>.
+    const escaped = tokens.map((t) =>
+      escapeHtml(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    );
     const re = new RegExp(`(${escaped.join("|")})`, "ig");
     return escapeHtml(text).replace(re, "<mark>$1</mark>");
   }

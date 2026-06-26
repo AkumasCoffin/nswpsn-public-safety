@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.24
+// @version      1.25
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -23,36 +23,113 @@
     const BACKEND_URL = 'https://api.forcequit.xyz/api/waze/ingest';
     const INGEST_KEY  = 'REPLACE_WITH_YOUR_WAZE_INGEST_KEY';
 
-    // Regions rotated through. v1.21: switched from a dense ~190-tile
-    // zoom-14 grid (street level, ~1-2 km per tile) to a sparse 6-tile
-    // zoom-8 grid (~100-150 km per tile) so the script does one full
-    // NSW pass in 6 snapshots instead of 190. Trades fine-grained
-    // detail in low-density areas for far less browser activity, fewer
-    // pan operations, and dramatically lower risk of Waze 403'ing the
-    // georss endpoint for over-querying. The trade-off works because
-    // Waze's georss endpoint returns up to ~200 alerts per viewport
-    // and most regional NSW tiles have well under that.
+    // Regions rotated through. v1.25: expanded to a ~94-point NSW grid —
+    // four zoom-13 "Wide Zone" catch-alls plus ~90 zoom-14 street-level
+    // tiles over the populated corridors (Sydney, Illawarra/South Coast,
+    // Hunter, Mid/North Coast, Riverina, Canberra region, Central West).
+    // The region index is persisted in localStorage and 403/429 blocks
+    // now pause-and-continue (see noteWazeBlock) rather than reloading, so
+    // a long list completes across blocks. One full sweep is ~5-12 min
+    // depending on how fast georss returns per tile.
     //
-    // The six tiles are placed to cover the populated parts of NSW:
-    //   1. Sydney metro + Central Coast + Blue Mountains
-    //   2. Hunter / Newcastle / Mid North Coast
-    //   3. Northern Rivers / Far North Coast
-    //   4. Illawarra / South Coast / Far South
-    //   5. Central West / Western Plains (Bathurst, Dubbo, Orange)
-    //   6. Riverina / South West (Wagga, Albury, Griffith)
-    // Far-west / outback (Broken Hill, Tibooburra) is intentionally
-    // not covered — minimal traffic, high cost-per-alert.
+    // NOTE: a few entries are still labelled "Riverina / South West" but
+    // sit near Sydney/Illawarra — the coordinates are authoritative, the
+    // names are cosmetic.
     const REGIONS = [
-        // 6-tile NSW pass at zoom 8. Each tile's viewport is ~100-150 km
-        // wide. Centres are placed so the union of all six covers the
-        // NSW coastal corridor, Hunter, Riverina and Central West —
-        // i.e. everywhere with non-trivial traffic.
-        { name: 'Sydney + Blue Mountains',     lat: -33.700, lon: 150.800, zoom: 8 },
-        { name: 'Hunter / Mid North Coast',    lat: -32.000, lon: 152.200, zoom: 8 },
-        { name: 'Northern Rivers',             lat: -29.500, lon: 152.800, zoom: 8 },
-        { name: 'Illawarra / South Coast',     lat: -35.300, lon: 150.300, zoom: 8 },
-        { name: 'Central West Plains',         lat: -33.000, lon: 148.300, zoom: 8 },
-        { name: 'Riverina / South West',       lat: -35.300, lon: 146.500, zoom: 8 },
+        { name: 'Wide Zone 1', lat: -36.778458, lon: 149.950325, zoom: 13 },
+        { name: 'Wide Zone 2', lat: -35.639371, lon: 149.883138, zoom: 13 },
+        { name: 'Wide Zone 3', lat: -30.059437, lon: 152.449813, zoom: 13 },
+        { name: 'Wide Zone 4', lat: -34.015957, lon: 146.195516, zoom: 13 },
+        { name: 'Sydney + Blue Mountains', lat: -33.700, lon: 150.800, zoom: 14 },
+        { name: 'Northen Sydney', lat: -33.833, lon: 151.207, zoom: 14 },
+        { name: 'Sydney CBD', lat: -33.897, lon: 151.213, zoom: 14 },
+        { name: 'Sydney South', lat: -34.032, lon: 151.101, zoom: 14 },
+        { name: 'Hunter / Mid North Coast', lat: -32.000, lon: 152.200, zoom: 14 },
+        { name: 'Northern Rivers', lat: -29.500, lon: 152.800, zoom: 14 },
+        { name: 'Illawarra / South Coast', lat: -35.300, lon: 150.300, zoom: 14 },
+        { name: 'Central West Plains', lat: -33.000, lon: 148.300, zoom: 14 },
+        { name: 'Riverina / South West', lat: -35.300, lon: 146.500, zoom: 14 },
+        { name: 'nowra', lat: -34.889, lon: 150.606, zoom: 14 },
+        { name: 'falls creek', lat: -35.154, lon: 150.575, zoom: 14 },
+        { name: 'gong north', lat: -34.317, lon: 150.924, zoom: 14 },
+        { name: 'Riverina / South West', lat: -34.551, lon: 150.814, zoom: 14 },
+        { name: 'Riverina / South West', lat: -33.779, lon: 150.911, zoom: 14 },
+        { name: 'Penrith / Cranebrook', lat: -33.766572, lon: 150.802924, zoom: 14 },
+        { name: 'Prospect / Pemulwuy', lat: -33.801956, lon: 151.027964, zoom: 14 },
+        { name: 'Lane Cove / Chatswood', lat: -33.833902, lon: 151.254376, zoom: 14 },
+        { name: 'Wallacia / Silverdale', lat: -33.939924, lon: 150.723396, zoom: 14 },
+        { name: 'Bankstown / Padstow', lat: -33.966124, lon: 150.951181, zoom: 14 },
+        { name: 'Sutherland / Menai', lat: -33.996871, lon: 151.114472, zoom: 14 },
+        { name: 'Camden / Mount Hunter', lat: -34.167482, lon: 150.765934, zoom: 14 },
+        { name: 'Picton / Wilton', lat: -34.371761, lon: 150.901745, zoom: 14 },
+        { name: 'Cataract / Appin', lat: -34.516723, lon: 150.837252, zoom: 14 },
+        { name: 'Dapto / Avondale', lat: -34.674988, lon: 150.855091, zoom: 14 },
+        { name: 'Kangaroo Valley', lat: -34.867896, lon: 150.602194, zoom: 14 },
+        { name: 'Berry / Bomaderry', lat: -35.024356, lon: 150.673724, zoom: 14 },
+        { name: 'Canberra North / Belconnen', lat: -35.209152, lon: 149.115020, zoom: 14 },
+        { name: 'Canberra Central', lat: -35.321840, lon: 149.123253, zoom: 14 },
+        { name: 'Canberra / Woden', lat: -35.403035, lon: 149.119823, zoom: 14 },
+        { name: 'Canberra / Fyshwick', lat: -35.380084, lon: 149.226042, zoom: 14 },
+        { name: 'Batemans Bay', lat: -35.703581, lon: 150.187950, zoom: 14 },
+        { name: 'Nerriga / Endrick', lat: -35.340326, lon: 150.417245, zoom: 14 },
+        { name: 'Lake Macquarie / Morisset', lat: -33.098427, lon: 151.581014, zoom: 14 },
+        { name: 'Newcastle / Lake Macquarie', lat: -32.914162, lon: 151.729211, zoom: 14 },
+        { name: 'Port Stephens / Nelson Bay', lat: -32.738754, lon: 152.113872, zoom: 14 },
+        { name: 'Port Macquarie', lat: -31.450907, lon: 152.894893, zoom: 14 },
+        { name: 'Jerilderie', lat: -35.362159, lon: 145.725113, zoom: 14 },
+        { name: 'Wagga Wagga', lat: -35.389015, lon: 146.383053, zoom: 14 },
+        { name: 'Swan Hill / Tooleybuc', lat: -34.962427, lon: 143.483915, zoom: 14 },
+        { name: 'Mildura / Merbein', lat: -35.229898, lon: 141.248196, zoom: 14 },
+        { name: 'Narooma / Tilba', lat: -36.223218, lon: 150.128371, zoom: 14 },
+        { name: 'Cann River / Bombala', lat: -37.313366, lon: 149.932245, zoom: 14 },
+        { name: 'Eden / Pambula', lat: -36.986083, lon: 149.777034, zoom: 14 },
+        { name: 'Merimbula / Tathra', lat: -36.678315, lon: 149.949950, zoom: 14 },
+        { name: 'Jindabyne / Berridale', lat: -36.146677, lon: 148.065160, zoom: 14 },
+        { name: 'Albury / Wodonga', lat: -36.047971, lon: 146.951954, zoom: 14 },
+        { name: 'Lockhart / The Rock', lat: -35.382297, lon: 146.160268, zoom: 14 },
+        { name: 'Yamba / Maclean', lat: -29.056095, lon: 153.413975, zoom: 14 },
+        { name: 'Broken Hill', lat: -30.087959, lon: 142.771761, zoom: 14 },
+        { name: 'Bourke / Brewarrina', lat: -29.783300, lon: 145.692195, zoom: 14 },
+        { name: 'Moree', lat: -29.916703, lon: 150.151179, zoom: 14 },
+        { name: 'Tamworth / Gunnedah', lat: -31.146712, lon: 150.302402, zoom: 14 },
+        { name: 'Coonabarabran / Gilgandra', lat: -31.071462, lon: 148.809455, zoom: 14 },
+        { name: 'Nyngan / Cobar', lat: -30.836067, lon: 146.070713, zoom: 14 },
+        { name: 'Central Coast / Gosford', lat: -33.387844, lon: 151.456784, zoom: 14 },
+        { name: 'Dapto / Albion Park', lat: -34.673309, lon: 150.849426, zoom: 14 },
+        { name: 'Forster / Tuncurry', lat: -32.435577, lon: 152.144535, zoom: 14 },
+        { name: 'Wagga Wagga East', lat: -35.134492, lon: 147.677250, zoom: 14 },
+        { name: 'Coolamon / Ganmain', lat: -35.096312, lon: 147.364209, zoom: 14 },
+        { name: 'Junee / Marrar', lat: -35.185590, lon: 147.356662, zoom: 14 },
+        { name: 'Griffith', lat: -34.746682, lon: 146.559805, zoom: 14 },
+        { name: 'Leeton / Yanco', lat: -34.741039, lon: 146.779363, zoom: 14 },
+        { name: 'Muswellbrook / Denman', lat: -32.335875, lon: 150.850695, zoom: 14 },
+        { name: 'Singleton', lat: -32.463996, lon: 151.035395, zoom: 14 },
+        { name: 'Branxton / Greta', lat: -32.600617, lon: 151.060780, zoom: 14 },
+        { name: 'Cessnock / Kurri Kurri', lat: -32.709880, lon: 151.101269, zoom: 14 },
+        { name: 'Maitland', lat: -32.826483, lon: 151.339017, zoom: 14 },
+        { name: 'Raymond Terrace', lat: -32.787238, lon: 151.575034, zoom: 14 },
+        { name: 'Coffs Harbour', lat: -30.075018, lon: 153.188499, zoom: 14 },
+        { name: 'Coffs Harbour South', lat: -30.219897, lon: 153.146965, zoom: 14 },
+        { name: 'Sawtell / Bonville', lat: -30.324267, lon: 153.119521, zoom: 14 },
+        { name: 'Urunga / Mylestom', lat: -30.484147, lon: 153.029340, zoom: 14 },
+        { name: 'Nambucca Heads', lat: -30.616041, lon: 152.971131, zoom: 14 },
+        { name: 'Cobar / Nyngan West', lat: -30.599798, lon: 145.009396, zoom: 14 },
+        { name: 'Lightning Ridge / Walgett', lat: -29.151861, lon: 148.695047, zoom: 14 },
+        { name: 'Walgett / Come By Chance', lat: -30.149803, lon: 148.663142, zoom: 14 },
+        { name: 'Narrabri / Wee Waa', lat: -30.116473, lon: 150.261235, zoom: 14 },
+        { name: 'Goondiwindi / Boggabilla', lat: -28.439563, lon: 150.568606, zoom: 14 },
+        { name: 'Narrandera / Grong Grong', lat: -34.292954, lon: 146.055804, zoom: 14 },
+        { name: 'Narrandera East', lat: -34.211767, lon: 146.713946, zoom: 14 },
+        { name: 'Junee South', lat: -35.173804, lon: 147.359512, zoom: 14 },
+        { name: 'Coolamon South', lat: -35.096874, lon: 147.365344, zoom: 14 },
+        { name: 'Wagga / Lake Albert', lat: -35.124678, lon: 147.279239, zoom: 14 },
+        { name: 'Wagga / Gumly Gumly', lat: -35.148262, lon: 147.458996, zoom: 14 },
+        { name: 'Goulburn West', lat: -34.774891, lon: 149.687394, zoom: 14 },
+        { name: 'Goulburn', lat: -34.722140, lon: 149.745713, zoom: 14 },
+        { name: 'Tarago / Lake Bathurst', lat: -34.710430, lon: 149.996833, zoom: 14 },
+        { name: 'Bungonia / Marulan', lat: -34.709019, lon: 150.096852, zoom: 14 },
+        { name: 'Nowra / Bomaderry', lat: -34.847901, lon: 150.604764, zoom: 14 },
+        { name: 'Ulladulla / Milton', lat: -35.257670, lon: 150.513800, zoom: 14 },
     ];
     // After panning, wait up to this long for Waze to fire georss for the
     // new viewport. As soon as a georss response arrives we accelerate the
@@ -79,10 +156,10 @@
     // backend warns "Waze ingest stale: no POST in 15m" when this happens.
     // Reloading restarts the SPA, the WebSocket, and our hooks. Cheap.
     // Absolute backstop reload. Must be MORE than 2× full-rotation time
-    // (190 regions × 5s ≈ 16 min). Reloading sooner means a region visited
-    // just before the reload may not get re-visited within the backend's
-    // WAZE_INGEST_MAX_AGE window, so its pins get pruned and the map
-    // shows fewer markers. The 4-min stuck-watchdog still catches real
+    // (~94 regions × ~3-7s ≈ 5-12 min). Reloading sooner means a region
+    // visited just before the reload may not get re-visited within the
+    // backend's WAZE_INGEST_MAX_AGE window, so its pins get pruned and the
+    // map shows fewer markers. The 4-min stuck-watchdog still catches real
     // hangs — this timer only exists for slow drift the watchdog misses.
     const RELOAD_INTERVAL_MS     = 30 * 60 * 1000;
     // Watchdog: if no successful ingest in this long, force a reload
@@ -144,7 +221,18 @@
     const LS_BLOCK_COUNT = 'nswpsn_waze_block_count';
     const COOLDOWN_BASE_MS = 5 * 60 * 1000;   // 5 min for first 403 past threshold
     const COOLDOWN_MAX_MS  = 30 * 60 * 1000;  // cap at 30 min after repeats
-    const RELOAD_BACKOFF_THRESHOLD = 3;       // try 3 reloads before falling back to wait
+    const RELOAD_BACKOFF_THRESHOLD = 3;       // reload attempts before long backoff
+    // Block handling is tiered so a long region list still completes across
+    // 403/429s. The old code full-reloaded on EVERY block, and the 15s
+    // warm-up per reload meant a big list never finished a single sweep:
+    //   tier 1 (≤ SOFT_BLOCK_LIMIT):  short in-place cooldown, NO reload —
+    //          the rotation loop pauses then resumes from the same index.
+    //   tier 2 (next RELOAD_BACKOFF_THRESHOLD): clear cookies + reload once
+    //          for a fresh waze.com session.
+    //   tier 3: long exponential backoff, no reload (IP likely throttled).
+    const SOFT_BLOCK_LIMIT        = 4;
+    const SOFT_COOLDOWN_MS        = 60_000;   // pause on a soft block, then resume
+    const SOFT_COOLDOWN_JITTER_MS = 30_000;
 
     function loadCooldown() {
         try {
@@ -189,19 +277,10 @@
         return null;
     }
 
-    // Force-reload after a small delay so the log line lands and any
-    // in-flight requests have a chance to settle. Bypassed cache
-    // (location.reload(true)) where supported.
-    function forceReload(reason) {
-        log(`reloading: ${reason}`);
-        setTimeout(() => {
-            try { pageWin.location.reload(true); }
-            catch (e) {
-                try { pageWin.location.href = pageWin.location.href; }
-                catch (e2) { try { window.location.reload(); } catch (e3) {} }
-            }
-        }, 1500);
-    }
+    // forceReload() is defined once, lower in this file (the robust
+    // multi-fallback version guarded by _reloadInProgress). A duplicate
+    // definition used to live here and shadowed that one as dead code —
+    // removed to avoid confusion about which reload path actually runs.
 
     // Best-effort: enumerate every waze.com cookie and delete them all.
     // Calls cb() once when done (or after a 3s safety timeout if the
@@ -271,29 +350,40 @@
         const { count: prevCount } = loadCooldown();
         const newCount = prevCount + 1;
 
-        // Past the reload threshold — IP is probably banned, fall back
-        // to the old wait-it-out behaviour with exponential backoff.
-        if (newCount > RELOAD_BACKOFF_THRESHOLD) {
-            const delay = Math.min(
-                COOLDOWN_BASE_MS * Math.pow(2, newCount - RELOAD_BACKOFF_THRESHOLD - 1),
-                COOLDOWN_MAX_MS,
-            );
+        // Tier 1 — soft block: short in-place cooldown and KEEP rotating.
+        // scheduleNextPan() honours the cooldown (skips panning) and then
+        // resumes from the persisted region index, so the list keeps
+        // advancing across blocks instead of restarting on every 403. A
+        // clean ingest resets the counter, so this only escalates on a
+        // genuine sustained block, not on isolated 403s.
+        if (newCount <= SOFT_BLOCK_LIMIT) {
+            const delay = SOFT_COOLDOWN_MS + Math.floor(Math.random() * SOFT_COOLDOWN_JITTER_MS);
             saveCooldown(Date.now() + delay, newCount);
-            log(`Waze ${status} #${newCount} — past reload threshold, waiting ${Math.round(delay / 60000)}m`);
+            log(`Waze ${status} #${newCount} — soft cooldown ${Math.round(delay / 1000)}s, continuing rotation (no reload)`);
             return;
         }
 
-        // Within reload budget — clear cookies and reload. The next
-        // page load comes up with a fresh waze.com session.
-        // LS_BLOCK_COUNT persists across reload so we still know how
-        // many we've done; LS_BLOCK_UNTIL is set to a tiny window so
-        // startRotation has a 5s breather to let the new session
-        // bootstrap before we start panning again.
-        saveCooldown(Date.now() + 5_000, newCount);
-        log(`Waze ${status} #${newCount} — clearing cookies + reloading (budget ${RELOAD_BACKOFF_THRESHOLD - newCount + 1} left)`);
-        clearWazeCookies((ok) => {
-            forceReload(ok ? `${status} (cookies cleared)` : `${status} (cookie clear failed)`);
-        });
+        // Tier 2 — sustained blocking: the waze.com session looks stale.
+        // Clear cookies + reload ONCE for a fresh session, bounded by the
+        // reload budget. LS_BLOCK_COUNT persists across the reload so we
+        // keep counting; LS_BLOCK_UNTIL gets a tiny 5s window so
+        // startRotation has a breather before the first post-reload pan.
+        if (newCount <= SOFT_BLOCK_LIMIT + RELOAD_BACKOFF_THRESHOLD) {
+            saveCooldown(Date.now() + 5_000, newCount);
+            log(`Waze ${status} #${newCount} — clearing cookies + reloading (fresh session)`);
+            clearWazeCookies((ok) => {
+                forceReload(ok ? `${status} (cookies cleared)` : `${status} (cookie clear failed)`);
+            });
+            return;
+        }
+
+        // Tier 3 — still blocked after the reload attempts: the IP is
+        // probably throttled, so reloading just earns more 403s. Long
+        // exponential backoff (no reload), capped at COOLDOWN_MAX_MS.
+        const over = newCount - SOFT_BLOCK_LIMIT - RELOAD_BACKOFF_THRESHOLD - 1;
+        const delay = Math.min(COOLDOWN_BASE_MS * Math.pow(2, Math.max(0, over)), COOLDOWN_MAX_MS);
+        saveCooldown(Date.now() + delay, newCount);
+        log(`Waze ${status} #${newCount} — extended backoff ${Math.round(delay / 60000)}m`);
     }
 
     function forward(payload) {
@@ -684,7 +774,7 @@
             // Skip the pan during cooldown — every request just earns
             // another 403 and resets the cookie clock.
             if (isInCooldown()) {
-                log(`cooldown active, skipping pan (${Math.round((_wazeBlockedUntil - Date.now()) / 60000)}m left)`);
+                log(`cooldown active, skipping pan (${Math.round(cooldownRemainingMs() / 60000)}m left)`);
                 scheduleNextPan();
                 return;
             }
@@ -819,7 +909,7 @@
     {
         const _cd = loadCooldown();
         const _remMin = Math.round(Math.max(0, _cd.until - Date.now()) / 60000);
-        log('NSWPSN Waze Forwarder v1.20 loaded — backend:', BACKEND_URL,
+        log('NSWPSN Waze Forwarder v1.25 loaded — backend:', BACKEND_URL,
             `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
             `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
             `· watchdog ${STUCK_RELOAD_AFTER_MS / 60000}m`,
