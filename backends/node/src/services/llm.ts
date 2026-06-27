@@ -35,6 +35,7 @@ import {
   ensureSpellcheckerLoaded,
   spellcheckTranscript,
 } from './rdioSpell.js';
+import { classifyTranscript, type JunkReason } from './rdioQuality.js';
 
 const LLM_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -272,6 +273,12 @@ export async function formatRdioPrompt(
   await ensureUnitLabelsLoaded();
   await ensureSpellcheckerLoaded();
   let totalSpellChanges = 0;
+  // Junk-transcript drops, tallied by reason for the summary log line.
+  const droppedJunk: Record<JunkReason, number> = {
+    url: 0,
+    garbled: 0,
+    non_english: 0,
+  };
   type GroupKey = string;
   const groups = new Map<
     GroupKey,
@@ -308,6 +315,16 @@ export async function formatRdioPrompt(
     }
     const rawText = extractTranscriptText(row.transcript);
     if (!rawText) continue;
+    // Drop Whisper hallucinations before they reach the spell-checker or
+    // Gemini: URLs / bare domains (subtitle-credit artefacts), garbled or
+    // looping output, and non-English (non-Latin script) lines. These
+    // carry no operational content and only inflate the prompt / mislead
+    // the model. See services/rdioQuality.ts for the (conservative) gates.
+    const junk = classifyTranscript(rawText);
+    if (junk) {
+      droppedJunk[junk] += 1;
+      continue;
+    }
     // Conservative spell-check (en-AU + rdio_units.csv label corpus +
     // rdio_lexicon.txt). Both the LLM input and the displayed
     // transcript see the same corrected string so we don't store one
@@ -366,6 +383,21 @@ export async function formatRdioPrompt(
     log.info(
       { corrections: totalSpellChanges, calls: calls.length },
       'rdio spell: hourly summary',
+    );
+  }
+
+  const totalJunk =
+    droppedJunk.url + droppedJunk.garbled + droppedJunk.non_english;
+  if (totalJunk > 0) {
+    log.info(
+      {
+        total: totalJunk,
+        url: droppedJunk.url,
+        garbled: droppedJunk.garbled,
+        non_english: droppedJunk.non_english,
+        calls: calls.length,
+      },
+      'rdio quality: dropped junk transcripts',
     );
   }
 
