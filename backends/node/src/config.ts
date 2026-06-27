@@ -139,6 +139,9 @@ const Schema = z.object({
   // Gemini API key for /api/summaries/trigger and the optional hourly
   // scheduler. Mirrors python's GEMINI_API_KEY. When unset, the
   // trigger endpoint returns 503 and the scheduler refuses to start.
+  // May be a single key or a comma-separated list ("keyA,keyB,keyC") —
+  // the LLM client rotates through them and rolls over to the next key
+  // on a 429/RESOURCE_EXHAUSTED to ride out per-key rate limits.
   GEMINI_API_KEY: z.string().optional(),
 
   // Gemini model id. Default matches python's _LLM_DEFAULT_MODEL.
