@@ -913,11 +913,17 @@ class EmbedBuilder:
         units = []
         for u in units_raw:
             if isinstance(u, str):
-                units.append(u)
+                label = u
             elif isinstance(u, dict):
-                uid = u.get('id') or u.get('callsign')
-                if uid:
-                    units.append(uid)
+                label = u.get('id') or u.get('callsign')
+            else:
+                label = None
+            if not label:
+                continue
+            # Drop bare "UID:<n>" tokens (unresolved unit ids) — noise.
+            if str(label).strip().upper().startswith('UID:'):
+                continue
+            units.append(str(label))
         if units:
             meta_parts.append(f"Units: {', '.join(units)}")
         if meta_parts:
