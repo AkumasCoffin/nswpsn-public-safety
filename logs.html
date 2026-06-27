@@ -4587,13 +4587,14 @@
         const vehicles = Array.isArray(inc.vehicles) && inc.vehicles.length ? inc.vehicles.map(v => esc(v)).join(', ') : '';
         // Units can arrive as: string (current rebuilder + legacy Gemini),
         // {label, uid} (transient bug from the rebuilder rollout), or
-        // {id, ...} (deep-legacy dict shape). Prefer label > id > '?'.
+        // {id, ...} (deep-legacy dict shape). Prefer label > id. Drop bare
+        // "UID:<n>" tokens (unresolved unit ids) — they're noise, not useful.
         const unitList = Array.isArray(inc.units) && inc.units.length
-          ? inc.units.map(u => esc(
-              typeof u === 'string'
-                ? u
-                : ((u && (u.label || u.id)) || '?')
-            )).join(', ')
+          ? inc.units
+              .map(u => (typeof u === 'string' ? u : ((u && (u.label || u.id)) || '')))
+              .filter(u => u && !String(u).trim().toUpperCase().startsWith('UID:'))
+              .map(u => esc(u))
+              .join(', ')
           : '';
         // Window: new schema is window.{start,end}; legacy used first_heard/last_heard.
         const winStart = (inc.window && inc.window.start) || inc.first_heard || '';

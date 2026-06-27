@@ -519,20 +519,19 @@ export function rebuildIncidents(
       obj['transcripts_truncated'] = true;
       obj['transcripts_total'] = valid.length;
     }
-    // Build units[] as a deduped string array — the friendly label
-    // from rdio_units.csv when known, "UID:<n>" otherwise. live.html /
-    // logs.html both render units via
-    //   typeof u === 'string' ? u : (u.id || u.label || '?')
-    // so a string array drops straight in. An earlier draft of this
-    // function emitted {uid,label} objects, which both frontends
-    // rendered as "?".
+    // Build units[] as a deduped string array of friendly labels from
+    // rdio_units.csv. Units with no known label are SKIPPED — bare
+    // "UID:<n>" tokens are noise to readers and cluttered the Units line
+    // in live.html / logs.html / the Discord embed. live.html / logs.html
+    // render units via `typeof u === 'string' ? u : (u.label || u.id)`,
+    // so a string array drops straight in.
     const unitSeen = new Set<number>();
     const unitList: string[] = [];
     for (const id of valid) {
       const row = inputMap.get(id)!;
       if (row.uid === null || unitSeen.has(row.uid)) continue;
       unitSeen.add(row.uid);
-      unitList.push(row.unit_label ?? `UID:${row.uid}`);
+      if (row.unit_label) unitList.push(row.unit_label);
     }
     obj['units'] = unitList;
     out.push(obj);
