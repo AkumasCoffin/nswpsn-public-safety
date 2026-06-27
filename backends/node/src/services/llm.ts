@@ -1774,14 +1774,15 @@ export function startRdioSummaryScheduler(): void {
   arm(wait);
   const nextIso = new Date(Date.now() + wait).toISOString();
   log.info({ next_fire: nextIso, wait_ms: wait }, 'rdio summary scheduler started');
-  // Boot-time catchup is intentionally disabled. Every restart was
-  // calling Gemini to backfill the previous hour, which (a) burned
-  // boot CPU + Gemini quota every time pm2 cycled, and (b) ran the
-  // pre-LLM dedup pass at boot regardless of whether the row
-  // already existed. The scheduler's HH:55 fire is now the only
-  // path that talks to Gemini — missed hours stay missed. Set
-  // NODE_RDIO_CATCHUP=true to re-enable.
-  if (process.env['NODE_RDIO_CATCHUP'] === 'true') {
+  // Boot-time catch-up: if the previous completed hour has no summary row
+  // (e.g. the process was down at its HH:55 fire), generate one now so
+  // /api/summaries/latest never shows a gap — including a "no traffic"
+  // stub for an empty hour. This is idempotent: runRdioSummaryCatchup
+  // checks for an existing row FIRST and only calls Gemini when the row is
+  // genuinely missing, so a normal restart (row already present) costs
+  // nothing. Multi-key rollover keeps a backfill from burning a single
+  // key's quota. Set NODE_RDIO_CATCHUP=false to disable.
+  if (process.env['NODE_RDIO_CATCHUP'] !== 'false') {
     void runRdioSummaryCatchup();
   }
 }
