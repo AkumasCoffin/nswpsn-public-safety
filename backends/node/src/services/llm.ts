@@ -563,6 +563,22 @@ interface ChatResponse {
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+// Gemini API keys. GEMINI_API_KEY may be a single key or a comma-separated
+// list ("keyA,keyB,keyC") to spread load and survive per-key rate limits.
+// We rotate through them and, on a 429/RESOURCE_EXHAUSTED, roll over to the
+// next key immediately (no backoff). `_geminiKeyIdx` persists across calls
+// so we keep using the last good key instead of always hammering key #1.
+let _geminiKeys: string[] | null = null;
+let _geminiKeyIdx = 0;
+function getGeminiKeys(): string[] {
+  if (_geminiKeys) return _geminiKeys;
+  _geminiKeys = (config.GEMINI_API_KEY ?? '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0);
+  return _geminiKeys;
+}
+
 // Compress a Gemini error response body into one short line. The full
 // JSON is hundreds of characters of help URLs + nested quota details that
 // drown the log. We pluck the bits operators actually care about:
@@ -630,8 +646,8 @@ export async function callLlm(opts: {
   maxTokens?: number;
   maxAttempts?: number;
 }): Promise<string> {
-  const apiKey = config.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  const keys = getGeminiKeys();
+  if (keys.length === 0) throw new Error('GEMINI_API_KEY not set');
   const maxAttempts = opts.maxAttempts ?? 4;
   const payload: Record<string, unknown> = {
     model: opts.model,
@@ -652,67 +668,108 @@ export async function callLlm(opts: {
   let lastErr: Error | null = null;
   let lastStatus: number | null = null;
   let lastBody = '';
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 10 * 60_000); // 10 min hard cap
-    try {
-      const res = await fetch(LLM_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
+  // Each "round" is one backoff cycle. Within a round we try every API key
+  // in rotation; a 429 on one key rolls over to the next IMMEDIATELY (no
+  // wait), so a single quota-exhausted key never stalls the call. Only when
+  // every key is rate-limited — or we hit a 5xx/network error — do we back
+  // off and start the next round.
+  for (let round = 0; round < maxAttempts; round++) {
+    let keysRateLimited = 0;
+    let retryAfterMs = 0;
+    let sawTransient = false;
+
+    while (keysRateLimited < keys.length) {
+      const apiKey = keys[_geminiKeyIdx % keys.length]!;
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 10 * 60_000); // 10 min hard cap
+      try {
+        const res = await fetch(LLM_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: ac.signal,
+        });
+        lastStatus = res.status;
+        if (res.ok) {
+          const data = (await res.json()) as ChatResponse;
+          const choice = data.choices?.[0];
+          if (!choice) throw new Error('Gemini response had no choices');
+          const finish = choice.finish_reason ?? choice.native_finish_reason ?? '';
+          if (finish && !['stop', 'STOP'].includes(finish)) {
+            log.warn({ finish }, 'LLM finish_reason non-stop (output may be truncated)');
+          }
+          return (choice.message.content ?? '').trim();
+        }
+        lastBody = (await res.text()).slice(0, 1000);
+        if (res.status === 429) {
+          // This key is rate-limited — roll over to the next key and retry
+          // immediately within the same round (no backoff).
+          retryAfterMs = Number(res.headers.get('Retry-After') ?? '0') * 1000;
+          keysRateLimited += 1;
+          const prevIdx = _geminiKeyIdx % keys.length;
+          _geminiKeyIdx = (_geminiKeyIdx + 1) % keys.length;
+          if (keys.length > 1 && keysRateLimited < keys.length) {
+            log.warn(
+              { keyIndex: prevIdx, nextKeyIndex: _geminiKeyIdx, totalKeys: keys.length },
+              'Gemini key rate-limited, rolling to next key',
+            );
+            continue; // try the next key right away
+          }
+          break; // every key is rate-limited this round → back off below
+        }
+        if (TRANSIENT_STATUSES.has(res.status)) {
+          sawTransient = true;
+          break; // 5xx → back off below
+        }
+        // Non-transient HTTP error — bubble.
+        throw new Error(`Gemini ${summarizeGeminiError(res.status, lastBody)}`);
+      } catch (err) {
+        const e = err as Error;
+        // AbortError or network issues — treat as transient, back off.
+        if (e.name === 'AbortError' || (e as { code?: string }).code) {
+          lastErr = e;
+          sawTransient = true;
+          break;
+        }
+        throw e; // programming / non-transient error
+      } finally {
+        clearTimeout(t);
+      }
+    }
+
+    // Got here because all keys were rate-limited this round, or a 5xx /
+    // network error broke the inner loop. Back off before the next round.
+    if (round < maxAttempts - 1) {
+      const wait =
+        retryAfterMs > 0
+          ? Math.min(retryAfterMs, 60_000)
+          : Math.min(60_000, (sawTransient ? 10_000 : 5_000) * 2 ** round);
+      log.warn(
+        {
+          status: lastStatus,
+          round: round + 1,
+          keysRateLimited,
+          totalKeys: keys.length,
+          waitMs: wait,
         },
-        body: JSON.stringify(payload),
-        signal: ac.signal,
-      });
-      lastStatus = res.status;
-      if (res.ok) {
-        const data = (await res.json()) as ChatResponse;
-        const choice = data.choices?.[0];
-        if (!choice) throw new Error('Gemini response had no choices');
-        const finish = choice.finish_reason ?? choice.native_finish_reason ?? '';
-        if (finish && !['stop', 'STOP'].includes(finish)) {
-          log.warn({ finish }, 'LLM finish_reason non-stop (output may be truncated)');
-        }
-        return (choice.message.content ?? '').trim();
-      }
-      lastBody = (await res.text()).slice(0, 1000);
-      if (TRANSIENT_STATUSES.has(res.status) && attempt < maxAttempts - 1) {
-        const retryAfter = Number(res.headers.get('Retry-After') ?? '0');
-        const wait =
-          retryAfter > 0 ? retryAfter * 1000 : Math.min(60_000, 5_000 * 2 ** attempt);
-        log.warn(
-          { status: res.status, attempt: attempt + 1, waitMs: wait },
-          'Gemini transient error, backing off',
-        );
-        await new Promise((r) => setTimeout(r, wait));
-        continue;
-      }
-      throw new Error(`Gemini ${summarizeGeminiError(res.status, lastBody)}`);
-    } catch (err) {
-      const e = err as Error;
-      // AbortError or network issues — retry.
-      if (e.name === 'AbortError' || (e as { code?: string }).code) {
-        lastErr = e;
-        if (attempt < maxAttempts - 1) {
-          const wait = Math.min(60_000, 10_000 * 2 ** attempt);
-          log.warn({ err: e.message, attempt: attempt + 1, waitMs: wait }, 'Gemini network error');
-          await new Promise((r) => setTimeout(r, wait));
-          continue;
-        }
-        throw new Error(`Gemini network error after ${maxAttempts} attempts: ${e.message}`);
-      }
-      // Non-transient HTTP error or programming error — bubble.
-      throw e;
-    } finally {
-      clearTimeout(t);
+        keysRateLimited >= keys.length && keys.length > 0
+          ? 'all Gemini keys rate-limited, backing off'
+          : 'Gemini transient error, backing off',
+      );
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
     }
   }
   const summary =
     lastStatus !== null
       ? summarizeGeminiError(lastStatus, lastBody)
       : lastErr?.message || 'unreachable';
-  throw new Error(`Gemini failed after ${maxAttempts} attempts: ${summary}`);
+  throw new Error(
+    `Gemini failed after ${maxAttempts} rounds across ${keys.length} key(s): ${summary}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1717,14 +1774,15 @@ export function startRdioSummaryScheduler(): void {
   arm(wait);
   const nextIso = new Date(Date.now() + wait).toISOString();
   log.info({ next_fire: nextIso, wait_ms: wait }, 'rdio summary scheduler started');
-  // Boot-time catchup is intentionally disabled. Every restart was
-  // calling Gemini to backfill the previous hour, which (a) burned
-  // boot CPU + Gemini quota every time pm2 cycled, and (b) ran the
-  // pre-LLM dedup pass at boot regardless of whether the row
-  // already existed. The scheduler's HH:55 fire is now the only
-  // path that talks to Gemini — missed hours stay missed. Set
-  // NODE_RDIO_CATCHUP=true to re-enable.
-  if (process.env['NODE_RDIO_CATCHUP'] === 'true') {
+  // Boot-time catch-up: if the previous completed hour has no summary row
+  // (e.g. the process was down at its HH:55 fire), generate one now so
+  // /api/summaries/latest never shows a gap — including a "no traffic"
+  // stub for an empty hour. This is idempotent: runRdioSummaryCatchup
+  // checks for an existing row FIRST and only calls Gemini when the row is
+  // genuinely missing, so a normal restart (row already present) costs
+  // nothing. Multi-key rollover keeps a backfill from burning a single
+  // key's quota. Set NODE_RDIO_CATCHUP=false to disable.
+  if (process.env['NODE_RDIO_CATCHUP'] !== 'false') {
     void runRdioSummaryCatchup();
   }
 }
