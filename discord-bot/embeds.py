@@ -253,6 +253,34 @@ def build_map_url(lat: float, lon: float, label: str = "", layer: str = "inciden
     return f"{MAP_BASE_URL}/map.html?lat={lat}&lng={lon}&zoom={zoom}&label={label_encoded}&layer={layer}"
 
 
+def representative_lonlat(coords: Any):
+    """Reduce a GeoJSON `coordinates` array to one representative
+    (lon, lat) numeric pair, regardless of geometry type.
+
+    Handles Point `[lon, lat]`, LineString `[[lon, lat], ...]`, Polygon
+    `[[[lon, lat], ...]]`, and MultiPolygon (deeper) by descending through
+    the nesting and picking the middle element at each level until it
+    reaches a numeric pair. Returns `(lon, lat)` floats, or `(None, None)`
+    when the structure isn't usable — callers must guard for that so a
+    non-Point geometry never produces a `lat=[...]` garbage map link.
+    """
+    node = coords
+    # Bounded descent: Point=0, LineString=1, Polygon=2, MultiPolygon=3
+    # levels of list nesting above the coordinate pair; 6 is ample headroom.
+    for _ in range(6):
+        if not isinstance(node, (list, tuple)) or not node:
+            return None, None
+        first = node[0]
+        if isinstance(first, (int, float)):
+            # `node` is itself a coordinate pair [lon, lat, ...].
+            if len(node) >= 2 and isinstance(node[1], (int, float)):
+                return float(node[0]), float(node[1])
+            return None, None
+        # `node` is a list of sub-arrays — descend into the middle one.
+        node = node[len(node) // 2]
+    return None, None
+
+
 def _embed_char_size(embed: discord.Embed) -> int:
     """Approximate the char count Discord charges against the 6000 per-message
     embed budget. Covers title, description, footer.text, author.name, and
@@ -337,6 +365,46 @@ def _container_component_count(container) -> int:
     return n
 
 
+def _truncate_container_components_inplace(container, max_components: int) -> int:
+    """Drop trailing children from a Container until its component count
+    fits `max_components`, then append a marker so the clip is visible.
+
+    Discord HARD-rejects (400) a message whose component count exceeds 40,
+    so a single container that's over budget on components — independent of
+    its char size — must be trimmed before it's packed, or the whole chunk
+    fails to send. We reserve one slot for the marker we add at the end."""
+    children = getattr(container, 'children', None)
+    if not isinstance(children, list):
+        return _container_component_count(container)
+    target = max(1, max_components - 1)  # leave room for the marker below
+    remove = getattr(container, 'remove_item', None)
+    guard = 0
+    while (
+        _container_component_count(container) > target
+        and len(children) > 1
+        and guard < 500
+    ):
+        guard += 1
+        child = children[-1]
+        try:
+            if callable(remove):
+                remove(child)
+            else:
+                children.pop()
+        except Exception:
+            try:
+                children.pop()
+            except Exception:
+                break
+    try:
+        container.add_item(
+            discord.ui.TextDisplay(content="*… truncated to fit Discord limit.*")
+        )
+    except Exception:
+        pass
+    return _container_component_count(container)
+
+
 def chunk_containers_for_message(containers: list, max_chars: int = 3600,
                                  max_components: int = 36,
                                  max_per_message: int = 25) -> list:
@@ -367,6 +435,13 @@ def chunk_containers_for_message(containers: list, max_chars: int = 3600,
         if sz > max_chars:
             sz = _truncate_container_inplace(c, max_chars)
         cc = _container_component_count(c)
+        # Defensive: a single container can also blow the component ceiling
+        # on its own (e.g. a busy radio summary with many sections). Trim
+        # its components too — otherwise it lands in a solo group that, with
+        # the chunk-0 role-ping TextDisplay, can exceed Discord's hard 40
+        # and the whole message 400s.
+        if cc > max_components:
+            cc = _truncate_container_components_inplace(c, max_components)
         would_exceed = current and (
             current_size + sz > max_chars
             or current_components + cc > max_components
@@ -1365,10 +1440,12 @@ class EmbedBuilder:
             footer_bits.append(f"🕐 <t:{int(dt_updated.timestamp())}:R>")
 
         geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
-                lon, lat = coords[0], coords[1]
+        if isinstance(geometry, dict) and geometry.get('coordinates') is not None:
+            # RFS firegrounds are often Polygon/MultiPolygon, not Point, so
+            # reduce to a representative point instead of assuming coords is
+            # a flat [lon, lat] pair (which produced lat=[...] dead links).
+            lon, lat = representative_lonlat(geometry['coordinates'])
+            if lat is not None and lon is not None:
                 map_url = build_map_url(lat, lon, label=title, layer="rfs")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 
@@ -1588,10 +1665,12 @@ class EmbedBuilder:
             footer_bits.append(f"🕐 <t:{int(dt_created.timestamp())}:R>")
 
         geometry = data.get('geometry', {})
-        if geometry.get('coordinates'):
-            coords = geometry['coordinates']
-            if len(coords) >= 2:
-                lon, lat = coords[0], coords[1]
+        if isinstance(geometry, dict) and geometry.get('coordinates') is not None:
+            # Traffic closures/roadwork are often LineString, not Point —
+            # reduce to a representative point instead of assuming a flat
+            # [lon, lat] pair.
+            lon, lat = representative_lonlat(geometry['coordinates'])
+            if lat is not None and lon is not None:
                 map_url = build_map_url(lat, lon, label=title, layer="incidents")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 

@@ -9,7 +9,7 @@ import json
 import logging
 import threading
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Defensive: load .env here too so this module can be imported standalone
 # (e.g. from migrate_sqlite_to_postgres.py or the Python REPL) and still
@@ -931,7 +931,10 @@ class Database:
         conn = self._connect()
         try:
             c = conn.cursor()
-            now = datetime.now().isoformat()
+            # UTC so first_seen is comparable to Postgres NOW() in
+            # cleanup_old_seen — a Sydney-local write was ~10-11h ahead of
+            # NOW() and kept rows alive past the retention window.
+            now = datetime.now(timezone.utc).isoformat()
             if USE_POSTGRES:
                 c.execute('INSERT INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (%s, %s, %s) ON CONFLICT (alert_type, alert_id) DO NOTHING', (alert_type, alert_id, now))
             else:
@@ -968,7 +971,7 @@ class Database:
         conn = self._connect()
         try:
             c = conn.cursor()
-            now = datetime.now().isoformat()
+            now = datetime.now(timezone.utc).isoformat()  # UTC — see mark_alert_seen
             data = [(alert_type, alert_id, now) for alert_type, alert_id in alerts]
             if USE_POSTGRES:
                 c.executemany('INSERT INTO seen_alerts (alert_type, alert_id, first_seen) VALUES (%s, %s, %s) ON CONFLICT (alert_type, alert_id) DO NOTHING', data)
@@ -994,7 +997,7 @@ class Database:
         conn = self._connect()
         try:
             c = conn.cursor()
-            now = datetime.now().isoformat()
+            now = datetime.now(timezone.utc).isoformat()  # UTC — see mark_alert_seen
             if USE_POSTGRES:
                 c.execute('INSERT INTO seen_pager (message_hash, first_seen) VALUES (%s, %s) ON CONFLICT (message_hash) DO NOTHING', (message_hash, now))
             else:
@@ -1009,7 +1012,7 @@ class Database:
         conn = self._connect()
         try:
             c = conn.cursor()
-            now = datetime.now().isoformat()
+            now = datetime.now(timezone.utc).isoformat()  # UTC — see mark_alert_seen
             data = [(h, now) for h in message_hashes]
             if USE_POSTGRES:
                 c.executemany('INSERT INTO seen_pager (message_hash, first_seen) VALUES (%s, %s) ON CONFLICT (message_hash) DO NOTHING', data)
@@ -1024,12 +1027,16 @@ class Database:
         conn = self._connect()
         try:
             c = conn.cursor()
-            cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             cutoff_str = cutoff.isoformat()
 
             if USE_POSTGRES:
-                c.execute("DELETE FROM seen_alerts WHERE (first_seen::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
-                c.execute("DELETE FROM seen_pager WHERE (first_seen::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
+                # Cast to timestamptz (not timestamp) so the UTC offset stored
+                # by mark_*_seen is honoured regardless of the DB session
+                # timezone — comparing a naive timestamp against NOW() would
+                # silently re-introduce the offset skew this fix removes.
+                c.execute("DELETE FROM seen_alerts WHERE (first_seen::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
+                c.execute("DELETE FROM seen_pager WHERE (first_seen::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
             else:
                 c.execute("DELETE FROM seen_alerts WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
                 c.execute("DELETE FROM seen_pager WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))

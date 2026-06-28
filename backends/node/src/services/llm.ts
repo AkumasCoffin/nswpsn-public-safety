@@ -680,6 +680,13 @@ export async function callLlm(opts: {
   const keys = getGeminiKeys();
   if (keys.length === 0) throw new Error('GEMINI_API_KEY not set');
   const maxAttempts = opts.maxAttempts ?? 4;
+  // Per-call key cursor, seeded from the module global so we resume on the
+  // last known-good key, but mutated LOCALLY so two concurrent callLlm
+  // invocations (e.g. the scheduler and a manual /trigger) can't clobber
+  // each other's rotation accounting. We publish the local back to the
+  // global on each rollover (benign last-writer-wins) so the next call
+  // still benefits from the most recent good key.
+  let keyIdx = _geminiKeyIdx;
   const payload: Record<string, unknown> = {
     model: opts.model,
     temperature: 0.2,
@@ -710,7 +717,7 @@ export async function callLlm(opts: {
     let sawTransient = false;
 
     while (keysRateLimited < keys.length) {
-      const apiKey = keys[_geminiKeyIdx % keys.length]!;
+      const apiKey = keys[keyIdx % keys.length]!;
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 10 * 60_000); // 10 min hard cap
       try {
@@ -740,11 +747,12 @@ export async function callLlm(opts: {
           // immediately within the same round (no backoff).
           retryAfterMs = Number(res.headers.get('Retry-After') ?? '0') * 1000;
           keysRateLimited += 1;
-          const prevIdx = _geminiKeyIdx % keys.length;
-          _geminiKeyIdx = (_geminiKeyIdx + 1) % keys.length;
+          const prevIdx = keyIdx % keys.length;
+          keyIdx = (keyIdx + 1) % keys.length;
+          _geminiKeyIdx = keyIdx; // publish last good cursor for the next call
           if (keys.length > 1 && keysRateLimited < keys.length) {
             log.warn(
-              { keyIndex: prevIdx, nextKeyIndex: _geminiKeyIdx, totalKeys: keys.length },
+              { keyIndex: prevIdx, nextKeyIndex: keyIdx, totalKeys: keys.length },
               'Gemini key rate-limited, rolling to next key',
             );
             continue; // try the next key right away

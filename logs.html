@@ -1170,18 +1170,36 @@
     
     // === API HELPERS ===
     async function apiFetch(url) {
+      // Never fire a request with an empty/missing key — that silently goes
+      // out as `api_key=` (unauthenticated) and the failure is opaque. Try
+      // to (re)load config first; if it still isn't there, surface a real
+      // error so the caller's catch handles it instead of a confusing 401.
+      if (!API_KEY) await loadApiConfig();
+      if (!API_KEY) throw new Error('API key unavailable — /api/config failed to load');
       const separator = url.includes('?') ? '&' : '?';
       return fetch(`${url}${separator}api_key=${API_KEY}`);
     }
-    
+
+    let _apiConfigPromise = null;
     async function loadApiConfig() {
-      try {
-        const res = await fetch(`${API_BASE}/api/config`);
-        const config = await res.json();
-        API_KEY = config.apiKey;
-      } catch (e) {
-        console.error('Failed to load API config:', e);
-      }
+      // Cache the in-flight load so concurrent callers share one request,
+      // but DROP the cache if we still don't have a key, so a transient
+      // /api/config failure can be retried on the next call rather than
+      // permanently leaving every request unauthenticated.
+      if (API_KEY) return;
+      if (_apiConfigPromise) return _apiConfigPromise;
+      _apiConfigPromise = (async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/config`);
+          const config = await res.json();
+          if (config && config.apiKey) API_KEY = config.apiKey;
+        } catch (e) {
+          console.error('Failed to load API config:', e);
+        } finally {
+          if (!API_KEY) _apiConfigPromise = null;
+        }
+      })();
+      return _apiConfigPromise;
     }
     
     // === HEARTBEAT ===
@@ -4570,7 +4588,13 @@
         // Locations: new schema uses locations[]; legacy uses single location object.
         let locText = '';
         if (Array.isArray(inc.locations) && inc.locations.length) {
-          locText = inc.locations.filter(l => l).join(' · ');
+          // Entries are normally strings, but tolerate the legacy object
+          // shape ({raw, region}) so a mixed/old payload never renders
+          // "[object Object]".
+          locText = inc.locations
+            .map(l => (typeof l === 'string' ? l : (l && (l.raw || l.region)) || ''))
+            .filter(l => l)
+            .join(' · ');
         } else if (inc.location && (inc.location.raw || inc.location.region)) {
           locText = inc.location.raw || inc.location.region;
         }

@@ -89,8 +89,14 @@ function parseDateBoundary(v: string | null | undefined, endOfDay: boolean): num
   // Using `new Date()` here would parse in the server's local zone (UTC
   // on prod), shifting the requested day by the Sydney offset (10–11h)
   // and silently dropping the start/end of the day from results.
+  // Optional fractional seconds (`.\d+`) are tolerated and discarded so a
+  // bare datetime like `2026-06-27 14:30:00.000` is still read as Sydney
+  // wall-clock rather than falling through to the local-zone `new Date()`
+  // path below (which would shift it by the Sydney offset). Strings with
+  // an explicit offset / `Z` still fail this anchored match and are parsed
+  // by `new Date()`, which is correct — they carry their own zone.
   const m = trimmed.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/,
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/,
   );
   if (m) {
     const [, y, mo, d, hh, mi, ss] = m;
@@ -313,7 +319,13 @@ async function runWithTimeout(
     // query and gets reset before the connection returns to the pool.
     await client.query('BEGIN');
     try {
-      await client.query(`SET LOCAL statement_timeout = '${timeoutSecs}s'`);
+      // statement_timeout can't be parameterized (SET LOCAL ... = $1 is a
+      // syntax error in Postgres), so the value is interpolated. Callers
+      // only ever pass internal literals today, but clamp to a positive
+      // integer so a future request-derived value can't inject SQL or
+      // produce a malformed interval.
+      const timeoutInt = Math.max(1, Math.trunc(timeoutSecs));
+      await client.query(`SET LOCAL statement_timeout = '${timeoutInt}s'`);
       const r = await client.query<RawArchiveRow>(sql, params);
       await client.query('COMMIT');
       return r;
