@@ -106,6 +106,95 @@ export function sourceFamilies(sources: string[] | null | undefined): ArchiveTab
 
 export type SortDir = 'ASC' | 'DESC';
 
+/**
+ * Global rank of an archive table — its index in ALL_ARCHIVE_TABLES.
+ * Used as the secondary sort key (after fetched_at, before id) when a
+ * query merges rows from multiple families, so the cross-table order is
+ * deterministic AND reproducible from a cursor. Returns -1 for unknown
+ * tables; callers treat that as "no table info" and fall back to a
+ * single-table seek.
+ */
+export function tableRank(table: ArchiveTable): number {
+  return ALL_ARCHIVE_TABLES.indexOf(table);
+}
+
+type RankRelation = 'equal' | 'after' | 'before';
+
+/**
+ * Where `thisRank` sits relative to `cursorRank` in the merged stream's
+ * sort order. In ASC order rank ascends (lower rank first); in DESC it
+ * descends. "after" = comes later in the stream than the cursor row's
+ * table; "before" = already emitted on a prior page.
+ */
+function rankRelation(
+  thisRank: number,
+  cursorRank: number,
+  order: SortDir,
+): RankRelation {
+  if (thisRank === cursorRank) return 'equal';
+  if (order === 'ASC') return thisRank > cursorRank ? 'after' : 'before';
+  return thisRank < cursorRank ? 'after' : 'before';
+}
+
+/**
+ * Build the keyset seek clause for one table given the cursor position.
+ *
+ * The merged stream is ordered by (fetched_at, table_rank, id). To fetch
+ * everything strictly after the cursor row, each table needs a different
+ * clause depending on how its rank compares to the cursor row's table:
+ *
+ *   - equal  (same table, or a single-family / table-less cursor):
+ *       the classic row-value seek on (fetched_at, id).
+ *   - after  (this table sorts later at a tied second): include the
+ *       boundary second too — `fetched_at <cmp>= X`.
+ *   - before (this table sorts earlier at a tied second; its rows at X
+ *       were already returned): only strictly-later seconds —
+ *       `fetched_at <cmp> X`.
+ *
+ * `baseParamCount` is how many params already precede these in the final
+ * params array, so the $N placeholders line up (the unique=1 path
+ * prepends sidecar params, so it can't assume a zero base). Returns the
+ * clause text plus the params to append, or null when there's no cursor.
+ */
+function buildCursorSeek(
+  faCol: string,
+  idCol: string,
+  p: DataHistoryParams,
+  table: ArchiveTable,
+  baseParamCount: number,
+): { clause: string; params: unknown[] } | null {
+  if (!p.cursor) return null;
+  const cmp = p.order === 'DESC' ? '<' : '>';
+  // A cursor without a (valid) table — single-family, a legacy 2-part
+  // cursor, or a foreign table name — collapses to equal-rank, i.e. the
+  // original single-table seek. tableRank() returns -1 for unknowns.
+  const ct = p.cursor.table;
+  const cursorRank =
+    ct != null && tableRank(ct as ArchiveTable) >= 0
+      ? tableRank(ct as ArchiveTable)
+      : tableRank(table);
+  const rel = rankRelation(tableRank(table), cursorRank, p.order);
+  const i = baseParamCount;
+  if (rel === 'before') {
+    return {
+      clause: `${faCol} ${cmp} to_timestamp($${i + 1})`,
+      params: [p.cursor.fetchedAt],
+    };
+  }
+  if (rel === 'after') {
+    return {
+      clause: `${faCol} ${cmp}= to_timestamp($${i + 1})`,
+      params: [p.cursor.fetchedAt],
+    };
+  }
+  return {
+    clause:
+      `(${faCol} ${cmp} to_timestamp($${i + 1}) ` +
+      `OR (${faCol} = to_timestamp($${i + 2}) AND ${idCol} ${cmp} $${i + 3}))`,
+    params: [p.cursor.fetchedAt, p.cursor.fetchedAt, p.cursor.rowId],
+  };
+}
+
 export interface DataHistoryParams {
   /** Comma-split, already-trimmed list. null = no source filter. */
   sources: string[] | null;
@@ -368,14 +457,10 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
       p.lng + lonDelta,
     );
   }
-  if (p.cursor) {
-    const cmp = p.order === 'DESC' ? '<' : '>';
-    const i = offset();
-    parentAcc.parts.push(
-      `(a.fetched_at ${cmp} to_timestamp($${i + 1}) ` +
-        `OR (a.fetched_at = to_timestamp($${i + 2}) AND a.id ${cmp} $${i + 3}))`,
-    );
-    parentAcc.params.push(p.cursor.fetchedAt, p.cursor.fetchedAt, p.cursor.rowId);
+  const uniqueSeek = buildCursorSeek('a.fetched_at', 'a.id', p, table, offset());
+  if (uniqueSeek) {
+    parentAcc.parts.push(uniqueSeek.clause);
+    parentAcc.params.push(...uniqueSeek.params);
   }
 
   const parentWhere =
@@ -547,14 +632,12 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
   // Cursor seek clause. (fetched_at, id) row-value comparison — same
   // shape Python uses, but on TIMESTAMPTZ instead of unix int. The
   // index `(fetched_at DESC)` on every archive_* table supports this.
-  if (p.cursor) {
-    const cmp = p.order === 'DESC' ? '<' : '>';
-    const i = acc.params.length;
-    acc.parts.push(
-      `(fetched_at ${cmp} to_timestamp($${i + 1}) ` +
-        `OR (fetched_at = to_timestamp($${i + 2}) AND id ${cmp} $${i + 3}))`,
-    );
-    acc.params.push(p.cursor.fetchedAt, p.cursor.fetchedAt, p.cursor.rowId);
+  // For multi-family cursors the clause is rank-aware so a per-table id
+  // is never compared against another table's id (see buildCursorSeek).
+  const seek = buildCursorSeek('fetched_at', 'id', p, table, acc.params.length);
+  if (seek) {
+    acc.parts.push(seek.clause);
+    acc.params.push(...seek.params);
   }
 
   const whereClause = acc.parts.length > 0 ? `WHERE ${acc.parts.join(' AND ')}` : '';
@@ -920,21 +1003,38 @@ export interface ArchiveQueryRow {
   category: string | null;
   subcategory: string | null;
   data: Record<string, unknown>;
+  /** Which archive table this row came from. Tagged by the route after
+   *  fetch so the multi-family merge can order by table rank and the
+   *  cursor can record the boundary row's table. Not emitted to clients. */
+  _family?: ArchiveTable;
 }
 
 /**
  * Sort the merged rows from multiple tables and apply offset+limit in
- * Node. Stable sort by (fetched_at_epoch, id), direction-aware.
+ * Node. Sort key is (fetched_at_epoch, table_rank, id), direction-aware.
+ *
+ * The table_rank tiebreaker is essential: `id` is a per-table BIGSERIAL,
+ * so at a fetched_at tie two families' ids are unrelated. Ordering by
+ * rank first makes the cross-table order deterministic and — critically —
+ * reproducible from the cursor's table segment, which is what keeps
+ * forward pagination from skipping or repeating rows. Rows missing
+ * `_family` fall back to rank 0 (only happens if a caller hand-builds
+ * rows; the route always tags them).
  */
 export function mergeAndPaginate(
   rows: ArchiveQueryRow[],
   plan: QueryPlan,
 ): ArchiveQueryRow[] {
   const dir = plan.order === 'DESC' ? -1 : 1;
+  const rankOf = (r: ArchiveQueryRow): number =>
+    r._family ? tableRank(r._family) : 0;
   rows.sort((a, b) => {
     if (a.fetched_at_epoch !== b.fetched_at_epoch) {
       return (a.fetched_at_epoch - b.fetched_at_epoch) * dir;
     }
+    const ra = rankOf(a);
+    const rb = rankOf(b);
+    if (ra !== rb) return (ra - rb) * dir;
     return (a.id - b.id) * dir;
   });
   return rows.slice(plan.effectiveOffset, plan.effectiveOffset + plan.limit);
