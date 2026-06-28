@@ -392,6 +392,11 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           // lets the next request retry sooner and unblocks the pool.
           const r = await runWithTimeout(pool, q.sql, q.params, 30);
           const rows = r.rows.map(normaliseRow);
+          // Tag each row with the family it came from so the multi-family
+          // merge can order by (fetched_at, table_rank, id) and the cursor
+          // can record the boundary row's table. Constant per cache key
+          // (q.table is fixed), so this is safe to do before caching.
+          for (const row of rows) row._family = q.table;
           // Bound the cache: drop oldest when over capacity.
           if (dataCache.size >= DATA_CACHE_MAX) {
             const oldestKey = dataCache.keys().next().value;
@@ -491,8 +496,18 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
 
     const records = merged.map((r) => formatRecord(r, params.includeData));
     const last = merged[merged.length - 1];
+    // Multi-family cursors carry the boundary row's table so the next
+    // page's seek can reproduce the (fetched_at, table_rank, id) order.
+    // Single-family stays byte-identical to the legacy 2-part format.
+    const multiFamily = results.length > 1;
     const nextCursor =
-      hasMore && last ? encodeCursor(last.fetched_at_epoch, last.id) : null;
+      hasMore && last
+        ? encodeCursor(
+            last.fetched_at_epoch,
+            last.id,
+            multiFamily ? last._family : undefined,
+          )
+        : null;
 
     return c.json({
       records,
