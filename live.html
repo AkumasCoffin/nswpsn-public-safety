@@ -2559,16 +2559,20 @@
     // ======== HELPER FUNCTIONS ========
     
     // Format timestamp as date and time
+    // NOTE: despite the name this returns an ABSOLUTE timestamp, not a
+    // relative "x ago" string. Kept the name to avoid churning call sites,
+    // but pin the locale to en-AU so it matches formatNewsTime and the rest
+    // of this (Sydney-centric) page instead of the visitor's browser default.
     function formatTimeAgo(dateStr) {
       if (!dateStr) return '';
       const date = new Date(dateStr);
       if (isNaN(date.getTime())) return dateStr;
-      
-      return date.toLocaleString([], { 
-        day: '2-digit', 
-        month: '2-digit', 
+
+      return date.toLocaleString('en-AU', {
+        day: '2-digit',
+        month: '2-digit',
         year: '2-digit',
-        hour: '2-digit', 
+        hour: '2-digit',
         minute: '2-digit'
       });
     }
@@ -2774,7 +2778,13 @@
     
     let heartbeatTimer = null;
     let dataRefreshTimers = [];
-    
+    // News / summaries polling handles — tracked so stopDataCollection() can
+    // pause them when the tab is hidden (previously they were created once at
+    // DOMContentLoaded and polled forever in the background).
+    let newsRefreshTimer = null;
+    let summariesRefreshTimer = null;
+    let topOfHourTimer = null;
+
     // Shared session ID across all pages - uses localStorage to persist
     const LIVE_PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
       const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
@@ -2848,7 +2858,12 @@
       // Locations: new schema uses locations[]; legacy uses single location object.
       let locText = '';
       if (Array.isArray(inc.locations) && inc.locations.length) {
-        locText = inc.locations.filter(l => l).join(' · ');
+        // Tolerate the legacy {raw, region} object shape so a mixed/old
+        // payload never renders "[object Object]".
+        locText = inc.locations
+          .map(l => (typeof l === 'string' ? l : (l && (l.raw || l.region)) || ''))
+          .filter(l => l)
+          .join(' · ');
       } else if (inc.location && (inc.location.raw || inc.location.region)) {
         locText = inc.location.raw || inc.location.region;
       }
@@ -3077,7 +3092,7 @@
           const spanH = (ps && pe && !isAdhoc)
             ? Math.max(1, Math.round((pe.getTime() - ps.getTime()) / 3600000))
             : 1;
-          hourlyMeta.textContent = `${timeRange} · ${data.hourly.call_count} calls · ${ago} min ago`;
+          hourlyMeta.textContent = `${timeRange} · ${data.hourly.call_count ?? 0} calls · ${ago} min ago`;
           if (isAdhoc) {
             hourlyTitle.textContent = 'Latest Ad-hoc Summary';
             hourlySlot.textContent = 'Ad-hoc';
@@ -3161,14 +3176,36 @@
       dataRefreshTimers.push(setInterval(refreshAllData, REFRESH_INTERVAL));
       
       // Slow refresh items (every 15 minutes)
-      dataRefreshTimers.push(setInterval(() => { 
-        loadRfsMajorIncidents(); 
-        loadRfsFireDangerToban(); 
+      dataRefreshTimers.push(setInterval(() => {
+        loadRfsMajorIncidents();
+        loadRfsFireDangerToban();
       }, SLOW_REFRESH));
-      
+
+      // News refresh (5 min) + summaries (5 min fallback) + a top-of-hour
+      // refresh. Tracked separately so they pause with the tab — see the
+      // matching clears in stopDataCollection().
+      newsRefreshTimer = setInterval(loadNewsFeed, NEWS_REFRESH);
+      summariesRefreshTimer = setInterval(loadRdioSummaries, 5 * 60 * 1000);
+      scheduleTopOfHourRefresh();
+
       console.log('[Satellite] Data collection started (active mode: 2min refresh)');
     }
-    
+
+    // Summaries only change at the top of the hour — the backend embargoes a
+    // prefetched summary until :59:50, so refresh once at :00:05 each hour
+    // (plus the 5-min fallback poll above). Self-reschedules; the handle is
+    // kept in topOfHourTimer so stopDataCollection() can cancel it.
+    function scheduleTopOfHourRefresh() {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(now.getHours() + 1, 0, 5, 0);
+      const delay = Math.max(1000, next - now);
+      topOfHourTimer = setTimeout(() => {
+        loadRdioSummaries();
+        scheduleTopOfHourRefresh();
+      }, delay);
+    }
+
     // Stop periodic data collection
     function stopDataCollection() {
       if (heartbeatTimer) {
@@ -3177,6 +3214,9 @@
       }
       dataRefreshTimers.forEach(t => clearInterval(t));
       dataRefreshTimers = [];
+      if (newsRefreshTimer) { clearInterval(newsRefreshTimer); newsRefreshTimer = null; }
+      if (summariesRefreshTimer) { clearInterval(summariesRefreshTimer); summariesRefreshTimer = null; }
+      if (topOfHourTimer) { clearTimeout(topOfHourTimer); topOfHourTimer = null; }
     }
     
     // Handle page visibility changes
@@ -3470,30 +3510,9 @@
       loadNewsFeed();
       loadRdioSummaries();
 
-      // Start periodic data collection
+      // Start periodic data collection (this also arms the news / summaries /
+      // top-of-hour timers, which pause when the tab is hidden).
       startDataCollection();
-
-      // News refresh on slower interval (5 minutes)
-      setInterval(loadNewsFeed, NEWS_REFRESH);
-      // Summaries only change at the top of the hour — the backend embargoes
-      // a prefetched summary until :59:50, so we schedule one refresh right
-      // at the top of each hour (plus a tiny buffer) and keep a 5-min
-      // fallback poll in case the user's clock drifts or an ad-hoc lands.
-      setInterval(loadRdioSummaries, 5 * 60 * 1000);
-      function scheduleTopOfHourRefresh() {
-        const now = new Date();
-        const next = new Date(now);
-        // :00:05 of the next hour — the backend releases the new hourly at
-        // :59:30, so by :00:05 the row has been visible for ~35 seconds and
-        // the fetch lands immediately.
-        next.setHours(now.getHours() + 1, 0, 5, 0);
-        const delay = Math.max(1000, next - now);
-        setTimeout(() => {
-          loadRdioSummaries();
-          scheduleTopOfHourRefresh();
-        }, delay);
-      }
-      scheduleTopOfHourRefresh();
     });
     
     // Time period selector
