@@ -1176,8 +1176,7 @@
       // error so the caller's catch handles it instead of a confusing 401.
       if (!API_KEY) await loadApiConfig();
       if (!API_KEY) throw new Error('API key unavailable — /api/config failed to load');
-      const separator = url.includes('?') ? '&' : '?';
-      return fetch(`${url}${separator}api_key=${API_KEY}`);
+      return fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
     }
 
     let _apiConfigPromise = null;
@@ -1328,7 +1327,7 @@
           const iconColor = providerColors[p.name] || p.color || '#64748b';
           opt.dataset.icon = iconName;
           opt.dataset.color = iconColor;
-          opt.innerHTML = `<i class="fa-solid fa-${iconName}" style="color: ${iconColor};"></i><span>${p.name}</span><span class="option-count">${p.count.toLocaleString()}</span>`;
+          opt.innerHTML = `<i class="fa-solid fa-${iconName}" style="color: ${iconColor};"></i><span>${escapeHtml(p.name)}</span><span class="option-count">${p.count.toLocaleString()}</span>`;
           opt.onclick = () => selectProvider(p.name, p.name, iconName, iconColor);
           optionsContainer.appendChild(opt);
         });
@@ -1682,7 +1681,7 @@
         opt.dataset.value = t.source;
         opt.dataset.icon = typeInfo.icon;
         opt.dataset.color = typeInfo.color;
-        opt.innerHTML = `<i class="fa-solid fa-${typeInfo.icon}" style="color: ${typeInfo.color};"></i><span>${t.name}</span><span class="option-count">${t.count.toLocaleString()}</span>`;
+        opt.innerHTML = `<i class="fa-solid fa-${typeInfo.icon}" style="color: ${typeInfo.color};"></i><span>${escapeHtml(t.name)}</span><span class="option-count">${t.count.toLocaleString()}</span>`;
         opt.onclick = () => selectType(t.source, t.name, typeInfo.icon, typeInfo.color);
         typeOptionsContainer.appendChild(opt);
       });
@@ -1890,7 +1889,7 @@
               opt.dataset.value = s.value;
               opt.dataset.icon = info.icon;
               opt.dataset.color = info.color;
-              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${displayName}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
               opt.onclick = () => selectStatus(s.value, displayName, info.icon, info.color);
               statusOptionsContainer.appendChild(opt);
             });
@@ -1933,7 +1932,7 @@
               opt.dataset.value = s.value;
               opt.dataset.icon = info.icon;
               opt.dataset.color = info.color;
-              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${s.value}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(s.value)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
               opt.onclick = () => selectStatus(s.value, s.value, info.icon, info.color);
               statusOptionsContainer.appendChild(opt);
             });
@@ -2211,7 +2210,7 @@
               opt.dataset.value = s.value;
               opt.dataset.icon = info.icon;
               opt.dataset.color = info.color;
-              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${displayName}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
               opt.onclick = () => selectSubcategory(s.value, displayName, info.icon, info.color);
               subcategoryOptionsContainer.appendChild(opt);
             });
@@ -2228,9 +2227,9 @@
             opt.dataset.color = info.color;
             if (isPager) {
               // No icons for pager cap codes
-              opt.innerHTML = `<span>${displayName}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+              opt.innerHTML = `<span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
             } else {
-              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${displayName}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
             }
             opt.onclick = () => selectSubcategory(s.value, displayName, isPager ? 'tags' : info.icon, isPager ? '#64748b' : info.color);
             subcategoryOptionsContainer.appendChild(opt);
@@ -2278,7 +2277,7 @@
             opt.dataset.value = s.value;
             opt.dataset.icon = info.icon;
             opt.dataset.color = info.color;
-            opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${s.value}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+            opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(s.value)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
             opt.onclick = () => selectAlertLevel(s.value, s.value, info.icon, info.color);
             alertLevelOptionsContainer.appendChild(opt);
           });
@@ -2953,9 +2952,9 @@
       
       try {
         // Fetch all snapshots for this incident (not unique - get full history)
-        const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1`;
+        const url = `${API_BASE}/api/data/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1`;
         console.log('History URL:', url);
-        const res = await fetch(url);
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
         if (!res.ok) throw new Error(`API returned ${res.status}`);
         const data = await res.json();
 
@@ -3128,8 +3127,8 @@
           // 1. Find other pager hits with same incident_id (if available)
           if (incidentId && !incidentId.startsWith('noid-')) {
             try {
-              const pagerUrl = `${API_BASE}/api/pager/hits?api_key=${API_KEY}&incident_id=${encodeURIComponent(incidentId)}&hours=72&limit=20`;
-              const pagerRes = await fetch(pagerUrl);
+              const pagerUrl = `${API_BASE}/api/pager/hits?incident_id=${encodeURIComponent(incidentId)}&hours=72&limit=20`;
+              const pagerRes = await fetch(pagerUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
               if (!pagerRes.ok) throw new Error(`API returned ${pagerRes.status}`);
               const pagerJson = await pagerRes.json();
               
@@ -3160,8 +3159,8 @@
               
               // ~20m radius, search all pagers (unique=0 explicit to
               // include ended ones — backend default is now unique=1)
-              const proximityUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-              const proxRes = await fetch(proximityUrl);
+              const proximityUrl = `${API_BASE}/api/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+              const proxRes = await fetch(proximityUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
               if (!proxRes.ok) throw new Error(`API returned ${proxRes.status}`);
               const proxData = await proxRes.json();
               
@@ -3221,8 +3220,8 @@
               
               // Search nearby (~20m radius), unique=0 explicit to
               // include ended incidents (backend default is now unique=1)
-              const incUrl = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-              const incRes = await fetch(incUrl);
+              const incUrl = `${API_BASE}/api/data/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+              const incRes = await fetch(incUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
               if (!incRes.ok) throw new Error(`API returned ${incRes.status}`);
               const incData = await incRes.json();
               
@@ -3343,8 +3342,8 @@
           
           // ~20m radius, search all pagers (unique=0 explicit to
           // include ended ones — backend default is now unique=1)
-          const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-          const res = await fetch(url);
+          const url = `${API_BASE}/api/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
+          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = await res.json();
 
@@ -3436,8 +3435,8 @@
         document.body.appendChild(toast);
         
         try {
-          const url = `${API_BASE}/api/data/history?api_key=${API_KEY}&source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
-          const res = await fetch(url);
+          const url = `${API_BASE}/api/data/history?source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
+          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
           if (!res.ok) throw new Error(`API returned ${res.status}`);
           const data = await res.json();
 
@@ -4368,7 +4367,7 @@
         // Only fetch current page. Use the shared pagination picker so a
         // refresh while sitting on the last page doesn't send a deep
         // offset that the backend now caps at 10000.
-        const params = new URLSearchParams({ api_key: API_KEY, limit: pageSize, unique: '1' });
+        const params = new URLSearchParams({ limit: pageSize, unique: '1' });
         // full=1 mirrors the main search so auto-refresh receives the
         // JSONB `data` column. Without it the response payload's data
         // field is `{}` and rendered records flip to "Unknown" titles

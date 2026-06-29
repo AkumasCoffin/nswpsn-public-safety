@@ -4672,7 +4672,7 @@
           
           return `
             <div class="tt-outage-item ${hasGPS ? 'map-clickable' : ''}" 
-                 ${hasGPS ? `onclick="event.stopPropagation(); openMapAt(${i.lat}, ${i.lng}, '${encodeURIComponent(i.suburb + (i.streets ? ' - ' + i.streets : ''))}', 'outages')"` : ''}
+                 ${hasGPS ? `onclick="event.stopPropagation(); openMapAt(${Number(i.lat)}, ${Number(i.lng)}, '${encodeURIComponent(i.suburb + (i.streets ? ' - ' + i.streets : ''))}', 'outages')"` : ''}
                  style="border-left-color:${borderColor}; background:${bgColor};">
               
               <div class="tt-outage-header">
@@ -5064,7 +5064,7 @@
               const shortAdvice = adviceText.length > 160 ? adviceText.substring(0, 160) + '…' : adviceText;
               return `
               <div class="tt-item tt-traffic list-item ${accentClass} ${i.lat && i.lng ? 'map-clickable' : ''}" 
-                   ${i.lat && i.lng ? `onclick="openMapAt(${i.lat}, ${i.lng}, '${encodeURIComponent(i.title)}', 'incidents')"` : ''}>
+                   ${i.lat && i.lng ? `onclick="openMapAt(${Number(i.lat)}, ${Number(i.lng)}, '${encodeURIComponent(i.title)}', 'incidents')"` : ''}>
                 <div class="tt-header">
                   <div class="tt-header-body">
                     <div class="tt-title">${i.isMajor ? '<i class="fas fa-exclamation-circle" style="color:#ef4444;margin-right:4px;"></i>' : ''}${escapeHtml(i.title)}</div>
@@ -5452,7 +5452,7 @@
 
               return `
                 <div class="tt-item tt-beach list-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}"
-                     ${hasGPS ? `onclick="openMapAt(${b.lat}, ${b.lng}, '${encodeURIComponent(b.name)}', 'beachwatch')"` : ''}>
+                     ${hasGPS ? `onclick="openMapAt(${Number(b.lat)}, ${Number(b.lng)}, '${encodeURIComponent(b.name)}', 'beachwatch')"` : ''}>
                   <div class="tt-beach-row">
                     <div class="tt-title tt-title-compact"><i class="fas fa-umbrella-beach" style="color:#06b6d4;"></i> ${escapeHtml(b.name)}</div>
                     ${hasGPS ? '<span class="map-view-btn compact"><i class="fas fa-map-marker-alt"></i></span>' : ''}
@@ -5670,7 +5670,7 @@
               
               return `
                 <div class="tt-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}"
-                     ${hasGPS ? `onclick="openMapAt(${inc.lat}, ${inc.lng}, '${encodeURIComponent(inc.title)}', 'rfs')"` : ''}>
+                     ${hasGPS ? `onclick="openMapAt(${Number(inc.lat)}, ${Number(inc.lng)}, '${encodeURIComponent(inc.title)}', 'rfs')"` : ''}>
                   
                   <div class="tt-header">
                     <div class="tt-title">${escapeHtml(inc.title)}</div>

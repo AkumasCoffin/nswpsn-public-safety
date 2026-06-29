@@ -376,12 +376,11 @@ function summariseSources(nowMs: number): {
     const m = metrics.get(s.name);
     const has = liveStore.getData(s.name) !== undefined;
     const status = has ? 'ok' : 'unknown';
-    // Active poll cadence in seconds (matches what editor-requests
-    // shows under `thresh`). intervalIdleMs gives the soft threshold
-    // we tolerate before the source looks stale; intervalActiveMs is
-    // the active-mode polling target so the UI can compare the two.
-    const softSec = Math.round(s.intervalActiveMs / 1000);
-    const hardSec = Math.round(s.intervalIdleMs / 1000);
+    // Poll cadence in seconds (matches what editor-requests shows under
+    // `thresh`). soft = the polling target; hard = 2× that, the staleness
+    // we tolerate before the source looks unhealthy.
+    const softSec = Math.round(s.intervalMs / 1000);
+    const hardSec = Math.round((s.intervalMs * 2) / 1000);
     block[s.name] = {
       ok: has,
       status,

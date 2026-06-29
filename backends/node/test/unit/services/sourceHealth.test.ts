@@ -27,22 +27,19 @@ beforeEach(() => {
   registerSource({
     name: 'rfs',
     family: 'rfs',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 120_000,
+    intervalMs: 60_000,
     fetch: async () => ({}),
   });
   registerSource({
     name: 'waze',
     family: 'waze',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 120_000,
+    intervalMs: 60_000,
     fetch: async () => ({}),
   });
   registerSource({
     name: 'unconfigured',
     family: 'misc',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 120_000,
+    intervalMs: 60_000,
     fetch: async () => ({}),
   });
 });
@@ -143,8 +140,7 @@ describe('getSourceHealthSnapshot', () => {
     registerSource({
       name: 'traffic_cameras',
       family: 'traffic',
-      intervalActiveMs: 60_000,
-      intervalIdleMs: 120_000,
+      intervalMs: 60_000,
       fetch: async () => ({}),
     });
     const rows = getSourceHealthSnapshot();

@@ -22,11 +22,27 @@ vi.mock('../../../src/db/pool.js', () => ({
   getPool: vi.fn(async () => (getPoolReturn === 'pool' ? fakePool : null)),
 }));
 
-const { editorRouter } = await import('../../../src/api/editor.js');
-const { _resetRolesCacheForTests } = await import('../../../src/services/auth/roles.js');
+// Keep requireRole real; stub the DB-backed canManageUsers so management
+// routes (GET list, approve, reject) don't need a live user_roles table.
+vi.mock('../../../src/services/auth/roles.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
+  return { ...actual, canManageUsers: vi.fn(async () => true) };
+});
 
-function makeApp() {
+const { editorRouter } = await import('../../../src/api/editor.js');
+const roles = await import('../../../src/services/auth/roles.js');
+const { _resetRolesCacheForTests } = roles;
+
+// Injects a verified user id by default (POST /api/editor-requests is public
+// and unaffected); pass {authed:false} to exercise the 401 path.
+function makeApp(opts: { authed?: boolean } = {}) {
   const app = new Hono();
+  if (opts.authed !== false) {
+    app.use('*', async (c, next) => {
+      c.set('userId', 'owner-1');
+      await next();
+    });
+  }
   app.route('/', editorRouter);
   return app;
 }
@@ -475,5 +491,35 @@ describe('503 when DB is unavailable', () => {
     const res = await app.request('/api/check-admin/u');
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'database unavailable' });
+  });
+});
+
+describe('management routes require an authorized user', () => {
+  it('GET /api/editor-requests 401 without a verified user', async () => {
+    const app = makeApp({ authed: false });
+    const res = await app.request('/api/editor-requests');
+    expect(res.status).toBe(401);
+  });
+
+  it('approve 403 when authenticated but lacks canManageUsers', async () => {
+    vi.mocked(roles.canManageUsers).mockResolvedValueOnce(false);
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests/1/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /api/editor-requests stays public (no auth needed)', async () => {
+    const app = makeApp({ authed: false });
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    // 400 (validation), NOT 401 — proves the public submit isn't gated.
+    expect(res.status).toBe(400);
   });
 });
