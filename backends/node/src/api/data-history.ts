@@ -89,8 +89,14 @@ function parseDateBoundary(v: string | null | undefined, endOfDay: boolean): num
   // Using `new Date()` here would parse in the server's local zone (UTC
   // on prod), shifting the requested day by the Sydney offset (10–11h)
   // and silently dropping the start/end of the day from results.
+  // Optional fractional seconds (`.\d+`) are tolerated and discarded so a
+  // bare datetime like `2026-06-27 14:30:00.000` is still read as Sydney
+  // wall-clock rather than falling through to the local-zone `new Date()`
+  // path below (which would shift it by the Sydney offset). Strings with
+  // an explicit offset / `Z` still fail this anchored match and are parsed
+  // by `new Date()`, which is correct — they carry their own zone.
   const m = trimmed.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/,
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/,
   );
   if (m) {
     const [, y, mo, d, hh, mi, ss] = m;
@@ -313,7 +319,13 @@ async function runWithTimeout(
     // query and gets reset before the connection returns to the pool.
     await client.query('BEGIN');
     try {
-      await client.query(`SET LOCAL statement_timeout = '${timeoutSecs}s'`);
+      // statement_timeout can't be parameterized (SET LOCAL ... = $1 is a
+      // syntax error in Postgres), so the value is interpolated. Callers
+      // only ever pass internal literals today, but clamp to a positive
+      // integer so a future request-derived value can't inject SQL or
+      // produce a malformed interval.
+      const timeoutInt = Math.max(1, Math.trunc(timeoutSecs));
+      await client.query(`SET LOCAL statement_timeout = '${timeoutInt}s'`);
       const r = await client.query<RawArchiveRow>(sql, params);
       await client.query('COMMIT');
       return r;
@@ -392,6 +404,11 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           // lets the next request retry sooner and unblocks the pool.
           const r = await runWithTimeout(pool, q.sql, q.params, 30);
           const rows = r.rows.map(normaliseRow);
+          // Tag each row with the family it came from so the multi-family
+          // merge can order by (fetched_at, table_rank, id) and the cursor
+          // can record the boundary row's table. Constant per cache key
+          // (q.table is fixed), so this is safe to do before caching.
+          for (const row of rows) row._family = q.table;
           // Bound the cache: drop oldest when over capacity.
           if (dataCache.size >= DATA_CACHE_MAX) {
             const oldestKey = dataCache.keys().next().value;
@@ -491,8 +508,18 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
 
     const records = merged.map((r) => formatRecord(r, params.includeData));
     const last = merged[merged.length - 1];
+    // Multi-family cursors carry the boundary row's table so the next
+    // page's seek can reproduce the (fetched_at, table_rank, id) order.
+    // Single-family stays byte-identical to the legacy 2-part format.
+    const multiFamily = results.length > 1;
     const nextCursor =
-      hasMore && last ? encodeCursor(last.fetched_at_epoch, last.id) : null;
+      hasMore && last
+        ? encodeCursor(
+            last.fetched_at_epoch,
+            last.id,
+            multiFamily ? last._family : undefined,
+          )
+        : null;
 
     return c.json({
       records,

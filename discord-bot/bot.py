@@ -956,6 +956,16 @@ class NSWPSNBot(commands.Bot):
             # 'skip' — drop this one, keep going with the channel
         return sent
 
+    async def close(self):
+        """Tidy shutdown: close the poller's shared HTTP session before the
+        gateway tears down so aiohttp doesn't warn about a leaked session /
+        connector, then defer to the base class."""
+        try:
+            await self.poller.close()
+        except Exception as e:
+            logger.error(f"Error closing poller session: {e}")
+        await super().close()
+
     @tasks.loop(seconds=1)
     async def process_message_queue(self):
         """Drain a batch from the queue and send it, fanning out per channel
@@ -963,32 +973,40 @@ class NSWPSNBot(commands.Bot):
         others, which is what let a Waze burst overflow the queue. discord.py
         still enforces per-channel + global rate limits, so concurrency can't
         exceed Discord's caps — it just keeps every channel making progress."""
-        batch = []
-        while not self.message_queue.empty() and len(batch) < self.max_messages_per_batch:
-            try:
-                batch.append(self.message_queue.get_nowait())
-            except asyncio.QueueEmpty:
-                break
-        if not batch:
-            return
+        # Outer guard: a @tasks.loop that raises an unhandled exception STOPS
+        # and is not auto-restarted. The send fan-out is already shielded by
+        # return_exceptions=True, but the drain / by_channel setup is not —
+        # wrap the whole body so a transient error can't silently kill the
+        # queue drainer (mirrors poll_alerts / poll_pager / drain_bot_actions).
+        try:
+            batch = []
+            while not self.message_queue.empty() and len(batch) < self.max_messages_per_batch:
+                try:
+                    batch.append(self.message_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            if not batch:
+                return
 
-        by_channel = {}
-        for item in batch:
-            by_channel.setdefault(item['channel_id'], []).append(item)
+            by_channel = {}
+            for item in batch:
+                by_channel.setdefault(item['channel_id'], []).append(item)
 
-        results = await asyncio.gather(
-            *[self._send_channel_batch(cid, items) for cid, items in by_channel.items()],
-            return_exceptions=True,
-        )
-        sent = 0
-        for r in results:
-            if isinstance(r, int):
-                sent += r
-            elif isinstance(r, Exception):
-                logger.error(f"Channel batch error: {r}")
-        if sent:
-            logger.info(f"Sent {sent} messages across {len(by_channel)} channel(s) "
-                        f"(queue size: {self.message_queue.qsize()})")
+            results = await asyncio.gather(
+                *[self._send_channel_batch(cid, items) for cid, items in by_channel.items()],
+                return_exceptions=True,
+            )
+            sent = 0
+            for r in results:
+                if isinstance(r, int):
+                    sent += r
+                elif isinstance(r, Exception):
+                    logger.error(f"Channel batch error: {r}")
+            if sent:
+                logger.info(f"Sent {sent} messages across {len(by_channel)} channel(s) "
+                            f"(queue size: {self.message_queue.qsize()})")
+        except Exception as e:
+            logger.error(f"process_message_queue cycle error: {e}", exc_info=True)
     
     @process_message_queue.before_loop
     async def before_process_queue(self):
