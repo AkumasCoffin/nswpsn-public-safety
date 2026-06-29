@@ -1,0 +1,80 @@
+name: Security
+
+# All security checks in one place: production dependency audit, secret
+# hygiene, and CodeQL static analysis (SAST). Runs on push/PR plus a weekly
+# scheduled scan so newly-disclosed issues catch existing code too.
+on:
+  push:
+    branches: [main, dev-beta]
+  pull_request:
+    branches: [main, dev-beta]
+  schedule:
+    - cron: '27 3 * * 1' # Mondays 03:27 UTC
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency audit (prod, fail on high+)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backends/node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backends/node/package-lock.json
+      - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    name: Secret hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No tracked secret files or committed private keys
+        run: |
+          set -e
+          if git ls-files | grep -E '(^|/)(\.env|config\.js)$'; then
+            echo "::error::A secret file (.env / config.js) is tracked — it must stay gitignored"
+            exit 1
+          fi
+          if git grep -nI -E 'BEGIN ([A-Z ]+ )?PRIVATE KEY' -- . ; then
+            echo "::error::A private key appears to be committed"
+            exit 1
+          fi
+          echo "OK: no tracked .env/config.js, no committed private keys"
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # JS/TS and Python are interpreted — no compile step needed.
+          build-mode: none
+          queries: security-and-quality
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
