@@ -200,16 +200,14 @@ export function register(): void {
   registerSource<EssentialOutage[]>({
     name: 'essential_current',
     family: 'power',
-    intervalActiveMs: 180_000,
-    intervalIdleMs: 600_000,
+    intervalMs: 180_000,
     fetch: () => fetchFeed('current'),
     archiveItems: essentialArchiveItems,
   });
   registerSource<EssentialOutage[]>({
     name: 'essential_future',
     family: 'power',
-    intervalActiveMs: 180_000,
-    intervalIdleMs: 600_000,
+    intervalMs: 180_000,
     fetch: () => fetchFeed('future'),
     archiveItems: essentialArchiveItems,
   });

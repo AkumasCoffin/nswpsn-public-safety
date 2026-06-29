@@ -2,9 +2,9 @@
  * Heartbeat route tests.
  *
  * Drives the route directly via Hono's request handler; the underlying
- * activityMode singleton is real but harmless — setActivityMode on the
- * poller is a no-op when the poller isn't running, so calling the route
- * just exercises the in-memory map + JSON response shape.
+ * activityMode singleton is real but harmless — it only tracks viewer
+ * sessions now (no poller coupling), so calling the route just exercises
+ * the in-memory map + JSON response shape.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';

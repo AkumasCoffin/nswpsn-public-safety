@@ -329,15 +329,13 @@ export function register(): void {
   registerSource<EndeavourOutage[]>({
     name: 'endeavour_current',
     family: 'power',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 300_000,
+    intervalMs: 60_000,
     fetch: async () => (await getOrFetch()).current,
   });
   registerSource<EndeavourOutage[]>({
     name: 'endeavour_planned',
     family: 'power',
-    intervalActiveMs: 300_000,
-    intervalIdleMs: 600_000,
+    intervalMs: 300_000,
     fetch: async () => (await getOrFetch()).future_maintenance,
   });
   registerSource<EndeavourOutage[]>({
@@ -348,8 +346,7 @@ export function register(): void {
     // maintenance entries (external_api_proxy.py:4544-4545). Without this
     // override, the logs page showed two synonym sources in the dropdown.
     archiveSource: 'endeavour_planned',
-    intervalActiveMs: 300_000,
-    intervalIdleMs: 600_000,
+    intervalMs: 300_000,
     fetch: async () => (await getOrFetch()).current_maintenance,
   });
 }

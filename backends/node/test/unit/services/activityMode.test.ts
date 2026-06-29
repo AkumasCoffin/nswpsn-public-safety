@@ -1,18 +1,12 @@
 /**
  * Activity-mode tracker unit tests.
  *
- * Mocks the poller's setActivityMode so we can assert on how the
- * tracker drives mode transitions without needing real timers.
+ * The tracker now only tracks viewer/session counts for display — it no
+ * longer drives the poller cadence (the active/idle polling split was
+ * removed). These tests cover session counting + the `active` flag the
+ * heartbeat response still reports.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// vi.hoisted so the mock factory can reference the spy below; vi.mock
-// is hoisted above all imports.
-const { setActivityMode } = vi.hoisted(() => ({ setActivityMode: vi.fn() }));
-vi.mock('../../../src/services/poller.js', () => ({
-  setActivityMode,
-}));
-
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   recordHeartbeat,
   activeViewerCount,
@@ -23,11 +17,10 @@ import {
 
 describe('activityMode', () => {
   beforeEach(() => {
-    setActivityMode.mockReset();
     _resetForTests();
   });
 
-  it('open + ping bump session counts and flip to active for data pages', () => {
+  it('open + ping bump session counts; data pages report active', () => {
     const r = recordHeartbeat('page-1', 'open', {
       pageType: 'live',
       isDataPage: true,
@@ -35,11 +28,9 @@ describe('activityMode', () => {
     expect(r.totalViewers).toBe(1);
     expect(r.dataViewers).toBe(1);
     expect(r.active).toBe(true);
-    // First report should fire setActivityMode(true).
-    expect(setActivityMode).toHaveBeenCalledWith(true);
   });
 
-  it('does not flip to active for non-data pages', () => {
+  it('non-data pages count as viewers but do not report active', () => {
     const r = recordHeartbeat('page-2', 'open', {
       pageType: 'about',
       isDataPage: false,
@@ -47,17 +38,13 @@ describe('activityMode', () => {
     expect(r.totalViewers).toBe(1);
     expect(r.dataViewers).toBe(0);
     expect(r.active).toBe(false);
-    expect(setActivityMode).toHaveBeenCalledWith(false);
   });
 
-  it('close removes the session and flips back to idle', () => {
+  it('close removes the session and drops back to not-active', () => {
     recordHeartbeat('p', 'open', { isDataPage: true });
-    expect(setActivityMode).toHaveBeenLastCalledWith(true);
-
     const r = recordHeartbeat('p', 'close', {});
     expect(r.totalViewers).toBe(0);
     expect(r.active).toBe(false);
-    expect(setActivityMode).toHaveBeenLastCalledWith(false);
   });
 
   it('ping refreshes lastSeen but preserves openedAt', () => {
@@ -72,15 +59,6 @@ describe('activityMode', () => {
     expect(after[0]!.session.lastSeen).toBeGreaterThanOrEqual(openedAt);
   });
 
-  it('only emits setActivityMode on transitions, not every heartbeat', () => {
-    recordHeartbeat('p1', 'open', { isDataPage: true });
-    recordHeartbeat('p1', 'ping', { isDataPage: true });
-    recordHeartbeat('p2', 'open', { isDataPage: true });
-    // Three heartbeats, one transition (idle→active).
-    expect(setActivityMode).toHaveBeenCalledTimes(1);
-    expect(setActivityMode).toHaveBeenCalledWith(true);
-  });
-
   it('counts both data and non-data sessions in totalViewers', () => {
     recordHeartbeat('a', 'open', { isDataPage: true });
     recordHeartbeat('b', 'open', { isDataPage: false });
@@ -89,9 +67,7 @@ describe('activityMode', () => {
   });
 
   it('preserves isDataPage from open across pings without explicit value', () => {
-    // Open as data page
     recordHeartbeat('p', 'open', { isDataPage: true, pageType: 'live' });
-    // Ping without isDataPage should not downgrade it
     const r = recordHeartbeat('p', 'ping', {});
     expect(r.dataViewers).toBe(1);
   });

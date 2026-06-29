@@ -141,15 +141,13 @@ export default function register(): void {
   registerSource<BeachwatchSnapshot>({
     name: 'beachwatch',
     family: 'misc',
-    intervalActiveMs: 600_000,
-    intervalIdleMs: 1_200_000,
+    intervalMs: 600_000,
     fetch: fetchBeachwatch,
   });
   registerSource<BeachsafeBeach[]>({
     name: 'beachsafe',
     family: 'misc',
-    intervalActiveMs: 600_000,
-    intervalIdleMs: 1_200_000,
+    intervalMs: 600_000,
     fetch: fetchBeachsafe,
   });
 }

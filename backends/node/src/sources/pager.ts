@@ -255,8 +255,7 @@ export default function register(): void {
   registerSource<PagerSnapshot>({
     name: 'pager',
     family: 'misc',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 120_000,
+    intervalMs: 60_000,
     fetch: fetchPager,
     archiveItems: pagerArchiveItems,
   });
