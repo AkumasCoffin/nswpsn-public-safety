@@ -22,7 +22,7 @@
     "migrate-history": "node --env-file-if-exists=../.env scripts/migrate-history.mjs"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.0.6",
     "dictionary-en-au": "^3.0.0",
     "fast-xml-parser": "^5.7.2",
     "hono": "^4.6.0",
