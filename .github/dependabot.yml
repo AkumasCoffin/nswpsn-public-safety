@@ -14,6 +14,11 @@ updates:
       # breaking bump is easy to review/hold on its own.
       backend-minor:
         update-types: [minor, patch]
+    ignore:
+      # undici 8 requires Node >=22.19; production + CI run Node 20. Stay on
+      # undici 7. Remove this once the runtime moves to Node 22.
+      - dependency-name: undici
+        versions: ['>=8']
 
   # Discord bot Python dependencies.
   - package-ecosystem: pip
