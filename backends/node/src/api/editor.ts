@@ -226,16 +226,19 @@ async function fetchRequest(pool: Pool, requestId: number): Promise<EditorReques
   return r.rows[0] ?? null;
 }
 
-// Mirror of python's `Changeme-` + 6 chars from secrets.choice over
-// `string.ascii_lowercase + string.digits`. There's a slight modulo bias
-// here (4 of 36 chars are ~1.4% more likely) — fine for a one-time temp
-// password that the user is forced to change on first login.
+// `Changeme-` + 6 chars from a CSPRNG over ascii_lowercase + digits. Uses
+// rejection sampling so there's no modulo bias (256 % 36 != 0): bytes in
+// the biased tail [252,256) are discarded and re-drawn, giving each of the
+// 36 chars equal probability. One-time temp password; user must rotate it.
 const TEMP_PASSWORD_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 function generateTempPassword(): string {
-  const bytes = randomBytes(6);
+  const n = TEMP_PASSWORD_ALPHABET.length; // 36
+  const cutoff = 256 - (256 % n); // 252 — largest unbiased multiple of n
   let suffix = '';
-  for (let i = 0; i < 6; i++) {
-    suffix += TEMP_PASSWORD_ALPHABET[bytes[i]! % TEMP_PASSWORD_ALPHABET.length];
+  while (suffix.length < 6) {
+    const b = randomBytes(1)[0]!;
+    if (b >= cutoff) continue; // reject the biased tail, draw again
+    suffix += TEMP_PASSWORD_ALPHABET[b % n];
   }
   return `Changeme-${suffix}`;
 }
