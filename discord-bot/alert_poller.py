@@ -503,17 +503,36 @@ class AlertPoller:
         # so every sync DB call is offloaded off the gateway heartbeat path.
         loop = asyncio.get_event_loop()
 
+        # Fetch all subscribed endpoints CONCURRENTLY. This loop used to fetch
+        # each of the ~18 endpoints sequentially, every one with a 30s
+        # timeout — so a single slow or unreachable source could stall the
+        # whole cycle for minutes and delay EVERY source's alerts (and, with
+        # @tasks.loop, push back the next cycle too). Now we first resolve
+        # which alert types have subscribers (cheap local DB), then fire all
+        # their HTTP fetches at once, so a cycle is bounded by the single
+        # slowest fetch instead of the sum of all of them.
+        subscribed = []  # [(alert_type, endpoint)]
         for alert_type, endpoint in self.endpoints.items():
-            # Check if anyone is subscribed to this alert type
             presets = await loop.run_in_executor(
                 None, self.db.get_presets_for_alert_type, alert_type
             )
             if not presets:
                 logger.debug(f"Skipping {alert_type} - no subscribers")
                 continue  # Skip if no one is subscribed
+            subscribed.append((alert_type, endpoint))
 
-            logger.debug(f"Checking {alert_type} ({len(presets)} subscribers)...")
-            data = await self._fetch(endpoint)
+        fetched = await asyncio.gather(
+            *[self._fetch(ep) for (_, ep) in subscribed],
+            return_exceptions=True,
+        )
+
+        for idx, (alert_type, _endpoint) in enumerate(subscribed):
+            data = fetched[idx]
+            # _fetch swallows its own errors and returns None, but gather can
+            # still surface an unexpected exception — treat it like no data.
+            if isinstance(data, Exception):
+                logger.warning(f"Fetch error for {alert_type}: {data}")
+                continue
             if not data:
                 logger.debug(f"  → No data returned for {alert_type}")
                 continue
