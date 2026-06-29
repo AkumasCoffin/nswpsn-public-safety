@@ -7137,8 +7137,11 @@ async function loadPagerData() {
         }
         const typePills = _roadworkAvailableTypes.map((t) => {
           const on = _roadworkSelectedTypes.has(t);
-          const safe = String(t).replace(/'/g, "\\'");
-          return _ffPill(on, `${t} (${(typeCounts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
+          // `t` is a roadwork type from the Waze / Live Traffic feeds (not a
+          // fixed enum), and the pill is inserted via innerHTML — so escape
+          // both the visible label and the value embedded in the onclick.
+          const safe = escapeHtml(String(t).replace(/'/g, "\\'"));
+          return _ffPill(on, `${escapeHtml(String(t))} (${(typeCounts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
         }).join('');
         const sourcePills = `
           ${_ffPill(_roadworkSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkSourcePill('livetraffic')")}
