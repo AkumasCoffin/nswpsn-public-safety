@@ -1,0 +1,99 @@
+name: CI
+
+# Runs on every push to the long-lived branches and on every PR. Mirrors
+# the checks we otherwise run by hand: backend typecheck + tests + prod
+# dependency audit, frontend inline-script syntax, bot syntax + lint, and a
+# secret-hygiene guard. A red ✗ here means don't deploy.
+on:
+  push:
+    branches: [main, dev-beta]
+  pull_request:
+
+# A new push to the same branch cancels the previous in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (typecheck · tests · audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backends/node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backends/node/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npx vitest run
+      - name: Audit production dependencies (fail on high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  frontend:
+    name: Frontend (inline script syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Parse classic inline <script> blocks
+        run: |
+          node -e '
+            const fs = require("fs");
+            const files = fs.readdirSync(".").filter((f) => f.endsWith(".html"));
+            // Only classic scripts (skip src= externals and type= module/json/template).
+            const re = /<script(?![^>]*\b(?:src|type)=)[^>]*>([\s\S]*?)<\/script>/gi;
+            let bad = 0;
+            for (const f of files) {
+              const html = fs.readFileSync(f, "utf8");
+              let m;
+              while ((m = re.exec(html))) {
+                try { new Function(m[1]); }
+                catch (e) { bad++; console.log(`::error file=${f}::inline script: ${e.message}`); }
+              }
+            }
+            if (bad) { console.log(`${bad} inline script(s) failed to parse`); process.exit(1); }
+            console.log("all classic inline scripts parse OK");
+          '
+
+  bot:
+    name: Discord bot (syntax + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Syntax check (py_compile)
+        run: python -m py_compile discord-bot/*.py
+      - name: Lint (ruff — informational, never blocks)
+        continue-on-error: true
+        run: |
+          python -m pip install --quiet ruff
+          ruff check discord-bot --output-format=github
+
+  secrets:
+    name: Secret hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No tracked secret files or committed private keys
+        run: |
+          set -e
+          if git ls-files | grep -E '(^|/)(\.env|config\.js)$'; then
+            echo "::error::A secret file (.env / config.js) is tracked — it must stay gitignored"
+            exit 1
+          fi
+          if git grep -nI -E 'BEGIN ([A-Z ]+ )?PRIVATE KEY' -- . ; then
+            echo "::error::A private key appears to be committed"
+            exit 1
+          fi
+          echo "OK: no tracked .env/config.js, no committed private keys"
