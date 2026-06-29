@@ -318,8 +318,7 @@ export default function register(): void {
     // data + this poller's output share the same `source` value.
     archiveSource: 'rfs',
     family: 'rfs',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 120_000,
+    intervalMs: 60_000,
     fetch: fetchRfs,
   });
 }

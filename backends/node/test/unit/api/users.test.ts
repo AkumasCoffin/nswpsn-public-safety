@@ -31,11 +31,34 @@ vi.mock('../../../src/db/pool.js', () => ({
   getPool: vi.fn(async () => (getPoolReturn === 'pool' ? fakePool : null)),
 }));
 
-const { usersRouter } = await import('../../../src/api/users.js');
-const { _resetRolesCacheForTests } = await import('../../../src/services/auth/roles.js');
+// Keep requireRole real (it's the gate under test) but stub the DB-backed
+// role checks so the happy-path tests don't need a live user_roles table.
+// vi.fn so individual tests can force a 403 via mockResolvedValueOnce.
+vi.mock('../../../src/services/auth/roles.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
+  return {
+    ...actual,
+    canManageUsers: vi.fn(async () => true),
+    canAssignPrivilegedRoles: vi.fn(async () => true),
+    isOwner: vi.fn(async () => true),
+  };
+});
 
-function makeApp() {
+const { usersRouter } = await import('../../../src/api/users.js');
+const roles = await import('../../../src/services/auth/roles.js');
+const { _resetRolesCacheForTests } = roles;
+
+// Build the test app. By default it injects a verified Supabase user id
+// (as the global optionalSupabaseJwt would after a valid JWT) so requireRole
+// can pass; pass {authed:false} to exercise the unauthenticated 401 path.
+function makeApp(opts: { authed?: boolean } = {}) {
   const app = new Hono();
+  if (opts.authed !== false) {
+    app.use('*', async (c, next) => {
+      c.set('userId', 'owner-1');
+      await next();
+    });
+  }
   app.route('/', usersRouter);
   return app;
 }
@@ -159,5 +182,35 @@ describe('503 when DB unavailable', () => {
       body: JSON.stringify({ roles: [] }),
     });
     expect(res.status).toBe(503);
+  });
+});
+
+describe('auth gate', () => {
+  it('401 when no authenticated user (public api key alone is not enough)', async () => {
+    const app = makeApp({ authed: false });
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'map_editor' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('403 when authenticated but not an owner', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'map_editor' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/users 403 when authenticated but lacks canManageUsers', async () => {
+    vi.mocked(roles.canManageUsers).mockResolvedValueOnce(false);
+    const app = makeApp();
+    const res = await app.request('/api/users');
+    expect(res.status).toBe(403);
   });
 });

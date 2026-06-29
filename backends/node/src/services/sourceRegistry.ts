@@ -5,15 +5,15 @@
  *   - `name`: stable identifier (also the LiveStore key)
  *   - `family`: maps to the archive table family (waze | traffic |
  *               rfs | power | misc) for when we wire ArchiveWriter
- *   - `intervalActiveMs` / `intervalIdleMs`: poll cadence in active vs
- *                                            idle mode (page-active
- *                                            heartbeat dictates which)
+ *   - `intervalMs`: poll cadence. Every source polls on this single
+ *                   interval 24/7 (the old active/idle split tied to the
+ *                   page-active heartbeat was removed — the bot is a
+ *                   round-the-clock consumer, so polling no longer depends
+ *                   on whether anyone's viewing the website)
  *   - `fetch`: async function that returns a snapshot (whatever shape
  *              this source uses; LiveStore is opaque to it)
  *
- * services/poller.ts walks the registry and schedules each. The
- * activity-mode service flips intervals between active/idle when the
- * heartbeat tracker reports a state change.
+ * services/poller.ts walks the registry and schedules each.
  */
 import type { ArchiveRow, ArchiveTable } from '../store/archive.js';
 
@@ -24,11 +24,8 @@ export interface SourceDefinition<T = unknown> {
   name: string;
   /** Which archive_<family> table archive rows from this source go to. */
   family: SourceFamily;
-  /** Active mode (someone watching a page). Mirrors python's
-   *  PREWARM_ACTIVE_INTERVAL = 60s default. */
-  intervalActiveMs: number;
-  /** Idle mode (no active page). Mirrors PREWARM_IDLE_INTERVAL = 120s. */
-  intervalIdleMs: number;
+  /** Poll cadence in ms — used 24/7 (no active/idle split). */
+  intervalMs: number;
   /** Returns the snapshot to store in LiveStore. Throws on upstream
    *  failure (poller catches, increments failure counter, applies
    *  backoff). */

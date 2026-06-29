@@ -6,6 +6,26 @@
  * traffic-raw + admin DB routes mock undici / pg respectively.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SignJWT } from 'jose';
+
+// The /api/admin/db/* routes are owner-gated. Stub the DB-backed isOwner
+// check so the smoke tests don't need a real user_roles table; the JWT
+// (signed below with the test secret) is still verified by the real
+// optionalSupabaseJwt so a valid `userId` is set.
+vi.mock('../../../src/services/auth/roles.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
+  return { ...actual, isOwner: vi.fn(async () => true) };
+});
+
+// Owner Authorization header — a real HS256 JWT signed with the test
+// SUPABASE_JWT_SECRET (vitest.config) so optionalSupabaseJwt verifies it.
+async function ownerHeaders(): Promise<Record<string, string>> {
+  const jwt = await new SignJWT({})
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject('owner-1')
+    .sign(new TextEncoder().encode('test-jwt-secret-0123456789'));
+  return { Authorization: `Bearer ${jwt}` };
+}
 
 const fetchJsonMock = vi.fn();
 
@@ -169,7 +189,7 @@ describe('/api/admin/db/stats', () => {
   it('reports per-table row counts and sizes', async () => {
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
-    const res = await app.request('/api/admin/db/stats', { headers: AUTH });
+    const res = await app.request('/api/admin/db/stats', { headers: await ownerHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, Record<string, unknown>>;
     expect(body['archive_waze']).toBeDefined();
@@ -184,7 +204,7 @@ describe('/api/admin/db/cleanup-duplicates', () => {
     const app = createApp();
     const res = await app.request('/api/admin/db/cleanup-duplicates', {
       method: 'POST',
-      headers: AUTH,
+      headers: await ownerHeaders(),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;

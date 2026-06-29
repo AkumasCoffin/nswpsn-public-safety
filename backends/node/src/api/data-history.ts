@@ -532,7 +532,7 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     });
   } catch (err) {
     log.error({ err }, '/api/data/history error');
-    return c.json({ error: (err as Error).message }, 500);
+    return c.json({ error: 'internal error' }, 500);
   }
 });
 
@@ -1007,6 +1007,6 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
     });
   } catch (err) {
     log.error({ err, source, sourceId }, '/api/data/history/incident error');
-    return c.json({ error: (err as Error).message }, 500);
+    return c.json({ error: 'internal error' }, 500);
   }
 });

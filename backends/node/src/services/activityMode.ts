@@ -7,25 +7,18 @@
  * we keep an in-memory map of page_id → last seen timestamp and prune
  * anything older than 120 seconds (PAGE_SESSION_TIMEOUT in Python).
  *
- * "Active" mode is on whenever at least one *data* page is non-stale.
- * Non-data pages count toward the viewer total (so /api/heartbeat /
- * /api/collection/status can show them) but don't switch the poller
- * cadence — that matches Python behaviour where info pages don't bump
- * `last_heartbeat`.
- *
- * The activity-mode flip is sticky: when a page joins, we immediately
- * call setActivityMode(true) on the poller; when the last data page
- * goes stale or closes, we flip back to false. The poller treats this
- * as "rearm every source on the next tick" so cadence catches up
- * within seconds.
+ * This now ONLY tracks viewer/session counts for display purposes
+ * (/api/heartbeat, /api/collection/status, dashboard viewer counts). It
+ * no longer drives the poller cadence — the active/idle polling split was
+ * removed, so sources poll on a single interval 24/7 regardless of who's
+ * watching. The `active` flag in the heartbeat response still reports
+ * "is at least one data page open?" purely so the frontend's display
+ * logic keeps working.
  *
  * Sweeper:
  *   - Runs every 30s (default; configurable via start()).
  *   - Removes any session whose last_seen is older than STALE_AFTER_MS.
- *   - Re-evaluates active mode after pruning so a tab going silent
- *     doesn't strand the pollers in active.
  */
-import { setActivityMode } from './poller.js';
 import { log } from '../lib/log.js';
 
 export type HeartbeatAction = 'open' | 'ping' | 'close';
@@ -50,7 +43,6 @@ const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 
 const _sessions = new Map<string, PageSession>();
 let _sweepTimer: NodeJS.Timeout | null = null;
-let _lastReportedActive: boolean | null = null;
 
 /** Internal: prune stale sessions. Returns count removed. */
 function pruneStale(now: number): number {
@@ -62,32 +54,6 @@ function pruneStale(now: number): number {
     }
   }
   return removed;
-}
-
-/** True if any non-stale session has isDataPage=true. */
-function hasActiveDataPage(now: number): boolean {
-  for (const s of _sessions.values()) {
-    if (!s.isDataPage) continue;
-    if (now - s.lastSeen <= STALE_AFTER_MS) return true;
-  }
-  return false;
-}
-
-/**
- * Re-evaluate active state and notify the poller iff it changed.
- * Centralised so both the heartbeat handler and the sweeper use the
- * same code path.
- */
-function reevaluate(): void {
-  const now = Date.now();
-  const active = hasActiveDataPage(now);
-  if (_lastReportedActive !== active) {
-    _lastReportedActive = active;
-    setActivityMode(active);
-    log.debug(
-      `activityMode: ${active ? 'active' : 'idle'} (sessions=${_sessions.size})`,
-    );
-  }
 }
 
 /**
@@ -128,7 +94,6 @@ export function recordHeartbeat(
   // Always prune before counting so the values we report are accurate
   // even between sweeper ticks.
   pruneStale(now);
-  reevaluate();
 
   let total = 0;
   let dataPages = 0;
@@ -171,7 +136,6 @@ export function start(intervalMs: number = DEFAULT_SWEEP_INTERVAL_MS): void {
         'activityMode: sweeper pruned stale sessions',
       );
     }
-    reevaluate();
   }, intervalMs);
   // Sweeper shouldn't keep the process alive on its own.
   _sweepTimer.unref?.();
@@ -190,5 +154,4 @@ export function stop(): void {
  */
 export function _resetForTests(): void {
   _sessions.clear();
-  _lastReportedActive = null;
 }

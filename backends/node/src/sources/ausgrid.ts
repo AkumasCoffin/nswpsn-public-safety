@@ -267,16 +267,14 @@ export function register(): void {
   registerSource<AusgridOutagesPayload>({
     name: 'ausgrid',
     family: 'power',
-    intervalActiveMs: 120_000,
-    intervalIdleMs: 300_000,
+    intervalMs: 120_000,
     fetch: fetchAusgridOutages,
     archiveItems: ausgridArchiveItems,
   });
   registerSource<unknown>({
     name: 'ausgrid_stats',
     family: 'power',
-    intervalActiveMs: 120_000,
-    intervalIdleMs: 300_000,
+    intervalMs: 120_000,
     fetch: fetchAusgridStats,
   });
 }

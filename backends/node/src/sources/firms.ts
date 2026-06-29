@@ -372,8 +372,7 @@ export default function register(): void {
     family: 'misc',
     // 15 min active / 30 min idle. FIRMS NRT updates ~every few hours;
     // polling more often just wastes API quota.
-    intervalActiveMs: 15 * 60_000,
-    intervalIdleMs: 30 * 60_000,
+    intervalMs: 15 * 60_000,
     fetch: fetchFirmsHotspots,
   });
 }

@@ -52,6 +52,7 @@ import { statusRouter } from './api/status.js';
 import { w3wRouter } from './api/w3w.js';
 import { systemRouter } from './api/system.js';
 import { requireApiKey } from './services/auth/apiKey.js';
+import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { log } from './lib/log.js';
 
 // Paths that should never appear in the request log even on
@@ -229,11 +230,19 @@ export function createApp() {
     }),
   );
 
+  // Identify the caller from a Supabase JWT (if one is presented) BEFORE
+  // the API-key gate, so privileged routes can role-check the real user
+  // and the key gate can let a logged-in user through. Purely additive:
+  // opaque NSWPSN_API_KEY bearer tokens aren't JWT-shaped so this is a
+  // no-op for them.
+  app.use('*', optionalSupabaseJwt);
+
   // Global NSWPSN_API_KEY gate. The middleware itself short-circuits for
   // OPTIONS preflights, public endpoints (/api/health, /api/config,
   // /api/heartbeat, POST /api/editor-requests, POST /api/waze/ingest,
-  // /api/check-editor/*, etc.), and any non-/api path. Mirrors Python's
-  // global @app.before_request hook.
+  // /api/check-editor/*, etc.), any non-/api path, and any request already
+  // authenticated as a Supabase user (a logged-in user is at least as
+  // trusted as the public key). Mirrors Python's global before_request.
   app.use('*', requireApiKey);
 
   // Register route modules. Each router defines its own paths under
