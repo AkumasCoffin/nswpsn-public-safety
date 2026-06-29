@@ -2,7 +2,7 @@
 # Python 3.9+ required
 
 # Discord
-discord.py>=2.3.0
+discord.py>=2.7.1
 
 # HTTP requests for API polling
 aiohttp>=3.9.0
