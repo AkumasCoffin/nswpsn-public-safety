@@ -36,6 +36,7 @@ import {
   _resetNonceCacheForTests as _resetAviationNonceForTests,
   _resetDetailCacheForTests as _resetAviationDetailForTests,
 } from '../sources/aviation.js';
+import { requireRole, isOwner } from '../services/auth/roles.js';
 import { log } from '../lib/log.js';
 
 export const systemRouter = new Hono();
@@ -227,7 +228,7 @@ systemRouter.get('/api/debug/test-all', (c) => {
 // /api/admin/db/stats — adapted to the partitioned archive_* schema.
 // Python's version queried the legacy `data_history` table; on Node we
 // query each archive_* table for row count + size.
-systemRouter.get('/api/admin/db/stats', async (c) => {
+systemRouter.get('/api/admin/db/stats', requireRole(isOwner), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database not configured' }, 503);
 
@@ -310,7 +311,7 @@ systemRouter.get('/api/admin/db/stats', async (c) => {
 // VACUUM in postgres can't run inside a transaction, so we use a
 // dedicated client with autocommit (the default outside an explicit
 // BEGIN). Returns per-table outcome.
-systemRouter.post('/api/admin/db/vacuum', async (c) => {
+systemRouter.post('/api/admin/db/vacuum', requireRole(isOwner), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database not configured' }, 503);
   const tables = [
@@ -347,7 +348,7 @@ systemRouter.post('/api/admin/db/vacuum', async (c) => {
 // queries. Useful when /api/data/history or other endpoints are
 // timing out and we need to know what postgres is actually doing
 // (autovacuum running? long-held locks? blocked on a backend?).
-systemRouter.get('/api/admin/db/active-queries', async (c) => {
+systemRouter.get('/api/admin/db/active-queries', requireRole(isOwner), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json({ error: 'database not configured' }, 503);
   try {
@@ -452,7 +453,7 @@ systemRouter.get('/api/admin/db/active-queries', async (c) => {
 // the deprecated `data_history` table. The new partitioned archive_*
 // schema is append-only with no duplicate-row problem, so this
 // endpoint is a no-op stub on Node.
-systemRouter.post('/api/admin/db/cleanup-duplicates', (c) =>
+systemRouter.post('/api/admin/db/cleanup-duplicates', requireRole(isOwner), (c) =>
   c.json(
     {
       status: 'no-op',

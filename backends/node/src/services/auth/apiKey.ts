@@ -104,6 +104,15 @@ export const requireApiKey: MiddlewareHandler = async (c, next) => {
     return;
   }
 
+  // A request already authenticated as a Supabase user (optionalSupabaseJwt
+  // verified the JWT and set userId) passes the key gate — a logged-in user
+  // is at least as trusted as the public NSWPSN_API_KEY. Privileged routes
+  // still enforce their own role check (requireRole) on top of this.
+  if (c.get('userId')) {
+    await next();
+    return;
+  }
+
   const provided = extractKey(
     c.req.header('Authorization'),
     c.req.header('X-API-Key'),

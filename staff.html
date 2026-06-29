@@ -1155,6 +1155,20 @@
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+    // Authorization header for admin API calls. The backend now gates the
+    // privileged endpoints (users, editor-request management, admin DB) on a
+    // verified Supabase JWT + role — NOT the public API_KEY — so send the
+    // logged-in user's access token. Falls back to API_KEY only for the
+    // non-privileged calls when (somehow) no session exists.
+    async function authHeader() {
+      try {
+        const { data } = await sb.auth.getSession();
+        const token = data?.session?.access_token;
+        if (token) return `Bearer ${token}`;
+      } catch (e) { /* fall through */ }
+      return `Bearer ${API_KEY}`;
+    }
+
     // Escape user/backend-supplied strings before interpolating into innerHTML.
     function escapeHtml(value) {
       if (value == null) return '';
@@ -1624,7 +1638,7 @@
       try {
         const response = await fetch(`${API_BASE_URL}/api/check-admin/${session.user.id}`, {
           headers: {
-            'Authorization': `Bearer ${API_KEY}`
+            'Authorization': await authHeader()
           }
         });
         
@@ -1735,7 +1749,7 @@
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           headers: {
-            'Authorization': `Bearer ${API_KEY}`
+            'Authorization': await authHeader()
           }
         });
         
@@ -1807,7 +1821,7 @@
         
         const response = await fetch(`${API_BASE_URL}/api/users`, {
           headers: {
-            'Authorization': `Bearer ${API_KEY}`
+            'Authorization': await authHeader()
           }
         });
         
@@ -1939,7 +1953,7 @@
         const response = await fetch(`${API_BASE_URL}/api/users/${currentEditUserId}/roles`, {
           method: 'PUT',
           headers: {
-            'Authorization': `Bearer ${API_KEY}`,
+            'Authorization': await authHeader(),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({ roles })
@@ -2156,7 +2170,7 @@
         const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}/approve`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${API_KEY}`,
+            'Authorization': await authHeader(),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -2245,7 +2259,7 @@
         const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}/reject`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${API_KEY}`,
+            'Authorization': await authHeader(),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({ reason })

@@ -5,6 +5,7 @@
  * checks against a fake pg query without spinning up a real DB.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Hono } from 'hono';
 
 let resultQueue: Array<{ rows: unknown[] }> = [];
 let queryCallCount = 0;
@@ -28,6 +29,7 @@ const {
   canManageUsers,
   canAssignPrivilegedRoles,
   isPrivilegedRole,
+  requireRole,
   invalidateUserRolesCache,
   _resetRolesCacheForTests,
 } = await import('../../../src/services/auth/roles.js');
@@ -107,6 +109,49 @@ describe('hasRole / isOwner / canManageUsers / canAssignPrivilegedRoles', () => 
     _resetRolesCacheForTests();
     resultQueue = [{ rows: [{ role: 'map_editor' }] }];
     expect(await hasRole('u', ['owner', 'team_member'])).toBe(false);
+  });
+});
+
+describe('requireRole middleware', () => {
+  // Build a tiny app: an optional pre-middleware sets userId (as the real
+  // optionalSupabaseJwt would), then the role-gated route.
+  function app(opts: { userId?: string } = {}) {
+    const a = new Hono();
+    if (opts.userId) {
+      a.use('*', async (c, next) => {
+        c.set('userId', opts.userId!);
+        await next();
+      });
+    }
+    a.get('/x', requireRole(isOwner), (c) => c.json({ ok: true }));
+    return a;
+  }
+
+  it('401 when no verified user is present', async () => {
+    const res = await app().request('/x');
+    expect(res.status).toBe(401);
+  });
+
+  it('403 when the user lacks the role', async () => {
+    resultQueue = [{ rows: [{ role: 'map_editor' }] }];
+    const res = await app({ userId: 'u' }).request('/x');
+    expect(res.status).toBe(403);
+  });
+
+  it('passes through when the role check succeeds', async () => {
+    resultQueue = [{ rows: [{ role: 'owner' }] }];
+    const res = await app({ userId: 'u' }).request('/x');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it('403 (fails closed) when the check throws', async () => {
+    const res = await app({ userId: 'u' })
+      .get('/y', requireRole(async () => { throw new Error('db down'); }), (c) =>
+        c.json({ ok: true }),
+      )
+      .request('/y');
+    expect(res.status).toBe(403);
   });
 });
 

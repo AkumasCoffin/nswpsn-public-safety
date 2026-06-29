@@ -15,6 +15,7 @@
  *   - map_editor   : Map editor page access.
  *   - pager_contributor / radio_contributor : feature roles, no admin.
  */
+import type { MiddlewareHandler } from 'hono';
 import { getPool } from '../../db/pool.js';
 
 const PRIVILEGED_ROLES: ReadonlySet<string> = new Set(['owner', 'team_member', 'dev']);
@@ -100,4 +101,39 @@ export async function canAssignPrivilegedRoles(userId: string): Promise<boolean>
 
 export function isPrivilegedRole(role: string): boolean {
   return PRIVILEGED_ROLES.has(role);
+}
+
+/**
+ * Middleware factory that gates a route on a role check. Requires a
+ * verified Supabase user (`c.get('userId')`, set upstream by
+ * optionalSupabaseJwt / requireSupabaseJwt) and that `check(userId)`
+ * resolves true.
+ *
+ *   - 401 when no verified user is present (only the public API key was
+ *     supplied, or no/invalid JWT) — these admin routes need a real user.
+ *   - 403 when the user is authenticated but lacks the role.
+ *
+ * Use on privileged routes (role management, editor-request approval,
+ * admin DB ops) so the public NSWPSN_API_KEY alone can no longer reach
+ * them — only a logged-in user with the right role can.
+ */
+export function requireRole(
+  check: (userId: string) => Promise<boolean>,
+): MiddlewareHandler {
+  return async (c, next) => {
+    const userId = c.get('userId');
+    if (!userId) {
+      return c.json({ error: 'authentication required' }, 401);
+    }
+    let allowed = false;
+    try {
+      allowed = await check(userId);
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    await next();
+  };
 }
