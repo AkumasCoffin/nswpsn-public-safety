@@ -102,21 +102,57 @@ export function urgentKeywords(): string[] {
   return parseKeywordEnv(config.RDIO_ALERT_URGENT_KEYWORDS) ?? [];
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Cache compiled matchers — the keyword lists are tiny and stable per
+// process, so we don't rebuild a RegExp on every burst.
+const _kwRe = new Map<string, RegExp>();
+
+/**
+ * Whole-token keyword match. The keyword must NOT be flanked by an
+ * alphanumeric character, so short codes match as standalone words but not
+ * as a fragment of a longer one:
+ *   keywordMatches('gsw to the leg', 'gsw')   → true
+ *   keywordMatches('unit at cogswell st', 'gsw') → false  (…co[gsw]ell…)
+ *   keywordMatches('kingswood', 'gsw')        → false  (…kin[gsw]ood…)
+ * Adjacency to spaces/punctuation/slashes still matches ('gsw/stab' → true),
+ * and multi-word phrases work ('structure fire'). Both `text` and `keyword`
+ * are expected lowercased (parseKeywordEnv lowercases the keywords;
+ * analyzeKeywords lowercases the text).
+ */
+export function keywordMatches(text: string, keyword: string): boolean {
+  if (!keyword) return false;
+  let re = _kwRe.get(keyword);
+  if (!re) {
+    // (?<![a-z0-9]) / (?![a-z0-9]) = not glued to an alphanumeric run, i.e.
+    // a "word-ish" boundary that also treats digits as part of a token so
+    // "gsw" never matches inside "gsw2"/"2gsw".
+    re = new RegExp(`(?<![a-z0-9])${escapeRegExp(keyword)}(?![a-z0-9])`);
+    _kwRe.set(keyword, re);
+  }
+  return re.test(text);
+}
+
 /** Match a burst's transcripts. `matched` is the incident list only — it
  *  is the trigger gate AND the displayed set, so nothing the operator
  *  didn't list (e.g. the urgent terms) can ever fire or show. `urgent`
- *  comes from the separate urgent list and only affects priority. */
+ *  comes from the separate urgent list and only affects priority.
+ *
+ *  Matching is whole-token (see keywordMatches) so a short code like "GSW"
+ *  fires on a spoken "GSW" but not on "Cogswell"/"Kingswood". */
 export function analyzeKeywords(allText: string): KeywordHit {
   const text = allText.toLowerCase();
   const matched: string[] = [];
   const seen = new Set<string>();
   for (const k of incidentKeywords()) {
-    if (text.includes(k) && !seen.has(k)) {
+    if (keywordMatches(text, k) && !seen.has(k)) {
       seen.add(k);
       matched.push(k);
     }
   }
-  const urgent = urgentKeywords().some((k) => text.includes(k));
+  const urgent = urgentKeywords().some((k) => keywordMatches(text, k));
   return { matched, urgent };
 }
 
