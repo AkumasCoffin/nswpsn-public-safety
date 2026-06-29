@@ -301,7 +301,8 @@ systemRouter.get('/api/admin/db/stats', requireRole(isOwner), async (c) => {
     }
     return c.json(stats);
   } catch (err) {
-    return c.json({ error: (err as Error).message }, 500);
+    log.error({ err }, '/api/admin/db/stats error');
+    return c.json({ error: 'internal error' }, 500);
   } finally {
     client.release();
   }
@@ -445,7 +446,8 @@ systemRouter.get('/api/admin/db/active-queries', requireRole(isOwner), async (c)
       })),
     });
   } catch (err) {
-    return c.json({ error: (err as Error).message }, 500);
+    log.error({ err }, '/api/admin/db/active-queries error');
+    return c.json({ error: 'internal error' }, 500);
   }
 });
 
