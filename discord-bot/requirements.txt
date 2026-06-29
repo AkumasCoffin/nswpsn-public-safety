@@ -8,7 +8,7 @@ discord.py>=2.3.0
 aiohttp>=3.9.0
 
 # Environment variable management
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 
 # PostgreSQL (for BOT_DATABASE_URL)
 psycopg2-binary>=2.9.0
