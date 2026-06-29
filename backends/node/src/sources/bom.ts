@@ -271,8 +271,7 @@ export default function register(): void {
     // legacy `bom_warning` into `bom_land` at read time
     // (external_api_proxy.py:1118), so older rows still surface.
     family: 'misc',
-    intervalActiveMs: 60_000,
-    intervalIdleMs: 120_000,
+    intervalMs: 60_000,
     fetch: fetchBom,
     archiveItems: bomArchiveItems,
   });

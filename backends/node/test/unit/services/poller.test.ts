@@ -8,15 +8,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const okSource = {
   name: 'test_ok',
   family: 'misc' as const,
-  intervalActiveMs: 60_000,
-  intervalIdleMs: 120_000,
+  intervalMs: 60_000,
   fetch: vi.fn(async () => ({ rows: [1, 2, 3] })),
 };
 const failSource = {
   name: 'test_fail',
   family: 'misc' as const,
-  intervalActiveMs: 60_000,
-  intervalIdleMs: 120_000,
+  intervalMs: 60_000,
   fetch: vi.fn(async () => {
     throw new Error('upstream-broke');
   }),
@@ -24,8 +22,7 @@ const failSource = {
 const slowSource = {
   name: 'test_slow',
   family: 'misc' as const,
-  intervalActiveMs: 60_000,
-  intervalIdleMs: 120_000,
+  intervalMs: 60_000,
   fetch: vi.fn(
     () =>
       // Resolves AFTER our timeout — proves prewarmAll returns without
@@ -125,8 +122,7 @@ describe('prewarmAll', () => {
     const heldSource = {
       name: 'test_held',
       family: 'misc' as const,
-      intervalActiveMs: 60_000,
-      intervalIdleMs: 120_000,
+      intervalMs: 60_000,
       fetch: vi.fn(
         () =>
           new Promise<{ ok: true }>((resolve) => {

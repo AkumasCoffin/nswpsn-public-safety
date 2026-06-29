@@ -278,15 +278,13 @@ export default function register(): void {
   registerSource<WeatherSnapshot>({
     name: 'weather_current',
     family: 'misc',
-    intervalActiveMs: 30 * 60_000,
-    intervalIdleMs: 60 * 60_000,
+    intervalMs: 30 * 60_000,
     fetch: fetchWeatherCurrent,
   });
   registerSource<WeatherRadarSnapshot>({
     name: 'weather_radar',
     family: 'misc',
-    intervalActiveMs: 300_000,
-    intervalIdleMs: 600_000,
+    intervalMs: 300_000,
     fetch: fetchWeatherRadar,
   });
 }

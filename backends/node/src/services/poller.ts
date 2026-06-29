@@ -6,13 +6,14 @@
  * failure the next attempt waits backoffSeconds(failureCount) past the
  * normal interval. Success resets the counter.
  *
- * Activity-mode awareness: when activeMode flips, every source's
- * interval is reset to the matching cadence on the next tick.
+ * Every source polls on its single `intervalMs` cadence 24/7. (The old
+ * active/idle split — driven by the page-active heartbeat — was removed;
+ * the Discord bot is a round-the-clock consumer, so backend freshness
+ * shouldn't depend on whether anyone's viewing the website.)
  *
  * Why each source is its own setInterval rather than one big tick:
  *   - One slow source can't starve the others
  *   - Backoff per-source is simpler to reason about
- *   - Idle/active switch only re-arms the affected timers
  */
 import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
@@ -63,7 +64,6 @@ interface SourceState {
   inFlight: Promise<void> | null;
 }
 
-let activeMode = true; // true = active interval, false = idle
 const _state = new Map<string, SourceState>();
 let _running = false;
 // Set by prewarmAll() so startPolling() knows to skip its initial-tick
@@ -71,29 +71,8 @@ let _running = false;
 // did the first round.
 let _prewarmDone = false;
 
-/**
- * Toggle activity mode. Causes every source's next tick to use the
- * appropriate interval. Called by the heartbeat / activityMode service
- * when page-active state changes.
- */
-export function setActivityMode(active: boolean): void {
-  if (active === activeMode) return;
-  activeMode = active;
-  log.info(`activity mode → ${active ? 'active' : 'idle'}; rearming pollers`);
-  if (_running) {
-    // Re-arm immediately so cadence reflects the new mode.
-    for (const src of allSources()) {
-      armOne(src);
-    }
-  }
-}
-
-export function isActiveMode(): boolean {
-  return activeMode;
-}
-
 function intervalFor(src: SourceDefinition): number {
-  return activeMode ? src.intervalActiveMs : src.intervalIdleMs;
+  return src.intervalMs;
 }
 
 function ensureState(name: string): SourceState {

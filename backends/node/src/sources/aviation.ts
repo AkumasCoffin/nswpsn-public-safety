@@ -279,8 +279,7 @@ export default function register(): void {
   registerSource<AviationSnapshot>({
     name: 'aviation_cameras',
     family: 'misc',
-    intervalActiveMs: 5 * 60_000,
-    intervalIdleMs: 10 * 60_000,
+    intervalMs: 5 * 60_000,
     fetch: fetchAviationCameras,
   });
 }
