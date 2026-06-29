@@ -1,0 +1,34 @@
+# Automated dependency-update PRs + vulnerability alerts. Each PR is
+# validated by the CI workflow before you merge. Updates are weekly and
+# grouped per ecosystem so you get a few tidy PRs, not a flood.
+version: 2
+updates:
+  # Backend Node/TS dependencies.
+  - package-ecosystem: npm
+    directory: /backends/node
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Bundle non-major updates into one PR; majors come separately so a
+      # breaking bump is easy to review/hold on its own.
+      backend-minor:
+        update-types: [minor, patch]
+
+  # Discord bot Python dependencies.
+  - package-ecosystem: pip
+    directory: /discord-bot
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      bot-minor:
+        update-types: [minor, patch]
+
+  # The GitHub Actions used in our workflows (keeps action versions current
+  # and patched).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
