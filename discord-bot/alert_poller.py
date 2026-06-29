@@ -2,7 +2,6 @@
 Alert Poller - Fetches alerts from the NSW PSN API and tracks new incidents.
 """
 
-import os
 import aiohttp
 import asyncio
 import hashlib
@@ -157,7 +156,7 @@ class AlertPoller:
         elif alert_type.startswith('traffic_'):
             # Use the ID from properties
             props = item.get('properties', {})
-            return str(props.get('id', '')) or hashlib.md5(str(item).encode()).hexdigest()[:16]
+            return str(props.get('id', '')) or hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
         elif alert_type.startswith('endeavour_'):
             # Use incident ID + suburb + streets to make unique
@@ -167,7 +166,7 @@ class AlertPoller:
             suburb = item.get('suburb', '') or item.get('location', '')
             streets = item.get('streets', '') or item.get('streetName', '')
             # Create hash of streets to keep ID shorter
-            street_hash = hashlib.md5(str(streets).encode()).hexdigest()[:8] if streets else ''
+            street_hash = hashlib.md5(str(streets).encode(), usedforsecurity=False).hexdigest()[:8] if streets else ''
             prefix = alert_type  # endeavour_current / endeavour_planned
             return f"{prefix}_{incident_id}_{suburb}_{street_hash}" if suburb else f"{prefix}_{incident_id}"
 
@@ -178,7 +177,7 @@ class AlertPoller:
                 return f"ausgrid_{outage_id}"
             suburb = item.get('Suburb', '') or item.get('suburb', '')
             street = item.get('StreetName', '') or item.get('streetName', '')
-            return f"ausgrid_{suburb}_{street}" if suburb else hashlib.md5(str(item).encode()).hexdigest()[:16]
+            return f"ausgrid_{suburb}_{street}" if suburb else hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
         elif alert_type.startswith('essential_'):
             # Essential Energy outages — best-effort key off id-ish fields
@@ -190,7 +189,7 @@ class AlertPoller:
             street = item.get('street') or item.get('streetName') or item.get('StreetName') or ''
             if suburb or street:
                 return f"{alert_type}_{suburb}_{street}"
-            return hashlib.md5(str(item).encode()).hexdigest()[:16]
+            return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
         elif alert_type.startswith('waze_'):
             # Waze alerts - use the Waze UUID from properties when present.
@@ -228,7 +227,7 @@ class AlertPoller:
                     bucket_dt = datetime.now(timezone.utc)
                 bucket = int(bucket_dt.timestamp() // (WAZE_POLICE_DEDUP_MINUTES * 60))
                 stable = '|'.join([str(props.get('wazeSubtype', '')), loc, str(bucket)])
-                return "waze_police_" + hashlib.md5(stable.encode()).hexdigest()[:16]
+                return "waze_police_" + hashlib.md5(stable.encode(), usedforsecurity=False).hexdigest()[:16]
 
             waze_id = props.get('id', '')
             if waze_id:
@@ -252,7 +251,7 @@ class AlertPoller:
                 str(props.get('street', '')),
                 loc,
             ])
-            return f"{alert_type}_" + hashlib.md5(stable.encode()).hexdigest()[:16]
+            return f"{alert_type}_" + hashlib.md5(stable.encode(), usedforsecurity=False).hexdigest()[:16]
 
         elif alert_type == 'user_incident':
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
@@ -261,17 +260,17 @@ class AlertPoller:
             # Backend log order isn't guaranteed (embeds.py re-sorts for
             # display), so pick the newest by created_at/id rather than
             # trusting logs[0] — otherwise updates can fail to re-fire.
-            dict_logs = [l for l in logs if isinstance(l, dict)]
+            dict_logs = [row for row in logs if isinstance(row, dict)]
             latest_log = max(
                 dict_logs,
-                key=lambda l: (str(l.get('created_at', '')), str(l.get('id', ''))),
+                key=lambda row: (str(row.get('created_at', '')), str(row.get('id', ''))),
                 default=None,
             ) if dict_logs else None
             latest_log_id = latest_log.get('id', '') if latest_log else ''
             return f"user_{incident_id}_{latest_log_id}"
         
         # Fallback to hash
-        return hashlib.md5(str(item).encode()).hexdigest()[:16]
+        return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
     
     def _get_alert_timestamp(self, alert_type: str, item: Dict[str, Any]) -> datetime:
         """Extract the source timestamp from an alert item for sorting.
@@ -1290,5 +1289,5 @@ class AlertPoller:
         """Create a hash for a pager message to detect duplicates"""
         if isinstance(message, dict):
             message = str(message)
-        return hashlib.md5(message.encode()).hexdigest()
+        return hashlib.md5(message.encode(), usedforsecurity=False).hexdigest()
 
