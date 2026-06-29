@@ -24,12 +24,15 @@ export function formatSydneyNaive(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false,
+    // h23 = 00..23. Plain `hour12:false` can surface the "24" Intl quirk
+    // at midnight in some engines, which the old post-patch only fixed for
+    // the hour — leaving the date a day behind. h23 avoids it at the source.
+    hourCycle: 'h23',
   });
   const parts = fmt.formatToParts(new Date(ms));
   const get = (t: string): string =>
     parts.find((p) => p.type === t)?.value ?? '00';
-  const hour = get('hour') === '24' ? '00' : get('hour'); // Intl quirk
+  const hour = get('hour') === '24' ? '00' : get('hour'); // belt-and-suspenders
   return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}:${get('second')}`;
 }
 

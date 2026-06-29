@@ -139,6 +139,32 @@ describe('formatRdioPrompt', () => {
     expect(prompt).not.toContain('===');
   });
 
+  it('drops junk transcripts (url / garbled / non-english) before grouping', async () => {
+    const { formatRdioPrompt } = await import('../../../src/services/llm.js');
+    const mk = (call_id: number, transcript: string) => ({
+      call_id,
+      date_time: new Date('2026-04-25T01:00:00Z'),
+      system: 1,
+      talkgroup: 50,
+      transcript,
+      source: null,
+      sources: null,
+    });
+    const calls = [
+      mk(1, 'Pumper 7 on scene, no signs of fire'), // keep
+      mk(2, 'Subtitles by the Amara.org community'), // url
+      mk(3, 'you you you you you'), // garbled
+      mk(4, '请订阅我的频道'), // non-english
+    ];
+    const { prompt, totalChars, inputMap } = await formatRdioPrompt(calls, 'p');
+    // Only the real line survives into the prompt and the input map.
+    expect(inputMap.size).toBe(1);
+    expect(inputMap.has(1)).toBe(true);
+    expect(prompt).toContain('Pumper 7 on scene');
+    expect(prompt).not.toContain('Amara');
+    expect(totalChars).toBe('Pumper 7 on scene, no signs of fire'.length);
+  });
+
   it('emits an inputMap keyed by call_id with verbatim text + uid + context', async () => {
     const { formatRdioPrompt } = await import('../../../src/services/llm.js');
     const calls = [
@@ -216,11 +242,12 @@ describe('rebuildIncidents', () => {
     expect(trs).toHaveLength(3);
     expect(trs[0]).toEqual({ call_id: 100, time: '10:00:01', text: 'truck en route' });
     expect(trs[2]!['text']).toBe('arriving on scene'); // verbatim, not "ALSO POLISHED"
-    // units[] is a deduped string array. UID 2010282 has a label in
-    // the input map; UID 2019977 does not, so it falls back to
-    // "UID:<n>". Order follows first-seen order in member_call_ids.
+    // units[] is a deduped string array of friendly labels only. UID
+    // 2010282 has a label in the input map; UID 2019977 does not, so it
+    // is SKIPPED — bare "UID:<n>" tokens are noise and no longer emitted
+    // (see commit "stop showing bare UID tokens in the Units line").
     const units = incs[0]!['units'] as unknown[];
-    expect(units).toEqual(['RFS - Greenwall Point 1', 'UID:2019977']);
+    expect(units).toEqual(['RFS - Greenwall Point 1']);
     expect(out['incident_count']).toBe(1);
   });
 

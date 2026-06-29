@@ -215,6 +215,72 @@ describe('buildSqlForTable — time, geo, cursor', () => {
     );
     expect(q.sql).toMatch(/fetched_at > to_timestamp/);
   });
+
+  it('a table-less (single-family) cursor keeps the equal-rank row-value seek', () => {
+    const q = buildSqlForTable(
+      'archive_waze',
+      defaultParams({ cursor: { fetchedAt: 1_700_000_000, rowId: 99 } }),
+    );
+    expect(q.sql).toMatch(
+      /\(fetched_at < to_timestamp\(\$\d+\) OR \(fetched_at = to_timestamp\(\$\d+\) AND id < \$\d+\)\)/,
+    );
+  });
+});
+
+describe('buildSqlForTable — multi-family rank-aware cursor seek (DESC)', () => {
+  // Global DESC order is (fetched_at DESC, table_rank DESC, id DESC).
+  // ALL_ARCHIVE_TABLES rank: waze=0, traffic=1, rfs=2, power=3, misc=4.
+  // With the cursor's boundary row in archive_rfs (rank 2), at a tied
+  // second the lower-rank tables (waze/traffic) sort AFTER the cursor and
+  // must include that second; the higher-rank tables (power/misc) already
+  // emitted it and must exclude it.
+  const cursor = { fetchedAt: 1_700_000_000, rowId: 99, table: 'archive_rfs' };
+
+  it('same table as the cursor → row-value (fetched_at, id) seek', () => {
+    const q = buildSqlForTable('archive_rfs', defaultParams({ cursor }));
+    expect(q.sql).toMatch(
+      /\(fetched_at < to_timestamp\(\$\d+\) OR \(fetched_at = to_timestamp\(\$\d+\) AND id < \$\d+\)\)/,
+    );
+    expect(q.params).toContain(99); // tiebreaker id present
+  });
+
+  it('lower-rank table (sorts after cursor) → inclusive fetched_at <= seek, no id', () => {
+    const q = buildSqlForTable('archive_waze', defaultParams({ cursor }));
+    expect(q.sql).toMatch(/fetched_at <= to_timestamp\(\$\d+\)/);
+    expect(q.sql).not.toMatch(/AND id </); // no cross-table id comparison
+    expect(q.params).not.toContain(99); // boundary id never applied here
+  });
+
+  it('higher-rank table (already emitted at tie) → strict fetched_at < seek, no id', () => {
+    const q = buildSqlForTable('archive_power', defaultParams({ cursor }));
+    expect(q.sql).toMatch(/fetched_at < to_timestamp\(\$\d+\)/);
+    expect(q.sql).not.toMatch(/fetched_at <= to_timestamp/);
+    expect(q.sql).not.toMatch(/AND id </);
+    expect(q.params).not.toContain(99);
+  });
+
+  it('ASC flips which side is inclusive (lower rank now sorts before)', () => {
+    const q = buildSqlForTable(
+      'archive_waze',
+      defaultParams({ cursor, order: 'ASC' }),
+    );
+    // ASC global order = (fetched_at ASC, rank ASC, id ASC); waze(0) <
+    // rfs(2) so waze sorts BEFORE the cursor at a tie → strict seek.
+    expect(q.sql).toMatch(/fetched_at > to_timestamp\(\$\d+\)/);
+    expect(q.sql).not.toMatch(/fetched_at >= to_timestamp/);
+  });
+
+  it('an unknown cursor table falls back to the equal-rank seek (graceful)', () => {
+    const q = buildSqlForTable(
+      'archive_waze',
+      defaultParams({
+        cursor: { fetchedAt: 1_700_000_000, rowId: 99, table: 'archive_bogus' },
+      }),
+    );
+    expect(q.sql).toMatch(
+      /\(fetched_at < to_timestamp\(\$\d+\) OR \(fetched_at = to_timestamp\(\$\d+\) AND id < \$\d+\)\)/,
+    );
+  });
 });
 
 describe('buildSqlForTable — unique=1', () => {
@@ -294,6 +360,25 @@ describe('mergeAndPaginate', () => {
     const plan = buildPlan(defaultParams({ limit: 10 }));
     const out = mergeAndPaginate(rows, plan);
     expect(out.map((r) => r.id)).toEqual([2, 1, 3]);
+  });
+
+  it('breaks fetched_at ties by table rank before id (DESC: higher rank first)', () => {
+    // Same second, but a low id in a high-rank family must still sort
+    // ahead of a high id in a low-rank family — rank dominates id.
+    const a: ArchiveQueryRow = { ...row(5, 1000), _family: 'archive_waze' }; // rank 0
+    const b: ArchiveQueryRow = { ...row(1, 1000), _family: 'archive_misc' }; // rank 4
+    const plan = buildPlan(defaultParams({ limit: 10 }));
+    const out = mergeAndPaginate([a, b], plan);
+    // DESC → rank 4 (misc, id 1) before rank 0 (waze, id 5).
+    expect(out.map((r) => r._family)).toEqual(['archive_misc', 'archive_waze']);
+  });
+
+  it('falls back to id tiebreak within the same family at a tie', () => {
+    const a: ArchiveQueryRow = { ...row(7, 1000), _family: 'archive_waze' };
+    const b: ArchiveQueryRow = { ...row(9, 1000), _family: 'archive_waze' };
+    const plan = buildPlan(defaultParams({ limit: 10 }));
+    const out = mergeAndPaginate([a, b], plan);
+    expect(out.map((r) => r.id)).toEqual([9, 7]); // DESC by id
   });
 
   it('applies offset+limit after merge', () => {

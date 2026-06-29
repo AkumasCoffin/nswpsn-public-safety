@@ -35,6 +35,7 @@ import {
   ensureSpellcheckerLoaded,
   spellcheckTranscript,
 } from './rdioSpell.js';
+import { classifyTranscript, type JunkReason } from './rdioQuality.js';
 
 const LLM_URL =
   'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
@@ -272,6 +273,12 @@ export async function formatRdioPrompt(
   await ensureUnitLabelsLoaded();
   await ensureSpellcheckerLoaded();
   let totalSpellChanges = 0;
+  // Junk-transcript drops, tallied by reason for the summary log line.
+  const droppedJunk: Record<JunkReason, number> = {
+    url: 0,
+    garbled: 0,
+    non_english: 0,
+  };
   type GroupKey = string;
   const groups = new Map<
     GroupKey,
@@ -308,6 +315,16 @@ export async function formatRdioPrompt(
     }
     const rawText = extractTranscriptText(row.transcript);
     if (!rawText) continue;
+    // Drop Whisper hallucinations before they reach the spell-checker or
+    // Gemini: URLs / bare domains (subtitle-credit artefacts), garbled or
+    // looping output, and non-English (non-Latin script) lines. These
+    // carry no operational content and only inflate the prompt / mislead
+    // the model. See services/rdioQuality.ts for the (conservative) gates.
+    const junk = classifyTranscript(rawText);
+    if (junk) {
+      droppedJunk[junk] += 1;
+      continue;
+    }
     // Conservative spell-check (en-AU + rdio_units.csv label corpus +
     // rdio_lexicon.txt). Both the LLM input and the displayed
     // transcript see the same corrected string so we don't store one
@@ -366,6 +383,21 @@ export async function formatRdioPrompt(
     log.info(
       { corrections: totalSpellChanges, calls: calls.length },
       'rdio spell: hourly summary',
+    );
+  }
+
+  const totalJunk =
+    droppedJunk.url + droppedJunk.garbled + droppedJunk.non_english;
+  if (totalJunk > 0) {
+    log.info(
+      {
+        total: totalJunk,
+        url: droppedJunk.url,
+        garbled: droppedJunk.garbled,
+        non_english: droppedJunk.non_english,
+        calls: calls.length,
+      },
+      'rdio quality: dropped junk transcripts',
     );
   }
 
@@ -519,20 +551,19 @@ export function rebuildIncidents(
       obj['transcripts_truncated'] = true;
       obj['transcripts_total'] = valid.length;
     }
-    // Build units[] as a deduped string array — the friendly label
-    // from rdio_units.csv when known, "UID:<n>" otherwise. live.html /
-    // logs.html both render units via
-    //   typeof u === 'string' ? u : (u.id || u.label || '?')
-    // so a string array drops straight in. An earlier draft of this
-    // function emitted {uid,label} objects, which both frontends
-    // rendered as "?".
+    // Build units[] as a deduped string array of friendly labels from
+    // rdio_units.csv. Units with no known label are SKIPPED — bare
+    // "UID:<n>" tokens are noise to readers and cluttered the Units line
+    // in live.html / logs.html / the Discord embed. live.html / logs.html
+    // render units via `typeof u === 'string' ? u : (u.label || u.id)`,
+    // so a string array drops straight in.
     const unitSeen = new Set<number>();
     const unitList: string[] = [];
     for (const id of valid) {
       const row = inputMap.get(id)!;
       if (row.uid === null || unitSeen.has(row.uid)) continue;
       unitSeen.add(row.uid);
-      unitList.push(row.unit_label ?? `UID:${row.uid}`);
+      if (row.unit_label) unitList.push(row.unit_label);
     }
     obj['units'] = unitList;
     out.push(obj);
@@ -649,6 +680,13 @@ export async function callLlm(opts: {
   const keys = getGeminiKeys();
   if (keys.length === 0) throw new Error('GEMINI_API_KEY not set');
   const maxAttempts = opts.maxAttempts ?? 4;
+  // Per-call key cursor, seeded from the module global so we resume on the
+  // last known-good key, but mutated LOCALLY so two concurrent callLlm
+  // invocations (e.g. the scheduler and a manual /trigger) can't clobber
+  // each other's rotation accounting. We publish the local back to the
+  // global on each rollover (benign last-writer-wins) so the next call
+  // still benefits from the most recent good key.
+  let keyIdx = _geminiKeyIdx;
   const payload: Record<string, unknown> = {
     model: opts.model,
     temperature: 0.2,
@@ -679,7 +717,7 @@ export async function callLlm(opts: {
     let sawTransient = false;
 
     while (keysRateLimited < keys.length) {
-      const apiKey = keys[_geminiKeyIdx % keys.length]!;
+      const apiKey = keys[keyIdx % keys.length]!;
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 10 * 60_000); // 10 min hard cap
       try {
@@ -709,11 +747,12 @@ export async function callLlm(opts: {
           // immediately within the same round (no backoff).
           retryAfterMs = Number(res.headers.get('Retry-After') ?? '0') * 1000;
           keysRateLimited += 1;
-          const prevIdx = _geminiKeyIdx % keys.length;
-          _geminiKeyIdx = (_geminiKeyIdx + 1) % keys.length;
+          const prevIdx = keyIdx % keys.length;
+          keyIdx = (keyIdx + 1) % keys.length;
+          _geminiKeyIdx = keyIdx; // publish last good cursor for the next call
           if (keys.length > 1 && keysRateLimited < keys.length) {
             log.warn(
-              { keyIndex: prevIdx, nextKeyIndex: _geminiKeyIdx, totalKeys: keys.length },
+              { keyIndex: prevIdx, nextKeyIndex: keyIdx, totalKeys: keys.length },
               'Gemini key rate-limited, rolling to next key',
             );
             continue; // try the next key right away

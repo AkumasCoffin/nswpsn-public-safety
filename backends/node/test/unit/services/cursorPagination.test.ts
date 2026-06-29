@@ -75,4 +75,32 @@ describe('cursorPagination', () => {
   it('exposes MAX_OFFSET = 10000 (matches Python contract)', () => {
     expect(MAX_OFFSET).toBe(10_000);
   });
+
+  it('roundtrips a multi-family cursor with a table segment', () => {
+    const cursor = encodeCursor(1_700_000_000, 12345, 'archive_waze');
+    expect(decodeCursor(cursor)).toEqual({
+      fetchedAt: 1_700_000_000,
+      rowId: 12345,
+      table: 'archive_waze',
+    });
+  });
+
+  it('omits the table segment when table is null/undefined (back-compat)', () => {
+    expect(encodeCursor(1_700_000_000, 1, null)).toBe('MTcwMDAwMDAwMDox');
+    expect(encodeCursor(1_700_000_000, 1, undefined)).toBe('MTcwMDAwMDAwMDox');
+    // Decoding a 2-part cursor yields no `table` key at all.
+    expect(decodeCursor('MTcwMDAwMDAwMDox')).toEqual({
+      fetchedAt: 1_700_000_000,
+      rowId: 1,
+    });
+  });
+
+  it('rejects a malformed table segment but accepts valid ones', () => {
+    // base64('100:5:archive waze') — space is illegal in a table name.
+    const bad = Buffer.from('100:5:archive waze', 'ascii').toString('base64url');
+    expect(decodeCursor(bad)).toBeNull();
+    // 4+ colon segments are rejected outright.
+    const tooMany = Buffer.from('100:5:a:b', 'ascii').toString('base64url');
+    expect(decodeCursor(tooMany)).toBeNull();
+  });
 });

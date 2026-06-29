@@ -82,10 +82,30 @@ class AlertPoller:
         
         # Track last seen pager message ID
         self.last_pager_id = 0
-        
+
         # Track first poll cycle (skip high-volume sources on first run)
         self._first_poll = True
-    
+
+        # Shared HTTP session — created lazily on first use so it binds to
+        # the running event loop. ~18 endpoints are fetched per 60s cycle;
+        # reusing one session keeps TCP/TLS connections alive instead of
+        # paying a fresh handshake per request. Closed via close().
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Return the shared aiohttp session, (re)creating it if absent or
+        closed. Must be called from within the running event loop."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the shared HTTP session. Call on bot shutdown so aiohttp
+        doesn't warn about an unclosed session / leaked connector."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
     async def _fetch(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """Fetch data from an API endpoint"""
         url = f"{self.api_base_url}{endpoint}"
@@ -94,15 +114,15 @@ class AlertPoller:
             'User-Agent': 'NSWPSNBot/1.0',
             'X-Client-Type': 'discord-bot'
         }
-        
+
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.warning(f"API returned {response.status} for {endpoint}")
-                        return None
+            session = self._get_session()
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.warning(f"API returned {response.status} for {endpoint}")
+                    return None
         except asyncio.TimeoutError:
             logger.error(f"Timeout fetching {endpoint}")
             return None
@@ -646,6 +666,7 @@ class AlertPoller:
                 )
             return new_alerts
 
+        pending_seen = []
         for incident in incidents:
             # Skip incidents that don't have minimum required data
             # (prevents posting when marker just created but not filled in)
@@ -658,11 +679,6 @@ class AlertPoller:
                 None, self.db.is_alert_seen, 'user_incident', alert_id
             )
             if not seen:
-                # Mark as seen IMMEDIATELY to prevent duplicates on next poll cycle
-                await loop.run_in_executor(
-                    None, self.db.mark_alert_seen, 'user_incident', alert_id
-                )
-
                 # Use actual source timestamp for proper ordering
                 source_ts = self._get_alert_timestamp('user_incident', incident)
                 alert = {
@@ -672,7 +688,17 @@ class AlertPoller:
                     'timestamp': source_ts.isoformat()
                 }
                 new_alerts.append(alert)
+                pending_seen.append(alert_id)
                 logger.info(f"New user incident: {incident.get('title', 'Unknown')}")
+
+        # Defer mark-seen until AFTER the alerts are appended (mirrors the
+        # radio_summary path). Cross-cycle dedup is preserved because this
+        # still completes before the function returns, but the window in
+        # which a crash could drop an alert shrinks to these milliseconds.
+        for alert_id in pending_seen:
+            await loop.run_in_executor(
+                None, self.db.mark_alert_seen, 'user_incident', alert_id
+            )
 
         return new_alerts
 
@@ -947,6 +973,7 @@ class AlertPoller:
         messages = await self._fetch_pager_from_api()
         logger.debug(f"  → Fetched {len(messages)} pager messages from API")
 
+        pending_seen = []
         for msg in messages:
             # Use pager_msg_id as unique identifier
             pager_msg_id = str(msg.get('pager_msg_id', ''))
@@ -961,16 +988,25 @@ class AlertPoller:
                 # Returns None for test messages that should be filtered
                 parsed = self._format_api_pager(msg)
                 if parsed:
-                    # Mark as seen IMMEDIATELY to prevent duplicates on next poll cycle
-                    # (poll runs every 30s, queue processing can take longer due to rate limits)
-                    await loop.run_in_executor(None, self.db.mark_pager_seen, msg_hash)
                     parsed['_msg_hash'] = msg_hash
                     new_messages.append(parsed)
+                    # Defer mark-seen for REAL messages until after append
+                    # (see below) so a crash can't drop an unsent pager alert.
+                    pending_seen.append(msg_hash)
                     logger.info(f"New pager message: {parsed.get('capcode', 'UNKNOWN')} - {parsed.get('incident_id', '')} - {parsed.get('type', '')}")
                 else:
-                    # Mark filtered/test messages as seen immediately (they won't be sent)
+                    # Filtered/test messages are never sent, so mark them seen
+                    # immediately — there's nothing to lose and we want them
+                    # suppressed on the next cycle.
                     await loop.run_in_executor(None, self.db.mark_pager_seen, msg_hash)
                     logger.debug(f"Filtered pager message (test/invalid): {pager_msg_id}")
+
+        # Mark real messages seen AFTER they're appended to new_messages.
+        # This still runs before check_pager returns, so the next poll cycle
+        # (~30s later) sees them as seen and won't re-queue — cross-cycle
+        # dedup is intact — while the crash-loss window shrinks to here.
+        for msg_hash in pending_seen:
+            await loop.run_in_executor(None, self.db.mark_pager_seen, msg_hash)
 
         return new_messages
     
@@ -990,22 +1026,22 @@ class AlertPoller:
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        # API returns GeoJSON FeatureCollection, extract features
-                        if isinstance(data, dict) and 'features' in data:
-                            # Convert features to flat format for processing
-                            messages = []
-                            for feature in data.get('features', []):
-                                props = feature.get('properties', {})
-                                messages.append(props)
-                            return messages
-                        return []
-                    else:
-                        logger.warning(f"API returned {response.status} for pager/hits")
-                        return []
+            session = self._get_session()
+            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # API returns GeoJSON FeatureCollection, extract features
+                    if isinstance(data, dict) and 'features' in data:
+                        # Convert features to flat format for processing
+                        messages = []
+                        for feature in data.get('features', []):
+                            props = feature.get('properties', {})
+                            messages.append(props)
+                        return messages
+                    return []
+                else:
+                    logger.warning(f"API returned {response.status} for pager/hits")
+                    return []
         except asyncio.TimeoutError:
             logger.error("Timeout fetching pager messages from API")
             return []
@@ -1053,7 +1089,7 @@ class AlertPoller:
             'coordinates': {
                 'lat': msg.get('lat'),
                 'lon': msg.get('lon')
-            } if msg.get('lat') and msg.get('lon') else None,
+            } if msg.get('lat') is not None and msg.get('lon') is not None else None,
             'timestamp': msg.get('incident_time', ''),
             'pager_msg_id': msg.get('pager_msg_id')
         }
