@@ -40,6 +40,8 @@ import { config } from '../config.js';
 import {
   getUserRoles,
   invalidateUserRolesCache,
+  requireRole,
+  canManageUsers,
 } from '../services/auth/roles.js';
 
 export const editorRouter = new Hono();
@@ -190,7 +192,7 @@ editorRouter.post('/api/editor-requests', async (c) => {
 // ---------------------------------------------------------------------------
 // GET /api/editor-requests  — admin list
 // ---------------------------------------------------------------------------
-editorRouter.get('/api/editor-requests', async (c) => {
+editorRouter.get('/api/editor-requests', requireRole(canManageUsers), async (c) => {
   try {
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
@@ -238,7 +240,7 @@ function generateTempPassword(): string {
   return `Changeme-${suffix}`;
 }
 
-editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
+editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers), async (c) => {
   const requestIdRaw = c.req.param('id');
   if (!/^\d+$/.test(requestIdRaw)) {
     return c.json({ error: 'Request not found' }, 404);
@@ -386,7 +388,7 @@ editorRouter.post('/api/editor-requests/:id/approve', async (c) => {
 // ---------------------------------------------------------------------------
 // POST /api/editor-requests/:id/reject
 // ---------------------------------------------------------------------------
-editorRouter.post('/api/editor-requests/:id/reject', async (c) => {
+editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers), async (c) => {
   const requestIdRaw = c.req.param('id');
   if (!/^\d+$/.test(requestIdRaw)) {
     return c.json({ error: 'Request not found' }, 404);

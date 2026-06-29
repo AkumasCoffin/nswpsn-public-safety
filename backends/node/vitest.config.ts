@@ -12,6 +12,10 @@ export default defineConfig({
       // Stable NSWPSN_API_KEY so tests hitting private endpoints can
       // pass it via X-API-Key without depending on the prod default.
       NSWPSN_API_KEY: 'test-api-key',
+      // HS256 secret so optionalSupabaseJwt/requireSupabaseJwt can verify
+      // tokens signed by the tests. SUPABASE_URL is intentionally left
+      // unset so iss/aud aren't enforced — tests just need sub.
+      SUPABASE_JWT_SECRET: 'test-jwt-secret-0123456789',
       // Stable temp-ish state dir so LiveStore disk writes don't bleed
       // into the project tree during tests.
       STATE_DIR: './test/.tmp-state',

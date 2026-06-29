@@ -14,19 +14,23 @@
  *   { error: 'Supabase not configured' }
  * — we match that exactly.
  *
- * Privilege rules are enforced inside the route. They depend on the
- * caller's user id, which the python backend doesn't actually verify
- * (it trusts the API key + frontend). Because we have to remain
- * byte-for-byte compatible during cutover, the roles endpoints here
- * also gate purely on API key. The role helpers (`canAssignPrivilegedRoles`)
- * are still wired up so a future tightening pass that requires a
- * Supabase JWT can flip the switch in one place.
+ * Auth: these endpoints require a verified Supabase user (JWT) with the
+ * right role — NOT just the public NSWPSN_API_KEY (which is handed to
+ * every visitor via /api/config, so key-only gating was effectively
+ * unauthenticated). Reads require owner|team_member (canManageUsers);
+ * role mutations require owner (canAssignPrivilegedRoles).
  */
 import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
-import { invalidateUserRolesCache, isPrivilegedRole } from '../services/auth/roles.js';
+import {
+  invalidateUserRolesCache,
+  isPrivilegedRole,
+  requireRole,
+  canManageUsers,
+  canAssignPrivilegedRoles,
+} from '../services/auth/roles.js';
 
 export const usersRouter = new Hono();
 
@@ -54,7 +58,7 @@ interface UserRoleRow {
 // ---------------------------------------------------------------------------
 // GET /api/users
 // ---------------------------------------------------------------------------
-usersRouter.get('/api/users', async (c) => {
+usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
   try {
     if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) {
       return c.json({ error: 'Supabase not configured' }, 503);
@@ -130,7 +134,7 @@ usersRouter.get('/api/users', async (c) => {
 // ---------------------------------------------------------------------------
 // PUT /api/users/:userId/roles  — atomic replace.
 // ---------------------------------------------------------------------------
-usersRouter.put('/api/users/:userId/roles', async (c) => {
+usersRouter.put('/api/users/:userId/roles', requireRole(canAssignPrivilegedRoles), async (c) => {
   const userId = c.req.param('userId');
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -179,7 +183,7 @@ usersRouter.put('/api/users/:userId/roles', async (c) => {
 // ---------------------------------------------------------------------------
 // POST /api/users/:userId/roles  — add a single role.
 // ---------------------------------------------------------------------------
-usersRouter.post('/api/users/:userId/roles', async (c) => {
+usersRouter.post('/api/users/:userId/roles', requireRole(canAssignPrivilegedRoles), async (c) => {
   const userId = c.req.param('userId');
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -210,7 +214,7 @@ usersRouter.post('/api/users/:userId/roles', async (c) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/users/:userId/roles/:role
 // ---------------------------------------------------------------------------
-usersRouter.delete('/api/users/:userId/roles/:role', async (c) => {
+usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canAssignPrivilegedRoles), async (c) => {
   const userId = c.req.param('userId');
   const role = c.req.param('role');
   try {
