@@ -1998,7 +1998,7 @@
           'pager_feeder': '📟 Pager',
           'radio_feeder': '📻 Radio'
         };
-        const typesHtml = (req.request_type || []).map(t => `<span class="type-badge">${typeLabels[t] || t}</span>`).join(' ') || '—';
+        const typesHtml = (req.request_type || []).map(t => `<span class="type-badge">${typeLabels[t] || escapeHtml(t)}</span>`).join(' ') || '—';
         
         // Format region
         const regionLabels = {
