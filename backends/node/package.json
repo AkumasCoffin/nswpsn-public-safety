@@ -22,26 +22,26 @@
     "migrate-history": "node --env-file-if-exists=../.env scripts/migrate-history.mjs"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.0.6",
     "dictionary-en-au": "^3.0.0",
-    "fast-xml-parser": "^5.7.2",
+    "fast-xml-parser": "^5.9.3",
     "hono": "^4.6.0",
-    "jose": "^6.2.2",
+    "jose": "^6.2.3",
     "nspell": "^2.1.5",
-    "pg": "^8.13.0",
+    "pg": "^8.22.0",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
-    "playwright": "^1.59.1",
-    "undici": "^6.21.0",
+    "playwright": "^1.61.1",
+    "undici": "^7.16.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.0.1",
     "@types/nspell": "^2.1.6",
     "@types/pg": "^8.11.10",
-    "tsx": "^4.19.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.9"
   },
   "optionalDependencies": {
     "playwright-extra": "^4.3.6",

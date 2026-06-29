@@ -1,15 +1,15 @@
 # NSW PSN Alert Discord Bot Dependencies
-# Python 3.9+ required
+# Python 3.10+ required (aiohttp 3.14 dropped 3.9; discord.py Components V2)
 
 # Discord
-discord.py>=2.3.0
+discord.py>=2.7.1
 
 # HTTP requests for API polling
-aiohttp>=3.9.0
+aiohttp>=3.14.1
 
 # Environment variable management
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 
 # PostgreSQL (for BOT_DATABASE_URL)
-psycopg2-binary>=2.9.0
+psycopg2-binary>=2.9.12
 
