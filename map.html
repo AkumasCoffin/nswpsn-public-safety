@@ -1170,12 +1170,16 @@
     .leaflet-layer, .leaflet-control-zoom-in, .leaflet-control-zoom-out, .leaflet-control-attribution,
     .leaflet-marker-icon, .leaflet-marker-shadow, .leaflet-popup, .leaflet-tooltip { filter: none !important; }
     
-    /* GPU compositing for marker stability on mobile */
+    /* GPU compositing for marker stability on mobile.
+       NB: no `will-change: transform` here — hinting it on every marker
+       forces each pin onto its own persistent GPU layer, which with a
+       dense layer (e.g. traffic hazards) exhausts GPU memory and makes
+       pan/zoom stutter. translateZ(0) gives the stability fix without
+       pinning a live layer per pin. */
     .leaflet-marker-icon {
       transform: translateZ(0);
       backface-visibility: hidden;
       -webkit-backface-visibility: hidden;
-      will-change: transform;
       contain: layout style;
     }
     .leaflet-marker-pane {
@@ -2794,6 +2798,11 @@
     // Sub-layers for filtered data
     let hazardSubLayers = {};
     let policeSubLayers = {};
+    // Police: flat marker list (mirrors the hazards/roadwork pattern) so
+    // the layer can be viewport-culled — markers are projected into the
+    // per-category sub-layers (visible / hidden / camera) honouring the
+    // current viewport, rather than all mounted at once.
+    const _policeMarkers = []; // [{marker, category, latlng}]
     // Hazards: flat marker list lets us re-project into sub-layers when
     // the source filter (livetraffic / waze) flips, without refetching.
     // subtypeLabel is the human-readable label from formatWazeType()
@@ -7006,20 +7015,51 @@ function initPagerHoursFromStorage() {
       }
     }
 
+    // ---- Viewport culling (shared across the incident layers) ----------
+    // The hazards / police / roadwork layers intentionally don't cluster,
+    // so any of them can drag once it holds a lot of pins. Instead of
+    // mounting every pin, each layer keeps only the pins inside the padded
+    // viewport in the DOM and re-evaluates on map move. PAD over-renders a
+    // margin beyond the screen so edge pins are already present before
+    // they scroll in. Rebuilds are delta-based (add/remove only the pins
+    // whose visibility flips), so a pan never rebuilds the whole set —
+    // no flicker, no full re-layout.
+    const VIEWPORT_CULL_PAD = 0.3;
+    function _viewportCullBounds() {
+      return map.getBounds().pad(VIEWPORT_CULL_PAD);
+    }
+    function _cullEntryInView(entry, bounds) {
+      if (entry.latlng) return bounds.contains(entry.latlng);
+      if (entry.mbounds) return bounds.intersects(entry.mbounds); // polylines
+      return true; // no geometry recorded → never cull it out
+    }
+    // Each incident layer registers its delta-rebuild fn here; one moveend
+    // handler re-runs them all. moveend fires once per gesture (not per
+    // frame), so this stays cheap even with a few thousand pins. Rebuilds
+    // are no-ops for layers whose flat list is empty (not yet loaded).
+    const _viewportCullers = [];
+    function registerViewportCuller(rebuildFn) { _viewportCullers.push(rebuildFn); }
+    map.on('moveend', () => { for (const fn of _viewportCullers) fn(); });
+
     /** Rebuild the per-type sub-layers from the flat hazards list,
-     *  honouring source + (waze-only) subtype filters. Call after a
-     *  load or after the user toggles a source / subtype pill. */
+     *  honouring source + (waze-only) subtype filters AND viewport
+     *  culling. Call after a load, after the user toggles a source /
+     *  subtype pill, or on map move. Delta-based (see note above). */
     function _rebuildHazardSubLayers() {
-      // Reset every typed sub-layer's contents.
-      Object.values(hazardSubLayers).forEach((sl) => sl.clearLayers());
+      const bounds = _viewportCullBounds();
       for (const m of _hazardMarkers) {
-        if (!_hazardSelectedSources.has(m.source)) continue;
-        if (m.source === 'waze' && m.subtypeLabel
-            && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
+        const desired =
+          _hazardSelectedSources.has(m.source)
+          && !(m.source === 'waze' && m.subtypeLabel
+               && _hazardExcludedSubtypes.has(m.subtypeLabel))
+          && _cullEntryInView(m, bounds);
         const sl = hazardSubLayers[m.type];
-        if (sl) sl.addLayer(m.marker);
+        if (!sl) continue;
+        if (desired && !m._shown) { sl.addLayer(m.marker); m._shown = true; }
+        else if (!desired && m._shown) { sl.removeLayer(m.marker); m._shown = false; }
       }
     }
+    registerViewportCuller(_rebuildHazardSubLayers);
     function toggleHazardSourcePill(src) {
       if (_hazardSelectedSources.has(src)) _hazardSelectedSources.delete(src);
       else _hazardSelectedSources.add(src);
@@ -7051,6 +7091,24 @@ function initPagerHoursFromStorage() {
         loadPoliceHeatmap(true);
       }
     }
+
+    /** Project the flat police list into the per-category sub-layers,
+     *  honouring viewport culling. Category → sub-layer is fixed per
+     *  marker, so this is delta-based like the hazards/roadwork rebuilds.
+     *  The visible/hidden/camera filters still work by attaching or
+     *  detaching whole sub-layers in togglePoliceFilter — untouched. */
+    function _renderPoliceVisible() {
+      if (!policeSubLayers.visible) return; // not loaded yet
+      const bounds = _viewportCullBounds();
+      for (const m of _policeMarkers) {
+        const desired = _cullEntryInView(m, bounds);
+        const sl = policeSubLayers[m.category];
+        if (!sl) continue;
+        if (desired && !m._shown) { sl.addLayer(m.marker); m._shown = true; }
+        else if (!desired && m._shown) { sl.removeLayer(m.marker); m._shown = false; }
+      }
+    }
+    registerViewportCuller(_renderPoliceVisible);
 
     async function loadOutageData() {
       outagesLayer.clearLayers();
@@ -7794,7 +7852,7 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null });
+              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null, latlng: L.latLng(lat, lon) });
               totalCount++;
             }
           });
@@ -7833,7 +7891,7 @@ function initPagerHoursFromStorage() {
                 opacity: 0.95
               });
               const subtypeLabel = formatWazeType(props.wazeSubtype || props.wazeType || '') || null;
-              _hazardMarkers.push({ marker, type: category, source: 'waze', subtypeLabel });
+              _hazardMarkers.push({ marker, type: category, source: 'waze', subtypeLabel, latlng: L.latLng(lat, lon) });
               totalCount++;
             }
           });
@@ -7864,7 +7922,7 @@ function initPagerHoursFromStorage() {
                 sticky: true,
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze', subtypeLabel: 'Traffic Jam' });
+              _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze', subtypeLabel: 'Traffic Jam', mbounds: polyline.getBounds() });
               jamCount++;
             }
           });
@@ -7924,7 +7982,10 @@ function initPagerHoursFromStorage() {
         hidden: L.layerGroup(),
         camera: L.layerGroup()
       };
-      
+      // Reset the flat marker list — repopulated below, then projected
+      // into the sub-layers by _renderPoliceVisible() (viewport-culled).
+      _policeMarkers.length = 0;
+
       // Helper to determine which sub-layer a marker belongs to
       function getPoliceCategory(subtype) {
         const st = (subtype || '').toLowerCase();
@@ -7968,7 +8029,8 @@ function initPagerHoursFromStorage() {
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
-              const marker = L.marker([lat, lon], { icon }).addTo(policeSubLayers[category]);
+              const marker = L.marker([lat, lon], { icon });
+              _policeMarkers.push({ marker, category, latlng: L.latLng(lat, lon) });
               
               // Beach-style police tooltip — shares header/section helpers
               // with hazard/roadwork so a Waze-fed pin reads the same
@@ -8003,16 +8065,17 @@ function initPagerHoursFromStorage() {
               });
             }
           });
+        // Project the flat list into the category sub-layers, honouring
+        // the current viewport (culls off-screen pins out of the DOM).
+        _renderPoliceVisible();
         // Add sub-layers to main layer based on filter state
-        const totalMarkers = (policeSubLayers.visible?.getLayers().length || 0) +
-          (policeSubLayers.hidden?.getLayers().length || 0) +
-          (policeSubLayers.camera?.getLayers().length || 0);
+        const totalMarkers = _policeMarkers.length;
         Object.keys(policeSubLayers).forEach(type => {
           if (policeFilters[type]) {
             policeLayer.addLayer(policeSubLayers[type]);
           }
         });
-        
+
         console.log(`Loaded ${totalMarkers} police reports`);
       } catch (e) {
         console.error('Police data error', e);
@@ -8213,6 +8276,7 @@ function initPagerHoursFromStorage() {
                 marker,
                 type: _roadworkClassify(props, false),
                 source: 'livetraffic',
+                latlng: L.latLng(lat, lon),
               });
               totalCount++;
             }
@@ -8245,6 +8309,7 @@ function initPagerHoursFromStorage() {
                 marker,
                 type: _roadworkClassify(props, true),
                 source: 'waze',
+                latlng: L.latLng(lat, lon),
               });
               totalCount++;
             }
@@ -8272,15 +8337,20 @@ function initPagerHoursFromStorage() {
     }
 
     /** Re-project the flat marker list onto roadworkLayer, honoring
-     *  both selected types and selected sources. */
+     *  selected types, selected sources, AND viewport culling. Delta-based
+     *  so a pan only touches the pins whose visibility flipped. */
     function _renderRoadworkVisible() {
-      roadworkLayer.clearLayers();
+      const bounds = _viewportCullBounds();
       for (const m of _roadworkMarkers) {
-        if (!_roadworkSelectedTypes.has(m.type)) continue;
-        if (!_roadworkSelectedSources.has(m.source)) continue;
-        roadworkLayer.addLayer(m.marker);
+        const desired =
+          _roadworkSelectedTypes.has(m.type)
+          && _roadworkSelectedSources.has(m.source)
+          && _cullEntryInView(m, bounds);
+        if (desired && !m._shown) { roadworkLayer.addLayer(m.marker); m._shown = true; }
+        else if (!desired && m._shown) { roadworkLayer.removeLayer(m.marker); m._shown = false; }
       }
     }
+    registerViewportCuller(_renderRoadworkVisible);
     function toggleRoadworkSourcePill(src) {
       if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
       else _roadworkSelectedSources.add(src);
