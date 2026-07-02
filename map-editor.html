@@ -4149,19 +4149,31 @@ async function loadPagerData() {
     // API Key - loaded from backend config
     let API_KEY = null;
     
-    // Authenticated fetch wrapper
-    function apiFetch(url, options = {}) {
-      // Block mutating requests until the API key has loaded, otherwise we'd
-      // silently send unauthenticated writes that get rejected/dropped.
+    // Authenticated fetch wrapper.
+    // Reads send the public API key; WRITES send the logged-in editor's
+    // Supabase JWT instead — the backend now gates incident
+    // create/update/delete on an editor role (the key alone is public
+    // via /api/config, so it can't authorise writes).
+    async function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
       const isMutating = method === 'PUT' || method === 'POST' || method === 'DELETE' || method === 'PATCH';
-      if (isMutating && !API_KEY) {
-        alert('Not ready yet — API key is still loading. Please wait a moment and try again.');
-        return Promise.reject(new Error('apiFetch blocked: API_KEY not loaded'));
+      let bearer = API_KEY;
+      if (isMutating) {
+        const { data } = await sb.auth.getSession();
+        const token = data?.session?.access_token;
+        if (!token) {
+          alert('You need to be logged in as an editor to make changes. Please log in and try again.');
+          return Promise.reject(new Error('apiFetch blocked: no editor session'));
+        }
+        bearer = token;
+      } else if (!API_KEY) {
+        // Reads before /api/config loads — send unauthenticated and let
+        // the caller's error handling deal with the 401.
+        bearer = null;
       }
       const headers = {
         ...options.headers,
-        ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
+        ...(bearer ? { 'Authorization': `Bearer ${bearer}` } : {})
       };
       return fetch(url, { ...options, headers });
     }

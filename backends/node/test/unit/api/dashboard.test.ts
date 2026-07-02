@@ -44,6 +44,10 @@ vi.mock('../../../src/services/botDb.js', () => ({
   getBotDbPool: vi.fn(async () => fakePool),
   closeBotDbPool: vi.fn(async () => undefined),
   _setBotDbPoolForTests: vi.fn(),
+  // Added with the bot-action signing fix — dashboard enqueue calls this
+  // before INSERT to add the `sig` column. No-op in tests.
+  ensureBotActionSigColumn: vi.fn(async () => undefined),
+  ensurePresetAuditTable: vi.fn(async () => undefined),
 }));
 
 const exchangeCodeMock = vi.fn();

@@ -119,14 +119,19 @@ async function runOne(pool, table) {
   }
 
   // Exact duplicates: same (source, source_id, fetched_at) more than
-  // once. NULL source_id values are folded into a single null-group
-  // via IS NOT DISTINCT FROM semantics in the DELETE; here we treat
-  // them with regular GROUP BY (postgres groups all NULLs together).
-  // sub-query keeps it to a single round-trip.
+  // once, among rows that HAVE a source_id. NULL-id rows are excluded
+  // from both the count and the delete — SQL GROUP BY folds all NULLs
+  // into one group, so counting them here inflated the report with
+  // "duplicates" that are really N distinct incidents sharing one
+  // poll's fetched_at (and the old IS-NOT-DISTINCT-FROM delete would
+  // have collapsed them to a single survivor). Genuine NULL-id dedup
+  // needs content comparison — use dedup-archive.mjs
+  // --include-null-source-id, which keys on md5(data).
   const exactRes = await pool.query(`
     WITH dupe_groups AS (
       SELECT count(*) AS n
         FROM ${table}
+       WHERE source_id IS NOT NULL
        GROUP BY source, source_id, fetched_at
       HAVING count(*) > 1
     )
@@ -167,6 +172,7 @@ async function runOne(pool, table) {
       WITH dupe_groups AS (
         SELECT source, count(*) - 1 AS extras
           FROM ${table}
+         WHERE source_id IS NOT NULL
          GROUP BY source, source_id, fetched_at
         HAVING count(*) > 1
       )
@@ -194,12 +200,17 @@ async function runOne(pool, table) {
       // Keep the lowest id per (source, source_id, fetched_at) tuple,
       // delete the rest. Self-join on the keyset so we don't scan
       // every row twice. EXISTS is faster than IN here on big tables.
+      // Restricted to source_id IS NOT NULL with plain equality — the
+      // old IS NOT DISTINCT FROM treated every NULL-id row in one poll
+      // snapshot as duplicates of each other and pruned N distinct
+      // incidents down to one.
       const r = await client.query(`
         DELETE FROM ${table} t
-         WHERE EXISTS (
+         WHERE t.source_id IS NOT NULL
+           AND EXISTS (
            SELECT 1 FROM ${table} k
             WHERE k.source = t.source
-              AND (k.source_id IS NOT DISTINCT FROM t.source_id)
+              AND k.source_id = t.source_id
               AND k.fetched_at = t.fetched_at
               AND k.id < t.id
          )

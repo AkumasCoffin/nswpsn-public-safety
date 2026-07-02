@@ -270,7 +270,7 @@ transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
     });
   } catch (err) {
     log.error({ err }, '/api/rdio/transcripts/search error');
-    return c.json({ error: (err as Error).message }, 500);
+    return c.json({ error: 'failed to load transcripts' }, 500);
   }
 });
 
@@ -301,6 +301,6 @@ transcriptsRouter.get('/api/rdio/calls/:callId', async (c) => {
     return c.json(await rowToShape(row));
   } catch (err) {
     log.error({ err, callId }, '/api/rdio/calls/:id error');
-    return c.json({ error: (err as Error).message }, 500);
+    return c.json({ error: 'failed to load transcripts' }, 500);
   }
 });

@@ -17,6 +17,7 @@
  * Auth: X-Ingest-Key matched against WAZE_INGEST_KEY env var.
  */
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { requireIngestKey } from '../services/auth/ingestKey.js';
 import { WazeIngestPayloadSchema, type WazeAlert, type WazeJam } from '../types/waze.js';
 import { ingest } from '../store/wazeIngestCache.js';
@@ -156,7 +157,17 @@ function archiveAlertsAndJams(alerts: WazeAlert[], jams: WazeJam[]): number {
   return queued;
 }
 
-wazeIngestRouter.post('/api/waze/ingest', requireIngestKey, async (c) => {
+// Cap the buffered request body at ~2MB before we parse it. c.req.json()
+// otherwise reads the whole body into memory with no ceiling; a single
+// authorized (or key-leaked) client could stream an arbitrarily large
+// payload. bodyLimit runs first in the chain and returns 413 on overflow.
+const INGEST_MAX_BODY = 2 * 1024 * 1024; // 2MB
+
+wazeIngestRouter.post(
+  '/api/waze/ingest',
+  bodyLimit({ maxSize: INGEST_MAX_BODY }),
+  requireIngestKey,
+  async (c) => {
   let body: unknown;
   try {
     body = await c.req.json();
@@ -207,3 +218,4 @@ wazeIngestRouter.post('/api/waze/ingest', requireIngestKey, async (c) => {
     archived,
   });
 });
+

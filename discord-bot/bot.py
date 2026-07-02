@@ -58,6 +58,26 @@ def is_bot_owner(user_id: int) -> bool:
     except ValueError:
         return False
 
+
+def safe_add_containers(view, group) -> int:
+    """Add each container of a chunked group to a LayoutView, skipping any
+    that discord.py rejects (ValueError('maximum number of children
+    exceeded') when a container slipped past the chunker's component
+    budget — e.g. truncation couldn't shrink it enough). One over-budget
+    container must degrade to "that container missing", never to an
+    exception that aborts the whole dispatch cycle: by that point the
+    poller has already marked every alert in the batch as seen, so an
+    abort silently loses them all. Returns how many containers were added.
+    """
+    added = 0
+    for container in group:
+        try:
+            view.add_item(container)
+            added += 1
+        except Exception:
+            logger.exception("Container rejected by LayoutView — skipping it")
+    return added
+
 # Alert types available (canonical, singular, provider-prefixed where it
 # helps — kept in sync with the dashboard PROVIDERS list and data_history).
 ALERT_TYPES = {
@@ -1062,6 +1082,41 @@ class NSWPSNBot(commands.Bot):
         action_id = int(action['id'])
         kind = action['action']
         params = action.get('params') or {}
+
+        # --- HMAC signature gate -------------------------------------------
+        # The backend signs each queue row with BOT_ACTION_SIGNING_SECRET.
+        # Reject rows that didn't come from the backend so an attacker who
+        # can merely INSERT into pending_bot_actions can't get unattended
+        # Discord actions. When the secret is unset we fail OPEN (rollout
+        # only) but log loudly.
+        signing_secret = os.getenv('BOT_ACTION_SIGNING_SECRET')
+        if signing_secret:
+            ok = self.db.verify_bot_action_sig(
+                signing_secret,
+                action['action'],
+                action.get('requested_by') or '',
+                action.get('params') or {},
+                action.get('sig'),
+            )
+            if not ok:
+                logger.warning(
+                    f"bot-action drain: REJECTED id={action_id} action={kind} "
+                    "— signature verification failed (missing or bad sig)"
+                )
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.db.complete_bot_action(
+                        action_id, error='signature verification failed'
+                    ),
+                )
+                return
+        else:
+            logger.warning(
+                "bot-action signing DISABLED (set BOT_ACTION_SIGNING_SECRET "
+                "in both .env files) — executing unsigned action "
+                f"id={action_id} action={kind}"
+            )
+
         logger.info(f"bot-action drain: executing id={action_id} action={kind}")
         try:
             if kind == 'sync':
@@ -1249,8 +1304,8 @@ class NSWPSNBot(commands.Bot):
                     containers = self.embed_builder.build_radio_summary_components(row)
                     for group in chunk_containers_for_message(containers):
                         view = discord.ui.LayoutView(timeout=None)
-                        for container in group:
-                            view.add_item(container)
+                        if not safe_add_containers(view, group):
+                            continue  # every container rejected — nothing to send
                         await channel.send(view=view)
                         sent += 1
                         await asyncio.sleep(0.5)
@@ -1422,6 +1477,13 @@ class NSWPSNBot(commands.Bot):
         # }
         buckets: Dict[int, Dict[str, Any]] = {}
         fires: List[tuple] = []  # (preset_id, alert_type) — for preset_fire_log
+        # (channel_id, alert_id) pairs already bucketed — two presets in the
+        # SAME channel subscribed to the same alert type (a supported
+        # dashboard configuration) must not render the alert twice in one
+        # message. Fire-logging and role-ping unions still run per preset;
+        # only the container append is deduped. Mirrors the collapse the
+        # radio-summary dispatcher already does.
+        bucketed: set = set()
 
         for alert in new_alerts:
             alert_type = alert.get('type')
@@ -1432,7 +1494,18 @@ class NSWPSNBot(commands.Bot):
             # rendering is incident-aware in ways that don't compose with
             # other alert types in the same view.
             if alert_type == 'radio_summary':
-                await self._dispatch_radio_summary(alert)
+                # Guarded like the per-alert container builds below: the
+                # summary builder chews LLM-structured `details` (agencies
+                # / codes lists can carry non-string junk) and a raised
+                # exception here would drop every remaining alert in this
+                # cycle — all already marked seen, so lost for good.
+                try:
+                    await self._dispatch_radio_summary(alert)
+                except Exception:
+                    logger.exception(
+                        "radio_summary dispatch failed for %s — skipping",
+                        alert.get('id'),
+                    )
                 continue
 
             presets = await loop.run_in_executor(
@@ -1455,33 +1528,37 @@ class NSWPSNBot(commands.Bot):
                     continue
                 fires.append((preset['id'], alert_type))
 
-                # Previous-message lookup for incident tracking (RFS / user_incident).
-                # Use get_previous_incident_message so the link points to the
-                # most recent prior update of THIS incident, not the very first
-                # one — when an incident has 4-5 updates the "first" message
-                # has scrolled far up the channel and looks random.
-                previous_message = None
-                if incident_guid:
-                    previous_message = await loop.run_in_executor(
-                        None,
-                        self.db.get_previous_incident_message,
-                        incident_guid,
-                        channel_id,
-                    )
-
                 bucket = buckets.setdefault(channel_id, {
                     'alerts': [],
                     'any_preset_id': preset['id'],
                     'role_ids_set': set(),
                     'guild_id': guild_id,
                 })
-                bucket['alerts'].append({
-                    'alert': alert,
-                    'preset': preset,
-                    'previous_message': previous_message,
-                    'incident_guid': incident_guid,
-                    'incident_status': incident_status,
-                })
+                dedupe_key = (channel_id, alert.get('id'))
+                if dedupe_key not in bucketed:
+                    bucketed.add(dedupe_key)
+
+                    # Previous-message lookup for incident tracking (RFS / user_incident).
+                    # Use get_previous_incident_message so the link points to the
+                    # most recent prior update of THIS incident, not the very first
+                    # one — when an incident has 4-5 updates the "first" message
+                    # has scrolled far up the channel and looks random.
+                    previous_message = None
+                    if incident_guid:
+                        previous_message = await loop.run_in_executor(
+                            None,
+                            self.db.get_previous_incident_message,
+                            incident_guid,
+                            channel_id,
+                        )
+
+                    bucket['alerts'].append({
+                        'alert': alert,
+                        'preset': preset,
+                        'previous_message': previous_message,
+                        'incident_guid': incident_guid,
+                        'incident_status': incident_status,
+                    })
                 # Union role ids only when this preset's effective_ping is on;
                 # _resolve_ping_role_ids also filters deleted roles.
                 if effective['enabled_ping']:
@@ -1534,8 +1611,8 @@ class NSWPSNBot(commands.Bot):
                 view = discord.ui.LayoutView(timeout=None)
                 if i == 0 and ping_text:
                     view.add_item(discord.ui.TextDisplay(content=ping_text))
-                for container in group:
-                    view.add_item(container)
+                if not safe_add_containers(view, group) and not (i == 0 and ping_text):
+                    continue  # every container rejected — nothing to send
 
                 # Only attach incident-tracking metadata to the first chunk.
                 # The DB row records which jump_url was sent first — if we
@@ -1622,8 +1699,8 @@ class NSWPSNBot(commands.Bot):
                 view = discord.ui.LayoutView(timeout=None)
                 if i == 0 and ping_text:
                     view.add_item(discord.ui.TextDisplay(content=ping_text))
-                for container in group:
-                    view.add_item(container)
+                if not safe_add_containers(view, group) and not (i == 0 and ping_text):
+                    continue  # every container rejected — nothing to send
                 self.queue_message(
                     channel_id=channel_id,
                     view=view,
@@ -1691,6 +1768,11 @@ class NSWPSNBot(commands.Bot):
         # channel_id -> {'containers': [...], 'role_ids_set': set(), 'any_preset_id': ..., 'msg_hashes': [...]}
         buckets: Dict[int, Dict[str, Any]] = {}
         fires: List[tuple] = []
+        # (channel_id, msg_hash) pairs already bucketed — two presets in the
+        # same channel with overlapping capcode filters must not render the
+        # same pager message twice in one send (same dedupe as the alerts
+        # dispatcher). Fire-logging and ping unions still run per preset.
+        bucketed: set = set()
 
         for msg in new_messages:
             capcode = str(msg.get('capcode', '')).strip().upper()
@@ -1712,10 +1794,13 @@ class NSWPSNBot(commands.Bot):
                     'any_preset_id': preset['id'],
                     'msg_hashes': [],
                 })
-                bucket['containers'].append(
-                    self.embed_builder.build_pager_container(msg)
-                )
-                bucket['msg_hashes'].append(msg.get('_msg_hash'))
+                dedupe_key = (channel_id, msg.get('_msg_hash'))
+                if dedupe_key not in bucketed:
+                    bucketed.add(dedupe_key)
+                    bucket['containers'].append(
+                        self.embed_builder.build_pager_container(msg)
+                    )
+                    bucket['msg_hashes'].append(msg.get('_msg_hash'))
                 if effective['enabled_ping']:
                     ping_view = dict(preset)
                     ping_view['enabled_ping'] = True
@@ -1734,8 +1819,8 @@ class NSWPSNBot(commands.Bot):
                 view = discord.ui.LayoutView(timeout=None)
                 if i == 0 and ping_text:
                     view.add_item(discord.ui.TextDisplay(content=ping_text))
-                for container in group:
-                    view.add_item(container)
+                if not safe_add_containers(view, group) and not (i == 0 and ping_text):
+                    continue  # every container rejected — nothing to send
                 # alert_id for the queue entry is the first msg_hash in the
                 # chunk — used only for logging (alerts are already marked
                 # seen in the poller before we get here).
@@ -2144,8 +2229,8 @@ async def alert_list_command(interaction: discord.Interaction):
         groups = chunk_containers_for_message(containers)
         for group in groups:
             view = discord.ui.LayoutView(timeout=None)
-            for container in group:
-                view.add_item(container)
+            if not safe_add_containers(view, group):
+                continue  # every container rejected — nothing to send
             await interaction.followup.send(view=view, ephemeral=True)
 
     except Exception as e:
@@ -2806,9 +2891,22 @@ class SetupHomeView(discord.ui.View):
             value=f"[nswpsn.forcequit.xyz]({WEBSITE_URL})",
             inline=False,
         )
+
+        # Fetch the channel's existing alert types off-loop; the view
+        # constructor must not touch the DB (it runs on the gateway loop).
+        def _existing_alert_types() -> List[str]:
+            cfgs = _get_alert_configs_for_channel(self.channel.guild.id, self.channel.id)
+            # Only general alert types — radio_summary is managed in its
+            # own submenu.
+            return sorted([
+                c.get("alert_type") for c in cfgs
+                if c.get("alert_type") and c.get("alert_type") != 'radio_summary'
+            ])
+        existing_types = await loop.run_in_executor(None, _existing_alert_types)
+
         await _edit_or_send(
             interaction, embed=embed,
-            view=SetupAlertsSubmenuView(self.invoker_id, self.channel),
+            view=SetupAlertsSubmenuView(self.invoker_id, self.channel, existing_types),
         )
 
     @discord.ui.button(label="Setup Pager", style=discord.ButtonStyle.primary)
@@ -3190,17 +3288,17 @@ class SetupRadioSummarySubmenuView(discord.ui.View):
 
 
 class SetupAlertsSubmenuView(discord.ui.View):
-    def __init__(self, invoker_id: int, channel: discord.TextChannel):
+    def __init__(self, invoker_id: int, channel: discord.TextChannel,
+                 existing_types: List[str]):
+        # `existing_types` is fetched by the CALLER via run_in_executor —
+        # this constructor runs on the gateway event loop, and it used to
+        # make three blocking Postgres round-trips itself (the only DB
+        # call path in this file not offloaded), stalling the heartbeat
+        # for up to ~10s under DB latency whenever someone clicked
+        # "Setup Alerts".
         super().__init__(timeout=180)
         self.invoker_id = invoker_id
         self.channel = channel
-
-        existing_cfgs = _get_alert_configs_for_channel(channel.guild.id, channel.id)
-        # Only general alert types — radio_summary is managed in its own submenu
-        existing_types = sorted([
-            c.get("alert_type") for c in existing_cfgs
-            if c.get("alert_type") and c.get("alert_type") != 'radio_summary'
-        ])
         self.selected_alert_types: List[str] = existing_types[:]
 
         self.alert_select.options = [
@@ -4304,8 +4402,8 @@ async def overview_command(interaction: discord.Interaction):
     groups = chunk_containers_for_message(containers)
     for group in groups:
         view = discord.ui.LayoutView(timeout=None)
-        for container in group:
-            view.add_item(container)
+        if not safe_add_containers(view, group):
+            continue  # every container rejected — nothing to send
         await interaction.followup.send(view=view, ephemeral=False)
 
 

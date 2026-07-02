@@ -419,6 +419,11 @@ export async function ensurePerfIndexes(): Promise<void> {
         }
       }
     } finally {
+      // Session-level SET survives release() — RESET so the connection
+      // doesn't return to the shared pool with an unlimited timeout.
+      try {
+        await client.query('RESET statement_timeout');
+      } catch { /* best-effort */ }
       client.release();
     }
   })();
