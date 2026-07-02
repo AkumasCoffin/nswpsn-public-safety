@@ -6,8 +6,11 @@
  * tables, both already deployed). We don't write a new migration —
  * we just read/write the existing columns.
  *
- * Routes (every one requires NSWPSN_API_KEY via the parent router's
- * requireApiKey middleware):
+ * Routes (reads require NSWPSN_API_KEY via the parent router's
+ * requireApiKey middleware; mutating routes additionally require a
+ * logged-in editor — see requireRole(canEditIncidents) below, added
+ * because the API key is public via /api/config and key-only gating
+ * left incident create/update/delete open to anyone):
  *   GET    /api/incidents                       — list, optional ?active=true filter
  *   GET    /api/incidents/:id                   — single (additive — Python doesn't have it,
  *                                                  but it's idiomatic for any client that already
@@ -36,8 +39,21 @@ import { Hono } from 'hono';
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { requireRole, canEditIncidents } from '../services/auth/roles.js';
 
 export const incidentsRouter = new Hono();
+
+// Gate every mutating incident route on an editor login. Registered
+// before the route handlers so it runs for POST/PUT/DELETE only —
+// reads stay key-gated for the map/live pages and the discord bot.
+incidentsRouter.use('/api/incidents', async (c, next) => {
+  if (c.req.method === 'GET') return next();
+  return requireRole(canEditIncidents)(c, next);
+});
+incidentsRouter.use('/api/incidents/*', async (c, next) => {
+  if (c.req.method === 'GET') return next();
+  return requireRole(canEditIncidents)(c, next);
+});
 
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
 

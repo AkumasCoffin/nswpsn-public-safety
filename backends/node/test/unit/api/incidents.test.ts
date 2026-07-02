@@ -27,10 +27,23 @@ vi.mock('../../../src/db/pool.js', () => ({
   getPool: vi.fn(async () => (getPoolReturn === 'pool' ? fakePool : null)),
 }));
 
+// Mutating incident routes are editor-gated (requireRole(canEditIncidents)).
+// Stub the DB-backed role check and inject a userId so the CRUD tests
+// exercise the handlers, not the gate.
+vi.mock('../../../src/services/auth/roles.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
+  return { ...actual, canEditIncidents: vi.fn(async () => true) };
+});
+
 const { incidentsRouter } = await import('../../../src/api/incidents.js');
 
 function makeApp() {
   const app = new Hono();
+  // Simulate optionalSupabaseJwt having verified a logged-in editor.
+  app.use('*', async (c, next) => {
+    c.set('userId' as never, 'editor-1' as never);
+    await next();
+  });
   app.route('/', incidentsRouter);
   return app;
 }
