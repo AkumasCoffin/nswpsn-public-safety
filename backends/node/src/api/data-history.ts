@@ -509,13 +509,22 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     const records = merged.map((r) => formatRecord(r, params.includeData));
     const last = merged[merged.length - 1];
     // Multi-family cursors carry the boundary row's table so the next
-    // page's seek can reproduce the (fetched_at, table_rank, id) order.
+    // page's seek can reproduce the (ts, table_rank, id) order.
     // Single-family stays byte-identical to the legacy 2-part format.
+    // Unique mode encodes the boundary row's effective_ts — the key its
+    // SQL actually orders by — instead of fetched_at; the two coincide
+    // for sources without their own timestamp, so legacy in-flight
+    // cursors keep (approximately) working across a deploy.
     const multiFamily = results.length > 1;
+    const cursorTs = last
+      ? params.unique
+        ? Number(last.source_timestamp_unix ?? last.fetched_at_epoch)
+        : Number(last.fetched_at_epoch)
+      : 0;
     const nextCursor =
       hasMore && last
         ? encodeCursor(
-            last.fetched_at_epoch,
+            cursorTs,
             last.id,
             multiFamily ? last._family : undefined,
           )

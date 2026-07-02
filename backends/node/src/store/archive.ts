@@ -239,8 +239,37 @@ export class ArchiveWriter {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
-    // One final drain so we don't lose buffered rows on shutdown.
-    await this.flush();
+    // Final drain so we don't lose buffered rows on shutdown. A single
+    // flush() isn't enough: if a periodic flush is mid-drain, flush()
+    // no-ops (this.flushing guard) and rows pushed after that drain
+    // started would be dropped on exit. Wait out any in-flight drain
+    // and keep flushing until the queue is empty — bounded so a wedged
+    // DB can't hang shutdown forever.
+    const deadline = Date.now() + 30_000;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    for (;;) {
+      if (Date.now() > deadline) {
+        if (this.queue.length > 0) {
+          log.warn(
+            { queued: this.queue.length },
+            'ArchiveWriter: shutdown drain deadline hit; dropping queued rows',
+          );
+        }
+        break;
+      }
+      if (this.flushing) {
+        await sleep(100);
+        continue;
+      }
+      if (this.queue.length === 0) break;
+      const before = this.queue.length;
+      await this.flush();
+      if (this.queue.length >= before) {
+        // No forward progress (DB down/unconfigured or batch failed and
+        // re-queued) — brief pause so this can't spin, retry to deadline.
+        await sleep(500);
+      }
+    }
   }
 
   /**
@@ -421,7 +450,10 @@ export class ArchiveWriter {
             noKeyRows.push(e);
             continue;
           }
-          const key = `${e.row.source}${sid}`;
+          // \x01 separator matches lookupExistingHashes' keys — without
+          // one, ('essential', '_current123') and ('essential_current',
+          // '123') would collide.
+          const key = `${e.row.source}\x01${sid}`;
           const existingInBatch = collapsed.get(key);
           if (!existingInBatch || e.row.fetched_at > existingInBatch.row.fetched_at) {
             collapsed.set(key, e);
@@ -579,7 +611,7 @@ export class ArchiveWriter {
     for (const e of hashed) {
       const sid = e.row.source_id;
       if (sid == null || sid === '') continue;
-      const key = `${e.row.source}${sid}`;
+      const key = `${e.row.source}\x01${sid}`; // separator: see collapse map above
       const existing = map.get(key);
       if (!existing || e.row.fetched_at > existing.fetched_at) {
         map.set(key, {

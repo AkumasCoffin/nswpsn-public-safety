@@ -303,6 +303,48 @@ describe('buildSqlForTable — unique=1', () => {
     const q = buildSqlForTable('archive_waze', defaultParams());
     expect(q.sql).not.toContain('archive_waze_latest');
   });
+
+  it('cursor bounds top_keys AND seeks on effective_ts (not fetched_at)', () => {
+    // Regression: the old seek compared a.fetched_at while the query
+    // ordered by effective_ts, skipping/repeating rows for sources with
+    // their own timestamps — and top_keys ignored the cursor entirely,
+    // so pagination dead-ended once the cursor passed cteLimit rows.
+    const q = buildSqlForTable(
+      'archive_waze',
+      defaultParams({
+        unique: true,
+        sources: ['waze_police'],
+        cursor: { fetchedAt: 1_700_000_000, rowId: 42 },
+      }),
+    );
+    // Inclusive pre-filter inside the CTE (before ORDER BY ... LIMIT).
+    const cteBody = q.sql.slice(0, q.sql.indexOf('CROSS JOIN LATERAL'));
+    expect(cteBody).toContain(
+      "COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) <=",
+    );
+    // Post-JOIN seek on the ordering key, numeric (no to_timestamp).
+    expect(q.sql).toContain('k.effective_ts <');
+    expect(q.sql).not.toContain('a.fetched_at < to_timestamp');
+    // Cursor ts appears for CTE bound + 2 seek slots, rowId once.
+    expect(q.params.filter((v) => v === 1_700_000_000)).toHaveLength(3);
+    expect(q.params).toContain(42);
+  });
+
+  it('ASC cursor flips both the CTE bound and the seek direction', () => {
+    const q = buildSqlForTable(
+      'archive_waze',
+      defaultParams({
+        unique: true,
+        sources: ['waze_police'],
+        order: 'ASC',
+        cursor: { fetchedAt: 1_700_000_000, rowId: 42 },
+      }),
+    );
+    expect(q.sql).toContain(
+      "COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) >=",
+    );
+    expect(q.sql).toContain('k.effective_ts >');
+  });
 });
 
 describe('buildPlan', () => {
@@ -388,5 +430,26 @@ describe('mergeAndPaginate', () => {
     expect(out).toHaveLength(5);
     // DESC: top item is id=49, offset 10 lands on id=39.
     expect(out[0]?.id).toBe(39);
+  });
+
+  it('unique mode merges on effective_ts (source_timestamp_unix over fetched_at)', () => {
+    // Regression: the merge used fetched_at_epoch while unique-mode SQL
+    // orders by effective_ts, so the cross-family order (and the cursor
+    // cut from it) contradicted what each family's next page returned.
+    const a: ArchiveQueryRow = {
+      ...row(1, 2000), // fetched recently...
+      source_timestamp_unix: 500, // ...but published long ago
+      _family: 'archive_waze',
+    };
+    const b: ArchiveQueryRow = {
+      ...row(2, 1000),
+      source_timestamp_unix: null, // falls back to fetched_at (1000)
+      _family: 'archive_waze',
+    };
+    const plan = buildPlan(defaultParams({ unique: true, limit: 10 }));
+    const out = mergeAndPaginate([a, b], plan);
+    // DESC by effective_ts: b (1000) before a (500) — the old
+    // fetched_at merge would have put a (2000) first.
+    expect(out.map((r) => r.id)).toEqual([2, 1]);
   });
 });

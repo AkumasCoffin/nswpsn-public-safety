@@ -99,6 +99,16 @@ export async function canAssignPrivilegedRoles(userId: string): Promise<boolean>
   return isOwner(userId);
 }
 
+/**
+ * Owner, team_member, or map_editor — gates the incident CRUD used by
+ * map-editor.html. Key-only gating was effectively unauthenticated
+ * (NSWPSN_API_KEY is public via /api/config), so mutating incidents
+ * requires a real editor login like the other privileged routes.
+ */
+export async function canEditIncidents(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'team_member', 'map_editor']);
+}
+
 export function isPrivilegedRole(role: string): boolean {
   return PRIVILEGED_ROLES.has(role);
 }

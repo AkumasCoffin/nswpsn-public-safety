@@ -375,6 +375,14 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         );
       }
     } finally {
+      // The session-level statement_timeout=0 above survives release()
+      // (node-postgres doesn't DISCARD on release), so without this RESET
+      // the connection would return to the shared read pool with no
+      // timeout at all — permanently defeating the pool's 30s default
+      // for whichever API query draws it next.
+      try {
+        await client.query('RESET statement_timeout');
+      } catch { /* best-effort — don't mask the real error */ }
       client.release();
     }
 

@@ -127,10 +127,16 @@ async function checkDatabase(): Promise<{
     };
   }
   try {
+    // SET LOCAL is a no-op outside a transaction (postgres just warns),
+    // so without the BEGIN/COMMIT the probe silently ran under the
+    // pool's 30s default instead of the intended short timeout — on a
+    // wedged DB /api/status hung ~30s instead of failing fast.
+    await client.query('BEGIN');
     await client.query(
       `SET LOCAL statement_timeout = '${STATUS_DB_TIMEOUT_SECS * 1000}ms'`,
     );
     await client.query('SELECT 1');
+    await client.query('COMMIT');
     const latency_ms = Date.now() - t0;
     return {
       block: {
@@ -148,6 +154,9 @@ async function checkDatabase(): Promise<{
       degraded: false,
     };
   } catch (err) {
+    // Roll back the aborted probe transaction so the connection doesn't
+    // return to the pool stuck in "current transaction is aborted".
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
     const msg = (err as Error).message;
     // Postgres SQLSTATE 57014 = query_canceled (statement_timeout).
     // pg surfaces it as code === '57014' on the error.
