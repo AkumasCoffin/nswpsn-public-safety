@@ -2744,8 +2744,15 @@
           (Array.isArray(data) ? data.length : null);
         const ts =
           data.lastUpdated || data.updated_at || data.generated_at || data.timestamp || null;
-        if (featLen !== null || ts) {
-          return `${featLen ?? ''}|${ts ?? ''}`;
+        // Only take the cheap count|timestamp shortcut when the payload
+        // actually carries a timestamp. Count alone is lossy: on a
+        // churning feed (waze police has no timestamp field) one alert
+        // expiring while another appears keeps the count identical, so
+        // hasDataChanged() said "unchanged" and the 60s auto-refresh
+        // never redrew the layer — stale pins persisted indefinitely.
+        // Timestamp-less payloads fall through to the full content hash.
+        if (ts) {
+          return `${featLen ?? ''}|${ts}`;
         }
         // Fallback for shapes we don't recognise — full stringify hash.
         const str = JSON.stringify(data);
@@ -3658,7 +3665,10 @@
         // Load data when layer is first enabled
         if (target === 'hazards' && hazardsLayer.getLayers().length === 0) loadHazardsData();
         if (target === 'police' && policeLayer.getLayers().length === 0) loadPoliceData();
-        if (target === 'roadwork' && roadworkLayer.getLayers().length === 0) loadRoadworkData();
+        // Roadwork: gate on the flat list — its markers mount directly on
+        // the layer (no sub-groups), so a culled-empty viewport would
+        // otherwise re-trigger the loader on every toggle.
+        if (target === 'roadwork' && _roadworkMarkers.length === 0) loadRoadworkData();
         if (target === 'floods' && floodsLayer.getLayers().length === 0) loadFloodsData();
         if (target === 'cameras') {
           if (camerasLayer.getLayers().length === 0) loadCamerasData();
@@ -8084,8 +8094,13 @@ function initPagerHoursFromStorage() {
 
     // Roadwork - combines Live Traffic roadwork + Waze construction
     async function loadRoadworkData(forceRefresh = false) {
-      // Skip if layer already has data and not forcing refresh
-      if (!forceRefresh && roadworkLayer.getLayers().length > 0) {
+      // Skip if layer already has data and not forcing refresh.
+      // "Loaded" is judged by the flat marker list, NOT
+      // roadworkLayer.getLayers(): markers mount directly onto the layer
+      // (no sub-layergroups like hazards/police), so under viewport
+      // culling a view with zero roadwork pins reads as an empty layer
+      // and would re-trigger the loader on every toggle/refresh.
+      if (!forceRefresh && _roadworkMarkers.length > 0) {
         console.log('Roadwork layer already loaded, skipping fetch');
         return;
       }
@@ -8117,8 +8132,9 @@ function initPagerHoursFromStorage() {
       }
       
       // Check if data has changed - skip redraw if unchanged (no flash!)
+      // Gate on the flat list, not getLayers() — see loader head note.
       const combinedData = { traffic: trafficData, waze: wazeData };
-      if (!hasDataChanged('roadwork', combinedData) && roadworkLayer.getLayers().length > 0) {
+      if (!hasDataChanged('roadwork', combinedData) && _roadworkMarkers.length > 0) {
         console.log('Roadwork data unchanged, skipping redraw');
         return;
       }
@@ -8621,8 +8637,8 @@ function initPagerHoursFromStorage() {
     }
     function firmsSatelliteLine(props) {
       // "NOAA-21 (VIIRS) · Daytime" or "Aqua (MODIS) · Nighttime".
-      const sat = props.satellite_tag || props.satellite || '—';
-      const inst = props.instrument || '';
+      const sat = escapeHtml(props.satellite_tag || props.satellite || '—');
+      const inst = escapeHtml(props.instrument || '');
       const dn = props.daynight === 'D' ? 'Daytime'
         : props.daynight === 'N' ? 'Nighttime' : '';
       const left = inst ? `${sat} (${inst})` : sat;
@@ -8954,8 +8970,8 @@ function initPagerHoursFromStorage() {
         const status = (_firmsLastSourceStatus || []).map((s) => {
           const ok = !!s.ok;
           const color = ok ? '#34d399' : '#f87171';
-          const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
-          return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+          const detail = ok ? `${s.count} detections` : `failed: ${escapeHtml((s.error || 'unknown').slice(0, 40))}`;
+          return `<div><span style="color:${color};">●</span> ${escapeHtml(s.satellite)}: ${detail}</div>`;
         }).join('');
         return `
           <h4><i class="fa-solid fa-fire" style="color:#fdba74;"></i> Fire Hotspots</h4>
@@ -9024,9 +9040,13 @@ function initPagerHoursFromStorage() {
               .slice(0, 24);
             const pills = sorted.map(([label, n]) => {
               const active = !_hazardExcludedSubtypes.has(label);
-              // label may contain quotes — keep the inline onclick safe.
-              const safe = label.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-              return _ffPill(active, `${label} (${n.toLocaleString()})`, `toggleHazardSubtypePill('${safe}')`);
+              // label derives from raw Waze subtype strings (not a fixed
+              // enum) and the pill is inserted via innerHTML — escape both
+              // the visible label and the onclick-embedded value (incl. "
+              // via escapeHtml, since the handler sits in a double-quoted
+              // attribute). Mirrors the roadwork type pills below.
+              const safe = escapeHtml(String(label).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+              return _ffPill(active, `${escapeHtml(String(label))} (${n.toLocaleString()})`, `toggleHazardSubtypePill('${safe}')`);
             }).join('');
             subtypeBlock = `
               <div class="ff-section-label">Waze subtype</div>
@@ -11576,7 +11596,12 @@ function initPagerHoursFromStorage() {
       isRefreshing = true;
       updateCountdownDisplay();
       const startTime = Date.now();
-      
+      // try/finally around the whole refresh: some loaders (cameras,
+      // outages preamble) throw on malformed payloads, which rejected
+      // the Promise.all below and exited with isRefreshing stuck true —
+      // every future tick then early-returned and auto-refresh was
+      // silently dead until a page reload.
+      try {
       // Clear the frontend cache to force fresh fetch from backend
       for (const key of Object.keys(layerCache)) {
         layerCache[key].timestamp = 0; // Expire all cache entries
@@ -11628,13 +11653,18 @@ function initPagerHoursFromStorage() {
       // Also refresh RFS data (always loaded)
       redrawTasks.push(loadAllData());
       
-      await Promise.all(redrawTasks);
-      
+      // Settle every redraw instead of failing fast — one bad layer
+      // shouldn't abort the others' refresh.
+      const settled = await Promise.allSettled(redrawTasks);
+      const failed = settled.filter((s) => s.status === 'rejected');
+      for (const f of failed) console.error('Layer refresh failed:', f.reason);
+
       const totalTime = Date.now() - startTime;
-      console.log(`✅ Refresh done: ${prewarmTime}ms fetch, ${totalTime}ms total (${prewarmTasks.length} endpoints)`);
-      
-      isRefreshing = false;
-      resetCountdown();
+      console.log(`✅ Refresh done: ${prewarmTime}ms fetch, ${totalTime}ms total (${prewarmTasks.length} endpoints${failed.length ? `, ${failed.length} layer(s) failed` : ''})`);
+      } finally {
+        isRefreshing = false;
+        resetCountdown();
+      }
     }
     
     // Manual refresh triggered by clicking the timer

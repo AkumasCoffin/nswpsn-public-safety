@@ -341,6 +341,11 @@ systemRouter.post('/api/admin/db/vacuum', requireRole(isOwner), async (c) => {
     }
     return c.json({ status: 'ok', tables: out });
   } finally {
+    // Session-level SET survives release() — RESET so the connection
+    // doesn't return to the shared pool with an unlimited timeout.
+    try {
+      await client.query('RESET statement_timeout');
+    } catch { /* best-effort */ }
     client.release();
   }
 });

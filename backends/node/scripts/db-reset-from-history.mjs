@@ -101,9 +101,21 @@ async function main() {
       return;
     }
 
-    // 1. TRUNCATE.
+    // 1. TRUNCATE — parents AND everything derived from them. Leaving
+    // the `_latest` sidecars in place after wiping the parents corrupts
+    // unique=1 reads permanently: sidecar keys dangle (their
+    // latest_fetched_at points at parent rows that no longer exist, so
+    // the LATERAL join returns nothing while the key still burns a
+    // top_keys slot), the filter facets keep advertising phantom
+    // incidents, and the startup backfill never repairs it because it
+    // only fires when a sidecar is completely EMPTY.
     console.log('\n[truncate]');
-    for (const t of ARCHIVE_TABLES) {
+    const derivedTables = [
+      ...ARCHIVE_TABLES.map((t) => `${t}_latest`),
+      'police_heatmap_bin_daily',
+      'filter_facets_daily',
+    ];
+    for (const t of [...ARCHIVE_TABLES, ...derivedTables]) {
       const t0 = Date.now();
       // CASCADE in case anything else references it (shouldn't be any
       // FKs but defensive). RESTART IDENTITY resets the BIGSERIAL ids.
@@ -111,11 +123,24 @@ async function main() {
       console.log(`  ✓ ${t} (${Date.now() - t0} ms)`);
     }
 
-    // 2. Clear the backfill marker so migrate-history.mjs runs.
+    // 2. Clear the one-shot completion markers so every repair pass
+    // re-runs against the rebuilt data on next boot:
+    //   999_data_history_backfill    — migrate-history gate
+    //   _backfill_%                  — indexBuilder one-shots (heatmap
+    //                                  bin_daily + filter facets rebuild
+    //                                  from the re-migrated parents)
+    //   task:archive_latest_recompute / task:archive_dims_backfill:%
+    //                                — sidecar pointer + dims passes
+    //                                  (the plain backfill only fills
+    //                                  source/source_id/latest_fetched_at)
     await pool.query(
-      `DELETE FROM schema_migrations WHERE filename = '999_data_history_backfill'`,
+      `DELETE FROM schema_migrations
+        WHERE filename = '999_data_history_backfill'
+           OR filename LIKE '\\_backfill\\_%'
+           OR filename = 'task:archive_latest_recompute'
+           OR filename LIKE 'task:archive\\_dims\\_backfill:%'`,
     );
-    console.log(`\n[marker] cleared 999_data_history_backfill`);
+    console.log(`\n[marker] cleared backfill/recompute markers`);
 
     // 3. Spawn migrate-history.mjs as a child process. Streams its
     // output through so the user sees per-batch progress.

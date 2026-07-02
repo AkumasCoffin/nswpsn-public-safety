@@ -118,6 +118,14 @@ const Schema = z.object({
   // accidentally accept unverified tokens.
   SUPABASE_JWT_SECRET: z.string().optional(),
 
+  // Shared secret used to HMAC-sign bot-action queue rows so the Discord
+  // bot rejects `pending_bot_actions` inserts that didn't come from this
+  // backend. Set the SAME value in discord-bot/.env
+  // (BOT_ACTION_SIGNING_SECRET). When unset, signing is DISABLED and the
+  // bot fails open (rollout only) — both sides log a warning. Generate
+  // with `openssl rand -hex 32`.
+  BOT_ACTION_SIGNING_SECRET: z.string().optional(),
+
   // rdio-scanner self-hosted Postgres URL. Required by /api/rdio/*
   // routes (transcripts search + call detail). When unset those
   // routes return 503 with a clear "not configured" body, matching
@@ -175,7 +183,12 @@ const Schema = z.object({
   DASHBOARD_REDIRECT_URI: z.string().optional(),
   DASHBOARD_FRONTEND_URL: z.string().optional(),
   DASHBOARD_FRONTEND_BASE: z.string().optional(),
-  DASHBOARD_COOKIE_DOMAIN: z.string().default('.forcequit.xyz'),
+  // Cookie domain for the dashboard session. Default '' = host-only
+  // (the cookie is scoped to the exact host that set it), which is the
+  // safe default; set an explicit apex like '.example.com' only when the
+  // dashboard and API live on sibling subdomains that must share the
+  // cookie.
+  DASHBOARD_COOKIE_DOMAIN: z.string().default(''),
   DASHBOARD_ADMIN_IDS: z.string().optional(),
   // Bot-data Postgres (the discord-bot's separate Postgres cluster).
   // Holds dash_sessions + alert_presets + mute_state + bot_actions.

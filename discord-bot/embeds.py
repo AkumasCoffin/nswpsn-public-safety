@@ -373,28 +373,43 @@ def _truncate_container_components_inplace(container, max_components: int) -> in
     so a single container that's over budget on components — independent of
     its char size — must be trimmed before it's packed, or the whole chunk
     fails to send. We reserve one slot for the marker we add at the end."""
-    children = getattr(container, 'children', None)
-    if not isinstance(children, list):
+    if not isinstance(getattr(container, 'children', None), list):
         return _container_component_count(container)
     target = max(1, max_components - 1)  # leave room for the marker below
     remove = getattr(container, 'remove_item', None)
     guard = 0
-    while (
-        _container_component_count(container) > target
-        and len(children) > 1
-        and guard < 500
-    ):
+    # IMPORTANT: discord.py's Container.children property returns a COPY
+    # of the internal list, so it must be re-read every iteration. The
+    # previous version snapshotted it once: after the first removal the
+    # stale copy kept handing back the same already-removed child, which
+    # Container.remove_item silently ignores (it swallows ValueError), so
+    # the loop spun to the guard cap having removed exactly ONE child —
+    # and the still-over-budget container later made view.add_item raise,
+    # killing the whole dispatch cycle.
+    while guard < 500:
         guard += 1
-        child = children[-1]
-        try:
-            if callable(remove):
-                remove(child)
-            else:
-                children.pop()
-        except Exception:
+        live = getattr(container, 'children', None)
+        if not isinstance(live, list) or len(live) <= 1:
+            break
+        if _container_component_count(container) <= target:
+            break
+        before = len(live)
+        removed = False
+        if callable(remove):
             try:
-                children.pop()
+                remove(live[-1])
+                after = getattr(container, 'children', None)
+                removed = isinstance(after, list) and len(after) < before
             except Exception:
+                removed = False
+        if not removed:
+            # Public API made no progress — fall back to the underlying
+            # list (private but stable in discord.py 2.x); bail rather
+            # than loop forever if even that isn't there.
+            raw = getattr(container, '_children', None)
+            if isinstance(raw, list) and raw:
+                raw.pop()
+            else:
                 break
     try:
         container.add_item(
@@ -1815,7 +1830,10 @@ class EmbedBuilder:
         start_time = data.get('startTime', '')
         last_updated = data.get('lastUpdated', '')
 
-        title_prefix = "🔧" if outage_type == 'Planned' else "⚡"
+        # The backend emits 'Unplanned' | 'Current Maintenance' | 'Future
+        # Maintenance' — it never says 'Planned', so the old equality check
+        # rendered every planned/maintenance outage with the unplanned ⚡.
+        title_prefix = "⚡" if outage_type == 'Unplanned' else "🔧"
 
         container = discord.ui.Container(
             accent_colour=self.COLORS.get(alert_type, self.COLORS['endeavour_current'])

@@ -162,9 +162,13 @@ function buildCursorSeek(
   p: DataHistoryParams,
   table: ArchiveTable,
   baseParamCount: number,
+  /** When true, faCol is a bigint epoch expression (unique-mode
+   *  effective_ts) — compare numerically instead of via to_timestamp. */
+  epochTs = false,
 ): { clause: string; params: unknown[] } | null {
   if (!p.cursor) return null;
   const cmp = p.order === 'DESC' ? '<' : '>';
+  const wrap = (ph: string): string => (epochTs ? ph : `to_timestamp(${ph})`);
   // A cursor without a (valid) table — single-family, a legacy 2-part
   // cursor, or a foreign table name — collapses to equal-rank, i.e. the
   // original single-table seek. tableRank() returns -1 for unknowns.
@@ -177,20 +181,20 @@ function buildCursorSeek(
   const i = baseParamCount;
   if (rel === 'before') {
     return {
-      clause: `${faCol} ${cmp} to_timestamp($${i + 1})`,
+      clause: `${faCol} ${cmp} ${wrap(`$${i + 1}`)}`,
       params: [p.cursor.fetchedAt],
     };
   }
   if (rel === 'after') {
     return {
-      clause: `${faCol} ${cmp}= to_timestamp($${i + 1})`,
+      clause: `${faCol} ${cmp}= ${wrap(`$${i + 1}`)}`,
       params: [p.cursor.fetchedAt],
     };
   }
   return {
     clause:
-      `(${faCol} ${cmp} to_timestamp($${i + 1}) ` +
-      `OR (${faCol} = to_timestamp($${i + 2}) AND ${idCol} ${cmp} $${i + 3}))`,
+      `(${faCol} ${cmp} ${wrap(`$${i + 1}`)} ` +
+      `OR (${faCol} = ${wrap(`$${i + 2}`)} AND ${idCol} ${cmp} $${i + 3}))`,
     params: [p.cursor.fetchedAt, p.cursor.fetchedAt, p.cursor.rowId],
   };
 }
@@ -245,6 +249,11 @@ export interface QueryPlan {
   effectiveOffset: number;
   limit: number;
   order: SortDir;
+  /** unique=1 mode — the per-family SQL orders by effective_ts
+   *  (source_timestamp_unix with latest_fetched_at fallback), so the
+   *  cross-family merge must sort by the same key or the merged order
+   *  (and the cursor derived from it) contradicts the per-family SQL. */
+  unique: boolean;
 }
 
 interface ConditionAcc {
@@ -410,6 +419,20 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
     );
     sidecarAcc.params.push(`%${p.location}%`);
   }
+  // Cursor pre-filter INSIDE top_keys. Unique-mode cursors encode the
+  // boundary row's effective_ts (see the route's next_cursor emit).
+  // Without this bound the CTE re-read the same top-cteLimit keys on
+  // every page and only post-filtered them, so pagination silently
+  // dead-ended once the cursor was deeper than cteLimit (~2 pages at
+  // the default limit). Inclusive bound keeps boundary ties in the
+  // window; the post-JOIN seek below discards the already-served rows.
+  if (p.cursor) {
+    const cmpEq = p.order === 'DESC' ? '<=' : '>=';
+    sidecarAcc.parts.push(
+      `COALESCE(source_timestamp_unix, EXTRACT(EPOCH FROM latest_fetched_at)::bigint) ${cmpEq} $${sidecarAcc.params.length + 1}`,
+    );
+    sidecarAcc.params.push(p.cursor.fetchedAt);
+  }
 
   // CTE row budget — must cover (offset + limit) plus headroom for
   // post-JOIN filter drops. 2x multiplier on the fetch target handles
@@ -457,7 +480,14 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
       p.lng + lonDelta,
     );
   }
-  const uniqueSeek = buildCursorSeek('a.fetched_at', 'a.id', p, table, offset());
+  // Seek on k.effective_ts — the SAME key the query orders by. The old
+  // seek compared a.fetched_at, but for any source that populates
+  // source_timestamp_unix (waze pubMillis, RFS pubDate, ...) the
+  // ordering key and the pagination key were different timestamps, so
+  // page N+1 both skipped and repeated rows around the boundary.
+  const uniqueSeek = buildCursorSeek(
+    'k.effective_ts', 'a.id', p, table, offset(), true,
+  );
   if (uniqueSeek) {
     parentAcc.parts.push(uniqueSeek.clause);
     parentAcc.params.push(...uniqueSeek.params);
@@ -975,6 +1005,7 @@ export function buildPlan(p: DataHistoryParams): QueryPlan {
     effectiveOffset: p.cursor ? 0 : p.offset,
     limit: p.limit,
     order: p.order,
+    unique: p.unique,
   };
 }
 
@@ -1028,10 +1059,19 @@ export function mergeAndPaginate(
   const dir = plan.order === 'DESC' ? -1 : 1;
   const rankOf = (r: ArchiveQueryRow): number =>
     r._family ? tableRank(r._family) : 0;
+  // Unique mode orders by effective_ts in SQL (source_timestamp_unix
+  // with fetched_at fallback) — merge on the same key so the combined
+  // order, and the cursor cut from its boundary row, stay consistent
+  // with what each family's next page will produce. Number() because
+  // pg returns bigint columns as strings.
+  const tsOf = (r: ArchiveQueryRow): number =>
+    plan.unique
+      ? Number(r.source_timestamp_unix ?? r.fetched_at_epoch)
+      : Number(r.fetched_at_epoch);
   rows.sort((a, b) => {
-    if (a.fetched_at_epoch !== b.fetched_at_epoch) {
-      return (a.fetched_at_epoch - b.fetched_at_epoch) * dir;
-    }
+    const ta = tsOf(a);
+    const tb = tsOf(b);
+    if (ta !== tb) return (ta - tb) * dir;
     const ra = rankOf(a);
     const rb = rankOf(b);
     if (ra !== rb) return (ra - rb) * dir;

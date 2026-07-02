@@ -82,8 +82,15 @@ class AlertPoller:
         # Track last seen pager message ID
         self.last_pager_id = 0
 
-        # Track first poll cycle (skip high-volume sources on first run)
-        self._first_poll = True
+        # Per-source bootstrap tracking. A source is bootstrapped (all its
+        # currently-active items marked seen, no alerts fired) on its first
+        # SUCCESSFUL fetch after startup. This used to be one global
+        # _first_poll flag flipped at the end of cycle 1 — but a source
+        # whose first fetch failed (backend still booting after a shared
+        # host restart, or a 30s timeout) was never bootstrapped, and on
+        # cycle 2 every active item for it fired as "new": exactly the
+        # restart flood the bootstrap exists to prevent.
+        self._bootstrapped: set = set()
 
         # Shared HTTP session — created lazily on first use so it binds to
         # the running event loop. ~18 endpoints are fetched per 60s cycle;
@@ -303,15 +310,29 @@ class AlertPoller:
                     return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
 
             elif alert_type.startswith('bom_'):
-                # BOM uses pubDate (RFC 2822 format) — same for land + marine
-                pub_date = item.get('pubDate', '')
-                if pub_date:
-                    from email.utils import parsedate_to_datetime
-                    return _aware(parsedate_to_datetime(pub_date))
+                # The backend's BomWarning shape carries `issued` — ISO-ish
+                # local time for land warnings, RFC 2822 (mapped from the
+                # feed's pubDate) for marine. The old top-level `pubDate`
+                # read never matched the API payload, so every BOM alert
+                # fell back to "now" and sorted arbitrarily. Try ISO first,
+                # then RFC 2822; keep pubDate as a legacy fallback.
+                ts = item.get('issued') or item.get('pubDate') or ''
+                if ts:
+                    try:
+                        return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
+                    except ValueError:
+                        from email.utils import parsedate_to_datetime
+                        try:
+                            return _aware(parsedate_to_datetime(str(ts)))
+                        except Exception:
+                            pass
 
             elif alert_type.startswith('traffic_'):
-                # Traffic uses Created (Unix timestamp in milliseconds)
-                created = item.get('Created')
+                # The backend GeoJSON carries properties.created (ISO); the
+                # old top-level `Created` read never matched, so traffic
+                # alerts always sorted as "now". Keep Created as a legacy
+                # fallback for raw-feed payload shapes.
+                created = item.get('properties', {}).get('created') or item.get('Created')
                 if created:
                     if isinstance(created, (int, float)):
                         # Convert ms to seconds if needed
@@ -341,10 +362,14 @@ class AlertPoller:
                     return _aware(datetime.fromisoformat(ts.replace('Z', '+00:00')))
 
             elif alert_type.startswith('endeavour_'):
-                # Endeavour uses estimatedRestoreTime or just current time
-                restore_time = item.get('estimatedRestoreTime', '')
-                if restore_time:
-                    return _aware(datetime.fromisoformat(restore_time.replace('Z', '+00:00')))
+                # The backend emits startTime + estimatedRestoration (the
+                # old `estimatedRestoreTime` field name never matched, so
+                # endeavour alerts always sorted as "now"). startTime =
+                # when the outage began — the right chronological key;
+                # restoration is a future estimate, kept only as fallback.
+                ts = item.get('startTime') or item.get('estimatedRestoration') or ''
+                if ts:
+                    return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
 
             elif alert_type == 'ausgrid':
                 # Ausgrid uses StartTime (ISO format)
@@ -539,21 +564,20 @@ class AlertPoller:
             items = self._extract_items(alert_type, data)
             original_count = len(items)
 
-            # On the first poll cycle after bot startup, bootstrap EVERY
-            # source: mark every currently-active item as seen without
-            # firing an alert. Without this, a restart after downtime
-            # surfaces every active outage / incident / pager hit as
-            # "new" — the bot then tries to send thousands of messages
-            # at once, saturates the 500-message queue, and drops a
-            # bunch of them as "Message queue full". Production saw
-            # 2126 alerts on a single restart cycle.
+            # On a source's first SUCCESSFUL fetch after startup, bootstrap
+            # it: mark every currently-active item as seen without firing
+            # an alert. Without this, a restart after downtime surfaces
+            # every active outage / incident / pager hit as "new" — the
+            # bot then tries to send thousands of messages at once,
+            # saturates the 500-message queue, and drops a bunch of them
+            # as "Message queue full". Production saw 2126 alerts on a
+            # single restart cycle.
             #
-            # Previously this was waze-only because waze ingest is
-            # high-volume and the bootstrap was framed as "anti-flood
-            # for waze". The same flood happens for every other source
-            # the moment the bot's been offline for any non-trivial
-            # window, so it gets the same bootstrap treatment.
-            if self._first_poll:
+            # Per-source (not a global first-cycle flag) so a source whose
+            # first fetch failed still gets bootstrapped when it recovers,
+            # instead of flooding on cycle 2.
+            if alert_type not in self._bootstrapped:
+                self._bootstrapped.add(alert_type)
                 logger.info(
                     f"  → {alert_type}: Bootstrapping {original_count} items "
                     "(marking as seen, no alerts)"
@@ -636,11 +660,6 @@ class AlertPoller:
                     None, self.db.mark_alert_seen, 'radio_summary', rs_alert['id']
                 )
         
-        # Mark first poll as complete
-        if self._first_poll:
-            self._first_poll = False
-            logger.info("First poll cycle complete — alerts active for all sources")
-        
         # Sort all alerts by source timestamp (oldest first) for chronological posting
         if new_alerts:
             new_alerts.sort(key=lambda a: self._get_alert_timestamp(a['type'], a['data']))
@@ -663,14 +682,20 @@ class AlertPoller:
         if not presets:
             return new_alerts
 
-        # Fetch user incidents from backend API
+        # Fetch user incidents from backend API. None = fetch FAILED (as
+        # opposed to a successful fetch with zero incidents) — skip the
+        # cycle without consuming the bootstrap, so a backend that's still
+        # booting doesn't cause a cycle-2 flood.
         incidents = await self._fetch_user_incidents()
+        if incidents is None:
+            return new_alerts
 
-        # Bootstrap on first poll — mark currently-ready incidents as seen
-        # without firing alerts. Same anti-flood reasoning as check_alerts:
-        # restart after downtime would otherwise re-emit every active user
-        # incident as new.
-        if self._first_poll:
+        # Bootstrap on the first successful fetch — mark currently-ready
+        # incidents as seen without firing alerts. Same anti-flood
+        # reasoning as check_alerts: restart after downtime would
+        # otherwise re-emit every active user incident as new.
+        if 'user_incident' not in self._bootstrapped:
+            self._bootstrapped.add('user_incident')
             ready = [i for i in incidents if self._is_incident_ready(i)]
             for incident in ready:
                 alert_id = self._get_alert_id('user_incident', incident)
@@ -749,6 +774,13 @@ class AlertPoller:
         if not row or not row.get('id'):
             return []
 
+        # Consume the bootstrap on the first SUCCESSFUL fetch — checked
+        # BEFORE the seen guard, so a restart whose inherited summary is
+        # already seen doesn't leave the bootstrap pending to swallow the
+        # next genuinely-new summary.
+        first_success = 'radio_summary' not in self._bootstrapped
+        self._bootstrapped.add('radio_summary')
+
         alert_id = f"radio_summary_{row['id']}"
         seen = await loop.run_in_executor(
             None, self.db.is_alert_seen, 'radio_summary', alert_id
@@ -756,12 +788,12 @@ class AlertPoller:
         if seen:
             return []
 
-        # Bootstrap on first poll — the latest summary the bot inherits at
-        # startup may already be hours old; firing it as "new" once the
-        # bot reconnects is misleading (and noisy if downtime spanned
-        # multiple summary boundaries; a quiet hour summary then a
-        # backlog of new alerts is the typical stack).
-        if self._first_poll:
+        # Bootstrap — the latest summary the bot inherits at startup may
+        # already be hours old; firing it as "new" once the bot reconnects
+        # is misleading (and noisy if downtime spanned multiple summary
+        # boundaries; a quiet hour summary then a backlog of new alerts is
+        # the typical stack).
+        if first_success:
             await loop.run_in_executor(
                 None, self.db.mark_alert_seen, 'radio_summary', alert_id
             )
@@ -815,8 +847,14 @@ class AlertPoller:
         # Incident is ready if it has type, logs, or agencies
         return has_type or has_logs or has_agencies
     
-    async def _fetch_user_incidents(self) -> List[Dict[str, Any]]:
-        """Fetch active user incidents from backend API"""
+    async def _fetch_user_incidents(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch active user incidents from backend API.
+
+        Returns None on a FAILED fetch (HTTP error / timeout / exception)
+        so the caller can distinguish "backend unreachable" from "no
+        incidents" — the bootstrap must only be consumed by a successful
+        fetch, and a malformed-but-200 payload counts as failure too.
+        """
         url = f"{self.api_base_url}/api/incidents?active=true"
         headers = {
             'Authorization': f"Bearer {self.api_key}",
@@ -829,7 +867,7 @@ class AlertPoller:
                     if response.status == 200:
                         incidents = await response.json()
                         if not isinstance(incidents, list):
-                            return []
+                            return None
 
                         # Filter out RFS stubs client-side
                         incidents = [i for i in incidents if not i.get('is_rfs_stub')]
@@ -844,13 +882,13 @@ class AlertPoller:
                         return incidents
                     else:
                         logger.warning(f"Backend returned {response.status} for user incidents")
-                        return []
+                        return None
         except asyncio.TimeoutError:
             logger.error("Timeout fetching user incidents from backend")
-            return []
+            return None
         except Exception as e:
             logger.error(f"Error fetching user incidents: {e}")
-            return []
+            return None
 
     async def _fetch_incident_logs(self, incident_id: str) -> List[Dict[str, Any]]:
         """Fetch incident logs/updates from backend API"""

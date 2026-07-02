@@ -123,6 +123,22 @@ const vesselDetailCache = new Map<
   { data: unknown; expires: number }
 >();
 
+// These per-vessel Maps check TTL on read but nothing ever *removes*
+// expired entries, and /api/marinetraffic/vessel-image/:id is a public
+// endpoint with integer ids — trivially enumerable. Every other cache in
+// the codebase is capacity-bounded (DATA_CACHE_MAX etc.); these were
+// missed, so process memory grew monotonically (image entries hold raw
+// photo bytes). Cap them with oldest-first eviction — Map preserves
+// insertion order, so the first key is the oldest entry.
+const VESSEL_CACHE_MAX = 500;
+function capMap(m: Map<string, unknown>, max = VESSEL_CACHE_MAX): void {
+  while (m.size > max) {
+    const oldest = m.keys().next().value;
+    if (oldest === undefined) break;
+    m.delete(oldest);
+  }
+}
+
 async function dbReadVesselDetail(id: string): Promise<{
   data: unknown;
   fetchedAtMs: number;
@@ -321,6 +337,7 @@ marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
       data: dbRow.data,
       expires: now + VESSEL_DETAIL_TTL_MS,
     });
+    capMap(vesselDetailCache);
     return c.json(dbRow.data);
   }
   // Layer 3: origin fetch.
@@ -336,6 +353,7 @@ marinetrafficRouter.get('/api/marinetraffic/vessel/:id', async (c) => {
     return c.json({ error: 'vessel detail not found' }, 502);
   }
   vesselDetailCache.set(id, { data, expires: now + VESSEL_DETAIL_TTL_MS });
+  capMap(vesselDetailCache);
   // Persist to DB asynchronously — don't block the response on it.
   void dbWriteVesselDetail(id, data);
   return c.json(data);
@@ -383,6 +401,7 @@ marinetrafficRouter.get('/api/marinetraffic/vessel-image/:id', async (c) => {
   const result = await marinetrafficBrowser.fetchBinary(collectionUrl);
   if (!result || result.status >= 400 || result.bytes.length === 0) {
     vesselImageMissCache.set(id, now);
+    capMap(vesselImageMissCache);
     if (cached) {
       return c.body(cached.bytes, 200, {
         'Content-Type': cached.contentType,
@@ -396,6 +415,8 @@ marinetrafficRouter.get('/api/marinetraffic/vessel-image/:id', async (c) => {
     contentType: result.contentType,
     expires: now + VESSEL_IMAGE_TTL_MS,
   });
+  // Image entries hold raw photo bytes — cap tighter than the others.
+  capMap(vesselImageCache, 200);
   return c.body(result.bytes, 200, {
     'Content-Type': result.contentType,
     'Cache-Control': 'public, max-age=21600',

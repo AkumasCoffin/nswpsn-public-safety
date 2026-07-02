@@ -16,8 +16,13 @@
  * Tuples with NULL source_id (e.g. legacy rows where the upstream
  * didn't expose a stable id) are NOT deduplicated by default — they
  * could be genuine multi-poll snapshots of the same incident. Pass
- * --include-null-source-id to dedup those too (treats NULL as a single
- * group keyed by source + fetched_at).
+ * --include-null-source-id to dedup those too, in a SEPARATE pass keyed
+ * by (source, fetched_at, md5(data)) — the content hash means only
+ * byte-identical rows (the double-backfill signature) collapse; N
+ * distinct NULL-id incidents that share one poll's fetched_at are left
+ * alone. (An earlier version applied the NULL grouping to EVERY row,
+ * which would have deleted N-1 of every poll snapshot's genuine,
+ * distinct incidents across the whole table.)
  *
  * Usage:
  *   cd backends/node
@@ -32,8 +37,11 @@
  *   --batch=<N>                 delete in chunks of N (default 50000)
  *
  * Safety:
- *   - DELETE runs in a single transaction per table so a crash leaves
- *     the table in a consistent state.
+ *   - DELETEs run as independent autocommit batches (--batch=N rows per
+ *     statement). Each batch is atomic, but a crash mid-run leaves
+ *     earlier batches committed — safe here because every batch removes
+ *     only rows whose keeper sibling provably exists; just re-run to
+ *     finish the remainder.
  *   - statement_timeout is set to 0 (unlimited) for the bulk DELETE.
  *   - Idempotent: re-running on a clean table is a no-op.
  */
@@ -98,24 +106,45 @@ async function main() {
 }
 
 /**
- * Build the duplicate-row CTE. Groups by (source, source_id, fetched_at)
- * (or (source, fetched_at) when --include-null-source-id is set), keeps
- * the row with the smallest id per group, marks the rest for deletion.
+ * Dedup passes. Each pass scopes its scan with `filter` and groups by
+ * `groupCols`; the smallest-id row per group is kept, the rest deleted.
+ *
+ *   notnull — rows WITH a stable id: (source, source_id, fetched_at).
+ *             The double-backfill signature exactly.
+ *   null    — rows WITHOUT one (only with --include-null-source-id):
+ *             (source, fetched_at, md5(data::text)). The content hash is
+ *             essential — one poll snapshot stamps every incident with
+ *             the same fetched_at, so keying on (source, fetched_at)
+ *             alone would collapse N distinct incidents into one.
  */
-function dupesCte(table, includeNull) {
-  const groupCols = includeNull
-    ? `source, fetched_at`
-    : `source, source_id, fetched_at`;
-  const filter = includeNull ? '' : `WHERE source_id IS NOT NULL`;
+function dedupPasses() {
+  const passes = [
+    {
+      name: 'source_id rows',
+      groupCols: 'source, source_id, fetched_at',
+      filter: 'WHERE source_id IS NOT NULL',
+    },
+  ];
+  if (flags.includeNull) {
+    passes.push({
+      name: 'NULL-source_id rows (content-identical only)',
+      groupCols: 'source, fetched_at, md5(data::text)',
+      filter: 'WHERE source_id IS NULL',
+    });
+  }
+  return passes;
+}
+
+function dupesCte(table, pass) {
   return `
     WITH ranked AS (
       SELECT id,
              ROW_NUMBER() OVER (
-               PARTITION BY ${groupCols}
+               PARTITION BY ${pass.groupCols}
                ORDER BY id ASC
              ) AS rn
       FROM ${table}
-      ${filter}
+      ${pass.filter}
     )
     SELECT id FROM ranked WHERE rn > 1
   `;
@@ -124,61 +153,59 @@ function dupesCte(table, includeNull) {
 async function dedupOne(pool, table) {
   console.log(`\n${table}:`);
 
-  // Count duplicates first (cheap subset of the full delete plan).
-  const cte = dupesCte(table, flags.includeNull);
-  const t0 = Date.now();
-  const cnt = await pool.query(`SELECT COUNT(*)::bigint AS n FROM (${cte}) d`);
-  const total = Number(cnt.rows[0]?.n ?? 0);
-  const ms = Date.now() - t0;
-  console.log(`  duplicates: ${total} (${ms} ms to scan)`);
+  for (const pass of dedupPasses()) {
+    // Count duplicates first (cheap subset of the full delete plan).
+    const cte = dupesCte(table, pass);
+    const t0 = Date.now();
+    const cnt = await pool.query(`SELECT COUNT(*)::bigint AS n FROM (${cte}) d`);
+    const total = Number(cnt.rows[0]?.n ?? 0);
+    const ms = Date.now() - t0;
+    console.log(`  [${pass.name}] duplicates: ${total} (${ms} ms to scan)`);
 
-  if (total === 0) {
-    console.log(`  ✓ no action`);
-    return;
-  }
+    if (total === 0) {
+      console.log(`  ✓ no action`);
+      continue;
+    }
 
-  if (flags.dryRun) {
-    console.log(`  dry-run — no deletes issued`);
-    return;
-  }
+    if (flags.dryRun) {
+      console.log(`  dry-run — no deletes issued`);
+      continue;
+    }
 
-  // Batched delete to keep WAL pressure manageable on large tables.
-  let deleted = 0;
-  for (;;) {
-    const t1 = Date.now();
-    // Use a fresh CTE per batch — `LIMIT` inside the CTE bounds the
-    // ROW_NUMBER scan to a single page, keeping memory low.
-    const sql = `
-      WITH dupes AS (
-        SELECT id FROM (
-          SELECT id,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY ${
-                     flags.includeNull
-                       ? 'source, fetched_at'
-                       : 'source, source_id, fetched_at'
-                   }
-                   ORDER BY id ASC
-                 ) AS rn
-          FROM ${table}
-          ${flags.includeNull ? '' : 'WHERE source_id IS NOT NULL'}
-        ) ranked
-        WHERE rn > 1
-        LIMIT ${flags.batch}
-      )
-      DELETE FROM ${table}
-      WHERE id IN (SELECT id FROM dupes)
-    `;
-    const r = await pool.query(sql);
-    const n = r.rowCount ?? 0;
-    deleted += n;
-    const dt = Date.now() - t1;
-    process.stdout.write(
-      `  deleted ${deleted}/${total} (${dt} ms last batch)         \r`,
-    );
-    if (n === 0) break;
+    // Batched delete to keep WAL pressure manageable on large tables.
+    let deleted = 0;
+    for (;;) {
+      const t1 = Date.now();
+      // Use a fresh CTE per batch — `LIMIT` inside the CTE bounds the
+      // ROW_NUMBER scan to a single page, keeping memory low.
+      const sql = `
+        WITH dupes AS (
+          SELECT id FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY ${pass.groupCols}
+                     ORDER BY id ASC
+                   ) AS rn
+            FROM ${table}
+            ${pass.filter}
+          ) ranked
+          WHERE rn > 1
+          LIMIT ${flags.batch}
+        )
+        DELETE FROM ${table}
+        WHERE id IN (SELECT id FROM dupes)
+      `;
+      const r = await pool.query(sql);
+      const n = r.rowCount ?? 0;
+      deleted += n;
+      const dt = Date.now() - t1;
+      process.stdout.write(
+        `  deleted ${deleted}/${total} (${dt} ms last batch)         \r`,
+      );
+      if (n === 0) break;
+    }
+    console.log(`  deleted ${deleted}/${total}                          `);
   }
-  console.log(`  deleted ${deleted}/${total}                          `);
   console.log(`  ✓ ${table} clean`);
 }
 
