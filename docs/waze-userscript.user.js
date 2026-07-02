@@ -269,13 +269,19 @@
     function handleGeorss(urlStr, data) {
         try {
             const u = new URL(urlStr, location.origin);
+            const bbox = {
+                top:    parseFloat(u.searchParams.get('top')),
+                bottom: parseFloat(u.searchParams.get('bottom')),
+                left:   parseFloat(u.searchParams.get('left')),
+                right:  parseFloat(u.searchParams.get('right')),
+            };
+            // A georss URL without bbox params yields NaNs, which JSON-
+            // serialise to null and forward a useless {top:null,...}
+            // snapshot to /api/waze/ingest. Same guard as the manual
+            // variant.
+            if ([bbox.top, bbox.bottom, bbox.left, bbox.right].some(isNaN)) return;
             forward({
-                bbox: {
-                    top:    parseFloat(u.searchParams.get('top')),
-                    bottom: parseFloat(u.searchParams.get('bottom')),
-                    left:   parseFloat(u.searchParams.get('left')),
-                    right:  parseFloat(u.searchParams.get('right')),
-                },
+                bbox,
                 alerts: data.alerts || [],
                 jams:   data.jams   || [],
                 users:  data.users  || [],
@@ -943,14 +949,20 @@
     // Scheduled reload — fires once per page load. After reload, the script
     // re-runs and schedules a fresh timer, so this naturally repeats.
     // Region index is persisted in localStorage (LS_KEY) so we resume mid-rotation.
-    // Skipped during cooldown — reloading mid-block earns more 403s.
-    setTimeout(() => {
+    // Deferred (not dropped) during cooldown — reloading mid-block earns
+    // more 403s, but a plain `return` here would disarm the absolute
+    // backstop for the REST of the page's life: nothing rescheduled it,
+    // and the ingest watchdog won't fire while ingests still succeed.
+    // Retry every 5 minutes until the cooldown has elapsed.
+    function scheduledReload() {
         if (isInCooldown()) {
-            log(`scheduled ${RELOAD_INTERVAL_MS / 60000}m reload — skipped (cooldown active)`);
+            log(`scheduled ${RELOAD_INTERVAL_MS / 60000}m reload — deferred (cooldown active)`);
+            setTimeout(scheduledReload, 5 * 60_000);
             return;
         }
         forceReload(`scheduled ${RELOAD_INTERVAL_MS / 60000}m`);
-    }, RELOAD_INTERVAL_MS);
+    }
+    setTimeout(scheduledReload, RELOAD_INTERVAL_MS);
 
     // Watchdog — runs on every check tick AND every visibility change.
     // The visibility hook is the important one: backgrounded tabs get
