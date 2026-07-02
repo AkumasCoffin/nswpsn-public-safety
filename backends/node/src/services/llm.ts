@@ -1264,7 +1264,15 @@ function localHourStartUtc(now: Date, tz: string): Date {
   // ~5 minutes before the boundary.)
   const nowAsIfUtcMs = Date.UTC(y, mo - 1, d, h, mn, s);
   const topAsIfUtcMs = Date.UTC(y, mo - 1, d, h, 0, 0);
-  const offsetMs = nowAsIfUtcMs - now.getTime();
+  // Compare against `now` truncated to the whole second: nowAsIfUtcMs is
+  // built from Intl parts (no sub-second component), so subtracting the raw
+  // now.getTime() would leak now's milliseconds into the result. That gave
+  // boundaries like 05:00:00.563Z, so period_start differed every run — the
+  // existence check never matched (needless re-summarise + wasted LLM call)
+  // and the UNIQUE(summary_type, period_start) constraint couldn't dedupe.
+  // Dropping the millis yields a clean HH:00:00.000 boundary.
+  const nowToSecondMs = now.getTime() - now.getMilliseconds();
+  const offsetMs = nowAsIfUtcMs - nowToSecondMs;
   return new Date(topAsIfUtcMs - offsetMs);
 }
 
