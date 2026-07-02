@@ -14,7 +14,21 @@
  * Node doesn't carry rows. Idempotent — the WHERE guard skips already-
  * populated rows.
  *
- * Skip behaviour: counts pending rows up-front; if zero, table is done.
+ * Chunking is keyset-paginated over the (source, source_id) PK: each
+ * chunk scans a bounded WINDOW of candidate rows past a cursor, fills
+ * the fillable subset, and advances the cursor past the whole window.
+ * The naive version instead LIMIT-ed on *fillable* rows — for tables
+ * where most NULL rows are permanently unfillable (archive_waze: the
+ * parent rows simply have no category/title), collecting one chunk
+ * meant scanning ~the whole table joined to the parent, which blew the
+ * per-chunk statement_timeout on chunk 0 forever, making zero progress
+ * on every boot.
+ *
+ * Completion marker: when a table finishes a full pass (cursor reached
+ * the end), a sentinel row goes into schema_migrations — same pattern
+ * as archiveLatestRecompute — so later boots skip the table entirely.
+ * Post-022 the live writer populates the dims on every upsert, so no
+ * new backfill-needing rows accumulate after a completed pass.
  */
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
@@ -74,16 +88,19 @@ let running = false;
 interface BackfillStats {
   table: string;
   chunks: number;
+  rowsScanned: number;
   rowsUpdated: number;
+  completed: boolean; // full pass reached the end of the table
   ms: number;
 }
 
-// A row needs backfill if ANY of the promoted columns is NULL AND the
-// parent has a value for it. Approximated cheaply by checking
-// category IS NULL OR title IS NULL — most sources populate at least
-// one of these, so this catches both 021 (category) and 022 (title +
-// status + severity + ...) backfill targets in one pass.
-async function nullCount(pool: Pool, table: string): Promise<number> {
+// A row is a CANDIDATE if ANY of the promoted columns is NULL —
+// category IS NULL OR title IS NULL catches both 021 (category) and
+// 022 (title + status + severity + ...) targets in one pass. Whether a
+// candidate is actually FILLABLE (parent has a value) is only decided
+// inside the chunk query; counting fillable rows up-front would need
+// the same full parent join that made the naive chunking time out.
+async function candidateCount(pool: Pool, table: string): Promise<number> {
   const r = await pool.query<{ n: string }>(
     `SELECT COUNT(*)::text AS n
        FROM ${table}_latest
@@ -92,14 +109,60 @@ async function nullCount(pool: Pool, table: string): Promise<number> {
   return Number(r.rows[0]?.n ?? '0');
 }
 
+// Per-table completion sentinel, stored as a schema_migrations row (same
+// trick as archiveLatestRecompute's 'task:archive_latest_recompute').
+// Written only after a FULL pass (cursor walked off the end of the
+// table) — a deferred (writer-busy) or bailed (repeated chunk failure)
+// table gets no marker and retries on the next boot.
+function markerFor(table: string): string {
+  return `task:archive_dims_backfill:${table}`;
+}
+
+async function tableDone(pool: Pool, table: string): Promise<boolean> {
+  try {
+    const r = await pool.query(
+      `SELECT 1 FROM schema_migrations WHERE filename = $1`,
+      [markerFor(table)],
+    );
+    return (r.rowCount ?? 0) > 0;
+  } catch {
+    return false; // can't read markers → just do the (idempotent) work
+  }
+}
+
+async function markTableDone(pool: Pool, table: string): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO schema_migrations (filename) VALUES ($1)
+         ON CONFLICT (filename) DO NOTHING`,
+      [markerFor(table)],
+    );
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message, table },
+      'archiveLatestDimsBackfill: failed to write done-marker (will rescan next boot)',
+    );
+  }
+}
+
 async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> {
   const start = Date.now();
   const stats: BackfillStats = {
     table,
     chunks: 0,
+    rowsScanned: 0,
     rowsUpdated: 0,
+    completed: false,
     ms: 0,
   };
+
+  // Keyset cursor over the (source, source_id) PK. Advanced past the whole
+  // scanned window on every committed chunk — INCLUDING windows where
+  // nothing was fillable — so progress is monotonic and the pass always
+  // terminates. '' sorts before every non-empty text, so ('','') starts
+  // from the top of the index.
+  let cursorSource = '';
+  let cursorSourceId = '';
 
   // A deadlock (40P01) means another sidecar writer won the race; the
   // chunk rolled back untouched and just needs re-running, not aborting
@@ -112,7 +175,7 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   for (;;) {
     const client = await pool.connect();
-    let updated = 0;
+    let scanned = 0;
     let outcome: 'ok' | 'deadlock' | 'lockmiss' | 'fail' = 'ok';
     try {
       await client.query('BEGIN');
@@ -129,70 +192,98 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
         await client.query('ROLLBACK');
         outcome = 'lockmiss';
       } else {
-      // CTE picks a chunk of NULL-category sidecar rows, joins to the
-      // parent on the latest_fetched_at pointer, then updates the
-      // sidecar. The CTE's LIMIT bounds the lock scope so cleanup +
-      // writers can interleave. FOR UPDATE SKIP LOCKED would be ideal
-      // but pg doesn't support it on the subselect of an UPDATE...FROM;
-      // the loop simply re-runs if a row got grabbed concurrently.
-      // Backfill both 021 (category/subcategory — parent columns) and
-      // 022 (title/location_text/status/severity/is_active — extracted
-      // from parent's data JSONB). The CASE on is_active uses the same
-      // truthy-string semantics as extractBoolField in archive.ts so
-      // backfilled values match what the writer would produce going
-      // forward.
-      const r = await client.query<{ updated: string }>(
-        `WITH batch AS (
-           -- Join the parent here and require at least one NULL the parent
-           -- can actually fill. Selecting purely on the sidecar's NULLs (the
-           -- old behaviour) re-picked rows the UPDATE couldn't change —
-           -- either no parent row at latest_fetched_at, or the parent's
-           -- value is itself NULL/empty — so RETURNING kept counting them,
-           -- "updated" never hit 0, and the for(;;) loop never terminated.
-           -- After an update here the row's category/title go non-null and
-           -- it leaves the predicate; permanently-NULL rows are never picked.
-           SELECT l.source, l.source_id, l.latest_fetched_at
+      // scan: the next window of candidate rows past the keyset cursor.
+      // The LIMIT bounds the window by CANDIDATES (cheap PK-index walk,
+      // no parent join), so per-chunk cost stays flat no matter how many
+      // candidates turn out unfillable. batch: the fillable subset —
+      // parent joined only for the windowed rows. upd: fills them.
+      // Backfill covers both 021 (category/subcategory — parent columns)
+      // and 022 (title/location_text/status/severity/is_active —
+      // extracted from parent's data JSONB). The CASE on is_active uses
+      // the same truthy-string semantics as extractBoolField in
+      // archive.ts so backfilled values match what the writer would
+      // produce going forward. Rows whose parent can't fill them are
+      // simply stepped over by the cursor and never revisited.
+      // batch keeps (source, source_id) order to match the live
+      // writer's upsert lock order; without a shared order, overlapping
+      // batches deadlock (SQLSTATE 40P01).
+      const r = await client.query<{
+        scanned: number;
+        updated: number;
+        last_source: string | null;
+        last_source_id: string | null;
+      }>(
+        `WITH scan AS (
+           SELECT l.source, l.source_id, l.latest_fetched_at,
+                  l.category, l.title
            FROM ${table}_latest l
-           JOIN ${table} a
-             ON a.source = l.source
-            AND a.source_id = l.source_id
-            AND a.fetched_at = l.latest_fetched_at
-           WHERE (l.category IS NULL AND a.category IS NOT NULL)
-              OR (l.title    IS NULL AND NULLIF(a.data->>'title', '') IS NOT NULL)
-           -- Lock sidecar rows in (source, source_id) order to match the
-           -- live writer's upsert and the sidecar backfill; without a
-           -- shared order, overlapping batches deadlock (SQLSTATE 40P01).
+           WHERE (l.source, l.source_id) > ($2::text, $3::text)
+             AND (l.category IS NULL OR l.title IS NULL)
            ORDER BY l.source, l.source_id
            LIMIT $1
-         )
-         UPDATE ${table}_latest l
-            SET category      = a.category,
-                subcategory   = a.subcategory,
-                title         = NULLIF(a.data->>'title', ''),
-                location_text = NULLIF(a.data->>'location_text', ''),
-                status        = NULLIF(a.data->>'status', ''),
-                severity      = NULLIF(a.data->>'severity', ''),
-                is_active     = CASE
-                  WHEN a.data->>'is_active' IN ('1','true','True','TRUE') THEN true
-                  WHEN a.data->>'is_active' IN ('0','false','False','FALSE') THEN false
-                  ELSE NULL
-                END
-           FROM batch b
+         ),
+         batch AS (
+           SELECT s.source, s.source_id, s.latest_fetched_at
+           FROM scan s
            JOIN ${table} a
-             ON a.source = b.source
-            AND a.source_id = b.source_id
-            AND a.fetched_at = b.latest_fetched_at
-          WHERE l.source = b.source
-            AND l.source_id = b.source_id
-         RETURNING 1`,
-          [CHUNK_SIZE],
+             ON a.source = s.source
+            AND a.source_id = s.source_id
+            AND a.fetched_at = s.latest_fetched_at
+           WHERE (s.category IS NULL AND a.category IS NOT NULL)
+              OR (s.title    IS NULL AND NULLIF(a.data->>'title', '') IS NOT NULL)
+           ORDER BY s.source, s.source_id
+         ),
+         upd AS (
+           UPDATE ${table}_latest l
+              SET category      = a.category,
+                  subcategory   = a.subcategory,
+                  title         = NULLIF(a.data->>'title', ''),
+                  location_text = NULLIF(a.data->>'location_text', ''),
+                  status        = NULLIF(a.data->>'status', ''),
+                  severity      = NULLIF(a.data->>'severity', ''),
+                  is_active     = CASE
+                    WHEN a.data->>'is_active' IN ('1','true','True','TRUE') THEN true
+                    WHEN a.data->>'is_active' IN ('0','false','False','FALSE') THEN false
+                    ELSE NULL
+                  END
+             FROM batch b
+             JOIN ${table} a
+               ON a.source = b.source
+              AND a.source_id = b.source_id
+              AND a.fetched_at = b.latest_fetched_at
+            WHERE l.source = b.source
+              AND l.source_id = b.source_id
+           RETURNING 1
+         )
+         SELECT (SELECT COUNT(*) FROM scan)::int AS scanned,
+                (SELECT COUNT(*) FROM upd)::int  AS updated,
+                (SELECT s.source FROM scan s
+                  ORDER BY s.source DESC, s.source_id DESC LIMIT 1) AS last_source,
+                (SELECT s.source_id FROM scan s
+                  ORDER BY s.source DESC, s.source_id DESC LIMIT 1) AS last_source_id`,
+          [CHUNK_SIZE, cursorSource, cursorSourceId],
         );
-        updated = r.rowCount ?? 0;
+        const row = r.rows[0];
+        scanned = row?.scanned ?? 0;
+        const updated = row?.updated ?? 0;
         await client.query('COMMIT');
 
+        // Advance the cursor past the whole window — only after COMMIT so
+        // a rolled-back chunk is retried from the same position.
+        if (row?.last_source != null && row.last_source_id != null) {
+          cursorSource = row.last_source;
+          cursorSourceId = row.last_source_id;
+        }
         stats.chunks += 1;
+        stats.rowsScanned += scanned;
         stats.rowsUpdated += updated;
         deadlockRetries = 0; // progress made — reset the retry budget
+        if (stats.chunks % 50 === 0) {
+          log.info(
+            { table, chunks: stats.chunks, scanned: stats.rowsScanned, updated: stats.rowsUpdated },
+            'archiveLatestDimsBackfill: progress',
+          );
+        }
       }
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch { /* ignore */ }
@@ -249,7 +340,13 @@ async function backfillTable(pool: Pool, table: string): Promise<BackfillStats> 
     // Success.
     lockMisses = 0;
     chunkFails = 0;
-    if (updated === 0) break; // table done
+    if (scanned < CHUNK_SIZE) {
+      // Window came back short — the cursor walked off the end of the
+      // candidate set. Full pass complete (fillable rows filled,
+      // unfillable ones permanently stepped over).
+      stats.completed = true;
+      break;
+    }
 
     if (PAUSE_BETWEEN_CHUNKS_MS > 0) {
       await sleep(PAUSE_BETWEEN_CHUNKS_MS);
@@ -275,14 +372,24 @@ export async function runArchiveLatestDimsBackfill(): Promise<void> {
     }
     for (const table of ARCHIVE_TABLES) {
       try {
-        const remaining = await nullCount(pool, table);
-        if (remaining === 0) {
-          log.info({ table }, 'archiveLatestDimsBackfill: no NULL rows, skipping');
+        if (await tableDone(pool, table)) {
+          log.info({ table }, 'archiveLatestDimsBackfill: marker present, skipping');
           continue;
         }
-        log.info({ table, remaining }, 'archiveLatestDimsBackfill: starting');
+        const candidates = await candidateCount(pool, table);
+        if (candidates === 0) {
+          log.info({ table }, 'archiveLatestDimsBackfill: no NULL rows, marking done');
+          await markTableDone(pool, table);
+          continue;
+        }
+        log.info({ table, candidates }, 'archiveLatestDimsBackfill: starting');
         const stats = await backfillTable(pool, table);
         log.info(stats, 'archiveLatestDimsBackfill: table done');
+        if (stats.completed) {
+          // Only a full pass earns the marker; a deferred (writer busy)
+          // or bailed (repeated chunk failure) table retries next boot.
+          await markTableDone(pool, table);
+        }
       } catch (err) {
         log.warn(
           { err: (err as Error).message, table },
