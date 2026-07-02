@@ -6,6 +6,8 @@ Uses PostgreSQL when BOT_DATABASE_URL is set, otherwise SQLite.
 import os
 import re
 import json
+import hmac
+import hashlib
 import logging
 import threading
 from typing import Optional, List, Dict, Any
@@ -43,6 +45,93 @@ else:
 # connection limit. Tunable via env.
 BOT_DB_POOL_MAX = max(2, int(os.getenv('BOT_DB_POOL_MAX', '12')))
 _pool_lock = threading.Lock()
+
+
+# =====================================================================
+# BOT-ACTION HMAC SIGNING (cross-language parity with the Node backend)
+# =====================================================================
+# The web dashboard enqueues rows into pending_bot_actions that this bot
+# later drains and executes with NO further authentication. To reject
+# rows that didn't come from the backend, the backend HMAC-signs each row
+# with a shared secret (BOT_ACTION_SIGNING_SECRET) and the bot verifies.
+#
+# The canonical string + HMAC below MUST stay byte-for-byte identical to
+# the Node implementation in
+# backends/node/src/services/botActionSign.ts (canonicalBotAction /
+# signBotAction) or verification silently fails:
+#
+#   canonical = action + "\n" + requested_by + "\n" + _stable_json(params)
+#   signature = hex( HMAC-SHA256(secret_utf8, canonical_utf8) )
+#
+# _stable_json sorts object keys so the canonical form round-trips through
+# Postgres JSONB (which reorders keys). All params values here are
+# strings / arrays-of-strings / arrays-of-objects-of-strings — no floats —
+# so there is no number-formatting drift between the languages.
+
+def _stable_json(value: Any) -> str:
+    """Deterministic serializer matching JS stableJson in botActionSign.ts.
+
+    - None       -> "null"
+    - bool       -> "true"/"false"  (checked BEFORE int, since bool is an int)
+    - int/float  -> JSON number form (none expected here, but handled)
+    - str        -> json.dumps(s, ensure_ascii=False)  (JSON-quoted)
+    - list       -> "[" + items joined by "," + "]"
+    - dict       -> "{" + sorted "key":value pairs joined by "," + "}"
+    """
+    if value is None:
+        return 'null'
+    # bool is a subclass of int — must be checked first.
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)):
+        return '[' + ','.join(_stable_json(v) for v in value) + ']'
+    if isinstance(value, dict):
+        keys = sorted(value.keys())
+        return (
+            '{'
+            + ','.join(
+                json.dumps(k, ensure_ascii=False) + ':' + _stable_json(value[k])
+                for k in keys
+            )
+            + '}'
+        )
+    # Unexpected type — serialise as null so the signature stays deterministic.
+    return 'null'
+
+
+def canonical_bot_action(action: str, requested_by: str, params: Any) -> str:
+    """Build the canonical signing string for a bot-action row."""
+    return f"{action}\n{requested_by}\n{_stable_json(params)}"
+
+
+def sign_bot_action(secret: str, action: str, requested_by: str, params: Any) -> str:
+    """Compute the hex HMAC-SHA256 signature for a bot-action row."""
+    canonical = canonical_bot_action(action, requested_by, params)
+    return hmac.new(
+        secret.encode('utf-8'), canonical.encode('utf-8'), hashlib.sha256
+    ).hexdigest()
+
+
+def verify_bot_action_sig(
+    secret: str,
+    action: str,
+    requested_by: str,
+    params: Any,
+    sig: Optional[str],
+) -> bool:
+    """Constant-time verify a bot-action row's signature.
+
+    Returns False when sig is missing/None or does not match — the caller
+    must refuse to execute the action in that case.
+    """
+    if not sig:
+        return False
+    expected = sign_bot_action(secret, action, requested_by, params)
+    return hmac.compare_digest(expected, sig)
 
 
 class _PooledConnection:
@@ -292,13 +381,16 @@ class Database:
                         claimed_at    TIMESTAMPTZ,
                         completed_at  TIMESTAMPTZ,
                         result        JSONB,
-                        error         TEXT
+                        error         TEXT,
+                        sig           TEXT
                     )
                 ''')
                 c.execute('CREATE INDEX IF NOT EXISTS idx_pending_bot_actions_status ON pending_bot_actions(status, requested_at)')
 
                 # Live-DB migration for the per-preset filters column.
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
+                # Live-DB migration: HMAC signature column for bot-action rows.
+                c.execute("ALTER TABLE pending_bot_actions ADD COLUMN IF NOT EXISTS sig TEXT")
             else:
                 # SQLite DDL — alert_configs / pager_configs are gone (Phase 3).
                 # SQLite is also no longer the supported runtime; the bot expects
@@ -824,6 +916,13 @@ class Database:
             conn.close()
 
     # ==================== BOT ACTION QUEUE ====================
+
+    def verify_bot_action_sig(self, secret: str, action: str, requested_by: str,
+                              params: Any, sig: Optional[str]) -> bool:
+        """Instance wrapper over the module-level verify_bot_action_sig so
+        callers can use self.db.verify_bot_action_sig(...). Constant-time;
+        returns False when sig is missing or does not match."""
+        return verify_bot_action_sig(secret, action, requested_by, params, sig)
 
     def enqueue_bot_action(self, action: str, params: Optional[Dict[str, Any]] = None,
                            requested_by: Optional[str] = None) -> int:

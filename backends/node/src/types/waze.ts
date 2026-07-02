@@ -18,7 +18,11 @@ import { z } from 'zod';
 // `z.number()` would 400 every such ingest. `z.coerce.number()` accepts
 // numbers and numeric strings; `.default(0)` matches python's `or 0`
 // fallback when a field is missing entirely.
-const bboxCoord = z.coerce.number().catch(0).default(0);
+// `.finite()` rejects Infinity/NaN (which z.coerce.number() otherwise
+// accepts from e.g. "Infinity"/"NaN" strings); the `.catch(0)` then maps
+// any such non-finite coercion back to the 0 default. Defense-in-depth so
+// bbox rounding / cache keys can never carry a poisoned non-finite value.
+const bboxCoord = z.coerce.number().finite().catch(0).default(0);
 export const BboxSchema = z.object({
   top: bboxCoord,
   bottom: bboxCoord,
@@ -87,9 +91,11 @@ export const WazeIngestPayloadSchema = z.object({
   // coerces each field to float with a 0 default — same effective
   // behaviour as missing-bbox-becomes-{0,0,0,0}.
   bbox: BboxSchema.default({ top: 0, bottom: 0, left: 0, right: 0 }),
-  alerts: z.array(WazeAlertSchema).optional().default([]),
-  jams: z.array(WazeJamSchema).optional().default([]),
-  users: z.array(z.unknown()).optional().default([]),
+  // Upper-bound each array (5000) so a single authorized POST can't carry
+  // an unbounded array and exhaust memory during parse/archive fan-out.
+  alerts: z.array(WazeAlertSchema).max(5000).optional().default([]),
+  jams: z.array(WazeJamSchema).max(5000).optional().default([]),
+  users: z.array(z.unknown()).max(5000).optional().default([]),
 });
 export type WazeIngestPayload = z.infer<typeof WazeIngestPayloadSchema>;
 

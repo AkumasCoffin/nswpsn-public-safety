@@ -98,6 +98,29 @@ export async function ensurePresetAuditTable(pool: Pool): Promise<void> {
   return _auditEnsured;
 }
 
+/**
+ * Ensure the `sig` column exists on pending_bot_actions. Idempotent and
+ * memoised — the ALTER runs at most once per process. Added lazily from
+ * the backend so HMAC-signed enqueues work without waiting for a bot
+ * redeploy; the bot's database.py / apply_schema_presets.py define the
+ * same column. Mirrors ensurePresetAuditTable.
+ */
+let _sigColumnEnsured: Promise<void> | null = null;
+export async function ensureBotActionSigColumn(pool: Pool): Promise<void> {
+  if (_sigColumnEnsured) return _sigColumnEnsured;
+  _sigColumnEnsured = (async () => {
+    await pool.query(
+      'ALTER TABLE pending_bot_actions ADD COLUMN IF NOT EXISTS sig TEXT',
+    );
+  })().catch((err) => {
+    // Reset so a later call can retry after a transient failure.
+    _sigColumnEnsured = null;
+    log.warn({ err }, 'ensureBotActionSigColumn failed');
+    throw err;
+  });
+  return _sigColumnEnsured;
+}
+
 /** Close the pool — for graceful shutdown. */
 export async function closeBotDbPool(): Promise<void> {
   if (_pool) {
@@ -106,6 +129,7 @@ export async function closeBotDbPool(): Promise<void> {
   }
   _initAttempted = false;
   _auditEnsured = null;
+  _sigColumnEnsured = null;
 }
 
 /**
@@ -116,4 +140,5 @@ export function _setBotDbPoolForTests(p: Pool | null): void {
   _pool = p;
   _initAttempted = true;
   _auditEnsured = null;
+  _sigColumnEnsured = null;
 }

@@ -3393,7 +3393,8 @@
     function renderNewsItem(item) {
       // Use timestamp if available (more reliable), fallback to published string
       const timeAgo = formatNewsTime(item.timestamp || item.published);
-      const categoryClass = item.category || 'general';
+      const _CAT = ['emergency', 'weather', 'general'];
+      const categoryClass = _CAT.includes(item.category) ? item.category : 'general';
       
       // Only allow a safe Font Awesome <i> icon, else fall back to default
       const safeIcon = (typeof item.icon === 'string' && /^<i class="fa[srlbd]? fa-[a-z0-9-]+"><\/i>$/.test(item.icon.trim()))

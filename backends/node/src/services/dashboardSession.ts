@@ -34,8 +34,16 @@ export const DASH_OAUTH_COOKIE = 'nswpsn_dash_oauth';
 export const DASH_SESSION_TTL_SECS = 24 * 60 * 60; // 24h
 export const DASH_OAUTH_STATE_TTL_SECS = 10 * 60; // 10m
 export const DASH_GUILD_REFRESH_INTERVAL_SECS = 10 * 60;
-// Cookie domain — the dashboard UI is at nswpsn.forcequit.xyz but the API is
-// at api.forcequit.xyz; share the cookie via the parent domain.
+// Cookie domain — host-only by default (no Domain attribute), so the
+// HttpOnly session cookie is scoped to exactly the API host
+// (api.forcequit.xyz) and is NOT sent to sibling subdomains.
+//
+// The apex ('.forcequit.xyz') is now OPT-IN, not the default: a
+// leading-dot apex Domain leaks the session cookie to every
+// *.forcequit.xyz host — including third-party self-hosted apps like
+// radio./pager. — which could then read a logged-in user's session
+// cookie. Operators who genuinely need cross-subdomain cookie sharing
+// must explicitly set DASHBOARD_COOKIE_DOMAIN=.forcequit.xyz.
 export const DASH_COOKIE_DOMAIN_DEFAULT = '.forcequit.xyz';
 
 // --- Types -------------------------------------------------------------------
@@ -211,9 +219,13 @@ export function isSecureRequest(
 }
 
 export function getCookieDomain(): string | null {
+  // Host-only by default: unset OR empty DASHBOARD_COOKIE_DOMAIN means no
+  // Domain attribute, scoping the cookie to exactly the API host. Only a
+  // non-empty explicit value opts into a shared cookie domain. See the
+  // DASH_COOKIE_DOMAIN_DEFAULT note above for the sibling-subdomain leak
+  // this prevents.
   const v = process.env['DASHBOARD_COOKIE_DOMAIN'];
-  if (v === undefined) return DASH_COOKIE_DOMAIN_DEFAULT;
-  return v || null;
+  return v ? v : null;
 }
 
 // ---------------------------------------------------------------------------

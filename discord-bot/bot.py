@@ -1082,6 +1082,41 @@ class NSWPSNBot(commands.Bot):
         action_id = int(action['id'])
         kind = action['action']
         params = action.get('params') or {}
+
+        # --- HMAC signature gate -------------------------------------------
+        # The backend signs each queue row with BOT_ACTION_SIGNING_SECRET.
+        # Reject rows that didn't come from the backend so an attacker who
+        # can merely INSERT into pending_bot_actions can't get unattended
+        # Discord actions. When the secret is unset we fail OPEN (rollout
+        # only) but log loudly.
+        signing_secret = os.getenv('BOT_ACTION_SIGNING_SECRET')
+        if signing_secret:
+            ok = self.db.verify_bot_action_sig(
+                signing_secret,
+                action['action'],
+                action.get('requested_by') or '',
+                action.get('params') or {},
+                action.get('sig'),
+            )
+            if not ok:
+                logger.warning(
+                    f"bot-action drain: REJECTED id={action_id} action={kind} "
+                    "— signature verification failed (missing or bad sig)"
+                )
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.db.complete_bot_action(
+                        action_id, error='signature verification failed'
+                    ),
+                )
+                return
+        else:
+            logger.warning(
+                "bot-action signing DISABLED (set BOT_ACTION_SIGNING_SECRET "
+                "in both .env files) — executing unsigned action "
+                f"id={action_id} action={kind}"
+            )
+
         logger.info(f"bot-action drain: executing id={action_id} action={kind}")
         try:
             if kind == 'sync':

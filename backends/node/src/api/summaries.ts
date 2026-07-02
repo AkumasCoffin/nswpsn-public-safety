@@ -20,6 +20,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { isRdioConfigured } from '../services/rdio.js';
+import { requireRole, isOwner } from '../services/auth/roles.js';
 import {
   generateRdioHourlySummary,
   generateRdioRecentSummary,
@@ -98,8 +99,7 @@ summariesRouter.get('/api/summaries/latest', async (c) => {
     return c.json({ hourly: row ? rowToSummary(row) : null });
   } catch (err) {
     log.error({ err }, '/api/summaries/latest error');
-    const e = err as Error;
-    return c.json({ error: `${e.name}: ${e.message}` }, 500);
+    return c.json({ error: 'failed to fetch summaries' }, 500);
   }
 });
 
@@ -179,15 +179,16 @@ summariesRouter.get('/api/summaries', async (c) => {
     });
   } catch (err) {
     log.error({ err }, '/api/summaries error');
-    return c.json({ error: (err as Error).message }, 500);
+    return c.json({ error: 'failed to fetch summaries' }, 500);
   }
 });
 
-// /api/summaries/trigger — manual summary generation. Both POST (json
-// body) and GET (query params) are accepted, matching python's dual-
-// method handler. Recent triggers run synchronously by default for
-// short N; longer Ns can opt into a background queue with `?sync=0`
-// (kept for python-cli parity but the response shape stays the same).
+// /api/summaries/trigger — manual summary generation. Only POST (json
+// body) drives generation and it is owner-gated (see route registration
+// below); GET returns 405 so a browser address bar can't start a job.
+// Recent triggers run synchronously by default for short N; longer Ns
+// can opt into a background queue with `?sync=0` (kept for python-cli
+// parity but the response shape stays the same).
 async function handleTrigger(c: Context): Promise<Response> {
   if (!isRdioConfigured()) {
     return c.json({ error: 'RDIO_DATABASE_URL not configured' }, 503);
@@ -253,7 +254,7 @@ async function handleTrigger(c: Context): Promise<Response> {
       });
     } catch (err) {
       log.error({ err }, '/api/summaries/trigger hourly error');
-      return c.json({ error: (err as Error).message }, 500);
+      return c.json({ error: 'failed to generate summary' }, 500);
     }
   }
 
@@ -291,12 +292,25 @@ async function handleTrigger(c: Context): Promise<Response> {
       return c.json({ ok: true, type: 'recent', result });
     } catch (err) {
       log.error({ err }, '/api/summaries/trigger recent error');
-      return c.json({ error: (err as Error).message }, 500);
+      return c.json({ error: 'failed to generate summary' }, 500);
     }
   }
 
   return c.json({ error: "type must be 'hourly' or 'recent'" }, 400);
 }
 
-summariesRouter.post('/api/summaries/trigger', handleTrigger);
-summariesRouter.get('/api/summaries/trigger', handleTrigger);
+// Only a logged-in owner (verified Supabase JWT + owner role) may drive
+// Gemini generation — the public NSWPSN_API_KEY (handed to every client
+// via /api/config) must not be able to trigger quota/billing drain or
+// hammer the rdio DB.
+summariesRouter.post('/api/summaries/trigger', requireRole(isOwner), handleTrigger);
+
+// GET must NOT be able to start a job — a browser address bar hitting
+// this URL would otherwise kick off generation. Return 405 and tell the
+// caller to POST instead.
+summariesRouter.get('/api/summaries/trigger', (c) =>
+  c.json(
+    { error: 'method not allowed; POST to /api/summaries/trigger to generate' },
+    405,
+  ),
+);
