@@ -669,7 +669,37 @@ function summarizeGeminiError(status: number, body: string): string {
   }
 }
 
+// Public entry point. Runs the call on the primary model, and if that gives
+// up after exhausting its retries (sustained 503 overload, or every key 429'd
+// on that model), falls back ONCE to a lighter model — which has its own
+// capacity/quota pool and so usually answers when the primary is overloaded.
+// This is what keeps hourly summaries flowing through Gemini's flaky periods.
+// The fallback is skipped when it's unset or identical to the primary.
 export async function callLlm(opts: {
+  systemPrompt: string;
+  userPrompt: string;
+  model: string;
+  jsonMode?: boolean;
+  maxTokens?: number;
+  maxAttempts?: number;
+  fallbackModel?: string;
+}): Promise<string> {
+  const fallback = opts.fallbackModel ?? config.LLM_MODEL_FALLBACK;
+  try {
+    return await callLlmOnce(opts);
+  } catch (err) {
+    if (fallback && fallback !== opts.model) {
+      log.warn(
+        { from: opts.model, to: fallback, err: (err as Error).message },
+        'Gemini primary model exhausted — falling back to lighter model',
+      );
+      return await callLlmOnce({ ...opts, model: fallback });
+    }
+    throw err;
+  }
+}
+
+async function callLlmOnce(opts: {
   systemPrompt: string;
   userPrompt: string;
   model: string;
