@@ -2705,12 +2705,25 @@
       updateCloseAllButtonVisibility();
     }
     
-    // Open map at specific coordinates with optional layer activation
+    // Escape a feed-derived value for embedding inside a single-quoted JS
+    // string inside a double-quoted HTML attribute (the inline onclick
+    // handlers below). encodeURIComponent alone is NOT enough — it leaves
+    // ' ( ) ! * unencoded, so an apostrophe in feed text (e.g. "O'Connell
+    // St") terminated the JS string: a broken handler at best, an XSS
+    // sink fed by third-party feeds at worst. %27-encode the quote too.
+    function mapLabelArg(s) {
+      return encodeURIComponent(String(s ?? '')).replace(/'/g, '%27');
+    }
+
+    // Open map at specific coordinates with optional layer activation.
+    // `label` arrives already percent-encoded (mapLabelArg at the call
+    // sites), so it drops into the URL as-is — re-encoding here was
+    // double-encoding it.
     function openMapAt(lat, lng, label, layer) {
       if (!lat || !lng) return;
       if (typeof umami !== 'undefined') umami.track('live-open-on-map', { layer: layer || 'default' });
       // Open in new tab with coordinates - using map.html with coordinates and layer
-      let url = `map.html?lat=${lat}&lng=${lng}&zoom=15&label=${encodeURIComponent(label || '')}`;
+      let url = `map.html?lat=${lat}&lng=${lng}&zoom=15&label=${label || ''}`;
       if (layer) url += `&layer=${layer}`;
       window.open(url, '_blank');
     }
@@ -4672,7 +4685,7 @@
           
           return `
             <div class="tt-outage-item ${hasGPS ? 'map-clickable' : ''}" 
-                 ${hasGPS ? `onclick="event.stopPropagation(); openMapAt(${Number(i.lat)}, ${Number(i.lng)}, '${encodeURIComponent(i.suburb + (i.streets ? ' - ' + i.streets : ''))}', 'outages')"` : ''}
+                 ${hasGPS ? `onclick="event.stopPropagation(); openMapAt(${Number(i.lat)}, ${Number(i.lng)}, '${mapLabelArg(i.suburb + (i.streets ? ' - ' + i.streets : ''))}', 'outages')"` : ''}
                  style="border-left-color:${borderColor}; background:${bgColor};">
               
               <div class="tt-outage-header">
@@ -5064,7 +5077,7 @@
               const shortAdvice = adviceText.length > 160 ? adviceText.substring(0, 160) + '…' : adviceText;
               return `
               <div class="tt-item tt-traffic list-item ${accentClass} ${i.lat && i.lng ? 'map-clickable' : ''}" 
-                   ${i.lat && i.lng ? `onclick="openMapAt(${Number(i.lat)}, ${Number(i.lng)}, '${encodeURIComponent(i.title)}', 'incidents')"` : ''}>
+                   ${i.lat && i.lng ? `onclick="openMapAt(${Number(i.lat)}, ${Number(i.lng)}, '${mapLabelArg(i.title)}', 'incidents')"` : ''}>
                 <div class="tt-header">
                   <div class="tt-header-body">
                     <div class="tt-title">${i.isMajor ? '<i class="fas fa-exclamation-circle" style="color:#ef4444;margin-right:4px;"></i>' : ''}${escapeHtml(i.title)}</div>
@@ -5452,7 +5465,7 @@
 
               return `
                 <div class="tt-item tt-beach list-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}"
-                     ${hasGPS ? `onclick="openMapAt(${Number(b.lat)}, ${Number(b.lng)}, '${encodeURIComponent(b.name)}', 'beachwatch')"` : ''}>
+                     ${hasGPS ? `onclick="openMapAt(${Number(b.lat)}, ${Number(b.lng)}, '${mapLabelArg(b.name)}', 'beachwatch')"` : ''}>
                   <div class="tt-beach-row">
                     <div class="tt-title tt-title-compact"><i class="fas fa-umbrella-beach" style="color:#06b6d4;"></i> ${escapeHtml(b.name)}</div>
                     ${hasGPS ? '<span class="map-view-btn compact"><i class="fas fa-map-marker-alt"></i></span>' : ''}
@@ -5670,7 +5683,7 @@
               
               return `
                 <div class="tt-item ${accentClass} ${hasGPS ? 'map-clickable' : ''}"
-                     ${hasGPS ? `onclick="openMapAt(${Number(inc.lat)}, ${Number(inc.lng)}, '${encodeURIComponent(inc.title)}', 'rfs')"` : ''}>
+                     ${hasGPS ? `onclick="openMapAt(${Number(inc.lat)}, ${Number(inc.lng)}, '${mapLabelArg(inc.title)}', 'rfs')"` : ''}>
                   
                   <div class="tt-header">
                     <div class="tt-title">${escapeHtml(inc.title)}</div>
