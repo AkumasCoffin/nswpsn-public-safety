@@ -212,6 +212,37 @@ async function main() {
       console.log(`  ${parent} (${Date.now() - t0} ms)`);
     }
 
+    // 2b. Wipe everything DERIVED from the parents we just dropped.
+    // Leaving the `_latest` sidecars in place corrupts unique=1 reads
+    // permanently: their latest_fetched_at pointers dangle at parent
+    // rows that no longer exist (the LATERAL join returns nothing while
+    // the key still burns a top_keys slot), the filter facets keep
+    // advertising phantom incidents, and the startup backfill never
+    // repairs any of it because it only fires on a completely EMPTY
+    // sidecar. TRUNCATE (not DROP) — their schema is migration-managed.
+    console.log('\n[derived]');
+    for (const t of [
+      ...PARENTS.map((t) => `${t}_latest`),
+      'police_heatmap_bin_daily',
+      'filter_facets_daily',
+    ]) {
+      const t0 = Date.now();
+      await pool.query(`TRUNCATE ${t} RESTART IDENTITY CASCADE`);
+      console.log(`  truncated ${t} (${Date.now() - t0} ms)`);
+    }
+    // Clear the one-shot completion markers so every repair pass re-runs
+    // against the rebuilt data on next boot: indexBuilder one-shots
+    // (_backfill_% — heatmap bin_daily + filter facets), the sidecar
+    // recompute, and the dims pass (the plain sidecar backfill only
+    // fills source/source_id/latest_fetched_at).
+    await pool.query(
+      `DELETE FROM schema_migrations
+        WHERE filename LIKE '\\_backfill\\_%'
+           OR filename = 'task:archive_latest_recompute'
+           OR filename LIKE 'task:archive\\_dims\\_backfill:%'`,
+    );
+    console.log('  cleared backfill/recompute markers');
+
     if (skipMigrate) {
       console.log('\n--no-migrate: skipping data_history backfill.');
     } else {

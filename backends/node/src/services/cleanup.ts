@@ -27,8 +27,14 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
 
+// Accept both the canonical var and the name env.sample documented for
+// years (DATA_CLEANUP_INTERVAL) — previously only _SECS was read here
+// while /api/status read the other, so setting the documented var
+// changed what status REPORTED but not what cleanup actually DID.
 const DEFAULT_INTERVAL_SECS = Number.parseInt(
-  process.env['DATA_CLEANUP_INTERVAL_SECS'] ?? '3600',
+  process.env['DATA_CLEANUP_INTERVAL_SECS']
+    ?? process.env['DATA_CLEANUP_INTERVAL']
+    ?? '3600',
   10,
 );
 const RETENTION_DAYS_FALLBACK = 31;
