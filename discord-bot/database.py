@@ -1052,7 +1052,13 @@ class Database:
         conn = self._connect()
         try:
             c = conn.cursor()
-            now = datetime.now().isoformat()
+            # UTC for the same reason as mark_alert_seen above: the
+            # cleanup compares created_at against Postgres NOW(), so a
+            # Sydney-local naive write sat ~10-11h "in the future",
+            # skewing the 14-day retention — and the TEXT ORDER BY
+            # created_at used by get_previous_incident_message could
+            # misorder rows written across a DST transition.
+            now = datetime.now(timezone.utc).isoformat()
             if USE_POSTGRES:
                 c.execute('''
                     INSERT INTO incident_messages (incident_guid, channel_id, message_url, status, created_at)
@@ -1107,7 +1113,10 @@ class Database:
         try:
             c = conn.cursor()
             if USE_POSTGRES:
-                c.execute("DELETE FROM incident_messages WHERE (created_at::timestamp) < NOW() - INTERVAL '1 day' * %s", (days,))
+                # timestamptz cast for the same reason as cleanup_old_seen:
+                # honour the +00:00 offset save_incident_message now writes,
+                # independent of the DB session timezone.
+                c.execute("DELETE FROM incident_messages WHERE (created_at::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
             else:
                 cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                 cutoff_str = cutoff.isoformat()
