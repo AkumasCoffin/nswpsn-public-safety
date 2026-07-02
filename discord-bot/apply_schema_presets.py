@@ -181,9 +181,11 @@ CREATE TABLE IF NOT EXISTS pending_bot_actions (
     claimed_at    TIMESTAMPTZ,
     completed_at  TIMESTAMPTZ,
     result        JSONB,
-    error         TEXT
+    error         TEXT,
+    sig           TEXT                  -- HMAC-SHA256 (hex) of the row, signed by the backend
 );
 CREATE INDEX IF NOT EXISTS idx_pending_bot_actions_status ON pending_bot_actions(status, requested_at);
+ALTER TABLE pending_bot_actions ADD COLUMN IF NOT EXISTS sig TEXT;
 
 -- ------------------------------------------------------------------------
 -- source_health — persisted upstream-source health counters so the

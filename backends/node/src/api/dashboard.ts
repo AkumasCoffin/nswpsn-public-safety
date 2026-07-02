@@ -22,7 +22,13 @@ import type { Context } from 'hono';
 import type { Pool } from 'pg';
 import { randomBytes } from 'node:crypto';
 import { log } from '../lib/log.js';
-import { getBotDbPool, isBotDbConfigured, ensurePresetAuditTable } from '../services/botDb.js';
+import {
+  getBotDbPool,
+  isBotDbConfigured,
+  ensurePresetAuditTable,
+  ensureBotActionSigColumn,
+} from '../services/botDb.js';
+import { getBotActionSecret, signBotAction } from '../services/botActionSign.js';
 import {
   DASH_OAUTH_COOKIE,
   DASH_OAUTH_STATE_TTL_SECS,
@@ -96,6 +102,25 @@ const ALERT_TYPES: readonly string[] = [
 ];
 
 const PG_UNIQUE_VIOLATION = '23505';
+
+// Warn-once guard so we don't spam the log on every enqueue when
+// BOT_ACTION_SIGNING_SECRET is unset (signing disabled / rollout only).
+let _botSignDisabledWarned = false;
+function botSignForEnqueue(action: string, requestedBy: string, params: unknown): string | null {
+  const secret = getBotActionSecret();
+  if (!secret) {
+    if (!_botSignDisabledWarned) {
+      _botSignDisabledWarned = true;
+      log.warn(
+        'BOT_ACTION_SIGNING_SECRET is unset — bot-action queue signing DISABLED ' +
+          '(rows enqueued without a signature; the bot fails open). Set the same ' +
+          'value in the backend and discord-bot .env to enable.',
+      );
+    }
+    return null;
+  }
+  return signBotAction(secret, action, requestedBy, params);
+}
 
 // ---------------------------------------------------------------------------
 // Tiny helpers.
@@ -211,6 +236,21 @@ async function requireAdmin(c: Context): Promise<DashSession | Response> {
   }
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// L1 defense-in-depth: a router-level guard on every /api/dashboard/admin/*
+// path that runs the SAME admin check as requireAdmin BEFORE any admin
+// handler executes. Belt-and-suspenders — a future admin route that forgets
+// its per-handler requireAdmin call still can't be reached unauthenticated.
+// The per-handler requireAdmin calls stay in place (idempotent). This guard
+// is scoped to the /admin/ prefix only, so it never touches the OAuth flow
+// (/api/dashboard/auth/login | /callback | /logout) or any non-admin route.
+// ---------------------------------------------------------------------------
+dashboardRouter.use('/api/dashboard/admin/*', async (c, next) => {
+  const result = await requireAdmin(c);
+  if (result instanceof Response) return result;
+  await next();
+});
 
 interface GuardEntry { id: string; name: string; permissions: string; owner?: boolean; icon?: string | null }
 
@@ -2095,11 +2135,14 @@ dashboardRouter.post('/api/dashboard/admin/broadcast', async (c) => {
   const pool = await getBotDbPool();
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
 
+  const sig = botSignForEnqueue('broadcast', requestedBy, params);
+
   try {
+    await ensureBotActionSigColumn(pool);
     const r = await pool.query<{ id: number | string }>(
-      'INSERT INTO pending_bot_actions (action, params, requested_by) ' +
-        "VALUES ('broadcast', $1::jsonb, $2) RETURNING id",
-      [JSON.stringify(params), requestedBy],
+      'INSERT INTO pending_bot_actions (action, params, requested_by, sig) ' +
+        "VALUES ('broadcast', $1::jsonb, $2, $3) RETURNING id",
+      [JSON.stringify(params), requestedBy, sig],
     );
     const newId = Number(r.rows[0]?.id ?? 0);
     log.info(
@@ -2298,11 +2341,14 @@ dashboardRouter.post('/api/dashboard/admin/bot-actions', async (c) => {
   const pool = await getBotDbPool();
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
 
+  const sig = botSignForEnqueue(action, requestedBy, params);
+
   try {
+    await ensureBotActionSigColumn(pool);
     const r = await pool.query<{ id: number | string }>(
-      'INSERT INTO pending_bot_actions (action, params, requested_by) ' +
-        'VALUES ($1, $2::jsonb, $3) RETURNING id',
-      [action, JSON.stringify(params), requestedBy],
+      'INSERT INTO pending_bot_actions (action, params, requested_by, sig) ' +
+        'VALUES ($1, $2::jsonb, $3, $4) RETURNING id',
+      [action, JSON.stringify(params), requestedBy, sig],
     );
     const newId = Number(r.rows[0]?.id ?? 0);
     log.info({ action, id: newId, by: requestedBy }, 'dashboard bot-action queued');

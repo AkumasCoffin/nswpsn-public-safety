@@ -8637,8 +8637,8 @@ function initPagerHoursFromStorage() {
     }
     function firmsSatelliteLine(props) {
       // "NOAA-21 (VIIRS) · Daytime" or "Aqua (MODIS) · Nighttime".
-      const sat = props.satellite_tag || props.satellite || '—';
-      const inst = props.instrument || '';
+      const sat = escapeHtml(props.satellite_tag || props.satellite || '—');
+      const inst = escapeHtml(props.instrument || '');
       const dn = props.daynight === 'D' ? 'Daytime'
         : props.daynight === 'N' ? 'Nighttime' : '';
       const left = inst ? `${sat} (${inst})` : sat;
@@ -8970,8 +8970,8 @@ function initPagerHoursFromStorage() {
         const status = (_firmsLastSourceStatus || []).map((s) => {
           const ok = !!s.ok;
           const color = ok ? '#34d399' : '#f87171';
-          const detail = ok ? `${s.count} detections` : `failed: ${(s.error || 'unknown').slice(0, 40)}`;
-          return `<div><span style="color:${color};">●</span> ${s.satellite}: ${detail}</div>`;
+          const detail = ok ? `${s.count} detections` : `failed: ${escapeHtml((s.error || 'unknown').slice(0, 40))}`;
+          return `<div><span style="color:${color};">●</span> ${escapeHtml(s.satellite)}: ${detail}</div>`;
         }).join('');
         return `
           <h4><i class="fa-solid fa-fire" style="color:#fdba74;"></i> Fire Hotspots</h4>

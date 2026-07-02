@@ -657,15 +657,50 @@ describe('resolveSummaryWindow (one window per hour)', () => {
 });
 
 describe('/api/summaries/trigger', () => {
-  it('503s when GEMINI_API_KEY is unset', async () => {
+  it('401s when the trigger is called without an owner JWT', async () => {
+    // The trigger is owner-gated (requireRole(isOwner)) so the public
+    // API key alone can no longer drive Gemini generation. Unauthenticated
+    // callers are rejected before the handler runs.
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();
     const res = await app.request('/api/summaries/trigger?type=hourly', {
       method: 'POST',
       headers: { 'X-API-Key': 'test-api-key' },
     });
-    // Either 503 (no rdio configured) or 503 (no gemini key) — both
-    // come from the same handler. Just assert the env-gating works.
+    expect(res.status).toBe(401);
+  });
+
+  it('GET no longer triggers generation (405)', async () => {
+    const { createApp } = await import('../../../src/server.js');
+    const app = createApp();
+    const res = await app.request('/api/summaries/trigger?type=hourly', {
+      method: 'GET',
+      headers: { 'X-API-Key': 'test-api-key' },
+    });
+    expect(res.status).toBe(405);
+  });
+
+  it('503s for an authenticated owner when GEMINI_API_KEY is unset', async () => {
+    // Sign a real HS256 JWT with the test SUPABASE_JWT_SECRET so
+    // optionalSupabaseJwt sets a userId; mock isOwner→true so requireRole
+    // passes and we reach the env-gating (503, no rdio/gemini configured).
+    vi.resetModules();
+    vi.doMock('../../../src/services/auth/roles.js', async (orig) => {
+      const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
+      return { ...actual, isOwner: vi.fn(async () => true) };
+    });
+    const { SignJWT } = await import('jose');
+    const jwt = await new SignJWT({})
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('owner-1')
+      .sign(new TextEncoder().encode('test-jwt-secret-0123456789'));
+    const { createApp } = await import('../../../src/server.js');
+    const app = createApp();
+    const res = await app.request('/api/summaries/trigger?type=hourly', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
     expect(res.status).toBe(503);
+    vi.doUnmock('../../../src/services/auth/roles.js');
   });
 });

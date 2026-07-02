@@ -215,14 +215,34 @@ export function createApp() {
   // where CORS isn't enforced anyway — browsers always send an
   // Origin on cross-origin requests, so the regex-matched specific
   // origin is what flows back to them.
+  // Deliberately NARROW: an explicit allow-list of first-party frontend
+  // origins only — NOT arbitrary subdomains. The old regex matched every
+  // *.forcequit.xyz / *.nswpsn.org host; combined with credentials:true
+  // below, that let a compromised sibling subdomain (radio.forcequit.xyz,
+  // pager.forcequit.xyz — third-party self-hosted apps) make credentialed
+  // cross-origin reads of the dashboard API using a logged-in user's
+  // cookie. Listing exact origins removes that pivot. The public
+  // map/live/logs pages are served from nswpsn.forcequit.xyz, which is
+  // included, so they keep working.
   const ALLOWED_ORIGIN_RE =
-    /^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|([a-z0-9-]+\.)*forcequit\.xyz|([a-z0-9-]+\.)*nswpsn\.org)$/i;
+    /^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|nswpsn\.forcequit\.xyz|forcequit\.xyz|www\.forcequit\.xyz|nswpsn\.org|www\.nswpsn\.org)$/i;
+  // Operator-extensible without a code change: CORS_ALLOWED_ORIGINS is a
+  // comma-separated list of EXACT origins (e.g. "https://foo.example")
+  // that are additionally allowed. Empty/whitespace entries are ignored.
+  const EXTRA_ALLOWED_ORIGINS = new Set(
+    (process.env['CORS_ALLOWED_ORIGINS'] ?? '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter((o) => o.length > 0),
+  );
   app.use(
     '*',
     cors({
       origin: (origin) => {
         if (!origin) return '*'; // file://, curl, server-to-server
-        return ALLOWED_ORIGIN_RE.test(origin) ? origin : null;
+        if (ALLOWED_ORIGIN_RE.test(origin)) return origin;
+        if (EXTRA_ALLOWED_ORIGINS.has(origin)) return origin;
+        return null;
       },
       credentials: true,
       allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key', 'Accept'],
