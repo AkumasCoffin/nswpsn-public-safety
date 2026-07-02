@@ -147,6 +147,13 @@ const Schema = z.object({
   // Gemini model id. Default matches python's _LLM_DEFAULT_MODEL.
   LLM_MODEL: z.string().default('gemini-2.5-flash'),
 
+  // Fallback model used only when the primary (LLM_MODEL) gives up after
+  // exhausting retries — sustained 503 overload or all keys 429'd. A lighter
+  // model has its own capacity/quota pool, so it usually answers when the
+  // primary is overloaded, keeping summaries flowing. Set empty to disable
+  // fallback. Ignored when it equals LLM_MODEL.
+  LLM_MODEL_FALLBACK: z.string().default('gemini-2.5-flash-lite'),
+
   // Gate the in-process hourly summary scheduler. Defaulted OFF
   // during the python→Node cutover to avoid double-spending Gemini
   // quota with two schedulers running. Now defaults ON since python
