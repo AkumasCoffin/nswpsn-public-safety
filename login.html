@@ -199,9 +199,37 @@
       border: 1px solid var(--accent);
       color: var(--accent);
     }
-    
+
     .btn-outline:hover {
       background: rgba(249, 115, 22, 0.1);
+    }
+
+    .btn-discord {
+      background: #5865F2;
+      text-transform: none;
+      letter-spacing: normal;
+    }
+
+    .btn-discord:hover {
+      background: #4752c4;
+    }
+
+    .or-sep {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin: 1.25rem 0;
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .or-sep::before,
+    .or-sep::after {
+      content: '';
+      flex: 1;
+      border-top: 1px solid var(--border-subtle);
     }
     
     .message {
@@ -332,15 +360,22 @@
         <img src="./assets/fqlogo.png" alt="Forcequit Logo">
         <div class="logo-text">Forcequit <span>NSW PSN</span></div>
       </div>
-      <p class="subtitle">Map Editor Login</p>
+      <p class="subtitle">Account Login</p>
     </div>
     
     <div class="card">
       <!-- Login View -->
       <div id="login-view" class="view active">
         <div class="card-title">Welcome Back</div>
-        <p class="card-description">Sign in to access the Map Editor</p>
-        
+        <p class="card-description">Sign in to your NSW PSN account</p>
+
+        <button type="button" id="discord-login-btn" class="btn btn-discord" onclick="handleDiscordLogin()">
+          <i class="fab fa-discord"></i>
+          Continue with Discord
+        </button>
+
+        <div class="or-sep"><span>or sign in with email</span></div>
+
         <form id="login-form" onsubmit="handleLogin(event); return false;">
           <div class="form-group">
             <label class="form-label">Email Address</label>
@@ -499,18 +534,84 @@
       }
     }
 
+    // Route a signed-in user off the login page: honor an explicit
+    // ?redirect= if valid; otherwise land them by role.
+    async function redirectSignedIn(userId) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const explicit = safeRedirect(urlParams.get('redirect'), '');
+      window.location.href = explicit || await roleLandingPage(userId);
+    }
+
     // Check if user is already logged in
     async function checkSession() {
       const { data } = await sb.auth.getSession();
       if (data.session) {
-        // Honor an explicit ?redirect= if valid; otherwise route by role.
-        const urlParams = new URLSearchParams(window.location.search);
-        const explicit = safeRedirect(urlParams.get('redirect'), '');
-        window.location.href = explicit || await roleLandingPage(data.session.user.id);
+        await redirectSignedIn(data.session.user.id);
       }
     }
-    
+
     checkSession();
+
+    // ---- Discord OAuth (Supabase provider) ----
+    async function handleDiscordLogin() {
+      const messageEl = document.getElementById('login-message');
+      const btn = document.getElementById('discord-login-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…';
+      messageEl.textContent = '';
+
+      // Come back to this login page (keeping any ?redirect=) so the
+      // role-aware routing below decides the final destination.
+      const urlParams = new URLSearchParams(window.location.search);
+      const explicit = safeRedirect(urlParams.get('redirect'), '');
+      const redirectTo = window.location.origin + window.location.pathname
+        + (explicit ? ('?redirect=' + encodeURIComponent(explicit)) : '');
+
+      try {
+        const { error } = await withTimeout(
+          sb.auth.signInWithOAuth({ provider: 'discord', options: { redirectTo } }),
+          AUTH_TIMEOUT_MS,
+          AUTH_TIMEOUT_MSG,
+        );
+        if (error) throw error;
+        // On success the browser navigates away to Discord.
+      } catch (err) {
+        if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'discord' });
+        messageEl.className = 'message error';
+        messageEl.textContent = (err && err.message) || 'Could not start Discord sign-in.';
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord';
+      }
+    }
+
+    // OAuth callback: Supabase parses the token (hash) or exchanges the PKCE
+    // code (?code=) itself, then fires SIGNED_IN — route by role when it lands.
+    (function handleOAuthReturn() {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const searchParams = new URLSearchParams(window.location.search);
+
+      const oauthError = hashParams.get('error_description') || searchParams.get('error_description')
+        || hashParams.get('error') || searchParams.get('error');
+      if (oauthError) {
+        const messageEl = document.getElementById('login-message');
+        messageEl.className = 'message error';
+        messageEl.textContent = decodeURIComponent(String(oauthError).replace(/\+/g, ' '));
+        return;
+      }
+
+      if (!hashParams.has('access_token') && !searchParams.has('code')) return;
+
+      const messageEl = document.getElementById('login-message');
+      messageEl.className = 'message success';
+      messageEl.textContent = 'Completing Discord sign-in…';
+
+      sb.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          if (typeof umami !== 'undefined') umami.track('login-success', { method: 'discord' });
+          await redirectSignedIn(session.user.id);
+        }
+      });
+    })();
     
     function showView(viewName) {
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -571,9 +672,7 @@
 
         // Honor an explicit ?redirect= if valid; otherwise route by role
         // (non-editors go to the public map, not the editor's access wall).
-        const urlParams = new URLSearchParams(window.location.search);
-        const explicit = safeRedirect(urlParams.get('redirect'), '');
-        window.location.href = explicit || await roleLandingPage(data.user.id);
+        await redirectSignedIn(data.user.id);
 
       } catch (err) {
         if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'page' });
