@@ -12,27 +12,45 @@ import { Hono } from 'hono';
 // Capture what the handler calls. The fake gets reset per-test.
 type Call = { sql: string; params?: unknown[] };
 const calls: Call[] = [];
-let nextResult: { rows: unknown[] } = { rows: [] };
+let nextResult: { rows: unknown[]; rowCount?: number } = { rows: [] };
+// Optional per-query sequence — when non-empty each query shifts one result;
+// otherwise the shared `nextResult` is returned. Lets the multi-query
+// ownership/suggestion handlers drive distinct results per step.
+let resultQueue: Array<{ rows: unknown[]; rowCount?: number }> = [];
 let getPoolReturn: 'pool' | 'null' = 'pool';
 
 const fakePool = {
   query: vi.fn(async (sql: string, params?: unknown[]) => {
     calls.push({ sql, ...(params ? { params } : {}) });
-    return nextResult;
+    return resultQueue.length ? resultQueue.shift() : nextResult;
   }),
   connect: vi.fn(),
 };
+
+// Find the captured call whose SQL contains a substring — robust to the
+// ownership SELECT that now precedes several mutations.
+function callWith(substr: string): Call | undefined {
+  return calls.find((c) => c.sql.includes(substr));
+}
 
 vi.mock('../../../src/db/pool.js', () => ({
   getPool: vi.fn(async () => (getPoolReturn === 'pool' ? fakePool : null)),
 }));
 
-// Mutating incident routes are editor-gated (requireRole(canEditIncidents)).
-// Stub the DB-backed role check and inject a userId so the CRUD tests
-// exercise the handlers, not the gate.
+// Mutating incident routes are editor-gated (requireRole(canEditIncidents)),
+// and edit/delete additionally require creator-or-admin. Stub the DB-backed
+// role checks: canEditIncidents→true (any editor) and canManageUsers→true
+// (treat the injected user as a site admin) so the CRUD tests exercise the
+// handler logic. Ownership DENIAL is covered by its own test that overrides
+// canManageUsers→false.
+const canManageUsersMock = vi.fn(async () => true);
 vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
-  return { ...actual, canEditIncidents: vi.fn(async () => true) };
+  return {
+    ...actual,
+    canEditIncidents: vi.fn(async () => true),
+    canManageUsers: (...a: unknown[]) => canManageUsersMock(...(a as [])),
+  };
 });
 
 const { incidentsRouter } = await import('../../../src/api/incidents.js');
@@ -51,7 +69,10 @@ function makeApp() {
 beforeEach(() => {
   calls.length = 0;
   nextResult = { rows: [] };
+  resultQueue = [];
   getPoolReturn = 'pool';
+  canManageUsersMock.mockReset();
+  canManageUsersMock.mockResolvedValue(true);
   fakePool.query.mockClear();
 });
 
@@ -199,29 +220,58 @@ describe('PUT /api/incidents/:id', () => {
   });
 
   it('builds dynamic SET clause for whitelisted fields and stringifies JSONB', async () => {
+    // Gate SELECT finds the incident (owner row), then the UPDATE runs.
+    nextResult = { rows: [{ created_by: 'editor-1' }], rowCount: 1 };
     const app = makeApp();
     await app.request('/api/incidents/inc1', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'New', type: ['fire'] }),
     });
-    const sql = calls[0]?.sql ?? '';
-    const params = calls[0]?.params ?? [];
-    expect(sql).toContain('UPDATE incidents SET');
-    expect(sql).toContain('title = $1');
-    expect(sql).toContain('type = $2');
-    expect(params).toEqual(['New', '["fire"]', 'inc1']);
+    const upd = callWith('UPDATE incidents SET');
+    expect(upd?.sql).toContain('title = $1');
+    expect(upd?.sql).toContain('type = $2');
+    expect(upd?.params).toEqual(['New', '["fire"]', 'inc1']);
+    // The gate SELECT ran first.
+    expect(callWith('SELECT created_by FROM incidents')?.params).toEqual(['inc1']);
+  });
+
+  it('403s when a non-owner, non-admin tries to edit', async () => {
+    canManageUsersMock.mockResolvedValue(false); // not an admin
+    nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New' }),
+    });
+    expect(res.status).toBe(403);
+    // Must NOT have issued the UPDATE.
+    expect(callWith('UPDATE incidents SET')).toBeUndefined();
   });
 });
 
 describe('DELETE /api/incidents/:id', () => {
-  it('issues DELETE and returns success', async () => {
+  it('issues DELETE and returns success (owner/admin)', async () => {
+    nextResult = { rows: [{ created_by: 'editor-1' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/del-id', { method: 'DELETE' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true });
-    expect(calls[0]?.sql).toContain('DELETE FROM incidents WHERE id = $1');
-    expect(calls[0]?.params).toEqual(['del-id']);
+    const del = callWith('DELETE FROM incidents WHERE id = $1');
+    expect(del?.params).toEqual(['del-id']);
+    // Cascade cleanup ran too.
+    expect(callWith('DELETE FROM incident_updates WHERE incident_id = $1')).toBeDefined();
+    expect(callWith('DELETE FROM incident_suggestions WHERE incident_id = $1')).toBeDefined();
+  });
+
+  it('403s when a non-owner, non-admin tries to delete', async () => {
+    canManageUsersMock.mockResolvedValue(false);
+    nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/del-id', { method: 'DELETE' });
+    expect(res.status).toBe(403);
+    expect(callWith('DELETE FROM incidents WHERE id = $1')).toBeUndefined();
   });
 });
 
@@ -234,7 +284,7 @@ describe('incident_updates routes', () => {
     expect(calls[0]?.sql).toContain('ORDER BY created_at DESC');
   });
 
-  it('POST /api/incidents/:id/updates returns 201 with new id', async () => {
+  it('POST /api/incidents/:id/updates returns 201 with new id (author stamped)', async () => {
     nextResult = { rows: [{ id: 'upd-1' }] };
     const app = makeApp();
     const res = await app.request('/api/incidents/inc1/updates', {
@@ -244,10 +294,13 @@ describe('incident_updates routes', () => {
     });
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ id: 'upd-1', success: true });
-    expect(calls[0]?.params).toEqual(['inc1', 'hello']);
+    // created_by (the editor) is now recorded as the third param.
+    expect(callWith('INSERT INTO incident_updates')?.params).toEqual(['inc1', 'hello', 'editor-1']);
   });
 
-  it('PUT /api/incidents/updates/:id updates the message column', async () => {
+  it('PUT /api/incidents/updates/:id updates the message column (author/owner/admin)', async () => {
+    // Authority SELECT returns the log author + incident owner.
+    nextResult = { rows: [{ update_by: 'editor-1', incident_by: 'editor-1' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/updates/u1', {
       method: 'PUT',
@@ -255,15 +308,96 @@ describe('incident_updates routes', () => {
       body: JSON.stringify({ message: 'edited' }),
     });
     expect(res.status).toBe(200);
-    expect(calls[0]?.sql).toContain('UPDATE incident_updates SET message = $1 WHERE id = $2');
-    expect(calls[0]?.params).toEqual(['edited', 'u1']);
+    const upd = callWith('UPDATE incident_updates SET message = $1 WHERE id = $2');
+    expect(upd?.params).toEqual(['edited', 'u1']);
   });
 
-  it('DELETE /api/incidents/updates/:id removes the row', async () => {
+  it('DELETE /api/incidents/updates/:id removes the row (author/owner/admin)', async () => {
+    nextResult = { rows: [{ update_by: 'editor-1', incident_by: 'editor-1' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/updates/u1', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    expect(calls[0]?.sql).toContain('DELETE FROM incident_updates WHERE id = $1');
-    expect(calls[0]?.params).toEqual(['u1']);
+    expect(callWith('DELETE FROM incident_updates WHERE id = $1')?.params).toEqual(['u1']);
+  });
+
+  it('403s when a non-author non-owner non-admin edits a log', async () => {
+    canManageUsersMock.mockResolvedValue(false);
+    nextResult = { rows: [{ update_by: 'other', incident_by: 'other' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/updates/u1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'x' }),
+    });
+    expect(res.status).toBe(403);
+    expect(callWith('UPDATE incident_updates SET message')).toBeUndefined();
+  });
+});
+
+describe('suggestion workflow', () => {
+  it('POST /suggestions creates an edit suggestion (any editor)', async () => {
+    resultQueue = [
+      { rows: [{ n: 1 }], rowCount: 1 }, // incident exists
+      { rows: [{ id: '77' }], rowCount: 1 }, // insert returns id
+    ];
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1/suggestions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'edit', changes: { title: 'Better title', bogus: 'x' } }),
+    });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ id: '77', success: true });
+    const ins = callWith('INSERT INTO incident_suggestions');
+    // Only the whitelisted field survives into the stored changes JSON.
+    expect(ins?.params?.[2]).toBe(JSON.stringify({ title: 'Better title' }));
+    expect(ins?.params?.[4]).toBe('editor-1'); // suggested_by
+  });
+
+  it('POST /suggestions rejects an unknown kind', async () => {
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1/suggestions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'delete' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /suggestions 403s for a non-owner non-admin', async () => {
+    canManageUsersMock.mockResolvedValue(false);
+    nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1/suggestions');
+    expect(res.status).toBe(403);
+  });
+
+  it('approve auto-applies an edit suggestion and marks it approved', async () => {
+    resultQueue = [
+      { rows: [{ created_by: 'editor-1' }], rowCount: 1 }, // owner check
+      { rows: [{ id: '77', incident_id: 'inc1', kind: 'edit', changes: { status: 'Contained' }, message: null, suggested_by: 'other', suggested_by_name: 'Other', status: 'pending' }], rowCount: 1 }, // load suggestion
+      { rows: [], rowCount: 1 }, // UPDATE incidents (apply)
+      { rows: [{ id: 'log' }], rowCount: 1 }, // INSERT audit log
+      { rows: [], rowCount: 1 }, // UPDATE suggestion status
+    ];
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1/suggestions/77/approve', { method: 'POST' });
+    expect(res.status).toBe(200);
+    // It applied the whitelisted change to the incident...
+    const applied = callWith('UPDATE incidents SET');
+    expect(applied?.sql).toContain('status = $1');
+    // ...and marked the suggestion approved.
+    expect(callWith("SET status = 'approved'")).toBeDefined();
+  });
+
+  it('reject marks the suggestion rejected (owner/admin)', async () => {
+    resultQueue = [
+      { rows: [{ created_by: 'editor-1' }], rowCount: 1 }, // owner check
+      { rows: [], rowCount: 1 }, // UPDATE ... rejected
+    ];
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1/suggestions/77/reject', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(callWith("SET status = 'rejected'")).toBeDefined();
   });
 });
