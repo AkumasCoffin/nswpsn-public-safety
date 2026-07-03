@@ -74,6 +74,14 @@ function createAuthModals() {
           <div style="font-size:1.5rem; font-weight:700; color:#fff; text-transform:uppercase; letter-spacing:0.1em;">Forcequit <span style="color:#f97316;">Login</span></div>
           <div style="color:#94a3b8; font-size:0.9rem; margin-top:0.5rem;">NSW PSN Reference</div>
         </div>
+        <button onclick="doDiscordLogin()" id="discord-modal-btn" style="width:100%; padding:0.8rem; background:#5865F2; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; display:flex; align-items:center; justify-content:center; gap:0.5rem; transition:background 0.2s;">
+          <i class="fab fa-discord"></i> Continue with Discord
+        </button>
+        <div style="display:flex; align-items:center; gap:0.75rem; margin:1.2rem 0; color:#94a3b8; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">
+          <span style="flex:1; border-top:1px solid rgba(148,163,184,0.2);"></span>
+          <span>or</span>
+          <span style="flex:1; border-top:1px solid rgba(148,163,184,0.2);"></span>
+        </div>
         <div style="margin-bottom:1.2rem;">
           <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Email Address</label>
           <input type="email" id="login-email" style="width:100%; padding:0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.95rem; box-sizing:border-box; font-family:inherit;" placeholder="name@forcequit.xyz">
@@ -183,6 +191,27 @@ async function doLogin() {
   checkAuthState();
 }
 
+async function doDiscordLogin() {
+  const errorDiv = document.getElementById('login-error');
+  const btn = document.getElementById('discord-modal-btn');
+  if (errorDiv) errorDiv.textContent = '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…'; }
+
+  // Return to the page the user is on; onAuthStateChange -> checkAuthState()
+  // updates the sidebar once the session lands.
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: 'discord',
+    options: { redirectTo: window.location.origin + window.location.pathname + window.location.search }
+  });
+
+  if (error) {
+    if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'discord-modal' });
+    if (errorDiv) errorDiv.textContent = error.message;
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord'; }
+  }
+  // On success the browser navigates away to Discord.
+}
+
 async function doLogout() {
   if (typeof umami !== 'undefined') umami.track('logout');
   await sb.auth.signOut();
@@ -204,7 +233,13 @@ async function checkAuthState() {
     // User is logged in - fetch their roles
     loggedOutDiv.style.display = 'none';
     loggedInDiv.style.display = 'block';
-    if (emailDiv) emailDiv.textContent = session.user?.email ?? '';
+    const meta = session.user?.user_metadata || {};
+    if (emailDiv) emailDiv.textContent = session.user?.email || meta.full_name || meta.name || meta.user_name || '';
+
+    // Discord-authenticated users have no password to change — hide the link.
+    const provider = session.user?.app_metadata?.provider;
+    const cpLink = loggedInDiv.querySelector('a[href="change-password.html"]');
+    if (cpLink) cpLink.style.display = provider === 'discord' ? 'none' : 'flex';
     
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
