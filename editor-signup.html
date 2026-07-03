@@ -452,9 +452,15 @@
             <input type="email" id="email" class="form-input" placeholder="your@email.com" required>
           </div>
 
-          <!-- Password: creates the NSW PSN account at submit time (hidden
-               when already signed in, e.g. after Discord signup). -->
+          <!-- Account creation (hidden when already signed in, e.g. after
+               Discord signup): username + password for the new account. -->
           <div id="password-group">
+            <div class="form-group">
+              <label class="form-label">
+                Username <span class="required">*</span>
+              </label>
+              <input type="text" id="signup-username" class="form-input" placeholder="How you'll appear around the site" maxlength="32" autocomplete="username">
+            </div>
             <div class="form-group">
               <label class="form-label">
                 Create a Password <span class="required">*</span>
@@ -797,6 +803,12 @@
       } catch (e) { /* treat as signed out */ }
 
       if (!existingSession) {
+        const username = document.getElementById('signup-username').value.trim();
+        if (username.length < 2) {
+          messageEl.textContent = 'Please choose a username (at least 2 characters).';
+          messageEl.className = 'message error';
+          return;
+        }
         const pw = document.getElementById('signup-password').value;
         const pw2 = document.getElementById('signup-password-confirm').value;
         if (!pw || pw.length < 8) {
@@ -818,7 +830,12 @@
       try {
         if (!existingSession) {
           const pw = document.getElementById('signup-password').value;
-          const { data: suData, error: suError } = await sb.auth.signUp({ email, password: pw });
+          const username = document.getElementById('signup-username').value.trim();
+          const { data: suData, error: suError } = await sb.auth.signUp({
+            email,
+            password: pw,
+            options: { data: { display_name: username } },
+          });
           if (suError) {
             const already = /already|registered|exists/i.test(suError.message || '');
             messageEl.innerHTML = already

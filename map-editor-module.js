@@ -1978,6 +1978,14 @@
         if (range) range.max = '48';
         const hint = document.querySelector('#pager-panel .pager-hint');
         if (hint) hint.textContent = 'Shows pager hits from the last N hours (editors: up to 48h)';
+        // The public init ran before the max was raised and clamps the
+        // stored window to the max — re-run it so a saved 25-48h window
+        // is re-adopted, then refresh if the effective value changed.
+        if (typeof pagerHours !== 'undefined' && typeof initPagerHoursFromStorage === 'function') {
+          const before = pagerHours;
+          initPagerHoursFromStorage();
+          if (pagerHours !== before && typeof loadAllData === 'function') loadAllData();
+        }
       } catch (e) { /* non-fatal */ }
 
       // Panel visibility: Map Controls belongs to the User layer, so it only
