@@ -85,7 +85,7 @@
         </div>
         <div class="card-body">
           <p class="card-hint" style="margin-top:0; color:var(--text-soft); font-size:0.78rem;">Use the Agencies search in the sidebar to jump to a specific TGID, zone, or code.</p>
-          <div class="table-wrapper"><div class="table-scroll"><table class="table">
+          <div class="table-wrapper table-wrapper--auto"><div class="table-scroll"><table class="table">
             <thead><tr><th style="width:6.5rem;">TGID</th><th style="width:9rem;">Alias</th><th>Description</th></tr></thead>
             <tbody id="tgid-tbody"><tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">Loading…</td></tr></tbody>
           </table></div></div>
@@ -238,7 +238,10 @@
       const tbody = '<tbody>' + table.rows.map((row) =>
         '<tr>' + row.map((cell) => `<td>${renderCellMarkup(cell || '')}</td>`).join('') + '</tr>'
       ).join('') + '</tbody>';
-      return `<div class="table-wrapper"><div class="table-scroll"><table class="${cls}">${thead}${tbody}</table></div></div>`;
+      // Tables without a bespoke column layout hug their content width instead of
+      // stretching the whole card, so short data doesn't leave large empty columns.
+      const wrapCls = tableClass ? 'table-wrapper' : 'table-wrapper table-wrapper--auto';
+      return `<div class="${wrapCls}"><div class="table-scroll"><table class="${cls}">${thead}${tbody}</table></div></div>`;
     }
 
     function renderOverviewBody(blocks) {
