@@ -1168,6 +1168,85 @@ a:hover { text-decoration: underline; }
 .badge-agency { color: #f97373; border-color: rgba(248,113,113,0.6); }
 .badge-parent { color: #38bdf8; border-color: rgba(56,189,248,0.6); }
 
+/* --- AGENCY OVERVIEW (compact, detail-dense) --- */
+.agency-overview .card-body { line-height: 1.5; }
+/* Lead paragraph reads a touch brighter; the rest stay muted and tight */
+.agency-overview .card-body > p { margin: 0 0 0.6rem; }
+.agency-overview .card-body > p:first-of-type { color: #cbd5e1; }
+/* Section headings inside the overview: smaller, upper, less top gap than default zone-subtitle */
+.agency-overview .zone-subtitle {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #f8b57a;
+}
+/* Fact lists flow into 2 (or 3) newspaper-style columns on wider cards, so a long
+   "At a Glance" stays short vertically while still showing every detail. */
+.agency-overview ul:not(.agency-links) {
+  list-style: none;
+  margin: 0 0 0.35rem;
+  padding: 0;
+}
+@media (min-width: 640px) {
+  .agency-overview ul:not(.agency-links) { column-count: 2; column-gap: 1.6rem; }
+}
+@media (min-width: 1200px) {
+  .agency-overview ul:not(.agency-links) { column-count: 3; }
+}
+.agency-overview ul:not(.agency-links) li {
+  position: relative;
+  padding-left: 0.9rem;
+  margin: 0 0 0.32rem;
+  font-size: 0.83rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+}
+.agency-overview ul:not(.agency-links) li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.5em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f97316, #facc15);
+}
+/* Useful Links rendered as compact tappable chips rather than a bullet list */
+.agency-overview .agency-links {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.agency-overview .agency-links li { margin: 0; }
+.agency-overview .agency-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.78rem;
+  line-height: 1.1;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.08);
+  color: #7dd3fc;
+  text-decoration: none;
+}
+.agency-overview .agency-links a::after {
+  content: '\2197';
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+.agency-overview .agency-links a:hover {
+  border-color: rgba(56, 189, 248, 0.7);
+  background: rgba(56, 189, 248, 0.16);
+}
+
 .pill { display: inline-flex; align-items: center; justify-content: center; padding: 0.1rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #e5e7eb; border: 1px solid #9ca3af; background: radial-gradient(circle at 0 0, rgba(243,244,246,0.35), rgba(15,23,42,0.95)); }
 
 .pill-red { color: #fee2e2; border-color: #ef4444; background: radial-gradient(circle at 0 0, rgba(239,68,68,0.55), rgba(15,23,42,0.95)); }
