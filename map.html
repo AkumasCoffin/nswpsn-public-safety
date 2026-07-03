@@ -4133,7 +4133,11 @@ function onPagerHoursChange() {
 function updateSliderFill() {
   const el = document.getElementById('pager-hours-range');
   if (!el) return;
-  const percent = ((el.value - 1) / 23) * 100;
+  // Derive from the slider's own min/max so the fill stays correct when
+  // editor mode raises the max from 24h to 48h.
+  const min = Number(el.min) || 1;
+  const max = Number(el.max) || 24;
+  const percent = ((el.value - min) / Math.max(1, max - min)) * 100;
   el.style.setProperty('--percent', percent + '%');
 }
 
@@ -4150,12 +4154,17 @@ function initPagerHoursFromStorage() {
     const stored = localStorage.getItem(PAGER_HOURS_STORAGE_KEY);
     if (stored != null) {
       const n = Number(stored);
-      if (Number.isFinite(n) && n >= 1 && n <= 24) {
-        pagerHours = n;
+      // Accept anything the backend accepts (<=168h); display clamps to the
+      // slider's current max (24h public, raised to 48h in editor mode —
+      // the editor module re-runs this after raising the max).
+      if (Number.isFinite(n) && n >= 1 && n <= 168) {
         const rangeEl = document.getElementById('pager-hours-range');
+        const maxH = rangeEl ? (Number(rangeEl.max) || 24) : 24;
+        const shown = Math.min(n, maxH);
+        pagerHours = shown;
         const labelEl = document.getElementById('pager-hours-value');
-        if (rangeEl) rangeEl.value = String(n);
-        if (labelEl) labelEl.textContent = n + 'h';
+        if (rangeEl) rangeEl.value = String(shown);
+        if (labelEl) labelEl.textContent = shown + 'h';
       }
     }
   } catch (e) {

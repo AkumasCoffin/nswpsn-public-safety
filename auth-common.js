@@ -224,7 +224,7 @@ function createProfileModal() {
           <input type="text" id="profile-username" maxlength="32" style="flex:1; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit;" placeholder="Pick a username">
           <button onclick="saveProfile()" id="profile-save-btn" style="padding:0.65rem 1rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.85rem; font-family:inherit;">Save</button>
         </div>
-        <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">Shown instead of your email around the site.</div>
+        <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">How you'll appear around the site.</div>
       </div>
 
       <div style="margin-bottom:1.2rem;">
