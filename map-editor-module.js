@@ -158,6 +158,10 @@
       map.panTo([inc.lat, inc.lng]);
       renderPagerSection(pagerDetails);
       updateDragGhost(inc, canModify);
+
+      // Archive is staff/owner-only (backend enforces canManageUsers too).
+      const archiveBtn = document.getElementById('btn-archive');
+      if (archiveBtn) archiveBtn.style.display = currentIsAdmin ? 'block' : 'none';
     }
 
     // Toggle the direct-edit path vs. the suggestion path based on ownership,
@@ -504,6 +508,8 @@
       document.getElementById('agency-group').style.display = 'none';
       document.getElementById('desc-group').style.display = 'none';
       document.getElementById('save-delete-group').style.display = 'none';
+      const _ab1 = document.getElementById('btn-archive');
+      if (_ab1) _ab1.style.display = 'none';
 
       // Clear any ownership-aware panels left over from a user-pin selection.
       const _on = document.getElementById('ownership-notice');
@@ -612,6 +618,8 @@
       if (PAGER_BLOCK) PAGER_BLOCK.remove();
       removeDragGhost();
       clearSuggestMove();
+      const _ab3 = document.getElementById('btn-archive');
+      if (_ab3) _ab3.style.display = 'none';
     }
 
     // --- LOG MANAGEMENT ---
@@ -1656,6 +1664,67 @@
       reloadIncidents();
       showToast('Pin deleted.', 'success');
     }
+    function showPagerClusterEditor(clusterEntry) {
+      try {
+        selectedId = null;
+        const editorPanel = document.getElementById('selection-editor');
+        const instruction = document.getElementById('instruction-text');
+        if (!editorPanel || !instruction) return;
+
+        editorPanel.style.display = 'block';
+        instruction.style.display = 'none';
+
+        const header = document.querySelector('#edit-header h4');
+        if (header) header.textContent = 'Pager hits at this location';
+
+        const idDisplay = document.getElementById('edit-id-display');
+        if (idDisplay) idDisplay.textContent = '';
+
+        // Hide all incident editing controls + logs for pure pager view
+        document.getElementById('title-group').style.display = 'none';
+        document.getElementById('status-size-group').style.display = 'none';
+        document.getElementById('expiry-group').style.display = 'none';
+        document.getElementById('type-group').style.display = 'none';
+        document.getElementById('agency-group').style.display = 'none';
+        document.getElementById('desc-group').style.display = 'none';
+        document.getElementById('save-delete-group').style.display = 'none';
+        document.getElementById('log-section').style.display = 'none';
+        const _ab2 = document.getElementById('btn-archive');
+        if (_ab2) _ab2.style.display = 'none';
+
+        const existingRfs = document.getElementById('rfs-read-only-data');
+        if (existingRfs && existingRfs.parentNode) {
+          existingRfs.parentNode.removeChild(existingRfs);
+        }
+        const existingPager = document.getElementById('pager-read-only-data');
+        if (existingPager && existingPager.parentNode) {
+          existingPager.parentNode.removeChild(existingPager);
+        }
+
+        const raw = clusterEntry.rawDetails || {};
+        const details = {
+          hits: raw.hits || clusterEntry.hits || [],
+          clusterAliases: raw.clusterAliases || [],
+          clusterAgencies: raw.clusterAgencies || [],
+          incidentId: raw.incidentId || null,
+          incidentIds: raw.incidentIds || []
+        };
+
+        const pagerBlock = document.createElement('div');
+        pagerBlock.id = 'pager-read-only-data';
+        pagerBlock.innerHTML = renderPagerDetailsHtml(details);
+
+        const logSection = document.getElementById('log-section');
+        editorPanel.insertBefore(pagerBlock, logSection);
+
+        if (clusterEntry.lat != null && clusterEntry.lon != null && map) {
+          map.panTo([clusterEntry.lat, clusterEntry.lon]);
+        }
+      } catch (e) {
+        console.error('showPagerClusterEditor error', e);
+      }
+    }
+
     // Render the pager-hits block under the editor form from the unified
     // item's merged pagerDetails ({hits, clusterAliases, clusterAgencies}).
     function renderPagerSection(details) {
@@ -1687,6 +1756,26 @@
 
     // Reload just the editor-owned incidents; the public page's own
     // countdown refresh handles every other layer.
+    // Staff/owner: preserve a major incident forever. Snapshots the pin +
+    // its logs into the permanent archive (searchable from the logs page)
+    // and removes the live pin from the map.
+    async function archiveIncident() {
+      if (!selectedId) return;
+      const ok = await askConfirm(
+        'Archive this incident? A permanent snapshot (including its logs) is saved to the archive and the pin is removed from the live map.',
+        { confirmLabel: 'Archive', danger: false },
+      );
+      if (!ok) return;
+      const res = await apiFetch(`${PROXY_BASE}/api/incidents/${selectedId}/archive`, { method: 'POST' });
+      if (!res.ok) {
+        showToast('Failed to archive incident.', 'error');
+        return;
+      }
+      resetEditor();
+      reloadIncidents();
+      showToast('Incident archived.', 'success');
+    }
+
     function refreshData() {
       reloadIncidents();
     }
@@ -1695,7 +1784,7 @@
   // --- DOM injection (CSS + floating panel), done only on activation ---
   const EDITOR_CSS = '    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      overflow-y: auto;\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: detach the incident/RFS panel (the RIGHT sidebar) into a\n       floating card over the map — rounded, detached from the edges, all-\n       round border + shadow — matching the AIS list-panel treatment. The\n       base .map-sidebar (styles.css) docks it flush to right:0/top:0/height:\n       100%; we only override the geometry here. The slide-in transform\n       (translateX) still hides/shows it. Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px; /* below the layer bar AND the top-right zoom buttons */\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(148, 163, 184, 0.28);\n        border-radius: 14px;\n        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }';
 
-  const PANEL_HTML = '      <div class="map-sidebar open" id="editor-panel">\n        <h3 style="margin-top:0; color:#fff;">Map Controls</h3>\n\n        <div style="display:flex; gap:0.5rem; margin-bottom:1.5rem;">\n          <button class="btn btn-primary btn-block" id="btn-add-mode" onclick="toggleAddMode()">+ Add Pin</button>\n          <button class="btn btn-secondary" onclick="refreshData()" title="Reload Data">↻</button>\n        </div>\n        <hr style="border:0; border-top:1px solid var(--border-subtle); margin-bottom:1.5rem;">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <label class="form-label" for="edit-expiry">Auto-Remove In...</label>\n            <select id="edit-expiry" class="form-select" style="border-color:var(--accent);">\n              <option value="0">Keep Current Expiry</option>\n              <option value="1">1 Hour</option>\n              <option value="2" selected>2 Hours (Default)</option>\n              <option value="4">4 Hours</option>\n              <option value="12">12 Hours</option>\n              <option value="24">24 Hours</option>\n              <option value="48">48 Hours</option>\n            </select>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:2rem;">\n          Select a pin to edit<br>or click <strong>+ Add Pin</strong> to create new.\n        </div>\n      </div>';
+  const PANEL_HTML = '      <div class="map-sidebar open" id="editor-panel">\n        <h3 style="margin-top:0; color:#fff;">Map Controls</h3>\n\n        <div style="display:flex; gap:0.5rem; margin-bottom:1.5rem;">\n          <button class="btn btn-primary btn-block" id="btn-add-mode" onclick="toggleAddMode()">+ Add Pin</button>\n          <button class="btn btn-secondary" onclick="refreshData()" title="Reload Data">↻</button>\n        </div>\n        <hr style="border:0; border-top:1px solid var(--border-subtle); margin-bottom:1.5rem;">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <label class="form-label" for="edit-expiry">Auto-Remove In...</label>\n            <select id="edit-expiry" class="form-select" style="border-color:var(--accent);">\n              <option value="0">Keep Current Expiry</option>\n              <option value="1">1 Hour</option>\n              <option value="2" selected>2 Hours (Default)</option>\n              <option value="4">4 Hours</option>\n              <option value="12">12 Hours</option>\n              <option value="24">24 Hours</option>\n              <option value="48">48 Hours</option>\n            </select>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:2rem;">\n          Select a pin to edit<br>or click <strong>+ Add Pin</strong> to create new.\n        </div>\n      </div>';
 
   function injectEditorDom() {
     if (document.getElementById('editor-panel')) return;
@@ -1950,4 +2039,5 @@
   window.updateGrammarPreviewFromCheckbox = updateGrammarPreviewFromCheckbox;
   window.startSuggestMove = startSuggestMove;
   window.clearSuggestMove = clearSuggestMove;
+  window.archiveIncident = archiveIncident;
 })();

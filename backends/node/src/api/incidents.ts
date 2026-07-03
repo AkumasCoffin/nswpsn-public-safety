@@ -248,10 +248,140 @@ incidentsRouter.get('/api/incidents', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// ARCHIVE — permanent snapshots of major incidents (staff/owner only).
+// Archived rows live in their own table, are exempt from data retention,
+// and are publicly searchable from the logs page.
+// ---------------------------------------------------------------------------
+
+// GET /api/incidents/archived — public search (?q=&limit=&offset=).
+// Registered before /:id so the static segment wins the route match.
+incidentsRouter.get('/api/incidents/archived', async (c) => {
+  try {
+    const url = new URL(c.req.url);
+    const q = (url.searchParams.get('q') ?? '').trim();
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 20) || 20));
+    const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
+    const result = await withPool(async (pool) => {
+      const vals: unknown[] = [];
+      let where = '';
+      if (q) {
+        vals.push(`%${q}%`);
+        where = `WHERE (title ILIKE $1 OR location ILIKE $1 OR incident->>'description' ILIKE $1)`;
+      }
+      vals.push(limit, offset);
+      const r = await pool.query(
+        `SELECT id, title, location, archived_at,
+                incident->>'status' AS status,
+                incident->'type' AS type,
+                incident->>'created_at' AS original_created_at,
+                COUNT(*) OVER() AS total
+           FROM archived_incidents ${where}
+          ORDER BY archived_at DESC
+          LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
+        vals,
+      );
+      const total = r.rows.length > 0 ? Number(r.rows[0].total) || 0 : 0;
+      return {
+        total,
+        results: r.rows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          location: row.location,
+          status: row.status,
+          type: row.type,
+          original_created_at: row.original_created_at,
+          archived_at: row.archived_at,
+        })),
+      };
+    });
+    if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
+    return c.json(result);
+  } catch (err) {
+    log.error({ err }, 'Error searching archived incidents');
+    return c.json({ error: 'Failed to search archive' }, 500);
+  }
+});
+
+// GET /api/incidents/archived/:id — public detail (snapshot + logs).
+incidentsRouter.get('/api/incidents/archived/:id', async (c) => {
+  const id = c.req.param('id');
+  try {
+    const result = await withPool(async (pool) => {
+      const r = await pool.query(
+        'SELECT * FROM archived_incidents WHERE id = $1',
+        [id],
+      );
+      return r.rows[0] ?? null;
+    });
+    if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
+    if (!result) return c.json({ error: 'Archived incident not found' }, 404);
+    return c.json(result);
+  } catch (err) {
+    log.error({ err, id }, 'Error fetching archived incident');
+    return c.json({ error: 'Failed to fetch archived incident' }, 500);
+  }
+});
+
+// POST /api/incidents/:id/archive — staff/owner only. Snapshots the live
+// incident + its logs into archived_incidents (upsert), then soft-deletes
+// the live pin so it leaves the map; the archive copy stays forever.
+incidentsRouter.post('/api/incidents/:id/archive', requireRole(canManageUsers), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const result = await withPool(async (pool) => {
+      const r = await pool.query<IncidentRow>(
+        'SELECT * FROM incidents WHERE id = $1 AND deleted_at IS NULL',
+        [id],
+      );
+      if (r.rowCount === 0) return { notFound: true as const };
+      const inc = normaliseIncident(r.rows[0]!);
+
+      const logs = await pool.query<IncidentUpdateRow>(
+        'SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC',
+        [id],
+      );
+      const logsJson = logs.rows.map(normaliseIncidentUpdate);
+
+      await pool.query(
+        `INSERT INTO archived_incidents (id, title, location, incident, logs, archived_by)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title,
+           location = EXCLUDED.location,
+           incident = EXCLUDED.incident,
+           logs = EXCLUDED.logs,
+           archived_at = NOW(),
+           archived_by = EXCLUDED.archived_by`,
+        [
+          id,
+          (inc['title'] as string) || '',
+          (inc['location'] as string) || null,
+          JSON.stringify(inc),
+          JSON.stringify(logsJson),
+          currentUserId(c) ?? null,
+        ],
+      );
+      // Off the live map; the archive copy is the permanent record.
+      await pool.query('UPDATE incidents SET deleted_at = NOW() WHERE id = $1', [id]);
+      return { ok: true as const };
+    });
+    if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
+    if ('notFound' in result) return c.json({ error: 'Incident not found' }, 404);
+    log.info({ id }, 'Incident archived');
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id }, 'Error archiving incident');
+    return c.json({ error: 'Failed to archive incident' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/incidents/:id  (additive vs python — see file header)
 // ---------------------------------------------------------------------------
 incidentsRouter.get('/api/incidents/:id', async (c) => {
   const id = c.req.param('id');
+  if (id === 'archived') return c.notFound();
   // Don't let the bare /:id route swallow `/updates/<x>` paths — that
   // collision is theoretical (Hono routes longer paths first) but cheap
   // to defend against.

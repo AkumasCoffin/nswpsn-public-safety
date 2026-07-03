@@ -887,6 +887,33 @@
       </div>
     </details>
 
+    <!-- Archived Incidents (major incidents preserved forever) -->
+    <details id="archived-incidents" class="filter-bar" style="padding: 0.75rem 1rem; display: block;">
+      <summary style="cursor: pointer; font-weight: 600; color: #e2e8f0; display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fas fa-box-archive" style="color:#f59e0b;"></i>
+        Archived Incidents
+        <span style="font-size: 0.75rem; color: #64748b; font-weight: 400;">&mdash; major incidents preserved by staff, kept forever</span>
+      </summary>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; align-items: flex-end;">
+        <div class="filter-group" style="flex:1; min-width: 220px;">
+          <label class="filter-label">Search</label>
+          <input type="text" id="archived-q" class="filter-input" placeholder="Title, location or description..." onkeydown="if(event.key==='Enter'){searchArchived(1);}">
+        </div>
+        <div class="action-buttons">
+          <button class="action-btn primary" onclick="searchArchived(1)"><i class="fas fa-search"></i> Search</button>
+          <button class="action-btn secondary" onclick="clearArchivedFilters()"><i class="fas fa-times"></i> Clear</button>
+        </div>
+      </div>
+      <div id="archived-results" style="margin-top: 0.9rem;">
+        <div style="font-size: 0.8rem; color: #64748b;">Click Search to browse the archive.</div>
+      </div>
+      <div id="archived-pagination" style="margin-top: 0.6rem; display: none; gap: 0.5rem; align-items: center; font-size: 0.8rem;">
+        <button class="action-btn secondary" onclick="archivedGoPage(archivedPage - 1)"><i class="fas fa-angle-left"></i></button>
+        <span id="archived-page-info" style="color:#94a3b8;"></span>
+        <button class="action-btn secondary" onclick="archivedGoPage(archivedPage + 1)"><i class="fas fa-angle-right"></i></button>
+      </div>
+    </details>
+
     <!-- Filter Bar -->
     <div class="filter-bar">
       <div class="filter-group">
@@ -4479,6 +4506,116 @@
         console.warn('Silent refresh failed:', e);
       } finally {
         isLoading = false;
+      }
+    }
+
+    // === ARCHIVED INCIDENTS (permanent, staff-curated) ===
+    let archivedPage = 1;
+    const archivedLimit = 20;
+    let archivedTotal = 0;
+
+    function clearArchivedFilters() {
+      document.getElementById('archived-q').value = '';
+      document.getElementById('archived-results').innerHTML =
+        '<div style="font-size: 0.8rem; color: #64748b;">Click Search to browse the archive.</div>';
+      document.getElementById('archived-pagination').style.display = 'none';
+    }
+
+    async function searchArchived(page = 1) {
+      archivedPage = page;
+      const q = document.getElementById('archived-q').value.trim();
+      const p = { limit: archivedLimit, offset: (page - 1) * archivedLimit };
+      if (q) p.q = q;
+      const qs = new URLSearchParams(p).toString();
+      const container = document.getElementById('archived-results');
+      container.innerHTML = '<div style="font-size: 0.8rem; color: #94a3b8;">Loading&hellip;</div>';
+      try {
+        const res = await apiFetch(`${API_BASE}/api/incidents/archived?${qs}`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+        archivedTotal = data.total || 0;
+        renderArchived(data.results || []);
+      } catch (e) {
+        container.innerHTML = `<div style="color:#ef4444;">Error: ${e.message}</div>`;
+      }
+    }
+
+    function archivedGoPage(newPage) {
+      const maxPage = Math.max(1, Math.ceil(archivedTotal / archivedLimit));
+      if (newPage < 1 || newPage > maxPage) return;
+      searchArchived(newPage);
+    }
+
+    function renderArchived(results) {
+      const container = document.getElementById('archived-results');
+      const pager = document.getElementById('archived-pagination');
+      const esc = (s) => String(s || '').replace(/[&<>"']/g, c =>
+        ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+      if (!results.length) {
+        container.innerHTML = '<div style="font-size: 0.85rem; color: #94a3b8;">No archived incidents match.</div>';
+        pager.style.display = 'none';
+        return;
+      }
+
+      container.innerHTML = results.map((r) => {
+        let types = [];
+        try { types = Array.isArray(r.type) ? r.type : JSON.parse(r.type || '[]'); } catch (e) { /* legacy */ }
+        const typeStr = Array.isArray(types) && types.length ? types.join(', ') : '';
+        const when = r.original_created_at ? new Date(r.original_created_at).toLocaleString() : '';
+        const archived = r.archived_at ? new Date(r.archived_at).toLocaleDateString() : '';
+        return `
+          <div style="border:1px solid rgba(245,158,11,0.25); background:rgba(245,158,11,0.04); border-radius:8px; padding:0.7rem 0.85rem; margin-bottom:0.6rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
+              <div style="font-weight:600; color:#fbbf24;"><i class="fas fa-box-archive" style="margin-right:0.4rem;"></i>${esc(r.title || 'Untitled incident')}</div>
+              <div style="font-size:0.72rem; color:#64748b;">archived ${esc(archived)}</div>
+            </div>
+            <div style="font-size:0.78rem; color:#94a3b8; margin-top:0.25rem;">
+              ${r.location ? `<i class="fas fa-location-dot" style="margin-right:0.3rem;"></i>${esc(r.location)}` : ''}
+              ${r.status ? ` &middot; ${esc(r.status)}` : ''}${typeStr ? ` &middot; ${esc(typeStr)}` : ''}${when ? ` &middot; ${esc(when)}` : ''}
+            </div>
+            <div id="archived-detail-${esc(r.id)}" style="display:none; margin-top:0.6rem;"></div>
+            <button class="action-btn secondary" style="margin-top:0.5rem; font-size:0.75rem;" onclick="toggleArchivedDetail('${esc(r.id)}')">
+              <i class="fas fa-list"></i> View logs
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      const maxPage = Math.max(1, Math.ceil(archivedTotal / archivedLimit));
+      if (maxPage > 1) {
+        pager.style.display = 'flex';
+        document.getElementById('archived-page-info').textContent = `Page ${archivedPage} of ${maxPage} (${archivedTotal} archived)`;
+      } else {
+        pager.style.display = 'none';
+      }
+    }
+
+    async function toggleArchivedDetail(id) {
+      const box = document.getElementById(`archived-detail-${id}`);
+      if (!box) return;
+      if (box.style.display === 'block') { box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = '<div style="font-size:0.78rem; color:#94a3b8;">Loading logs&hellip;</div>';
+      const esc = (s) => String(s || '').replace(/[&<>"']/g, c =>
+        ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      try {
+        const res = await apiFetch(`${API_BASE}/api/incidents/archived/${encodeURIComponent(id)}`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+        const inc = data.incident || {};
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+        const desc = inc.description
+          ? `<div style="font-size:0.8rem; color:#cbd5e1; white-space:pre-wrap; margin-bottom:0.5rem;">${esc(inc.description)}</div>` : '';
+        const logsHtml = logs.length ? logs.map((l) => `
+          <div style="border-top:1px solid rgba(255,255,255,0.08); padding:0.4rem 0;">
+            <div style="font-size:0.68rem; color:#64748b;">${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : ''}</div>
+            <div style="font-size:0.8rem; color:#e2e8f0; white-space:pre-wrap;">${esc(l.message || '')}</div>
+          </div>`).join('')
+          : '<div style="font-size:0.78rem; color:#64748b; font-style:italic;">No logs were recorded.</div>';
+        box.innerHTML = desc + logsHtml;
+      } catch (e) {
+        box.innerHTML = `<div style="color:#ef4444; font-size:0.78rem;">Error loading detail: ${e.message}</div>`;
       }
     }
 
