@@ -516,17 +516,16 @@
       }
     }
 
-    // Pick the landing page for a user by role, so a non-editor isn't
-    // dumped on map-editor.html (which just walls them with "Access
-    // Denied"). has_access = map_editor OR owner → the editor; a plain
-    // team_member → user management; everyone else → the public map.
-    // Fails safe to the public map on any error.
+    // Pick the landing page for a user by role. Editors land on the merged
+    // map page (editor mode activates itself there); a plain team_member ->
+    // user management; everyone else -> the public map. Fails safe to the
+    // public map on any error.
     async function roleLandingPage(userId) {
       try {
         const r = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`);
         if (!r.ok) return 'map.html';
         const d = await r.json();
-        if (d.has_access) return 'map-editor.html';
+        if (d.has_access) return 'map.html';
         if (d.is_team_member) return 'staff.html';
         return 'map.html';
       } catch (e) {

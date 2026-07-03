@@ -447,7 +447,7 @@ async function checkAuthState() {
       
       // Map Editor chip - for map_editor or owner
       if (roleData.is_map_editor || roleData.is_owner) {
-        buttons += `<a href="map-editor.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.3); border-radius:6px; color:#60a5fa; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
+        buttons += `<a href="map.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.3); border-radius:6px; color:#60a5fa; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
           <i class="fas fa-map-marked-alt"></i> Editor
         </a>`;
       }
