@@ -252,17 +252,19 @@ describe('PUT /api/incidents/:id', () => {
 });
 
 describe('DELETE /api/incidents/:id', () => {
-  it('issues DELETE and returns success (owner/admin)', async () => {
+  it('soft-deletes (sets deleted_at) and returns success (owner/admin)', async () => {
     nextResult = { rows: [{ created_by: 'editor-1' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/del-id', { method: 'DELETE' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true });
-    const del = callWith('DELETE FROM incidents WHERE id = $1');
+    // Soft delete: the row is marked, never removed here — the hourly
+    // cleanup purges it after DATA_RETENTION_DAYS.
+    const del = callWith('UPDATE incidents SET deleted_at = NOW() WHERE id = $1');
     expect(del?.params).toEqual(['del-id']);
-    // Cascade cleanup ran too.
-    expect(callWith('DELETE FROM incident_updates WHERE incident_id = $1')).toBeDefined();
-    expect(callWith('DELETE FROM incident_suggestions WHERE incident_id = $1')).toBeDefined();
+    expect(callWith('DELETE FROM incidents')).toBeUndefined();
+    expect(callWith('DELETE FROM incident_updates')).toBeUndefined();
+    expect(callWith('DELETE FROM incident_suggestions')).toBeUndefined();
   });
 
   it('403s when a non-owner, non-admin tries to delete', async () => {
