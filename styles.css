@@ -1237,11 +1237,6 @@ a:hover { text-decoration: underline; }
   color: #7dd3fc;
   text-decoration: none;
 }
-.agency-overview .agency-links a::after {
-  content: '\2197';
-  font-size: 0.7rem;
-  opacity: 0.6;
-}
 .agency-overview .agency-links a:hover {
   border-color: rgba(56, 189, 248, 0.7);
   background: rgba(56, 189, 248, 0.16);
