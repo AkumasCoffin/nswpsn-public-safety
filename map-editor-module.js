@@ -1781,6 +1781,45 @@
     }
 
 
+  // --- Panel visibility -------------------------------------------------
+  // Desktop: the panel floats top-right whenever the User layer is on and
+  // the AIS vessel list is closed. Mobile (<=900px): .map-sidebar becomes a
+  // 60% bottom sheet, so it stays COLLAPSED behind a floating button and
+  // only opens when the user taps a pin or the button; a close X collapses
+  // it again.
+  let mobileSheetOpen = false;
+
+  function isMobileLayout() {
+    return window.matchMedia('(max-width: 900px)').matches;
+  }
+
+  function editorPanelVisibility() {
+    const editorPanel = document.getElementById('editor-panel');
+    if (!editorPanel) return;
+    const aisPanel = document.getElementById('ais-list-panel');
+    const userBtn = document.getElementById('btn-user');
+    const aisOpen = !!(aisPanel && aisPanel.classList.contains('open'));
+    const userOn = !userBtn || userBtn.classList.contains('active');
+    const mobile = isMobileLayout();
+    const open = userOn && !aisOpen && (!mobile || mobileSheetOpen);
+    editorPanel.classList.toggle('open', open);
+
+    const fab = document.getElementById('editor-mobile-fab');
+    if (fab) fab.style.display = (mobile && userOn && !open) ? 'flex' : 'none';
+    const closeBtn = document.getElementById('editor-panel-close');
+    if (closeBtn) closeBtn.style.display = mobile ? 'flex' : 'none';
+  }
+
+  function openEditorSheet() {
+    mobileSheetOpen = true;
+    editorPanelVisibility();
+  }
+
+  function closeEditorSheet() {
+    mobileSheetOpen = false;
+    editorPanelVisibility();
+  }
+
   // --- DOM injection (CSS + floating panel), done only on activation ---
   const EDITOR_CSS = '    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      overflow-y: auto;\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: detach the incident/RFS panel (the RIGHT sidebar) into a\n       floating card over the map — rounded, detached from the edges, all-\n       round border + shadow — matching the AIS list-panel treatment. The\n       base .map-sidebar (styles.css) docks it flush to right:0/top:0/height:\n       100%; we only override the geometry here. The slide-in transform\n       (translateX) still hides/shows it. Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px; /* below the layer bar AND the top-right zoom buttons */\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(148, 163, 184, 0.28);\n        border-radius: 14px;\n        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }';
 
@@ -1798,6 +1837,30 @@
     const wrap = document.createElement('div');
     wrap.innerHTML = PANEL_HTML;
     host.appendChild(wrap.firstElementChild);
+
+    // Mobile: floating button that opens the collapsed bottom sheet.
+    const fab = document.createElement('button');
+    fab.id = 'editor-mobile-fab';
+    fab.type = 'button';
+    fab.title = 'Map Controls';
+    fab.setAttribute('aria-label', 'Open Map Controls');
+    fab.innerHTML = '<i class="fa-solid fa-map-pin"></i>';
+    fab.style.cssText = 'display:none; position:absolute; bottom:96px; right:12px; z-index:1004; width:48px; height:48px; border-radius:50%; background:#f97316; color:#fff; border:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); font-size:1.05rem; align-items:center; justify-content:center; cursor:pointer;';
+    fab.onclick = openEditorSheet;
+    host.appendChild(fab);
+
+    // Mobile: close X inside the sheet (hidden on desktop).
+    const panel = document.getElementById('editor-panel');
+    if (panel) {
+      const closeBtn = document.createElement('button');
+      closeBtn.id = 'editor-panel-close';
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('aria-label', 'Close Map Controls');
+      closeBtn.innerHTML = '&times;';
+      closeBtn.style.cssText = 'display:none; position:absolute; top:10px; right:12px; z-index:5; width:32px; height:32px; border-radius:8px; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); color:#cbd5e1; font-size:1.2rem; align-items:center; justify-content:center; cursor:pointer;';
+      closeBtn.onclick = closeEditorSheet;
+      panel.insertBefore(closeBtn, panel.firstChild);
+    }
   }
 
   // --- Map click: place pin in add-mode (snap to pager cluster when the
@@ -1948,7 +2011,7 @@
       window.NSWPSNEditorHooks = {
         // showIncidentDetails(incident, pagerDetails) — raw incident row.
         openUser(incident, pagerDetails) {
-          try { selectIncident(incident, pagerDetails); } catch (e) { console.warn('[editor] openUser', e); }
+          try { selectIncident(incident, pagerDetails); openEditorSheet(); } catch (e) { console.warn('[editor] openUser', e); }
         },
         // showRfsDetails(item) — unified RFS item.
         openRfs(item) {
@@ -1962,12 +2025,14 @@
               link: item.link || 'https://www.rfs.nsw.gov.au/fire-information/fires-near-me',
               point: `${item.lat} ${item.lng}`,
             }, item.pagerDetails);
+            openEditorSheet();
           } catch (e) { console.warn('[editor] openRfs', e); }
         },
         // showPagerDetails(item) — unified pager cluster item.
         openPager(item) {
           try {
             showPagerClusterEditor({ lat: item.lat, lon: item.lng, rawDetails: item.rawDetails || {} });
+            openEditorSheet();
           } catch (e) { console.warn('[editor] openPager', e); }
         },
       };
@@ -1988,25 +2053,18 @@
         }
       } catch (e) { /* non-fatal */ }
 
-      // Panel visibility: Map Controls belongs to the User layer, so it only
-      // shows while that toggle is ON — and never at the same time as the
-      // AIS vessel list, which floats in the same top-right spot.
+      // Panel visibility: User-layer-gated, AIS-deferring, and collapsed
+      // into a floating button on mobile (see editorPanelVisibility).
       try {
         const aisPanel = document.getElementById('ais-list-panel');
         const userBtn = document.getElementById('btn-user');
-        const updatePanelVisibility = () => {
-          const editorPanel = document.getElementById('editor-panel');
-          if (!editorPanel) return;
-          const aisOpen = !!(aisPanel && aisPanel.classList.contains('open'));
-          const userOn = !userBtn || userBtn.classList.contains('active');
-          editorPanel.classList.toggle('open', userOn && !aisOpen);
-        };
         if (window.MutationObserver) {
-          const mo = new MutationObserver(updatePanelVisibility);
+          const mo = new MutationObserver(editorPanelVisibility);
           if (aisPanel) mo.observe(aisPanel, { attributes: true, attributeFilter: ['class'] });
           if (userBtn) mo.observe(userBtn, { attributes: true, attributeFilter: ['class'] });
         }
-        updatePanelVisibility();
+        window.addEventListener('resize', editorPanelVisibility, { passive: true });
+        editorPanelVisibility();
       } catch (e) { /* non-fatal */ }
 
       map.on('click', onMapClick);
