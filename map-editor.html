@@ -313,20 +313,25 @@
     .btn-toggle:not(.active) { opacity: 0.6; }
     
     /* LAYER TOGGLES - adjusted for right sidebar (350px) */
-    .layer-toggles { 
-      position: absolute; 
-      top: 20px; 
-      left: calc(50% - 175px); /* Center in visible area: 50% minus half of 350px sidebar */
-      transform: translateX(-50%);
-      max-width: calc(100% - 400px); /* 350px sidebar + 50px margins for more room */
-      z-index: 800; 
-      display: flex; 
-      gap: 10px; 
-      background: rgba(15, 23, 42, 0.9); 
-      padding: 6px 12px; 
-      border-radius: 50px; 
-      border: 1px solid rgba(255,255,255,0.15); 
-      backdrop-filter: blur(8px); 
+    .layer-toggles {
+      position: absolute;
+      top: 20px;
+      /* Span the map area and centre the buttons so all toggles fit without
+         a horizontal scroll. right:64px clears the top-right zoom control;
+         the floating panel sits below this row (top:70) so full width is safe.
+         overflow-x:auto (below) stays as a fallback on very narrow screens. */
+      left: 16px;
+      right: 64px;
+      max-width: none;
+      justify-content: center;
+      z-index: 800;
+      display: flex;
+      gap: 8px;
+      background: rgba(15, 23, 42, 0.9);
+      padding: 6px 12px;
+      border-radius: 50px;
+      border: 1px solid rgba(255,255,255,0.15);
+      backdrop-filter: blur(8px);
       box-shadow: 0 4px 20px rgba(0,0,0,0.4);
       white-space: nowrap;
     }
