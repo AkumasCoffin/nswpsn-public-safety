@@ -83,10 +83,7 @@
         </div>
         <div class="card-body">
           <p class="card-hint" style="margin-top:0; color:var(--text-soft); font-size:0.78rem;">Use the Agencies search in the sidebar to jump to a specific TGID, zone, or code.</p>
-          <div class="table-wrapper"><div class="table-scroll"><table class="table">
-            <thead><tr><th style="width:6.5rem;">TGID</th><th style="width:9rem;">Alias</th><th>Description</th></tr></thead>
-            <tbody id="tgid-tbody"><tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">Loading…</td></tr></tbody>
-          </table></div></div>
+          <div id="tgid-table-mount"><p style="text-align:center; color:var(--text-muted); padding:2rem;">Loading…</p></div>
         </div>
       </article>
     </section>
@@ -124,24 +121,35 @@
         ? `No agency with slug "${slug}" — open the Agencies dropdown to pick one.`
         : 'No agency selected — open the Agencies dropdown in the sidebar.';
       document.getElementById('agency-tgid-count').textContent = '0';
-      document.getElementById('tgid-tbody').innerHTML =
-        '<tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">No data.</td></tr>';
+      document.getElementById('tgid-table-mount').innerHTML =
+        '<p style="text-align:center; color:var(--text-muted); padding:2rem;">No data.</p>';
       document.querySelector('.card-hint').textContent = '';
     }
 
     function renderRows(rows) {
-      const tbody = document.getElementById('tgid-tbody');
+      const mount = document.getElementById('tgid-table-mount');
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:2rem;">No data.</td></tr>';
+        mount.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:2rem;">No data.</p>';
         return;
       }
-      tbody.innerHTML = rows.map((r) => {
+      const rowHtml = (r) => {
         const aliasIsDash = !r.alias || r.alias === '-';
         const descIsDash = !r.description || r.description === '-';
         const alias = aliasIsDash ? '<span style="color:var(--text-soft);">—</span>' : escapeHtml(r.alias);
         const desc = descIsDash ? '<span style="color:var(--text-soft);">—</span>' : escapeHtml(r.description);
         return `<tr><td class="tgid-cell">${escapeHtml(r.tgid)}</td><td class="tgid-alias">${alias}</td><td class="tgid-desc">${desc}</td></tr>`;
-      }).join('');
+      };
+      // Flow long lists into 2-3 side-by-side table columns so a big agency
+      // doesn't produce one enormous single-column card.
+      const cols = rows.length > 100 ? 3 : rows.length > 25 ? 2 : 1;
+      const per = Math.ceil(rows.length / cols);
+      const chunks = [];
+      for (let i = 0; i < rows.length; i += per) chunks.push(rows.slice(i, i + per));
+      const tableHtml = (chunk) => `<div class="table-wrapper"><div class="table-scroll"><table class="table">
+        <thead><tr><th>TGID</th><th>Alias</th><th>Description</th></tr></thead>
+        <tbody>${chunk.map(rowHtml).join('')}</tbody>
+      </table></div></div>`;
+      mount.innerHTML = `<div class="tgid-columns tgid-columns--${cols}">${chunks.map(tableHtml).join('')}</div>`;
     }
 
     // Scroll the first row whose text contains `query` into view and apply a highlight class.
