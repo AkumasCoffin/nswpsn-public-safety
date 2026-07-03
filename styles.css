@@ -994,7 +994,26 @@ a:hover { text-decoration: underline; }
 .table tbody tr { transition: background 0.15s ease; }
 .table tbody tr:hover { background: rgba(249, 115, 22, 0.06); }
 
+/* Agency reference tables: slightly tighter rows than the site default —
+   these are scan-dense code/ID lists, not prose. */
+#agency-content .table th, #agency-content .table td { padding: 0.5rem 0.75rem; }
+
 /* --- Talkgroup IDs table (per-agency reference) --- */
+/* Long TGID lists flow into 2-3 side-by-side table columns (set in renderRows)
+   so the card height stays proportionate instead of one row per line. */
+.tgid-columns { display: grid; gap: 1rem; align-items: start; }
+.tgid-columns--2 { grid-template-columns: 1fr 1fr; }
+.tgid-columns--3 { grid-template-columns: 1fr 1fr 1fr; }
+@media (max-width: 1200px) {
+  .tgid-columns--3 { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 760px) {
+  .tgid-columns--2, .tgid-columns--3 { grid-template-columns: 1fr; }
+}
+.tgid-columns .table-wrapper { margin-top: 0; }
+/* Denser rows: a reference list wants scanning density, not reading comfort. */
+#agency-tgid-card .table th, #agency-tgid-card .table td { padding: 0.4rem 0.65rem; }
+#agency-tgid-card .table { min-width: 0; font-size: 0.8rem; }
 /* Zebra striping for easier scanning of long TGID lists. Hover rule below
    carries the #id so it still wins over the striping at equal source order. */
 #agency-tgid-card .table tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.035); }
