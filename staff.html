@@ -1026,13 +1026,22 @@
         </div>
       </div>
       
-      <div style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px;">
+      <div id="create-account-section" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px;">
         <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
           <input type="checkbox" id="create-account-toggle" checked style="width: 18px; height: 18px; accent-color: var(--success);">
           <span style="font-weight: 600;">Create Supabase Login Account</span>
         </label>
         <p style="color: var(--text-soft); font-size: 0.8rem; margin: 0.5rem 0 0 1.6rem;">
           Creates a login account so the user can access the editor. Uncheck if they only need non-login roles.
+        </p>
+      </div>
+      <div id="linked-account-section" style="display: none; margin-bottom: 1.5rem; padding: 1rem; background: rgba(88, 101, 242, 0.1); border: 1px solid rgba(88, 101, 242, 0.35); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary); font-weight: 600;">
+          <i class="fab fa-discord" style="color: #5865F2;"></i> Linked account
+        </div>
+        <p style="color: var(--text-soft); font-size: 0.8rem; margin: 0.5rem 0 0 1.6rem;">
+          This request was submitted while signed in (Discord signup). Approving assigns the
+          selected roles directly to that existing account — no new account or temp password.
         </p>
       </div>
       
@@ -2128,8 +2137,14 @@
         privilegedRolesSection.style.display = 'none';
       }
       
+      // Linked-account requests (Discord signup) skip account creation —
+      // approval assigns roles straight to the existing account.
+      const isLinked = !!req.supabase_user_id;
+      document.getElementById('create-account-section').style.display = isLinked ? 'none' : 'block';
+      document.getElementById('linked-account-section').style.display = isLinked ? 'block' : 'none';
+
       // Default to create account if map editor is requested
-      document.getElementById('create-account-toggle').checked = (req.request_type || []).includes('editor');
+      document.getElementById('create-account-toggle').checked = !isLinked && (req.request_type || []).includes('editor');
       
       console.log('Showing approve-confirm-modal');
       const modal = document.getElementById('approve-confirm-modal');
@@ -2216,7 +2231,12 @@
         
         // Update status box based on result
         const statusBox = document.getElementById('approve-status-box');
-        if (data.supabase_account_created) {
+        if (data.roles_assigned_to_linked_account) {
+          statusBox.style.background = 'rgba(88, 101, 242, 0.15)';
+          statusBox.style.border = '1px solid rgba(88, 101, 242, 0.4)';
+          statusBox.style.color = '#a5b4fc';
+          statusBox.innerHTML = '<i class="fab fa-discord"></i> Roles assigned to the user\'s linked account — they can use them on next page load.';
+        } else if (data.supabase_account_created) {
           statusBox.style.background = 'rgba(34, 197, 94, 0.15)';
           statusBox.style.border = '1px solid rgba(34, 197, 94, 0.4)';
           statusBox.style.color = '#22c55e';
