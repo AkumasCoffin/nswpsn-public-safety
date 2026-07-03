@@ -123,7 +123,11 @@
 
   function buildRail() {
     if (!rail) return;
-    const targets = Array.from(document.querySelectorAll(TARGET_SELECTOR));
+    // Skip hidden cards (e.g. the Talkgroup IDs card is display:none for
+    // agencies with no TGIDs) — a collapsed rect would otherwise pin the
+    // active-section tooltip to that card permanently.
+    const targets = Array.from(document.querySelectorAll(TARGET_SELECTOR))
+      .filter((el) => el.offsetParent !== null && el.getBoundingClientRect().height > 0);
     if (targets.length < 2) {
       clearDots();
       ensureThumb();
