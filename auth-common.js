@@ -340,6 +340,72 @@ async function linkDiscordAccount() {
   }
 }
 
+// ---- One-time username prompt for existing accounts ----
+// Accounts created before usernames existed (or admin-created ones) have no
+// display_name and would show as "Account" in the sidebar. Ask them to pick
+// one on page load; "Later" defers for the rest of the browser session.
+let usernamePromptShown = false;
+
+function maybeAskUsername(session) {
+  try {
+    if (usernamePromptShown) return;
+    if (sessionStorage.getItem('nswpsn_username_prompt_dismissed') === '1') return;
+    const meta = session.user?.user_metadata || {};
+    // A Discord-provided name counts — same rule as signup.
+    if (meta.display_name || meta.full_name || meta.name || meta.user_name) return;
+    usernamePromptShown = true;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'username-prompt-modal';
+    overlay.style.cssText = 'position:fixed; inset:0; background:rgba(2,6,23,0.7); z-index:10005; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px);';
+    overlay.innerHTML = `
+      <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:12px; padding:1.6rem; max-width:360px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);">
+        <div style="font-size:1.1rem; font-weight:700; color:#fff; margin-bottom:0.4rem;"><i class="fas fa-user" style="color:#f97316; margin-right:0.4rem;"></i>Choose a username</div>
+        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 1rem;">Your account doesn't have a username yet — pick how you'll appear around the site.</p>
+        <input type="text" id="username-prompt-input" maxlength="32" placeholder="Username" style="width:100%; padding:0.7rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.95rem; box-sizing:border-box; font-family:inherit;">
+        <div id="username-prompt-msg" style="color:#ef4444; font-size:0.8rem; min-height:1.1em; margin-top:0.45rem;"></div>
+        <div style="display:flex; gap:0.5rem; margin-top:0.7rem;">
+          <button id="username-prompt-later" style="flex:1; padding:0.6rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:8px; color:#94a3b8; font-size:0.85rem; cursor:pointer; font-family:inherit;">Later</button>
+          <button id="username-prompt-save" style="flex:2; padding:0.6rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; font-size:0.85rem; cursor:pointer; font-family:inherit;">Save username</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#username-prompt-input');
+    input.focus();
+
+    const close = () => overlay.remove();
+    overlay.querySelector('#username-prompt-later').onclick = () => {
+      try { sessionStorage.setItem('nswpsn_username_prompt_dismissed', '1'); } catch (e) {}
+      close();
+    };
+    const save = async () => {
+      const msg = overlay.querySelector('#username-prompt-msg');
+      const username = input.value.trim();
+      if (username.length < 2) {
+        msg.textContent = 'Username must be at least 2 characters.';
+        return;
+      }
+      const btn = overlay.querySelector('#username-prompt-save');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      const { error } = await sb.auth.updateUser({ data: { display_name: username } });
+      if (error) {
+        btn.disabled = false;
+        btn.textContent = 'Save username';
+        msg.textContent = error.message;
+        return;
+      }
+      if (typeof umami !== 'undefined') umami.track('username-prompt-saved');
+      close();
+      checkAuthState();
+    };
+    overlay.querySelector('#username-prompt-save').onclick = save;
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+  } catch (e) {
+    console.warn('username prompt failed', e);
+  }
+}
+
 async function doDiscordLogin() {
   const errorDiv = document.getElementById('login-error');
   const btn = document.getElementById('discord-modal-btn');
@@ -388,6 +454,9 @@ async function checkAuthState() {
     const displayName = meta.display_name || meta.full_name || meta.name || meta.user_name
       || 'Account';
     if (emailDiv) emailDiv.textContent = displayName;
+
+    // Existing account with no name at all: ask them to pick a username.
+    maybeAskUsername(session);
 
     // Avatar: Discord avatar image when available, else the first letter.
     const avatarDiv = document.getElementById('auth-avatar');
