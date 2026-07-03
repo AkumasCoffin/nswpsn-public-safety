@@ -481,14 +481,32 @@
       }
     }
 
+    // Pick the landing page for a user by role, so a non-editor isn't
+    // dumped on map-editor.html (which just walls them with "Access
+    // Denied"). has_access = map_editor OR owner → the editor; a plain
+    // team_member → user management; everyone else → the public map.
+    // Fails safe to the public map on any error.
+    async function roleLandingPage(userId) {
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`);
+        if (!r.ok) return 'map.html';
+        const d = await r.json();
+        if (d.has_access) return 'map-editor.html';
+        if (d.is_team_member) return 'staff.html';
+        return 'map.html';
+      } catch (e) {
+        return 'map.html';
+      }
+    }
+
     // Check if user is already logged in
     async function checkSession() {
       const { data } = await sb.auth.getSession();
       if (data.session) {
-        // Check if there's a redirect URL
+        // Honor an explicit ?redirect= if valid; otherwise route by role.
         const urlParams = new URLSearchParams(window.location.search);
-        const redirect = urlParams.get('redirect');
-        window.location.href = safeRedirect(redirect, 'map-editor.html');
+        const explicit = safeRedirect(urlParams.get('redirect'), '');
+        window.location.href = explicit || await roleLandingPage(data.session.user.id);
       }
     }
     
@@ -550,10 +568,12 @@
         if (typeof umami !== 'undefined') umami.track('login-success', { method: 'page' });
         messageEl.className = 'message success';
         messageEl.textContent = 'Success! Redirecting...';
-        
+
+        // Honor an explicit ?redirect= if valid; otherwise route by role
+        // (non-editors go to the public map, not the editor's access wall).
         const urlParams = new URLSearchParams(window.location.search);
-        const redirect = urlParams.get('redirect');
-        window.location.href = safeRedirect(redirect, 'map-editor.html');
+        const explicit = safeRedirect(urlParams.get('redirect'), '');
+        window.location.href = explicit || await roleLandingPage(data.user.id);
 
       } catch (err) {
         if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'page' });
