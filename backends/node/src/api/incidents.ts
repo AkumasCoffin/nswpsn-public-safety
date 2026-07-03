@@ -234,7 +234,7 @@ incidentsRouter.get('/api/incidents', async (c) => {
       // Filtering in JS makes active=true exactly as robust as the
       // unfiltered list (which works), regardless of the column's type.
       const r = await pool.query<IncidentRow>(
-        'SELECT * FROM incidents ORDER BY created_at DESC',
+        'SELECT * FROM incidents WHERE deleted_at IS NULL ORDER BY created_at DESC',
       );
       const rows = r.rows.map(normaliseIncident);
       return activeOnly ? rows.filter((row) => row['is_live'] === true) : rows;
@@ -259,7 +259,7 @@ incidentsRouter.get('/api/incidents/:id', async (c) => {
   try {
     const result = await withPool(async (pool) => {
       const r = await pool.query<IncidentRow>(
-        'SELECT * FROM incidents WHERE id = $1',
+        'SELECT * FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       return r.rows[0] ? normaliseIncident(r.rows[0]) : null;
@@ -334,7 +334,7 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     // non-owner editor must use the suggestion flow instead.
     const gate = await withPool(async (pool) => {
       const r = await pool.query<{ created_by: string | null }>(
-        'SELECT created_by FROM incidents WHERE id = $1',
+        'SELECT created_by FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       if (r.rowCount === 0) return { notFound: true as const };
@@ -400,17 +400,18 @@ incidentsRouter.delete('/api/incidents/:id', async (c) => {
     const result = await withPool(async (pool) => {
       // Ownership gate — only the creator or a site admin may delete.
       const owner = await pool.query<{ created_by: string | null }>(
-        'SELECT created_by FROM incidents WHERE id = $1',
+        'SELECT created_by FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       if (owner.rowCount === 0) return { notFound: true as const };
       if (!(await userCanModifyIncident(currentUserId(c), owner.rows[0]?.created_by ?? null))) {
         return { forbidden: true as const };
       }
-      // Remove the pin and everything hanging off it (logs + suggestions).
-      await pool.query('DELETE FROM incident_updates WHERE incident_id = $1', [id]);
-      await pool.query('DELETE FROM incident_suggestions WHERE incident_id = $1', [id]);
-      await pool.query('DELETE FROM incidents WHERE id = $1', [id]);
+      // Soft delete: hide the pin (and with it, its logs + suggestions)
+      // from the API but keep everything in the database. The hourly
+      // cleanup hard-deletes rows once deleted_at ages past
+      // DATA_RETENTION_DAYS, so accidental deletes stay recoverable.
+      await pool.query('UPDATE incidents SET deleted_at = NOW() WHERE id = $1', [id]);
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
@@ -628,7 +629,7 @@ incidentsRouter.post('/api/incidents/:id/suggestions', async (c) => {
 
     const result = await withPool(async (pool) => {
       // Confirm the incident exists so we don't accrue orphan suggestions.
-      const inc = await pool.query('SELECT 1 FROM incidents WHERE id = $1', [id]);
+      const inc = await pool.query('SELECT 1 FROM incidents WHERE id = $1 AND deleted_at IS NULL', [id]);
       if (inc.rowCount === 0) return { notFound: true as const };
       const r = await pool.query<{ id: string }>(
         `INSERT INTO incident_suggestions
@@ -659,7 +660,7 @@ incidentsRouter.get('/api/incidents/:id/suggestions', async (c) => {
   try {
     const result = await withPool(async (pool) => {
       const owner = await pool.query<{ created_by: string | null }>(
-        'SELECT created_by FROM incidents WHERE id = $1',
+        'SELECT created_by FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       if (owner.rowCount === 0) return { notFound: true as const };
@@ -715,7 +716,7 @@ incidentsRouter.post('/api/incidents/:id/suggestions/:sid/approve', async (c) =>
   try {
     const result = await withPool(async (pool) => {
       const owner = await pool.query<{ created_by: string | null }>(
-        'SELECT created_by FROM incidents WHERE id = $1',
+        'SELECT created_by FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       if (owner.rowCount === 0) return { notFound: true as const };
@@ -791,7 +792,7 @@ incidentsRouter.post('/api/incidents/:id/suggestions/:sid/reject', async (c) => 
   try {
     const result = await withPool(async (pool) => {
       const owner = await pool.query<{ created_by: string | null }>(
-        'SELECT created_by FROM incidents WHERE id = $1',
+        'SELECT created_by FROM incidents WHERE id = $1 AND deleted_at IS NULL',
         [id],
       );
       if (owner.rowCount === 0) return { notFound: true as const };
