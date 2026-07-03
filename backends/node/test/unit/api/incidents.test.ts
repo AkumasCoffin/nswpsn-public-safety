@@ -403,3 +403,65 @@ describe('suggestion workflow', () => {
     expect(callWith("SET status = 'rejected'")).toBeDefined();
   });
 });
+
+describe('incident archive', () => {
+  it('POST /:id/archive snapshots + soft-deletes (staff/owner)', async () => {
+    resultQueue = [
+      { rows: [{ id: 'arc-1', title: 'Major fire', location: 'Somewhere', status: 'Going' }], rowCount: 1 }, // SELECT incident
+      { rows: [{ id: 'log1', incident_id: 'arc-1', message: 'm', created_at: '2026-01-01' }] },              // SELECT logs
+      { rows: [] }, // INSERT archived_incidents
+      { rows: [] }, // UPDATE soft delete
+    ];
+    const app = makeApp();
+    const res = await app.request('/api/incidents/arc-1/archive', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true });
+    const ins = callWith('INSERT INTO archived_incidents');
+    expect(ins).toBeDefined();
+    expect(ins?.params?.[0]).toBe('arc-1');
+    expect(ins?.params?.[1]).toBe('Major fire');
+    const soft = callWith('UPDATE incidents SET deleted_at = NOW()');
+    expect(soft?.params).toEqual(['arc-1']);
+  });
+
+  it('403s archive for non-staff editors', async () => {
+    canManageUsersMock.mockResolvedValue(false);
+    const app = makeApp();
+    const res = await app.request('/api/incidents/arc-1/archive', { method: 'POST' });
+    expect(res.status).toBe(403);
+    expect(callWith('INSERT INTO archived_incidents')).toBeUndefined();
+  });
+
+  it('404s archive when the incident is missing or already soft-deleted', async () => {
+    resultQueue = [{ rows: [], rowCount: 0 }];
+    const app = makeApp();
+    const res = await app.request('/api/incidents/ghost/archive', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /archived returns results + total and searches with ILIKE', async () => {
+    nextResult = {
+      rows: [{ id: 'arc-1', title: 'Major fire', location: 'X', status: 'Going', type: '["Bush Fire"]', original_created_at: '2026-01-01', archived_at: '2026-01-02', total: '1' }],
+    };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/archived?q=fire&limit=5');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number; results: Array<Record<string, unknown>> };
+    expect(body.total).toBe(1);
+    expect(body.results[0]?.['title']).toBe('Major fire');
+    const sel = callWith('FROM archived_incidents');
+    expect(sel?.sql).toContain('ILIKE');
+    expect(sel?.params?.[0]).toBe('%fire%');
+  });
+
+  it('GET /archived/:id returns the snapshot or 404', async () => {
+    nextResult = { rows: [{ id: 'arc-1', title: 'Major fire', incident: {}, logs: [] }] };
+    const app = makeApp();
+    const ok = await app.request('/api/incidents/archived/arc-1');
+    expect(ok.status).toBe(200);
+
+    nextResult = { rows: [] };
+    const miss = await app.request('/api/incidents/archived/nope');
+    expect(miss.status).toBe(404);
+  });
+});
