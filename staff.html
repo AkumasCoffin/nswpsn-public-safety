@@ -805,11 +805,8 @@
           <button class="btn btn-secondary" onclick="refreshAll()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
-          <a href="map.html" id="editor-link" class="btn btn-secondary" style="display: none;">
-            <i class="fas fa-map"></i> Editor
-          </a>
           <a href="map.html" class="btn btn-secondary">
-            <i class="fas fa-globe"></i> Public Map
+            <i class="fas fa-map"></i> Map
           </a>
           <button class="btn btn-danger" onclick="doLogout()">
             <i class="fas fa-sign-out-alt"></i> Logout
@@ -1735,12 +1732,6 @@
                          tabs.dev      ? 'dev' : null;
       if (defaultTab && defaultTab !== currentTab) {
         switchTab(defaultTab);
-      }
-
-      // Editor link — show whenever they could plausibly use it.
-      const editorLink = document.getElementById('editor-link');
-      if (userPermissions.is_map_editor || userPermissions.is_owner) {
-        editorLink.style.display = 'inline-flex';
       }
 
       // Header — use the broadest title so a dev-only user doesn't see
