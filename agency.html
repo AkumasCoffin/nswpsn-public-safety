@@ -75,10 +75,8 @@
       <p id="agency-meta">Loading talkgroup data…</p>
     </header>
 
-    <div id="agency-fragment-mount"></div>
-
     <section class="card-grid" id="agency-content">
-      <article class="card card-wide" id="agency-tgid-card">
+      <article class="card" id="agency-tgid-card">
         <div class="card-header">
           <div class="card-title">🔍 Talkgroup IDs</div>
           <div class="card-tag" id="agency-tgid-count">—</div>
@@ -322,8 +320,8 @@
     }
 
     async function renderExtended(slug) {
-      const mount = document.getElementById('agency-fragment-mount');
-      if (!mount) return;
+      const grid = document.getElementById('agency-content');
+      if (!grid) return;
       let data;
       try {
         // Shared cache from agencies.js — avoids a duplicate fetch.
@@ -350,7 +348,15 @@
         </article>`;
 
       const sectionsHtml = (ext.sections || []).map(renderSection).join('');
-      mount.innerHTML = `<section class="card-grid">${overviewCard}${sectionsHtml}</section>`;
+      // Insert into the same grid as the Talkgroup IDs card so every reference
+      // card shares one flex layout and content-sized cards pack side by side.
+      const tgidCard = document.getElementById('agency-tgid-card');
+      if (tgidCard) {
+        tgidCard.insertAdjacentHTML('beforebegin', overviewCard);
+      } else {
+        grid.insertAdjacentHTML('afterbegin', overviewCard);
+      }
+      grid.insertAdjacentHTML('beforeend', sectionsHtml);
     }
 
     loadAgency();
