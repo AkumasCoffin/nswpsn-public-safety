@@ -1885,7 +1885,15 @@
             <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>
             <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>
           </div>
-          
+
+          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):
+               - ownership-notice: shown to non-owners in place of direct edit.
+               - suggest-panel: non-owners propose edits / notes.
+               - suggestions-review-panel: owners/admins review pending items. -->
+          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>
+          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>
+          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>
+
           <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">
             <div class="form-label">Incident Logs</div>
             <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">
@@ -2615,6 +2623,15 @@
     let selectedId = null;
     let pagerHoursWindowEditor = 24; // pager hits lookback window (hours)
 
+    // --- Current identity (set in checkUser once access is established) ---
+    // Used for incident ownership: only the creator OR a site admin
+    // (owner/team_member) may edit/delete directly; others suggest changes.
+    let currentUserId = null;
+    let currentIsAdmin = false;
+    let currentUserEmail = null;
+    // The incident object currently open in the editor (used to diff suggestions).
+    let currentIncident = null;
+
     const INCIDENT_TYPES = [
       "Bush Fire", "Grass Fire", "Structure Fire", "MVA", "Transport",
       "Car / Vehicle Fire", "Hazard Reduction", "Pile Burn", "Search / Rescue",
@@ -2725,6 +2742,13 @@
           }
           
           // User has access - continue with normal flow
+          // Capture identity for incident ownership checks. A site admin
+          // (owner/team_member) keeps edit/delete + suggestion-review powers
+          // over ANY incident; other editors only own the pins they created.
+          currentUserId = session.user.id;
+          currentIsAdmin = roleData.roles?.some(r => r === 'owner' || r === 'team_member') || false;
+          currentUserEmail = session.user.email || null;
+
           document.getElementById('login-overlay').style.display = 'none';
           
           // Show full account layout in auth controls
@@ -4157,12 +4181,19 @@ async function loadPagerData() {
     async function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
       const isMutating = method === 'PUT' || method === 'POST' || method === 'DELETE' || method === 'PATCH';
+      // options.auth === true forces the Supabase JWT even on a GET (used by
+      // owner-only reads such as the suggestions review list).
+      const needsJwt = isMutating || options.auth === true;
       let bearer = API_KEY;
-      if (isMutating) {
+      if (needsJwt) {
         const { data } = await sb.auth.getSession();
         const token = data?.session?.access_token;
         if (!token) {
-          alert('You need to be logged in as an editor to make changes. Please log in and try again.');
+          // Suppress the alert for auth-forced reads (e.g. suggestion review);
+          // the caller handles the rejection quietly.
+          if (isMutating) {
+            alert('You need to be logged in as an editor to make changes. Please log in and try again.');
+          }
           return Promise.reject(new Error('apiFetch blocked: no editor session'));
         }
         bearer = token;
@@ -9127,8 +9158,9 @@ async function loadPagerData() {
     function selectIncident(inc) {
       const RFS_BLOCK = document.getElementById('rfs-read-only-data');
       if (RFS_BLOCK) RFS_BLOCK.remove();
-      
+
       selectedId = inc.id;
+      currentIncident = inc;
       document.getElementById('selection-editor').style.display = 'block';
       document.getElementById('instruction-text').style.display = 'none';
       document.getElementById('edit-id').value = inc.id;
@@ -9169,12 +9201,340 @@ async function loadPagerData() {
           if (match) match.checked = true;
         });
       }
-      
+
+      // --- Ownership-aware UI ---
+      // A site admin (owner/team_member) may edit/delete any pin; otherwise
+      // only the creator may. Legacy pins (created_by null) are admin-only,
+      // so non-admins fall through to the suggest UI (backend enforces 403).
+      const canModify = currentIsAdmin || (!!inc.created_by && inc.created_by === currentUserId);
+      applyOwnershipUI(inc, canModify);
+
       loadIncidentLogs(inc.id);
+      if (canModify) {
+        loadIncidentSuggestions(inc.id);
+      }
       map.panTo([inc.lat, inc.lng]);
       attachPagerSectionToEditor(inc.lat, inc.lng);
     }
-    
+
+    // Toggle the direct-edit path vs. the suggestion path based on ownership,
+    // and (re)build the injected panels fresh so no state leaks between pins.
+    function applyOwnershipUI(inc, canModify) {
+      const notice = document.getElementById('ownership-notice');
+      const suggestPanel = document.getElementById('suggest-panel');
+      const reviewPanel = document.getElementById('suggestions-review-panel');
+      const editGroupIds = ['title-group', 'status-size-group', 'expiry-group', 'type-group', 'agency-group', 'desc-group'];
+
+      // Always reset injected panels between selections.
+      notice.style.display = 'none';
+      notice.innerHTML = '';
+      suggestPanel.style.display = 'none';
+      suggestPanel.innerHTML = '';
+      reviewPanel.style.display = 'none';
+      reviewPanel.innerHTML = '';
+
+      if (canModify) {
+        // Full edit path (existing behavior).
+        editGroupIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = (id === 'status-size-group') ? 'grid' : 'block';
+        });
+        document.getElementById('save-delete-group').style.display = 'grid';
+        // Review panel is populated asynchronously by loadIncidentSuggestions.
+      } else {
+        // Non-owner: hide the direct edit form + save/delete, show suggest UI.
+        editGroupIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        document.getElementById('save-delete-group').style.display = 'none';
+        notice.style.display = 'block';
+        notice.innerHTML = `<i class="fa-solid fa-circle-info" style="margin-right:0.4rem;"></i>You're not the owner of this pin — suggest changes below.`;
+        buildSuggestPanel(inc);
+      }
+    }
+
+    // ---- SUGGESTION WORKFLOW (non-owner path) ----
+    // Build a compact "suggest an edit" + "suggest a note" panel pre-filled
+    // from the incident. Fields are namespaced (sugg-*) so they never collide
+    // with the real editor inputs.
+    function buildSuggestPanel(inc) {
+      const panel = document.getElementById('suggest-panel');
+      const statusOptions = ['Going','In Route','On Scene','Out of Control','Being Controlled','Emergency Warning','Watch and Act','Advice','Under Control','Pending','Investigation','Monitor','Patrol','Off Scene','Safe'];
+      const curStatus = inc.status || 'Going';
+      const statusHtml = statusOptions.map(s =>
+        `<option value="${escapeHtml(s)}"${s === curStatus ? ' selected' : ''}>${escapeHtml(s)}</option>`
+      ).join('');
+
+      const incTypes = Array.isArray(inc.type) ? inc.type : (inc.type ? [inc.type] : []);
+      const typeHtml = INCIDENT_TYPES.map(t => {
+        const checked = incTypes.includes(t) ? ' checked' : '';
+        return `<label class="pill-checkbox"><input type="checkbox" class="sugg-type" value="${escapeHtml(t)}"${checked}> ${escapeHtml(t)}</label>`;
+      }).join('');
+
+      const AGENCIES = ['RFS','FRNSW','NSWAS','SES','Police','VRA'];
+      const incAgencies = Array.isArray(inc.responding_agencies) ? inc.responding_agencies : [];
+      const agencyHtml = AGENCIES.map(a => {
+        const checked = incAgencies.includes(a) ? ' checked' : '';
+        return `<label class="pill-checkbox"><input type="checkbox" class="sugg-agency" value="${escapeHtml(a)}"${checked}> ${escapeHtml(a)}</label>`;
+      }).join('');
+
+      panel.style.display = 'block';
+      panel.innerHTML = `
+        <div style="border:1px solid rgba(168,85,247,0.35); background:rgba(168,85,247,0.06); border-radius:8px; padding:0.9rem;">
+          <h4 style="margin:0 0 0.8rem; color:#c084fc; font-size:0.95rem;"><i class="fa-solid fa-lightbulb"></i> Suggest an edit</h4>
+          <div class="form-group">
+            <label class="form-label" for="sugg-title">Title</label>
+            <input type="text" id="sugg-title" class="form-input" value="${escapeHtml(inc.title || '')}">
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
+            <div class="form-group">
+              <label class="form-label" for="sugg-status">Status</label>
+              <select id="sugg-status" class="form-select">${statusHtml}</select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="sugg-size">Size</label>
+              <input type="text" id="sugg-size" class="form-input" value="${escapeHtml(inc.size || '')}" placeholder="e.g. 5 ha">
+            </div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Incident Type(s)</div>
+            <div style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:120px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);">${typeHtml}</div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Responding Agencies</div>
+            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;">${agencyHtml}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="sugg-desc">Description (Markdown)</label>
+            <textarea id="sugg-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists...">${escapeHtml(inc.description || '')}</textarea>
+          </div>
+          <button class="btn btn-primary btn-block" style="padding:0.5rem;" onclick="submitSuggestionEdit()"><i class="fa-solid fa-paper-plane"></i> Submit suggestion</button>
+          <div style="border-top:1px solid rgba(255,255,255,0.1); margin:1rem 0 0.8rem;"></div>
+          <div class="form-group" style="margin-bottom:0.5rem;">
+            <label class="form-label" for="sugg-note">Suggest a note to the owner</label>
+            <textarea id="sugg-note" class="form-textarea" placeholder="e.g. This pin looks like a duplicate of #1234" style="min-height:50px; font-size:0.85rem;"></textarea>
+          </div>
+          <button class="btn btn-secondary btn-block" style="padding:0.5rem;" onclick="submitSuggestionNote()"><i class="fa-solid fa-comment"></i> Suggest a note</button>
+        </div>
+      `;
+    }
+
+    // Collect only the fields that differ from the loaded incident so the
+    // owner sees a focused diff.
+    function collectSuggestionChanges(inc) {
+      const changes = {};
+      const title = document.getElementById('sugg-title').value;
+      if (title !== (inc.title || '')) changes.title = title;
+
+      const desc = document.getElementById('sugg-desc').value;
+      if (desc !== (inc.description || '')) changes.description = desc;
+
+      const status = document.getElementById('sugg-status').value;
+      if (status !== (inc.status || 'Going')) changes.status = status;
+
+      const size = document.getElementById('sugg-size').value;
+      if (size !== (inc.size || '')) changes.size = size;
+
+      const newTypes = Array.from(document.querySelectorAll('.sugg-type:checked')).map(cb => cb.value);
+      const oldTypes = Array.isArray(inc.type) ? inc.type : (inc.type ? [inc.type] : []);
+      if (!arraysEqualUnordered(newTypes, oldTypes)) changes.type = newTypes;
+
+      const newAgencies = Array.from(document.querySelectorAll('.sugg-agency:checked')).map(cb => cb.value);
+      const oldAgencies = Array.isArray(inc.responding_agencies) ? inc.responding_agencies : [];
+      if (!arraysEqualUnordered(newAgencies, oldAgencies)) changes.responding_agencies = newAgencies;
+
+      return changes;
+    }
+
+    function arraysEqualUnordered(a, b) {
+      if (a.length !== b.length) return false;
+      const sa = [...a].sort();
+      const sb = [...b].sort();
+      return sa.every((v, i) => v === sb[i]);
+    }
+
+    async function submitSuggestionEdit() {
+      if (!selectedId || !currentIncident) return;
+      const changes = collectSuggestionChanges(currentIncident);
+      if (Object.keys(changes).length === 0) {
+        alert('No changes to suggest — edit a field first.');
+        return;
+      }
+      const body = { kind: 'edit', changes };
+      if (currentUserEmail) body.suggested_by_name = currentUserEmail;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${selectedId}/suggestions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (res.ok) {
+          alert('Suggestion submitted — the owner will review it.');
+        } else {
+          alert('Failed to submit suggestion.');
+        }
+      } catch (e) {
+        console.warn('Suggestion submit failed:', e);
+      }
+    }
+
+    async function submitSuggestionNote() {
+      if (!selectedId) return;
+      const msg = document.getElementById('sugg-note').value.trim();
+      if (!msg) {
+        alert('Type a note first.');
+        return;
+      }
+      const body = { kind: 'note', message: msg };
+      if (currentUserEmail) body.suggested_by_name = currentUserEmail;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${selectedId}/suggestions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (res.ok) {
+          document.getElementById('sugg-note').value = '';
+          alert('Note submitted — the owner will review it.');
+        } else {
+          alert('Failed to submit note.');
+        }
+      } catch (e) {
+        console.warn('Note submit failed:', e);
+      }
+    }
+
+    // ---- SUGGESTION REVIEW (owner/admin path) ----
+    // GET the pending suggestions with the reviewer's JWT and render each as
+    // an approve/reject card. Owner-only endpoint; 401/403 render nothing.
+    async function loadIncidentSuggestions(id) {
+      const panel = document.getElementById('suggestions-review-panel');
+      if (!panel) return;
+      let list = [];
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${id}/suggestions?status=pending`, { auth: true });
+        if (!res.ok) {
+          // 401/403 (not an owner/admin for this pin) or other error: show nothing.
+          panel.style.display = 'none';
+          panel.innerHTML = '';
+          return;
+        }
+        list = await res.json();
+      } catch (e) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        return;
+      }
+      if (!Array.isArray(list) || list.length === 0) {
+        panel.style.display = 'block';
+        panel.innerHTML = `<div style="font-size:0.75rem; color:var(--text-soft); font-style:italic; padding:0.3rem 0;">No pending suggestions.</div>`;
+        return;
+      }
+
+      const cards = list.map(s => renderSuggestionCard(id, s)).join('');
+      panel.style.display = 'block';
+      panel.innerHTML = `
+        <div style="border:1px solid rgba(34,197,94,0.35); background:rgba(34,197,94,0.05); border-radius:8px; padding:0.9rem;">
+          <h4 style="margin:0 0 0.8rem; color:#4ade80; font-size:0.95rem;">
+            <i class="fa-solid fa-inbox"></i> Pending suggestions
+            <span style="background:#22c55e; color:#052e16; font-size:0.7rem; font-weight:700; padding:1px 7px; border-radius:10px; margin-left:0.3rem;">${list.length}</span>
+          </h4>
+          ${cards}
+        </div>
+      `;
+    }
+
+    function renderSuggestionCard(incidentId, s) {
+      const who = escapeHtml(s.suggested_by_name || s.suggested_by || 'Unknown');
+      const when = s.created_at ? new Date(s.created_at).toLocaleString() : '';
+      let bodyHtml = '';
+      if (s.kind === 'edit' && s.changes && typeof s.changes === 'object') {
+        const rows = Object.keys(s.changes).map(k => {
+          const oldVal = currentIncident ? currentIncident[k] : undefined;
+          const oldStr = formatFieldValue(oldVal);
+          const newStr = formatFieldValue(s.changes[k]);
+          return `<div style="font-size:0.78rem; margin-bottom:0.25rem;">
+            <span style="color:#c084fc; font-weight:600;">${escapeHtml(k)}</span>:
+            <span style="color:#94a3b8; text-decoration:line-through;">${escapeHtml(oldStr)}</span>
+            <span style="color:#64748b;"> → </span>
+            <span style="color:#e2e8f0;">${escapeHtml(newStr)}</span>
+          </div>`;
+        }).join('');
+        bodyHtml = rows || `<div style="font-size:0.78rem; color:var(--text-soft);">(no field changes)</div>`;
+      } else if (s.kind === 'note') {
+        bodyHtml = `<div style="font-size:0.82rem; color:#e2e8f0; white-space:pre-wrap;">${escapeHtml(s.message || '')}</div>`;
+      } else {
+        bodyHtml = `<div style="font-size:0.78rem; color:var(--text-soft);">(unrecognized suggestion)</div>`;
+      }
+
+      const kindLabel = s.kind === 'edit' ? 'EDIT' : (s.kind === 'note' ? 'NOTE' : escapeHtml(String(s.kind || '')));
+      const sid = encodeURIComponent(s.id);
+      const iid = encodeURIComponent(incidentId);
+      return `
+        <div style="border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:0.6rem 0.7rem; margin-bottom:0.6rem; background:rgba(0,0,0,0.2);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; font-size:0.7rem; color:var(--text-soft);">
+            <span><span style="background:rgba(168,85,247,0.2); color:#c084fc; padding:1px 6px; border-radius:4px; font-weight:700; letter-spacing:0.3px;">${kindLabel}</span> by ${who}</span>
+            <span>${escapeHtml(when)}</span>
+          </div>
+          ${bodyHtml}
+          <div style="display:flex; gap:0.5rem; margin-top:0.6rem;">
+            <button class="btn btn-primary" style="padding:0.3rem 0.7rem; font-size:0.75rem;" onclick="approveSuggestion('${iid}','${sid}')">Approve</button>
+            <button class="btn btn-danger" style="padding:0.3rem 0.7rem; font-size:0.75rem;" onclick="rejectSuggestion('${iid}','${sid}')">Reject</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function formatFieldValue(v) {
+      if (v === null || v === undefined) return '—';
+      if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
+      const s = String(v);
+      return s.length ? s : '—';
+    }
+
+    async function approveSuggestion(incidentId, sid) {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}/suggestions/${sid}/approve`, { method: 'POST' });
+        if (!res.ok) { alert('Failed to approve suggestion.'); return; }
+        // Re-fetch the incident so the editor + review panel reflect the applied change.
+        await refreshSelectedIncident(incidentId);
+      } catch (e) {
+        console.warn('Approve failed:', e);
+      }
+    }
+
+    async function rejectSuggestion(incidentId, sid) {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}/suggestions/${sid}/reject`, { method: 'POST' });
+        if (!res.ok) { alert('Failed to reject suggestion.'); return; }
+        loadIncidentSuggestions(incidentId);
+      } catch (e) {
+        console.warn('Reject failed:', e);
+      }
+    }
+
+    // Re-fetch a single incident and re-open it in the editor (used after an
+    // approval auto-applies a change). Falls back to a logs+suggestions refresh.
+    async function refreshSelectedIncident(incidentId) {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}`);
+        if (res.ok) {
+          const fresh = await res.json();
+          if (fresh && fresh.id) {
+            selectIncident(fresh);
+            loadIncidents();
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Incident refresh failed:', e);
+      }
+      // Fallback: at least refresh logs + suggestions in place.
+      loadIncidentLogs(incidentId);
+      loadIncidentSuggestions(incidentId);
+    }
+
     // RFS incident (read-only) selection for logging
     async function selectRfsIncident(data) {
       document.getElementById('title-group').style.display = 'none';
@@ -9184,6 +9544,15 @@ async function loadPagerData() {
       document.getElementById('agency-group').style.display = 'none';
       document.getElementById('desc-group').style.display = 'none';
       document.getElementById('save-delete-group').style.display = 'none';
+
+      // Clear any ownership-aware panels left over from a user-pin selection.
+      const _on = document.getElementById('ownership-notice');
+      if (_on) { _on.style.display = 'none'; _on.innerHTML = ''; }
+      const _sp = document.getElementById('suggest-panel');
+      if (_sp) { _sp.style.display = 'none'; _sp.innerHTML = ''; }
+      const _rp = document.getElementById('suggestions-review-panel');
+      if (_rp) { _rp.style.display = 'none'; _rp.innerHTML = ''; }
+      currentIncident = null;
 
       selectedId = data.id;
       document.getElementById('selection-editor').style.display = 'block';
@@ -9252,11 +9621,12 @@ async function loadPagerData() {
       return { background, glow: colors[0] };
     }
 
-    function resetEditor() { 
-      selectedId = null; 
-      document.getElementById('selection-editor').style.display = 'none'; 
-      document.getElementById('instruction-text').style.display = 'block'; 
-      
+    function resetEditor() {
+      selectedId = null;
+      currentIncident = null;
+      document.getElementById('selection-editor').style.display = 'none';
+      document.getElementById('instruction-text').style.display = 'block';
+
       document.getElementById('title-group').style.display = 'block';
       document.getElementById('location-group').style.display = 'none';
       document.getElementById('status-size-group').style.display = 'grid';
@@ -9266,6 +9636,14 @@ async function loadPagerData() {
       document.getElementById('desc-group').style.display = 'block';
       document.getElementById('save-delete-group').style.display = 'grid';
       document.getElementById('log-section').style.display = 'block';
+
+      // Clear ownership-aware injected panels so state never leaks between pins.
+      const ownershipNotice = document.getElementById('ownership-notice');
+      if (ownershipNotice) { ownershipNotice.style.display = 'none'; ownershipNotice.innerHTML = ''; }
+      const suggestPanel = document.getElementById('suggest-panel');
+      if (suggestPanel) { suggestPanel.style.display = 'none'; suggestPanel.innerHTML = ''; }
+      const reviewPanel = document.getElementById('suggestions-review-panel');
+      if (reviewPanel) { reviewPanel.style.display = 'none'; reviewPanel.innerHTML = ''; }
 
       const RFS_BLOCK = document.getElementById('rfs-read-only-data');
       if (RFS_BLOCK) RFS_BLOCK.remove();
