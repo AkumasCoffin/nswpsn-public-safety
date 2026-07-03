@@ -10663,16 +10663,52 @@ async function loadPagerData() {
       }
     }
     
+    // In-page confirm dialog — replaces the native confirm(). Resolves true
+    // if the user confirms. Message is set via textContent (no injection).
+    function askConfirm(message, opts = {}) {
+      const confirmLabel = opts.confirmLabel || 'Confirm';
+      const danger = opts.danger !== false; // default to danger styling
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.id = 'confirm-modal';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.6);z-index:10060;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#0b1220;border:1px solid rgba(148,163,184,0.3);border-radius:14px;padding:1.2rem 1.3rem;width:min(90vw,380px);box-shadow:0 20px 50px rgba(0,0,0,0.6);';
+        box.innerHTML = `
+          <div id="cm-msg" style="font-size:0.92rem;color:#e2e8f0;margin-bottom:1rem;line-height:1.4;"></div>
+          <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+            <button id="cm-cancel" class="btn btn-secondary" style="padding:0.5rem 0.9rem;">Cancel</button>
+            <button id="cm-ok" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" style="padding:0.5rem 0.9rem;"></button>
+          </div>`;
+        box.querySelector('#cm-msg').textContent = message;
+        box.querySelector('#cm-ok').textContent = confirmLabel;
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        box.querySelector('#cm-ok').focus();
+        let done = false;
+        const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+        const finish = (val) => { if (done) return; done = true; document.removeEventListener('keydown', onKey); overlay.remove(); resolve(val); };
+        document.addEventListener('keydown', onKey);
+        box.querySelector('#cm-cancel').onclick = () => finish(false);
+        box.querySelector('#cm-ok').onclick = () => finish(true);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      });
+    }
+
     async function deleteIncident() {
-      if (!selectedId || !confirm("Delete?")) return;
+      if (!selectedId) return;
+      const ok = await askConfirm('Delete this pin? This removes the incident and its logs.', {
+        confirmLabel: 'Delete', danger: true,
+      });
+      if (!ok) return;
       const res = await apiFetch(`${PROXY_BASE}/api/incidents/${selectedId}`, { method: 'DELETE' });
-      const error = res.ok ? null : { message: 'Failed to delete incident' };
-      if (!error) {
-        resetEditor();
-        loadIncidents();
-      } else {
-        alert(error.message);
+      if (!res.ok) {
+        showToast('Failed to delete incident.', 'error');
+        return;
       }
+      resetEditor();
+      loadIncidents();
+      showToast('Pin deleted.', 'success');
     }
     
     function refreshData() {
