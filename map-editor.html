@@ -37,34 +37,8 @@
   
   <style>
     body, html { width: 100%; height: 100%; overflow: hidden; margin: 0; padding: 0; background: #0f172a; }
-    /* Map is full-bleed; the sidebar floats OVER it (see the desktop block
-       below) rather than being docked in a left column. */
-    #editor-layout-root { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: auto !important; height: 100% !important; padding: 0 !important; margin: 0 !important; max-width: none !important; overflow: hidden; }
+    #editor-layout-root { position: absolute; top: 0; left: 260px; right: 0; bottom: 0; width: auto !important; height: 100% !important; padding: 0 !important; margin: 0 !important; max-width: none !important; overflow: hidden; }
     @media (max-width: 900px) { #editor-layout-root { left: 0; top: 60px; height: calc(100% - 60px); } }
-
-    /* Desktop: detach the editor sidebar into a floating card over the map
-       (rounded, blurred, margins + shadow) — same treatment as the AIS list
-       panel on the public map. Mobile keeps its slide-in drawer untouched.
-       The bottom-left layer-filter controls (the "AIS ships" floating filter
-       sidebar/panel) and the map-type toggle are pushed to the right of the
-       floating card so they're no longer hidden behind it. */
-    @media (min-width: 901px) {
-      #sidebar {
-        top: 12px;
-        left: 12px;
-        height: auto;
-        max-height: calc(100vh - 24px);
-        border: 1px solid rgba(148, 163, 184, 0.28);
-        border-radius: 14px;
-        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
-        background: rgba(2, 6, 23, 0.92);
-        -webkit-backdrop-filter: blur(10px);
-        backdrop-filter: blur(10px);
-      }
-      .floating-filter-sidebar { left: calc(var(--sidebar-width) + 24px); }
-      .floating-filter-panel { left: calc(var(--sidebar-width) + 76px); }
-      .map-type-controls { left: calc(var(--sidebar-width) + 24px); }
-    }
     .map-container { width: 100%; height: 100%; position: relative; overflow: hidden; }
     #map { width: 100%; height: 100%; background: #0f172a; z-index: 1; }
 
