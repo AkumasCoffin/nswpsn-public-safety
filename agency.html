@@ -142,7 +142,7 @@
         const descIsDash = !r.description || r.description === '-';
         const alias = aliasIsDash ? '<span style="color:var(--text-soft);">—</span>' : escapeHtml(r.alias);
         const desc = descIsDash ? '<span style="color:var(--text-soft);">—</span>' : escapeHtml(r.description);
-        return `<tr><td style="font-family:ui-monospace,Menlo,monospace;">${escapeHtml(r.tgid)}</td><td>${alias}</td><td>${desc}</td></tr>`;
+        return `<tr><td class="tgid-cell">${escapeHtml(r.tgid)}</td><td class="tgid-alias">${alias}</td><td class="tgid-desc">${desc}</td></tr>`;
       }).join('');
     }
 

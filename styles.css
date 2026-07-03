@@ -993,6 +993,23 @@ a:hover { text-decoration: underline; }
 .table tr:last-child td { border-bottom: none; }
 .table tbody tr { transition: background 0.15s ease; }
 .table tbody tr:hover { background: rgba(249, 115, 22, 0.06); }
+
+/* --- Talkgroup IDs table (per-agency reference) --- */
+/* Zebra striping for easier scanning of long TGID lists. Hover rule below
+   carries the #id so it still wins over the striping at equal source order. */
+#agency-tgid-card .table tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.035); }
+#agency-tgid-card .table tbody tr:hover { background: rgba(249, 115, 22, 0.1); }
+/* The TGID itself: monospace, tabular figures, accent-toned so the number reads
+   as a code value and columns of digits line up. */
+#agency-tgid-card .tgid-cell {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #fcd34d;
+  white-space: nowrap;
+}
+#agency-tgid-card .tgid-alias { font-weight: 500; color: var(--text-soft); white-space: nowrap; }
+#agency-tgid-card .tgid-desc { color: var(--text-muted); line-height: 1.45; }
 .table tbody tr.row-highlighted {
   background: rgba(249, 115, 22, 0.32) !important;
   box-shadow: inset 3px 0 0 var(--accent);
