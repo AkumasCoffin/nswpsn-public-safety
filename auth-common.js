@@ -50,6 +50,11 @@ function injectAuthSection() {
         <i class="fas fa-sign-out-alt"></i> Logout
       </button>
     </div>
+    <div class="sidebar-section-label" style="margin-top:1rem;">Legal</div>
+    <nav class="sidebar-nav">
+      <a href="terms.html"${location.pathname.endsWith('/terms.html') ? ' class="active"' : ''}>Terms &amp; Conditions</a>
+      <a href="privacy.html"${location.pathname.endsWith('/privacy.html') ? ' class="active"' : ''}>Privacy Policy</a>
+    </nav>
   `;
   
   // Insert before footer
