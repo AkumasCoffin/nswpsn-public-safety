@@ -10519,31 +10519,63 @@ async function loadPagerData() {
       }
     }
 
+    // Lightweight in-page toast (bottom-center) so incident flows don't rely
+    // on native browser dialogs. textContent → no HTML injection.
+    function showToast(message, type = 'info') {
+      const prev = document.getElementById('me-toast');
+      if (prev) prev.remove();
+      const border = type === 'success' ? '#22c55e' : type === 'error' ? '#ef4444' : '#f97316';
+      const el = document.createElement('div');
+      el.id = 'me-toast';
+      el.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#e2e8f0;padding:12px 20px;border-radius:8px;border:1px solid ${border};font-size:13px;font-weight:500;z-index:10002;box-shadow:0 4px 20px rgba(0,0,0,0.45);max-width:90vw;text-align:center;`;
+      el.textContent = message;
+      document.body.appendChild(el);
+      setTimeout(() => {
+        el.style.transition = 'opacity 0.3s';
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+      }, 3200);
+    }
+
     async function createIncidentAtLocation(lat, lng) {
-      const title = prompt("Enter Title for new Incident:");
-      if (!title) return;
-      
       // Reverse geocode to get location address
       const location = await reverseGeocode(lat, lng);
-      
+
       const expireTime = new Date(Date.now() + 2 * 3600000); // Default: 2 hours
+      // Create the pin with a placeholder title, then open the editor so the
+      // title is entered IN-PAGE (no browser prompt). The creator owns the
+      // pin, so selectIncident() shows the editable form.
       const res = await apiFetch(`${PROXY_BASE}/api/incidents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title, lat, lng, location: location || '', type: [], description: '',
+          title: 'New Incident', lat, lng, location: location || '', type: [], description: '',
           status: 'Going', size: '-', responding_agencies: [], expires_at: expireTime
         })
       });
-      const error = res.ok ? null : { message: 'Failed to create incident' };
       // Always reset add-mode so the next map click doesn't create another
       // incident, whether the request succeeded or failed.
       if (addMode) toggleAddMode();
-      if (error) {
-        alert(error.message);
-      } else {
-        loadIncidents();
+      if (!res.ok) {
+        showToast('Failed to create incident.', 'error');
+        return;
       }
+      let newId = null;
+      try { newId = (await res.json())?.id ?? null; } catch (e) { /* ignore */ }
+      await loadIncidents();
+      // Open the freshly-created pin so the user names it in the editor.
+      if (newId) {
+        try {
+          const one = await apiFetch(`${PROXY_BASE}/api/incidents/${newId}`);
+          if (one.ok) {
+            const inc = await one.json();
+            selectIncident(inc);
+            const titleInput = document.getElementById('edit-title');
+            if (titleInput) { titleInput.focus(); titleInput.select(); }
+          }
+        } catch (e) { /* pin still created; user can click it */ }
+      }
+      showToast('Pin created — enter a title and Save.', 'success');
     }
 
     async function saveIncident() {
