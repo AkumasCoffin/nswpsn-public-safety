@@ -25,8 +25,6 @@
   let currentUserId = null;
   let currentIsAdmin = false;
   let currentUserEmail = null;
-  let markers = {};
-  const incidentMarkerEntries = [];
 
     const INCIDENT_TYPES = [
       "Bush Fire", "Grass Fire", "Structure Fire", "MVA", "Transport",
@@ -92,163 +90,14 @@
       };
       return fetch(url, { ...options, headers });
     }
-    async function loadIncidents() {
-      const res = await apiFetch(`${PROXY_BASE}/api/incidents`);
-      const incidents = res.ok ? await res.json() : [];
-      Object.values(markers).forEach(m => map.removeLayer(m));
-      markers = {};
-      incidentMarkerEntries.length = 0;
-
-      if (incidents) {
-        // Filter incidents by expiration time (only show non-expired)
-        const now = new Date();
-        
-        const filteredIncidents = incidents.filter(inc => {
-          const expiresAt = inc.expires_at ? new Date(inc.expires_at) : null;
-          // Show incidents whose expiry is missing or unparseable; only hide
-          // those with a valid expiry that is in the past.
-          if (!expiresAt || isNaN(expiresAt.getTime())) return true;
-          return expiresAt > now;
-        });
-        
-        filteredIncidents.forEach(inc => {
-          // Do not show stub rows on the editor map
-          if (inc.is_rfs_stub) return;
-
-          // Skip incidents with invalid coordinates
-          if (!Number.isFinite(+inc.lat) || !Number.isFinite(+inc.lng)) return;
-
-          let style = getPinStyle(inc);
-          const status = (inc.status || '').toLowerCase();
-          let pulseClass = '';
-          let shadowStyle = ''; 
-
-          // Pulse if incident was created within last 20 minutes
-          if (isWithinMinutes(inc.created_at, 20)) {
-            pulseClass = 'rfs-pulse';
-          }
-          
-          if (status.includes('out of control')) {
-            shadowStyle = 'box-shadow: 0 0 10px #ef4444; border-color: #ef4444;';
-          } else if (status.includes('watch')) {
-            shadowStyle = 'box-shadow: 0 0 10px #f97316; border-color: #f97316;';
-          } else if (status.includes('being controlled')) {
-            shadowStyle = 'box-shadow: 0 0 10px #eab308; border-color: #eab308;';
-          } else if (status.includes('advice')) {
-            shadowStyle = 'box-shadow: 0 0 8px #3b82f6; border-color: #3b82f6;';
-          } else if (status.includes('monitor') || status.includes('investigation')) {
-            shadowStyle = 'box-shadow: 0 0 8px #a855f7; border-color: #a855f7;';
-          } else if (status.includes('contained') || status.includes('control') || status.includes('safe') || status.includes('patrol')) {
-            shadowStyle = 'box-shadow: 0 0 8px #22c55e; border-color: #22c55e;';
-          } else if (status.includes('pending')) {
-            shadowStyle = 'box-shadow: 0 0 8px #94a3b8; border-color: #94a3b8;';
-          } else if (status.includes('on scene')) {
-            shadowStyle = 'box-shadow: 0 0 10px #06b6d4; border-color: #06b6d4;';
-          } else if (status.includes('in route')) {
-            shadowStyle = 'box-shadow: 0 0 10px #d946ef; border-color: #d946ef;';
-          } else if (status.includes('off scene')) {
-            shadowStyle = 'box-shadow: 0 0 8px #64748b; border-color: #64748b;';
-          } else {
-            shadowStyle = `box-shadow: 0 0 10px ${style.glow};`;
-          }
-          
-          // User pins have a distinctive purple outer ring to match the USER toggle button (#a855f7)
-          // Inner elements kept separate for combining with pager badge
-          const userInnerHtml = `
-            <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid #a855f7; box-shadow:0 0 8px #a855f7;"></div>
-            <div class="${pulseClass}" style="background:${style.background}; width:20px; height:20px; border-radius:50%; border:2px solid #fff; ${shadowStyle}"></div>
-          `;
-          const iconHtml = `
-            <div style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">
-              ${userInnerHtml}
-            </div>
-          `;
-          const icon = L.divIcon({
-            className: 'custom-pin',
-            html: iconHtml,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16]
-          });
-
-          const marker = L.marker([inc.lat, inc.lng], { icon, draggable: true }).addTo(map);
-
-          marker.on('click', (e) => {
-            L.DomEvent.stopPropagation(e);
-            selectIncident(inc);
-          });
-          marker.on('dragend', async (e) => {
-            try {
-              const newPos = e.target.getLatLng();
-              // Reverse geocode to get updated location
-              const newLocation = await reverseGeocode(newPos.lat, newPos.lng);
-              const res = await apiFetch(`${PROXY_BASE}/api/incidents/${inc.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lat: newPos.lat, lng: newPos.lng, location: newLocation || '' })
-              });
-              if (!res.ok) {
-                alert('Failed to save the new pin location. Reverting.');
-                e.target.setLatLng([inc.lat, inc.lng]);
-                return;
-              }
-              // Persist the saved coords on the closure + marker entry so a later
-              // failed drag reverts to the last-saved position, not the original.
-              inc.lat = newPos.lat;
-              inc.lng = newPos.lng;
-              const entry = incidentMarkerEntries.find(en => en.inc === inc);
-              if (entry) {
-                entry.lat = newPos.lat;
-                entry.lon = newPos.lng;
-              }
-              // Update location display if this incident is currently selected
-              if (selectedId === inc.id && newLocation) {
-                document.getElementById('edit-location-text').textContent = newLocation;
-                document.getElementById('location-group').style.display = 'block';
-              }
-            } catch (err) {
-              alert('Failed to save pin location — reverting.');
-              e.target.setLatLng([inc.lat, inc.lng]);
-            }
-          });
-          markers[inc.id] = marker;
-
-          // Build rich tooltip for user incidents using buildUserIncidentTooltip
-          const typeStr = Array.isArray(inc.type)
-            ? (inc.type.length ? inc.type.join(', ') : 'Unspecified')
-            : (inc.type || 'Unspecified');
-          
-          const userItem = {
-            rawDetails: {
-              title: inc.title || '',
-              status: inc.status || 'Going',
-              location: inc.location || '',
-              created_at: inc.created_at,
-              updated_at: inc.updated_at
-            },
-            typeDisplay: typeStr
-          };
-          const userTooltipHtml = buildUserIncidentTooltip(userItem);
-          marker.bindTooltip(userTooltipHtml, {
-            direction: 'top',
-            offset: [0, -10],
-            opacity: 0.95
-          });
-
-          incidentMarkerEntries.push({
-            inc,
-            marker,
-            baseIconHtml: iconHtml,
-            userInnerHtml,  // Inner elements only, for combining with pager badge
-            baseTooltipHtml: userTooltipHtml,
-            lat: inc.lat,
-            lon: inc.lng
-          });
-        });
-      }
-
-      // (pager/RFS icon-combining stays with the public renderer)
+    // Rendering stays with the public unified renderer (loadAllData) so
+    // user/RFS/pager pins keep merging; the editor just re-triggers it
+    // after mutations.
+    function reloadIncidents() {
+      try { if (typeof loadAllData === 'function') loadAllData(); } catch (e) { /* non-fatal */ }
     }
-    function selectIncident(inc) {
+
+    function selectIncident(inc, pagerDetails) {
       const RFS_BLOCK = document.getElementById('rfs-read-only-data');
       if (RFS_BLOCK) RFS_BLOCK.remove();
 
@@ -307,7 +156,8 @@
         loadIncidentSuggestions(inc.id);
       }
       map.panTo([inc.lat, inc.lng]);
-      attachPagerSectionToEditor(inc.lat, inc.lng);
+      renderPagerSection(pagerDetails);
+      updateDragGhost(inc, canModify);
     }
 
     // Toggle the direct-edit path vs. the suggestion path based on ownership,
@@ -616,7 +466,7 @@
           const fresh = await res.json();
           if (fresh && fresh.id) {
             selectIncident(fresh);
-            loadIncidents();
+            reloadIncidents();
             return;
           }
         }
@@ -627,6 +477,63 @@
       loadIncidentLogs(incidentId);
       loadIncidentSuggestions(incidentId);
     }
+    // RFS incident (read-only) selection for logging
+    async function selectRfsIncident(data, pagerDetails) {
+      document.getElementById('title-group').style.display = 'none';
+      document.getElementById('status-size-group').style.display = 'none';
+      document.getElementById('expiry-group').style.display = 'none';
+      document.getElementById('type-group').style.display = 'none';
+      document.getElementById('agency-group').style.display = 'none';
+      document.getElementById('desc-group').style.display = 'none';
+      document.getElementById('save-delete-group').style.display = 'none';
+
+      // Clear any ownership-aware panels left over from a user-pin selection.
+      const _on = document.getElementById('ownership-notice');
+      if (_on) { _on.style.display = 'none'; _on.innerHTML = ''; }
+      const _sp = document.getElementById('suggest-panel');
+      if (_sp) { _sp.style.display = 'none'; _sp.innerHTML = ''; }
+      const _rp = document.getElementById('suggestions-review-panel');
+      if (_rp) { _rp.style.display = 'none'; _rp.innerHTML = ''; }
+      currentIncident = null;
+
+      selectedId = data.id;
+      document.getElementById('selection-editor').style.display = 'block';
+      document.getElementById('instruction-text').style.display = 'none';
+      document.getElementById('edit-id').value = data.id;
+      document.getElementById('edit-id-display').textContent = "RFS Log ID: " + data.id.slice(0, 8); 
+      
+      const customRFSBlock = document.createElement('div');
+      customRFSBlock.id = 'rfs-read-only-data';
+      customRFSBlock.dataset.point = data.point;
+      
+      customRFSBlock.innerHTML = `
+        <div style="background:rgba(249, 115, 22, 0.1); border:1px solid #f97316; padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
+          <h5 style="margin-top:0.3rem; margin-bottom:0.5rem; color:#f97316;">RFS Incident Details (Read Only)</h5>
+          <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
+          <strong>Status:</strong> ${escapeHtml(data.STATUS || 'Unknown')}<br>
+          <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
+          <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block;">View on Fires Near Me →</a>
+        </div>
+      `;
+      const editorPanel = document.getElementById('selection-editor');
+      let existingRFSBlock = document.getElementById('rfs-read-only-data');
+      if (existingRFSBlock) existingRFSBlock.remove();
+      
+      const logSection = document.getElementById('log-section');
+      editorPanel.insertBefore(customRFSBlock, logSection); 
+
+      logSection.style.display = 'block';
+      document.getElementById('new-update-msg').value = ''; 
+
+      loadIncidentLogs(data.id);
+      const [lat, lng] = data.point.split(' ').map(Number);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        map.panTo([lat, lng]);
+      }
+      renderPagerSection(pagerDetails);
+      removeDragGhost();
+    }
+
     function getPinStyle(inc) {
       let colors = [];
       if (inc.responding_agencies && inc.responding_agencies.length > 0) {
@@ -685,6 +592,7 @@
       if (RFS_BLOCK) RFS_BLOCK.remove();
       const PAGER_BLOCK = document.getElementById('pager-read-only-data');
       if (PAGER_BLOCK) PAGER_BLOCK.remove();
+      removeDragGhost();
     }
 
     // --- LOG MANAGEMENT ---
@@ -1631,7 +1539,7 @@
       }
       let newId = null;
       try { newId = (await res.json())?.id ?? null; } catch (e) { /* ignore */ }
-      await loadIncidents();
+      await reloadIncidents();
       // Open the freshly-created pin so the user can fill in details + save.
       if (newId) {
         try {
@@ -1678,7 +1586,7 @@
         if (titleResults) titleResults.style.display = 'none';
         if (descResults) descResults.style.display = 'none';
         alert("Saved.");
-        loadIncidents();
+        reloadIncidents();
       }
     }
     
@@ -1726,60 +1634,22 @@
         return;
       }
       resetEditor();
-      loadIncidents();
+      reloadIncidents();
       showToast('Pin deleted.', 'success');
     }
-    function attachPagerSectionToEditor(lat, lon) {
+    // Render the pager-hits block under the editor form from the unified
+    // item's merged pagerDetails ({hits, clusterAliases, clusterAgencies}).
+    function renderPagerSection(details) {
       try {
         const editorPanel = document.getElementById('selection-editor');
         const logSection = document.getElementById('log-section');
         if (!editorPanel || !logSection) return;
 
-        const existingPagerBlock = document.getElementById('pager-read-only-data');
-        if (existingPagerBlock && existingPagerBlock.parentNode) {
-          existingPagerBlock.parentNode.removeChild(existingPagerBlock);
-        }
+        const existing = document.getElementById('pager-read-only-data');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
-        if (lat == null || lon == null) return;
-        if (typeof pagerClustersByKey === 'undefined' || !pagerClustersByKey || !Object.keys(pagerClustersByKey).length) return;
-
-        const DIST_THRESHOLD_METRES = 30;
-        const hits = [];
-        const aliasSet = new Set();
-        const agencySet = new Set();
-        const incidentIdSet = new Set();
-
-        Object.values(pagerClustersByKey).forEach(entry => {
-          if (!entry || !entry.hits) return;
-          const pLat = Number(entry.lat);
-          const pLon = Number(entry.lon);
-          if (!Number.isFinite(pLat) || !Number.isFinite(pLon)) return;
-
-          const d = haversineMeters(lat, lon, pLat, pLon);
-          if (d <= DIST_THRESHOLD_METRES) {
-            entry.hits.forEach(h => {
-              hits.push(h);
-              const label = (h.alias || h.capcode || h.address || 'Unknown??').trim();
-              if (label) aliasSet.add(label);
-              if (h.agency) agencySet.add(h.agency);
-              if (h.incident_id) incidentIdSet.add(h.incident_id);
-            });
-            if (entry.rawDetails && Array.isArray(entry.rawDetails.incidentIds)) {
-              entry.rawDetails.incidentIds.forEach(id => incidentIdSet.add(id));
-            }
-          }
-        });
-
-        if (!hits.length) return;
-
-        const incidentIds = Array.from(incidentIdSet);
-        const details = {
-          hits,
-          clusterAliases: Array.from(aliasSet),
-          clusterAgencies: Array.from(agencySet),
-          incidentId: incidentIds[0] || null,
-          incidentIds
-        };
+        if (!details || !Array.isArray(details.hits) || !details.hits.length) return;
+        if (typeof renderPagerDetailsHtml !== 'function') return;
 
         const pagerBlock = document.createElement('div');
         pagerBlock.id = 'pager-read-only-data';
@@ -1790,17 +1660,16 @@
           </h3>
           ${renderPagerDetailsHtml(details)}
         `;
-
         editorPanel.insertBefore(pagerBlock, logSection);
       } catch (e) {
-        console.error('attachPagerSectionToEditor error', e);
+        console.error('renderPagerSection error', e);
       }
     }
 
     // Reload just the editor-owned incidents; the public page's own
     // countdown refresh handles every other layer.
     function refreshData() {
-      loadIncidents();
+      reloadIncidents();
     }
 
 
@@ -1848,6 +1717,55 @@
     }
   }
 
+
+  // --- Drag-to-move: the public unified pins aren't draggable, so when an
+  // editable incident is selected we float a draggable ghost handle on it;
+  // dropping it saves the new coords (and reverse-geocoded location). ---
+  let dragGhost = null;
+
+  function removeDragGhost() {
+    if (dragGhost) {
+      try { map.removeLayer(dragGhost); } catch (e) { /* already gone */ }
+      dragGhost = null;
+    }
+  }
+
+  function updateDragGhost(inc, canModify) {
+    removeDragGhost();
+    if (!canModify || !Number.isFinite(+inc.lat) || !Number.isFinite(+inc.lng)) return;
+    const icon = L.divIcon({
+      className: 'custom-pin',
+      html: '<div title="Drag to move this pin" style="width:34px;height:34px;border-radius:50%;border:2px dashed #a855f7;box-shadow:0 0 10px rgba(168,85,247,0.7);cursor:move;"></div>',
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
+    });
+    dragGhost = L.marker([inc.lat, inc.lng], { icon, draggable: true, zIndexOffset: 2000 }).addTo(map);
+    dragGhost.bindTooltip('Drag to move this pin', { direction: 'top', offset: [0, -14], opacity: 0.9 });
+    dragGhost.on('dragend', async (e) => {
+      const pos = e.target.getLatLng();
+      try {
+        const newLocation = await reverseGeocode(pos.lat, pos.lng);
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${inc.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: pos.lat, lng: pos.lng, location: newLocation || '' }),
+        });
+        if (!res.ok) throw new Error('save failed');
+        inc.lat = pos.lat;
+        inc.lng = pos.lng;
+        if (selectedId === inc.id && newLocation) {
+          document.getElementById('edit-location-text').textContent = newLocation;
+          document.getElementById('location-group').style.display = 'block';
+        }
+        showToast('Pin moved.', 'success');
+        reloadIncidents();
+      } catch (err) {
+        showToast('Failed to move pin — reverting.', 'error');
+        e.target.setLatLng([inc.lat, inc.lng]);
+      }
+    });
+  }
+
   // --- Activation: dormant unless the session passes the role check. ---
   async function activateEditor() {
     try {
@@ -1868,20 +1786,60 @@
       injectEditorDom();
       renderTypeCheckboxes();
 
-      // Hand user incidents over to the editor: hide the public read-only
-      // layer + its toggle so editable pins aren't duplicated.
+      // Pins stay with the public unified renderer (user/RFS/pager keep
+      // merging and every layer toggle keeps working). The hooks below
+      // reroute pin CLICKS from the public #incident-sidebar into the
+      // editor panel instead.
       window.__editorActive = true;
+      window.NSWPSNEditorHooks = {
+        // showIncidentDetails(incident, pagerDetails) — raw incident row.
+        openUser(incident, pagerDetails) {
+          try { selectIncident(incident, pagerDetails); } catch (e) { console.warn('[editor] openUser', e); }
+        },
+        // showRfsDetails(item) — unified RFS item.
+        openRfs(item) {
+          try {
+            const d = item.rawDetails || {};
+            selectRfsIncident({
+              id: item.id,
+              title: item.title,
+              STATUS: d.STATUS || d.status || 'Unknown',
+              LOCATION: d.LOCATION || d.location || '',
+              link: item.link || 'https://www.rfs.nsw.gov.au/fire-information/fires-near-me',
+              point: `${item.lat} ${item.lng}`,
+            }, item.pagerDetails);
+          } catch (e) { console.warn('[editor] openRfs', e); }
+        },
+        // showPagerDetails(item) — unified pager cluster item.
+        openPager(item) {
+          try {
+            showPagerClusterEditor({ lat: item.lat, lon: item.lng, rawDetails: item.rawDetails || {} });
+          } catch (e) { console.warn('[editor] openPager', e); }
+        },
+      };
+
+      // Editors get a longer pager lookback: 48h instead of the public 24h.
       try {
-        if (typeof userLayer !== 'undefined' && userLayer && map.hasLayer(userLayer)) {
-          map.removeLayer(userLayer);
+        const range = document.getElementById('pager-hours-range');
+        if (range) range.max = '48';
+        const hint = document.querySelector('#pager-panel .pager-hint');
+        if (hint) hint.textContent = 'Shows pager hits from the last N hours (editors: up to 48h)';
+      } catch (e) { /* non-fatal */ }
+
+      // The AIS vessel list floats in the same top-right spot as the editor
+      // panel — show one at a time so they never stack.
+      try {
+        const aisPanel = document.getElementById('ais-list-panel');
+        if (aisPanel && window.MutationObserver) {
+          new MutationObserver(() => {
+            const editorPanel = document.getElementById('editor-panel');
+            if (!editorPanel) return;
+            editorPanel.classList.toggle('open', !aisPanel.classList.contains('open'));
+          }).observe(aisPanel, { attributes: true, attributeFilter: ['class'] });
         }
-        const userBtn = document.getElementById('btn-user');
-        if (userBtn) userBtn.style.display = 'none';
       } catch (e) { /* non-fatal */ }
 
       map.on('click', onMapClick);
-      await loadIncidents();
-      setInterval(loadIncidents, 60000);
       console.log('[editor] editor mode active');
     } catch (e) {
       console.warn('[editor] staying dormant:', e && e.message);
