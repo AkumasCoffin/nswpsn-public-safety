@@ -3699,6 +3699,11 @@
         const enabled = map.hasLayer(nswpsnLayer);
         if (enabled) addFilterButton('nswpsn');
         else removeFilterButton('nswpsn');
+        // While Repeaters is on, the map search also accepts a frequency.
+        const _si = document.getElementById('address-search');
+        if (_si) _si.placeholder = enabled
+          ? 'Search address, frequency, ///w3w, or coords...'
+          : 'Search address, ///w3w, or coords...';
       }
       // Surface the satellite filter controls only while the layer is on.
       if (target === 'firms') {
@@ -5949,6 +5954,55 @@ function initPagerHoursFromStorage() {
       return null;
     }
 
+    // --- Repeater frequency search (active only while the Repeaters layer is on) ---
+    // A query counts as a frequency when it's just a number, optionally with a
+    // decimal or "MHz" — e.g. "462.55", "146.800", "462550".
+    function _freqLooksLike(q) {
+      const cleaned = String(q).toLowerCase().replace(/mhz/g, '').replace(/[\s,]/g, '').trim();
+      return /^\d{2,8}(\.\d{1,4})?$/.test(cleaned);
+    }
+    // Match repeater sites whose frequencies / control channels contain the
+    // typed digits (digit-substring match, ignoring dots/spacing).
+    function _searchRepeatersByFreq(q) {
+      const qDigits = String(q).replace(/[^\d]/g, '');
+      if (qDigits.length < 3) return [];
+      const out = [];
+      for (const s of (typeof _nswpsnSites !== 'undefined' ? _nswpsnSites : [])) {
+        const lat = parseFloat(s.Latitude), lng = parseFloat(s.Longitude);
+        if (!isFinite(lat) || !isFinite(lng)) continue;
+        const freqs = [];
+        if (Array.isArray(s.Frequencies)) for (const f of s.Frequencies) freqs.push(String(f));
+        if (s['Control Channel']) freqs.push(String(s['Control Channel']));
+        if (s['Alt Control Channel']) freqs.push(String(s['Alt Control Channel']));
+        const hit = freqs.find(f => f.replace(/[^\d]/g, '').includes(qDigits));
+        if (hit) out.push({ site: s, lat, lng, freq: hit });
+        if (out.length >= 25) break;
+      }
+      return out;
+    }
+    function renderRepeaterFreqResults(q) {
+      const matches = _searchRepeatersByFreq(q);
+      resultsBox.innerHTML = '';
+      resultsBox.style.display = 'block';
+      if (!matches.length) {
+        resultsBox.innerHTML = '<div style="padding:0.8rem; color:var(--text-soft);">No repeater matches that frequency.</div>';
+        return;
+      }
+      for (const m of matches) {
+        const div = document.createElement('div');
+        div.className = 'search-result-item';
+        div.innerHTML = '<i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i> ' +
+          escapeHtml(m.site.NAME || 'Repeater') +
+          ' <span style="color:#94a3b8; font-size:0.8em;">' + escapeHtml(String(m.freq)) + '</span>';
+        div.onclick = () => {
+          resultsBox.style.display = 'none';
+          searchInput.value = '';
+          map.setView([m.lat, m.lng], 14);
+        };
+        resultsBox.appendChild(div);
+      }
+    }
+
     async function performAddressSearch() {
       const query = searchInput.value.trim();
       if (query.length <= 1) return;
@@ -5956,6 +6010,12 @@ function initPagerHoursFromStorage() {
       
       resultsBox.innerHTML = '<div style="padding:0.8rem; color:var(--text-soft);">Searching...</div>';
       resultsBox.style.display = 'block';
+
+      // 0. Frequency search — ONLY while the Repeaters layer is on.
+      if (typeof nswpsnLayer !== 'undefined' && map.hasLayer(nswpsnLayer) && _freqLooksLike(query)) {
+        renderRepeaterFreqResults(query);
+        return;
+      }
 
       // 1. Check for coordinate search (lat, lng)
       const coords = parseCoordinates(query);
