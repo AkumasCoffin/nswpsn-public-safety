@@ -76,7 +76,7 @@
     </header>
 
     <section class="card-grid" id="agency-content">
-      <article class="card" id="agency-tgid-card">
+      <article class="card card-wide" id="agency-tgid-card">
         <div class="card-header">
           <div class="card-title">🔍 Talkgroup IDs</div>
           <div class="card-tag" id="agency-tgid-count">—</div>
@@ -345,15 +345,14 @@
         </article>`;
 
       const sectionsHtml = (ext.sections || []).map(renderSection).join('');
-      // Insert into the same grid as the Talkgroup IDs card so every reference
-      // card shares one flex layout and content-sized cards pack side by side.
+      // Insert into the same grid as the Talkgroup IDs card, ahead of it, so the
+      // order reads: overview, reference sections, then the TGID list last.
       const tgidCard = document.getElementById('agency-tgid-card');
       if (tgidCard) {
-        tgidCard.insertAdjacentHTML('beforebegin', overviewCard);
+        tgidCard.insertAdjacentHTML('beforebegin', overviewCard + sectionsHtml);
       } else {
-        grid.insertAdjacentHTML('afterbegin', overviewCard);
+        grid.insertAdjacentHTML('afterbegin', overviewCard + sectionsHtml);
       }
-      grid.insertAdjacentHTML('beforeend', sectionsHtml);
     }
 
     loadAgency();
