@@ -27,7 +27,7 @@ function injectAuthSection() {
   if (!document.getElementById('auth-section')) {
     const authSection = document.createElement('div');
     authSection.id = 'auth-section';
-    authSection.style.cssText = 'margin:0.9rem 0 1.1rem; border-bottom:1px solid rgba(148,163,184,0.2); padding-bottom:1rem;';
+    authSection.style.cssText = 'margin:0.7rem 0 0.9rem; border-bottom:1px solid rgba(148,163,184,0.2); padding-bottom:0.8rem;';
     authSection.innerHTML = `
       <div class="sidebar-section-label">Account</div>
       <div id="auth-logged-out">
@@ -36,22 +36,17 @@ function injectAuthSection() {
         </a>
       </div>
       <div id="auth-logged-in" style="display:none;">
-        <div style="display:flex; align-items:center; gap:0.6rem; padding:0.55rem 0.65rem; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:0.6rem;">
-          <div id="auth-avatar" style="width:34px; height:34px; border-radius:50%; background:rgba(249,115,22,0.2); display:flex; align-items:center; justify-content:center; color:#f97316; font-weight:700; font-size:0.95rem; overflow:hidden; flex-shrink:0;"></div>
-          <div style="min-width:0;">
-            <div id="auth-user-email" style="font-size:0.82rem; color:#fff; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
-            <div style="font-size:0.66rem; color:#22c55e;">● Logged in</div>
-          </div>
-        </div>
-        <div id="auth-role-buttons" style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.6rem;"></div>
-        <div style="display:flex; gap:0.5rem;">
-          <button onclick="openProfileModal()" style="flex:1; padding:0.5rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit;">
-            <i class="fas fa-user"></i> Profile
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <div id="auth-avatar" style="width:26px; height:26px; border-radius:50%; background:rgba(249,115,22,0.2); display:flex; align-items:center; justify-content:center; color:#f97316; font-weight:700; font-size:0.75rem; overflow:hidden; flex-shrink:0;"></div>
+          <div id="auth-user-email" style="flex:1; min-width:0; font-size:0.82rem; color:#fff; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+          <button onclick="openProfileModal()" title="Profile" aria-label="Profile" style="width:28px; height:28px; padding:0; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
+            <i class="fas fa-user-cog"></i>
           </button>
-          <button onclick="doLogout()" style="flex:1; padding:0.5rem; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:#ef4444; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit;">
-            <i class="fas fa-sign-out-alt"></i> Logout
+          <button onclick="doLogout()" title="Logout" aria-label="Logout" style="width:28px; height:28px; padding:0; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.25); border-radius:6px; color:#ef4444; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
+            <i class="fas fa-sign-out-alt"></i>
           </button>
         </div>
+        <div id="auth-role-buttons" style="display:flex; gap:0.4rem; margin-top:0.5rem; flex-wrap:wrap;"></div>
       </div>
     `;
     // Insert under the subtitle (or logo), i.e. at the top of the sidebar.
@@ -388,8 +383,10 @@ async function checkAuthState() {
     loggedOutDiv.style.display = 'none';
     loggedInDiv.style.display = 'block';
     const meta = session.user?.user_metadata || {};
+    // Never show the email in the sidebar — username / Discord name only
+    // (email still visible inside the profile modal).
     const displayName = meta.display_name || meta.full_name || meta.name || meta.user_name
-      || session.user?.email || '';
+      || 'Account';
     if (emailDiv) emailDiv.textContent = displayName;
 
     // Avatar: Discord avatar image when available, else the first letter.
@@ -448,17 +445,17 @@ async function checkAuthState() {
       // Build role-based buttons
       let buttons = '';
       
-      // Map Editor button - for map_editor or owner
+      // Map Editor chip - for map_editor or owner
       if (roleData.is_map_editor || roleData.is_owner) {
-        buttons += `<a href="map-editor.html" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.3); border-radius:6px; color:#60a5fa; font-size:0.8rem; text-decoration:none;">
-          <i class="fas fa-map-marked-alt"></i> Map Editor
+        buttons += `<a href="map-editor.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.3); border-radius:6px; color:#60a5fa; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
+          <i class="fas fa-map-marked-alt"></i> Editor
         </a>`;
       }
-      
-      // User Management button - for team_member or owner
+
+      // User Management chip - for team_member or owner
       if (roleData.is_team_member || roleData.is_owner) {
-        buttons += `<a href="staff.html" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.8rem; text-decoration:none;">
-          <i class="fas fa-users-cog"></i> User Management
+        buttons += `<a href="staff.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
+          <i class="fas fa-users-cog"></i> Staff
         </a>`;
       }
       
