@@ -66,6 +66,7 @@ interface EditorRequestRow {
   created_at: number | string;
   reviewed_at: number | string | null;
   notes: string | null;
+  supabase_user_id: string | null;
 }
 
 function splitCsv(s: string | null | undefined): string[] {
@@ -98,6 +99,7 @@ function normaliseRequest(row: EditorRequestRow): Record<string, unknown> {
     created_at: row.created_at,
     reviewed_at: row.reviewed_at,
     notes: row.notes,
+    supabase_user_id: row.supabase_user_id ?? null,
   };
 }
 
@@ -163,18 +165,33 @@ editorRouter.post('/api/editor-requests', async (c) => {
     const techExperienceStr = techExperience.length > 0 ? techExperience.join(',') : null;
     const createdAt = Math.floor(Date.now() / 1000);
 
+    // Link the request to an existing account (e.g. Discord OAuth signup).
+    // Taken ONLY from the verified JWT set by optionalSupabaseJwt — never
+    // from the request body, or a submitter could bind someone else's
+    // account and have roles granted to it on approval.
+    const linkedUserIdRaw = c.get('userId');
+    const linkedUserId =
+      typeof linkedUserIdRaw === 'string' && linkedUserIdRaw.length > 0
+        ? linkedUserIdRaw
+        : null;
+
     const inserted = await pool.query<{ id: number }>(
       `INSERT INTO editor_requests
         (email, discord_id, website, about, request_type, region, background, background_details,
-         has_existing_setup, setup_details, tech_experience, experience_level, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13)
+         has_existing_setup, setup_details, tech_experience, experience_level, status, created_at,
+         supabase_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14)
        RETURNING id`,
       [email, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
-        hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, createdAt],
+        hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, createdAt,
+        linkedUserId],
     );
     const requestId = inserted.rows[0]?.id;
 
-    log.info({ requestId, email, discordId, requestType }, 'New editor request');
+    log.info(
+      { requestId, email, discordId, requestType, linkedUserId },
+      'New editor request',
+    );
     return c.json(
       {
         success: true,
@@ -267,8 +284,37 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     let supabaseAccountCreated = false;
     let supabaseError: string | null = null;
     let supabaseUserId: string | null = null;
+    let rolesAssignedToLinked = false;
 
-    if (createAccount) {
+    // Request came from an already-signed-in account (e.g. Discord OAuth
+    // signup): assign the roles straight to that account. No new account,
+    // no temp password — approval just unlocks the existing login.
+    if (req.supabase_user_id) {
+      supabaseUserId = req.supabase_user_id;
+      if (roles.length > 0) {
+        try {
+          for (const role of roles) {
+            await pool.query(
+              `INSERT INTO user_roles (user_id, role, granted_by, request_id)
+               VALUES ($1, $2, 'system', $3)
+               ON CONFLICT (user_id, role) DO NOTHING`,
+              [supabaseUserId, role, requestId],
+            );
+          }
+          invalidateUserRolesCache(supabaseUserId);
+          rolesAssignedToLinked = true;
+          log.info(
+            { userId: supabaseUserId, roles },
+            'Assigned roles to linked account',
+          );
+        } catch (roleErr) {
+          log.warn(
+            { err: (roleErr as Error).message },
+            'Error inserting roles for linked account (non-fatal)',
+          );
+        }
+      }
+    } else if (createAccount) {
       tempPassword = generateTempPassword();
       if (config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY) {
         try {
@@ -352,7 +398,9 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     const rolesStr = roles.join(',');
     let notes = `Roles: ${rolesStr}`;
     if (tempPassword) notes += ` | Temp password: ${tempPassword}`;
-    if (supabaseAccountCreated) {
+    if (rolesAssignedToLinked) {
+      notes += ` | Roles assigned to linked account ${supabaseUserId}`;
+    } else if (supabaseAccountCreated) {
       notes += ' | Supabase account created';
     } else if (supabaseError) {
       notes += ` | Supabase error: ${supabaseError}`;
@@ -378,6 +426,7 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
       discord_id: req.discord_id,
       roles,
       supabase_account_created: supabaseAccountCreated,
+      roles_assigned_to_linked_account: rolesAssignedToLinked,
     };
     if (tempPassword) result['temp_password'] = tempPassword;
     if (supabaseError) result['supabase_error'] = supabaseError;
