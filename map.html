@@ -5369,6 +5369,8 @@ function initPagerHoursFromStorage() {
     }
 
     function showPagerDetails(item) {
+      // Editor mode: pager cluster details open in the editor panel.
+      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openPager(item); }
       const sidebar = document.getElementById('incident-sidebar');
       const content = document.getElementById('sidebar-content');
       sidebar.classList.add('open');
@@ -5725,6 +5727,8 @@ function initPagerHoursFromStorage() {
 
     
     async function showIncidentDetails(incident, pagerDetails) {
+      // Editor mode: pin details open in the editor panel instead.
+      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openUser(incident, pagerDetails); }
       // Ensure we always have an object to work with
       const data = incident || {};
       const sidebar = document.getElementById('incident-sidebar');
@@ -5800,6 +5804,8 @@ function initPagerHoursFromStorage() {
 
     
     async function showRfsDetails(item) {
+      // Editor mode: RFS details open in the editor panel (read-only + logs).
+      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openRfs(item); }
       const data = item.rawDetails;
       const pagerDetails = item.pagerDetails;
       const sidebar = document.getElementById('incident-sidebar');
