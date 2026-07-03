@@ -340,11 +340,11 @@
             Sign up with Discord
           </button>
           <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
-            Recommended — creates your account now and links it to this request, so approval unlocks it instantly. Your email and Discord details are filled in for you.
+            No separate password to remember — your email and Discord details are filled in automatically.
           </p>
           <div style="display:flex; align-items:center; gap:0.75rem; margin-top:1rem; color:#64748b; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">
             <span style="flex:1; border-top:1px solid var(--border-subtle);"></span>
-            <span>or just fill in the form</span>
+            <span>or sign up with email</span>
             <span style="flex:1; border-top:1px solid var(--border-subtle);"></span>
           </div>
         </div>
@@ -451,7 +451,27 @@
             </label>
             <input type="email" id="email" class="form-input" placeholder="your@email.com" required>
           </div>
-          
+
+          <!-- Password: creates the NSW PSN account at submit time (hidden
+               when already signed in, e.g. after Discord signup). -->
+          <div id="password-group">
+            <div class="form-group">
+              <label class="form-label">
+                Create a Password <span class="required">*</span>
+              </label>
+              <input type="password" id="signup-password" class="form-input" placeholder="At least 8 characters" autocomplete="new-password" minlength="8">
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                Confirm Password <span class="required">*</span>
+              </label>
+              <input type="password" id="signup-password-confirm" class="form-input" placeholder="Repeat your password" autocomplete="new-password">
+              <p style="color:#64748b; font-size:0.75rem; margin-top:0.4rem;">
+                Your account is created when you submit — you can sign in straight away, and editor/feeder features switch on once your request is approved.
+              </p>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">
               Discord ID <span class="required">*</span>
@@ -535,7 +555,8 @@
       <div id="success-container" class="success-state" style="display: none;">
         <i class="fas fa-check-circle"></i>
         <h2>Request Submitted!</h2>
-        <p>Thanks for your interest! We'll review your request and contact you via Discord.</p>
+        <p>Thanks for your interest! We'll review your request and contact you via Discord.
+           Your account is ready to sign in with now — editor/feeder features switch on once you're approved.</p>
         <div style="margin-top: 1.5rem;">
           <a href="map.html" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
             <i class="fas fa-map"></i>
@@ -563,6 +584,12 @@
 
     // ---- Discord signup (Supabase OAuth) ----
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    function escapeHtmlSignup(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
 
     async function signUpWithDiscord() {
       const btn = document.getElementById('discord-signup-btn');
@@ -608,6 +635,8 @@
       }
       document.getElementById('discord-signup-box').style.display = 'none';
       document.getElementById('discord-linked-box').style.display = 'block';
+      // Already signed in — no password to create.
+      document.getElementById('password-group').style.display = 'none';
     }
 
     sb.auth.getSession().then(({ data }) => applySession(data.session));
@@ -758,14 +787,64 @@
         return;
       }
       
+      // Not signed in yet (no Discord signup): create the account now with
+      // the chosen password, so the request is linked to it and approval
+      // just switches the roles on.
+      let existingSession = null;
+      try {
+        const { data: sess0 } = await sb.auth.getSession();
+        existingSession = sess0?.session || null;
+      } catch (e) { /* treat as signed out */ }
+
+      if (!existingSession) {
+        const pw = document.getElementById('signup-password').value;
+        const pw2 = document.getElementById('signup-password-confirm').value;
+        if (!pw || pw.length < 8) {
+          messageEl.textContent = 'Please create a password of at least 8 characters.';
+          messageEl.className = 'message error';
+          return;
+        }
+        if (pw !== pw2) {
+          messageEl.textContent = 'Passwords do not match.';
+          messageEl.className = 'message error';
+          return;
+        }
+      }
+
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
       messageEl.textContent = '';
-      
+
       try {
-        // If signed in (Discord signup), send the JWT so the backend links
-        // this request to the verified account — approval then assigns
-        // roles straight to it.
+        if (!existingSession) {
+          const pw = document.getElementById('signup-password').value;
+          const { data: suData, error: suError } = await sb.auth.signUp({ email, password: pw });
+          if (suError) {
+            const already = /already|registered|exists/i.test(suError.message || '');
+            messageEl.innerHTML = already
+              ? 'This email already has an account — <a href="login.html?redirect=/editor-signup.html" style="color:var(--accent);">sign in</a> and then submit your request.'
+              : escapeHtmlSignup(suError.message || 'Could not create your account.');
+            messageEl.className = 'message error';
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+            return;
+          }
+          if (!suData?.session) {
+            // Email confirmation is required before a session exists. Ask the
+            // user to confirm + sign in, then resubmit (form stays filled) so
+            // the request links to their verified account.
+            messageEl.innerHTML = 'Account created! Check your email to confirm your address, then '
+              + '<a href="login.html?redirect=/editor-signup.html" style="color:var(--accent);">sign in</a> '
+              + 'and press Submit Request again to send your request.';
+            messageEl.className = 'message success';
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+            return;
+          }
+        }
+
+        // Send the JWT so the backend links this request to the verified
+        // account — approval then assigns roles straight to it.
         const headers = { 'Content-Type': 'application/json' };
         try {
           const { data: sess } = await sb.auth.getSession();
