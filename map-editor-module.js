@@ -1845,7 +1845,7 @@
     fab.title = 'Map Controls';
     fab.setAttribute('aria-label', 'Open Map Controls');
     fab.innerHTML = '<i class="fa-solid fa-map-pin"></i>';
-    fab.style.cssText = 'display:none; position:absolute; bottom:96px; right:12px; z-index:1004; width:48px; height:48px; border-radius:50%; background:#f97316; color:#fff; border:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); font-size:1.05rem; align-items:center; justify-content:center; cursor:pointer;';
+    fab.style.cssText = 'display:none; position:fixed; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); right:12px; z-index:1004; width:48px; height:48px; border-radius:50%; background:#f97316; color:#fff; border:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); font-size:1.05rem; align-items:center; justify-content:center; cursor:pointer;';
     fab.onclick = openEditorSheet;
     host.appendChild(fab);
 
