@@ -75,6 +75,34 @@
     .brand a { color: var(--text-main); }
     .topbar-center { flex: 1; display: flex; align-items: center; gap: 0.5rem; justify-content: flex-start; min-width: 0; }
     .topbar-center .guild-select { max-width: 260px; }
+    /* Custom guild dropdown (server picker with icons + per-server add-bot).
+       Replaces the native <select>, which can't render guild icons. */
+    .guild-dd { position: relative; }
+    .guild-dd-trigger { display: inline-flex; align-items: center; gap: 0.45rem; max-width: 260px;
+      padding: 0.35rem 0.6rem; background: rgba(2,6,23,0.5); border: 1px solid var(--border-subtle);
+      border-radius: 0.5rem; color: var(--text-main); cursor: pointer; font: inherit; font-size: 0.85rem; }
+    .guild-dd-trigger:hover { border-color: var(--accent); }
+    .guild-dd-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .guild-dd-caret { font-size: 0.65rem; opacity: 0.7; margin-left: 0.25rem; }
+    .guild-dd-panel { display: none; position: absolute; top: calc(100% + 4px); left: 0;
+      min-width: 250px; max-width: 340px; max-height: 60vh; overflow-y: auto; background: #0b1220;
+      border: 1px solid var(--border-subtle); border-radius: 0.6rem; box-shadow: 0 12px 34px rgba(0,0,0,0.55);
+      z-index: 1200; padding: 0.3rem; }
+    .guild-dd.open .guild-dd-panel { display: block; }
+    .guild-dd-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.5rem;
+      border-radius: 0.4rem; cursor: pointer; }
+    .guild-dd-item:hover { background: rgba(148,163,184,0.12); }
+    .guild-dd-item.active { background: var(--accent-soft); }
+    .guild-dd-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
+    .guild-dd-icon { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: rgba(148,163,184,0.2); }
+    .guild-dd-icon-fallback { display: inline-flex; align-items: center; justify-content: center;
+      background: rgba(148,163,184,0.25); color: #e2e8f0; font-size: 0.72rem; font-weight: 700; border-radius: 50%; flex-shrink: 0; }
+    .guild-dd-sep { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft);
+      padding: 0.55rem 0.5rem 0.3rem; border-top: 1px solid var(--border-subtle); margin-top: 0.3rem; }
+    .guild-dd-item-nobot { cursor: default; }
+    .guild-dd-add { margin-left: auto; font-size: 0.7rem; padding: 0.22rem 0.55rem; border-radius: 0.4rem;
+      background: var(--accent-soft); color: var(--accent); text-decoration: none; white-space: nowrap; font-weight: 600; }
+    .guild-dd-add:hover { background: var(--accent); color: #fff; }
     .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
     .hamburger {
       display: none;
@@ -1908,6 +1936,88 @@ function render() {
   syncDrawer();
 }
 
+// A guild's icon as an <img> (falling back to a letter badge when the
+// server has no custom icon, or the image fails to load).
+function guildIconEl(g, size) {
+  size = size || 24;
+  const letter = (String(g.name || '?').trim().charAt(0) || '?').toUpperCase();
+  const fallback = () => el('span', {
+    class: 'guild-dd-icon guild-dd-icon-fallback',
+    style: `width:${size}px;height:${size}px;`,
+  }, letter);
+  if (g.icon_url) {
+    return el('img', {
+      class: 'guild-dd-icon', src: g.icon_url, alt: '', width: size, height: size,
+      onerror: function () { this.replaceWith(fallback()); },
+    });
+  }
+  return fallback();
+}
+
+// Bot invite URL pre-scoped to a specific server (Discord pre-selects it,
+// and disable_guild_select locks the picker) → one-click add to that server.
+function botInviteFor(gid) {
+  const base = state.botInviteUrl;
+  if (!base) return '#';
+  return base + '&guild_id=' + encodeURIComponent(gid) + '&disable_guild_select=true';
+}
+
+// Custom server picker: shows every server the user manages, WITH its icon.
+// Servers that already have the bot are selectable; servers that don't get a
+// one-click "Add" (so the bot can be added without leaving the dashboard).
+// Returns null when the user manages no servers at all.
+function buildGuildDropdown() {
+  const manageable = (state.guilds || []).filter(g => g.manage_channels);
+  if (manageable.length === 0) return null;
+  const withBot = manageable.filter(g => g.has_bot);
+  const withoutBot = manageable.filter(g => !g.has_bot);
+  const active = withBot.find(g => g.id === state.activeGuildId) || null;
+
+  const wrap = el('div', { class: 'guild-dd', id: 'guild-dd' });
+  const trigger = el('button', {
+    class: 'guild-dd-trigger', type: 'button',
+    title: 'Select a server',
+    onclick: (e) => { e.stopPropagation(); wrap.classList.toggle('open'); },
+  }, [
+    active ? guildIconEl(active, 22) : el('i', { class: 'fa-solid fa-server' }),
+    el('span', { class: 'guild-dd-name' }, active ? active.name : 'Select a server'),
+    el('i', { class: 'fa-solid fa-chevron-down guild-dd-caret' }),
+  ]);
+  wrap.appendChild(trigger);
+
+  const panel = el('div', { class: 'guild-dd-panel' });
+  for (const g of withBot) {
+    panel.appendChild(el('div', {
+      class: 'guild-dd-item' + (g.id === state.activeGuildId ? ' active' : ''),
+      onclick: () => { wrap.classList.remove('open'); selectGuild(g.id); },
+    }, [guildIconEl(g), el('span', { class: 'guild-dd-item-name' }, g.name)]));
+  }
+  if (withoutBot.length) {
+    panel.appendChild(el('div', { class: 'guild-dd-sep' }, 'Add the bot to a server'));
+    for (const g of withoutBot) {
+      panel.appendChild(el('div', { class: 'guild-dd-item guild-dd-item-nobot' }, [
+        guildIconEl(g),
+        el('span', { class: 'guild-dd-item-name' }, g.name),
+        el('a', {
+          class: 'guild-dd-add', href: botInviteFor(g.id), target: '_blank', rel: 'noopener',
+          onclick: (e) => e.stopPropagation(),
+        }, [el('i', { class: 'fa-solid fa-plus' }), ' Add']),
+      ]));
+    }
+  }
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+// Close the server dropdown on any outside click (re-queried each click, so
+// it survives topbar re-renders).
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('guild-dd');
+  if (dd && dd.classList.contains('open') && !dd.contains(e.target)) {
+    dd.classList.remove('open');
+  }
+});
+
 function renderTopbar() {
   const center = qs('topbar-center');
   const right = qs('topbar-right');
@@ -1916,24 +2026,19 @@ function renderTopbar() {
 
   if (!state.user) return;
 
-  const eligible = (state.guilds || []).filter(g => g.has_bot && g.manage_channels);
-  if (eligible.length > 0) {
-    const sel = el('select', {
-      class: 'form-select guild-select',
-      id: 'guild-select',
-      'aria-label': 'Guild',
-      onchange: (e) => selectGuild(e.target.value),
-    });
-    for (const g of eligible) sel.appendChild(el('option', { value: g.id }, g.name));
-    if (state.activeGuildId) sel.value = state.activeGuildId;
-    center.appendChild(sel);
-
-    const ovBtn = el('button', {
-      class: 'btn btn-ghost btn-sm' + (state.view === 'overview' ? ' active' : ''),
-      title: 'Server overview',
-      onclick: () => openOverview(),
-    }, [el('i', { class: 'fa-solid fa-chart-simple' }), ' Overview']);
-    center.appendChild(ovBtn);
+  const gdd = buildGuildDropdown();
+  if (gdd) {
+    center.appendChild(gdd);
+    // The Overview button needs a bot-installed server selected.
+    const hasBotGuild = (state.guilds || []).some(g => g.has_bot && g.manage_channels);
+    if (hasBotGuild) {
+      const ovBtn = el('button', {
+        class: 'btn btn-ghost btn-sm' + (state.view === 'overview' ? ' active' : ''),
+        title: 'Server overview',
+        onclick: () => openOverview(),
+      }, [el('i', { class: 'fa-solid fa-chart-simple' }), ' Overview']);
+      center.appendChild(ovBtn);
+    }
   }
 
   if (state.botInviteUrl) {
@@ -2006,9 +2111,14 @@ function renderAuthCard() {
 function renderShell() {
   const eligible = (state.guilds || []).filter(g => g.has_bot && g.manage_channels);
   if (eligible.length === 0) {
+    // Point users at the new server menu: if they manage servers but the bot
+    // isn't in any, they can add it right from the dropdown at the top.
+    const manageable = (state.guilds || []).filter(g => g.manage_channels);
+    const msg = manageable.length > 0
+      ? 'The NSW PSN bot isn’t in any of your servers yet. Use the server menu at the top to add it to one of your servers, then refresh.'
+      : 'You have no servers where you hold Manage Channels. Ask an admin to invite the bot, or contact support.';
     const wrap = el('div', { style: 'padding: 2rem 1.4rem' }, [
-      el('div', { class: 'empty' },
-        'You have no servers where the NSW PSN bot is installed and you hold Manage Channels. Ask an admin to invite the bot, or contact support.'),
+      el('div', { class: 'empty' }, msg),
     ]);
     return wrap;
   }

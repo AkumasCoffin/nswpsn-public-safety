@@ -17,43 +17,62 @@ if (window.sb) {
   window.sb = sb;  // Make available globally for other scripts
 }
 
-// Inject auth section HTML into sidebar (only if sidebar-footer exists)
+// Inject the account/profile section at the TOP of the sidebar (under the
+// logo + subtitle) and the Legal links at the bottom (before the footer).
 function injectAuthSection() {
-  // Find sidebar footer or end of sidebar nav
-  const sidebarFooter = document.querySelector('.sidebar-footer');
-  if (!sidebarFooter) return;
-  
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+
   // Check if auth section already exists
-  if (document.getElementById('auth-section')) return;
-  
-  // Create auth section HTML
-  const authSection = document.createElement('div');
-  authSection.id = 'auth-section';
-  authSection.style.cssText = 'margin-top:1.5rem; border-top:1px solid rgba(148,163,184,0.2); padding-top:1rem;';
-  authSection.innerHTML = `
-    <div class="sidebar-section-label">Account</div>
-    <div id="auth-logged-out">
-      <a href="login.html" style="width:100%; padding:0.6rem 1rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:8px; color:#f97316; font-size:0.85rem; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
-        <i class="fas fa-sign-in-alt"></i> Login
-      </a>
-    </div>
-    <div id="auth-logged-in" style="display:none;">
-      <div style="padding:0.75rem; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:0.75rem;">
-        <div id="auth-user-email" style="font-size:0.8rem; color:#fff; font-weight:500; margin-bottom:0.25rem; word-break:break-all;"></div>
-        <div style="font-size:0.7rem; color:#22c55e;">● Logged in</div>
+  if (!document.getElementById('auth-section')) {
+    const authSection = document.createElement('div');
+    authSection.id = 'auth-section';
+    authSection.style.cssText = 'margin:0.7rem 0 0.9rem; border-bottom:1px solid rgba(148,163,184,0.2); padding-bottom:0.8rem;';
+    authSection.innerHTML = `
+      <div class="sidebar-section-label">Account</div>
+      <div id="auth-logged-out">
+        <a href="login.html" style="width:100%; padding:0.6rem 1rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:8px; color:#f97316; font-size:0.85rem; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
+          <i class="fas fa-sign-in-alt"></i> Login
+        </a>
       </div>
-      <div id="auth-role-buttons" style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem;"></div>
-      <a href="change-password.html" style="display:flex; width:100%; padding:0.5rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; margin-bottom:0.5rem; box-sizing:border-box;">
-        <i class="fas fa-key"></i> Change Password
-      </a>
-      <button onclick="doLogout()" style="width:100%; padding:0.5rem; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); border-radius:6px; color:#ef4444; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit;">
-        <i class="fas fa-sign-out-alt"></i> Logout
-      </button>
-    </div>
-  `;
-  
-  // Insert before footer
-  sidebarFooter.parentNode.insertBefore(authSection, sidebarFooter);
+      <div id="auth-logged-in" style="display:none;">
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <div id="auth-avatar" style="width:26px; height:26px; border-radius:50%; background:rgba(249,115,22,0.2); display:flex; align-items:center; justify-content:center; color:#f97316; font-weight:700; font-size:0.75rem; overflow:hidden; flex-shrink:0;"></div>
+          <div id="auth-user-email" style="flex:1; min-width:0; font-size:0.82rem; color:#fff; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+          <button onclick="openProfileModal()" title="Profile" aria-label="Profile" style="width:28px; height:28px; padding:0; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
+            <i class="fas fa-user-cog"></i>
+          </button>
+          <button onclick="doLogout()" title="Logout" aria-label="Logout" style="width:28px; height:28px; padding:0; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.25); border-radius:6px; color:#ef4444; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
+            <i class="fas fa-sign-out-alt"></i>
+          </button>
+        </div>
+        <div id="auth-role-buttons" style="display:flex; gap:0.4rem; margin-top:0.5rem; flex-wrap:wrap;"></div>
+      </div>
+    `;
+    // Insert under the subtitle (or logo), i.e. at the top of the sidebar.
+    const anchor = sidebar.querySelector('.sidebar-subtitle') || sidebar.querySelector('.sidebar-logo');
+    if (anchor) {
+      anchor.insertAdjacentElement('afterend', authSection);
+    } else {
+      sidebar.insertBefore(authSection, sidebar.firstChild);
+    }
+  }
+
+  // Legal links stay at the bottom, before the footer.
+  const sidebarFooter = document.querySelector('.sidebar-footer');
+  if (sidebarFooter && !document.getElementById('legal-section')) {
+    const legal = document.createElement('div');
+    legal.id = 'legal-section';
+    legal.style.cssText = 'margin-top:1.5rem; border-top:1px solid rgba(148,163,184,0.2); padding-top:1rem;';
+    legal.innerHTML = `
+      <div class="sidebar-section-label">Legal</div>
+      <nav class="sidebar-nav">
+        <a href="terms.html"${location.pathname.endsWith('/terms.html') ? ' class="active"' : ''}>Terms &amp; Conditions</a>
+        <a href="privacy.html"${location.pathname.endsWith('/privacy.html') ? ' class="active"' : ''}>Privacy Policy</a>
+      </nav>
+    `;
+    sidebarFooter.parentNode.insertBefore(legal, sidebarFooter);
+  }
 }
 
 // Create login and password reset modals (always runs)
@@ -68,6 +87,14 @@ function createAuthModals() {
         <div style="text-align:center; margin-bottom:2rem;">
           <div style="font-size:1.5rem; font-weight:700; color:#fff; text-transform:uppercase; letter-spacing:0.1em;">Forcequit <span style="color:#f97316;">Login</span></div>
           <div style="color:#94a3b8; font-size:0.9rem; margin-top:0.5rem;">NSW PSN Reference</div>
+        </div>
+        <button onclick="doDiscordLogin()" id="discord-modal-btn" style="width:100%; padding:0.8rem; background:#5865F2; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.9rem; font-family:inherit; display:flex; align-items:center; justify-content:center; gap:0.5rem; transition:background 0.2s;">
+          <i class="fab fa-discord"></i> Continue with Discord
+        </button>
+        <div style="display:flex; align-items:center; gap:0.75rem; margin:1.2rem 0; color:#94a3b8; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">
+          <span style="flex:1; border-top:1px solid rgba(148,163,184,0.2);"></span>
+          <span>or</span>
+          <span style="flex:1; border-top:1px solid rgba(148,163,184,0.2);"></span>
         </div>
         <div style="margin-bottom:1.2rem;">
           <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Email Address</label>
@@ -178,6 +205,228 @@ async function doLogin() {
   checkAuthState();
 }
 
+// ---- Profile modal (username, linked accounts, more to come) ----
+function createProfileModal() {
+  if (document.getElementById('profile-modal')) return;
+  const modal = document.createElement('div');
+  modal.id = 'profile-modal';
+  modal.style.cssText = 'display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:10002; align-items:center; justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:2rem; max-width:420px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7); max-height:90vh; overflow-y:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
+        <h2 style="margin:0; font-size:1.25rem; font-weight:700; color:#fff;">Your Profile</h2>
+        <button onclick="closeProfileModal()" style="background:none; border:none; color:#94a3b8; font-size:1.5rem; cursor:pointer; padding:0; width:30px; height:30px; display:flex; align-items:center; justify-content:center;">&times;</button>
+      </div>
+
+      <div style="margin-bottom:1.2rem;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Username</label>
+        <div style="display:flex; gap:0.5rem;">
+          <input type="text" id="profile-username" maxlength="32" style="flex:1; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit;" placeholder="Pick a username">
+          <button onclick="saveProfile()" id="profile-save-btn" style="padding:0.65rem 1rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.85rem; font-family:inherit;">Save</button>
+        </div>
+        <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">How you'll appear around the site.</div>
+      </div>
+
+      <div style="margin-bottom:1.2rem;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Linked Accounts</label>
+        <div id="profile-email-row" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.75rem; background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:8px; margin-bottom:0.5rem;">
+          <i class="fas fa-envelope" style="color:#94a3b8; width:18px; text-align:center;"></i>
+          <span id="profile-email-value" style="flex:1; color:#e2e8f0; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+        </div>
+        <div id="profile-discord-row" style="display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.75rem; background:rgba(2,6,23,0.4); border:1px solid rgba(148,163,184,0.15); border-radius:8px;">
+          <i class="fab fa-discord" style="color:#5865F2; width:18px; text-align:center;"></i>
+          <span id="profile-discord-value" style="flex:1; color:#e2e8f0; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+          <button id="profile-discord-link-btn" onclick="linkDiscordAccount()" style="display:none; padding:0.35rem 0.7rem; background:#5865F2; border:none; border-radius:6px; color:#fff; font-weight:600; cursor:pointer; font-size:0.75rem; font-family:inherit;">Link</button>
+          <span id="profile-discord-linked-badge" style="display:none; color:#22c55e; font-size:0.75rem; font-weight:600;"><i class="fas fa-check"></i> Linked</span>
+        </div>
+      </div>
+
+      <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
+        <i class="fas fa-key"></i> Change Password
+      </a>
+
+      <div id="profile-message" style="margin-top:1rem; font-size:0.85rem; text-align:center; min-height:1.2em;"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', (e) => {
+    if (e.target.id === 'profile-modal') closeProfileModal();
+  });
+}
+
+async function openProfileModal() {
+  createProfileModal();
+  const { data } = await sb.auth.getSession();
+  const session = data.session;
+  if (!session) return;
+  const user = session.user || {};
+  const meta = user.user_metadata || {};
+  const identities = user.identities || [];
+
+  document.getElementById('profile-username').value = meta.display_name || '';
+  document.getElementById('profile-email-value').textContent = user.email || 'No email on account';
+
+  const discordIdentity = identities.find((i) => i.provider === 'discord');
+  const discordValue = document.getElementById('profile-discord-value');
+  const linkBtn = document.getElementById('profile-discord-link-btn');
+  const linkedBadge = document.getElementById('profile-discord-linked-badge');
+  if (discordIdentity) {
+    const idData = discordIdentity.identity_data || {};
+    discordValue.textContent = idData.full_name || idData.name || idData.user_name || 'Discord';
+    linkBtn.style.display = 'none';
+    linkedBadge.style.display = 'inline';
+  } else {
+    discordValue.textContent = 'Not linked';
+    linkBtn.style.display = 'inline-block';
+    linkedBadge.style.display = 'none';
+  }
+
+  // Password management only makes sense for accounts with an email identity.
+  const hasEmailIdentity = identities.some((i) => i.provider === 'email');
+  document.getElementById('profile-change-password').style.display = hasEmailIdentity ? 'flex' : 'none';
+
+  const msg = document.getElementById('profile-message');
+  if (msg) msg.textContent = '';
+  document.getElementById('profile-modal').style.display = 'flex';
+}
+
+function closeProfileModal() {
+  const modal = document.getElementById('profile-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveProfile() {
+  const input = document.getElementById('profile-username');
+  const btn = document.getElementById('profile-save-btn');
+  const msg = document.getElementById('profile-message');
+  const username = (input.value || '').trim();
+  if (username.length > 0 && username.length < 2) {
+    msg.style.color = '#ef4444';
+    msg.textContent = 'Username must be at least 2 characters.';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  const { error } = await sb.auth.updateUser({ data: { display_name: username || null } });
+  btn.disabled = false;
+  btn.textContent = 'Save';
+  if (error) {
+    msg.style.color = '#ef4444';
+    msg.textContent = error.message;
+    return;
+  }
+  if (typeof umami !== 'undefined') umami.track('profile-username-saved');
+  msg.style.color = '#22c55e';
+  msg.textContent = 'Saved!';
+  checkAuthState();
+}
+
+async function linkDiscordAccount() {
+  const msg = document.getElementById('profile-message');
+  const btn = document.getElementById('profile-discord-link-btn');
+  btn.disabled = true;
+  btn.textContent = 'Redirecting…';
+  // linkIdentity adds the Discord identity to the CURRENT user (requires
+  // "manual linking" enabled in Supabase auth settings). Returns here after.
+  const { error } = await sb.auth.linkIdentity({
+    provider: 'discord',
+    options: { redirectTo: window.location.origin + window.location.pathname + window.location.search },
+  });
+  if (error) {
+    btn.disabled = false;
+    btn.textContent = 'Link';
+    msg.style.color = '#ef4444';
+    msg.textContent = error.message;
+  }
+}
+
+// ---- One-time username prompt for existing accounts ----
+// Accounts created before usernames existed (or admin-created ones) have no
+// display_name and would show as "Account" in the sidebar. Ask them to pick
+// one on page load; "Later" defers for the rest of the browser session.
+let usernamePromptShown = false;
+
+function maybeAskUsername(session) {
+  try {
+    if (usernamePromptShown) return;
+    if (sessionStorage.getItem('nswpsn_username_prompt_dismissed') === '1') return;
+    const meta = session.user?.user_metadata || {};
+    // A Discord-provided name counts — same rule as signup.
+    if (meta.display_name || meta.full_name || meta.name || meta.user_name) return;
+    usernamePromptShown = true;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'username-prompt-modal';
+    overlay.style.cssText = 'position:fixed; inset:0; background:rgba(2,6,23,0.7); z-index:10005; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px);';
+    overlay.innerHTML = `
+      <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:12px; padding:1.6rem; max-width:360px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7);">
+        <div style="font-size:1.1rem; font-weight:700; color:#fff; margin-bottom:0.4rem;"><i class="fas fa-user" style="color:#f97316; margin-right:0.4rem;"></i>Choose a username</div>
+        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 1rem;">Your account doesn't have a username yet — pick how you'll appear around the site.</p>
+        <input type="text" id="username-prompt-input" maxlength="32" placeholder="Username" style="width:100%; padding:0.7rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.95rem; box-sizing:border-box; font-family:inherit;">
+        <div id="username-prompt-msg" style="color:#ef4444; font-size:0.8rem; min-height:1.1em; margin-top:0.45rem;"></div>
+        <div style="display:flex; gap:0.5rem; margin-top:0.7rem;">
+          <button id="username-prompt-later" style="flex:1; padding:0.6rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:8px; color:#94a3b8; font-size:0.85rem; cursor:pointer; font-family:inherit;">Later</button>
+          <button id="username-prompt-save" style="flex:2; padding:0.6rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; font-size:0.85rem; cursor:pointer; font-family:inherit;">Save username</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#username-prompt-input');
+    input.focus();
+
+    const close = () => overlay.remove();
+    overlay.querySelector('#username-prompt-later').onclick = () => {
+      try { sessionStorage.setItem('nswpsn_username_prompt_dismissed', '1'); } catch (e) {}
+      close();
+    };
+    const save = async () => {
+      const msg = overlay.querySelector('#username-prompt-msg');
+      const username = input.value.trim();
+      if (username.length < 2) {
+        msg.textContent = 'Username must be at least 2 characters.';
+        return;
+      }
+      const btn = overlay.querySelector('#username-prompt-save');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      const { error } = await sb.auth.updateUser({ data: { display_name: username } });
+      if (error) {
+        btn.disabled = false;
+        btn.textContent = 'Save username';
+        msg.textContent = error.message;
+        return;
+      }
+      if (typeof umami !== 'undefined') umami.track('username-prompt-saved');
+      close();
+      checkAuthState();
+    };
+    overlay.querySelector('#username-prompt-save').onclick = save;
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+  } catch (e) {
+    console.warn('username prompt failed', e);
+  }
+}
+
+async function doDiscordLogin() {
+  const errorDiv = document.getElementById('login-error');
+  const btn = document.getElementById('discord-modal-btn');
+  if (errorDiv) errorDiv.textContent = '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…'; }
+
+  // Return to the page the user is on; onAuthStateChange -> checkAuthState()
+  // updates the sidebar once the session lands.
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: 'discord',
+    options: { redirectTo: window.location.origin + window.location.pathname + window.location.search }
+  });
+
+  if (error) {
+    if (typeof umami !== 'undefined') umami.track('login-failed', { method: 'discord-modal' });
+    if (errorDiv) errorDiv.textContent = error.message;
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord'; }
+  }
+  // On success the browser navigates away to Discord.
+}
+
 async function doLogout() {
   if (typeof umami !== 'undefined') umami.track('logout');
   await sb.auth.signOut();
@@ -199,7 +448,30 @@ async function checkAuthState() {
     // User is logged in - fetch their roles
     loggedOutDiv.style.display = 'none';
     loggedInDiv.style.display = 'block';
-    if (emailDiv) emailDiv.textContent = session.user?.email ?? '';
+    const meta = session.user?.user_metadata || {};
+    // Never show the email in the sidebar — username / Discord name only
+    // (email still visible inside the profile modal).
+    const displayName = meta.display_name || meta.full_name || meta.name || meta.user_name
+      || 'Account';
+    if (emailDiv) emailDiv.textContent = displayName;
+
+    // Existing account with no name at all: ask them to pick a username.
+    maybeAskUsername(session);
+
+    // Avatar: Discord avatar image when available, else the first letter.
+    const avatarDiv = document.getElementById('auth-avatar');
+    if (avatarDiv) {
+      if (meta.avatar_url) {
+        avatarDiv.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = meta.avatar_url;
+        img.alt = '';
+        img.style.cssText = 'width:100%; height:100%; object-fit:cover;';
+        avatarDiv.appendChild(img);
+      } else {
+        avatarDiv.textContent = (displayName || '?').charAt(0).toUpperCase();
+      }
+    }
     
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
@@ -242,17 +514,13 @@ async function checkAuthState() {
       // Build role-based buttons
       let buttons = '';
       
-      // Map Editor button - for map_editor or owner
-      if (roleData.is_map_editor || roleData.is_owner) {
-        buttons += `<a href="map-editor.html" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.3); border-radius:6px; color:#60a5fa; font-size:0.8rem; text-decoration:none;">
-          <i class="fas fa-map-marked-alt"></i> Map Editor
-        </a>`;
-      }
-      
-      // User Management button - for team_member or owner
+      // (No Editor chip — the map page enables editor mode automatically
+      // for signed-in editors, so the normal Incident Map link covers it.)
+
+      // User Management chip - for team_member or owner
       if (roleData.is_team_member || roleData.is_owner) {
-        buttons += `<a href="staff.html" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.8rem; text-decoration:none;">
-          <i class="fas fa-users-cog"></i> User Management
+        buttons += `<a href="staff.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
+          <i class="fas fa-users-cog"></i> Staff
         </a>`;
       }
       

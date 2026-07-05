@@ -380,6 +380,37 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
           'cleanup: latest-sidecar prune failed',
         );
       }
+
+      // 2e. Hard-delete soft-deleted user incidents once deleted_at ages
+      // past the retention window. Editor deletes only set deleted_at
+      // (rows + their logs/suggestions stay recoverable until now).
+      try {
+        const purgeDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const cond = `deleted_at IS NOT NULL AND deleted_at < (NOW() - ($1 || ' days')::interval)`;
+        await client.query(
+          `DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE ${cond})`,
+          [String(purgeDays)],
+        );
+        await client.query(
+          `DELETE FROM incident_suggestions WHERE incident_id IN (SELECT id FROM incidents WHERE ${cond})`,
+          [String(purgeDays)],
+        );
+        const purged = await client.query(
+          `DELETE FROM incidents WHERE ${cond}`,
+          [String(purgeDays)],
+        );
+        if ((purged.rowCount ?? 0) > 0) {
+          log.info(
+            { rows: purged.rowCount, retentionDays: purgeDays },
+            'cleanup: purged soft-deleted incidents',
+          );
+        }
+      } catch (err) {
+        log.warn(
+          { err: (err as Error).message },
+          'cleanup: soft-deleted incident purge failed',
+        );
+      }
     } finally {
       // The session-level statement_timeout=0 above survives release()
       // (node-postgres doesn't DISCARD on release), so without this RESET

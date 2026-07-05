@@ -340,7 +340,7 @@
     const cats = tgidData.categories || [];
     mount.innerHTML = `
       <div class="sidebar-section-label">Agencies</div>
-      <details class="agency-root" open>
+      <details class="agency-root">
         <summary><span class="agency-root-name">All Agencies</span></summary>
         <div class="agency-root-body">
           ${renderSearchPanel()}

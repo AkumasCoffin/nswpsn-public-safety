@@ -1955,13 +1955,9 @@
       <a href="logs.html">Incident Logs</a>
       <a href="links.html">Useful Links</a>
       <a href="data-sources.html">Data Sources</a>
+      <a href="about.html">About</a>
     </nav>
     <div id="agencies-nav-mount"></div>
-    <div class="sidebar-section-label">Legal</div>
-    <nav class="sidebar-nav">
-      <a href="terms.html">Terms &amp; Conditions</a>
-      <a href="privacy.html">Privacy Policy</a>
-    </nav>
     <div class="sidebar-section-label" id="sidebar-map-filters-label" style="display:none;">Map Layers &amp; Filters</div>
     <div id="sidebar-map-filters-slot" class="sidebar-map-filters" style="display:none;"></div>
     <div class="sidebar-section-label">Live Scanner</div>
@@ -1985,8 +1981,8 @@
       </a>
     </div>
     <div style="margin-top:0.3rem;">
-      <a class="discord-btn-wide" href="https://discord.com/oauth2/authorize?client_id=1454936671304028263&permissions=277025508352&scope=bot" target="_blank" rel="noopener noreferrer">
-        Add Discord Bot
+      <a class="discord-btn-wide" href="dashboard.html" target="_blank" rel="noopener noreferrer">
+        Discord Bot
       </a>
     </div>
     <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
@@ -2126,7 +2122,7 @@
       </div>
 
       <!-- Pager Settings Panel -->
-      <div class="filter-panel open" id="pager-panel">
+      <div class="filter-panel" id="pager-panel">
         <div class="mobile-drag-handle"></div>
         <h4>📟 Pager Window</h4>
         <div class="pager-slider-wrap">
@@ -3698,6 +3694,11 @@
         const enabled = map.hasLayer(nswpsnLayer);
         if (enabled) addFilterButton('nswpsn');
         else removeFilterButton('nswpsn');
+        // While Repeaters is on, the map search also accepts a frequency.
+        const _si = document.getElementById('address-search');
+        if (_si) _si.placeholder = enabled
+          ? 'Search address, frequency, ///w3w, or coords...'
+          : 'Search address, ///w3w, or coords...';
       }
       // Surface the satellite filter controls only while the layer is on.
       if (target === 'firms') {
@@ -4132,7 +4133,11 @@ function onPagerHoursChange() {
 function updateSliderFill() {
   const el = document.getElementById('pager-hours-range');
   if (!el) return;
-  const percent = ((el.value - 1) / 23) * 100;
+  // Derive from the slider's own min/max so the fill stays correct when
+  // editor mode raises the max from 24h to 48h.
+  const min = Number(el.min) || 1;
+  const max = Number(el.max) || 24;
+  const percent = ((el.value - min) / Math.max(1, max - min)) * 100;
   el.style.setProperty('--percent', percent + '%');
 }
 
@@ -4149,12 +4154,17 @@ function initPagerHoursFromStorage() {
     const stored = localStorage.getItem(PAGER_HOURS_STORAGE_KEY);
     if (stored != null) {
       const n = Number(stored);
-      if (Number.isFinite(n) && n >= 1 && n <= 24) {
-        pagerHours = n;
+      // Accept anything the backend accepts (<=168h); display clamps to the
+      // slider's current max (24h public, raised to 48h in editor mode —
+      // the editor module re-runs this after raising the max).
+      if (Number.isFinite(n) && n >= 1 && n <= 168) {
         const rangeEl = document.getElementById('pager-hours-range');
+        const maxH = rangeEl ? (Number(rangeEl.max) || 24) : 24;
+        const shown = Math.min(n, maxH);
+        pagerHours = shown;
         const labelEl = document.getElementById('pager-hours-value');
-        if (rangeEl) rangeEl.value = String(n);
-        if (labelEl) labelEl.textContent = n + 'h';
+        if (rangeEl) rangeEl.value = String(shown);
+        if (labelEl) labelEl.textContent = shown + 'h';
       }
     }
   } catch (e) {
@@ -5368,6 +5378,8 @@ function initPagerHoursFromStorage() {
     }
 
     function showPagerDetails(item) {
+      // Editor mode: pager cluster details open in the editor panel.
+      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openPager(item); }
       const sidebar = document.getElementById('incident-sidebar');
       const content = document.getElementById('sidebar-content');
       sidebar.classList.add('open');
@@ -5724,6 +5736,8 @@ function initPagerHoursFromStorage() {
 
     
     async function showIncidentDetails(incident, pagerDetails) {
+      // Editor mode: pin details open in the editor panel instead.
+      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openUser(incident, pagerDetails); }
       // Ensure we always have an object to work with
       const data = incident || {};
       const sidebar = document.getElementById('incident-sidebar');
@@ -5799,6 +5813,8 @@ function initPagerHoursFromStorage() {
 
     
     async function showRfsDetails(item) {
+      // Editor mode: RFS details open in the editor panel (read-only + logs).
+      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openRfs(item); }
       const data = item.rawDetails;
       const pagerDetails = item.pagerDetails;
       const sidebar = document.getElementById('incident-sidebar');
@@ -5948,6 +5964,55 @@ function initPagerHoursFromStorage() {
       return null;
     }
 
+    // --- Repeater frequency search (active only while the Repeaters layer is on) ---
+    // A query counts as a frequency when it's just a number, optionally with a
+    // decimal or "MHz" — e.g. "462.55", "146.800", "462550".
+    function _freqLooksLike(q) {
+      const cleaned = String(q).toLowerCase().replace(/mhz/g, '').replace(/[\s,]/g, '').trim();
+      return /^\d{2,8}(\.\d{1,4})?$/.test(cleaned);
+    }
+    // Match repeater sites whose frequencies / control channels contain the
+    // typed digits (digit-substring match, ignoring dots/spacing).
+    function _searchRepeatersByFreq(q) {
+      const qDigits = String(q).replace(/[^\d]/g, '');
+      if (qDigits.length < 3) return [];
+      const out = [];
+      for (const s of (typeof _nswpsnSites !== 'undefined' ? _nswpsnSites : [])) {
+        const lat = parseFloat(s.Latitude), lng = parseFloat(s.Longitude);
+        if (!isFinite(lat) || !isFinite(lng)) continue;
+        const freqs = [];
+        if (Array.isArray(s.Frequencies)) for (const f of s.Frequencies) freqs.push(String(f));
+        if (s['Control Channel']) freqs.push(String(s['Control Channel']));
+        if (s['Alt Control Channel']) freqs.push(String(s['Alt Control Channel']));
+        const hit = freqs.find(f => f.replace(/[^\d]/g, '').includes(qDigits));
+        if (hit) out.push({ site: s, lat, lng, freq: hit });
+        if (out.length >= 25) break;
+      }
+      return out;
+    }
+    function renderRepeaterFreqResults(q) {
+      const matches = _searchRepeatersByFreq(q);
+      resultsBox.innerHTML = '';
+      resultsBox.style.display = 'block';
+      if (!matches.length) {
+        resultsBox.innerHTML = '<div style="padding:0.8rem; color:var(--text-soft);">No repeater matches that frequency.</div>';
+        return;
+      }
+      for (const m of matches) {
+        const div = document.createElement('div');
+        div.className = 'search-result-item';
+        div.innerHTML = '<i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i> ' +
+          escapeHtml(m.site.NAME || 'Repeater') +
+          ' <span style="color:#94a3b8; font-size:0.8em;">' + escapeHtml(String(m.freq)) + '</span>';
+        div.onclick = () => {
+          resultsBox.style.display = 'none';
+          searchInput.value = '';
+          map.setView([m.lat, m.lng], 14);
+        };
+        resultsBox.appendChild(div);
+      }
+    }
+
     async function performAddressSearch() {
       const query = searchInput.value.trim();
       if (query.length <= 1) return;
@@ -5955,6 +6020,12 @@ function initPagerHoursFromStorage() {
       
       resultsBox.innerHTML = '<div style="padding:0.8rem; color:var(--text-soft);">Searching...</div>';
       resultsBox.style.display = 'block';
+
+      // 0. Frequency search — ONLY while the Repeaters layer is on.
+      if (typeof nswpsnLayer !== 'undefined' && map.hasLayer(nswpsnLayer) && _freqLooksLike(query)) {
+        renderRepeaterFreqResults(query);
+        return;
+      }
 
       // 1. Check for coordinate search (lat, lng)
       const coords = parseCoordinates(query);
@@ -6938,8 +7009,10 @@ function initPagerHoursFromStorage() {
         });
         removeFilterButton('pager');
       } else {
-        // Turn on pager layer and open panel with settings
-        panel.classList.add('open');
+        // Turn on pager layer. The settings panel only opens on mobile -
+        // on desktop the floating filter-buttons slider is the control,
+        // so popping this legacy panel too would show two sliders.
+        if (window.innerWidth <= 900) panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(pagerLayer);
         addFilterButton('pager');
@@ -9235,18 +9308,23 @@ function initPagerHoursFromStorage() {
       label: 'Pager',
       color: '#22c55e',
       render() {
-        const v = Number(document.getElementById('pager-hours-range')?.value ?? 12);
+        // Mirror the main slider's range: the editor module raises its max
+        // to 48h for signed-in editors, so this panel follows automatically.
+        const main = document.getElementById('pager-hours-range');
+        const maxH = Number(main?.max) || 24;
+        const v = Number(main?.value ?? 12);
+        const editorNote = maxH > 24 ? ' Editors can look back up to 48h.' : '';
         return `
           <h4><i class="fa-solid fa-pager" style="color:#22c55e;"></i> Pager</h4>
           <div class="ff-section-label">Time range</div>
           <div style="display:flex;align-items:center;gap:8px;">
-            <input type="range" min="1" max="24" step="1" value="${v}"
+            <input type="range" min="1" max="${maxH}" step="1" value="${v}"
                    oninput="document.getElementById('ff-pager-hours-val').textContent = this.value + 'h'"
                    onchange="setPagerHoursFromPanel(this.value)"
                    style="flex:1;accent-color:#22c55e;cursor:pointer;">
             <span id="ff-pager-hours-val" style="font-size:11px;color:#cbd5e1;width:36px;text-align:right;">${v}h</span>
           </div>
-          <div style="font-size:10px;color:#64748b;margin-top:6px;">Pager hits over the last N hours.</div>
+          <div style="font-size:10px;color:#64748b;margin-top:6px;">Pager hits over the last N hours.${editorNote}</div>
         `;
       },
     };
@@ -12026,5 +12104,8 @@ function initPagerHoursFromStorage() {
   </script>
   <script src="analytics.js"></script>
   <script src="agencies.js"></script>
+  <!-- Editor mode: dormant for the public; activates only after the
+       signed-in user passes the server-side /api/check-editor role check. -->
+  <script src="map-editor-module.js?v=5"></script>
 </body>
 </html>
