@@ -335,23 +335,27 @@
           <div class="card-tag">Ko-fi</div>
         </div>
         <div class="card-body">
-          <p>
-            NSW PSN is funded out of pocket — servers, receivers, antennas and bandwidth. If you'd like to
-            chip in, you can donate through <strong>Ko-fi</strong>. Donations are never required and never
-            unlock anything: every feature stays free for everyone either way.
-          </p>
-          <div id="kofi-panel-mount" style="margin-top: 1rem;">
-            <button id="kofi-open-btn" onclick="openKofiPanel()"
-              style="display:inline-flex; align-items:center; gap:0.5rem; padding:0.7rem 1.3rem; background:#13C3FF; border:none; border-radius:10px; color:#fff; font-weight:700; font-size:0.95rem; cursor:pointer; font-family:inherit;">
-              <i class="fa-solid fa-mug-hot"></i> Open the donation panel
-            </button>
-            <a href="https://ko-fi.com/forcequit" target="_blank" rel="noopener noreferrer"
-              style="display:inline-flex; align-items:center; gap:0.4rem; margin-left:0.8rem; color:var(--text-soft); font-size:0.85rem;">
-              or open Ko-fi in a new tab <i class="fa-solid fa-arrow-up-right-from-square" style="font-size:0.7rem;"></i>
-            </a>
-            <p style="color:var(--text-soft); font-size:0.75rem; margin-top:0.6rem;">
-              The panel loads from ko-fi.com only when you open it — nothing third-party loads with this page.
-            </p>
+          <div style="display:flex; flex-wrap:wrap; gap:1.5rem; align-items:flex-start;">
+            <div style="flex:1 1 300px; min-width:260px;">
+              <p>
+                NSW PSN is funded out of pocket — servers, receivers, antennas and bandwidth. If you'd like
+                to chip in, you can donate through <strong>Ko-fi</strong>.
+              </p>
+              <p>
+                Donations are never required and never unlock anything: every feature stays free for
+                everyone either way.
+              </p>
+              <p style="color:var(--text-soft); font-size:0.8rem;">
+                Payments are handled by Ko-fi (Stripe) — card details never touch this site. Prefer a new
+                tab? <a href="https://ko-fi.com/forcequit" target="_blank" rel="noopener noreferrer">ko-fi.com/forcequit</a>
+              </p>
+            </div>
+            <div style="flex:0 1 360px; min-width:280px; margin:0 auto;">
+              <iframe id="kofiframe"
+                src="https://ko-fi.com/forcequit/?hidefeed=true&widget=true&embed=true&preview=true"
+                style="border:none; width:100%; padding:0; background:transparent; border-radius:12px;"
+                height="620" title="forcequit" loading="lazy"></iframe>
+            </div>
           </div>
         </div>
       </article>
@@ -369,22 +373,6 @@
       const overlay = document.querySelector('.menu-overlay');
       sidebar.classList.toggle('open');
       overlay.classList.toggle('active');
-    }
-
-    // Ko-fi donation panel — click-to-load so nothing third-party loads
-    // with the page (keeps the privacy promise on this very page honest).
-    function openKofiPanel() {
-      const mount = document.getElementById('kofi-panel-mount');
-      if (!mount || document.getElementById('kofiframe')) return;
-      if (typeof umami !== 'undefined') umami.track('kofi-panel-open');
-      mount.innerHTML = `
-        <iframe id="kofiframe"
-          src="https://ko-fi.com/forcequit/?hidefeed=true&widget=true&embed=true&preview=true"
-          style="border:none; width:100%; padding:4px; background:#f9f9f9; border-radius:12px;"
-          height="712" title="forcequit" loading="lazy"></iframe>
-        <p style="color:var(--text-soft); font-size:0.75rem; margin-top:0.5rem;">
-          Payments are handled by Ko-fi (Stripe) — card details never touch this site.
-        </p>`;
     }
 
     // ======== HEARTBEAT SYSTEM ========
