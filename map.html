@@ -2122,7 +2122,7 @@
       </div>
 
       <!-- Pager Settings Panel -->
-      <div class="filter-panel open" id="pager-panel">
+      <div class="filter-panel" id="pager-panel">
         <div class="mobile-drag-handle"></div>
         <h4>📟 Pager Window</h4>
         <div class="pager-slider-wrap">
@@ -7009,8 +7009,10 @@ function initPagerHoursFromStorage() {
         });
         removeFilterButton('pager');
       } else {
-        // Turn on pager layer and open panel with settings
-        panel.classList.add('open');
+        // Turn on pager layer. The settings panel only opens on mobile -
+        // on desktop the floating filter-buttons slider is the control,
+        // so popping this legacy panel too would show two sliders.
+        if (window.innerWidth <= 900) panel.classList.add('open');
         btn.classList.add('active');
         map.addLayer(pagerLayer);
         addFilterButton('pager');
