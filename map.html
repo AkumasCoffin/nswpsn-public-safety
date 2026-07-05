@@ -9306,18 +9306,23 @@ function initPagerHoursFromStorage() {
       label: 'Pager',
       color: '#22c55e',
       render() {
-        const v = Number(document.getElementById('pager-hours-range')?.value ?? 12);
+        // Mirror the main slider's range: the editor module raises its max
+        // to 48h for signed-in editors, so this panel follows automatically.
+        const main = document.getElementById('pager-hours-range');
+        const maxH = Number(main?.max) || 24;
+        const v = Number(main?.value ?? 12);
+        const editorNote = maxH > 24 ? ' Editors can look back up to 48h.' : '';
         return `
           <h4><i class="fa-solid fa-pager" style="color:#22c55e;"></i> Pager</h4>
           <div class="ff-section-label">Time range</div>
           <div style="display:flex;align-items:center;gap:8px;">
-            <input type="range" min="1" max="24" step="1" value="${v}"
+            <input type="range" min="1" max="${maxH}" step="1" value="${v}"
                    oninput="document.getElementById('ff-pager-hours-val').textContent = this.value + 'h'"
                    onchange="setPagerHoursFromPanel(this.value)"
                    style="flex:1;accent-color:#22c55e;cursor:pointer;">
             <span id="ff-pager-hours-val" style="font-size:11px;color:#cbd5e1;width:36px;text-align:right;">${v}h</span>
           </div>
-          <div style="font-size:10px;color:#64748b;margin-top:6px;">Pager hits over the last N hours.</div>
+          <div style="font-size:10px;color:#64748b;margin-top:6px;">Pager hits over the last N hours.${editorNote}</div>
         `;
       },
     };
