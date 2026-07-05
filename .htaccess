@@ -34,6 +34,18 @@ DirectoryIndex index.html
   Require all granted
 </FilesMatch>
 
+# Cache policy: HTML, CSS and first-party JS must revalidate on every load
+# (cheap 304s via ETag/Last-Modified). These files change often and a stale
+# cached copy on one device against newer companions breaks pages — e.g. an
+# old cached map.html + old map-editor-module.js kept serving a pre-fix
+# editor build for days. Cloudflare honours origin Cache-Control, so this
+# also stops the CDN pinning old builds once dev mode expires.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|css|js)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
 # Allow the agency directory JSON files at the site root.
 # Front-end fetches `/agency-data.json` and `/agency-extended.json` to populate
 # the sidebar Agencies dropdown and the per-agency reference pages. The broader
