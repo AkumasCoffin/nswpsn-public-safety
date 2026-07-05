@@ -343,10 +343,17 @@
               </div>
             </div>
             <div style="flex:0 0 340px; min-width:280px;">
-              <iframe id="kofiframe"
-                src="https://ko-fi.com/forcequit/?hidefeed=true&widget=true&embed=true&preview=true"
-                style="border:none; width:100%; padding:0; background:transparent; border-radius:12px;"
-                height="580" title="forcequit" loading="lazy"></iframe>
+              <!-- Wrapper crops the widget to its white card edge (the frame
+                   otherwise trails a tall grey band under the panel). -->
+              <div style="height:520px; overflow:hidden; border-radius:14px;">
+                <iframe id="kofiframe"
+                  src="https://ko-fi.com/forcequit/?hidefeed=true&widget=true&embed=true&preview=true"
+                  style="border:none; width:100%; padding:0; background:transparent;"
+                  height="580" title="forcequit" loading="lazy"></iframe>
+              </div>
+              <p style="color:var(--text-soft); font-size:0.72rem; text-align:center; margin:0.45rem 0 0;">
+                Powered by <a href="https://ko-fi.com" target="_blank" rel="noopener noreferrer">Ko-fi</a>
+              </p>
             </div>
           </div>
         </div>
