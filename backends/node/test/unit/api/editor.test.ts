@@ -108,6 +108,41 @@ describe('POST /api/editor-requests (public submit)', () => {
     expect(params[11]).toBe(4);
   });
 
+  it('stores the verified userId (JWT) as supabase_user_id, never a body value', async () => {
+    resultQueue = [{ rows: [] }, { rows: [{ id: 5 }] }];
+    const app = makeApp(); // sets userId 'owner-1'
+    await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'a@b.com',
+        discord_id: 'd1',
+        about: 'hi',
+        request_type: ['editor'],
+        supabase_user_id: 'attacker-chosen-id', // must be ignored
+      }),
+    });
+    const params = calls[1]?.params ?? [];
+    expect(params[13]).toBe('owner-1');
+  });
+
+  it('stores null supabase_user_id for anonymous submissions', async () => {
+    resultQueue = [{ rows: [] }, { rows: [{ id: 6 }] }];
+    const app = makeApp({ authed: false });
+    await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'a@b.com',
+        discord_id: 'd1',
+        about: 'hi',
+        request_type: ['editor'],
+      }),
+    });
+    const params = calls[1]?.params ?? [];
+    expect(params[13]).toBeNull();
+  });
+
   it('clamps experience_level outside 1-5 to null', async () => {
     resultQueue = [{ rows: [] }, { rows: [{ id: 1 }] }];
     const app = makeApp();
@@ -197,6 +232,41 @@ describe('POST /api/editor-requests/:id/approve', () => {
     const updateCall = calls[1];
     expect(updateCall?.sql).toContain("status = 'approved'");
     expect(updateCall?.params?.[1]).toContain('Roles: map_editor,pager_contributor');
+  });
+
+  it('assigns roles to the linked account and skips account creation', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch');
+    try {
+      resultQueue = [
+        { rows: [{ id: 1, email: 'a@b.com', discord_id: 'd', status: 'pending', supabase_user_id: 'linked-uid-1' }] },
+        { rows: [] }, // INSERT role 1
+        { rows: [] }, // INSERT role 2
+        { rows: [] }, // UPDATE editor_requests
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/editor-requests/1/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // create_account true must NOT create an account for linked requests
+        body: JSON.stringify({ roles: ['map_editor', 'radio_contributor'], create_account: true }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body['roles_assigned_to_linked_account']).toBe(true);
+      expect(body['supabase_account_created']).toBe(false);
+      expect(body['temp_password']).toBeUndefined();
+      // No Supabase admin API call was made.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // Roles inserted for the linked user id.
+      const roleInserts = calls.filter((c2) => c2.sql.includes('INSERT INTO user_roles'));
+      expect(roleInserts).toHaveLength(2);
+      expect(roleInserts[0]?.params?.[0]).toBe('linked-uid-1');
+      // Notes record the linked assignment.
+      const updateCall = calls.find((c2) => c2.sql.includes("status = 'approved'"));
+      expect(updateCall?.params?.[1]).toContain('linked account linked-uid-1');
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it('creates a Supabase account, inserts roles, and surfaces temp password when create_account is true', async () => {

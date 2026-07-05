@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – About</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+
+  <meta name="description" content="About NSW PSN by Forcequit — a free, ad-free hub for monitoring NSW public safety data. Why it exists, what it aims to do, and where it's headed.">
+  <meta name="author" content="Forcequit">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/about.html">
+  <meta property="og:title" content="NSW PSN – About">
+  <meta property="og:description" content="About NSW PSN by Forcequit — a free, ad-free hub for monitoring NSW public safety data.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/about.html">
+  <meta name="twitter:title" content="NSW PSN – About">
+  <meta name="twitter:description" content="About NSW PSN by Forcequit — a free, ad-free hub for monitoring NSW public safety data.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+</head>
+<body>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>About</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+      <a class="active" href="about.html">About</a>
+    </nav>
+
+    <div id="agencies-nav-mount"></div>
+
+    <div class="sidebar-section-label">Live Scanner</div>
+    <div class="sidebar-highlight">
+      <div class="sidebar-highlight-title">NSW PSN Scanner</div>
+      <div>Hosted by Forcequit</div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://radio.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Radio Feed
+        </a>
+      </div>
+      <div style="margin-top:0.45rem;">
+        <a class="listen-btn-wide" href="https://pager.forcequit.xyz/" target="_blank" rel="noopener noreferrer">
+          Pager Feed
+        </a>
+      </div>
+    </div>
+    <div style="margin-top:0.45rem;">
+      <a class="discord-btn-wide" href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">
+        Support Discord
+      </a>
+    </div>
+    <div style="margin-top:0.3rem;">
+      <a class="discord-btn-wide" href="dashboard.html" target="_blank" rel="noopener noreferrer">
+        Discord Bot
+      </a>
+    </div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div class="breadcrumb">About</div>
+      <h1>ℹ️ About NSW PSN</h1>
+      <p>
+        A free, ad-free hub for keeping an eye on what's happening across New South Wales —
+        built and run by an enthusiast, for the community.
+      </p>
+    </header>
+
+    <section class="card-grid">
+
+      <!-- ============================================================
+           OVERVIEW
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">What is this site?</div>
+          <div class="card-tag">Overview</div>
+        </div>
+        <div class="card-body">
+          <p>
+            First, the name. The <strong>NSW Public Safety Network (PSN)</strong> is the state-wide digital
+            radio network that NSW's emergency services and government agencies — police, fire, ambulance,
+            SES and many more — communicate over. This site is <strong>named after that network</strong>, but
+            it isn't the network itself and has no affiliation with it: it's an independent,
+            community-run hub for monitoring that network and the public-safety data around it.
+          </p>
+          <p>
+            What you'll find here is a single place to watch what's unfolding across New South Wales in real
+            time — bush fires, traffic incidents, road hazards, power outages, weather warnings, beach
+            conditions, and more — pulled together from official and public sources onto one live map, live
+            feed, and searchable log.
+          </p>
+          <p>
+            It also ties together the things scanner and public-safety enthusiasts already use: a
+            <strong>live radio feed</strong> of PSN traffic, a <strong>pager message feed</strong>, and a
+            <strong>Discord bot</strong> that pushes alerts straight into your server — so you don't have to
+            juggle a dozen browser tabs and government websites to stay informed.
+          </p>
+          <p>
+            Everything is aggregated, cached briefly, and presented as-is. It's a monitoring and reference
+            tool — not an emergency service. In a real emergency, always call <strong>000</strong> and follow
+            official advice from the relevant agency.
+          </p>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           WHY I STARTED THIS
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">Why I started this</div>
+          <div class="card-tag">The story</div>
+        </div>
+        <div class="card-body">
+          <p>
+            I started this to <strong>help the community</strong>. Information about what's happening across NSW
+            is out there, but it's scattered everywhere — RFS on one site, Live Traffic on another, the Bureau
+            somewhere else, and power outages behind yet another map. To get a real picture of what's going on
+            near you, you'd need half a dozen tabs open, each refreshing on its own, none of them talking to each
+            other — and the radio and pager traffic you couldn't follow at all without your own scanner set up to
+            receive and decode it off-air.
+          </p>
+          <p>
+            So I built the thing I wished existed and made it free for everyone: one map and one feed that
+            quietly pull all of it together, update themselves, and let you filter down to what you care about.
+            The goal is simple — give the community, the volunteers, the scanner enthusiasts, and anyone who just
+            wants to stay informed one clear, honest place to see what's happening, without ads and without a
+            catch.
+          </p>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           AIMS
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">What it aims to do</div>
+          <div class="card-tag">Mission</div>
+        </div>
+        <div class="card-body">
+          <ul>
+            <li><strong>Put it all in one place.</strong> Aggregate NSW public-safety data that's normally spread across many sites into one live, filterable view.</li>
+            <li><strong>Keep it fast and current.</strong> Auto-refreshing data with sensible caching, so you're looking at what's happening now — not a page you have to keep reloading.</li>
+            <li><strong>Stay free and open to everyone.</strong> No paywall, no account required to watch, no "premium" tier for the important bits.</li>
+            <li><strong>Respect your privacy.</strong> No ads, no behavioural tracking, no selling data. (More on that below.)</li>
+            <li><strong>Be honest about what it is.</strong> A best-effort monitoring tool built on public data — not an official emergency service, and never a replacement for 000 or agency advice.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           AD-FREE
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">Ad-free &amp; independent</div>
+          <div class="card-tag">No ads</div>
+        </div>
+        <div class="card-body">
+          <p>
+            <strong>There are no ads here, and there never will be.</strong> No banners, no pop-ups, no
+            sponsored pins, no newsletter nags, no "accept cookies to continue" walls.
+          </p>
+          <p>Just as importantly, there's no hidden cost paid with your data:</p>
+          <ul>
+            <li>No advertising or marketing trackers</li>
+            <li>No third-party analytics like Google Analytics or Facebook Pixel</li>
+            <li>No cross-site behavioural profiling or fingerprinting</li>
+            <li>Your data is <strong>never</strong> sold, rented, or traded</li>
+          </ul>
+          <p>
+            The project is funded and run privately, out of pocket, because it's useful — not because it's
+            making money off you. The only analytics are a lightweight count of active viewers (so the site
+            can tune how often it refreshes) and self-hosted, cookie-free page-view stats that never leave
+            my own server. See the <a href="privacy.html">Privacy Policy</a> for the full detail.
+          </p>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           WHAT'S INCLUDED
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">What's included</div>
+          <div class="card-tag">Features</div>
+        </div>
+        <div class="card-body">
+          <p>The data brought together on the map, live feed and logs includes:</p>
+          <ul>
+            <li>NSW Rural Fire Service (RFS) bush fire incidents &amp; Fire Danger Ratings</li>
+            <li>Live Traffic NSW / Transport for NSW — incidents, roadwork, floods, fires &amp; major events</li>
+            <li>Waze — crowdsourced road hazards, police reports &amp; roadwork</li>
+            <li>Bureau of Meteorology (BOM) — warnings &amp; radar</li>
+            <li>Power outages — Endeavour Energy, Ausgrid &amp; Essential Energy</li>
+            <li>Beach conditions — Beachwatch &amp; BeachSafe NSW</li>
+            <li>Traffic, aviation &amp; fire-tower cameras</li>
+            <li>Emergency-related news feeds</li>
+          </ul>
+          <p style="margin-top: 1rem;">Plus the tools built around it:</p>
+          <ul>
+            <li><strong>Live radio feed</strong> of publicly receivable, non-encrypted transmissions — received off-air and decoded, not scraped from an API</li>
+            <li><strong>Pager message feed</strong></li>
+            <li><strong>Agency quick reference</strong> — talkgroup IDs, radio codes, zones and useful pages for dozens of NSW agencies</li>
+            <li><strong>Hourly radio-traffic summaries</strong> so you can catch up on what you missed</li>
+            <li><strong>Discord bot</strong> for per-server alert subscriptions — add it to your server from the <a href="dashboard.html">dashboard</a></li>
+            <li><strong>Incident map editor</strong> for approved contributors</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           COMMUNITY FEEDS / CONTRIBUTORS
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">Powered by the community</div>
+          <div class="card-tag">Contributors</div>
+        </div>
+        <div class="card-body">
+          <p>
+            The live radio and pager feeds aren't pulled from some API — they're <strong>received off-air</strong>.
+            The signals are picked up on radio receivers and decoded in real time, then streamed to the site. And
+            it isn't a one-person effort. Alongside my own receivers, a group of community feed
+            <strong>Contributors</strong> — the feeders — run their own gear and feed their radio and pager data
+            in to widen the coverage.
+          </p>
+          <p>
+            Every contributor's feed merges into the two main feeds — <strong>one radio feed and one pager
+            feed</strong> — so instead of relying on a single receiver in a single spot, you get the combined
+            coverage of everyone chipping in. More ears, wider reach, and a more reliable picture than any one
+            of us could manage alone.
+          </p>
+          <p>
+            That's the whole idea: people sharing what they can, pooled into one place, kept free for everyone.
+            There's more than one way to pitch in — run a receiver and contribute a <strong>radio or pager
+            feed</strong> to widen the coverage, or become a <strong>map editor</strong> and help add and update
+            incident markers on the live map. You can <a href="editor-signup.html">request access here</a>, or
+            come say hello on the
+            <a href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Discord</a>.
+          </p>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           WHAT'S NEXT
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">What's next</div>
+          <div class="card-tag">Plans</div>
+        </div>
+        <div class="card-body">
+          <p>
+            This is an evolving, actively-developed project. Things on the roadmap and under ongoing
+            improvement include:
+          </p>
+          <ul>
+            <li>More data sources and better coverage across NSW</li>
+            <li>Smarter, more useful radio-traffic summaries</li>
+            <li>Continued performance and reliability work as usage grows</li>
+            <li>More control in the Discord bot and dashboard</li>
+            <li>Quality-of-life improvements based on community feedback</li>
+          </ul>
+          <p>
+            Ideas and feature requests are genuinely welcome — the best improvements have come from people who
+            use it. Bring them to the <a href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">Discord</a>.
+          </p>
+        </div>
+      </article>
+
+      <!-- ============================================================
+           GET INVOLVED + SUPPORT / DONATIONS (Ko-fi)
+           One merged card: community/contact content fills the left
+           column so it visually balances the tall Ko-fi panel.
+           ============================================================ -->
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title">Get involved &amp; support</div>
+          <div class="card-tag">Community</div>
+        </div>
+        <div class="card-body">
+          <div style="display:flex; flex-wrap:wrap; gap:2.5rem; justify-content:center; align-items:center;">
+            <div style="flex:1 1 380px; min-width:260px; max-width:620px;">
+              <p>
+                The best way to follow along, report a problem, suggest a feature, or just chat with other
+                enthusiasts is the community Discord:
+              </p>
+              <p style="margin-top: 0.5rem;">
+                <strong>Discord:</strong> <a href="https://discord.forcequit.xyz" target="_blank" rel="noopener noreferrer">discord.forcequit.xyz</a><br>
+                <strong>Contact:</strong> contact@forcequit.xyz
+              </p>
+              <p style="margin-top: 1rem;">
+                If this site is useful to you, the most valuable thing you can do is use it, share it, and
+                tell me when something's broken or missing. Keeping it free and ad-free is the whole point.
+              </p>
+              <div style="border-top:1px solid rgba(148,163,184,0.18); margin:1.2rem 0; padding-top:1.2rem;">
+                <p>
+                  NSW PSN is funded out of pocket — servers, receivers, antennas and bandwidth. If you'd
+                  like to chip in, you can donate through <strong>Ko-fi</strong>.
+                </p>
+                <p>
+                  Donations are never required and never unlock anything: every feature stays free for
+                  everyone either way.
+                </p>
+                <p style="color:var(--text-soft); font-size:0.8rem; margin-bottom:0;">
+                  Payments are handled by Ko-fi (Stripe) — card details never touch this site. Prefer a new
+                  tab? <a href="https://ko-fi.com/forcequit" target="_blank" rel="noopener noreferrer">ko-fi.com/forcequit</a>
+                </p>
+              </div>
+            </div>
+            <div style="flex:0 0 340px; min-width:280px;">
+              <!-- Wrapper crops the widget to its white card edge (the frame
+                   otherwise trails a tall grey band under the panel). -->
+              <div style="height:520px; overflow:hidden; border-radius:14px;">
+                <iframe id="kofiframe"
+                  src="https://ko-fi.com/forcequit/?hidefeed=true&widget=true&embed=true&preview=true"
+                  style="border:none; width:100%; padding:0; background:transparent;"
+                  height="580" title="forcequit" loading="lazy"></iframe>
+              </div>
+              <p style="color:var(--text-soft); font-size:0.72rem; text-align:center; margin:0.45rem 0 0;">
+                Powered by <a href="https://ko-fi.com" target="_blank" rel="noopener noreferrer">Ko-fi</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+    <div class="main-footer-note">
+      About NSW PSN · <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms &amp; Conditions</a>
+    </div>
+  </main>
+
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.menu-overlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    }
+
+    // ======== HEARTBEAT SYSTEM ========
+    const PROXY_BASE = 'https://api.forcequit.xyz';
+    let heartbeatTimer = null;
+
+    const PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
+      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() :
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }));
+      localStorage.setItem('nswpsn_session_id', id);
+      return id;
+    })();
+    const PAGE_TYPE = 'about';
+    const IS_DATA_PAGE = false;
+
+    async function sendHeartbeat(action = 'ping') {
+      try {
+        await fetch(`${PROXY_BASE}/api/heartbeat?action=${action}&page_id=${PAGE_ID}&page_type=${PAGE_TYPE}&data_page=${IS_DATA_PAGE}`);
+      } catch (e) {}
+    }
+
+    sendHeartbeat('open');
+
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    }
+
+    startHeartbeat();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+    });
+  </script>
+<script src="analytics.js"></script>
+<script src="agencies.js"></script>
+</body>
+</html>

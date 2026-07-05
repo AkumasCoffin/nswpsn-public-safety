@@ -29,7 +29,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+
   <style>
     :root {
       --bg-dark: #020617;
@@ -326,10 +328,31 @@
         
         <div class="info-box">
           <i class="fas fa-info-circle"></i>
-          Editors can add and update incident markers on the live map. 
+          Editors can add and update incident markers on the live map.
           Your request will be reviewed and you'll be contacted via Discord.
         </div>
-        
+
+        <!-- Discord signup: sign in first so the request is tied to the
+             account and approval can unlock it directly. -->
+        <div id="discord-signup-box" style="margin-bottom: 1.5rem;">
+          <button type="button" id="discord-signup-btn" onclick="signUpWithDiscord()" style="width:100%; padding:0.9rem 1.5rem; background:#5865F2; color:#fff; border:none; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
+            <i class="fab fa-discord"></i>
+            Sign up with Discord
+          </button>
+          <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
+            No separate password to remember — your email and Discord details are filled in automatically.
+          </p>
+          <div style="display:flex; align-items:center; gap:0.75rem; margin-top:1rem; color:#64748b; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">
+            <span style="flex:1; border-top:1px solid var(--border-subtle);"></span>
+            <span>or sign up with email</span>
+            <span style="flex:1; border-top:1px solid var(--border-subtle);"></span>
+          </div>
+        </div>
+        <div id="discord-linked-box" style="display:none; margin-bottom:1.5rem; background:rgba(88,101,242,0.12); border:1px solid rgba(88,101,242,0.4); border-radius:8px; padding:0.85rem 1rem; font-size:0.85rem; color:#c7d2fe;">
+          <i class="fab fa-discord" style="margin-right:0.4rem;"></i>
+          Signed in as <strong id="discord-linked-name"></strong> — this request will be linked to your account.
+        </div>
+
         <form id="signup-form" onsubmit="submitRequest(event); return false;">
           <!-- Request Type -->
           <div class="form-group">
@@ -428,7 +451,33 @@
             </label>
             <input type="email" id="email" class="form-input" placeholder="your@email.com" required>
           </div>
-          
+
+          <!-- Account creation (hidden when already signed in, e.g. after
+               Discord signup): username + password for the new account. -->
+          <div id="password-group">
+            <div class="form-group">
+              <label class="form-label">
+                Username <span class="required">*</span>
+              </label>
+              <input type="text" id="signup-username" class="form-input" placeholder="How you'll appear around the site" maxlength="32" autocomplete="username">
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                Create a Password <span class="required">*</span>
+              </label>
+              <input type="password" id="signup-password" class="form-input" placeholder="At least 8 characters" autocomplete="new-password" minlength="8">
+            </div>
+            <div class="form-group">
+              <label class="form-label">
+                Confirm Password <span class="required">*</span>
+              </label>
+              <input type="password" id="signup-password-confirm" class="form-input" placeholder="Repeat your password" autocomplete="new-password">
+              <p style="color:#64748b; font-size:0.75rem; margin-top:0.4rem;">
+                Your account is created when you submit — you can sign in straight away, and editor/feeder features switch on once your request is approved.
+              </p>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">
               Discord ID <span class="required">*</span>
@@ -512,7 +561,8 @@
       <div id="success-container" class="success-state" style="display: none;">
         <i class="fas fa-check-circle"></i>
         <h2>Request Submitted!</h2>
-        <p>Thanks for your interest! We'll review your request and contact you via Discord.</p>
+        <p>Thanks for your interest! We'll review your request and contact you via Discord.
+           Your account is ready to sign in with now — editor/feeder features switch on once you're approved.</p>
         <div style="margin-top: 1.5rem;">
           <a href="map.html" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
             <i class="fas fa-map"></i>
@@ -536,8 +586,70 @@
   </div>
 
   <script>
-    const API_BASE_URL = 'https://api.forcequit.xyz';
-    
+    // API_BASE_URL comes from config.js (shared with the rest of the site).
+
+    // ---- Discord signup (Supabase OAuth) ----
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    function escapeHtmlSignup(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    async function signUpWithDiscord() {
+      const btn = document.getElementById('discord-signup-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…';
+      const { error } = await sb.auth.signInWithOAuth({
+        provider: 'discord',
+        options: { redirectTo: window.location.origin + window.location.pathname },
+      });
+      if (error) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fab fa-discord"></i> Sign up with Discord';
+        const messageEl = document.getElementById('message');
+        messageEl.textContent = error.message;
+        messageEl.className = 'message error';
+      }
+      // On success the browser navigates away to Discord.
+    }
+
+    // When signed in (fresh OAuth return or existing session), swap the
+    // signup button for a "linked" notice and prefill email + Discord ID
+    // from the Discord identity.
+    async function applySession(session) {
+      if (!session) return;
+      const user = session.user || {};
+      const meta = user.user_metadata || {};
+      const discordIdentity = (user.identities || []).find((i) => i.provider === 'discord');
+      const idData = (discordIdentity && discordIdentity.identity_data) || {};
+
+      const emailInput = document.getElementById('email');
+      if (emailInput && !emailInput.value && user.email) emailInput.value = user.email;
+
+      const discordInput = document.getElementById('discord');
+      if (discordInput && !discordInput.value) {
+        // Prefer the numeric Discord user ID; fall back to the username.
+        discordInput.value = idData.provider_id || idData.sub || meta.provider_id
+          || meta.user_name || meta.name || meta.full_name || '';
+      }
+
+      const nameEl = document.getElementById('discord-linked-name');
+      if (nameEl) {
+        nameEl.textContent = meta.full_name || meta.name || meta.user_name || user.email || 'your account';
+      }
+      document.getElementById('discord-signup-box').style.display = 'none';
+      document.getElementById('discord-linked-box').style.display = 'block';
+      // Already signed in — no password to create.
+      document.getElementById('password-group').style.display = 'none';
+    }
+
+    sb.auth.getSession().then(({ data }) => applySession(data.session));
+    sb.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN') applySession(session);
+    });
+
     let currentRating = 0;
     const ratingLabels = {
       1: '⭐ Beginner - Little to no experience',
@@ -681,16 +793,86 @@
         return;
       }
       
+      // Not signed in yet (no Discord signup): create the account now with
+      // the chosen password, so the request is linked to it and approval
+      // just switches the roles on.
+      let existingSession = null;
+      try {
+        const { data: sess0 } = await sb.auth.getSession();
+        existingSession = sess0?.session || null;
+      } catch (e) { /* treat as signed out */ }
+
+      if (!existingSession) {
+        const username = document.getElementById('signup-username').value.trim();
+        if (username.length < 2) {
+          messageEl.textContent = 'Please choose a username (at least 2 characters).';
+          messageEl.className = 'message error';
+          return;
+        }
+        const pw = document.getElementById('signup-password').value;
+        const pw2 = document.getElementById('signup-password-confirm').value;
+        if (!pw || pw.length < 8) {
+          messageEl.textContent = 'Please create a password of at least 8 characters.';
+          messageEl.className = 'message error';
+          return;
+        }
+        if (pw !== pw2) {
+          messageEl.textContent = 'Passwords do not match.';
+          messageEl.className = 'message error';
+          return;
+        }
+      }
+
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
       messageEl.textContent = '';
-      
+
       try {
+        if (!existingSession) {
+          const pw = document.getElementById('signup-password').value;
+          const username = document.getElementById('signup-username').value.trim();
+          const { data: suData, error: suError } = await sb.auth.signUp({
+            email,
+            password: pw,
+            options: { data: { display_name: username } },
+          });
+          if (suError) {
+            const already = /already|registered|exists/i.test(suError.message || '');
+            messageEl.innerHTML = already
+              ? 'This email already has an account — <a href="login.html?redirect=/editor-signup.html" style="color:var(--accent);">sign in</a> and then submit your request.'
+              : escapeHtmlSignup(suError.message || 'Could not create your account.');
+            messageEl.className = 'message error';
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+            return;
+          }
+          if (!suData?.session) {
+            // Email confirmation is required before a session exists. Ask the
+            // user to confirm + sign in, then resubmit (form stays filled) so
+            // the request links to their verified account.
+            messageEl.innerHTML = 'Account created! Check your email to confirm your address, then '
+              + '<a href="login.html?redirect=/editor-signup.html" style="color:var(--accent);">sign in</a> '
+              + 'and press Submit Request again to send your request.';
+            messageEl.className = 'message success';
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+            return;
+          }
+        }
+
+        // Send the JWT so the backend links this request to the verified
+        // account — approval then assigns roles straight to it.
+        const headers = { 'Content-Type': 'application/json' };
+        try {
+          const { data: sess } = await sb.auth.getSession();
+          if (sess?.session?.access_token) {
+            headers['Authorization'] = `Bearer ${sess.session.access_token}`;
+          }
+        } catch (e) { /* not signed in — plain request */ }
+
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers,
           body: JSON.stringify({ 
             email, 
             discord_id: discord, 
