@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder (Manual)
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.1
+// @version      1.2
 // @description  Passive companion to the auto-rotating NSWPSN Waze Forwarder. Hooks Waze's georss fetch/XHR responses and forwards them to the NSWPSN backend, but does NOT rotate the map — the operator pans around themselves. Use this in your normal browser; it contributes whatever you happen to be viewing on Waze to the NSWPSN data pool. Each operator sets their own ingest key via the userscript menu (stored per-browser, no keys in this public file).
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -28,6 +28,12 @@
     // localStorage and survives updates. Give each person a different key.
     const LS_INGEST_KEY = 'nswpsn_ingest_key';
 
+    // Prefer editing the script over the menu? Paste your key here — when
+    // non-empty it OVERRIDES the menu/localStorage value. Note it's wiped
+    // when the script auto-updates; turn OFF auto-update to keep it. Leave
+    // EMPTY in any copy you share.
+    const INGEST_KEY_OVERRIDE = '';
+
     // Optional NSW geofence — drop ingests whose bbox center sits outside
     // this rectangle. Saves the backend from processing data the user
     // browsed in QLD/VIC/etc. Set to null to disable the geofence and
@@ -50,6 +56,9 @@
 
     // ====== INGEST KEY (per-browser, set via the userscript menu) ======
     function getIngestKey() {
+        if (typeof INGEST_KEY_OVERRIDE === 'string' && INGEST_KEY_OVERRIDE.trim()) {
+            return INGEST_KEY_OVERRIDE.trim();
+        }
         try {
             const k = pageWin.localStorage.getItem(LS_INGEST_KEY);
             return (k && k.trim()) ? k.trim() : '';
