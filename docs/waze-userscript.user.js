@@ -1,16 +1,14 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.28
-// @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations. Each operator sets their own ingest key via the userscript menu (stored per-browser, so no keys live in this public file and updates never wipe it).
+// @version      1.29
+// @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations. Set INGEST_KEY near the top to your own key.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        GM_cookie
 // @grant        GM.cookie
-// @grant        GM_registerMenuCommand
-// @grant        GM.registerMenuCommand
 // @grant        unsafeWindow
 // @connect      *
 // @run-at       document-start
@@ -24,26 +22,13 @@
     // ====== CONFIG ======
     const BACKEND_URL = 'https://api.forcequit.xyz/api/waze/ingest';
 
-    // Your ingest key is NOT stored in this file. The script is public and
-    // auto-updates from GitHub, so a key edited into the file would leak and
-    // be wiped on the next update. Instead each operator sets their OWN key
-    // once; it lives in this browser profile's localStorage and survives
-    // script updates. Give each person (or each browser profile you run) a
-    // different key and they set it themselves.
-    //
-    // To set it: click the Tampermonkey / Violentmonkey toolbar icon, open
-    // this script's menu, choose "NSWPSN: set ingest key…" and paste the key
-    // you were given. (Advanced: set localStorage['nswpsn_ingest_key'].)
-    const LS_INGEST_KEY = 'nswpsn_ingest_key';
-
-    // Prefer editing the script over the menu? Paste your key here instead.
-    // When non-empty it OVERRIDES the menu/localStorage value.
-    // IMPORTANT: the userscript auto-updates from GitHub, which overwrites
-    // this whole file — so an edited key here is wiped on the next update.
-    // To keep it, turn OFF auto-update for this script in your userscript
-    // manager (Violentmonkey: script → Settings → "Update: off"). Leave this
-    // EMPTY in any copy you share.
-    const INGEST_KEY_OVERRIDE = '';
+    // Your ingest key. Each operator edits their OWN copy of this script and
+    // sets this to the key they were given. (The backend accepts a set of
+    // keys — WAZE_INGEST_KEYS — so every feeder can run with a distinct one.)
+    // Note: with auto-update ON, a script update overwrites this file and
+    // clears your key — turn auto-update OFF (Violentmonkey: script settings
+    // → Update: off) to keep an edited key. Leave EMPTY in any copy you share.
+    const INGEST_KEY = 'REPLACE_WITH_YOUR_WAZE_INGEST_KEY';
 
     // Regions rotated through. v1.26: regenerated as a 171-point grid for
     // gapless NSW coverage (backend health wants regions_cached >= 150) —
@@ -287,53 +272,6 @@
         catch (e) { return fn; }
     };
 
-    // ====== INGEST KEY (per-browser, set via the userscript menu) ======
-    // Resolved fresh on every POST, so changing it via the menu takes effect
-    // on the next ingest without a reload.
-    function getIngestKey() {
-        // In-file override wins when set (for people who prefer editing the
-        // script); otherwise use the per-browser menu/localStorage value.
-        if (typeof INGEST_KEY_OVERRIDE === 'string' && INGEST_KEY_OVERRIDE.trim()) {
-            return INGEST_KEY_OVERRIDE.trim();
-        }
-        try {
-            const k = pageWin.localStorage.getItem(LS_INGEST_KEY);
-            return (k && k.trim()) ? k.trim() : '';
-        } catch (e) { return ''; }
-    }
-    function maskKey(k) {
-        if (!k) return '(not set)';
-        if (k.length <= 8) return k[0] + '***';
-        return k.slice(0, 4) + '…' + k.slice(-4);
-    }
-    // Register menu commands to set / view the key. Both the legacy
-    // (GM_registerMenuCommand) and modern (GM.registerMenuCommand) APIs are
-    // supported; if neither exists the operator can set localStorage by hand.
-    function registerKeyMenu() {
-        const reg = (typeof GM_registerMenuCommand !== 'undefined') ? GM_registerMenuCommand
-                  : (typeof GM !== 'undefined' && GM.registerMenuCommand) ? GM.registerMenuCommand
-                  : null;
-        if (!reg) { log(`menu API unavailable — set localStorage['${LS_INGEST_KEY}'] manually`); return; }
-        try {
-            reg('NSWPSN: set ingest key…', () => {
-                const cur = getIngestKey();
-                const next = pageWin.prompt('Paste your NSWPSN Waze ingest key for THIS browser:', cur || '');
-                if (next === null) return; // cancelled
-                const v = next.trim();
-                try {
-                    if (v) pageWin.localStorage.setItem(LS_INGEST_KEY, v);
-                    else pageWin.localStorage.removeItem(LS_INGEST_KEY);
-                } catch (e) {}
-                log('ingest key ' + (v ? 'set → ' + maskKey(v) : 'cleared') + ' (applies on next ingest)');
-            });
-            reg('NSWPSN: show current ingest key', () => {
-                const m = maskKey(getIngestKey());
-                log('active ingest key:', m);
-                try { pageWin.alert('NSWPSN ingest key (this browser): ' + m); } catch (e) {}
-            });
-        } catch (e) { log('menu register fail', e); }
-    }
-
     // ====== INTERCEPT + FORWARD ======
     function handleGeorss(urlStr, data) {
         try {
@@ -544,16 +482,7 @@
         log(`Waze ${status} #${newCount} — extended backoff ${Math.round(delay / 60000)}m`);
     }
 
-    let _warnedNoKey = false;
     function forward(payload) {
-        const key = getIngestKey();
-        if (!key) {
-            if (!_warnedNoKey) {
-                _warnedNoKey = true;
-                log('NO INGEST KEY SET — open the Tampermonkey/Violentmonkey menu → "NSWPSN: set ingest key…" and paste your key. Not forwarding until then.');
-            }
-            return;
-        }
         const xhr = (typeof GM_xmlhttpRequest !== 'undefined') ? GM_xmlhttpRequest
                   : (typeof GM !== 'undefined' && GM.xmlHttpRequest) ? GM.xmlHttpRequest
                   : null;
@@ -561,7 +490,7 @@
         xhr({
             method: 'POST',
             url: BACKEND_URL,
-            headers: { 'Content-Type': 'application/json', 'X-Ingest-Key': key },
+            headers: { 'Content-Type': 'application/json', 'X-Ingest-Key': INGEST_KEY },
             data: JSON.stringify(payload),
             timeout: 15000,
             onload: (r) => {
@@ -1086,16 +1015,10 @@
         pageWin.addEventListener('focus', checkStuck);
     } catch (e) { log('visibility hook fail:', e); }
 
-    // Register the ingest-key menu commands and surface the current key
-    // status on load so a fresh install immediately knows to set one.
-    registerKeyMenu();
-
     {
         const _cd = loadCooldown();
         const _remMin = Math.round(Math.max(0, _cd.until - Date.now()) / 60000);
-        const _key = getIngestKey();
-        log('NSWPSN Waze Forwarder v1.28 loaded — backend:', BACKEND_URL,
-            `· key ${maskKey(_key)}`,
+        log('NSWPSN Waze Forwarder v1.29 loaded — backend:', BACKEND_URL,
             `· ${REGIONS.length} regions`,
             `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
             `· auto-reload ${RELOAD_INTERVAL_MS / 60000}m`,
@@ -1104,8 +1027,8 @@
             _cd.until > 0
                 ? `· COOLDOWN ACTIVE ${_remMin}m left (count ${_cd.count})`
                 : '· no active cooldown');
-        if (!_key) {
-            log('⚠ No ingest key set for this browser. Open the userscript menu → "NSWPSN: set ingest key…" to start forwarding.');
+        if (INGEST_KEY === 'REPLACE_WITH_YOUR_WAZE_INGEST_KEY' || !INGEST_KEY) {
+            log('⚠ INGEST_KEY not set — edit the INGEST_KEY line near the top of the script.');
         }
     }
 })();
