@@ -81,6 +81,12 @@ const Schema = z.object({
   // backend uses; .env carries it.
   WAZE_INGEST_KEY: z.string().min(1).optional(),
 
+  // Additional accepted ingest keys — one per feeder/operator so each can
+  // run the userscript with their own key (revoke/attribute individually).
+  // Comma-, whitespace- or newline-separated. Any key here OR WAZE_INGEST_KEY
+  // is accepted. e.g. WAZE_INGEST_KEYS="keyAlice,keyBob,keyCarol"
+  WAZE_INGEST_KEYS: z.string().optional(),
+
   // How long an ingested Waze bbox snapshot stays "live" before it's
   // pruned. Falls back to Python's WAZE_INGEST_MAX_AGE so the same .env
   // drives both backends. Default 40 min — userscript's ~16 min
