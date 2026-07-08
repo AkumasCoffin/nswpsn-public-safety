@@ -118,7 +118,13 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
   // signal under {"method":"GET",…} on every line. Embed everything in
   // the message string instead — production ndjson keeps it grep-able,
   // dev pretty-print shows the same clean line.
-  const line = `${method} ${path} → ${status} ${ms}ms [${client}]`;
+  // Ingest requests carry the matched feeder key's first 5 chars (set by
+  // requireIngestKey) so every hit shows WHICH feeder posted — lets a log
+  // reader see which feeders are online at a glance.
+  const keyPrefix = c.get('ingestKeyPrefix');
+  const line =
+    `${method} ${path} → ${status} ${ms}ms [${client}]` +
+    (keyPrefix ? ` key=${keyPrefix}` : '');
 
   if (status >= 500) {
     log.warn(`5xx ${line}`);
