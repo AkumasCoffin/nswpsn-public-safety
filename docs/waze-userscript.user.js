@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.27
+// @version      1.28
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations. Each operator sets their own ingest key via the userscript menu (stored per-browser, so no keys live in this public file and updates never wipe it).
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -35,6 +35,15 @@
     // this script's menu, choose "NSWPSN: set ingest key…" and paste the key
     // you were given. (Advanced: set localStorage['nswpsn_ingest_key'].)
     const LS_INGEST_KEY = 'nswpsn_ingest_key';
+
+    // Prefer editing the script over the menu? Paste your key here instead.
+    // When non-empty it OVERRIDES the menu/localStorage value.
+    // IMPORTANT: the userscript auto-updates from GitHub, which overwrites
+    // this whole file — so an edited key here is wiped on the next update.
+    // To keep it, turn OFF auto-update for this script in your userscript
+    // manager (Violentmonkey: script → Settings → "Update: off"). Leave this
+    // EMPTY in any copy you share.
+    const INGEST_KEY_OVERRIDE = '';
 
     // Regions rotated through. v1.26: regenerated as a 171-point grid for
     // gapless NSW coverage (backend health wants regions_cached >= 150) —
@@ -282,6 +291,11 @@
     // Resolved fresh on every POST, so changing it via the menu takes effect
     // on the next ingest without a reload.
     function getIngestKey() {
+        // In-file override wins when set (for people who prefer editing the
+        // script); otherwise use the per-browser menu/localStorage value.
+        if (typeof INGEST_KEY_OVERRIDE === 'string' && INGEST_KEY_OVERRIDE.trim()) {
+            return INGEST_KEY_OVERRIDE.trim();
+        }
         try {
             const k = pageWin.localStorage.getItem(LS_INGEST_KEY);
             return (k && k.trim()) ? k.trim() : '';
@@ -1080,7 +1094,7 @@
         const _cd = loadCooldown();
         const _remMin = Math.round(Math.max(0, _cd.until - Date.now()) / 60000);
         const _key = getIngestKey();
-        log('NSWPSN Waze Forwarder v1.27 loaded — backend:', BACKEND_URL,
+        log('NSWPSN Waze Forwarder v1.28 loaded — backend:', BACKEND_URL,
             `· key ${maskKey(_key)}`,
             `· ${REGIONS.length} regions`,
             `· pan ${PAN_INTERVAL_MS / 1000}s+jitter`,
