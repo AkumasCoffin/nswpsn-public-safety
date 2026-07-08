@@ -23,6 +23,12 @@ echo "[deploy] repo: $REPO_ROOT"
 echo "[deploy] node: $NODE_DIR"
 
 cd "$REPO_ROOT"
+# `npm install` (below) rewrites package-lock.json every deploy, leaving the
+# working tree dirty and making the NEXT `git pull --ff-only` abort with
+# "local changes would be overwritten". Discard that auto-generated drift
+# before pulling — the committed lockfile is authoritative and npm install
+# re-resolves it anyway. Scoped to the lockfile so real edits are untouched.
+git checkout -- backends/node/package-lock.json 2>/dev/null || true
 echo "[deploy] git pull…"
 git pull --ff-only
 
