@@ -16,6 +16,14 @@ import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { config } from '../../config.js';
 
+// The first 5 chars of the matched ingest key, so handlers/logs can show
+// WHICH feeder a request came from without exposing the full key.
+declare module 'hono' {
+  interface ContextVariableMap {
+    ingestKeyPrefix?: string;
+  }
+}
+
 /**
  * Constant-time string comparison. Length mismatch short-circuits before
  * timingSafeEqual (which throws on unequal-length buffers).
@@ -59,12 +67,15 @@ export const requireIngestKey: MiddlewareHandler = async (c, next) => {
   const supplied = c.req.header('X-Ingest-Key') ?? '';
   // Compare against every configured key WITHOUT short-circuiting, so
   // response timing doesn't leak which key matched or how many exist.
-  let ok = false;
+  let matched: string | null = null;
   for (const k of keys) {
-    if (safeEqual(supplied, k)) ok = true;
+    if (safeEqual(supplied, k)) matched = k;
   }
-  if (!ok) {
+  if (matched === null) {
     return c.json({ error: 'unauthorized' }, 401);
   }
+  // Expose the first 5 chars so the ingest handler can log which feeder
+  // this request came from.
+  c.set('ingestKeyPrefix', matched.slice(0, 5));
   await next();
 };

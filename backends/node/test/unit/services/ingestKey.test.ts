@@ -23,7 +23,9 @@ afterEach(() => {
 
 function appWith() {
   const app = new Hono();
-  app.post('/ingest', requireIngestKey, (ctx) => ctx.json({ ok: true }));
+  app.post('/ingest', requireIngestKey, (ctx) =>
+    ctx.json({ ok: true, prefix: ctx.get('ingestKeyPrefix') ?? null }),
+  );
   return app;
 }
 
@@ -78,5 +80,13 @@ describe('requireIngestKey middleware', () => {
     c.WAZE_INGEST_KEYS = 'alice,bob';
     expect((await post(appWith(), 'mallory')).status).toBe(401);
     expect((await post(appWith())).status).toBe(401); // missing header
+  });
+
+  it('exposes the matched key first-5 as ingestKeyPrefix', async () => {
+    c.WAZE_INGEST_KEY = undefined;
+    c.WAZE_INGEST_KEYS = 'aliceKey123,bobKey456';
+    const res = await post(appWith(), 'bobKey456');
+    expect(res.status).toBe(200);
+    expect((await res.json()).prefix).toBe('bobKe');
   });
 });
