@@ -30,6 +30,7 @@ import { getPool } from '../db/pool.js';
 import { liveStore } from '../store/live.js';
 import { archiveWriter } from '../store/archive.js';
 import { snapshot as wazeSnapshot, ingestStats as wazeIngestStats } from '../store/wazeIngestCache.js';
+import { ingestKeysConfigured } from '../services/auth/ingestKey.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
 import { policeHeatmapStatus } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
@@ -234,7 +235,7 @@ function checkWazeIngest(now: number): {
   block: Record<string, unknown>;
   degraded: boolean;
 } {
-  if (!config.WAZE_INGEST_KEY) {
+  if (!ingestKeysConfigured()) {
     return {
       block: {
         ok: true,
