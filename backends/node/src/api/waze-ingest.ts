@@ -14,7 +14,9 @@
  *     Bypasses ARCHIVE_WAZE feature flag because the new partitioned
  *     archive_waze table is what every downstream consumer queries.
  *
- * Auth: X-Ingest-Key matched against WAZE_INGEST_KEY env var.
+ * Auth: X-Ingest-Key matched against any configured ingest key
+ * (WAZE_INGEST_KEY + WAZE_INGEST_KEYS). The matched key's first 5 chars
+ * are logged so each feeder is identifiable.
  */
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -31,6 +33,11 @@ import {
 import { log } from '../lib/log.js';
 
 export const wazeIngestRouter = new Hono();
+
+// Feeder key-prefixes seen since startup, so we log each one at info level
+// ONCE (not per-POST — that would spam) while every ingest still carries
+// the prefix at debug level. Resets on restart.
+const seenKeyPrefixes = new Set<string>();
 
 function alertSource(a: WazeAlert): string | null {
   if (isPoliceAlert(a)) return 'waze_police';
@@ -188,6 +195,13 @@ wazeIngestRouter.post(
       400,
     );
   }
+  const keyPrefix = c.get('ingestKeyPrefix') ?? '?????';
+  // First POST from a given feeder key since startup → one info line so
+  // active feeders are visible at normal log level.
+  if (!seenKeyPrefixes.has(keyPrefix)) {
+    seenKeyPrefixes.add(keyPrefix);
+    log.info({ key: keyPrefix }, 'waze ingest: feeder key active');
+  }
   const result = ingest(parsed.data);
   // Mirror to the partitioned archive table so historical / heatmap
   // queries see fresh data. The archive writer is async-batched so
@@ -203,6 +217,7 @@ wazeIngestRouter.post(
   }
   log.debug(
     {
+      key: keyPrefix,
       bbox: result.bboxKey,
       alerts: result.alerts,
       jams: result.jams,
