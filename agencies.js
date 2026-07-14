@@ -67,14 +67,8 @@
       }
     }
 
-    if (path === "agency.html" && slug) return activate(slug);
-    const legacy = {
-      "fire-and-rescue.html": "fire-and-rescue-nsw",
-      "ambulance.html": "nsw-ambulance",
-      "rural-fire-service.html": "nsw-rural-fire-service",
-      "aviation.html": "nsw-aviation",
-    };
-    if (legacy[path]) activate(legacy[path]);
+    // Clean URLs strip the extension, so the path may be "agency" or "agency.html".
+    if ((path === "agency.html" || path === "agency") && slug) activate(slug);
   }
 
   // ---------- search index ----------

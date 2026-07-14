@@ -58,6 +58,14 @@ DirectoryIndex index.html
 # The redirect rule canonicalises the URL ("/live.html" → "/live"); the
 # rewrite rule transparently serves /<page>.html when /<page> is requested.
 <IfModule mod_rewrite.c>
+  # Legacy standalone agency pages — retired in favour of the data-driven
+  # agency template. 301 old bookmarks/search results to agency?slug=….
+  # These must run before the clean-URL rules below.
+  RewriteRule ^ambulance(\.html)?$ /agency?slug=nsw-ambulance [R=301,L]
+  RewriteRule ^aviation(\.html)?$ /agency?slug=nsw-aviation [R=301,L]
+  RewriteRule ^fire-and-rescue(\.html)?$ /agency?slug=fire-and-rescue-nsw [R=301,L]
+  RewriteRule ^rural-fire-service(\.html)?$ /agency?slug=nsw-rural-fire-service [R=301,L]
+
   # Skip /index.html (DirectoryIndex already handles the site root) so
   # links to "/" don't bounce. The negative lookahead matches anything
   # but index.html. The character class blocks dots/queries inside the
