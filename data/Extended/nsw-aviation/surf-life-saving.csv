@@ -1,4 +1,4 @@
-Reg,Callsign,Operator / Agency,Type
-VH-SRF,LIFE21,NSW Ambulance / SLSNSW,Rotary-Wing Aircraft
-VH-SQF,LIFE22,NSW Ambulance / SLSNSW,Rotary-Wing Aircraft
-VH-SHF,LIFE23,NSW Ambulance / SLSNSW,Rotary-Wing Aircraft
+Reg,Operator / Agency,Type
+VH-SRF,NSW Ambulance / SLSNSW,Rotary-Wing Aircraft
+VH-SQF,NSW Ambulance / SLSNSW,Rotary-Wing Aircraft
+VH-SHF,NSW Ambulance / SLSNSW,Rotary-Wing Aircraft
