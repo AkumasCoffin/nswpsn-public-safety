@@ -1,8 +1,8 @@
-Reg,Callsign,Operator / Agency,Type
-VH-ZXA,WP1,Westpac / NSW Ambulance,Rotary-Wing Aircraft
-VH-ZXB,WP2,Westpac / NSW Ambulance,Rotary-Wing Aircraft
-VH-ZXC,WP3,Westpac / NSW Ambulance,Rotary-Wing Aircraft
-VH-ZXD,WP4,Westpac / NSW Ambulance,Rotary-Wing Aircraft
-VH-XIB,WP5,Westpac / NSW Ambulance,Rotary-Wing Aircraft
-VH-RSQ,POL71,Westpac / Tasmania Police,Rotary-Wing Aircraft
-VH-EMS,POL72,Westpac / Tasmania Police,Rotary-Wing Aircraft
+Reg,Operator / Agency,Type,Model
+VH-ZXA,Westpac / NSW Ambulance,Rotary-Wing Aircraft,AW139
+VH-ZXB,Westpac / NSW Ambulance,Rotary-Wing Aircraft,AW139
+VH-ZXC,Westpac / NSW Ambulance,Rotary-Wing Aircraft,AW139
+VH-ZXD,Westpac / NSW Ambulance,Rotary-Wing Aircraft,AW139
+VH-XIB,Westpac / NSW Ambulance,Rotary-Wing Aircraft,AW139
+VH-RSQ,Westpac / Tasmania Police,Rotary-Wing Aircraft,
+VH-EMS,Westpac / Tasmania Police,Rotary-Wing Aircraft,
