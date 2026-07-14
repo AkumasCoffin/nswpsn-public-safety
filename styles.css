@@ -831,9 +831,9 @@ a:hover { text-decoration: underline; }
   .rfs-zone-table td:nth-child(3) { font-size: 0.68rem; }
   .rfs-zone-table td:nth-child(4) { font-size: 0.68rem; }
   
-  .aircraft-table { min-width: 420px; }
+  .aircraft-table { min-width: 360px; }
   .aircraft-table td:nth-child(1) { font-size: 0.68rem; }
-  .aircraft-table td:nth-child(4) { font-size: 0.68rem; }
+  .aircraft-table td:nth-child(3) { font-size: 0.68rem; }
   
   /* FDR District - extra small */
   .fdr-district { padding: 0.5rem !important; }
@@ -1121,25 +1121,27 @@ a:hover { text-decoration: underline; }
 .frnsw-prefix-table th:nth-child(2), .frnsw-prefix-table td:nth-child(2) { width: 30%; padding-right: 0.85rem; }
 .frnsw-prefix-table th:nth-child(3), .frnsw-prefix-table td:nth-child(3) { width: 54%; overflow-wrap: break-word; word-break: break-word; }
 
+/* Columns: Reg | Operator / Agency | Type [| Model] (4th column optional) */
 .aircraft-table { table-layout: fixed; }
-.aircraft-table th:nth-child(1), .aircraft-table td:nth-child(1) { width: 80px; min-width: 75px; }
-.aircraft-table th:nth-child(2), .aircraft-table td:nth-child(2) { width: 100px; min-width: 90px; }
-.aircraft-table th:nth-child(3), .aircraft-table td:nth-child(3) { width: auto; }
-.aircraft-table th:nth-child(4), .aircraft-table td:nth-child(4) { width: 140px; min-width: 120px; }
-.aircraft-table td:nth-child(1) { 
-  font-family: 'SF Mono', 'Consolas', monospace; 
-  font-size: 0.78rem; 
+.aircraft-table th:nth-child(1), .aircraft-table td:nth-child(1) { width: 90px; min-width: 80px; }
+.aircraft-table th:nth-child(2), .aircraft-table td:nth-child(2) { width: auto; overflow-wrap: break-word; word-break: break-word; }
+.aircraft-table th:nth-child(3), .aircraft-table td:nth-child(3) { width: 150px; min-width: 130px; }
+.aircraft-table th:nth-child(4), .aircraft-table td:nth-child(4) { width: 110px; min-width: 90px; }
+.aircraft-table td:nth-child(1) {
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 0.78rem;
   color: #94a3b8;
   letter-spacing: 0.02em;
 }
-.aircraft-table td:nth-child(2) { 
-  font-weight: 600; 
-  color: #f97316; 
-}
-.aircraft-table td:nth-child(3) { color: #e2e8f0; }
-.aircraft-table td:nth-child(4) { 
-  color: #60a5fa; 
+.aircraft-table td:nth-child(2) { color: #e2e8f0; }
+.aircraft-table td:nth-child(3) {
+  color: #60a5fa;
   font-size: 0.75rem;
+}
+.aircraft-table td:nth-child(4) {
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 0.75rem;
+  color: #94a3b8;
 }
 
 /* Mobile Table Improvements */
@@ -1152,7 +1154,7 @@ a:hover { text-decoration: underline; }
   .rfs-zone-table th:nth-child(2), 
   .rfs-zone-table td:nth-child(2) { min-width: 100px; }
   
-  .aircraft-table { table-layout: auto; min-width: 480px; }
+  .aircraft-table { table-layout: auto; min-width: 400px; }
   .aircraft-table td:nth-child(1) { font-size: 0.72rem; }
 }
 

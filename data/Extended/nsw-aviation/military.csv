@@ -1,5 +1,5 @@
-Reg,Callsign,Agency,Type
-N52-011,TAIP51,Royal Australian Navy,Rotary-Wing Aircraft
-N48-001,GLET01,Royal Australian Navy,Rotary-Wing Aircraft
-N48-014,GLET14,Royal Australian Navy,Rotary-Wing Aircraft
-N48-023,GLET23,Royal Australian Navy,Rotary-Wing Aircraft
+Reg,Agency,Type
+N52-011,Royal Australian Navy,Rotary-Wing Aircraft
+N48-001,Royal Australian Navy,Rotary-Wing Aircraft
+N48-014,Royal Australian Navy,Rotary-Wing Aircraft
+N48-023,Royal Australian Navy,Rotary-Wing Aircraft
