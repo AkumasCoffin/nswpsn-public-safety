@@ -1447,6 +1447,17 @@
     .ais-list-detail .row { display: flex; gap: 6px; }
     .ais-list-detail .row .k { color: #94a3b8; min-width: 80px; }
     .ais-list-detail .row .v { color: #e2e8f0; font-weight: 500; }
+    /* Section headers inside the shared list body — only shown when both
+       the AIS and Aircraft layers are on and the results are split. */
+    .unified-list-section-header {
+      position: sticky; top: 0; z-index: 1;
+      padding: 6px 12px 4px;
+      background: rgba(15, 23, 42, 0.97);
+      font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+      text-transform: uppercase;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .unified-list-section-header i { margin-right: 5px; }
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
     }
@@ -2203,32 +2214,30 @@
            stays in .map-container and .ais-list-panel keeps its floating
            overlay positioning; the sidebar override CSS makes it inline on
            mobile. Populated/refreshed by aisListRender(). -->
+      <!-- Shared vessel/aircraft list panel. One search box drives both
+           the AIS and ADS-B lists; when both layers are on the body
+           splits into an Aircraft section and a Vessels section. Title,
+           icon and placeholder adapt via updateUnifiedListPanel(). -->
       <div class="ais-list-panel" id="ais-list-panel">
         <div class="ais-list-header">
-          <i class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
-          <h4>AIS Vessels</h4>
+          <i id="unified-list-icon" class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
+          <h4 id="unified-list-title">AIS Vessels</h4>
           <span class="ais-list-count" id="ais-list-count">0</span>
           <button class="ais-list-close" onclick="closeAisListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="ais-list-search">
-          <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="aisListOnSearch(this.value)">
+          <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="unifiedListOnSearch(this.value)">
         </div>
-        <div class="ais-list-body" id="ais-list-body"></div>
-      </div>
-      <!-- Aircraft list — mirrors the AIS vessel list panel. Reuses the
-           ais-list-panel classes so the styling and mobile sidebar
-           relocation come for free. Populated by adsbListRender(). -->
-      <div class="ais-list-panel" id="adsb-list-panel">
-        <div class="ais-list-header">
-          <i class="fa-solid fa-plane" style="color:#c084fc;"></i>
-          <h4>Aircraft</h4>
-          <span class="ais-list-count" id="adsb-list-count">0</span>
-          <button class="ais-list-close" onclick="closeAdsbListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
+        <div class="ais-list-body" id="ais-list-body">
+          <div id="adsb-list-section" style="display:none;">
+            <div class="unified-list-section-header" id="adsb-section-header" style="display:none;color:#c084fc;"><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span></div>
+            <div id="adsb-list-rows"></div>
+          </div>
+          <div id="ais-list-section" style="display:none;">
+            <div class="unified-list-section-header" id="ais-section-header" style="display:none;color:#7dd3fc;"><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span></div>
+            <div id="ais-list-rows"></div>
+          </div>
         </div>
-        <div class="ais-list-search">
-          <input type="text" id="adsb-list-search" placeholder="Search callsign, rego, hex, type…" autocomplete="off" oninput="adsbListOnSearch(this.value)">
-        </div>
-        <div class="ais-list-body" id="adsb-list-body"></div>
       </div>
       </div><!-- /map-filters-for-sidebar -->
 
@@ -3722,26 +3731,18 @@
         const enabled = map.hasLayer(aisLayer);
         const panel = document.getElementById('ais-panel');
         if (panel) panel.classList.toggle('open', enabled);
-        if (enabled) {
-          addFilterButton('ais');
-          openAisListPanel();
-        } else {
-          removeFilterButton('ais');
-          closeAisListPanel();
-        }
+        if (enabled) addFilterButton('ais');
+        else removeFilterButton('ais');
+        syncUnifiedListPanel();
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
         }
       }
       if (target === 'adsb') {
         const enabled = map.hasLayer(adsbLayer);
-        if (enabled) {
-          addFilterButton('adsb');
-          openAdsbListPanel();
-        } else {
-          removeFilterButton('adsb');
-          closeAdsbListPanel();
-        }
+        if (enabled) addFilterButton('adsb');
+        else removeFilterButton('adsb');
+        syncUnifiedListPanel();
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
         }
@@ -10103,10 +10104,70 @@ function initPagerHoursFromStorage() {
     let _aisListSelectedId = null;
     const _aisDetailCache = new Map(); // shipId → fetched MT detail JSON
 
-    function openAisListPanel() {
+    // ---------- Shared vessel/aircraft list panel plumbing ----------
+    // The panel is shared between the AIS and Aircraft layers: one
+    // search box drives both lists, and the body splits into labelled
+    // sections when both layers are on.
+    let _aisListMatchCount = 0;
+    let _adsbListMatchCount = 0;
+
+    function updateUnifiedListPanel() {
+      const aisOn = map.hasLayer(aisLayer);
+      const adsbOn = map.hasLayer(adsbLayer);
+      const both = aisOn && adsbOn;
+      const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+      };
+      show('ais-list-section', aisOn);
+      show('adsb-list-section', adsbOn);
+      // Section headers only matter when the results are split.
+      show('ais-section-header', both);
+      show('adsb-section-header', both);
+      const title = document.getElementById('unified-list-title');
+      const icon = document.getElementById('unified-list-icon');
+      const input = document.getElementById('ais-list-search');
+      if (title) title.textContent = both ? 'Vessels & Aircraft' : (adsbOn ? 'Aircraft' : 'AIS Vessels');
+      if (icon) {
+        icon.className = 'fa-solid ' + (adsbOn && !aisOn ? 'fa-plane' : 'fa-ship');
+        icon.style.color = adsbOn && !aisOn ? '#c084fc' : '#7dd3fc';
+      }
+      if (input) {
+        input.placeholder = both
+          ? 'Search vessels & aircraft…'
+          : (adsbOn ? 'Search callsign, rego, hex, type…' : 'Search by name, MMSI, IMO, destination…');
+      }
+      updateUnifiedListCount();
+    }
+
+    function updateUnifiedListCount() {
+      const el = document.getElementById('ais-list-count');
+      if (!el) return;
+      const total = (map.hasLayer(aisLayer) ? _aisListMatchCount : 0)
+        + (map.hasLayer(adsbLayer) ? _adsbListMatchCount : 0);
+      const q = _aisListSearch || _adsbListSearch;
+      el.textContent = q
+        ? `${total} match${total === 1 ? '' : 'es'}`
+        : `${total} in view`;
+    }
+
+    // Called from the layer toggles: open the panel while either layer
+    // is on, close it when both are off, and resync the sections.
+    function syncUnifiedListPanel() {
       const p = document.getElementById('ais-list-panel');
-      if (p) p.classList.add('open');
-      aisListRender();
+      if (!p) return;
+      updateUnifiedListPanel();
+      if (map.hasLayer(aisLayer) || map.hasLayer(adsbLayer)) {
+        p.classList.add('open');
+        aisListRender();
+        adsbListRender();
+      } else {
+        p.classList.remove('open');
+      }
+    }
+
+    function openAisListPanel() {
+      syncUnifiedListPanel();
     }
     function closeAisListPanel() {
       const p = document.getElementById('ais-list-panel');
@@ -10114,14 +10175,17 @@ function initPagerHoursFromStorage() {
     }
     window.closeAisListPanel = closeAisListPanel;
 
-    function aisListOnSearch(q) {
-      _aisListSearch = (q || '').toLowerCase().trim();
-      // _rebuildAis applies the same search filter to map markers, then
-      // calls aisListRender() at the end so the floating list stays in
-      // sync with what's drawn on the map.
+    // One search box, both lists. Each _rebuild applies the filter to
+    // its own map markers and re-renders its list section.
+    function unifiedListOnSearch(q) {
+      const norm = (q || '').toLowerCase().trim();
+      _aisListSearch = norm;
+      _adsbListSearch = norm;
       _rebuildAis();
+      _rebuildAdsb();
     }
-    window.aisListOnSearch = aisListOnSearch;
+    window.unifiedListOnSearch = unifiedListOnSearch;
+    window.aisListOnSearch = unifiedListOnSearch; // legacy alias
 
     // Build the list. Filters by:
     //   - active type/status filters (matches what's drawn on the map)
@@ -10129,12 +10193,12 @@ function initPagerHoursFromStorage() {
     //   - the current map viewport (only vessels whose lat/lng are in
     //     the visible bounds — keeps the list short and relevant)
     function aisListRender() {
-      const body = document.getElementById('ais-list-body');
-      const countEl = document.getElementById('ais-list-count');
+      const body = document.getElementById('ais-list-rows');
       if (!body) return;
       if (_aisVessels.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">No vessels loaded yet.</div>';
-        if (countEl) countEl.textContent = '0';
+        _aisListMatchCount = 0;
+        updateUnifiedListCount();
         return;
       }
       const bounds = map.getBounds();
@@ -10166,11 +10230,10 @@ function initPagerHoursFromStorage() {
         if (aSat !== bSat) return aSat ? 1 : -1;
         return an.localeCompare(bn);
       });
-      if (countEl) {
-        countEl.textContent = q
-          ? `${matches.length} match${matches.length === 1 ? '' : 'es'}`
-          : `${matches.length} in view`;
-      }
+      _aisListMatchCount = matches.length;
+      const secCount = document.getElementById('ais-section-count');
+      if (secCount) secCount.textContent = `(${matches.length})`;
+      updateUnifiedListCount();
       if (matches.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">' +
           (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No vessels in current view.') +
@@ -10315,7 +10378,7 @@ function initPagerHoursFromStorage() {
       // and scroll to centre the row, accounting for the sticky
       // header + search bar above the body.
       const body = document.getElementById('ais-list-body');
-      const row = body && body.querySelector('.ais-list-row.selected');
+      const row = body && body.querySelector('#ais-list-rows .ais-list-row.selected');
       if (body && row && typeof body.scrollTo === 'function') {
         const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
         body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
@@ -10473,8 +10536,9 @@ function initPagerHoursFromStorage() {
       return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
     }
 
-    // Optional-field label text (second line of the marker label).
-    // Returns '' when no enabled field has a value.
+    // Optional-field label parts (rendered under the identity line).
+    // Returns an array so the icon builder can wrap them into short
+    // lines — a single joined line gets far too wide with every field on.
     function buildAircraftLabelFields(a) {
       const parts = [];
       if (adsbLabelSettings.alt) {
@@ -10484,8 +10548,8 @@ function initPagerHoursFromStorage() {
       if (adsbLabelSettings.track && Number.isFinite(a.trackDeg)) parts.push(Math.round(a.trackDeg) + '°');
       if (adsbLabelSettings.reg && a.reg) parts.push(a.reg);
       if (adsbLabelSettings.type && a.type) parts.push(a.type);
-      if (adsbLabelSettings.squawk && a.squawk) parts.push('sq ' + a.squawk);
-      return parts.filter(Boolean).join(' · ');
+      if (adsbLabelSettings.squawk && a.squawk) parts.push('sq' + a.squawk);
+      return parts.filter(Boolean);
     }
 
     function buildAircraftIcon(a) {
@@ -10515,10 +10579,16 @@ function initPagerHoursFromStorage() {
       let labelHtml = '';
       if (adsbLabelSettings.enabled) {
         const identity = a.callsign || a.reg || a.hex.toUpperCase();
-        const fields = buildAircraftLabelFields(a);
+        // Wrap fields two per line so the chip stays compact even with
+        // every field toggled on.
+        const parts = buildAircraftLabelFields(a);
+        let fieldLines = '';
+        for (let i = 0; i < parts.length; i += 2) {
+          fieldLines += '<div>' + escapeHtml(parts.slice(i, i + 2).join('·')) + '</div>';
+        }
         labelHtml = '<div style="position:absolute;top:21px;left:50%;transform:translateX(-50%);background:rgba(10,14,26,0.85);border:1px solid ' + hexToRgba(color, 0.5) + ';color:#e2e8f0;font-size:9px;line-height:1.3;padding:1px 4px;border-radius:4px;white-space:nowrap;text-align:center;pointer-events:none;font-family:system-ui,sans-serif;">' +
           '<div style="font-weight:700;color:' + color + ';">' + escapeHtml(identity) + '</div>' +
-          (fields ? '<div>' + escapeHtml(fields) + '</div>' : '') +
+          fieldLines +
         '</div>';
       }
       return L.divIcon({
@@ -10536,7 +10606,7 @@ function initPagerHoursFromStorage() {
     function _adsbIconKey(a) {
       const trackBucket = Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg / 5) : 'x';
       const label = adsbLabelSettings.enabled
-        ? (a.callsign || a.reg || a.hex) + '|' + buildAircraftLabelFields(a)
+        ? (a.callsign || a.reg || a.hex) + '|' + buildAircraftLabelFields(a).join(',')
         : '';
       return [a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, label].join('|');
     }
@@ -10673,26 +10743,7 @@ function initPagerHoursFromStorage() {
       }
     }
 
-    // ---------- Aircraft list panel (mirrors the AIS vessel list) ----------
-    function openAdsbListPanel() {
-      const p = document.getElementById('adsb-list-panel');
-      if (p) p.classList.add('open');
-      adsbListRender();
-    }
-    function closeAdsbListPanel() {
-      const p = document.getElementById('adsb-list-panel');
-      if (p) p.classList.remove('open');
-    }
-    window.closeAdsbListPanel = closeAdsbListPanel;
-
-    function adsbListOnSearch(q) {
-      _adsbListSearch = (q || '').toLowerCase().trim();
-      // _rebuildAdsb applies the same filter to the map markers and
-      // calls adsbListRender() at the end, keeping list and map in sync.
-      _rebuildAdsb();
-    }
-    window.adsbListOnSearch = adsbListOnSearch;
-
+    // ---------- Aircraft list (renders into the shared panel) ----------
     function adsbListGlyph(a) {
       const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
       const color = es ? es.color : adsbAltColor(a.altFt);
@@ -10706,12 +10757,12 @@ function initPagerHoursFromStorage() {
     // type / squawk) or, with no search, the current map viewport — same
     // shape as aisListRender().
     function adsbListRender() {
-      const body = document.getElementById('adsb-list-body');
-      const countEl = document.getElementById('adsb-list-count');
+      const body = document.getElementById('adsb-list-rows');
       if (!body) return;
       if (_adsbAircraft.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">No aircraft loaded yet.</div>';
-        if (countEl) countEl.textContent = '0';
+        _adsbListMatchCount = 0;
+        updateUnifiedListCount();
         return;
       }
       const bounds = map.getBounds();
@@ -10735,11 +10786,10 @@ function initPagerHoursFromStorage() {
         if (xe !== ye) return xe - ye;
         return (x.callsign || x.reg || x.hex).localeCompare(y.callsign || y.reg || y.hex);
       });
-      if (countEl) {
-        countEl.textContent = q
-          ? `${matches.length} match${matches.length === 1 ? '' : 'es'}`
-          : `${matches.length} in view`;
-      }
+      _adsbListMatchCount = matches.length;
+      const secCount = document.getElementById('adsb-section-count');
+      if (secCount) secCount.textContent = `(${matches.length})`;
+      updateUnifiedListCount();
       if (matches.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">' +
           (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No aircraft in current view.') +
@@ -10794,8 +10844,8 @@ function initPagerHoursFromStorage() {
         } catch (e) { /* ignore */ }
       }
       adsbListRender();
-      const body = document.getElementById('adsb-list-body');
-      const row = body && body.querySelector('.ais-list-row.selected');
+      const body = document.getElementById('ais-list-body');
+      const row = body && body.querySelector('#adsb-list-rows .ais-list-row.selected');
       if (body && row && typeof body.scrollTo === 'function') {
         const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
         body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
