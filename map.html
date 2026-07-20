@@ -3012,7 +3012,9 @@
     const transportLayer = L.layerGroup();
     const transportStopsLayer = L.layerGroup();
     const transportLinesLayer = L.layerGroup(); // static rail/metro/LR network
+    const transportAutoTracksLayer = L.layerGroup(); // live per-vehicle route tracks
     transportLayer.addLayer(transportLinesLayer);
+    transportLayer.addLayer(transportAutoTracksLayer);
     transportLayer.addLayer(transportStopsLayer);
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
@@ -11455,6 +11457,7 @@ function initPagerHoursFromStorage() {
       for (const [, entry] of _transportMarkers) transportLayer.removeLayer(entry.marker);
       _transportMarkers.clear();
       _transportVehicles = [];
+      syncTransportAutoTracks(); // no vehicles → no auto tracks
     }
 
     async function loadTransportData() {
@@ -11539,6 +11542,7 @@ function initPagerHoursFromStorage() {
           _transportMarkers.delete(id);
         }
       }
+      syncTransportAutoTracks();
       if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     }
 
@@ -11717,6 +11721,25 @@ function initPagerHoursFromStorage() {
       _transportTrackShapeId = null;
     }
 
+    // Shared shape fetch (client-cached decoded points). Returns null on
+    // failure or missing geometry.
+    async function fetchTransportShapePts(shapeId) {
+      let pts = _transportShapeCache.get(shapeId);
+      if (pts) return pts;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (!data.enc) return null;
+        pts = decodePolyline(data.enc);
+        _transportShapeCache.set(shapeId, pts);
+        return pts;
+      } catch (e) {
+        console.warn('[transport] shape failed:', e);
+        return null;
+      }
+    }
+
     async function showTransportTrack(shapeId, color) {
       // The 10s info refresh re-fires this — skip if the same track is
       // already drawn so the polyline doesn't blink.
@@ -11724,23 +11747,48 @@ function initPagerHoursFromStorage() {
       clearTransportTrack();
       if (!shapeId) return;
       _transportTrackShapeId = shapeId;
-      try {
-        let pts = _transportShapeCache.get(shapeId);
-        if (!pts) {
-          const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const data = await res.json();
-          if (!data.enc) return;
-          pts = decodePolyline(data.enc);
-          _transportShapeCache.set(shapeId, pts);
+      const pts = await fetchTransportShapePts(shapeId);
+      if (!pts || _transportTrackShapeId !== shapeId) return;
+      const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
+      const line = L.polyline(pts, { color: color || '#f6891f', weight: 4, opacity: 0.95, interactive: false });
+      casing.addTo(transportLayer);
+      line.addTo(transportLayer);
+      _transportTrackLines = [casing, line];
+    }
+
+    // ---------- Auto route tracks for visible vehicles ----------
+    // The static network tiles only cover greater Sydney and contain no
+    // ferry or regional-rail geometry, so each visible non-bus vehicle's
+    // route track is drawn from its GTFS shape (deduped per shape,
+    // thin, in the route colour). Buses stay click-to-show — Sydney's
+    // bus shape density would paint the whole map.
+    const _transportAutoTracks = new Map(); // shapeId → polyline | null (fetch in flight)
+    const TRANSPORT_AUTO_TRACK_CAP = 60;
+    function syncTransportAutoTracks() {
+      const want = new Map(); // shapeId → colour
+      for (const v of _transportVehicles) {
+        if (v.mode === 'buses' || v.mode === 'other') continue;
+        if (!v.shapeId || !transportModeFilter[v.mode]) continue;
+        if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
+          want.set(v.shapeId, (v.route && v.route.color) || transportModeColor(v.mode));
         }
-        const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
-        const line = L.polyline(pts, { color: color || '#f6891f', weight: 4, opacity: 0.95, interactive: false });
-        casing.addTo(transportLayer);
-        line.addTo(transportLayer);
-        _transportTrackLines = [casing, line];
-      } catch (e) {
-        console.warn('[transport] shape failed:', e);
+      }
+      for (const [sid, line] of _transportAutoTracks) {
+        if (!want.has(sid)) {
+          if (line) transportAutoTracksLayer.removeLayer(line);
+          _transportAutoTracks.delete(sid);
+        }
+      }
+      for (const [sid, color] of want) {
+        if (_transportAutoTracks.has(sid)) continue;
+        _transportAutoTracks.set(sid, null); // reserve — fetch in flight
+        fetchTransportShapePts(sid).then((pts) => {
+          if (!pts) { _transportAutoTracks.delete(sid); return; }
+          if (!_transportAutoTracks.has(sid)) return; // dropped while fetching
+          const line = L.polyline(pts, { color: color, weight: 2, opacity: 0.55, interactive: false });
+          transportAutoTracksLayer.addLayer(line);
+          _transportAutoTracks.set(sid, line);
+        });
       }
     }
 
