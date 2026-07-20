@@ -10480,9 +10480,48 @@ function initPagerHoursFromStorage() {
     // highlighted row in the list panel.
     let _adsbPinnedHex = null;
     // hex → '__loading__' | '__none__' | {src, link, photographer}.
-    // Populated lazily when an aircraft is pinned, via the backend
-    // Planespotters proxy (/api/adsb/photo/:hex).
+    // Filled by a throttled prefetch queue for listed aircraft (plus
+    // on-demand when pinning), via the backend Planespotters proxy
+    // (/api/adsb/photo/:hex). Persisted to localStorage so revisits
+    // don't re-fetch — an airframe's photo essentially never changes.
     const _adsbPhotoCache = new Map();
+    const ADSB_PHOTO_LS_KEY = 'adsbPhotoCache-v1';
+    const ADSB_PHOTO_TTL_MS = 7 * 24 * 3600 * 1000;
+    const ADSB_PHOTO_LS_MAX = 500;
+    (function loadAdsbPhotoCache() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(ADSB_PHOTO_LS_KEY) || '{}');
+        const now = Date.now();
+        for (const hex in raw) {
+          const e = raw[hex];
+          if (e && typeof e.t === 'number' && now - e.t < ADSB_PHOTO_TTL_MS) {
+            _adsbPhotoCache.set(hex, e.v === null ? '__none__' : e.v);
+          }
+        }
+      } catch (e) { /* corrupt/blocked storage — start empty */ }
+    })();
+    let _adsbPhotoSaveTimer = null;
+    function saveAdsbPhotoCache() {
+      if (_adsbPhotoSaveTimer) return;
+      _adsbPhotoSaveTimer = setTimeout(() => {
+        _adsbPhotoSaveTimer = null;
+        try {
+          // Keep each entry's original fetch time so the TTL measures
+          // photo age, not last-save age.
+          let prev = {};
+          try { prev = JSON.parse(localStorage.getItem(ADSB_PHOTO_LS_KEY) || '{}'); } catch (e) {}
+          const now = Date.now();
+          const out = {};
+          let n = 0;
+          for (const [hex, v] of _adsbPhotoCache) {
+            if (v === '__loading__') continue;
+            if (n++ >= ADSB_PHOTO_LS_MAX) break;
+            out[hex] = { v: v === '__none__' ? null : v, t: prev[hex] ? prev[hex].t : now };
+          }
+          localStorage.setItem(ADSB_PHOTO_LS_KEY, JSON.stringify(out));
+        } catch (e) { /* quota/blocked — in-memory cache still works */ }
+      }, 2000);
+    }
     // On-map labels under each plane. `enabled` is the master switch in
     // the floating filter panel; the field keys are the sub-toggles that
     // appear once labels are on. Identity (callsign/rego/hex) always
@@ -10721,11 +10760,21 @@ function initPagerHoursFromStorage() {
         ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Squawk</span><span style="font-weight:700;color:' + (sqBad ? '#ef4444' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span></div>'
         : '';
 
+      // Prefetched photo (from the queue / a previous pin) — shown
+      // straight in the hover tooltip, credit line per Planespotters'
+      // attribution terms.
+      const cachedPhoto = _adsbPhotoCache.get(a.hex);
+      const photoHtml = (cachedPhoto && cachedPhoto !== '__loading__' && cachedPhoto !== '__none__')
+        ? '<img src="' + escapeHtml(cachedPhoto.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';" style="width:100%;max-height:150px;object-fit:cover;border-radius:6px;margin-bottom:2px;background:rgba(0,0,0,0.3);">' +
+          '<div style="font-size:9px;color:#94a3b8;margin-bottom:6px;">Photo © ' + escapeHtml(cachedPhoto.photographer || 'unknown') + ' · Planespotters.net</div>'
+        : '';
+
       return '<div style="max-width:400px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
         '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<i class="fa-solid ' + (adsbIconClass(a) === 'heli' ? 'fa-helicopter' : 'fa-plane') + '"></i> ' + escapeHtml(name) +
           (es ? ' <span style="background:' + es.color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + es.label + '</span>' : '') +
         '</div>' +
+        photoHtml +
         '<div style="padding:6px 8px;background:' + hexToRgba(color, 0.08) + ';border-radius:6px;">' + body + squawkRow + '</div>' +
       '</div>';
     }
@@ -10881,6 +10930,9 @@ function initPagerHoursFromStorage() {
       const secCount = document.getElementById('adsb-section-count');
       if (secCount) secCount.textContent = `(${matches.length})`;
       updateUnifiedListCount();
+      // Prefetch photos for what's on screen (emergency services sort
+      // first, so they get their photos first too).
+      if (map.hasLayer(adsbLayer)) adsbQueuePhotoPrefetch(matches.slice(0, 40));
       if (matches.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">' +
           (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No aircraft in current view.') +
@@ -10951,11 +11003,45 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         _adsbPhotoCache.set(a.hex, data.photo ? data.photo : '__none__');
+        saveAdsbPhotoCache();
+        // Refresh the marker's tooltip now rather than waiting for the
+        // next 15 s rebuild tick.
+        const entry = _adsbMarkers.get(a.hex);
+        if (entry) entry.marker.setTooltipContent(buildAdsbTooltipHtml(a));
       } catch (e) {
         console.warn('[adsb] photo fetch failed', e);
+        // Not persisted — a transient failure shouldn't stick for 7 days.
         _adsbPhotoCache.set(a.hex, '__none__');
       }
       adsbListRender();
+    }
+
+    // Background prefetch so photos are already loaded before anyone
+    // clicks an aircraft. Fed with the currently-listed aircraft; drains
+    // at 1/s to stay inside Planespotters' rate limit on backend cache
+    // misses (hits cost nothing upstream).
+    const _adsbPhotoQueue = [];
+    let _adsbPhotoQueueTimer = null;
+    function adsbQueuePhotoPrefetch(list) {
+      for (const a of list) {
+        if (_adsbPhotoCache.has(a.hex)) continue;
+        if (_adsbPhotoQueue.some((x) => x.hex === a.hex)) continue;
+        _adsbPhotoQueue.push(a);
+      }
+      if (_adsbPhotoQueue.length > 80) _adsbPhotoQueue.length = 80;
+      if (_adsbPhotoQueue.length && !_adsbPhotoQueueTimer) {
+        _adsbPhotoQueueTimer = setInterval(() => {
+          if (document.hidden) return;
+          if (!map.hasLayer(adsbLayer)) { _adsbPhotoQueue.length = 0; }
+          const a = _adsbPhotoQueue.shift();
+          if (!a) {
+            clearInterval(_adsbPhotoQueueTimer);
+            _adsbPhotoQueueTimer = null;
+            return;
+          }
+          if (!_adsbPhotoCache.has(a.hex)) adsbFetchPhoto(a);
+        }, 1000);
+      }
     }
 
     // Pin an aircraft: pan to it, keep its tooltip open, highlight and
