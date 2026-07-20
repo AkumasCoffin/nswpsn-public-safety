@@ -9126,12 +9126,12 @@ function initPagerHoursFromStorage() {
     function _ffAisTypeGlyph(category, color) {
       // Mirror the pin shape so the filter pill reads as "this colour
       // = this type of pin". Navaids show a diamond, everything else
-      // shows a heading-up arrow (matches the rotating SVG arrow used
-      // for moving vessels).
+      // shows its per-category hull silhouette (aisIconSvg, hoisted —
+      // defined later in this script).
       if (category === 'navaid') {
         return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
       }
-      return `<svg viewBox="0 0 24 24" width="11" height="11" style="vertical-align:-1px;"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      return `<span style="display:inline-block;width:11px;height:11px;vertical-align:-1px;">${aisIconSvg(category, color, null, 11, 1)}</span>`;
     }
 
     // Register the FIRMS layer with the floating filter sidebar.
@@ -9979,6 +9979,55 @@ function initPagerHoursFromStorage() {
       pleasure: 'fa-life-ring', navaid: 'fa-tower-broadcast', unspecified: 'fa-ship'
     };
 
+    // Per-category vessel silhouette, drawn pointing north in a 24×24
+    // box and rotated by heading. Hull shapes echo real proportions —
+    // boxy container decks for cargo, manifold circle for tankers,
+    // white superstructure for passenger ships, sharp planing hull for
+    // HSC, stubby tug, stern gantry for fishing boats, slim pleasure
+    // craft — so vessel types read at a glance like the aircraft icons.
+    function aisIconSvg(category, color, headingDeg, size, op) {
+      const style = 'display:block;' +
+        (headingDeg != null ? 'transform:rotate(' + headingDeg + 'deg);' : '') +
+        'opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));';
+      const open = '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" style="' + style + '">';
+      const close = '</svg>';
+      const hull = (d) => '<path d="' + d + '" fill="' + color + '" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>';
+      switch (category) {
+        case 'cargo':
+          // Full-beam hull with container-row deck lines.
+          return open + hull('M12 2 L17 8 L17 20.5 L7 20.5 L7 8 Z') +
+            '<path d="M9 10.5 L15 10.5 M9 13.5 L15 13.5 M9 16.5 L15 16.5" stroke="#fff" stroke-width="1" stroke-linecap="round"/>' + close;
+        case 'tanker':
+          // Long hull, centreline pipe run + manifold circle.
+          return open + hull('M12 2 L17 8 L17 20.5 L7 20.5 L7 8 Z') +
+            '<path d="M12 9 L12 18" stroke="#fff" stroke-width="1"/>' +
+            '<circle cx="12" cy="13.5" r="2" fill="none" stroke="#fff" stroke-width="1"/>' + close;
+        case 'passenger':
+          // Hull with a white superstructure block.
+          return open + hull('M12 2 L17 8 L17 20.5 L7 20.5 L7 8 Z') +
+            '<rect x="9.4" y="9.5" width="5.2" height="8" rx="1.2" fill="#fff" opacity="0.9"/>' + close;
+        case 'hsc':
+          // Sharp planing hull + wake chevron.
+          return open + hull('M12 1.5 L16 9.5 L15 19 L9 19 L8 9.5 Z') +
+            '<path d="M7.5 21.5 L12 19.8 L16.5 21.5" fill="none" stroke="' + color + '" stroke-width="1.4" stroke-linecap="round"/>' + close;
+        case 'tug':
+          // Short, stubby, full-width hull with bow fender line.
+          return open + hull('M12 4 L17.5 9 L17.5 20 L6.5 20 L6.5 9 Z') +
+            '<path d="M8.5 7.6 L15.5 7.6" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>' + close;
+        case 'fishing':
+          // Hull with stern gantry A-frame.
+          return open + hull('M12 2.5 L16.5 8.5 L16.5 19 L7.5 19 L7.5 8.5 Z') +
+            '<path d="M9 21.5 L12 15.5 L15 21.5" fill="none" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>' + close;
+        case 'pleasure':
+          // Slim small hull with windshield line.
+          return open + hull('M12 3 L15.5 9.5 L15 20 L9 20 L8.5 9.5 Z') +
+            '<path d="M9.8 11.5 L14.2 11.5" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>' + close;
+        default:
+          // Unspecified — the original direction arrow.
+          return open + '<path d="M12 2 L20 22 L12 17 L4 22 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' + close;
+      }
+    }
+
     function buildAisIcon(category, headingDeg, isSatAis) {
       const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.unspecified;
       const op = isSatAis ? 0.55 : 1;
@@ -10001,11 +10050,9 @@ function initPagerHoursFromStorage() {
           iconAnchor: [6, 6]
         });
       }
-      // Directional arrow rotated by heading. SVG renders crisp at any
-      // zoom and lets us avoid the heavy circular background.
       return L.divIcon({
         className: 'ais-pin',
-        html: '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block;transform:rotate(' + headingDeg + 'deg);opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+        html: aisIconSvg(category, color, headingDeg, 20, op),
         iconSize: [20, 20],
         iconAnchor: [10, 10]
       });
@@ -10335,7 +10382,7 @@ function initPagerHoursFromStorage() {
       if (!isFinite(headingDeg)) {
         return `<svg viewBox="0 0 24 24" width="14" height="14" style="margin:2px;"><circle cx="12" cy="12" r="6" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
       }
-      return `<svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(${headingDeg}deg);"><path d="M12 2 L20 22 L12 17 L4 22 Z" fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+      return aisIconSvg(category, color, headingDeg, 18, 1);
     }
 
     function aisListDetailHtml(v) {
@@ -10592,6 +10639,50 @@ function initPagerHoursFromStorage() {
       { key: 'type',   label: 'Type' },
       { key: 'squawk', label: 'Squawk' }
     ];
+    // Aircraft-type filter categories. Emergency-service tags first,
+    // then airframe-derived classes. Colors echo the marker palette.
+    const ADSB_TYPE_CATEGORIES = [
+      { key: 'police',    label: 'Police',        color: '#3b82f6' },
+      { key: 'rescue',    label: 'Rescue',        color: '#f59e0b' },
+      { key: 'fire',      label: 'Firefighting',  color: '#ef4444' },
+      { key: 'ambulance', label: 'Air Ambulance', color: '#22c55e' },
+      { key: 'military',  label: 'Military',      color: '#64748b' },
+      { key: 'heli',      label: 'Helicopters',   color: '#06b6d4' },
+      { key: 'cargo',     label: 'Cargo',         color: '#eab308' },
+      { key: 'passenger', label: 'Passenger',     color: '#a855f7' },
+      { key: 'light',     label: 'Light / GA',    color: '#e9d5ff' },
+      { key: 'other',     label: 'Other',         color: '#94a3b8' }
+    ];
+    const adsbTypeFilter = {};
+    ADSB_TYPE_CATEGORIES.forEach((c) => { adsbTypeFilter[c.key] = true; });
+
+    // Dedicated freighter operators by ICAO callsign prefix — the ADS-B
+    // data itself doesn't say cargo vs passenger, so this is the usual
+    // heuristic. Mixed operators (e.g. Qantas Freight flies as QFA)
+    // can't be split and land in Passenger.
+    const ADSB_CARGO_PREFIXES = /^(FDX|UPS|GTI|GEC|CLX|ABW|SQC|MPH|BOX|CKS|CAO|CSS|PAC|TFX)/;
+    // Common airliner type designators, for targets that broadcast a
+    // type but no wake category (so the airframe class alone can't tell
+    // an A320 from a Cessna).
+    const ADSB_AIRLINER_TYPES = /^(A3\d\d|A19N|A20N|A21N|B7\d\d|B3\dM|B73\d|B78\d|E1[79]\d|E29\d|BCS[13]|AT7\d|DH8\d|SF34|F70|F100)/;
+
+    function adsbFilterCategory(a) {
+      switch (a.esTag) {
+        case 'polair': return 'police';
+        case 'rescue': return 'rescue';
+        case 'firebomber': return 'fire';
+        case 'ambulance': return 'ambulance';
+        case 'military': return 'military';
+      }
+      const cls = adsbIconClass(a);
+      if (cls === 'heli') return 'heli';
+      const cs = (a.callsign || '').toUpperCase();
+      const t = (a.type || '').toUpperCase();
+      const airliner = cls === 'airliner' || ADSB_AIRLINER_TYPES.test(t);
+      if (airliner) return ADSB_CARGO_PREFIXES.test(cs) ? 'cargo' : 'passenger';
+      if (cls === 'light') return 'light';
+      return 'other';
+    }
     // Ground targets only render at/above this zoom — Sydney KSA alone
     // parks dozens of them on one pixel at state-wide zoom.
     const ADSB_GROUND_MIN_ZOOM = 10;
@@ -10845,6 +10936,7 @@ function initPagerHoursFromStorage() {
         if (rendered >= ADSB_MAX_RENDER) break;
         if (a.onGround && !showGround) continue;
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
+        if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
         // Search filters map markers too, so the map matches the list
         // (same behaviour as AIS).
         if (q && !_adsbSearchHay(a).includes(q)) continue;
@@ -10960,6 +11052,7 @@ function initPagerHoursFromStorage() {
       const matches = [];
       for (const a of _adsbAircraft) {
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
+        if (!adsbTypeFilter[adsbFilterCategory(a)]) continue;
         // Ground targets are hidden from the map at low zoom, but a
         // search should still find them (the user typed something
         // specific — don't make them zoom in first).
@@ -11131,7 +11224,7 @@ function initPagerHoursFromStorage() {
       }
     });
 
-    // ---------- Floating filter panel: label toggles ----------
+    // ---------- Floating filter panel: type filters + label toggles ----------
     window.toggleAdsbLabelsPill = function () {
       adsbLabelSettings.enabled = !adsbLabelSettings.enabled;
       _rebuildAdsb();
@@ -11142,11 +11235,27 @@ function initPagerHoursFromStorage() {
       _rebuildAdsb();
       refreshActiveFilterPanel();
     };
+    window.toggleAdsbTypePill = function (key) {
+      adsbTypeFilter[key] = !adsbTypeFilter[key];
+      _rebuildAdsb();
+      refreshActiveFilterPanel();
+    };
     FILTER_REGISTRY.adsb = {
       icon: 'fa-plane',
       label: 'Aircraft',
       color: '#c084fc',
       render() {
+        // Tally per category so the pills read like the AIS ones.
+        const counts = {};
+        for (const a of _adsbAircraft) {
+          const c = adsbFilterCategory(a);
+          counts[c] = (counts[c] || 0) + 1;
+        }
+        const typePills = ADSB_TYPE_CATEGORIES.map((c) => {
+          const n = counts[c.key] || 0;
+          const glyph = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.color};vertical-align:0;"></span>`;
+          return _ffPillColored(adsbTypeFilter[c.key], c.color, glyph, `${c.label} (${n})`, `toggleAdsbTypePill('${c.key}')`);
+        }).join('');
         const master = _ffPill(
           adsbLabelSettings.enabled,
           '<i class="fa-solid fa-tag"></i> Labels',
@@ -11165,6 +11274,9 @@ function initPagerHoursFromStorage() {
         }
         return `
           <h4><i class="fa-solid fa-plane" style="color:#c084fc;"></i> Aircraft</h4>
+          <div class="ff-section-label">Aircraft type</div>
+          <div class="floating-filter-pills">${typePills}</div>
+          <div class="ff-section-label">Labels</div>
           <div class="floating-filter-pills">${master}</div>
           ${fieldsHtml}
         `;
