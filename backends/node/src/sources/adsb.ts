@@ -1,20 +1,20 @@
 /**
  * Live ADS-B aircraft source.
  *
- * Merges three free, no-key readsb-style aggregators — adsb.lol,
- * adsb.fi and airplanes.live — for the union of their feeder coverage.
- * All three expose the same v2 point-radius query and return the same
- * readsb JSON shape ({ ac: [...] }), so records dedupe cleanly by ICAO
- * hex, keeping whichever aggregator saw the aircraft most recently.
+ * Merges four free, no-key readsb-style aggregators — adsb.lol,
+ * adsb.fi, airplanes.live and adsb.one — for the union of their feeder
+ * coverage. All expose the same v2 point-radius query and return the
+ * same readsb JSON shape ({ ac: [...] }), so records dedupe cleanly by
+ * ICAO hex, keeping whichever aggregator saw the aircraft most recently.
  *
  * Coverage: the 250 nm (~463 km) max radius shared by all three APIs
  * can't span NSW (~1190 × 1066 km) in one query, so a 2×2 quadrant grid
  * of circles covers the state with ~50 km slack at the worst corner.
  *
- * Politeness: adsb.fi and airplanes.live ask for ≤1 request/second.
- * Upstreams are queried in parallel (different hosts) but the four
- * circles within each upstream are staggered 1 s apart, so the
- * instantaneous per-upstream rate never exceeds 1 req/s and the
+ * Politeness: adsb.fi, airplanes.live and adsb.one ask for ≤1
+ * request/second. Upstreams are queried in parallel (different hosts)
+ * but the four circles within each upstream are staggered 1 s apart, so
+ * the instantaneous per-upstream rate never exceeds 1 req/s and the
  * average is ~0.27 req/s at the 12 s registration interval (the poller
  * re-arms after each run completes, so real cadence lands ~15 s).
  */
@@ -65,6 +65,14 @@ const UPSTREAMS: readonly Upstream[] = [
   {
     id: 'airplanes_live',
     url: (c) => `https://api.airplanes.live/v2/point/${c.lat}/${c.lon}/${RADIUS_NM}`,
+  },
+  {
+    // ADSB One (run by the airplanes.live folks; ADSBx-v2-compatible).
+    // Sits behind aggressive Cloudflare bot protection that 403s some
+    // networks — a challenge page here is just a failed upstream, the
+    // other aggregators still merge.
+    id: 'adsb_one',
+    url: (c) => `https://api.adsb.one/v2/point/${c.lat}/${c.lon}/${RADIUS_NM}`,
   },
 ] as const;
 
