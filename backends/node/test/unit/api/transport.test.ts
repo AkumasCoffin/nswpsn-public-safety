@@ -242,7 +242,8 @@ describe('transport shapes', () => {
     expect(body).toEqual({ id: 'au2:bs:222299', enc: 'rr_nEmdzx[PC' });
     await getShape('au2:bs:222299');
     expect(fetchJsonMock).toHaveBeenCalledTimes(1);
-    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/shape/au2%3Abs%3A222299');
+    // Raw id in the upstream path — AnyTrip 404s on %3A-encoded colons.
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/shape/au2:bs:222299');
   });
 
   it('400s on malformed shape ids', async () => {

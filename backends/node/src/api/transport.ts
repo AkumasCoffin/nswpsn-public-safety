@@ -138,6 +138,9 @@ interface RawVehicleEntry {
     instanceNumber?: number;
     trip?: {
       id?: string;
+      /** Realtime trip id — the one tripInstance/... paths accept. For
+       *  buses it equals `id`; for trains it's the short form. */
+      rtTripId?: string;
       shapeId?: string;
       headsign?: { headline?: string; subtitle?: string | null };
       wheelchair?: boolean | number;
@@ -328,7 +331,7 @@ export function normalizeVehicles(raw: RawVehiclesResponse): TransportVehicle[] 
         typeof pos?.time === 'number' && pos.time > 0
           ? Math.max(0, Math.round(nowSec - pos.time))
           : null,
-      tripId: trip?.id ?? null,
+      tripId: trip?.rtTripId ?? trip?.id ?? null,
       shapeId: entry.tripInstance?.shapeId ?? trip?.shapeId ?? null,
       startDate: entry.tripInstance?.startDate ?? null,
       instanceNumber:
@@ -458,8 +461,10 @@ transportRouter.get('/api/transport/shape/:id', async (c) => {
     const { value } = await shapeCache.get(
       `sh|${id}`,
       async () => {
+        // Ids go in RAW — upstream 404s on percent-encoded colons, and
+        // the SHAPE_ID_RE whitelist already limits to URL-safe chars.
         const raw = await fetchJson<RawShapeResponse>(
-          `${ANYTRIP_BASE}/shape/${encodeURIComponent(id)}`,
+          `${ANYTRIP_BASE}/shape/${id}`,
           { timeoutMs: UPSTREAM_TIMEOUT_MS },
         );
         return { id, enc: raw.response?.shape?.enc ?? null };
@@ -493,6 +498,23 @@ export interface TransportTripStop {
   dep: number | null;
   depDelay: number | null;
   platform: string | null;
+  locality: string | null;
+  code: string | null;
+  /** Per-carriage occupancy (0-6 each; single element for buses). */
+  occupancy: Array<number | null> | null;
+  /** GTFS pickup_type / drop_off_type: 1 = not available. */
+  pickUp: number | null;
+  dropOff: number | null;
+}
+/** Link to an adjacent trip in the same block (preceded by / continues as). */
+export interface TransportTripRel {
+  tripId: string;
+  startDate: string;
+  instanceNumber: number;
+  routeName: string | null;
+  routeColor: string | null;
+  routeTextColor: string | null;
+  headsign: string | null;
 }
 export interface TransportTripSnapshot {
   tripId: string;
@@ -508,6 +530,16 @@ export interface TransportTripSnapshot {
   };
   shapeId: string | null;
   stops: TransportTripStop[];
+  alerts: string[];
+  /** Live vehicle position summary for the "Xs ago: at …" status line. */
+  vehicle: {
+    time: number | null;
+    statusString: string | null;
+    lat: number | null;
+    lon: number | null;
+  } | null;
+  prev: TransportTripRel | null;
+  next: TransportTripRel | null;
   fetched_at: string;
 }
 export interface TransportDeparture {
@@ -544,14 +576,28 @@ const DEP_STALE_MS = 60_000;
 interface RawStopTime {
   stop?: {
     fullName?: string;
+    code?: string;
+    locality?: string;
     name?: { station_name?: string };
     disassembled?: { platformCombinedName?: string };
     coordinates?: { lat?: number; lon?: number };
   };
   stopHeadsign?: { headline?: string; subtitle?: string | null };
   stopSequence?: number;
-  arrival?: { time?: number; delay?: number };
-  departure?: { time?: number; delay?: number };
+  arrival?: { time?: number; delay?: number; occupancy?: Array<number | null> };
+  departure?: { time?: number; delay?: number; occupancy?: Array<number | null> };
+  pickUp?: number;
+  dropOff?: number;
+}
+interface RawRelTripInstance {
+  startDate?: string;
+  instanceNumber?: number;
+  trip?: {
+    id?: string;
+    rtTripId?: string;
+    headsign?: { headline?: string };
+    route?: { name?: string; color?: string; textColor?: string };
+  };
 }
 interface RawTripDetailResponse {
   response?: {
@@ -571,6 +617,18 @@ interface RawTripDetailResponse {
       };
     };
     realtimePattern?: RawStopTime[];
+    alerts?: Array<{ header?: string }>;
+    vehicle?: {
+      lastPosition?: {
+        time?: number;
+        statusString?: string;
+        coordinates?: { lat?: number; lon?: number };
+      };
+    };
+    rel?: {
+      prev?: { tripInstance?: RawRelTripInstance };
+      next?: { tripInstance?: RawRelTripInstance };
+    };
   };
 }
 interface RawDeparturesResponse {
@@ -583,6 +641,7 @@ interface RawDeparturesResponse {
         instanceNumber?: number;
         trip?: {
           id?: string;
+          rtTripId?: string;
           headsign?: { headline?: string };
           route?: {
             name?: string;
@@ -623,25 +682,54 @@ transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => 
     const { value } = await tripCache.get(
       key,
       async () => {
+        // tripId goes in RAW — upstream 404s on percent-encoded colons;
+        // TRIP_ID_RE already restricts it to URL-safe characters.
         const raw = await fetchJson<RawTripDetailResponse>(
-          `${ANYTRIP_BASE}/tripInstance/${date}/${encodeURIComponent(tripId)}/${instance}`,
+          `${ANYTRIP_BASE}/tripInstance/${date}/${tripId}/${instance}`,
           { timeoutMs: UPSTREAM_TIMEOUT_MS },
         );
         const ti = raw.response?.tripInstance;
         const trip = ti?.trip;
         const stops: TransportTripStop[] = (raw.response?.realtimePattern ?? []).map(
-          (st, i) => ({
-            name: stopName(st.stop),
-            lat: num(st.stop?.coordinates?.lat),
-            lon: num(st.stop?.coordinates?.lon),
-            seq: num(st.stopSequence) ?? i,
-            arr: num(st.arrival?.time),
-            arrDelay: num(st.arrival?.delay),
-            dep: num(st.departure?.time),
-            depDelay: num(st.departure?.delay),
-            platform: stopPlatform(st.stop),
-          }),
+          (st, i) => {
+            const occ = st.departure?.occupancy ?? st.arrival?.occupancy;
+            return {
+              name: stopName(st.stop),
+              lat: num(st.stop?.coordinates?.lat),
+              lon: num(st.stop?.coordinates?.lon),
+              seq: num(st.stopSequence) ?? i,
+              arr: num(st.arrival?.time),
+              arrDelay: num(st.arrival?.delay),
+              dep: num(st.departure?.time),
+              depDelay: num(st.departure?.delay),
+              platform: stopPlatform(st.stop),
+              locality: st.stop?.locality ?? null,
+              code: st.stop?.code ?? null,
+              occupancy: Array.isArray(occ)
+                ? occ.map((o) => (typeof o === 'number' && o >= 0 && o <= 6 ? o : null))
+                : null,
+              pickUp: num(st.pickUp),
+              dropOff: num(st.dropOff),
+            };
+          },
         );
+        const relRef = (r?: { tripInstance?: RawRelTripInstance }): TransportTripRel | null => {
+          const rti = r?.tripInstance;
+          const relTripId = rti?.trip?.rtTripId ?? rti?.trip?.id;
+          if (!relTripId || !rti?.startDate || typeof rti.instanceNumber !== 'number') {
+            return null;
+          }
+          return {
+            tripId: relTripId,
+            startDate: rti.startDate,
+            instanceNumber: rti.instanceNumber,
+            routeName: rti.trip?.route?.name ?? null,
+            routeColor: normColor(rti.trip?.route?.color),
+            routeTextColor: normColor(rti.trip?.route?.textColor),
+            headsign: rti.trip?.headsign?.headline ?? null,
+          };
+        };
+        const pos = raw.response?.vehicle?.lastPosition;
         return {
           tripId,
           startDate: date,
@@ -656,6 +744,20 @@ transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => 
           },
           shapeId: ti?.shapeId ?? trip?.shapeId ?? null,
           stops,
+          alerts: (raw.response?.alerts ?? [])
+            .map((a) => a.header ?? '')
+            .filter(Boolean)
+            .slice(0, 3),
+          vehicle: pos
+            ? {
+                time: num(pos.time),
+                statusString: pos.statusString ?? null,
+                lat: num(pos.coordinates?.lat),
+                lon: num(pos.coordinates?.lon),
+              }
+            : null,
+          prev: relRef(raw.response?.rel?.prev),
+          next: relRef(raw.response?.rel?.next),
           fetched_at: new Date().toISOString(),
         };
       },
@@ -682,8 +784,10 @@ transportRouter.get('/api/transport/departures/:stopId', async (c) => {
     const { value } = await depCache.get(
       key,
       async () => {
+        // stopId raw for the same percent-encoding reason (STOP_ID_RE
+        // whitelists it).
         const raw = await fetchJson<RawDeparturesResponse>(
-          `${ANYTRIP_BASE}/departures/${encodeURIComponent(stopId)}?limit=${limit}`,
+          `${ANYTRIP_BASE}/departures/${stopId}?limit=${limit}`,
           { timeoutMs: UPSTREAM_TIMEOUT_MS },
         );
         const r = raw.response;
@@ -702,7 +806,7 @@ transportRouter.get('/api/transport/departures/:stopId', async (c) => {
             dep: num(sti?.departure?.time) ?? num(sti?.arrival?.time),
             delay: num(sti?.departure?.delay),
             platform: stopPlatform(sti?.stop),
-            tripId: trip?.id ?? null,
+            tripId: trip?.rtTripId ?? trip?.id ?? null,
             startDate: d.tripInstance?.startDate ?? null,
             instanceNumber:
               typeof d.tripInstance?.instanceNumber === 'number'
