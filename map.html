@@ -11935,6 +11935,11 @@ function initPagerHoursFromStorage() {
         const alertsHtml = (trip.alerts || []).map((a) =>
           '<div style="padding:5px 12px;font-size:10px;color:#fbbf24;border-bottom:1px solid rgba(148,163,184,0.08);"><i class="fa-solid fa-circle-exclamation" style="margin-right:4px;"></i>' + escapeHtml(a) + '</div>'
         ).join('');
+        // Is the vehicle actually AT a stop, or in transit between two?
+        // AnyTrip's statusString distinguishes ("at X" vs "6.7km from X")
+        // — highlighting the next-stop row while still kilometres away
+        // read as "the vehicle is there".
+        const atStop = !!(trip.vehicle && /^at /.test(trip.vehicle.statusString || ''));
         const rows = trip.stops.map((s, i) => {
           const past = i < nextIdx;
           const isNext = i === nextIdx;
@@ -11947,13 +11952,15 @@ function initPagerHoursFromStorage() {
               ? '<span style="background:#1e293b;color:#cbd5e1;font-size:8px;padding:1px 5px;border-radius:3px;white-space:nowrap;display:inline-block;">pick up only</span>'
               : '';
           const occHtml = tptOccupancyHtml(s.occupancy);
-          // Vehicle position marker on the progress rail.
+          // Vehicle position marker on the progress rail: at the stop →
+          // centred on the row; in transit → straddling the boundary
+          // ABOVE the next stop (between the previous stop and this one).
           const posDot = isNext
-            ? '<span style="position:absolute;left:-7px;top:10px;width:11px;height:11px;border-radius:50%;background:' + railColor + ';border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);"></span>'
+            ? '<span style="position:absolute;left:-7px;top:' + (atStop ? '10px' : '-6px') + ';width:11px;height:11px;border-radius:50%;background:' + railColor + ';border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);z-index:1;"></span>'
             : '';
           return '<div ' + (isNext ? 'id="tpt-next-stop"' : '') + ' style="position:relative;display:flex;gap:8px;padding:6px 12px 6px 14px;margin-left:8px;border-left:3px solid ' +
             (past ? 'rgba(148,163,184,0.25)' : railColor) + ';border-bottom:1px solid rgba(148,163,184,0.06);' +
-            (past ? 'opacity:0.5;' : '') + (isNext ? 'background:rgba(148,163,184,0.09);' : '') + '">' + posDot +
+            (past ? 'opacity:0.5;' : '') + (isNext && atStop ? 'background:rgba(148,163,184,0.09);' : '') + '">' + posDot +
             '<div style="flex:1;min-width:0;">' +
               '<div style="display:flex;justify-content:space-between;gap:6px;">' +
                 '<span style="font-size:8px;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">' + escapeHtml(s.locality || '') + '</span>' +
