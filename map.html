@@ -1447,55 +1447,40 @@
     .ais-list-detail .row { display: flex; gap: 6px; }
     .ais-list-detail .row .k { color: #94a3b8; min-width: 80px; }
     .ais-list-detail .row .v { color: #e2e8f0; font-weight: 500; }
-    /* Section headers inside the shared list body. Each active layer's
-       section shows its header with a sliders button that expands the
-       layer's filter controls inline — this panel is the single home
-       for AIS/Aircraft controls (no separate floating filter panel). */
+    /* Section divider headers inside the shared list body. */
     .unified-list-section-header {
       position: sticky; top: 0; z-index: 1;
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 5px 12px 4px;
+      padding: 6px 12px 4px;
       background: rgba(15, 23, 42, 0.97);
       font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
       text-transform: uppercase;
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
     }
     .unified-list-section-header i { margin-right: 5px; }
-    /* Right-side dock: panels stack vertically, never overlap. */
+    /* Right-side dock: ONE card. The dock itself carries the panel
+       chrome (background, border, radius, shadow); the panels inside —
+       Map Controls (order 0, injected by map-editor-module.js) and the
+       vessels/aircraft list (order 1) — render as flat sections
+       separated by dividers. Hidden entirely until a section is open. */
     #right-dock {
       position: absolute; top: 70px; right: 12px; z-index: 900;
-      display: flex; flex-direction: column; gap: 10px;
+      display: none; flex-direction: column;
       width: 320px; max-height: calc(100% - 90px);
-      pointer-events: none;
+      background: rgba(15, 23, 42, 0.94);
+      border: 1px solid rgba(125, 211, 252, 0.35);
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(8px);
+      overflow: hidden;
     }
-    #right-dock > * { pointer-events: auto; }
+    #right-dock:has(> .open) { display: flex; }
     #right-dock .ais-list-panel {
-      position: static; width: 100%; max-width: none; max-height: 44vh;
+      position: static; width: 100%; max-width: none; max-height: 48vh;
       order: 1;
+      background: transparent; border: 0; border-radius: 0;
+      box-shadow: none; backdrop-filter: none;
     }
-    @media (max-width: 900px) { #right-dock { display: none; } }
-    .unified-filters-btn {
-      background: transparent; border: 1px solid rgba(148, 163, 184, 0.25);
-      color: inherit; font-size: 10px; cursor: pointer;
-      padding: 2px 7px; border-radius: 5px; line-height: 1;
-    }
-    .unified-filters-btn:hover { background: rgba(255, 255, 255, 0.07); }
-    .unified-filters-btn.active { background: rgba(255, 255, 255, 0.1); border-color: currentColor; }
-    .unified-filters-btn i { margin-right: 0; }
-    .unified-inline-filters {
-      padding: 8px 12px;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-      background: rgba(8, 12, 28, 0.45);
-    }
-    /* The FILTER_REGISTRY render() output opens with its own <h4> title —
-       redundant inside a titled section, so hide it here. */
-    .unified-inline-filters h4 { display: none; }
-    .unified-inline-filters .floating-filter-pills { display: flex; flex-wrap: wrap; gap: 5px; }
-    .unified-inline-filters .ff-section-label {
-      font-size: 9px; color: #94a3b8; text-transform: uppercase;
-      letter-spacing: 0.4px; margin: 8px 0 5px; font-weight: 600;
-    }
-    .unified-inline-filters .ff-section-label:first-child { margin-top: 0; }
+    @media (max-width: 900px) { #right-dock { display: none !important; } }
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
     }
@@ -2270,19 +2255,11 @@
         </div>
         <div class="ais-list-body" id="ais-list-body">
           <div id="adsb-list-section" style="display:none;">
-            <div class="unified-list-section-header" id="adsb-section-header" style="color:#c084fc;">
-              <span><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span></span>
-              <button class="unified-filters-btn" onclick="toggleUnifiedFilters('adsb')" title="Aircraft filters"><i class="fa-solid fa-sliders"></i></button>
-            </div>
-            <div class="unified-inline-filters" id="adsb-inline-filters" style="display:none;"></div>
+            <div class="unified-list-section-header" id="adsb-section-header" style="color:#c084fc;"><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span></div>
             <div id="adsb-list-rows"></div>
           </div>
           <div id="ais-list-section" style="display:none;">
-            <div class="unified-list-section-header" id="ais-section-header" style="color:#7dd3fc;">
-              <span><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span></span>
-              <button class="unified-filters-btn" onclick="toggleUnifiedFilters('ais')" title="Vessel filters"><i class="fa-solid fa-sliders"></i></button>
-            </div>
-            <div class="unified-inline-filters" id="ais-inline-filters" style="display:none;"></div>
+            <div class="unified-list-section-header" id="ais-section-header" style="color:#7dd3fc;"><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span></div>
             <div id="ais-list-rows"></div>
           </div>
         </div>
@@ -3800,19 +3777,21 @@
           startAdsbRefresh(); // dedicated 15s live-position refresh
         }
       }
-      // AIS + Aircraft controls live entirely inside the unified list
-      // panel (filters expand inline per section) — no bottom-left
-      // floating filter button for these two layers.
       if (target === 'ais') {
         const enabled = map.hasLayer(aisLayer);
         const panel = document.getElementById('ais-panel');
         if (panel) panel.classList.toggle('open', enabled);
+        if (enabled) addFilterButton('ais');
+        else removeFilterButton('ais');
         syncUnifiedListPanel();
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
         }
       }
       if (target === 'adsb') {
+        const enabled = map.hasLayer(adsbLayer);
+        if (enabled) addFilterButton('adsb');
+        else removeFilterButton('adsb');
         syncUnifiedListPanel();
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
@@ -9068,10 +9047,6 @@ function initPagerHoursFromStorage() {
     /** Convenience: re-render the currently-open panel after state mutates. */
     function refreshActiveFilterPanel() {
       if (_activeFilterKey) _renderFilterPanel(_activeFilterKey);
-      // The AIS/Aircraft filter content also renders inline inside the
-      // unified list panel — keep those copies in sync (the pill click
-      // handlers all funnel through here after mutating state).
-      if (typeof renderUnifiedInlineFilters === 'function') renderUnifiedInlineFilters();
     }
     // Stop clicks inside the panel from bubbling to the document-level
     // outside-click listener. Without this, a pill click (which calls
@@ -10186,30 +10161,6 @@ function initPagerHoursFromStorage() {
     let _aisListMatchCount = 0;
     let _adsbListMatchCount = 0;
 
-    // Which sections have their inline filter controls expanded.
-    const _unifiedFilterOpen = { ais: false, adsb: false };
-    window.toggleUnifiedFilters = function (key) {
-      _unifiedFilterOpen[key] = !_unifiedFilterOpen[key];
-      renderUnifiedInlineFilters();
-    };
-
-    // Render each active layer's FILTER_REGISTRY content inline inside
-    // its section — this panel is the single home for AIS/Aircraft
-    // controls; the bottom-left floating filter sidebar isn't used for
-    // these two layers.
-    function renderUnifiedInlineFilters() {
-      for (const key of ['ais', 'adsb']) {
-        const box = document.getElementById(key + '-inline-filters');
-        if (!box) continue;
-        const open = _unifiedFilterOpen[key];
-        box.style.display = open ? '' : 'none';
-        if (open && FILTER_REGISTRY[key]) box.innerHTML = FILTER_REGISTRY[key].render();
-        const header = document.getElementById(key + '-section-header');
-        const btn = header && header.querySelector('.unified-filters-btn');
-        if (btn) btn.classList.toggle('active', open);
-      }
-    }
-
     function updateUnifiedListPanel() {
       const aisOn = map.hasLayer(aisLayer);
       const adsbOn = map.hasLayer(adsbLayer);
@@ -10220,7 +10171,6 @@ function initPagerHoursFromStorage() {
       };
       show('ais-list-section', aisOn);
       show('adsb-list-section', adsbOn);
-      renderUnifiedInlineFilters();
       const title = document.getElementById('unified-list-title');
       const icon = document.getElementById('unified-list-icon');
       const input = document.getElementById('ais-list-search');
@@ -12992,6 +12942,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=7"></script>
+  <script src="map-editor-module.js?v=8"></script>
 </body>
 </html>
