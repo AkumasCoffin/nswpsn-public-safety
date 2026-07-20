@@ -1786,6 +1786,9 @@
       color: #fff; font-size: 7px;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
     }
+    /* The transport GL canvas must never inherit the map's tile invert
+       filter (would flip the line colours) nor swallow map clicks. */
+    .leaflet-gl-layer { filter: none !important; pointer-events: none; }
     
     .camera-selection-badge {
       position: fixed;
@@ -2427,10 +2430,14 @@
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <!-- Leaflet.heat — used by the Police Heatmap layer. -->
   <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-  <!-- Parallel-line offsetting for the transport network (the AnyTrip
-       tiles carry per-feature pixel offsets so shared rail corridors
-       render as cleanly spaced parallel lines). -->
-  <script src="https://unpkg.com/leaflet-polylineoffset@1.1.1/leaflet.polylineoffset.js"></script>
+  <!-- MapLibre GL renders the transport network lines (the same engine
+       AnyTrip uses). GPU line-offset spaces parallel corridors and,
+       unlike geometric offsetting, can never self-intersect into ring
+       artifacts. The bridge plugin embeds the GL canvas as a Leaflet
+       layer; both must load AFTER leaflet.js (UMD globals). -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
   <script>
     // NSW PSN Map v2.3 - Updated for backend pre-warming cache system
     // Data is served from pre-warmed backend cache for instant loading
@@ -2580,6 +2587,11 @@
     map.on('movestart dragstart zoomstart', _closeAllTooltips);
 
     // W3W grid pane (between tiles and overlays) with fade transition
+    // Transport network GL canvas: above base tiles (200), below the
+    // w3w grid (350), vector overlays (400) and markers (600).
+    map.createPane('transportGlPane');
+    map.getPane('transportGlPane').style.zIndex = 300;
+
     map.createPane('w3wPane');
     map.getPane('w3wPane').style.zIndex = 350;
     map.getPane('w3wPane').style.transition = 'opacity 0.6s ease';
@@ -11721,97 +11733,13 @@ function initPagerHoursFromStorage() {
 
     // ---------- Static network lines (rail / metro / light rail) ----------
     // AnyTrip's pre-styled GeoJSON: per-feature official line colours
-    // ("stroke"), served through the backend with a day-long cache.
-    // Loaded once per session, visible whenever the layer is on — gives
-    // the layer presence even below the vehicle zoom gate.
-    // leaflet-polylineoffset generates ring/loop artifacts whenever a
-    // projected segment is shorter than the pixel offset — its arc
-    // joins wrap around. At low zooms even the raw tile geometry
-    // projects that densely. AnyTrip escapes this because their live
-    // renderer is MapLibre GL (shader-side line-offset can't
-    // self-intersect); the Leaflet equivalent is to SIMPLIFY the
-    // projected points to the offset's scale before offsetting, so no
-    // segment is ever shorter than the offset. High zooms are
-    // untouched (segments are long, simplify removes ~nothing).
-    (function () {
-      if (!L.PolylineOffset || !L.LineUtil || !L.LineUtil.simplify) return;
-      // Proper segment intersection (exclusive of endpoints).
-      function _segX(p, p2, q, q2) {
-        const rx = p2.x - p.x, ry = p2.y - p.y;
-        const sx = q2.x - q.x, sy = q2.y - q.y;
-        const denom = rx * sy - ry * sx;
-        if (!denom) return null;
-        const t = ((q.x - p.x) * sy - (q.y - p.y) * sx) / denom;
-        const u = ((q.x - p.x) * ry - (q.y - p.y) * rx) / denom;
-        if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null;
-        return { x: p.x + t * rx, y: p.y + t * ry };
-      }
-      // Cut out the small self-intersection loops the offset algorithm
-      // introduces at tight corners: scan a short window ahead for a
-      // crossing and splice the loop out, keeping the crossing point.
-      function _removeOffsetLoops(pts) {
-        for (let i = 0; i < pts.length - 3; i++) {
-          const maxJ = Math.min(pts.length - 2, i + 24);
-          for (let j = i + 2; j <= maxJ; j++) {
-            const X = _segX(pts[i], pts[i + 1], pts[j], pts[j + 1]);
-            if (X) {
-              pts.splice(i + 1, j - i, X);
-              break;
-            }
-          }
-        }
-        return pts;
-      }
-      L.Polyline.include({
-        _projectLatlngs: function (latlngs, result, projectedBounds) {
-          const flat = latlngs.length > 0 && latlngs[0] instanceof L.LatLng;
-          if (flat) {
-            let ring = latlngs.map(L.bind(function (ll) {
-              const p = this._map.latLngToLayerPoint(ll);
-              if (projectedBounds) projectedBounds.extend(p);
-              return p;
-            }, this));
-            if (this.options.offset) {
-              const z = this._map.getZoom();
-              // 1) SNAP projected points to a small pixel grid and drop
-              //    consecutive duplicates. Corridor-mates are separate
-              //    features whose source points differ by fractions of
-              //    a pixel — quantising makes near-identical geometries
-              //    EXACTLY identical, so every later step treats them
-              //    the same and the offset lines stay truly parallel.
-              const grid = z >= 14 ? 1 : 2;
-              const snapped = [];
-              let prevPt = null;
-              for (const p of ring) {
-                const qx = Math.round(p.x / grid) * grid;
-                const qy = Math.round(p.y / grid) * grid;
-                if (!prevPt || qx !== prevPt.x || qy !== prevPt.y) {
-                  prevPt = { x: qx, y: qy };
-                  snapped.push(prevPt);
-                }
-              }
-              ring = snapped;
-              // 2) Zoom-aware UNIFORM simplification (none at high
-              //    zoom for fidelity; low zoom needs it — dense points
-              //    make the offset output noisier than the loop
-              //    remover can clean). Tolerance depends only on zoom,
-              //    so identical inputs stay identical.
-              const tol = z >= 14 ? 0 : z >= 13 ? 1 : z >= 11 ? 2 : 3;
-              if (tol && ring.length > 2) ring = L.LineUtil.simplify(ring, tol);
-              // 3) Offset, then cut the corner loops out.
-              ring = _removeOffsetLoops(
-                L.PolylineOffset.offsetPoints(ring, this.options.offset),
-              );
-            }
-            result.push(ring.map(function (p) { return L.point(p.x, p.y); }));
-          } else {
-            latlngs.forEach(L.bind(function (ll) {
-              this._projectLatlngs(ll, result, projectedBounds);
-            }, this));
-          }
-        }
-      });
-    })();
+    // ("stroke") and pixel offsets, served through the backend with a
+    // day-long cache. Rendered by MapLibre GL — the same engine AnyTrip
+    // uses — embedded as a Leaflet layer: GPU line-offset spaces the
+    // parallel corridors and, unlike geometric offsetting, can never
+    // self-intersect into ring artifacts. WebGL-less clients fall back
+    // to plain Leaflet polylines with offsets omitted (corridors
+    // overlap, but zero artifacts).
 
     // Chaikin corner-cutting — rounds the sharp vertices of sparse
     // polylines without changing their course. Each iteration doubles
@@ -11832,6 +11760,89 @@ function initPagerHoursFromStorage() {
       return out;
     }
 
+    // GL style for the network — the two AnyTrip layers (white outline
+    // under the colour line, round caps, bevel joins) with width AND
+    // offset interpolated by zoom so corridors converge toward a single
+    // line when zoomed out. NOTE: the Leaflet bridge runs the GL map at
+    // Leaflet zoom − 1, so these stops are GL zooms (Leaflet 9/12/14 →
+    // GL 8/11/13).
+    function _transportGlStyle(geo) {
+      const offsetExpr = ['interpolate', ['linear'], ['zoom'],
+        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.25],
+        11, ['*', ['coalesce', ['get', 'offset'], 0], 0.6],
+        13, ['coalesce', ['get', 'offset'], 0]
+      ];
+      const opacityExpr = ['coalesce', ['get', 'opacity'], 1];
+      return {
+        version: 8,
+        sources: { lines: { type: 'geojson', data: geo } },
+        layers: [
+          {
+            id: 'lines-outline', type: 'line', source: 'lines',
+            layout: { 'line-cap': 'round', 'line-join': 'bevel' },
+            paint: {
+              'line-color': '#FFFFFF',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.6, 11, 2.9, 13, 4],
+              'line-offset': offsetExpr,
+              'line-opacity': ['*', opacityExpr, 0.85]
+            }
+          },
+          {
+            id: 'lines-colour', type: 'line', source: 'lines',
+            layout: { 'line-cap': 'round', 'line-join': 'bevel' },
+            paint: {
+              'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.2, 11, 2.2, 13, 3],
+              'line-offset': offsetExpr,
+              'line-opacity': opacityExpr
+            }
+          }
+        ]
+      };
+    }
+
+    function _transportGlAvailable() {
+      if (typeof maplibregl === 'undefined' || !L.maplibreGL) return false;
+      try {
+        const c = document.createElement('canvas');
+        return !!(c.getContext('webgl2') || c.getContext('webgl'));
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // Fallback for WebGL-less clients: plain Leaflet dual-layer lines
+    // with offsets OMITTED — corridors overlap into one strand, but
+    // there are no offset artifacts by construction. Weights use the
+    // existing zoomend sweep.
+    function _buildLeafletNetworkFallback(geo) {
+      let count = 0;
+      const outlines = [];
+      const colours = [];
+      for (const f of (geo.features || [])) {
+        if (!f || !f.geometry) continue;
+        const coordsList = f.geometry.type === 'LineString' ? [f.geometry.coordinates]
+          : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
+        const p = f.properties || {};
+        for (const coords of coordsList) {
+          if (!Array.isArray(coords) || coords.length < 2) continue;
+          const latlngs = coords.map((c) => [c[1], c[0]]);
+          const opacity = p.opacity != null ? p.opacity : 1;
+          const wf = _transportWeightFactor();
+          const ol = L.polyline(latlngs, { color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          ol._tptBaseWeight = 4;
+          cl._tptBaseWeight = 3;
+          outlines.push(ol);
+          colours.push(cl);
+          count++;
+        }
+      }
+      for (const l of outlines) transportLinesLayer.addLayer(l);
+      for (const l of colours) transportLinesLayer.addLayer(l);
+      return count;
+    }
+
     let _transportLinesLoaded = false;
     async function loadTransportLines() {
       if (_transportLinesLoaded) return;
@@ -11840,43 +11851,22 @@ function initPagerHoursFromStorage() {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
-        // Rendered exactly the way AnyTrip's own app renders these
-        // tiles (verified against their bundle): RAW geometry — never
-        // smoothed, since densifying the points makes segments shorter
-        // than the pixel offset and leaflet-polylineoffset's arc joins
-        // wrap into rings — with the feature `offset` applied verbatim
-        // at every zoom, and two layers per feature: a white outline
-        // (weight 4) under the coloured line (weight 3), round caps,
-        // bevel joins. Built by hand because L.geoJSON can't pass the
-        // offset constructor option.
-        let count = 0;
-        const outlines = [];
-        const colours = [];
-        for (const f of (geo.features || [])) {
-          if (!f || !f.geometry) continue;
-          const coordsList = f.geometry.type === 'LineString' ? [f.geometry.coordinates]
-            : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
-          const p = f.properties || {};
-          for (const coords of coordsList) {
-            if (!Array.isArray(coords) || coords.length < 2) continue;
-            const latlngs = coords.map((c) => [c[1], c[0]]);
-            const offset = typeof p.offset === 'number' ? p.offset : 0;
-            const opacity = p.opacity != null ? p.opacity : 1;
-            const common = { offset: offset, lineCap: 'round', lineJoin: 'bevel', interactive: false };
-            const wf = _transportWeightFactor();
-            const ol = L.polyline(latlngs, Object.assign({ color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85 }, common));
-            const cl = L.polyline(latlngs, Object.assign({ color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity }, common));
-            ol._tptBaseWeight = 4;
-            cl._tptBaseWeight = 3;
-            outlines.push(ol);
-            colours.push(cl);
-            count++;
-          }
+        if (_transportGlAvailable()) {
+          // The GeoJSON is embedded in the style (the endpoint is
+          // API-key-gated, so GL's own fetch can't load it by URL).
+          // Created once; the bridge re-reads options.style on every
+          // re-add, so toggling the layer never refetches.
+          const gl = L.maplibreGL({
+            style: _transportGlStyle(geo),
+            pane: 'transportGlPane',
+            interactive: false
+          });
+          transportLinesLayer.addLayer(gl);
+          console.log('[transport] network lines loaded (GL):', (geo.features || []).length, 'features');
+        } else {
+          const count = _buildLeafletNetworkFallback(geo);
+          console.log('[transport] network lines loaded (fallback, no offsets):', count, 'segments');
         }
-        // All outlines first so every colour line renders above them.
-        for (const l of outlines) transportLinesLayer.addLayer(l);
-        for (const l of colours) transportLinesLayer.addLayer(l);
-        console.log('[transport] network lines loaded:', count, 'segments');
       } catch (e) {
         _transportLinesLoaded = false; // allow retry on next enable
         console.warn('[transport] lines failed to load:', e);
