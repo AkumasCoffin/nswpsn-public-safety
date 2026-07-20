@@ -11767,13 +11767,14 @@ function initPagerHoursFromStorage() {
     // Leaflet zoom − 1, so these stops are GL zooms (Leaflet 9/12/14 →
     // GL 8/11/13).
     function _transportGlStyle(geo) {
-      // Full AnyTrip parity (verbatim offsets, 4/3px widths) from GL
-      // zoom 12 (Leaflet 13) — earlier than before, so typical viewing
-      // zooms match their rendering exactly; below that both shrink.
+      // AnyTrip's offsets place some corridor-mates fractions of a
+      // pixel apart, which reads as overlap at 3px line width — scale
+      // all offsets ×1.5 at full zoom so parallel lanes get clear
+      // spacing, converging proportionally when zoomed out.
       const offsetExpr = ['interpolate', ['linear'], ['zoom'],
-        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.3],
-        10, ['*', ['coalesce', ['get', 'offset'], 0], 0.65],
-        12, ['coalesce', ['get', 'offset'], 0]
+        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.4],
+        10, ['*', ['coalesce', ['get', 'offset'], 0], 0.9],
+        12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35]
       ];
       const opacityExpr = ['coalesce', ['get', 'opacity'], 1];
       return {
@@ -11999,7 +12000,10 @@ function initPagerHoursFromStorage() {
     // network layer — auto-drawing those shapes too stacked two lines in
     // the same corridor and read as inconsistent track thickness.
     const TRANSPORT_TILE_BOUNDS = { minLat: -34.9, maxLat: -32.0, minLon: 149.6, maxLon: 151.8 };
-    const TRANSPORT_TILED_MODES = { sydneytrains: 1, metro: 1, lightrail: 1 };
+    // nswtrains included: intercity services share the tiled rail
+    // corridors through Sydney — auto-drawing their raw GTFS shapes on
+    // top of the tiles doubled the corridor with diverging geometry.
+    const TRANSPORT_TILED_MODES = { sydneytrains: 1, metro: 1, lightrail: 1, nswtrains: 1 };
     function _transportInTileBounds(v) {
       return v.lat >= TRANSPORT_TILE_BOUNDS.minLat && v.lat <= TRANSPORT_TILE_BOUNDS.maxLat &&
         v.lon >= TRANSPORT_TILE_BOUNDS.minLon && v.lon <= TRANSPORT_TILE_BOUNDS.maxLon;
