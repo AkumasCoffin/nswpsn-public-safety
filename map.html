@@ -11727,15 +11727,13 @@ function initPagerHoursFromStorage() {
               return p;
             }, this));
             if (this.options.offset) {
-              // UNIFORM tolerance for every offset line — a tolerance
-              // proportional to each line's own offset simplified
-              // corridor-mates differently, so their bases diverged and
-              // the parallel lines weaved across each other. With one
-              // tolerance, features sharing a centreline simplify
-              // identically and stay parallel; the loop remover below
-              // handles the large-offset corner rings this no longer
-              // prevents.
-              ring = L.LineUtil.simplify(ring, 2.5);
+              // Offset the RAW projected geometry — any simplification
+              // before offsetting diverges corridor-mates whose source
+              // points differ slightly, so lines stop tracking each
+              // other. Ring/loop artifacts (segments shorter than the
+              // offset) are handled entirely by the loop remover on the
+              // offset output instead — the same net behaviour as a GL
+              // line-offset.
               ring = _removeOffsetLoops(
                 L.PolylineOffset.offsetPoints(ring, this.options.offset),
               );
