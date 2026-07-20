@@ -1461,6 +1461,19 @@
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
     }
     .unified-list-section-header i { margin-right: 5px; }
+    /* Right-side dock: panels stack vertically, never overlap. */
+    #right-dock {
+      position: absolute; top: 70px; right: 12px; z-index: 900;
+      display: flex; flex-direction: column; gap: 10px;
+      width: 320px; max-height: calc(100% - 90px);
+      pointer-events: none;
+    }
+    #right-dock > * { pointer-events: auto; }
+    #right-dock .ais-list-panel {
+      position: static; width: 100%; max-width: none; max-height: 44vh;
+      order: 1;
+    }
+    @media (max-width: 900px) { #right-dock { display: none; } }
     .unified-filters-btn {
       background: transparent; border: 1px solid rgba(148, 163, 184, 0.25);
       color: inherit; font-size: 10px; cursor: pointer;
@@ -1483,23 +1496,6 @@
       letter-spacing: 0.4px; margin: 8px 0 5px; font-weight: 600;
     }
     .unified-inline-filters .ff-section-label:first-child { margin-top: 0; }
-    /* Docked state: while the editor's Map Controls panel is open the
-       vessels/aircraft panel is reparented inside it (see
-       syncUnifiedListPanelDock) and becomes an in-flow section instead
-       of a floating card. The id-qualified selector outweighs the base
-       .ais-list-panel absolute positioning. */
-    #editor-panel .ais-list-panel {
-      position: static;
-      width: auto;
-      max-width: none;
-      max-height: none;
-      margin-top: 1rem;
-      border-radius: 10px;
-      box-shadow: none;
-    }
-    #editor-panel .ais-list-panel .ais-list-body {
-      max-height: 40vh;
-    }
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
     }
@@ -2293,6 +2289,14 @@
       </div>
       </div><!-- /map-filters-for-sidebar -->
 
+      <!-- Right-side panel dock (desktop). Every floating panel on the
+           map's right edge stacks in here as a sibling — the editor's
+           Map Controls (order 0, injected by map-editor-module.js) above
+           the vessels/aircraft list (order 1) — so panels never overlap
+           and share one consistent card styling. On mobile the JS in
+           updateMobileFiltersPlacement moves the children back out. -->
+      <div id="right-dock"></div>
+
       <div class="map-type-controls">
         <button class="btn-toggle map-type-btn active" id="btn-type-dark" onclick="setMapType('dark')">Dark</button>
         <button class="btn-toggle map-type-btn" id="btn-type-sat" onclick="setMapType('sat')">Sat</button>
@@ -2436,7 +2440,24 @@
           document.getElementById(panel)?.classList.remove('sidebar-filter-hidden');
         });
       }
+      // Right-side dock membership. Desktop: the vessels/aircraft list
+      // (and the editor's Map Controls, when injected) stack inside
+      // #right-dock. Mobile: the list returns to the filters wrapper
+      // (so it relocates into the sidebar) and Map Controls returns to
+      // .map-container (so its bottom-sheet positioning works).
+      const dock = document.getElementById('right-dock');
+      const listPanel = document.getElementById('ais-list-panel');
+      const editorPanel = document.getElementById('editor-panel');
+      if (dock && listPanel) {
+        if (isMobile && listPanel.parentElement === dock) wrapper.appendChild(listPanel);
+        else if (!isMobile && listPanel.parentElement !== dock) dock.appendChild(listPanel);
+      }
+      if (dock && editorPanel) {
+        if (isMobile && editorPanel.parentElement === dock) mapContainer.appendChild(editorPanel);
+        else if (!isMobile && editorPanel.parentElement !== dock) dock.appendChild(editorPanel);
+      }
     }
+    window.updateMobileFiltersPlacement = updateMobileFiltersPlacement;
     if (typeof window !== 'undefined') {
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', updateMobileFiltersPlacement);
@@ -10240,30 +10261,7 @@ function initPagerHoursFromStorage() {
       } else {
         p.classList.remove('open');
       }
-      syncUnifiedListPanelDock();
     }
-
-    // While the editor's Map Controls panel (#editor-panel, injected by
-    // map-editor-module.js for users with the map editor role when the
-    // User layer is on) is visible, the vessels/aircraft panel docks
-    // INSIDE it as a section instead of floating over the same corner.
-    // The module calls this on its visibility changes too.
-    const _unifiedPanelHome = document.getElementById('ais-list-panel')
-      ? document.getElementById('ais-list-panel').parentElement
-      : null;
-    function syncUnifiedListPanelDock() {
-      const panel = document.getElementById('ais-list-panel');
-      if (!panel || !_unifiedPanelHome) return;
-      const editor = document.getElementById('editor-panel');
-      const shouldDock = !!(editor && editor.classList.contains('open'));
-      const docked = panel.parentElement === editor;
-      if (shouldDock && !docked) {
-        editor.appendChild(panel);
-      } else if (!shouldDock && docked) {
-        _unifiedPanelHome.appendChild(panel);
-      }
-    }
-    window.syncUnifiedListPanelDock = syncUnifiedListPanelDock;
 
     function openAisListPanel() {
       syncUnifiedListPanel();
@@ -12994,6 +12992,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=6"></script>
+  <script src="map-editor-module.js?v=7"></script>
 </body>
 </html>
