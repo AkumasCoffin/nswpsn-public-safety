@@ -11706,11 +11706,18 @@ function initPagerHoursFromStorage() {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
-        // Built by hand rather than L.geoJSON so the tiles' per-feature
-        // pixel `offset` reaches the polyline options — that's what
-        // spaces parallel lines in shared corridors (polylineoffset
-        // plugin; harmlessly ignored if the plugin failed to load).
+        // Rendered exactly the way AnyTrip's own app renders these
+        // tiles (verified against their bundle): RAW geometry — never
+        // smoothed, since densifying the points makes segments shorter
+        // than the pixel offset and leaflet-polylineoffset's arc joins
+        // wrap into rings — with the feature `offset` applied verbatim
+        // at every zoom, and two layers per feature: a white outline
+        // (weight 4) under the coloured line (weight 3), round caps,
+        // bevel joins. Built by hand because L.geoJSON can't pass the
+        // offset constructor option.
         let count = 0;
+        const outlines = [];
+        const colours = [];
         for (const f of (geo.features || [])) {
           if (!f || !f.geometry) continue;
           const coordsList = f.geometry.type === 'LineString' ? [f.geometry.coordinates]
@@ -11718,19 +11725,18 @@ function initPagerHoursFromStorage() {
           const p = f.properties || {};
           for (const coords of coordsList) {
             if (!Array.isArray(coords) || coords.length < 2) continue;
-            const latlngs = chaikinSmooth(coords.map((c) => [c[1], c[0]]), 1);
-            transportLinesLayer.addLayer(L.polyline(latlngs, {
-              color: p.stroke || '#64748b',
-              weight: 2,
-              opacity: p.opacity != null ? p.opacity : 0.75,
-              offset: typeof p.offset === 'number' ? p.offset : 0,
-              lineJoin: 'round',
-              lineCap: 'round',
-              interactive: false
-            }));
+            const latlngs = coords.map((c) => [c[1], c[0]]);
+            const offset = typeof p.offset === 'number' ? p.offset : 0;
+            const opacity = p.opacity != null ? p.opacity : 1;
+            const common = { offset: offset, lineCap: 'round', lineJoin: 'bevel', interactive: false };
+            outlines.push(L.polyline(latlngs, Object.assign({ color: '#FFFFFF', weight: 4, opacity: opacity * 0.85 }, common)));
+            colours.push(L.polyline(latlngs, Object.assign({ color: p.stroke || '#64748b', weight: 3, opacity: opacity }, common)));
             count++;
           }
         }
+        // All outlines first so every colour line renders above them.
+        for (const l of outlines) transportLinesLayer.addLayer(l);
+        for (const l of colours) transportLinesLayer.addLayer(l);
         console.log('[transport] network lines loaded:', count, 'segments');
       } catch (e) {
         _transportLinesLoaded = false; // allow retry on next enable
@@ -11868,9 +11874,14 @@ function initPagerHoursFromStorage() {
         fetchTransportShapePts(sid).then((pts) => {
           if (!pts) { _transportAutoTracks.delete(sid); return; }
           if (_transportAutoTracks.get(sid) !== entry) return; // pruned meanwhile
-          // Same weight/opacity as the static network so all tracks
-          // render at one consistent thickness.
-          entry.line = L.polyline(pts, { color: w.color, weight: 2, opacity: 0.75, interactive: false });
+          // Same dual-layer style as the static network (white outline
+          // under the route colour) so shape-drawn tracks are
+          // indistinguishable from the tiled ones. No offset — these
+          // are single-route shapes.
+          entry.line = L.layerGroup([
+            L.polyline(pts, { color: '#FFFFFF', weight: 4, opacity: 0.85, lineCap: 'round', lineJoin: 'bevel', interactive: false }),
+            L.polyline(pts, { color: w.color, weight: 3, opacity: 1, lineCap: 'round', lineJoin: 'bevel', interactive: false })
+          ]);
           transportAutoTracksLayer.addLayer(entry.line);
         });
       }
