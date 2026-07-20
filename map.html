@@ -11142,6 +11142,16 @@ function initPagerHoursFromStorage() {
         }
         _adsbAircraft = aircraft;
         _rebuildAdsb();
+        // Follow mode: keep the camera on the pinned aircraft as it
+        // moves; if it vanished from the feed, quietly stop following.
+        if (_adsbFollowActive && _adsbPinnedHex) {
+          const followed = _adsbMarkers.get(_adsbPinnedHex);
+          if (followed) {
+            map.panTo(followed.marker.getLatLng(), { animate: true, duration: 0.8 });
+          } else {
+            _adsbFollowActive = false;
+          }
+        }
         console.log('[adsb] loaded', aircraft.length, 'aircraft (' + (data.emergency_count || 0) + ' emergency services)');
       } catch (e) {
         console.warn('[adsb] failed to load:', e);
@@ -11157,9 +11167,15 @@ function initPagerHoursFromStorage() {
     let _adsbTrails = {}; // hex → [[lat, lon, altFt|null], ...] oldest→newest
     const _adsbTrailLines = new Map(); // hex → [chunk polylines]
     let _adsbTrailTickFlip = false;
+    // Follow mode: clicking an aircraft pins it AND makes the camera
+    // track it on every refresh, with its trail highlighted (shown even
+    // when the global Trails pill is off). Dragging the map breaks the
+    // follow (pin/tooltip stay); clicking the map background clears
+    // both — the same gesture that already unpins.
+    let _adsbFollowActive = false;
 
     async function loadAdsbTrails() {
-      if (!adsbTrailsEnabled) return;
+      if (!adsbTrailsEnabled && !(_adsbFollowActive && _adsbPinnedHex)) return;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/adsb/trails`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -11179,9 +11195,13 @@ function initPagerHoursFromStorage() {
     }
 
     function _rebuildAdsbTrails() {
-      if (!adsbTrailsEnabled) { _clearAdsbTrails(); return; }
+      const followHex = _adsbFollowActive ? _adsbPinnedHex : null;
+      if (!adsbTrailsEnabled && !followHex) { _clearAdsbTrails(); return; }
       const seen = new Set();
       for (const [hex, entry] of _adsbMarkers) {
+        // Trails pill off → only the followed aircraft's trail shows.
+        if (!adsbTrailsEnabled && hex !== followHex) continue;
+        const followed = hex === followHex;
         const pts = _adsbTrails[hex];
         if (!pts || pts.length < 2) continue;
         const a = _adsbAircraft.find((x) => x.hex === hex);
@@ -11194,7 +11214,11 @@ function initPagerHoursFromStorage() {
         const es = a && a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
         const chunkCount = Math.min(3, latlngs.length - 1);
         const per = Math.ceil((latlngs.length - 1) / chunkCount);
-        const opacities = chunkCount === 3 ? [0.15, 0.3, 0.5] : chunkCount === 2 ? [0.2, 0.5] : [0.5];
+        // Followed aircraft get a bolder, brighter trail.
+        const opacities = followed
+          ? (chunkCount === 3 ? [0.4, 0.65, 0.95] : chunkCount === 2 ? [0.5, 0.95] : [0.95])
+          : (chunkCount === 3 ? [0.15, 0.3, 0.5] : chunkCount === 2 ? [0.2, 0.5] : [0.5]);
+        const weight = followed ? 3 : 2;
         seen.add(hex);
         let chunks = _adsbTrailLines.get(hex);
         if (!chunks) { chunks = []; _adsbTrailLines.set(hex, chunks); }
@@ -11206,10 +11230,10 @@ function initPagerHoursFromStorage() {
           const color = es ? es.color : adsbAltColor(pts[endPtIdx] ? pts[endPtIdx][2] : null);
           if (chunks[ci]) {
             chunks[ci].setLatLngs(seg);
-            chunks[ci].setStyle({ color: color, opacity: opacities[ci] });
+            chunks[ci].setStyle({ color: color, opacity: opacities[ci], weight: weight });
           } else {
             chunks[ci] = L.polyline(seg, {
-              color: color, opacity: opacities[ci], weight: 2,
+              color: color, opacity: opacities[ci], weight: weight,
               renderer: adsbTrailRenderer, interactive: false,
               lineCap: 'round', lineJoin: 'round'
             });
@@ -11433,6 +11457,10 @@ function initPagerHoursFromStorage() {
         if (prev) prev.marker.closeTooltip();
       }
       _adsbPinnedHex = hex;
+      // Clicking an aircraft engages follow mode: the camera tracks it
+      // on every refresh and its trail renders highlighted.
+      _adsbFollowActive = true;
+      loadAdsbTrails();
       const entry = _adsbMarkers.get(hex);
       if (entry) {
         try {
@@ -11452,15 +11480,21 @@ function initPagerHoursFromStorage() {
       if (a) adsbFetchPhoto(a);
     }
 
-    // Clicking the map background clears the pin (matches AIS).
+    // Clicking the map background clears the pin AND the follow
+    // (matches AIS). Dragging only breaks the follow — the pin,
+    // tooltip and highlighted trail stay so the user can look around
+    // and re-click the aircraft to resume following.
     map.on('click', () => {
       if (_adsbPinnedHex) {
         const entry = _adsbMarkers.get(_adsbPinnedHex);
         if (entry) entry.marker.closeTooltip();
         _adsbPinnedHex = null;
+        _adsbFollowActive = false;
+        _rebuildAdsbTrails();
         adsbListRender();
       }
     });
+    map.on('dragstart', () => { _adsbFollowActive = false; });
 
     // ---------- Floating filter panel: type filters + label toggles ----------
     window.toggleAdsbLabelsPill = function () {
