@@ -2123,7 +2123,7 @@
         <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')" title="NSW PSN repeaters"><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i><span>Repeaters</span></button>
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
-        <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f6891f;"></i><span>Transport</span></button>
+        <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f18500;"></i><span>Transport</span></button>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
@@ -2329,7 +2329,7 @@
            vehicle or station on the map. -->
       <div class="ais-list-panel" id="transport-info-panel">
         <div class="ais-list-header">
-          <i class="fa-solid fa-bus" style="color:#f6891f;" id="transport-info-icon"></i>
+          <i class="fa-solid fa-bus" style="color:#f18500;" id="transport-info-icon"></i>
           <h4 id="transport-info-title">Transport</h4>
           <span class="ais-list-count" id="transport-info-sub"></span>
           <button class="ais-list-close" onclick="closeTransportInfo()" title="Close"><i class="fa-solid fa-xmark"></i></button>
@@ -11408,15 +11408,16 @@ function initPagerHoursFromStorage() {
     const TRANSPORT_MIN_ZOOM = 11;
     const TRANSPORT_STOPS_MIN_ZOOM = 13;
     const TRANSPORT_MAX_RENDER = 500;
+    // Colours are AnyTrip's own modecolors map (regions.json), verbatim.
     const TRANSPORT_MODES = [
-      { key: 'sydneytrains', label: 'Trains',     color: '#F6891F', feeds: ['st'], prio: 0 },
+      { key: 'sydneytrains', label: 'Trains',     color: '#F18500', feeds: ['st'], prio: 0 },
       { key: 'metro',        label: 'Metro',      color: '#168388', feeds: ['mt'], prio: 1 },
       { key: 'ferries',      label: 'Ferries',    color: '#5AB031', feeds: ['fr'], prio: 2 },
-      { key: 'lightrail',    label: 'Light Rail', color: '#EE343F', feeds: ['lr'], prio: 3 },
-      { key: 'nswtrains',    label: 'NSW Trains', color: '#732A82', feeds: ['nt'], prio: 4 },
+      { key: 'lightrail',    label: 'Light Rail', color: '#E62A32', feeds: ['lr'], prio: 3 },
+      { key: 'nswtrains',    label: 'NSW Trains', color: '#F18500', feeds: ['nt'], prio: 4 },
       // 'sp' (school/special services) rides with the Buses pill — its
       // vehicles report mode au2:buses upstream.
-      { key: 'buses',        label: 'Buses',      color: '#00B5EF', feeds: ['bs', 'sp'], prio: 5 }
+      { key: 'buses',        label: 'Buses',      color: '#00ADE9', feeds: ['bs', 'sp'], prio: 5 }
     ];
     const TRANSPORT_MODE_BY_KEY = {};
     TRANSPORT_MODES.forEach((m) => { TRANSPORT_MODE_BY_KEY[m.key] = m; });
@@ -11447,7 +11448,7 @@ function initPagerHoursFromStorage() {
     }
     function transportModeColor(mode) {
       const m = TRANSPORT_MODE_BY_KEY[mode];
-      return m ? m.color : '#94a3b8';
+      return m ? m.color : '#777777'; // AnyTrip's "unknown" grey
     }
 
     // Fixed-precision padded bounds: stable URLs let apiFetch's in-flight
@@ -11727,13 +11728,18 @@ function initPagerHoursFromStorage() {
               return p;
             }, this));
             if (this.options.offset) {
-              // Offset the RAW projected geometry — any simplification
-              // before offsetting diverges corridor-mates whose source
-              // points differ slightly, so lines stop tracking each
-              // other. Ring/loop artifacts (segments shorter than the
-              // offset) are handled entirely by the loop remover on the
-              // offset output instead — the same net behaviour as a GL
-              // line-offset.
+              // Zoom-aware, UNIFORM simplification. High zoom offsets
+              // the RAW projected geometry (any simplification there
+              // diverges corridor-mates whose source points differ
+              // slightly). Low zoom NEEDS simplification — dense
+              // projected points make the offset output noisy beyond
+              // what the windowed loop remover can clean — and because
+              // the tolerance depends only on zoom, corridor-mates
+              // still simplify identically and stay parallel. This
+              // hook re-runs on every zoom, so it adapts by itself.
+              const z = this._map.getZoom();
+              const tol = z >= 14 ? 0 : z >= 13 ? 1 : z >= 11 ? 2 : 3;
+              if (tol) ring = L.LineUtil.simplify(ring, tol);
               ring = _removeOffsetLoops(
                 L.PolylineOffset.offsetPoints(ring, this.options.offset),
               );
@@ -11798,8 +11804,13 @@ function initPagerHoursFromStorage() {
             const offset = typeof p.offset === 'number' ? p.offset : 0;
             const opacity = p.opacity != null ? p.opacity : 1;
             const common = { offset: offset, lineCap: 'round', lineJoin: 'bevel', interactive: false };
-            outlines.push(L.polyline(latlngs, Object.assign({ color: '#FFFFFF', weight: 4, opacity: opacity * 0.85 }, common)));
-            colours.push(L.polyline(latlngs, Object.assign({ color: p.stroke || '#64748b', weight: 3, opacity: opacity }, common)));
+            const wf = _transportWeightFactor();
+            const ol = L.polyline(latlngs, Object.assign({ color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85 }, common));
+            const cl = L.polyline(latlngs, Object.assign({ color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity }, common));
+            ol._tptBaseWeight = 4;
+            cl._tptBaseWeight = 3;
+            outlines.push(ol);
+            colours.push(cl);
             count++;
           }
         }
@@ -11812,6 +11823,31 @@ function initPagerHoursFromStorage() {
         console.warn('[transport] lines failed to load:', e);
       }
     }
+
+    // Line weights shrink as the user zooms out so the network doesn't
+    // read as fat ropes at overview zooms.
+    function _transportWeightFactor() {
+      const z = map.getZoom();
+      if (z >= 14) return 1;
+      if (z >= 12) return 0.85;
+      if (z >= 10) return 0.6;
+      return 0.45;
+    }
+    let _transportLastWeightFactor = null;
+    function _applyTransportWeights() {
+      const f = _transportWeightFactor();
+      if (f === _transportLastWeightFactor) return;
+      _transportLastWeightFactor = f;
+      const apply = (l) => {
+        if (l instanceof L.LayerGroup) { l.eachLayer(apply); return; }
+        if (l._tptBaseWeight && typeof l.setStyle === 'function') {
+          l.setStyle({ weight: l._tptBaseWeight * f });
+        }
+      };
+      transportLinesLayer.eachLayer(apply);
+      transportAutoTracksLayer.eachLayer(apply);
+    }
+    map.on('zoomend', _applyTransportWeights);
 
     // ---------- Route track highlight + timetable panel ----------
     // Clicking a vehicle draws its trip's track (casing + route colour)
@@ -11878,7 +11914,7 @@ function initPagerHoursFromStorage() {
       const pts = await fetchTransportShapePts(shapeId);
       if (!pts || _transportTrackShapeId !== shapeId) return;
       const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
-      const line = L.polyline(pts, { color: color || '#f6891f', weight: 4, opacity: 0.95, interactive: false });
+      const line = L.polyline(pts, { color: color || '#f18500', weight: 4, opacity: 0.95, interactive: false });
       casing.addTo(transportLayer);
       line.addTo(transportLayer);
       _transportTrackLines = [casing, line];
@@ -11953,10 +11989,12 @@ function initPagerHoursFromStorage() {
           // under the route colour) so shape-drawn tracks are
           // indistinguishable from the tiled ones. No offset — these
           // are single-route shapes.
-          entry.line = L.layerGroup([
-            L.polyline(pts, { color: '#FFFFFF', weight: 4, opacity: 0.85, lineCap: 'round', lineJoin: 'bevel', interactive: false }),
-            L.polyline(pts, { color: w.color, weight: 3, opacity: 1, lineCap: 'round', lineJoin: 'bevel', interactive: false })
-          ]);
+          const wf = _transportWeightFactor();
+          const tOl = L.polyline(pts, { color: '#FFFFFF', weight: 4 * wf, opacity: 0.85, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          tOl._tptBaseWeight = 4;
+          tCl._tptBaseWeight = 3;
+          entry.line = L.layerGroup([tOl, tCl]);
           transportAutoTracksLayer.addLayer(entry.line);
         });
       }
@@ -12074,14 +12112,14 @@ function initPagerHoursFromStorage() {
         // A newer click may have replaced this request.
         if (!_transportInfo || _transportInfo.kind !== 'trip' || _transportInfo.ref.tripId !== ref.tripId) return;
         const route = trip.route && trip.route.name ? trip.route : (fallbackRoute || trip.route);
-        _setTransportInfoHeader('fa-route', (route && route.color) || '#f6891f',
+        _setTransportInfoHeader('fa-route', (route && route.color) || '#f18500',
           (route && route.name ? route.name + ' — ' : '') + (trip.headsign || 'Trip'),
           trip.stops.length + ' stops');
         showTransportTrack(trip.shapeId || (ref.shapeId || null), route && route.color);
         const now = Date.now() / 1000;
         let nextIdx = trip.stops.findIndex((s) => (s.dep ?? s.arr ?? 0) >= now - 30);
         if (nextIdx === -1) nextIdx = trip.stops.length; // trip finished
-        const railColor = (route && route.color) || '#f6891f';
+        const railColor = (route && route.color) || '#f18500';
         // "39s ago: at Lakemba Station, Stand D" status line.
         let statusHtml = '';
         if (trip.vehicle && trip.vehicle.statusString) {
@@ -12174,7 +12212,7 @@ function initPagerHoursFromStorage() {
       _transportInfo = { kind: 'departures', stopId: stopId, stopName: stopName };
       clearTransportTrack();
       openTransportInfoPanel();
-      _setTransportInfoHeader('fa-train', '#f6891f', stopName || 'Departures', '');
+      _setTransportInfoHeader('fa-train', '#f18500', stopName || 'Departures', '');
       const body = document.getElementById('transport-info-body');
       if (body) { delete body.dataset.tripId; body.innerHTML = '<div class="ais-list-empty">Loading departures…</div>'; }
       try {
@@ -12182,7 +12220,7 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         if (!_transportInfo || _transportInfo.kind !== 'departures' || _transportInfo.stopId !== stopId) return;
-        _setTransportInfoHeader('fa-train', '#f6891f', data.stopName || stopName || 'Departures',
+        _setTransportInfoHeader('fa-train', '#f18500', data.stopName || stopName || 'Departures',
           data.departures.length + ' services');
         const alerts = (data.alerts || []).map((a) =>
           '<div style="padding:6px 12px;font-size:10px;color:#fbbf24;border-bottom:1px solid rgba(148,163,184,0.08);">' + escapeHtml(a) + '</div>'
@@ -12272,7 +12310,7 @@ function initPagerHoursFromStorage() {
     FILTER_REGISTRY.transport = {
       icon: 'fa-bus',
       label: 'Transport',
-      color: '#f6891f',
+      color: '#f18500',
       render() {
         const counts = {};
         for (const v of _transportVehicles) counts[v.mode] = (counts[v.mode] || 0) + 1;
@@ -12284,7 +12322,7 @@ function initPagerHoursFromStorage() {
           ? '<div class="floating-filter-status">Zoom in to see live transport (vehicles from zoom ' + TRANSPORT_MIN_ZOOM + ', stations from ' + TRANSPORT_STOPS_MIN_ZOOM + ').</div>'
           : '';
         return `
-          <h4><i class="fa-solid fa-bus" style="color:#f6891f;"></i> Transport</h4>
+          <h4><i class="fa-solid fa-bus" style="color:#f18500;"></i> Transport</h4>
           <div class="ff-section-label">Mode</div>
           <div class="floating-filter-pills">${pills}</div>
           <div class="ff-section-label">Stations</div>
