@@ -40,7 +40,7 @@
     "@types/nspell": "^2.1.6",
     "@types/pg": "^8.11.10",
     "tsx": "^4.23.1",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
   "optionalDependencies": {
