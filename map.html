@@ -11886,10 +11886,12 @@ function initPagerHoursFromStorage() {
 
     // ---------- Auto route tracks for visible vehicles ----------
     // The static network tiles only cover greater Sydney and contain no
-    // ferry or regional-rail geometry, so each visible non-bus vehicle's
-    // route track is drawn from its GTFS shape (deduped per shape,
-    // thin, in the route colour). Buses stay click-to-show — Sydney's
-    // bus shape density would paint the whole map.
+    // ferry, bus or regional-rail geometry, so every visible vehicle
+    // whose mode filter is ON gets its route track drawn from its GTFS
+    // shape (deduped per shape, network-styled). Slots are claimed in
+    // mode-priority order so trains/ferries always get theirs before
+    // buses fill the remainder — with Buses off by default, the bus
+    // shape flood is opt-in via its filter pill.
     // shapeId → { line: polyline|null (null while fetch in flight),
     //             lastWanted: ts }. Tracks are RETAINED after their
     // vehicle leaves the (padded) viewport — shapes are geographically
@@ -11897,8 +11899,8 @@ function initPagerHoursFromStorage() {
     // out made lines vanish while zooming along a corridor. Pruning is
     // least-recently-wanted, only once over the retention cap.
     const _transportAutoTracks = new Map();
-    const TRANSPORT_AUTO_TRACK_CAP = 60;   // max new shapes wanted per sync
-    const TRANSPORT_AUTO_TRACK_KEEP = 150; // retention cap before LRU pruning
+    const TRANSPORT_AUTO_TRACK_CAP = 100;  // max shapes wanted per sync
+    const TRANSPORT_AUTO_TRACK_KEEP = 200; // retention cap before LRU pruning
     // Bounds of AnyTrip's static network tiles (greater Sydney). Rail /
     // metro / light-rail corridors inside them are already drawn by the
     // network layer — auto-drawing those shapes too stacked two lines in
@@ -11910,9 +11912,13 @@ function initPagerHoursFromStorage() {
         v.lon >= TRANSPORT_TILE_BOUNDS.minLon && v.lon <= TRANSPORT_TILE_BOUNDS.maxLon;
     }
     function syncTransportAutoTracks() {
-      const want = new Map(); // shapeId → colour
-      for (const v of _transportVehicles) {
-        if (v.mode === 'buses' || v.mode === 'other') continue;
+      const want = new Map(); // shapeId → { color, mode }
+      // Mode-priority order: trains/metro/ferries/light rail claim
+      // track slots before buses consume the remainder.
+      const byPrio = _transportVehicles.slice()
+        .sort((a, b) => transportModePrio(a.mode) - transportModePrio(b.mode));
+      for (const v of byPrio) {
+        if (v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
         // Skip shapes the static network already covers.
         if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
