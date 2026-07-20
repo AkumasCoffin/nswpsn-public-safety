@@ -10466,7 +10466,8 @@ function initPagerHoursFromStorage() {
 
     // ==================== ADS-B AIRCRAFT LAYER ====================
     // Live positions from /api/adsb/aircraft (backend merge of adsb.lol,
-    // adsb.fi and airplanes.live, deduped by ICAO hex). Refreshes on its
+    // adsb.fi, airplanes.live and adsb.one, deduped by ICAO hex).
+    // Refreshes on its
     // own 15 s timer while the layer is on — NOT part of the 60 s
     // refreshActiveLayersData loop, which is too coarse for aircraft.
     let _adsbAircraft = [];
