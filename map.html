@@ -4810,8 +4810,10 @@ function initPagerHoursFromStorage() {
           const hasPagerVisible = showPagerFlag && hasPager;
 
           // User pins have a distinctive purple outer ring to match the USER toggle button (#a855f7)
+          // Wrapper is 32px to match the divIcon's declared iconSize/anchor —
+          // a 28px wrapper rendered the visual ~2px off the true latlng.
           const baseCircleHtml = `
-            <div style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">
+            <div style="position:relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center;">
               <div style="position:absolute; width:28px; height:28px; border-radius:50%; border:2px solid #a855f7; box-shadow:0 0 8px #a855f7;"></div>
               <div class="${pulseClass}" style="background:${style.background}; width:20px; height:20px; border-radius:50%; border:2px solid #fff; ${shadowStyle}"></div>
             </div>`;
@@ -12942,6 +12944,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=8"></script>
+  <script src="map-editor-module.js?v=9"></script>
 </body>
 </html>
