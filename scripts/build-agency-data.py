@@ -1,7 +1,7 @@
 """Build agency-data.json from D:/working-dir/psn-scrape CSVs.
 
-Each agency entry includes name, slug, category, count, optional extendedHref,
-a Font Awesome icon class, and the full TGID/Alias/Description rows.
+Each agency entry includes name, slug, category, count, a Font Awesome icon
+class, and the full TGID/Alias/Description rows.
 
 Run from the site root: python scripts/build-agency-data.py
 """
@@ -27,12 +27,6 @@ SLUG_OVERRIDE = {
     "Fire & Rescue NSW": "fire-and-rescue-nsw",
     "NSW Ambulance": "nsw-ambulance",
     "NSW Rural Fire Service": "nsw-rural-fire-service",
-}
-
-EXTENDED_HREF = {
-    "fire-and-rescue-nsw": "fire-and-rescue.html",
-    "nsw-ambulance": "ambulance.html",
-    "nsw-rural-fire-service": "rural-fire-service.html",
 }
 
 # Per-agency Font Awesome 6 icon classes (free tier)
@@ -106,7 +100,9 @@ def slugify(s: str) -> str:
     return s.strip("-")
 
 
-SKIP_DIRS = {"Extended", ".waze-browser-profile"}
+# Extended feeds agency-extended.json; RF (UHF CB frequency list) and nswpsn
+# (GRN site list) are fetched directly by the front-end, not agency TGID data.
+SKIP_DIRS = {"Extended", ".waze-browser-profile", "RF", "nswpsn"}
 
 
 def main():
@@ -139,14 +135,13 @@ def main():
                 "category": cat,
                 "count": len(rows),
                 "icon": icon,
-                "extendedHref": EXTENDED_HREF.get(slug),
                 "tgids": rows,
             }
             cat_entry["agencies"].append({"name": name, "slug": slug, "icon": icon})
         out["categories"].append(cat_entry)
 
     target = Path("agency-data.json")
-    target.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    target.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {target}: {target.stat().st_size} bytes, {len(out['agencies'])} agencies, {len(out['categories'])} categories")
     # warn about missing icon mappings
     missing = [s for s in out["agencies"] if out["agencies"][s]["icon"] == DEFAULT_ICON and s not in {sl for sl in ICON_BY_SLUG if ICON_BY_SLUG[sl] == DEFAULT_ICON}]

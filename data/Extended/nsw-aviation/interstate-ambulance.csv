@@ -1,6 +1,6 @@
-Reg,Callsign,Agency,Type
-VH-VAS,RSCU51,SA Ambulance Service,Rotary-Wing Aircraft
-VH-VAE,AM315,Ambulance Victoria,Fixed-Wing Aircraft
-VH-YXI,HM2,Air Ambulance Vic,Rotary-Wing Aircraft
-VH-YXG,HM4,Air Ambulance Vic,Rotary-Wing Aircraft
-VH-YXH,HM5,Air Ambulance Vic,Rotary-Wing Aircraft
+Reg,Agency,Type
+VH-VAS,SA Ambulance Service,Rotary-Wing Aircraft
+VH-VAE,Ambulance Victoria,Fixed-Wing Aircraft
+VH-YXI,Air Ambulance Vic,Rotary-Wing Aircraft
+VH-YXG,Air Ambulance Vic,Rotary-Wing Aircraft
+VH-YXH,Air Ambulance Vic,Rotary-Wing Aircraft
