@@ -11690,6 +11690,33 @@ function initPagerHoursFromStorage() {
     // untouched (segments are long, simplify removes ~nothing).
     (function () {
       if (!L.PolylineOffset || !L.LineUtil || !L.LineUtil.simplify) return;
+      // Proper segment intersection (exclusive of endpoints).
+      function _segX(p, p2, q, q2) {
+        const rx = p2.x - p.x, ry = p2.y - p.y;
+        const sx = q2.x - q.x, sy = q2.y - q.y;
+        const denom = rx * sy - ry * sx;
+        if (!denom) return null;
+        const t = ((q.x - p.x) * sy - (q.y - p.y) * sx) / denom;
+        const u = ((q.x - p.x) * ry - (q.y - p.y) * rx) / denom;
+        if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null;
+        return { x: p.x + t * rx, y: p.y + t * ry };
+      }
+      // Cut out the small self-intersection loops the offset algorithm
+      // introduces at tight corners: scan a short window ahead for a
+      // crossing and splice the loop out, keeping the crossing point.
+      function _removeOffsetLoops(pts) {
+        for (let i = 0; i < pts.length - 3; i++) {
+          const maxJ = Math.min(pts.length - 2, i + 24);
+          for (let j = i + 2; j <= maxJ; j++) {
+            const X = _segX(pts[i], pts[i + 1], pts[j], pts[j + 1]);
+            if (X) {
+              pts.splice(i + 1, j - i, X);
+              break;
+            }
+          }
+        }
+        return pts;
+      }
       L.Polyline.include({
         _projectLatlngs: function (latlngs, result, projectedBounds) {
           const flat = latlngs.length > 0 && latlngs[0] instanceof L.LatLng;
@@ -11700,9 +11727,18 @@ function initPagerHoursFromStorage() {
               return p;
             }, this));
             if (this.options.offset) {
-              const tol = Math.max(1.5, Math.abs(this.options.offset) * 0.75);
-              ring = L.LineUtil.simplify(ring, tol);
-              ring = L.PolylineOffset.offsetPoints(ring, this.options.offset);
+              // UNIFORM tolerance for every offset line — a tolerance
+              // proportional to each line's own offset simplified
+              // corridor-mates differently, so their bases diverged and
+              // the parallel lines weaved across each other. With one
+              // tolerance, features sharing a centreline simplify
+              // identically and stay parallel; the loop remover below
+              // handles the large-offset corner rings this no longer
+              // prevents.
+              ring = L.LineUtil.simplify(ring, 2.5);
+              ring = _removeOffsetLoops(
+                L.PolylineOffset.offsetPoints(ring, this.options.offset),
+              );
             }
             result.push(ring.map(function (p) { return L.point(p.x, p.y); }));
           } else {
