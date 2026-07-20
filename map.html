@@ -10766,7 +10766,7 @@ function initPagerHoursFromStorage() {
     // then airframe-derived classes. Colors echo the marker palette.
     const ADSB_TYPE_CATEGORIES = [
       { key: 'police',    label: 'Police',        color: '#3b82f6' },
-      { key: 'rescue',    label: 'Rescue',        color: '#f59e0b' },
+      { key: 'rescue',    label: 'Aeromedical',   color: '#f59e0b' },
       { key: 'fire',      label: 'Firefighting',  color: '#ef4444' },
       { key: 'ambulance', label: 'Air Ambulance', color: '#22c55e' },
       { key: 'military',  label: 'Military',      color: '#64748b' },
@@ -10815,7 +10815,7 @@ function initPagerHoursFromStorage() {
 
     const ADSB_ES_STYLE = {
       polair:     { color: '#3b82f6', label: 'POLAIR' },
-      rescue:     { color: '#f59e0b', label: 'RESCUE' },
+      rescue:     { color: '#f59e0b', label: 'AEROMEDICAL' },
       firebomber: { color: '#ef4444', label: 'FIREBOMBER' },
       ambulance:  { color: '#22c55e', label: 'AIR AMBULANCE' },
       military:   { color: '#64748b', label: 'MILITARY' }
@@ -11163,9 +11163,11 @@ function initPagerHoursFromStorage() {
     // serves a prebuilt snapshot behind a 30s CDN cache; we fetch on
     // the same 30s cadence and render only for currently-visible
     // aircraft so all filters apply automatically.
-    let adsbTrailsEnabled = true;
+    // Trails show for the clicked/pinned aircraft; the Trails pill is
+    // an OPT-IN "show trails for every aircraft" mode (off by default).
+    let adsbTrailsEnabled = false;
     let _adsbTrails = {}; // hex → [[lat, lon, altFt|null], ...] oldest→newest
-    const _adsbTrailLines = new Map(); // hex → [chunk polylines]
+    const _adsbTrailLines = new Map(); // hex → { segs: [polylines], sig: string }
     let _adsbTrailTickFlip = false;
     // Follow mode: clicking an aircraft pins it AND makes the camera
     // track it on every refresh, with its trail highlighted (shown even
@@ -11175,7 +11177,7 @@ function initPagerHoursFromStorage() {
     let _adsbFollowActive = false;
 
     async function loadAdsbTrails() {
-      if (!adsbTrailsEnabled && !(_adsbFollowActive && _adsbPinnedHex)) return;
+      if (!adsbTrailsEnabled && !_adsbPinnedHex) return;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/adsb/trails`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -11188,66 +11190,69 @@ function initPagerHoursFromStorage() {
     }
 
     function _clearAdsbTrails() {
-      for (const [, chunks] of _adsbTrailLines) {
-        for (const c of chunks) adsbTrailsLayer.removeLayer(c);
+      for (const [, e] of _adsbTrailLines) {
+        for (const s of e.segs) adsbTrailsLayer.removeLayer(s);
       }
       _adsbTrailLines.clear();
     }
 
+    // Continuous altitude gradient for trails — orange near the ground
+    // through green to violet at cruise (FR24-style), far more readable
+    // than stepping through the marker ramp.
+    function adsbTrailAltColor(altFt) {
+      const a = Math.max(0, Math.min(40000, altFt == null ? 0 : altFt));
+      const hue = 25 + (a / 40000) * 245;
+      return 'hsl(' + Math.round(hue) + ', 85%, 55%)';
+    }
+
     function _rebuildAdsbTrails() {
-      const followHex = _adsbFollowActive ? _adsbPinnedHex : null;
-      if (!adsbTrailsEnabled && !followHex) { _clearAdsbTrails(); return; }
+      const focusHex = _adsbPinnedHex; // clicked aircraft always shows its trail
+      if (!adsbTrailsEnabled && !focusHex) { _clearAdsbTrails(); return; }
       const seen = new Set();
       for (const [hex, entry] of _adsbMarkers) {
-        // Trails pill off → only the followed aircraft's trail shows.
-        if (!adsbTrailsEnabled && hex !== followHex) continue;
-        const followed = hex === followHex;
+        // Pill off → only the clicked aircraft's trail shows.
+        if (!adsbTrailsEnabled && hex !== focusHex) continue;
+        const focused = hex === focusHex;
         const pts = _adsbTrails[hex];
         if (!pts || pts.length < 2) continue;
         const a = _adsbAircraft.find((x) => x.hex === hex);
-        // Connect the trail to the marker's current position.
-        const latlngs = pts.map((p) => [p[0], p[1]]);
+        // Trail points + the marker's live position as the head.
         const m = entry.marker.getLatLng();
+        const latlngs = pts.map((p) => [p[0], p[1]]);
         latlngs.push([m.lat, m.lng]);
-        // ≤3 chunks, oldest→newest, fading in: colour by the altitude at
-        // each chunk's end (ES aircraft use their tag colour throughout).
-        const es = a && a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
-        const chunkCount = Math.min(3, latlngs.length - 1);
-        const per = Math.ceil((latlngs.length - 1) / chunkCount);
-        // Followed aircraft get a bolder, brighter trail.
-        const opacities = followed
-          ? (chunkCount === 3 ? [0.4, 0.65, 0.95] : chunkCount === 2 ? [0.5, 0.95] : [0.95])
-          : (chunkCount === 3 ? [0.15, 0.3, 0.5] : chunkCount === 2 ? [0.2, 0.5] : [0.5]);
-        const weight = followed ? 3 : 2;
+        const alts = pts.map((p) => p[2]);
+        alts.push(a ? a.altFt : alts[alts.length - 1]);
         seen.add(hex);
-        let chunks = _adsbTrailLines.get(hex);
-        if (!chunks) { chunks = []; _adsbTrailLines.set(hex, chunks); }
-        for (let ci = 0; ci < chunkCount; ci++) {
-          const start = ci * per;
-          const end = Math.min(latlngs.length - 1, (ci + 1) * per);
-          const seg = latlngs.slice(start, end + 1);
-          const endPtIdx = Math.min(pts.length - 1, end);
-          const color = es ? es.color : adsbAltColor(pts[endPtIdx] ? pts[endPtIdx][2] : null);
-          if (chunks[ci]) {
-            chunks[ci].setLatLngs(seg);
-            chunks[ci].setStyle({ color: color, opacity: opacities[ci], weight: weight });
-          } else {
-            chunks[ci] = L.polyline(seg, {
-              color: color, opacity: opacities[ci], weight: weight,
-              renderer: adsbTrailRenderer, interactive: false,
-              lineCap: 'round', lineJoin: 'round'
-            });
-            adsbTrailsLayer.addLayer(chunks[ci]);
-          }
-        }
-        // Drop surplus chunks if the trail shrank.
-        while (chunks.length > chunkCount) {
-          adsbTrailsLayer.removeLayer(chunks.pop());
+        // Per-segment gradient. The focused trail renders every segment;
+        // background trails (pill mode) are grouped to ≤24 segments so
+        // hundreds of trails stay cheap on the shared canvas.
+        const n = latlngs.length - 1;
+        const step = focused ? 1 : Math.max(1, Math.ceil(n / 24));
+        const sig = [n, latlngs[n][0], latlngs[n][1], focused ? 'f' : 'b'].join('|');
+        let e = _adsbTrailLines.get(hex);
+        if (e && e.sig === sig) continue; // unchanged since last rebuild
+        if (e) for (const s of e.segs) adsbTrailsLayer.removeLayer(s);
+        e = { segs: [], sig: sig };
+        _adsbTrailLines.set(hex, e);
+        const es = a && a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+        const weight = focused ? 3 : 2;
+        for (let s = 0; s < n; s += step) {
+          const end = Math.min(n, s + step);
+          const t = end / n; // 0 tail → 1 head
+          const color = es ? es.color : adsbTrailAltColor(alts[end] != null ? alts[end] : alts[s]);
+          const opacity = focused ? 0.25 + 0.7 * t : 0.12 + 0.38 * t;
+          const seg = L.polyline(latlngs.slice(s, end + 1), {
+            color: color, opacity: opacity, weight: weight,
+            renderer: adsbTrailRenderer, interactive: false,
+            lineCap: 'round', lineJoin: 'round'
+          });
+          adsbTrailsLayer.addLayer(seg);
+          e.segs.push(seg);
         }
       }
-      for (const [hex, chunks] of _adsbTrailLines) {
+      for (const [hex, e] of _adsbTrailLines) {
         if (!seen.has(hex)) {
-          for (const c of chunks) adsbTrailsLayer.removeLayer(c);
+          for (const s of e.segs) adsbTrailsLayer.removeLayer(s);
           _adsbTrailLines.delete(hex);
         }
       }

@@ -164,7 +164,10 @@ const EMPTY_SNAPSHOT: AdsbSnapshot = {
 // without logic changes. Callsign rules win over the military dbFlag.
 const ES_CALLSIGN_RULES: ReadonlyArray<{ re: RegExp; tag: EsTag }> = [
   { re: /^POL\d/, tag: 'polair' }, // NSW PolAir: POL30, POL32...
-  { re: /^RSCU\d/, tag: 'rescue' }, // NSW Ambulance rescue helos: RSCU201...
+  // Aeromedical: Toll/NSW Ambulance rescue helos (RSCU201...), Westpac
+  // Life Saver (LIFS21...), Westpac Rescue Helicopter Service (WPR...),
+  // Toll-callsigned airframes (TOL...).
+  { re: /^(RSCU\d|LIFS|WPR\d|TOL\d)/, tag: 'rescue' },
   { re: /^(FIRE|BMBR|BDOG)/, tag: 'firebomber' }, // RFS bombers + birddogs
   { re: /^(AM\d|MDS\d)/, tag: 'ambulance' }, // Air Ambulance / RFDS SE
 ];
