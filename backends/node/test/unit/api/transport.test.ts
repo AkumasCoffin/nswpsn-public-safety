@@ -32,6 +32,7 @@ const CBD = 'minLat=-33.92&maxLat=-33.83&minLon=151.15&maxLon=151.25';
 function rawVehicle(overrides: Record<string, unknown> = {}) {
   return {
     tripInstance: {
+      shapeId: 'au2:bs:222299',
       trip: {
         id: 'au2:bs:123',
         headsign: { headline: 'Sydenham', subtitle: 'via Marrickville' },
@@ -165,6 +166,7 @@ describe('transport vehicle normalization', () => {
       wheelchair: true,
       aircon: true,
       tripId: 'au2:bs:123',
+      shapeId: 'au2:bs:222299',
     });
     expect(body.vehicles[0].ageSec).toBeGreaterThanOrEqual(11);
     expect(body.vehicles[0].ageSec).toBeLessThan(20);
@@ -225,6 +227,33 @@ describe('transport kill switch + failures', () => {
   it('502s on cold-path upstream failure', async () => {
     fetchJsonMock.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'));
     expect((await getVehicles(`${CBD}&feeds=bs`)).status).toBe(502);
+  });
+});
+
+describe('transport shapes', () => {
+  async function getShape(id: string) {
+    const { transportRouter } = await import('../../../src/api/transport.js');
+    return transportRouter.request(`/api/transport/shape/${encodeURIComponent(id)}`);
+  }
+
+  it('passes the encoded polyline through and caches it', async () => {
+    fetchJsonMock.mockResolvedValue({ response: { shape: { id: 'au2:bs:222299', enc: 'rr_nEmdzx[PC' } } });
+    const body = await (await getShape('au2:bs:222299')).json();
+    expect(body).toEqual({ id: 'au2:bs:222299', enc: 'rr_nEmdzx[PC' });
+    await getShape('au2:bs:222299');
+    expect(fetchJsonMock).toHaveBeenCalledTimes(1);
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain('/shape/au2%3Abs%3A222299');
+  });
+
+  it('400s on malformed shape ids', async () => {
+    expect((await getShape('DROP TABLE')).status).toBe(400);
+    expect((await getShape('au2:buses:../../etc')).status).toBe(400);
+  });
+
+  it('returns enc null when upstream has no geometry', async () => {
+    fetchJsonMock.mockResolvedValue({ response: {} });
+    const body = await (await getShape('au2:st:x1')).json();
+    expect(body).toEqual({ id: 'au2:st:x1', enc: null });
   });
 });
 

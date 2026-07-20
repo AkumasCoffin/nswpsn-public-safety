@@ -1495,6 +1495,9 @@
       background: transparent; border: 0; border-radius: 0;
       box-shadow: none; backdrop-filter: none;
     }
+    /* Transport timetable card sits below the vessels/aircraft section
+       and gets its own divider when both are open. */
+    #right-dock #transport-info-panel { order: 2; border-top: 1px solid rgba(148, 163, 184, 0.18); }
     @media (max-width: 900px) { #right-dock { display: none !important; } }
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
@@ -2314,6 +2317,19 @@
           </div>
         </div>
       </div>
+      <!-- Transport timetable card (vehicle trip stops / station
+           departures). Shares the ais-list-panel class for the dock
+           card styling + mobile relocation; opened by clicking a
+           vehicle or station on the map. -->
+      <div class="ais-list-panel" id="transport-info-panel">
+        <div class="ais-list-header">
+          <i class="fa-solid fa-bus" style="color:#f6891f;" id="transport-info-icon"></i>
+          <h4 id="transport-info-title">Transport</h4>
+          <span class="ais-list-count" id="transport-info-sub"></span>
+          <button class="ais-list-close" onclick="closeTransportInfo()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ais-list-body" id="transport-info-body"></div>
+      </div>
       </div><!-- /map-filters-for-sidebar -->
 
       <!-- Right-side panel dock (desktop). Every floating panel on the
@@ -2473,12 +2489,13 @@
       // (so it relocates into the sidebar) and Map Controls returns to
       // .map-container (so its bottom-sheet positioning works).
       const dock = document.getElementById('right-dock');
-      const listPanel = document.getElementById('ais-list-panel');
-      const editorPanel = document.getElementById('editor-panel');
-      if (dock && listPanel) {
-        if (isMobile && listPanel.parentElement === dock) wrapper.appendChild(listPanel);
-        else if (!isMobile && listPanel.parentElement !== dock) dock.appendChild(listPanel);
+      for (const id of ['ais-list-panel', 'transport-info-panel']) {
+        const panel = document.getElementById(id);
+        if (!dock || !panel) continue;
+        if (isMobile && panel.parentElement === dock) wrapper.appendChild(panel);
+        else if (!isMobile && panel.parentElement !== dock) dock.appendChild(panel);
       }
+      const editorPanel = document.getElementById('editor-panel');
       if (dock && editorPanel) {
         if (isMobile && editorPanel.parentElement === dock) mapContainer.appendChild(editorPanel);
         else if (!isMobile && editorPanel.parentElement !== dock) dock.appendChild(editorPanel);
@@ -2989,10 +3006,13 @@
     const adsbLayer = L.layerGroup();
     // ---------- Public transport (live vehicles + stations) ----------
     // Viewport-scoped fetch via the backend AnyTrip proxy. The stations
-    // sub-layer nests inside so one map.hasLayer(transportLayer) governs
-    // both; the Stations filter pill adds/removes the sub-layer.
+    // and network-lines sub-layers nest inside so one
+    // map.hasLayer(transportLayer) governs everything; the Stations
+    // filter pill adds/removes its sub-layer.
     const transportLayer = L.layerGroup();
     const transportStopsLayer = L.layerGroup();
+    const transportLinesLayer = L.layerGroup(); // static rail/metro/LR network
+    transportLayer.addLayer(transportLinesLayer);
     transportLayer.addLayer(transportStopsLayer);
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
@@ -3839,6 +3859,7 @@
         if (target === 'transport') {
           // Always fetch on enable — the data is viewport-scoped, so
           // the "only if empty" guard used by static layers can't apply.
+          loadTransportLines();
           loadTransportData();
           loadTransportStops();
           startTransportRefresh();
@@ -11495,6 +11516,19 @@ function initPagerHoursFromStorage() {
             .bindTooltip(buildTransportTooltipHtml(v), {
               className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
+          // Click → route track + trip timetable. Look the vehicle up
+          // fresh so a marker that survived many ticks uses current data.
+          const vehicleId = v.id;
+          marker.on('click', (ev) => {
+            if (ev && ev.originalEvent) L.DomEvent.stopPropagation(ev.originalEvent);
+            const cur = _transportVehicles.find((x) => x.id === vehicleId) || v;
+            if (cur.tripId && cur.startDate && cur.instanceNumber != null) {
+              showTransportTrip(
+                { startDate: cur.startDate, tripId: cur.tripId, inst: cur.instanceNumber, shapeId: cur.shapeId },
+                cur.route
+              );
+            }
+          });
           transportLayer.addLayer(marker);
           _transportMarkers.set(v.id, { marker: marker, iconKey: key });
         }
@@ -11605,15 +11639,252 @@ function initPagerHoursFromStorage() {
             (s.modes || []).length ? '<div style="font-size:11px;color:#cbd5e1;margin-top:3px;">' + s.modes.map((m) => escapeHtml(TRANSPORT_MODE_BY_KEY[m] ? TRANSPORT_MODE_BY_KEY[m].label : m)).join(' · ') + '</div>' : '',
             (s.accessibility || []).length ? '<div style="font-size:10px;color:#94a3b8;margin-top:4px;">' + s.accessibility.slice(0, 5).map((a) => escapeHtml(a)).join('<br>') + '</div>' : ''
           ].join('');
-          L.marker([s.lat, s.lon], { icon: icon, zIndexOffset: -100 })
+          const stopMarker = L.marker([s.lat, s.lon], { icon: icon, zIndexOffset: -100 })
             .bindTooltip('<div style="max-width:300px;font-family:system-ui,sans-serif;color:#e2e8f0;"><div style="font-weight:700;font-size:13px;color:' + color + ';">' + escapeHtml(s.name) + '</div>' + rows + '</div>', {
               className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
-            })
-            .addTo(transportStopsLayer);
+            });
+          // Click → departures board for this station.
+          stopMarker.on('click', (ev) => {
+            if (ev && ev.originalEvent) L.DomEvent.stopPropagation(ev.originalEvent);
+            showTransportDepartures(s.id, s.name);
+          });
+          stopMarker.addTo(transportStopsLayer);
         }
       } catch (e) {
         console.warn('[transport] stops failed to load:', e);
       }
+    }
+
+    // ---------- Static network lines (rail / metro / light rail) ----------
+    // AnyTrip's pre-styled GeoJSON: per-feature official line colours
+    // ("stroke"), served through the backend with a day-long cache.
+    // Loaded once per session, visible whenever the layer is on — gives
+    // the layer presence even below the vehicle zoom gate.
+    let _transportLinesLoaded = false;
+    async function loadTransportLines() {
+      if (_transportLinesLoaded) return;
+      _transportLinesLoaded = true; // set first so a failure doesn't refire every tick
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const geo = await res.json();
+        L.geoJSON(geo, {
+          interactive: false,
+          style: (f) => ({
+            color: (f.properties && f.properties.stroke) || '#64748b',
+            weight: 2,
+            opacity: (f.properties && f.properties.opacity != null) ? f.properties.opacity : 0.75
+          })
+        }).addTo(transportLinesLayer);
+        console.log('[transport] network lines loaded:', (geo.features || []).length, 'segments');
+      } catch (e) {
+        _transportLinesLoaded = false; // allow retry on next enable
+        console.warn('[transport] lines failed to load:', e);
+      }
+    }
+
+    // ---------- Route track highlight + timetable panel ----------
+    // Clicking a vehicle draws its trip's track (casing + route colour)
+    // and opens the timetable card with the stop sequence; clicking a
+    // station opens its next departures. Clicking a departure row jumps
+    // to that trip.
+    const _transportShapeCache = new Map(); // shapeId → latlngs
+    let _transportTrackLines = null; // [casing, line]
+    let _transportInfo = null; // {kind:'trip', ref:{date,tripId,inst}} | {kind:'departures', stopId}
+
+    // Google encoded polyline, precision 5.
+    function decodePolyline(str) {
+      let index = 0, lat = 0, lng = 0;
+      const pts = [];
+      while (index < str.length) {
+        let b, shift = 0, result = 0;
+        do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+        shift = 0; result = 0;
+        do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+        pts.push([lat / 1e5, lng / 1e5]);
+      }
+      return pts;
+    }
+
+    let _transportTrackShapeId = null;
+    function clearTransportTrack() {
+      if (_transportTrackLines) {
+        for (const l of _transportTrackLines) transportLayer.removeLayer(l);
+        _transportTrackLines = null;
+      }
+      _transportTrackShapeId = null;
+    }
+
+    async function showTransportTrack(shapeId, color) {
+      // The 10s info refresh re-fires this — skip if the same track is
+      // already drawn so the polyline doesn't blink.
+      if (shapeId && shapeId === _transportTrackShapeId && _transportTrackLines) return;
+      clearTransportTrack();
+      if (!shapeId) return;
+      _transportTrackShapeId = shapeId;
+      try {
+        let pts = _transportShapeCache.get(shapeId);
+        if (!pts) {
+          const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          if (!data.enc) return;
+          pts = decodePolyline(data.enc);
+          _transportShapeCache.set(shapeId, pts);
+        }
+        const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
+        const line = L.polyline(pts, { color: color || '#f6891f', weight: 4, opacity: 0.95, interactive: false });
+        casing.addTo(transportLayer);
+        line.addTo(transportLayer);
+        _transportTrackLines = [casing, line];
+      } catch (e) {
+        console.warn('[transport] shape failed:', e);
+      }
+    }
+
+    function openTransportInfoPanel() {
+      const p = document.getElementById('transport-info-panel');
+      if (p) p.classList.add('open');
+    }
+    function closeTransportInfo() {
+      const p = document.getElementById('transport-info-panel');
+      if (p) p.classList.remove('open');
+      _transportInfo = null;
+      clearTransportTrack();
+    }
+    window.closeTransportInfo = closeTransportInfo;
+
+    function tptTime(epoch) {
+      if (epoch == null) return '—';
+      const d = new Date(epoch * 1000);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    function tptDelayBadge(delay) {
+      if (delay == null) return '';
+      if (delay >= 120) return '<span style="color:#f87171;font-weight:700;">+' + Math.round(delay / 60) + 'm</span>';
+      if (delay <= -120) return '<span style="color:#67e8f9;font-weight:700;">' + Math.round(delay / 60) + 'm</span>';
+      return '<span style="color:#4ade80;">on time</span>';
+    }
+    function tptRouteChip(route) {
+      if (!route || !route.name) return '';
+      const bg = route.color || transportModeColor(route.mode || 'other');
+      const fg = route.textColor || '#fff';
+      return '<span style="background:' + bg + ';color:' + fg + ';font-size:10px;padding:1px 6px;border-radius:4px;font-weight:700;">' + escapeHtml(route.name) + '</span>';
+    }
+
+    function _setTransportInfoHeader(iconCls, color, title, sub) {
+      const icon = document.getElementById('transport-info-icon');
+      const t = document.getElementById('transport-info-title');
+      const s = document.getElementById('transport-info-sub');
+      if (icon) { icon.className = 'fa-solid ' + iconCls; icon.style.color = color; }
+      if (t) t.textContent = title;
+      if (s) s.textContent = sub || '';
+    }
+
+    // Vehicle trip: stop sequence with live times. Past stops dim, the
+    // next stop is highlighted and scrolled into view.
+    async function showTransportTrip(ref, fallbackRoute) {
+      if (!ref || !ref.tripId || !ref.startDate || ref.inst == null) return;
+      _transportInfo = { kind: 'trip', ref: ref };
+      openTransportInfoPanel();
+      const body = document.getElementById('transport-info-body');
+      if (body && !body.dataset.tripId) body.innerHTML = '<div class="ais-list-empty">Loading trip…</div>';
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/trip/${ref.startDate}/${encodeURIComponent(ref.tripId)}/${ref.inst}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const trip = await res.json();
+        // A newer click may have replaced this request.
+        if (!_transportInfo || _transportInfo.kind !== 'trip' || _transportInfo.ref.tripId !== ref.tripId) return;
+        const route = trip.route && trip.route.name ? trip.route : (fallbackRoute || trip.route);
+        _setTransportInfoHeader('fa-route', (route && route.color) || '#f6891f',
+          (route && route.name ? route.name + ' — ' : '') + (trip.headsign || 'Trip'),
+          trip.stops.length + ' stops');
+        showTransportTrack(trip.shapeId || (ref.shapeId || null), route && route.color);
+        const now = Date.now() / 1000;
+        let nextIdx = trip.stops.findIndex((s) => (s.dep ?? s.arr ?? 0) >= now - 30);
+        if (nextIdx === -1) nextIdx = trip.stops.length; // trip finished
+        const rows = trip.stops.map((s, i) => {
+          const past = i < nextIdx;
+          const isNext = i === nextIdx;
+          const t = s.dep ?? s.arr;
+          return '<div ' + (isNext ? 'id="tpt-next-stop"' : '') + ' style="display:flex;gap:8px;align-items:baseline;padding:5px 12px;border-bottom:1px solid rgba(148,163,184,0.06);' +
+            (past ? 'opacity:0.45;' : '') + (isNext ? 'background:rgba(246,137,31,0.12);' : '') + '">' +
+            '<span style="font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;color:#e2e8f0;min-width:38px;">' + tptTime(t) + '</span>' +
+            '<span style="font-size:11px;min-width:44px;">' + tptDelayBadge(s.depDelay ?? s.arrDelay) + '</span>' +
+            '<span style="flex:1;font-size:12px;color:#f1f5f9;">' + escapeHtml(s.name) +
+              (s.platform ? '<span style="color:#94a3b8;font-size:10px;"> · ' + escapeHtml(s.platform) + '</span>' : '') +
+            '</span></div>';
+        }).join('');
+        const bodyEl = document.getElementById('transport-info-body');
+        if (bodyEl) {
+          bodyEl.dataset.tripId = ref.tripId;
+          bodyEl.innerHTML = rows || '<div class="ais-list-empty">No stop data for this trip.</div>';
+          const next = document.getElementById('tpt-next-stop');
+          if (next && typeof bodyEl.scrollTo === 'function') {
+            bodyEl.scrollTo({ top: Math.max(0, next.offsetTop - bodyEl.clientHeight / 3) });
+          }
+        }
+      } catch (e) {
+        console.warn('[transport] trip failed:', e);
+        const bodyEl = document.getElementById('transport-info-body');
+        if (bodyEl) bodyEl.innerHTML = '<div class="ais-list-empty">Could not load trip details.</div>';
+      }
+    }
+    window.showTransportTripFromRow = function (date, tripId, inst) {
+      showTransportTrip({ startDate: date, tripId: tripId, inst: inst });
+    };
+
+    // Station departures board.
+    async function showTransportDepartures(stopId, stopName) {
+      if (!stopId) return;
+      _transportInfo = { kind: 'departures', stopId: stopId, stopName: stopName };
+      clearTransportTrack();
+      openTransportInfoPanel();
+      _setTransportInfoHeader('fa-train', '#f6891f', stopName || 'Departures', '');
+      const body = document.getElementById('transport-info-body');
+      if (body) { delete body.dataset.tripId; body.innerHTML = '<div class="ais-list-empty">Loading departures…</div>'; }
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/departures/${encodeURIComponent(stopId)}?limit=12`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (!_transportInfo || _transportInfo.kind !== 'departures' || _transportInfo.stopId !== stopId) return;
+        _setTransportInfoHeader('fa-train', '#f6891f', data.stopName || stopName || 'Departures',
+          data.departures.length + ' services');
+        const alerts = (data.alerts || []).map((a) =>
+          '<div style="padding:6px 12px;font-size:10px;color:#fbbf24;border-bottom:1px solid rgba(148,163,184,0.08);">' + escapeHtml(a) + '</div>'
+        ).join('');
+        const rows = data.departures.map((d) => {
+          const clickable = d.tripId && d.startDate && d.instanceNumber != null;
+          const onclick = clickable
+            ? ' onclick="showTransportTripFromRow(\'' + escapeHtml(d.startDate) + '\',\'' + escapeHtml(d.tripId) + '\',' + d.instanceNumber + ')" style="cursor:pointer;"'
+            : '';
+          return '<div class="ais-list-row" ' + onclick + '>' +
+            '<div style="font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;color:#e2e8f0;">' + tptTime(d.dep) + '</div>' +
+            '<div class="ais-list-info">' +
+              '<div style="display:flex;align-items:center;gap:6px;">' + tptRouteChip(d.route) +
+                '<span class="ais-list-name">' + escapeHtml(d.headsign || '') + '</span></div>' +
+              '<div class="ais-list-meta">' + (d.platform ? escapeHtml(d.platform) + ' · ' : '') + tptDelayBadge(d.delay) + '</div>' +
+            '</div>' +
+            '<div class="ais-list-speed"><i class="fa-solid fa-chevron-right" style="font-size:9px;color:#475569;"></i></div>' +
+          '</div>';
+        }).join('');
+        const bodyEl = document.getElementById('transport-info-body');
+        if (bodyEl) bodyEl.innerHTML = alerts + (rows || '<div class="ais-list-empty">No upcoming departures.</div>');
+      } catch (e) {
+        console.warn('[transport] departures failed:', e);
+        const bodyEl = document.getElementById('transport-info-body');
+        if (bodyEl) bodyEl.innerHTML = '<div class="ais-list-empty">Could not load departures.</div>';
+      }
+    }
+
+    // Refresh whichever timetable is open (called from the 10s tick;
+    // the backend caches keep this cheap).
+    function refreshTransportInfo() {
+      if (!_transportInfo) return;
+      if (_transportInfo.kind === 'trip') showTransportTrip(_transportInfo.ref);
+      else if (_transportInfo.kind === 'departures') showTransportDepartures(_transportInfo.stopId, _transportInfo.stopName);
     }
 
     function startTransportRefresh() {
@@ -11621,6 +11892,7 @@ function initPagerHoursFromStorage() {
       transportRefreshInterval = setInterval(() => {
         if (document.hidden || !map.hasLayer(transportLayer)) return;
         loadTransportData();
+        refreshTransportInfo();
       }, 10000);
       console.log('🚌 Transport refresh started (10s)');
     }
@@ -11630,6 +11902,7 @@ function initPagerHoursFromStorage() {
         transportRefreshInterval = null;
         console.log('🚌 Transport refresh stopped');
       }
+      closeTransportInfo();
     }
 
     // One debounced handler covers pan AND zoom (Leaflet fires moveend

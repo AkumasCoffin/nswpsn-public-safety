@@ -98,6 +98,11 @@ export interface TransportVehicle {
   model: string | null;
   ageSec: number | null;
   tripId: string | null;
+  /** GTFS shape id — resolves to the route track via /api/transport/shape. */
+  shapeId: string | null;
+  /** Trip-instance coordinates for /api/transport/trip lookups. */
+  startDate: string | null; // YYYYMMDD
+  instanceNumber: number | null;
 }
 
 export interface TransportVehiclesSnapshot {
@@ -128,8 +133,12 @@ export interface TransportStopsSnapshot {
 // the API is unofficial and may drift).
 interface RawVehicleEntry {
   tripInstance?: {
+    shapeId?: string;
+    startDate?: string;
+    instanceNumber?: number;
     trip?: {
       id?: string;
+      shapeId?: string;
       headsign?: { headline?: string; subtitle?: string | null };
       wheelchair?: boolean | number;
       route?: {
@@ -320,6 +329,12 @@ export function normalizeVehicles(raw: RawVehiclesResponse): TransportVehicle[] 
           ? Math.max(0, Math.round(nowSec - pos.time))
           : null,
       tripId: trip?.id ?? null,
+      shapeId: entry.tripInstance?.shapeId ?? trip?.shapeId ?? null,
+      startDate: entry.tripInstance?.startDate ?? null,
+      instanceNumber:
+        typeof entry.tripInstance?.instanceNumber === 'number'
+          ? entry.tripInstance.instanceNumber
+          : null,
     });
     if (out.size >= MAX_VEHICLES) break;
   }
@@ -351,11 +366,19 @@ export function normalizeStops(raw: RawStopsResponse): TransportStop[] {
 
 const vehiclesCache = new SwrCache<TransportVehiclesSnapshot>(500);
 const stopsCache = new SwrCache<TransportStopsSnapshot>(500);
+const shapeCache = new SwrCache<TransportShapeSnapshot>(1000);
+
+export interface TransportShapeSnapshot {
+  /** Google encoded polyline (precision 5) — decoded client-side. */
+  id: string;
+  enc: string | null;
+}
 
 /** TEST-ONLY: wipe caches between unit tests. */
 export function _resetTransportCacheForTests(): void {
   vehiclesCache.clear();
   stopsCache.clear();
+  shapeCache.clear();
 }
 
 function bboxKey(b: Bbox): string {
@@ -412,6 +435,332 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
   } catch (err) {
     // Cold-path failure only — SWR serves stale inside its window.
     log.warn({ err, key }, 'transport: vehicles upstream unavailable');
+    return c.json({ error: 'transport upstream unavailable' }, 502);
+  }
+});
+
+// Route track geometry for one GTFS shape id (from a vehicle's shapeId).
+// Shapes are static per id, so they cache long; the encoded polyline is
+// passed through and decoded client-side (~1.5 KB per route).
+const SHAPE_ID_RE = /^au2:[a-z]{2}:[A-Za-z0-9_.-]+$/;
+const SHAPE_FRESH_MS = 24 * 3600_000;
+const SHAPE_STALE_MS = 7 * 24 * 3600_000;
+
+interface RawShapeResponse {
+  response?: { shape?: { id?: string; enc?: string } };
+}
+
+transportRouter.get('/api/transport/shape/:id', async (c) => {
+  if (config.TRANSPORT_DISABLED) return c.json({ id: '', enc: null, disabled: true });
+  const id = c.req.param('id').trim();
+  if (!SHAPE_ID_RE.test(id)) return c.json({ error: 'invalid shape id' }, 400);
+  try {
+    const { value } = await shapeCache.get(
+      `sh|${id}`,
+      async () => {
+        const raw = await fetchJson<RawShapeResponse>(
+          `${ANYTRIP_BASE}/shape/${encodeURIComponent(id)}`,
+          { timeoutMs: UPSTREAM_TIMEOUT_MS },
+        );
+        return { id, enc: raw.response?.shape?.enc ?? null };
+      },
+      {
+        fresh: SHAPE_FRESH_MS,
+        stale: SHAPE_STALE_MS,
+        onError: (err) => log.warn({ err, id }, 'transport: shape refresh failed'),
+      },
+    );
+    return c.json(value);
+  } catch (err) {
+    log.warn({ err, id }, 'transport: shape upstream unavailable');
+    return c.json({ error: 'transport upstream unavailable' }, 502);
+  }
+});
+
+// ---------------------------------------------------------------------
+// Trip detail (stop sequence + live times) and station departures —
+// power the click-through timetable panels. Both are realtime-ish, so
+// short fresh windows; both normalize heavily (the raw departures
+// payload is ~560 KB for 10 rows).
+
+export interface TransportTripStop {
+  name: string;
+  lat: number | null;
+  lon: number | null;
+  seq: number;
+  arr: number | null; // epoch seconds
+  arrDelay: number | null; // seconds
+  dep: number | null;
+  depDelay: number | null;
+  platform: string | null;
+}
+export interface TransportTripSnapshot {
+  tripId: string;
+  startDate: string;
+  instanceNumber: number;
+  headsign: string | null;
+  route: {
+    name: string | null;
+    longName: string | null;
+    color: string | null;
+    textColor: string | null;
+    mode: TransportMode;
+  };
+  shapeId: string | null;
+  stops: TransportTripStop[];
+  fetched_at: string;
+}
+export interface TransportDeparture {
+  route: {
+    name: string | null;
+    color: string | null;
+    textColor: string | null;
+    mode: TransportMode;
+  };
+  headsign: string | null;
+  headsignSub: string | null;
+  dep: number | null; // epoch seconds (realtime when available)
+  delay: number | null; // seconds
+  platform: string | null;
+  tripId: string | null;
+  startDate: string | null;
+  instanceNumber: number | null;
+}
+export interface TransportDeparturesSnapshot {
+  stopId: string;
+  stopName: string | null;
+  departures: TransportDeparture[];
+  alerts: string[];
+  fetched_at: string;
+}
+
+const TRIP_ID_RE = /^au2:[a-z]{2}:[A-Za-z0-9_.:-]+$/;
+const STOP_ID_RE = /^au2:[A-Za-z0-9_.-]+$/;
+const TRIP_FRESH_MS = 15_000;
+const TRIP_STALE_MS = 60_000;
+const DEP_FRESH_MS = 20_000;
+const DEP_STALE_MS = 60_000;
+
+interface RawStopTime {
+  stop?: {
+    fullName?: string;
+    name?: { station_name?: string };
+    disassembled?: { platformCombinedName?: string };
+    coordinates?: { lat?: number; lon?: number };
+  };
+  stopHeadsign?: { headline?: string; subtitle?: string | null };
+  stopSequence?: number;
+  arrival?: { time?: number; delay?: number };
+  departure?: { time?: number; delay?: number };
+}
+interface RawTripDetailResponse {
+  response?: {
+    tripInstance?: {
+      shapeId?: string;
+      trip?: {
+        id?: string;
+        shapeId?: string;
+        headsign?: { headline?: string };
+        route?: {
+          name?: string;
+          longName?: string;
+          color?: string;
+          textColor?: string;
+          mode?: string;
+        };
+      };
+    };
+    realtimePattern?: RawStopTime[];
+  };
+}
+interface RawDeparturesResponse {
+  response?: {
+    stop?: { fullName?: string; name?: { station_name?: string } };
+    alerts?: Array<{ header?: string }>;
+    departures?: Array<{
+      tripInstance?: {
+        startDate?: string;
+        instanceNumber?: number;
+        trip?: {
+          id?: string;
+          headsign?: { headline?: string };
+          route?: {
+            name?: string;
+            color?: string;
+            textColor?: string;
+            mode?: string;
+          };
+        };
+      };
+      stopTimeInstance?: RawStopTime;
+    }>;
+  };
+}
+
+const tripCache = new SwrCache<TransportTripSnapshot>(300);
+const depCache = new SwrCache<TransportDeparturesSnapshot>(300);
+
+function num(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+function stopPlatform(st: RawStopTime['stop']): string | null {
+  return st?.disassembled?.platformCombinedName ?? null;
+}
+function stopName(st: RawStopTime['stop']): string {
+  return st?.fullName ?? st?.name?.station_name ?? 'Unknown stop';
+}
+
+transportRouter.get('/api/transport/trip/:date/:tripId/:instance', async (c) => {
+  if (config.TRANSPORT_DISABLED) return c.json({ error: 'disabled' }, 404);
+  const date = c.req.param('date');
+  const tripId = c.req.param('tripId');
+  const instance = c.req.param('instance');
+  if (!/^\d{8}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  if (!TRIP_ID_RE.test(tripId)) return c.json({ error: 'invalid trip id' }, 400);
+  if (!/^\d{1,3}$/.test(instance)) return c.json({ error: 'invalid instance' }, 400);
+  const key = `t|${date}|${tripId}|${instance}`;
+  try {
+    const { value } = await tripCache.get(
+      key,
+      async () => {
+        const raw = await fetchJson<RawTripDetailResponse>(
+          `${ANYTRIP_BASE}/tripInstance/${date}/${encodeURIComponent(tripId)}/${instance}`,
+          { timeoutMs: UPSTREAM_TIMEOUT_MS },
+        );
+        const ti = raw.response?.tripInstance;
+        const trip = ti?.trip;
+        const stops: TransportTripStop[] = (raw.response?.realtimePattern ?? []).map(
+          (st, i) => ({
+            name: stopName(st.stop),
+            lat: num(st.stop?.coordinates?.lat),
+            lon: num(st.stop?.coordinates?.lon),
+            seq: num(st.stopSequence) ?? i,
+            arr: num(st.arrival?.time),
+            arrDelay: num(st.arrival?.delay),
+            dep: num(st.departure?.time),
+            depDelay: num(st.departure?.delay),
+            platform: stopPlatform(st.stop),
+          }),
+        );
+        return {
+          tripId,
+          startDate: date,
+          instanceNumber: Number(instance),
+          headsign: trip?.headsign?.headline ?? null,
+          route: {
+            name: trip?.route?.name ?? null,
+            longName: trip?.route?.longName ?? null,
+            color: normColor(trip?.route?.color),
+            textColor: normColor(trip?.route?.textColor),
+            mode: normMode(trip?.route?.mode),
+          },
+          shapeId: ti?.shapeId ?? trip?.shapeId ?? null,
+          stops,
+          fetched_at: new Date().toISOString(),
+        };
+      },
+      {
+        fresh: TRIP_FRESH_MS,
+        stale: TRIP_STALE_MS,
+        onError: (err) => log.warn({ err, key }, 'transport: trip refresh failed'),
+      },
+    );
+    return c.json(value);
+  } catch (err) {
+    log.warn({ err, key }, 'transport: trip upstream unavailable');
+    return c.json({ error: 'transport upstream unavailable' }, 502);
+  }
+});
+
+transportRouter.get('/api/transport/departures/:stopId', async (c) => {
+  if (config.TRANSPORT_DISABLED) return c.json({ error: 'disabled' }, 404);
+  const stopId = c.req.param('stopId');
+  if (!STOP_ID_RE.test(stopId)) return c.json({ error: 'invalid stop id' }, 400);
+  const limit = Math.min(20, Math.max(1, Number(c.req.query('limit')) || 10));
+  const key = `d|${stopId}|${limit}`;
+  try {
+    const { value } = await depCache.get(
+      key,
+      async () => {
+        const raw = await fetchJson<RawDeparturesResponse>(
+          `${ANYTRIP_BASE}/departures/${encodeURIComponent(stopId)}?limit=${limit}`,
+          { timeoutMs: UPSTREAM_TIMEOUT_MS },
+        );
+        const r = raw.response;
+        const departures: TransportDeparture[] = (r?.departures ?? []).map((d) => {
+          const trip = d.tripInstance?.trip;
+          const sti = d.stopTimeInstance;
+          return {
+            route: {
+              name: trip?.route?.name ?? null,
+              color: normColor(trip?.route?.color),
+              textColor: normColor(trip?.route?.textColor),
+              mode: normMode(trip?.route?.mode),
+            },
+            headsign: sti?.stopHeadsign?.headline ?? trip?.headsign?.headline ?? null,
+            headsignSub: sti?.stopHeadsign?.subtitle ?? null,
+            dep: num(sti?.departure?.time) ?? num(sti?.arrival?.time),
+            delay: num(sti?.departure?.delay),
+            platform: stopPlatform(sti?.stop),
+            tripId: trip?.id ?? null,
+            startDate: d.tripInstance?.startDate ?? null,
+            instanceNumber:
+              typeof d.tripInstance?.instanceNumber === 'number'
+                ? d.tripInstance.instanceNumber
+                : null,
+          };
+        });
+        return {
+          stopId,
+          stopName: r?.stop?.fullName ?? r?.stop?.name?.station_name ?? null,
+          departures,
+          alerts: (r?.alerts ?? [])
+            .map((a) => a.header ?? '')
+            .filter(Boolean)
+            .slice(0, 3),
+          fetched_at: new Date().toISOString(),
+        };
+      },
+      {
+        fresh: DEP_FRESH_MS,
+        stale: DEP_STALE_MS,
+        onError: (err) => log.warn({ err, key }, 'transport: departures refresh failed'),
+      },
+    );
+    return c.json(value);
+  } catch (err) {
+    log.warn({ err, key }, 'transport: departures upstream unavailable');
+    return c.json({ error: 'transport upstream unavailable' }, 502);
+  }
+});
+
+// ---------------------------------------------------------------------
+// Static NSW rail/metro/light-rail network geometry (AnyTrip's
+// pre-styled GeoJSON, per-feature official line colours). ~434 KB raw,
+// gzipped by the compress() middleware; cached a day.
+
+const LINES_URL = 'https://static.anytrip.com.au/tiles/lines.json';
+const LINES_FRESH_MS = 24 * 3600_000;
+const LINES_STALE_MS = 7 * 24 * 3600_000;
+const linesCache = new SwrCache<unknown>(2);
+
+transportRouter.get('/api/transport/lines', async (c) => {
+  if (config.TRANSPORT_DISABLED) {
+    return c.json({ type: 'FeatureCollection', features: [], disabled: true });
+  }
+  try {
+    const { value } = await linesCache.get(
+      'lines',
+      () => fetchJson<unknown>(LINES_URL, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
+      {
+        fresh: LINES_FRESH_MS,
+        stale: LINES_STALE_MS,
+        onError: (err) => log.warn({ err }, 'transport: lines refresh failed'),
+      },
+    );
+    return c.json(value as object);
+  } catch (err) {
+    log.warn({ err }, 'transport: lines upstream unavailable');
     return c.json({ error: 'transport upstream unavailable' }, 502);
   }
 });
