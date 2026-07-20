@@ -24,6 +24,7 @@ import { beachRouter } from './api/beach.js';
 import { weatherRouter } from './api/weather.js';
 import { pagerRouter } from './api/pager.js';
 import { firmsRouter } from './api/firms.js';
+import { adsbRouter } from './api/adsb.js';
 // Power sources + heartbeat + stats (W4).
 import { endeavourRouter } from './api/endeavour.js';
 import { ausgridRouter } from './api/ausgrid.js';
@@ -287,6 +288,7 @@ export function createApp() {
   app.route('/', weatherRouter);
   app.route('/', pagerRouter);
   app.route('/', firmsRouter);
+  app.route('/', adsbRouter);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
   app.route('/', ausgridRouter);

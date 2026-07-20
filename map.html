@@ -1681,6 +1681,19 @@
       0%, 100% { outline-color: #22c55e; }
       50% { outline-color: #4ade80; }
     }
+
+    /* ADS-B aircraft markers. Emergency-service aircraft (and anything
+       squawking 7500/7600/7700) get an expanding ring in the tag colour,
+       passed in via the --pulse custom property on the wrapper div. */
+    .adsb-pulse {
+      border-radius: 50%;
+      animation: adsb-pulse 1.6s ease-out infinite;
+    }
+    @keyframes adsb-pulse {
+      0%   { box-shadow: 0 0 0 0 var(--pulse, rgba(168,85,247,0.7)); }
+      70%  { box-shadow: 0 0 0 9px rgba(0,0,0,0); }
+      100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+    }
     
     .camera-selection-badge {
       position: fixed;
@@ -2015,6 +2028,7 @@
         <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
         <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')"><span class="dot-indicator" style="background:#14b8a6;"></span> Repeaters</button>
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')"><span class="dot-indicator" style="background:#0284c7;"></span> AIS Ships</button>
+        <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')"><span class="dot-indicator" style="background:#a855f7;"></span> Aircraft</button>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
@@ -2843,6 +2857,12 @@
     // NASA FIRMS fire-hotspot polygons (off by default — niche layer that
     // only matters when bushfires are active).
     const firmsLayer = L.layerGroup();
+    // ---------- ADS-B aircraft (live positions) ----------
+    // Plain layerGroup, deliberately NOT a markercluster: aircraft move
+    // ~4 km per 15 s tick, so clustering would rebuild the whole tree
+    // every refresh. Markers are diff-updated in place instead (see
+    // _rebuildAdsb).
+    const adsbLayer = L.layerGroup();
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
@@ -3620,7 +3640,8 @@
         beachwatch: beachwatchLayer,
         firms: firmsLayer,
         nswpsn: nswpsnLayer,
-        ais: aisLayer
+        ais: aisLayer,
+        adsb: adsbLayer
       };
       const btnMap = {
         user: 'btn-user',
@@ -3634,7 +3655,8 @@
         beachwatch: 'btn-beachwatch',
         firms: 'btn-firms',
         nswpsn: 'btn-nswpsn',
-        ais: 'btn-ais'
+        ais: 'btn-ais',
+        adsb: 'btn-adsb'
       };
 
       const layer = layerMap[target];
@@ -3656,6 +3678,7 @@
           stopCameraRefresh();
           clearCameraSelection();
         }
+        if (target === 'adsb') stopAdsbRefresh();
       } else {
         map.addLayer(layer);
         btn.classList.add('active');
@@ -3675,6 +3698,10 @@
         if (target === 'firms' && firmsLayer.getLayers().length === 0) loadFirmsHotspots();
         if (target === 'nswpsn' && nswpsnLayer.getLayers().length === 0) loadNswpsnData();
         if (target === 'ais' && _aisVessels.length === 0) loadAisData();
+        if (target === 'adsb') {
+          if (_adsbAircraft.length === 0) loadAdsbData();
+          startAdsbRefresh(); // dedicated 15s live-position refresh
+        }
       }
       if (target === 'ais') {
         const enabled = map.hasLayer(aisLayer);
@@ -10345,6 +10372,211 @@ function initPagerHoursFromStorage() {
         if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
       }
     }
+
+    // ==================== ADS-B AIRCRAFT LAYER ====================
+    // Live positions from /api/adsb/aircraft (backend merge of adsb.lol,
+    // adsb.fi and airplanes.live, deduped by ICAO hex). Refreshes on its
+    // own 15 s timer while the layer is on — NOT part of the 60 s
+    // refreshActiveLayersData loop, which is too coarse for aircraft.
+    let _adsbAircraft = [];
+    const _adsbMarkers = new Map(); // hex → { marker, iconKey }
+    let adsbRefreshInterval = null;
+    // Ground targets only render at/above this zoom — Sydney KSA alone
+    // parks dozens of them on one pixel at state-wide zoom.
+    const ADSB_GROUND_MIN_ZOOM = 10;
+    // Render cap. Backend sorts emergency-first then lowest-altitude, so
+    // a truncated list keeps the aircraft that matter.
+    const ADSB_MAX_RENDER = 800;
+
+    const ADSB_ES_STYLE = {
+      polair:     { color: '#3b82f6', label: 'POLAIR' },
+      rescue:     { color: '#f59e0b', label: 'RESCUE' },
+      firebomber: { color: '#ef4444', label: 'FIREBOMBER' },
+      ambulance:  { color: '#22c55e', label: 'AIR AMBULANCE' },
+      military:   { color: '#64748b', label: 'MILITARY' }
+    };
+
+    // Civilian tint by altitude band — brighter = lower. Size stays
+    // constant; scaling by altitude makes low traffic visually dominate.
+    function adsbAltColor(altFt) {
+      if (altFt == null) return '#c084fc';
+      if (altFt <= 5000) return '#e9d5ff';
+      if (altFt <= 15000) return '#c084fc';
+      if (altFt <= 25000) return '#a855f7';
+      return '#7e22ce';
+    }
+    function adsbAltBand(altFt) {
+      if (altFt == null) return 1;
+      if (altFt <= 5000) return 0;
+      if (altFt <= 15000) return 1;
+      if (altFt <= 25000) return 2;
+      return 3;
+    }
+
+    function hexToRgba(hex, alpha) {
+      const n = parseInt(hex.slice(1), 16);
+      return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+    }
+
+    function buildAircraftIcon(a) {
+      const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+      const color = es ? es.color : adsbAltColor(a.altFt);
+      const op = a.onGround ? 0.5 : 1;
+      // Squawk emergencies pulse red regardless of tag; ES aircraft
+      // pulse in their tag colour. Ground targets never pulse.
+      const pulseColor = a.emergencySquawk ? '#ef4444' : (es ? es.color : null);
+      const pulse = pulseColor && !a.onGround
+        ? 'class="adsb-pulse" style="--pulse:' + hexToRgba(pulseColor, 0.7) + ';"'
+        : '';
+      let glyph;
+      // Number.isFinite, not global isFinite — trackDeg arrives as null
+      // and isFinite(null) is true.
+      if (Number.isFinite(a.trackDeg)) {
+        // Plane silhouette pointing north, rotated by track — same
+        // approach as the AIS arrow (rotates around its own centre).
+        glyph = '<svg viewBox="0 0 24 24" width="20" height="20" style="display:block;transform:rotate(' + a.trackDeg + 'deg);opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));">' +
+          '<path d="M12 1.5 L13.8 8 L22 12 L13.8 12.8 L13.8 18 L16.8 20.6 L12 19.2 L7.2 20.6 L10.2 18 L10.2 12.8 L2 12 L10.2 8 Z" fill="' + color + '" stroke="#fff" stroke-width="1" stroke-linejoin="round"/></svg>';
+      } else {
+        // No track — plain dot, same fallback as AIS.
+        glyph = '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';margin:5px;"></div>';
+      }
+      return L.divIcon({
+        className: 'adsb-pin',
+        html: '<div ' + pulse + '>' + glyph + '</div>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+    }
+
+    // Icon cache key — setIcon() only fires when this changes. Track is
+    // bucketed to 5° so 1° jitter doesn't rebuild the divIcon every tick.
+    function _adsbIconKey(a) {
+      const trackBucket = Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg / 5) : 'x';
+      return [a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0].join('|');
+    }
+
+    function buildAdsbTooltipHtml(a) {
+      const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+      const color = es ? es.color : '#a855f7';
+      const name = a.callsign || a.reg || a.hex.toUpperCase();
+      const sqBad = a.squawk && ['7500', '7600', '7700'].indexOf(a.squawk) !== -1;
+
+      function row(label, value) {
+        if (value == null || value === '' || value === '—') return '';
+        return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + escapeHtml(label) + '</span><span style="font-weight:600;">' + escapeHtml(String(value)) + '</span></div>';
+      }
+
+      const body = [
+        row('Type', a.type),
+        row('Registration', a.reg),
+        row('Altitude', a.onGround ? 'On ground' : (a.altFt != null ? a.altFt.toLocaleString() + ' ft' : null)),
+        row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null),
+        row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null),
+        row('Position age', Math.round(a.ageSec) + 's'),
+        row('Sources', (a.sources || []).join(', '))
+      ].join('');
+      const squawkRow = a.squawk
+        ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Squawk</span><span style="font-weight:700;color:' + (sqBad ? '#ef4444' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span></div>'
+        : '';
+
+      return '<div style="max-width:400px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+        '<div style="font-size:15px;font-weight:700;color:' + color + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<i class="fa-solid ' + (a.esTag === 'polair' || a.esTag === 'rescue' || a.esTag === 'ambulance' ? 'fa-helicopter' : 'fa-plane') + '"></i> ' + escapeHtml(name) +
+          (es ? ' <span style="background:' + es.color + ';color:#fff;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700;">' + es.label + '</span>' : '') +
+        '</div>' +
+        '<div style="padding:6px 8px;background:' + hexToRgba(color, 0.08) + ';border-radius:6px;">' + body + squawkRow + '</div>' +
+      '</div>';
+    }
+
+    // Diff-update: move existing markers with setLatLng, swap icons only
+    // on iconKey change, add new hexes, drop vanished ones. A full
+    // clearLayers()+rebuild of ~300 divIcons every 15 s visibly flickers.
+    function _rebuildAdsb() {
+      const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
+      const seen = new Set();
+      let rendered = 0;
+      for (const a of _adsbAircraft) {
+        if (rendered >= ADSB_MAX_RENDER) break;
+        if (a.onGround && !showGround) continue;
+        if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
+        rendered++;
+        seen.add(a.hex);
+        const key = _adsbIconKey(a);
+        const existing = _adsbMarkers.get(a.hex);
+        if (existing) {
+          existing.marker.setLatLng([a.lat, a.lon]);
+          if (existing.iconKey !== key) {
+            existing.marker.setIcon(buildAircraftIcon(a));
+            existing.iconKey = key;
+          }
+          existing.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+        } else {
+          const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a) })
+            .bindTooltip(buildAdsbTooltipHtml(a), {
+              className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+            });
+          adsbLayer.addLayer(marker);
+          _adsbMarkers.set(a.hex, { marker: marker, iconKey: key });
+        }
+      }
+      for (const [hex, entry] of _adsbMarkers) {
+        if (!seen.has(hex)) {
+          adsbLayer.removeLayer(entry.marker);
+          _adsbMarkers.delete(hex);
+        }
+      }
+    }
+
+    async function loadAdsbData() {
+      const hadData = _adsbAircraft.length > 0;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/adsb/aircraft`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const aircraft = Array.isArray(data.aircraft) ? data.aircraft : [];
+        // Keep stale markers over a blank map on transient upstream
+        // failures — same guard as the AIS layer.
+        if (aircraft.length === 0 && hadData) {
+          console.warn('[adsb] empty response — keeping previous', _adsbAircraft.length, 'aircraft');
+          return;
+        }
+        _adsbAircraft = aircraft;
+        _rebuildAdsb();
+        console.log('[adsb] loaded', aircraft.length, 'aircraft (' + (data.emergency_count || 0) + ' emergency services)');
+      } catch (e) {
+        console.warn('[adsb] failed to load:', e);
+      }
+    }
+
+    function startAdsbRefresh() {
+      if (adsbRefreshInterval) return;
+      adsbRefreshInterval = setInterval(() => {
+        // Self-gating: skip ticks while the tab is hidden or the layer
+        // is off (belt-and-braces — toggle-off also clears the timer).
+        if (document.hidden || !map.hasLayer(adsbLayer)) return;
+        loadAdsbData();
+      }, 15000);
+      console.log('✈️ ADS-B refresh started (15s)');
+    }
+    function stopAdsbRefresh() {
+      if (adsbRefreshInterval) {
+        clearInterval(adsbRefreshInterval);
+        adsbRefreshInterval = null;
+        console.log('✈️ ADS-B refresh stopped');
+      }
+    }
+
+    // Ground-target visibility depends on zoom; re-diff when the zoom
+    // crosses the threshold while the layer is on.
+    let _adsbLastShowGround = null;
+    map.on('zoomend', () => {
+      if (!map.hasLayer(adsbLayer)) return;
+      const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
+      if (showGround !== _adsbLastShowGround) {
+        _adsbLastShowGround = showGround;
+        _rebuildAdsb();
+      }
+    });
 
     // Subtype filters within the Repeaters layer. Only one entry for
     // now ("p25" = NSW PSN P25 sites loaded from NSW GRN Version 1.json)

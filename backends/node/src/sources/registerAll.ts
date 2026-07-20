@@ -11,6 +11,7 @@ import registerWeather from './weather.js';
 import registerPager from './pager.js';
 import registerAviation from './aviation.js';
 import registerFirms from './firms.js';
+import registerAdsb from './adsb.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -21,4 +22,5 @@ export function registerAllSources(): void {
   registerPager();
   registerAviation();
   registerFirms();
+  registerAdsb();
 }

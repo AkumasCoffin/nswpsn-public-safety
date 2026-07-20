@@ -219,6 +219,15 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Kill switch for the ADS-B aircraft source (adsb.lol / adsb.fi /
+  // airplanes.live fan-out). When true the source isn't registered and
+  // /api/adsb/aircraft serves an empty snapshot. Escape hatch if an
+  // upstream starts rate-limit banning us.
+  ADSB_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
   // ---------------------------------------------------------------------
   // rdio → ntfy "major incident" push notifier (services/rdioIncidentAlerts).
   // Detects bursts of radio traffic per talkgroup off the rdio-scanner DB
