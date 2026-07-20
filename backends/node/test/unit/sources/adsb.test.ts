@@ -205,6 +205,84 @@ describe('adsb.inNswBbox', () => {
   });
 });
 
+describe('adsb.trails', () => {
+  beforeEach(async () => {
+    const { _resetAdsbTrailsForTests } = await import('../../../src/sources/adsb.js');
+    _resetAdsbTrailsForTests();
+  });
+
+  it('DP simplification collapses straight lines and keeps corners', async () => {
+    const { simplifyTrail } = await import('../../../src/sources/adsb.js');
+    // Straight line with a right-angle corner at index 4.
+    const pts = [];
+    for (let i = 0; i <= 4; i++) pts.push([i, -33 - i * 0.01, 151, 1000]);
+    for (let i = 1; i <= 4; i++) pts.push([4 + i, -33.04, 151 + i * 0.01, 1000]);
+    const out = simplifyTrail(pts as never, 0.002);
+    expect(out.length).toBe(3); // start, corner, end
+    expect(out[1]).toEqual([4, -33.04, 151, 1000]);
+  });
+
+  it('accumulates per tick, dedupes stationary points, snapshots rounded', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft, adsbTrailsSnapshot } = await import('../../../src/sources/adsb.js');
+    // tick 1
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ lat: -33.9000014, lon: 151.2 })] });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // tick 2 — moved
+    vi.setSystemTime(1_800_000_015_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ lat: -33.91, lon: 151.21 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // tick 3 — stationary (same as tick 2)
+    vi.setSystemTime(1_800_000_030_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ lat: -33.91, lon: 151.21 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    const snap = adsbTrailsSnapshot();
+    const trail = snap.trails['abc123'];
+    expect(trail).toBeDefined();
+    expect(trail.length).toBe(2); // stationary tick didn't add a point
+    expect(trail[0][0]).toBe(-33.9); // 5dp rounding of -33.9000014
+    vi.useRealTimers();
+  });
+
+  it('keeps absent hexes for the dropout grace then deletes them', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft, adsbTrailsSnapshot } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'gone01', lat: -33.9, lon: 151.2 }), raw({ hex: 'stay01', lat: -33.5, lon: 151.0 })] });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    vi.setSystemTime(1_800_000_015_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'gone01', lat: -33.91, lon: 151.21 }), raw({ hex: 'stay01', lat: -33.51, lon: 151.01 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // gone01 vanishes; within grace it survives.
+    vi.setSystemTime(1_800_000_120_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'stay01', lat: -33.52, lon: 151.02 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    expect(adsbTrailsSnapshot().trails['gone01']).toBeDefined();
+    // Past the 10 min grace it's deleted.
+    vi.setSystemTime(1_800_000_015_000 + 11 * 60_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'stay01', lat: -33.53, lon: 151.03 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    expect(adsbTrailsSnapshot().trails['gone01']).toBeUndefined();
+    expect(adsbTrailsSnapshot().trails['stay01']).toBeDefined();
+    vi.useRealTimers();
+  });
+});
+
 describe('adsb.fetchAdsbAircraft', () => {
   beforeEach(() => {
     fetchJsonMock.mockReset();

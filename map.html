@@ -3026,6 +3026,13 @@
     // every refresh. Markers are diff-updated in place instead (see
     // _rebuildAdsb).
     const adsbLayer = L.layerGroup();
+    // Aircraft position trails: all trails share ONE canvas renderer so
+    // hundreds of gradient polylines cost zero DOM nodes. Nested in
+    // adsbLayer; canvas vectors land in overlayPane (400), always under
+    // the markerPane (600) icons.
+    const adsbTrailRenderer = L.canvas({ padding: 0.3 });
+    const adsbTrailsLayer = L.layerGroup();
+    adsbLayer.addLayer(adsbTrailsLayer);
     // ---------- Public transport (live vehicles + stations) ----------
     // Viewport-scoped fetch via the backend AnyTrip proxy. The stations
     // and network-lines sub-layers nest inside so one
@@ -11115,6 +11122,7 @@ function initPagerHoursFromStorage() {
       if (_adsbPinnedHex && _adsbMarkers.has(_adsbPinnedHex)) {
         _adsbMarkers.get(_adsbPinnedHex).marker.openTooltip();
       }
+      _rebuildAdsbTrails(); // trails follow the rendered-marker set
       adsbListRender();
       if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     }
@@ -11140,6 +11148,94 @@ function initPagerHoursFromStorage() {
       }
     }
 
+    // ---------- Position trails ----------
+    // Server accumulates full-lifetime trails (simplified history) and
+    // serves a prebuilt snapshot behind a 30s CDN cache; we fetch on
+    // the same 30s cadence and render only for currently-visible
+    // aircraft so all filters apply automatically.
+    let adsbTrailsEnabled = true;
+    let _adsbTrails = {}; // hex → [[lat, lon, altFt|null], ...] oldest→newest
+    const _adsbTrailLines = new Map(); // hex → [chunk polylines]
+    let _adsbTrailTickFlip = false;
+
+    async function loadAdsbTrails() {
+      if (!adsbTrailsEnabled) return;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/adsb/trails`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _adsbTrails = data.trails || {};
+        _rebuildAdsbTrails();
+      } catch (e) {
+        console.warn('[adsb] trails failed to load:', e);
+      }
+    }
+
+    function _clearAdsbTrails() {
+      for (const [, chunks] of _adsbTrailLines) {
+        for (const c of chunks) adsbTrailsLayer.removeLayer(c);
+      }
+      _adsbTrailLines.clear();
+    }
+
+    function _rebuildAdsbTrails() {
+      if (!adsbTrailsEnabled) { _clearAdsbTrails(); return; }
+      const seen = new Set();
+      for (const [hex, entry] of _adsbMarkers) {
+        const pts = _adsbTrails[hex];
+        if (!pts || pts.length < 2) continue;
+        const a = _adsbAircraft.find((x) => x.hex === hex);
+        // Connect the trail to the marker's current position.
+        const latlngs = pts.map((p) => [p[0], p[1]]);
+        const m = entry.marker.getLatLng();
+        latlngs.push([m.lat, m.lng]);
+        // ≤3 chunks, oldest→newest, fading in: colour by the altitude at
+        // each chunk's end (ES aircraft use their tag colour throughout).
+        const es = a && a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+        const chunkCount = Math.min(3, latlngs.length - 1);
+        const per = Math.ceil((latlngs.length - 1) / chunkCount);
+        const opacities = chunkCount === 3 ? [0.15, 0.3, 0.5] : chunkCount === 2 ? [0.2, 0.5] : [0.5];
+        seen.add(hex);
+        let chunks = _adsbTrailLines.get(hex);
+        if (!chunks) { chunks = []; _adsbTrailLines.set(hex, chunks); }
+        for (let ci = 0; ci < chunkCount; ci++) {
+          const start = ci * per;
+          const end = Math.min(latlngs.length - 1, (ci + 1) * per);
+          const seg = latlngs.slice(start, end + 1);
+          const endPtIdx = Math.min(pts.length - 1, end);
+          const color = es ? es.color : adsbAltColor(pts[endPtIdx] ? pts[endPtIdx][2] : null);
+          if (chunks[ci]) {
+            chunks[ci].setLatLngs(seg);
+            chunks[ci].setStyle({ color: color, opacity: opacities[ci] });
+          } else {
+            chunks[ci] = L.polyline(seg, {
+              color: color, opacity: opacities[ci], weight: 2,
+              renderer: adsbTrailRenderer, interactive: false,
+              lineCap: 'round', lineJoin: 'round'
+            });
+            adsbTrailsLayer.addLayer(chunks[ci]);
+          }
+        }
+        // Drop surplus chunks if the trail shrank.
+        while (chunks.length > chunkCount) {
+          adsbTrailsLayer.removeLayer(chunks.pop());
+        }
+      }
+      for (const [hex, chunks] of _adsbTrailLines) {
+        if (!seen.has(hex)) {
+          for (const c of chunks) adsbTrailsLayer.removeLayer(c);
+          _adsbTrailLines.delete(hex);
+        }
+      }
+    }
+
+    window.toggleAdsbTrailsPill = function () {
+      adsbTrailsEnabled = !adsbTrailsEnabled;
+      if (adsbTrailsEnabled) loadAdsbTrails();
+      else _clearAdsbTrails();
+      refreshActiveFilterPanel();
+    };
+
     function startAdsbRefresh() {
       if (adsbRefreshInterval) return;
       adsbRefreshInterval = setInterval(() => {
@@ -11147,7 +11243,11 @@ function initPagerHoursFromStorage() {
         // is off (belt-and-braces — toggle-off also clears the timer).
         if (document.hidden || !map.hasLayer(adsbLayer)) return;
         loadAdsbData();
+        // Trails refresh every 2nd tick (30s — matches the CDN window).
+        _adsbTrailTickFlip = !_adsbTrailTickFlip;
+        if (_adsbTrailTickFlip) loadAdsbTrails();
       }, 15000);
+      loadAdsbTrails();
       console.log('✈️ ADS-B refresh started (15s)');
     }
     function stopAdsbRefresh() {
@@ -11398,6 +11498,10 @@ function initPagerHoursFromStorage() {
           adsbLabelSettings.enabled,
           '<i class="fa-solid fa-tag"></i> Labels',
           'toggleAdsbLabelsPill()'
+        ) + _ffPill(
+          adsbTrailsEnabled,
+          '<i class="fa-solid fa-route"></i> Trails',
+          'toggleAdsbTrailsPill()'
         );
         // Field sub-toggles only appear while labels are on.
         let fieldsHtml = '';

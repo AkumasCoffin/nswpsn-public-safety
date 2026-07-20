@@ -319,6 +319,147 @@ async function fetchUpstream(up: Upstream): Promise<UpstreamResult> {
   return out;
 }
 
+// ---------------------------------------------------------------------
+// Position trails. Accumulated server-side once per poll and shared by
+// every client (the "fast at high usage" property — per-user cost is
+// only downloading the prebuilt snapshot, which is also CDN-cached).
+// Trails persist for the whole time an aircraft is tracked and end when
+// it lands / is no longer detected (10 min dropout grace). Unbounded
+// duration stays bounded in size via progressive simplification: the
+// recent ~10 min is kept at full resolution, older history is
+// Douglas-Peucker-thinned — straight cruise segments collapse to a few
+// points while helicopter orbits keep their shape.
+
+type TrailPoint = [number, number, number, number | null]; // [t, lat, lon, altFt]
+
+const TRAIL_RECENT_MS = 10 * 60_000; // full-resolution window
+const TRAIL_SIMPLIFY_TRIGGER = 60; // points before old-portion simplify
+const TRAIL_MAX_POINTS = 150; // hard cap per hex (larger epsilon on overflow)
+const TRAIL_DP_EPSILON_DEG = 0.002; // ~200 m
+const TRAIL_ABSENT_GRACE_MS = 10 * 60_000; // dropout tolerance before deletion
+const TRAIL_MAX_HEXES = 4000;
+
+const _trails = new Map<string, TrailPoint[]>();
+let _trailsSnapshot: AdsbTrailsSnapshot = {
+  trails: {},
+  fetched_at: new Date(0).toISOString(),
+};
+
+export interface AdsbTrailsSnapshot {
+  /** hex → [[lat, lon, altFt|null], ...] oldest→newest (5 dp coords). */
+  trails: Record<string, Array<[number, number, number | null]>>;
+  fetched_at: string;
+}
+
+/** Douglas-Peucker on [t, lat, lon, alt] points (lat/lon distance). */
+export function simplifyTrail(pts: TrailPoint[], epsilon: number): TrailPoint[] {
+  if (pts.length <= 2) return pts;
+  const keep = new Array<boolean>(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length) {
+    const seg = stack.pop() as [number, number];
+    const a = pts[seg[0]] as TrailPoint;
+    const b = pts[seg[1]] as TrailPoint;
+    let maxD = 0;
+    let maxI = -1;
+    const dx = b[2] - a[2];
+    const dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy;
+    for (let i = seg[0] + 1; i < seg[1]; i++) {
+      const p = pts[i] as TrailPoint;
+      let d: number;
+      if (len2 === 0) {
+        const ex = p[2] - a[2];
+        const ey = p[1] - a[1];
+        d = Math.sqrt(ex * ex + ey * ey);
+      } else {
+        const t = ((p[2] - a[2]) * dx + (p[1] - a[1]) * dy) / len2;
+        const cx = a[2] + Math.max(0, Math.min(1, t)) * dx;
+        const cy = a[1] + Math.max(0, Math.min(1, t)) * dy;
+        const ex = p[2] - cx;
+        const ey = p[1] - cy;
+        d = Math.sqrt(ex * ex + ey * ey);
+      }
+      if (d > maxD) {
+        maxD = d;
+        maxI = i;
+      }
+    }
+    if (maxD > epsilon && maxI !== -1) {
+      keep[maxI] = true;
+      stack.push([seg[0], maxI], [maxI, seg[1]]);
+    }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
+  const seen = new Set<string>();
+  for (const a of aircraft) {
+    seen.add(a.hex);
+    let buf = _trails.get(a.hex);
+    if (!buf) {
+      buf = [];
+      _trails.set(a.hex, buf);
+    }
+    const last = buf[buf.length - 1];
+    // Parked/stationary aircraft don't accumulate duplicate points.
+    if (last && last[1] === a.lat && last[2] === a.lon) continue;
+    buf.push([nowMs, a.lat, a.lon, a.altFt]);
+    if (buf.length > TRAIL_SIMPLIFY_TRIGGER) {
+      // Simplify the portion older than the full-resolution window.
+      const cut = buf.findIndex((p) => p[0] >= nowMs - TRAIL_RECENT_MS);
+      const splitAt = cut === -1 ? buf.length : cut;
+      if (splitAt > 2) {
+        const older = simplifyTrail(buf.slice(0, splitAt), TRAIL_DP_EPSILON_DEG);
+        const next = older.concat(buf.slice(splitAt));
+        buf.length = 0;
+        buf.push(...next);
+      }
+      if (buf.length > TRAIL_MAX_POINTS) {
+        const crushed = simplifyTrail(buf, TRAIL_DP_EPSILON_DEG * 3);
+        buf.length = 0;
+        buf.push(...crushed.slice(-TRAIL_MAX_POINTS));
+      }
+    }
+  }
+  // Landed / out-of-coverage: absent hexes keep their trail for a
+  // dropout grace, then delete.
+  for (const [hex, buf] of _trails) {
+    if (seen.has(hex)) continue;
+    const newest = buf[buf.length - 1];
+    if (!newest || nowMs - newest[0] > TRAIL_ABSENT_GRACE_MS) _trails.delete(hex);
+  }
+  // Memory backstop.
+  if (_trails.size > TRAIL_MAX_HEXES) {
+    const byAge = Array.from(_trails.entries()).sort(
+      (a, b) => (a[1][a[1].length - 1]?.[0] ?? 0) - (b[1][b[1].length - 1]?.[0] ?? 0),
+    );
+    for (const [hex] of byAge.slice(0, _trails.size - TRAIL_MAX_HEXES)) {
+      _trails.delete(hex);
+    }
+  }
+  // Prebuild the served snapshot once per poll — requests do zero work.
+  const out: AdsbTrailsSnapshot['trails'] = {};
+  const r5 = (v: number): number => Math.round(v * 1e5) / 1e5;
+  for (const [hex, buf] of _trails) {
+    if (buf.length < 2) continue;
+    out[hex] = buf.map((p) => [r5(p[1]), r5(p[2]), p[3]]);
+  }
+  _trailsSnapshot = { trails: out, fetched_at: new Date(nowMs).toISOString() };
+}
+
+export function adsbTrailsSnapshot(): AdsbTrailsSnapshot {
+  return _trailsSnapshot;
+}
+
+/** TEST-ONLY: reset trail state between unit tests. */
+export function _resetAdsbTrailsForTests(): void {
+  _trails.clear();
+  _trailsSnapshot = { trails: {}, fetched_at: new Date(0).toISOString() };
+}
+
 export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // Upstreams in parallel — different hosts, no shared rate limit.
   const results = await Promise.all(UPSTREAMS.map((u) => fetchUpstream(u)));
@@ -336,6 +477,8 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
         .join('; ')}`,
     );
   }
+
+  updateTrails(merged, Date.now());
 
   // Stable ordering: emergency services first, then lowest altitude —
   // matches the frontend's render cap so a truncated list keeps the

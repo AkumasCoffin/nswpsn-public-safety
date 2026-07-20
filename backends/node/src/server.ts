@@ -191,6 +191,9 @@ export function createApp() {
     '/api/beachsafe',
     '/api/pager/hits',
     '/api/firms/hotspots',
+    // Aircraft trails: prebuilt per poll, frontend fetches at the same
+    // 30s cadence as this cache window — the CDN absorbs all clients.
+    '/api/adsb/trails',
   ];
   app.use('*', async (c, next) => {
     await next();

@@ -20,7 +20,7 @@
  *                            change and Planespotters rate-limits.
  */
 import { Hono } from 'hono';
-import { adsbSnapshot } from '../sources/adsb.js';
+import { adsbSnapshot, adsbTrailsSnapshot } from '../sources/adsb.js';
 import { fetchJson } from '../sources/shared/http.js';
 import { SwrCache } from '../services/swrCache.js';
 import { log } from '../lib/log.js';
@@ -28,6 +28,12 @@ import { log } from '../lib/log.js';
 export const adsbRouter = new Hono();
 
 adsbRouter.get('/api/adsb/aircraft', (c) => c.json(adsbSnapshot()));
+
+// Position trails, prebuilt once per poll by the source (see
+// updateTrails in sources/adsb.ts). Fixed path with no query — listed
+// in CACHEABLE_PATHS so the CDN/browser 30s cache absorbs any number
+// of clients; the frontend polls it at the same 30s cadence.
+adsbRouter.get('/api/adsb/trails', (c) => c.json(adsbTrailsSnapshot()));
 
 interface PlanespottersPhoto {
   id?: string;
