@@ -3,149 +3,129 @@
   <!-- Landing -->
   <url>
     <loc>https://nswpsn.forcequit.xyz/</loc>
-    <lastmod>2026-05-04</lastmod>
+    <lastmod>2026-07-15</lastmod>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
 
   <!-- Primary tools -->
   <url>
-    <loc>https://nswpsn.forcequit.xyz/map.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/map</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>daily</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://nswpsn.forcequit.xyz/live.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/live</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>daily</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://nswpsn.forcequit.xyz/logs.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/logs</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>daily</changefreq>
     <priority>0.9</priority>
   </url>
 
   <!-- Agency reference index + 46 per-agency pages -->
   <url>
-    <loc>https://nswpsn.forcequit.xyz/agency.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/agency</loc>
+    <lastmod>2026-07-15</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=abc-news</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=act-government</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=ausgrid</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=australian-federal-police</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=australian-rail-track-corporation</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=blue-mountains-city-council</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=central-tablelands-water</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=corrective-services-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=endeavour-energy</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=fire-and-rescue-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=forestry-corporation-of-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=hatzolah-medical-sydney</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=hunter-water</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=marine-rescue-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=newborn-and-paediatric-emergency-transport-service-nets</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-ambulance</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-aviation</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-department-of-primary-industries</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-environmental-protection-agency</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-mining-and-rescue</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-national-parks-and-wildlife-service</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-police-force</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-rural-fire-service</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-state-emergency-service</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=nsw-telco-authority</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=office-of-the-sheriff-of-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=property-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=rental-groups</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=rspca-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=shared-liaison-groups</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=special-constables</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=st-john-ambulance-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=surf-life-saving-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=sutherland-shire-council</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=sydney-opera-house</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=sydney-water</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=transport-for-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=transport-for-nsw-ferries</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=transport-for-nsw-maritime</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=transport-for-nsw-rail</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=transport-for-nsw-roads</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=unconfirmed-groups</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=vra-rescue-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=water-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=western-sydney-parklands</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <url><loc>https://nswpsn.forcequit.xyz/agency.html?slug=youth-justice-nsw</loc><lastmod>2026-05-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=abc-news</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=act-government</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=ausgrid</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=australian-federal-police</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=australian-rail-track-corporation</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=blue-mountains-city-council</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=central-tablelands-water</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=corrective-services-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=endeavour-energy</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=fire-and-rescue-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=forestry-corporation-of-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=hatzolah-medical-sydney</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=hunter-water</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=marine-rescue-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=newborn-and-paediatric-emergency-transport-service-nets</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-ambulance</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-aviation</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-department-of-primary-industries</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-environmental-protection-agency</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-mining-and-rescue</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-national-parks-and-wildlife-service</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-police-force</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-rural-fire-service</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-state-emergency-service</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=nsw-telco-authority</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=office-of-the-sheriff-of-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=property-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=rental-groups</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=rspca-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=shared-liaison-groups</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=special-constables</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=st-john-ambulance-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=surf-life-saving-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=sutherland-shire-council</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=sydney-opera-house</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=sydney-water</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=transport-for-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=transport-for-nsw-ferries</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=transport-for-nsw-maritime</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=transport-for-nsw-rail</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=transport-for-nsw-roads</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=unconfirmed-groups</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=vra-rescue-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=water-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=western-sydney-parklands</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://nswpsn.forcequit.xyz/agency?slug=youth-justice-nsw</loc><lastmod>2026-07-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 
-  <!-- Standalone agency pages (predate the agency.html template) -->
+  <!-- Reference / links / about -->
   <url>
-    <loc>https://nswpsn.forcequit.xyz/ambulance.html</loc>
-    <lastmod>2026-05-04</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://nswpsn.forcequit.xyz/aviation.html</loc>
-    <lastmod>2026-05-04</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://nswpsn.forcequit.xyz/fire-and-rescue.html</loc>
-    <lastmod>2026-05-04</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://nswpsn.forcequit.xyz/rural-fire-service.html</loc>
-    <lastmod>2026-05-04</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-
-  <!-- Reference / links -->
-  <url>
-    <loc>https://nswpsn.forcequit.xyz/data-sources.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/data-sources</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://nswpsn.forcequit.xyz/links.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/links</loc>
+    <lastmod>2026-07-05</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://nswpsn.forcequit.xyz/about</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
 
   <!-- Account entry points -->
   <url>
-    <loc>https://nswpsn.forcequit.xyz/login.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/login</loc>
+    <lastmod>2026-07-03</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://nswpsn.forcequit.xyz/editor-signup.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/editor-signup</loc>
+    <lastmod>2026-07-04</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
 
   <!-- Legal -->
   <url>
-    <loc>https://nswpsn.forcequit.xyz/privacy.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/privacy</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://nswpsn.forcequit.xyz/terms.html</loc>
-    <lastmod>2026-05-04</lastmod>
+    <loc>https://nswpsn.forcequit.xyz/terms</loc>
+    <lastmod>2026-07-05</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>

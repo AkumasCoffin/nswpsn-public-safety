@@ -71,7 +71,7 @@ def main():
             "sections": sections,
         }
         print(f"  {agency_dir.name}: {len(sections)} section(s)")
-    OUTPUT.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    OUTPUT.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"\nWrote {OUTPUT}: {OUTPUT.stat().st_size} bytes, {len(out['agencies'])} agency/ies")
 
 

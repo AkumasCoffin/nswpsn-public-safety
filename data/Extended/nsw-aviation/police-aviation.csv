@@ -1,5 +1,5 @@
-Reg,Callsign,Agency,Type
-VH-PHB,POL23,NSW Police Force,Rotary-Wing Aircraft
-VH-DQV,POL28,NSW Police Force,Fixed-Wing Aircraft
-VH-PVO,POL30,Australia Victoria Police,Rotary-Wing Aircraft
-VH-PVR,POL32,Australia Victoria Police,Rotary-Wing Aircraft
+Reg,Agency,Type
+VH-PHB,NSW Police Force,Rotary-Wing Aircraft
+VH-DQV,NSW Police Force,Fixed-Wing Aircraft
+VH-PVO,Australia Victoria Police,Rotary-Wing Aircraft
+VH-PVR,Australia Victoria Police,Rotary-Wing Aircraft
