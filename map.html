@@ -1756,26 +1756,27 @@
     .tpt-chip {
       position: absolute;
       transform: translate(-50%, -50%);
-      height: 16px; line-height: 16px;
-      padding: 0 6px; border-radius: 999px; /* pill */
-      font-family: system-ui, sans-serif; font-size: 10px; font-weight: 700;
-      white-space: nowrap;
-      border: 1px solid rgba(255, 255, 255, 0.6);
+      width: 20px; height: 20px; border-radius: 50%; /* circle */
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, sans-serif; font-weight: 700;
+      letter-spacing: -0.3px;
+      border: 1px solid rgba(255, 255, 255, 0.7);
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
     }
-    /* Direction pointer fused to the pill edge — a solid CSS triangle
-       in the route colour, rotated around the marker centre. */
+    /* Direction arrow fused to the circle's rim — a solid CSS triangle
+       in the route colour, rotated around the marker centre. The
+       circle's constant radius keeps it attached at every angle. */
     .tpt-ptr {
       position: absolute; left: 0; top: 0;
       width: 0; height: 0;
     }
     .tpt-ptr span {
-      position: absolute; left: -5px; top: -15px;
+      position: absolute; left: -5px; top: -18px;
       width: 0; height: 0;
       border-left: 5px solid transparent;
       border-right: 5px solid transparent;
       border-bottom: 7px solid currentColor;
-      transform-origin: 5px 15px; /* rotate about the marker centre */
+      transform-origin: 5px 18px; /* rotate about the marker centre */
       filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
     }
     .tpt-stop {
@@ -11557,10 +11558,13 @@ function initPagerHoursFromStorage() {
       const fg = (v.route && v.route.textColor) || '#fff';
       let inner;
       if (v.route && v.route.name) {
-        inner = '<div class="tpt-chip" style="background:' + bg + ';color:' + fg + ';">' + escapeHtml(v.route.name) + '</div>';
+        // Scale the route number to fit the circle.
+        const name = v.route.name;
+        const fontPx = name.length <= 2 ? 10 : name.length === 3 ? 8 : 6.5;
+        inner = '<div class="tpt-chip" style="background:' + bg + ';color:' + fg + ';font-size:' + fontPx + 'px;">' + escapeHtml(name) + '</div>';
       } else {
-        // Nameless services (some ferries/trains) — mode-coloured dot.
-        inner = '<div class="tpt-chip" style="background:' + bg + ';color:' + fg + ';width:10px;padding:0;border-radius:50%;"></div>';
+        // Nameless services (some ferries/trains) — smaller plain circle.
+        inner = '<div class="tpt-chip" style="background:' + bg + ';color:' + fg + ';width:12px;height:12px;"></div>';
       }
       let needle = '';
       if (v.bearing != null && Number.isFinite(v.bearing)) {
