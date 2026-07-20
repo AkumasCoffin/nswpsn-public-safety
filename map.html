@@ -11026,6 +11026,28 @@ function initPagerHoursFromStorage() {
     // Diff-update: move existing markers with setLatLng, swap icons only
     // on iconKey change, add new hexes, drop vanished ones. A full
     // clearLayers()+rebuild of ~300 divIcons every 15 s visibly flickers.
+    // Closest point on a polyline (equirectangular approx — fine at
+    // metro scale). Returns { latlng, distDeg } or null.
+    function snapToPolylinePts(pts, lat, lon) {
+      if (!pts || pts.length < 2) return null;
+      const cosLat = Math.cos(lat * Math.PI / 180) || 1;
+      const px = lon * cosLat, py = lat;
+      let bestD = Infinity, bx2 = 0, by2 = 0;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const ax = pts[i][1] * cosLat, ay = pts[i][0];
+        const bx = pts[i + 1][1] * cosLat, by = pts[i + 1][0];
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const qx = ax + t * dx, qy = ay + t * dy;
+        const ddx = px - qx, ddy = py - qy;
+        const d = ddx * ddx + ddy * ddy;
+        if (d < bestD) { bestD = d; bx2 = qx; by2 = qy; }
+      }
+      return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD) };
+    }
+
     function _adsbSearchHay(a) {
       return [a.callsign, a.reg, a.hex, a.type, a.squawk]
         .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
@@ -11516,19 +11538,41 @@ function initPagerHoursFromStorage() {
           return p !== 0 ? p : String(a.id).localeCompare(String(b.id));
         })
         .slice(0, TRANSPORT_MAX_RENDER);
+      // Pins lock onto their route line: snap each vehicle to the
+      // closest point on its trip's shape (when cached; a small fetch
+      // budget warms shapes for snapping — including corridor modes
+      // whose tracks the static network draws). A ~150 m guard leaves
+      // genuinely off-route vehicles (detours, bad GPS) at their raw
+      // reported position rather than gluing them to the wrong line.
+      const SNAP_MAX_DEG = 0.0015;
+      let snapFetchBudget = 40;
       for (const v of list) {
         seen.add(v.id);
+        let dispLat = v.lat, dispLon = v.lon;
+        if (v.shapeId) {
+          const shapePts = _transportShapeCache.get(v.shapeId);
+          if (shapePts) {
+            const s = snapToPolylinePts(shapePts, v.lat, v.lon);
+            if (s && s.distDeg < SNAP_MAX_DEG) {
+              dispLat = s.latlng[0];
+              dispLon = s.latlng[1];
+            }
+          } else if (snapFetchBudget > 0) {
+            snapFetchBudget--;
+            fetchTransportShapePts(v.shapeId); // warms cache; snaps next tick
+          }
+        }
         const key = _transportIconKey(v);
         const existing = _transportMarkers.get(v.id);
         if (existing) {
-          existing.marker.setLatLng([v.lat, v.lon]);
+          existing.marker.setLatLng([dispLat, dispLon]);
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
             existing.iconKey = key;
           }
           existing.marker.setTooltipContent(buildTransportTooltipHtml(v));
         } else {
-          const marker = L.marker([v.lat, v.lon], { icon: buildTransportIcon(v) })
+          const marker = L.marker([dispLat, dispLon], { icon: buildTransportIcon(v) })
             .bindTooltip(buildTransportTooltipHtml(v), {
               className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
