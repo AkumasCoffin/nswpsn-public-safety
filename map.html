@@ -1757,21 +1757,26 @@
       position: absolute;
       transform: translate(-50%, -50%);
       height: 16px; line-height: 16px;
-      padding: 0 5px; border-radius: 4px;
+      padding: 0 6px; border-radius: 999px; /* pill */
       font-family: system-ui, sans-serif; font-size: 10px; font-weight: 700;
       white-space: nowrap;
       border: 1px solid rgba(255, 255, 255, 0.6);
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
     }
-    .tpt-needle {
+    /* Direction pointer fused to the pill edge — a solid CSS triangle
+       in the route colour, rotated around the marker centre. */
+    .tpt-ptr {
       position: absolute; left: 0; top: 0;
-      width: 0; height: 0; line-height: 0;
+      width: 0; height: 0;
     }
-    .tpt-needle span {
-      position: absolute; left: -4px; top: -17px;
-      font-size: 8px; line-height: 1;
-      transform-origin: 4px 17px; /* rotate about the marker centre */
-      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));
+    .tpt-ptr span {
+      position: absolute; left: -5px; top: -15px;
+      width: 0; height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 7px solid currentColor;
+      transform-origin: 5px 15px; /* rotate about the marker centre */
+      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
     }
     .tpt-stop {
       width: 14px; height: 14px; border-radius: 50%;
@@ -11559,7 +11564,7 @@ function initPagerHoursFromStorage() {
       }
       let needle = '';
       if (v.bearing != null && Number.isFinite(v.bearing)) {
-        needle = '<div class="tpt-needle"><span style="color:' + bg + ';transform:rotate(' + v.bearing + 'deg);">▲</span></div>';
+        needle = '<div class="tpt-ptr" style="color:' + bg + ';"><span style="transform:rotate(' + v.bearing + 'deg);"></span></div>';
       }
       return L.divIcon({
         className: 'tpt-pin',
@@ -11764,11 +11769,23 @@ function initPagerHoursFromStorage() {
     // bus shape density would paint the whole map.
     const _transportAutoTracks = new Map(); // shapeId → polyline | null (fetch in flight)
     const TRANSPORT_AUTO_TRACK_CAP = 60;
+    // Bounds of AnyTrip's static network tiles (greater Sydney). Rail /
+    // metro / light-rail corridors inside them are already drawn by the
+    // network layer — auto-drawing those shapes too stacked two lines in
+    // the same corridor and read as inconsistent track thickness.
+    const TRANSPORT_TILE_BOUNDS = { minLat: -34.9, maxLat: -32.0, minLon: 149.6, maxLon: 151.8 };
+    const TRANSPORT_TILED_MODES = { sydneytrains: 1, metro: 1, lightrail: 1 };
+    function _transportInTileBounds(v) {
+      return v.lat >= TRANSPORT_TILE_BOUNDS.minLat && v.lat <= TRANSPORT_TILE_BOUNDS.maxLat &&
+        v.lon >= TRANSPORT_TILE_BOUNDS.minLon && v.lon <= TRANSPORT_TILE_BOUNDS.maxLon;
+    }
     function syncTransportAutoTracks() {
       const want = new Map(); // shapeId → colour
       for (const v of _transportVehicles) {
         if (v.mode === 'buses' || v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
+        // Skip shapes the static network already covers.
+        if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, (v.route && v.route.color) || transportModeColor(v.mode));
         }
@@ -11785,7 +11802,9 @@ function initPagerHoursFromStorage() {
         fetchTransportShapePts(sid).then((pts) => {
           if (!pts) { _transportAutoTracks.delete(sid); return; }
           if (!_transportAutoTracks.has(sid)) return; // dropped while fetching
-          const line = L.polyline(pts, { color: color, weight: 2, opacity: 0.55, interactive: false });
+          // Same weight/opacity as the static network so all tracks
+          // render at one consistent thickness.
+          const line = L.polyline(pts, { color: color, weight: 2, opacity: 0.75, interactive: false });
           transportAutoTracksLayer.addLayer(line);
           _transportAutoTracks.set(sid, line);
         });
