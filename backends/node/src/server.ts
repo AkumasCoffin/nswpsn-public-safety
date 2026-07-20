@@ -51,6 +51,7 @@ import { dashboardRouter } from './api/dashboard.js';
 import { statusRouter } from './api/status.js';
 // What3Words proxy + system/debug/admin.
 import { w3wRouter } from './api/w3w.js';
+import { transportRouter } from './api/transport.js';
 import { systemRouter } from './api/system.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
@@ -314,6 +315,10 @@ export function createApp() {
   app.route('/', statusRouter);
   // What3Words proxy
   app.route('/', w3wRouter);
+  // AnyTrip public-transport proxy. Deliberately NOT in CACHEABLE_PATHS —
+  // that middleware ignores query strings, so a CDN would cross-serve one
+  // viewport's vehicles to every viewport.
+  app.route('/', transportRouter);
   // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
   app.route('/', systemRouter);
 

@@ -1745,6 +1745,38 @@
       70%  { box-shadow: 0 0 0 9px rgba(0,0,0,0); }
       100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
     }
+
+    /* Public-transport vehicle chips. The divIcon is declared zero-size
+       and the chip centres itself with a transform, so variable-width
+       route names ("T1" vs "601X") need no per-chip measurement. The
+       bearing needle orbits the chip edge like a compass needle. */
+    .tpt-chip {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      height: 16px; line-height: 16px;
+      padding: 0 5px; border-radius: 4px;
+      font-family: system-ui, sans-serif; font-size: 10px; font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    }
+    .tpt-needle {
+      position: absolute; left: 0; top: 0;
+      width: 0; height: 0; line-height: 0;
+    }
+    .tpt-needle span {
+      position: absolute; left: -4px; top: -17px;
+      font-size: 8px; line-height: 1;
+      transform-origin: 4px 17px; /* rotate about the marker centre */
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));
+    }
+    .tpt-stop {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid #fff;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 7px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    }
     
     .camera-selection-badge {
       position: fixed;
@@ -2082,6 +2114,7 @@
         <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')" title="NSW PSN repeaters"><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i><span>Repeaters</span></button>
         <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
         <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
+        <button id="btn-transport" class="btn-toggle" onclick="toggleMapLayer('transport')" title="Live public transport"><i class="fa-solid fa-bus" style="color:#f6891f;"></i><span>Transport</span></button>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
@@ -2954,6 +2987,13 @@
     // every refresh. Markers are diff-updated in place instead (see
     // _rebuildAdsb).
     const adsbLayer = L.layerGroup();
+    // ---------- Public transport (live vehicles + stations) ----------
+    // Viewport-scoped fetch via the backend AnyTrip proxy. The stations
+    // sub-layer nests inside so one map.hasLayer(transportLayer) governs
+    // both; the Stations filter pill adds/removes the sub-layer.
+    const transportLayer = L.layerGroup();
+    const transportStopsLayer = L.layerGroup();
+    transportLayer.addLayer(transportStopsLayer);
     const camerasLayer = L.layerGroup();
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
@@ -3732,7 +3772,8 @@
         firms: firmsLayer,
         nswpsn: nswpsnLayer,
         ais: aisLayer,
-        adsb: adsbLayer
+        adsb: adsbLayer,
+        transport: transportLayer
       };
       const btnMap = {
         user: 'btn-user',
@@ -3747,7 +3788,8 @@
         firms: 'btn-firms',
         nswpsn: 'btn-nswpsn',
         ais: 'btn-ais',
-        adsb: 'btn-adsb'
+        adsb: 'btn-adsb',
+        transport: 'btn-transport'
       };
 
       const layer = layerMap[target];
@@ -3770,6 +3812,7 @@
           clearCameraSelection();
         }
         if (target === 'adsb') stopAdsbRefresh();
+        if (target === 'transport') stopTransportRefresh();
       } else {
         map.addLayer(layer);
         btn.classList.add('active');
@@ -3793,6 +3836,13 @@
           if (_adsbAircraft.length === 0) loadAdsbData();
           startAdsbRefresh(); // dedicated 15s live-position refresh
         }
+        if (target === 'transport') {
+          // Always fetch on enable — the data is viewport-scoped, so
+          // the "only if empty" guard used by static layers can't apply.
+          loadTransportData();
+          loadTransportStops();
+          startTransportRefresh();
+        }
       }
       if (target === 'ais') {
         const enabled = map.hasLayer(aisLayer);
@@ -3813,6 +3863,10 @@
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
         }
+      }
+      if (target === 'transport') {
+        if (map.hasLayer(transportLayer)) addFilterButton('transport');
+        else removeFilterButton('transport');
       }
       if (target === 'nswpsn') {
         const enabled = map.hasLayer(nswpsnLayer);
@@ -11311,6 +11365,329 @@ function initPagerHoursFromStorage() {
         _rebuildAdsb();
       }
     });
+
+    // ==================== PUBLIC TRANSPORT LAYER ====================
+    // Live vehicles + stations from the backend AnyTrip proxy
+    // (/api/transport/*). The upstream is viewport-scoped, so data is
+    // fetched for the current (padded) bounds on enable, every 10 s,
+    // and on debounced moveend — never NSW-wide. Zoom-gated: vehicles
+    // from zoom 11, stations from zoom 13.
+    const TRANSPORT_MIN_ZOOM = 11;
+    const TRANSPORT_STOPS_MIN_ZOOM = 13;
+    const TRANSPORT_MAX_RENDER = 500;
+    const TRANSPORT_MODES = [
+      { key: 'sydneytrains', label: 'Trains',     color: '#F6891F', feeds: ['st'], prio: 0 },
+      { key: 'metro',        label: 'Metro',      color: '#168388', feeds: ['mt'], prio: 1 },
+      { key: 'ferries',      label: 'Ferries',    color: '#5AB031', feeds: ['fr'], prio: 2 },
+      { key: 'lightrail',    label: 'Light Rail', color: '#EE343F', feeds: ['lr'], prio: 3 },
+      { key: 'nswtrains',    label: 'NSW Trains', color: '#732A82', feeds: ['nt'], prio: 4 },
+      // 'sp' (school/special services) rides with the Buses pill — its
+      // vehicles report mode au2:buses upstream.
+      { key: 'buses',        label: 'Buses',      color: '#00B5EF', feeds: ['bs', 'sp'], prio: 5 }
+    ];
+    const TRANSPORT_MODE_BY_KEY = {};
+    TRANSPORT_MODES.forEach((m) => { TRANSPORT_MODE_BY_KEY[m.key] = m; });
+    // AnyTrip regions.json occupancyDescription (nsw), verbatim.
+    const TRANSPORT_OCCUPANCY = [
+      'space available', 'space available', 'limited space available',
+      'standing room only', 'standing room only', 'no space available',
+      'no space available'
+    ];
+    let _transportVehicles = [];
+    let _transportFetchedAt = 0;
+    const _transportMarkers = new Map(); // id → { marker, iconKey }
+    let transportRefreshInterval = null;
+    let _transportMoveTimer = null;
+    const transportModeFilter = {
+      buses: true, sydneytrains: true, metro: true,
+      nswtrains: true, ferries: true, lightrail: true
+    };
+    let transportStationsEnabled = true;
+    let _transportStopsKey = null; // last stops fetch key — skip refetch if unchanged
+    let _transportZoomHintAt = 0;  // throttle the "zoom in" toast
+
+    function transportModePrio(mode) {
+      const m = TRANSPORT_MODE_BY_KEY[mode];
+      return m ? m.prio : 6;
+    }
+    function transportModeColor(mode) {
+      const m = TRANSPORT_MODE_BY_KEY[mode];
+      return m ? m.color : '#94a3b8';
+    }
+
+    // Fixed-precision padded bounds: stable URLs let apiFetch's in-flight
+    // dedupe work and line up with the backend's 0.01° cache grid.
+    function transportBboxParams() {
+      const b = map.getBounds().pad(0.15);
+      return 'minLat=' + b.getSouth().toFixed(3) + '&maxLat=' + b.getNorth().toFixed(3) +
+        '&minLon=' + b.getWest().toFixed(3) + '&maxLon=' + b.getEast().toFixed(3);
+    }
+    function transportEnabledFeeds() {
+      const feeds = [];
+      for (const m of TRANSPORT_MODES) {
+        if (transportModeFilter[m.key]) feeds.push(...m.feeds);
+      }
+      return feeds.sort().join(',');
+    }
+
+    function _clearTransportVehicleMarkers() {
+      for (const [, entry] of _transportMarkers) transportLayer.removeLayer(entry.marker);
+      _transportMarkers.clear();
+      _transportVehicles = [];
+    }
+
+    async function loadTransportData() {
+      if (map.getZoom() < TRANSPORT_MIN_ZOOM) {
+        _clearTransportVehicleMarkers();
+        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+        if (Date.now() - _transportZoomHintAt > 60_000 && typeof showToast === 'function') {
+          _transportZoomHintAt = Date.now();
+          showToast('Zoom in to see live transport', 'info');
+        }
+        return;
+      }
+      const feeds = transportEnabledFeeds();
+      if (!feeds) { _clearTransportVehicleMarkers(); return; }
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/vehicles?` + transportBboxParams() + '&feeds=' + feeds);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        // Empty is a legitimate viewport state (rural, 2am) and must
+        // clear the map — deliberately NOT the ADS-B keep-stale guard.
+        // Only fetch errors keep the previous markers.
+        _transportVehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+        _transportFetchedAt = Date.now();
+        _rebuildTransport();
+      } catch (e) {
+        console.warn('[transport] failed to load:', e);
+      }
+    }
+
+    function _rebuildTransport() {
+      const seen = new Set();
+      // Stable sort (mode priority, then id) before the render cap:
+      // trains/ferries survive, CBD buses trim, and the cap boundary
+      // doesn't flicker between ticks.
+      const list = _transportVehicles
+        .filter((v) => {
+          if (!isFinite(v.lat) || !isFinite(v.lon)) return false;
+          const key = TRANSPORT_MODE_BY_KEY[v.mode] ? v.mode : null;
+          return key === null || transportModeFilter[key]; // 'other' always shown
+        })
+        .sort((a, b) => {
+          const p = transportModePrio(a.mode) - transportModePrio(b.mode);
+          return p !== 0 ? p : String(a.id).localeCompare(String(b.id));
+        })
+        .slice(0, TRANSPORT_MAX_RENDER);
+      for (const v of list) {
+        seen.add(v.id);
+        const key = _transportIconKey(v);
+        const existing = _transportMarkers.get(v.id);
+        if (existing) {
+          existing.marker.setLatLng([v.lat, v.lon]);
+          if (existing.iconKey !== key) {
+            existing.marker.setIcon(buildTransportIcon(v));
+            existing.iconKey = key;
+          }
+          existing.marker.setTooltipContent(buildTransportTooltipHtml(v));
+        } else {
+          const marker = L.marker([v.lat, v.lon], { icon: buildTransportIcon(v) })
+            .bindTooltip(buildTransportTooltipHtml(v), {
+              className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+            });
+          transportLayer.addLayer(marker);
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key });
+        }
+      }
+      for (const [id, entry] of _transportMarkers) {
+        if (!seen.has(id)) {
+          transportLayer.removeLayer(entry.marker);
+          _transportMarkers.delete(id);
+        }
+      }
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+    }
+
+    function buildTransportIcon(v) {
+      const modeColor = transportModeColor(v.mode);
+      const bg = (v.route && v.route.color) || modeColor;
+      const fg = (v.route && v.route.textColor) || '#fff';
+      let inner;
+      if (v.route && v.route.name) {
+        inner = '<div class="tpt-chip" style="background:' + bg + ';color:' + fg + ';">' + escapeHtml(v.route.name) + '</div>';
+      } else {
+        // Nameless services (some ferries/trains) — mode-coloured dot.
+        inner = '<div class="tpt-chip" style="background:' + bg + ';color:' + fg + ';width:10px;padding:0;border-radius:50%;"></div>';
+      }
+      let needle = '';
+      if (v.bearing != null && Number.isFinite(v.bearing)) {
+        needle = '<div class="tpt-needle"><span style="color:' + bg + ';transform:rotate(' + v.bearing + 'deg);">▲</span></div>';
+      }
+      return L.divIcon({
+        className: 'tpt-pin',
+        html: '<div style="position:relative;width:0;height:0;">' + inner + needle + '</div>',
+        iconSize: [0, 0],
+        iconAnchor: [0, 0]
+      });
+    }
+
+    // Chip text/colour are static per trip, so only route identity,
+    // mode and a 10° bearing bucket matter.
+    function _transportIconKey(v) {
+      const b = v.bearing != null && Number.isFinite(v.bearing) ? Math.round(v.bearing / 10) : 'x';
+      return [(v.route && (v.route.id || v.route.name)) || '', v.mode, b].join('|');
+    }
+
+    function buildTransportTooltipHtml(v) {
+      const modeDef = TRANSPORT_MODE_BY_KEY[v.mode];
+      const modeColor = transportModeColor(v.mode);
+      const bg = (v.route && v.route.color) || modeColor;
+      const fg = (v.route && v.route.textColor) || '#fff';
+      function row(label, value) {
+        if (value == null || value === '' || value === '—') return '';
+        return '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;color:#e2e8f0;"><span style="color:#94a3b8;min-width:90px;">' + escapeHtml(label) + '</span><span style="font-weight:600;">' + escapeHtml(String(value)) + '</span></div>';
+      }
+      // Server ageSec is age at fetch time — add the client-side delta
+      // so a tooltip left open doesn't read "3s" forever.
+      const age = v.ageSec != null
+        ? Math.round(v.ageSec + Math.max(0, (Date.now() - _transportFetchedAt) / 1000))
+        : null;
+      const comfort = [
+        v.wheelchair === true ? '♿ accessible' : null,
+        v.aircon === true ? '❄ air-con' : null
+      ].filter(Boolean).join(' · ');
+      const body = [
+        row('Route', v.route && v.route.longName),
+        row('Destination', v.headsign ? v.headsign + (v.headsignSub ? ' (' + v.headsignSub + ')' : '') : null),
+        row('Operator', v.agency),
+        row('Speed', v.speedKmh != null ? Math.round(v.speedKmh) + ' km/h' : null),
+        row('Occupancy', v.occupancy != null ? TRANSPORT_OCCUPANCY[v.occupancy] : null),
+        row('Vehicle', v.model),
+        row('Comfort', comfort || null),
+        row('Position age', age != null ? age + 's' : null)
+      ].join('');
+      const chip = v.route && v.route.name
+        ? '<span style="background:' + bg + ';color:' + fg + ';font-size:11px;padding:2px 8px;border-radius:4px;font-weight:700;">' + escapeHtml(v.route.name) + '</span>'
+        : '';
+      return '<div style="max-width:400px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+        '<div style="font-size:14px;font-weight:700;color:' + modeColor + ';margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          chip + escapeHtml(modeDef ? modeDef.label : 'Transport') +
+        '</div>' +
+        '<div style="padding:6px 8px;background:rgba(148,163,184,0.08);border-radius:6px;">' + body + '</div>' +
+      '</div>';
+    }
+
+    async function loadTransportStops() {
+      if (!transportStationsEnabled || map.getZoom() < TRANSPORT_STOPS_MIN_ZOOM) {
+        transportStopsLayer.clearLayers();
+        _transportStopsKey = null;
+        return;
+      }
+      const key = transportBboxParams();
+      if (key === _transportStopsKey) return;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/stops?` + key + '&modes=metro,sydneytrains,nswtrains,ferries,lightrail');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _transportStopsKey = key;
+        transportStopsLayer.clearLayers();
+        for (const s of (data.stops || [])) {
+          if (!isFinite(s.lat) || !isFinite(s.lon)) continue;
+          const color = transportModeColor((s.modes || []).find((m) => TRANSPORT_MODE_BY_KEY[m]) || 'other');
+          const icon = L.divIcon({
+            className: 'tpt-pin',
+            html: '<div class="tpt-stop" style="background:' + color + ';"><i class="fa-solid fa-train"></i></div>',
+            iconSize: [14, 14],
+            iconAnchor: [7, 7]
+          });
+          const rows = [
+            s.locality ? '<div style="font-size:11px;color:#94a3b8;">' + escapeHtml(s.locality) + '</div>' : '',
+            (s.modes || []).length ? '<div style="font-size:11px;color:#cbd5e1;margin-top:3px;">' + s.modes.map((m) => escapeHtml(TRANSPORT_MODE_BY_KEY[m] ? TRANSPORT_MODE_BY_KEY[m].label : m)).join(' · ') + '</div>' : '',
+            (s.accessibility || []).length ? '<div style="font-size:10px;color:#94a3b8;margin-top:4px;">' + s.accessibility.slice(0, 5).map((a) => escapeHtml(a)).join('<br>') + '</div>' : ''
+          ].join('');
+          L.marker([s.lat, s.lon], { icon: icon, zIndexOffset: -100 })
+            .bindTooltip('<div style="max-width:300px;font-family:system-ui,sans-serif;color:#e2e8f0;"><div style="font-weight:700;font-size:13px;color:' + color + ';">' + escapeHtml(s.name) + '</div>' + rows + '</div>', {
+              className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+            })
+            .addTo(transportStopsLayer);
+        }
+      } catch (e) {
+        console.warn('[transport] stops failed to load:', e);
+      }
+    }
+
+    function startTransportRefresh() {
+      if (transportRefreshInterval) return;
+      transportRefreshInterval = setInterval(() => {
+        if (document.hidden || !map.hasLayer(transportLayer)) return;
+        loadTransportData();
+      }, 10000);
+      console.log('🚌 Transport refresh started (10s)');
+    }
+    function stopTransportRefresh() {
+      if (transportRefreshInterval) {
+        clearInterval(transportRefreshInterval);
+        transportRefreshInterval = null;
+        console.log('🚌 Transport refresh stopped');
+      }
+    }
+
+    // One debounced handler covers pan AND zoom (Leaflet fires moveend
+    // after zoom animations). Data is viewport-scoped so movement must
+    // refetch, not just re-render.
+    map.on('moveend', () => {
+      if (!map.hasLayer(transportLayer)) return;
+      clearTimeout(_transportMoveTimer);
+      _transportMoveTimer = setTimeout(() => {
+        loadTransportData();
+        loadTransportStops();
+      }, 400);
+    });
+
+    window.toggleTransportModePill = function (key) {
+      transportModeFilter[key] = !transportModeFilter[key];
+      _rebuildTransport();
+      refreshActiveFilterPanel();
+      // Refire so a newly enabled mode appears immediately (the fetch
+      // feed list changed) rather than on the next 10 s tick.
+      loadTransportData();
+    };
+    window.toggleTransportStationsPill = function () {
+      transportStationsEnabled = !transportStationsEnabled;
+      if (transportStationsEnabled) {
+        transportLayer.addLayer(transportStopsLayer);
+        loadTransportStops();
+      } else {
+        transportStopsLayer.clearLayers();
+        transportLayer.removeLayer(transportStopsLayer);
+        _transportStopsKey = null;
+      }
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.transport = {
+      icon: 'fa-bus',
+      label: 'Transport',
+      color: '#f6891f',
+      render() {
+        const counts = {};
+        for (const v of _transportVehicles) counts[v.mode] = (counts[v.mode] || 0) + 1;
+        const pills = TRANSPORT_MODES.map((m) => {
+          const glyph = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${m.color};vertical-align:0;"></span>`;
+          return _ffPillColored(transportModeFilter[m.key], m.color, glyph, `${m.label} (${counts[m.key] || 0})`, `toggleTransportModePill('${m.key}')`);
+        }).join('');
+        const zoomNote = map.getZoom() < TRANSPORT_MIN_ZOOM
+          ? '<div class="floating-filter-status">Zoom in to see live transport (vehicles from zoom ' + TRANSPORT_MIN_ZOOM + ', stations from ' + TRANSPORT_STOPS_MIN_ZOOM + ').</div>'
+          : '';
+        return `
+          <h4><i class="fa-solid fa-bus" style="color:#f6891f;"></i> Transport</h4>
+          <div class="ff-section-label">Mode</div>
+          <div class="floating-filter-pills">${pills}</div>
+          <div class="ff-section-label">Stations</div>
+          <div class="floating-filter-pills">${_ffPill(transportStationsEnabled, '<i class="fa-solid fa-train"></i> Stations', 'toggleTransportStationsPill()')}</div>
+          ${zoomNote}
+        `;
+      },
+    };
 
     // Subtype filters within the Repeaters layer. Only one entry for
     // now ("p25" = NSW PSN P25 sites loaded from NSW GRN Version 1.json)
