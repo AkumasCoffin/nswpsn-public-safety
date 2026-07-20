@@ -58,12 +58,27 @@
     /* CONTROLS & TOGGLES */
     .layer-toggles {
       position: absolute; top: 20px; left: 50%; transform: translateX(-50%); z-index: 800;
-      display: flex; gap: 10px; background: rgba(15, 23, 42, 0.9); padding: 6px 12px;
-      border-radius: 50px; border: 1px solid rgba(255,255,255,0.15); backdrop-filter: blur(8px);
+      display: flex; gap: 2px; background: rgba(15, 23, 42, 0.9); padding: 5px 8px;
+      border-radius: 14px; border: 1px solid rgba(255,255,255,0.15); backdrop-filter: blur(8px);
       box-shadow: 0 4px 20px rgba(0,0,0,0.4);
       max-width: calc(100vw - 280px); /* Sidebar (260px) + small margin */
       white-space: nowrap;
     }
+    /* Compact icon-over-label layout for the layer buttons. Scoped so
+       the map-type (Dark/Sat/Topo) .btn-toggle pills keep their style;
+       the extra specificity also outranks the mobile .btn-toggle
+       overrides further down. */
+    .layer-toggles .btn-toggle {
+      flex-direction: column; gap: 3px; padding: 4px 7px;
+      font-size: 8.5px; letter-spacing: 0.04em; border-radius: 8px;
+      line-height: 1;
+    }
+    .layer-toggles .btn-toggle i { font-size: 13px; }
+    .layer-toggles .btn-toggle.active i { text-shadow: 0 0 8px currentColor; }
+    /* styles.css strikes through inactive .btn-toggle labels; at 8.5px
+       that makes them unreadable. Off-state is already clear from the
+       reduced opacity and missing glow/border. */
+    .layer-toggles .btn-toggle:not(.active) { text-decoration: none; }
     
     /* PC: Only show scrollbar when actually needed (when content overflows) */
     @media (min-width: 901px) {
@@ -2049,22 +2064,24 @@
       <div class="floating-filter-sidebar" id="floating-filter-sidebar"></div>
       <div class="floating-filter-panel" id="floating-filter-panel"></div>
 
+      <!-- Compact icon-over-label toggles: the coloured icon carries the
+           layer identity, the small caption keeps it unambiguous. -->
       <div class="layer-toggles" id="layer-toggles">
-        <button id="btn-user" class="btn-toggle active" onclick="toggleMapLayer('user')"><span class="dot-indicator" style="background:#a855f7;"></span> User</button>
-        <button id="btn-rfs" class="btn-toggle active" onclick="toggleMapLayer('rfs')"><span class="dot-indicator" style="background:#ef4444;"></span> RFS</button>
-        <button id="btn-pager" class="btn-toggle active" onclick="togglePagerPanel()"><span class="dot-indicator" style="background:#22c55e;"></span> Pager</button>
-        <button id="btn-outages" class="btn-toggle" onclick="toggleOutagesPanel()"><span class="dot-indicator" style="background:#f97316;"></span> Outages</button>
-        <button id="btn-hazards" class="btn-toggle" onclick="toggleHazardsPanel()"><span class="dot-indicator" style="background:#ef4444;"></span> Traffic Hazards</button>
-        <button id="btn-police" class="btn-toggle" onclick="togglePolicePanel()"><span class="dot-indicator" style="background:#3b82f6;"></span> Police</button>
-        <button id="btn-roadwork" class="btn-toggle" onclick="toggleMapLayer('roadwork')"><span class="dot-indicator" style="background:#eab308;"></span> Roadwork</button>
-        <button id="btn-floods" class="btn-toggle" onclick="toggleMapLayer('floods')"><span class="dot-indicator" style="background:#06b6d4;"></span> Floods</button>
-        <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()"><span class="dot-indicator" style="background:#8b5cf6;"></span> Cameras</button>
-        <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()"><span class="dot-indicator" style="background:#06b6d4;"></span> Beaches</button>
-        <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()"><span class="dot-indicator" style="background:#38bdf8;"></span> Weather</button>
-        <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')"><span class="dot-indicator" style="background:#f97316;"></span> Fire Hotspots</button>
-        <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')"><span class="dot-indicator" style="background:#14b8a6;"></span> Repeaters</button>
-        <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')"><span class="dot-indicator" style="background:#0284c7;"></span> AIS Ships</button>
-        <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')"><span class="dot-indicator" style="background:#a855f7;"></span> Aircraft</button>
+        <button id="btn-user" class="btn-toggle active" onclick="toggleMapLayer('user')" title="User incidents"><i class="fa-solid fa-user" style="color:#a855f7;"></i><span>User</span></button>
+        <button id="btn-rfs" class="btn-toggle active" onclick="toggleMapLayer('rfs')" title="RFS incidents"><i class="fa-solid fa-fire" style="color:#ef4444;"></i><span>RFS</span></button>
+        <button id="btn-pager" class="btn-toggle active" onclick="togglePagerPanel()" title="Pager hits"><i class="fa-solid fa-pager" style="color:#22c55e;"></i><span>Pager</span></button>
+        <button id="btn-outages" class="btn-toggle" onclick="toggleOutagesPanel()" title="Power outages"><i class="fa-solid fa-bolt" style="color:#f97316;"></i><span>Outages</span></button>
+        <button id="btn-hazards" class="btn-toggle" onclick="toggleHazardsPanel()" title="Traffic hazards"><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i><span>Hazards</span></button>
+        <button id="btn-police" class="btn-toggle" onclick="togglePolicePanel()" title="Police reports"><i class="fa-solid fa-shield-halved" style="color:#3b82f6;"></i><span>Police</span></button>
+        <button id="btn-roadwork" class="btn-toggle" onclick="toggleMapLayer('roadwork')" title="Roadwork"><i class="fa-solid fa-person-digging" style="color:#eab308;"></i><span>Roadwork</span></button>
+        <button id="btn-floods" class="btn-toggle" onclick="toggleMapLayer('floods')" title="Floods"><i class="fa-solid fa-water" style="color:#06b6d4;"></i><span>Floods</span></button>
+        <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()" title="Cameras"><i class="fa-solid fa-video" style="color:#8b5cf6;"></i><span>Cameras</span></button>
+        <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()" title="Beaches"><i class="fa-solid fa-umbrella-beach" style="color:#06b6d4;"></i><span>Beaches</span></button>
+        <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()" title="Weather"><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i><span>Weather</span></button>
+        <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')" title="Satellite fire hotspots"><i class="fa-solid fa-satellite" style="color:#f97316;"></i><span>Hotspots</span></button>
+        <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')" title="NSW PSN repeaters"><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i><span>Repeaters</span></button>
+        <button id="btn-ais" class="btn-toggle" onclick="toggleMapLayer('ais')" title="AIS vessels"><i class="fa-solid fa-ship" style="color:#0284c7;"></i><span>Ships</span></button>
+        <button id="btn-adsb" class="btn-toggle" onclick="toggleMapLayer('adsb')" title="Live aircraft"><i class="fa-solid fa-plane" style="color:#c084fc;"></i><span>Aircraft</span></button>
       </div>
       <!-- Mobile settings backdrop -->
       <div class="settings-backdrop" id="settings-backdrop"></div>
