@@ -445,7 +445,9 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
 // Route track geometry for one GTFS shape id (from a vehicle's shapeId).
 // Shapes are static per id, so they cache long; the encoded polyline is
 // passed through and decoded client-side (~1.5 KB per route).
-const SHAPE_ID_RE = /^au2:[a-z]{2}:[A-Za-z0-9_.-]+$/;
+// Tail may itself contain colons — dynamic services use ids like
+// au2:ds:dyn:918-841-289 (verified served by upstream).
+const SHAPE_ID_RE = /^au2:[a-z]{2}:[A-Za-z0-9_.:-]+$/;
 const SHAPE_FRESH_MS = 24 * 3600_000;
 const SHAPE_STALE_MS = 7 * 24 * 3600_000;
 

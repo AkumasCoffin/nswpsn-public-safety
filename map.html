@@ -11767,10 +11767,13 @@ function initPagerHoursFromStorage() {
     // Leaflet zoom − 1, so these stops are GL zooms (Leaflet 9/12/14 →
     // GL 8/11/13).
     function _transportGlStyle(geo) {
+      // Full AnyTrip parity (verbatim offsets, 4/3px widths) from GL
+      // zoom 12 (Leaflet 13) — earlier than before, so typical viewing
+      // zooms match their rendering exactly; below that both shrink.
       const offsetExpr = ['interpolate', ['linear'], ['zoom'],
-        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.25],
-        11, ['*', ['coalesce', ['get', 'offset'], 0], 0.6],
-        13, ['coalesce', ['get', 'offset'], 0]
+        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.3],
+        10, ['*', ['coalesce', ['get', 'offset'], 0], 0.65],
+        12, ['coalesce', ['get', 'offset'], 0]
       ];
       const opacityExpr = ['coalesce', ['get', 'opacity'], 1];
       return {
@@ -11782,7 +11785,7 @@ function initPagerHoursFromStorage() {
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': '#FFFFFF',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.6, 11, 2.9, 13, 4],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 10, 3, 12, 4],
               'line-offset': offsetExpr,
               'line-opacity': ['*', opacityExpr, 0.85]
             }
@@ -11792,7 +11795,7 @@ function initPagerHoursFromStorage() {
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.2, 11, 2.2, 13, 3],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.3, 10, 2.3, 12, 3],
               'line-offset': offsetExpr,
               'line-opacity': opacityExpr
             }
@@ -11933,22 +11936,27 @@ function initPagerHoursFromStorage() {
     }
 
     // Shared shape fetch (client-cached decoded points). Returns null on
-    // failure or missing geometry.
+    // failure or missing geometry. Failures are NEGATIVE-CACHED — the
+    // snap warm-up re-requests wanted shapes every tick, and without
+    // this a 4xx id hammered the backend on every rebuild.
+    const _transportShapeFailed = new Set();
     async function fetchTransportShapePts(shapeId) {
       let pts = _transportShapeCache.get(shapeId);
       if (pts) return pts;
+      if (_transportShapeFailed.has(shapeId)) return null;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        if (!data.enc) return null;
+        if (!data.enc) { _transportShapeFailed.add(shapeId); return null; }
         // Two smoothing passes — GTFS shapes are often sparse and render
         // with visibly sharp corners otherwise. Cached smoothed.
         pts = chaikinSmooth(decodePolyline(data.enc), 2);
         _transportShapeCache.set(shapeId, pts);
         return pts;
       } catch (e) {
-        console.warn('[transport] shape failed:', e);
+        _transportShapeFailed.add(shapeId);
+        console.warn('[transport] shape failed:', shapeId, e);
         return null;
       }
     }
@@ -12166,7 +12174,25 @@ function initPagerHoursFromStorage() {
           trip.stops.length + ' stops');
         showTransportTrack(trip.shapeId || (ref.shapeId || null), route && route.color);
         const now = Date.now() / 1000;
-        let nextIdx = trip.stops.findIndex((s) => (s.dep ?? s.arr ?? 0) >= now - 30);
+        // The feed's estimated stop times can run NON-MONOTONIC between
+        // stops (predictions of recovering delays), so time alone
+        // misplaces the position marker. The vehicle statusString names
+        // its current/next stop ("at X" / "2.5km from X") — use that as
+        // the primary signal, with the time scan as fallback.
+        let nextIdx = -1;
+        if (trip.vehicle && trip.vehicle.statusString) {
+          const m = trip.vehicle.statusString.match(/(?:at|from)\s+(.+)$/);
+          if (m) {
+            const ref = m[1].toLowerCase();
+            nextIdx = trip.stops.findIndex((s) => {
+              const n = (s.name || '').toLowerCase();
+              return n === ref || ref.startsWith(n.slice(0, 18)) || n.startsWith(ref.slice(0, 18));
+            });
+          }
+        }
+        if (nextIdx === -1) {
+          nextIdx = trip.stops.findIndex((s) => (s.dep ?? s.arr ?? 0) >= now - 30);
+        }
         if (nextIdx === -1) nextIdx = trip.stops.length; // trip finished
         const railColor = (route && route.color) || '#f18500';
         // "39s ago: at Lakemba Station, Stand D" status line.
