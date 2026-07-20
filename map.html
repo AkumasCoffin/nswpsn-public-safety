@@ -1483,6 +1483,23 @@
       letter-spacing: 0.4px; margin: 8px 0 5px; font-weight: 600;
     }
     .unified-inline-filters .ff-section-label:first-child { margin-top: 0; }
+    /* Docked state: while the editor's Map Controls panel is open the
+       vessels/aircraft panel is reparented inside it (see
+       syncUnifiedListPanelDock) and becomes an in-flow section instead
+       of a floating card. The id-qualified selector outweighs the base
+       .ais-list-panel absolute positioning. */
+    #editor-panel .ais-list-panel {
+      position: static;
+      width: auto;
+      max-width: none;
+      max-height: none;
+      margin-top: 1rem;
+      border-radius: 10px;
+      box-shadow: none;
+    }
+    #editor-panel .ais-list-panel .ais-list-body {
+      max-height: 40vh;
+    }
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
     }
@@ -1502,12 +1519,14 @@
       backdrop-filter: blur(6px);
     }
     .leaflet-tooltip.ais-tooltip > div { width: 100%; max-width: 100% !important; }
-    .leaflet-tooltip.ais-tooltip::before {
-      border-top-color: rgba(15, 23, 42, 0.96) !important;
-      border-right-color: rgba(15, 23, 42, 0.96) !important;
-      border-bottom-color: rgba(15, 23, 42, 0.96) !important;
-      border-left-color: rgba(15, 23, 42, 0.96) !important;
-    }
+    /* Recolor the tooltip arrow per anchor direction. Leaflet draws the
+       arrow as one colored border with the other three transparent —
+       overriding all four at once (the old rule) filled in a solid
+       square under the tooltip instead of a triangle. */
+    .leaflet-tooltip-top.ais-tooltip::before { border-top-color: rgba(15, 23, 42, 0.96) !important; }
+    .leaflet-tooltip-bottom.ais-tooltip::before { border-bottom-color: rgba(15, 23, 42, 0.96) !important; }
+    .leaflet-tooltip-left.ais-tooltip::before { border-left-color: rgba(15, 23, 42, 0.96) !important; }
+    .leaflet-tooltip-right.ais-tooltip::before { border-right-color: rgba(15, 23, 42, 0.96) !important; }
 
     /* Compact tooltip for police-heatmap hex cells. Override the
        default min-width / green glow / white card so a tiny hex
@@ -10221,7 +10240,30 @@ function initPagerHoursFromStorage() {
       } else {
         p.classList.remove('open');
       }
+      syncUnifiedListPanelDock();
     }
+
+    // While the editor's Map Controls panel (#editor-panel, injected by
+    // map-editor-module.js for users with the map editor role when the
+    // User layer is on) is visible, the vessels/aircraft panel docks
+    // INSIDE it as a section instead of floating over the same corner.
+    // The module calls this on its visibility changes too.
+    const _unifiedPanelHome = document.getElementById('ais-list-panel')
+      ? document.getElementById('ais-list-panel').parentElement
+      : null;
+    function syncUnifiedListPanelDock() {
+      const panel = document.getElementById('ais-list-panel');
+      if (!panel || !_unifiedPanelHome) return;
+      const editor = document.getElementById('editor-panel');
+      const shouldDock = !!(editor && editor.classList.contains('open'));
+      const docked = panel.parentElement === editor;
+      if (shouldDock && !docked) {
+        editor.appendChild(panel);
+      } else if (!shouldDock && docked) {
+        _unifiedPanelHome.appendChild(panel);
+      }
+    }
+    window.syncUnifiedListPanelDock = syncUnifiedListPanelDock;
 
     function openAisListPanel() {
       syncUnifiedListPanel();
@@ -12952,6 +12994,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=5"></script>
+  <script src="map-editor-module.js?v=6"></script>
 </body>
 </html>

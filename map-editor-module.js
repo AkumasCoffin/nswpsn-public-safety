@@ -1782,11 +1782,13 @@
 
 
   // --- Panel visibility -------------------------------------------------
-  // Desktop: the panel floats top-right whenever the User layer is on and
-  // the AIS vessel list is closed. Mobile (<=900px): .map-sidebar becomes a
-  // 60% bottom sheet, so it stays COLLAPSED behind a floating button and
-  // only opens when the user taps a pin or the button; a close X collapses
-  // it again.
+  // Desktop: the panel floats top-right whenever the User layer is on.
+  // The vessels/aircraft list panel no longer competes for that corner —
+  // map.html docks it INSIDE this panel while Map Controls is open (see
+  // syncUnifiedListPanelDock), so the old mutual-exclusion with the AIS
+  // list is gone. Mobile (<=900px): .map-sidebar becomes a 60% bottom
+  // sheet, so it stays COLLAPSED behind a floating button and only opens
+  // when the user taps a pin or the button; a close X collapses it again.
   let mobileSheetOpen = false;
 
   function isMobileLayout() {
@@ -1796,18 +1798,22 @@
   function editorPanelVisibility() {
     const editorPanel = document.getElementById('editor-panel');
     if (!editorPanel) return;
-    const aisPanel = document.getElementById('ais-list-panel');
     const userBtn = document.getElementById('btn-user');
-    const aisOpen = !!(aisPanel && aisPanel.classList.contains('open'));
     const userOn = !userBtn || userBtn.classList.contains('active');
     const mobile = isMobileLayout();
-    const open = userOn && !aisOpen && (!mobile || mobileSheetOpen);
+    const open = userOn && (!mobile || mobileSheetOpen);
     editorPanel.classList.toggle('open', open);
 
     const fab = document.getElementById('editor-mobile-fab');
     if (fab) fab.style.display = (mobile && userOn && !open) ? 'flex' : 'none';
     const closeBtn = document.getElementById('editor-panel-close');
     if (closeBtn) closeBtn.style.display = mobile ? 'flex' : 'none';
+
+    // Re-home the vessels/aircraft list panel now that our visibility
+    // changed (docks into this panel while open, floats otherwise).
+    if (typeof window.syncUnifiedListPanelDock === 'function') {
+      window.syncUnifiedListPanelDock();
+    }
   }
 
   function openEditorSheet() {
