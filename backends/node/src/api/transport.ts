@@ -739,10 +739,21 @@ transportRouter.get('/api/transport/departures/:stopId', async (c) => {
 // pre-styled GeoJSON, per-feature official line colours). ~434 KB raw,
 // gzipped by the compress() middleware; cached a day.
 
-const LINES_URL = 'https://static.anytrip.com.au/tiles/lines.json';
+// lines.json only covers greater Sydney; otherrail.json adds the few
+// styled segments outside it (e.g. Canberra light rail). Merged into
+// one FeatureCollection; either file failing alone is tolerated.
+const LINES_URLS = [
+  'https://static.anytrip.com.au/tiles/lines.json',
+  'https://static.anytrip.com.au/tiles/otherrail.json',
+];
 const LINES_FRESH_MS = 24 * 3600_000;
 const LINES_STALE_MS = 7 * 24 * 3600_000;
 const linesCache = new SwrCache<unknown>(2);
+
+interface GeoFeatureCollection {
+  type?: string;
+  features?: unknown[];
+}
 
 transportRouter.get('/api/transport/lines', async (c) => {
   if (config.TRANSPORT_DISABLED) {
@@ -751,7 +762,23 @@ transportRouter.get('/api/transport/lines', async (c) => {
   try {
     const { value } = await linesCache.get(
       'lines',
-      () => fetchJson<unknown>(LINES_URL, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
+      async () => {
+        const results = await Promise.allSettled(
+          LINES_URLS.map((u) =>
+            fetchJson<GeoFeatureCollection>(u, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
+          ),
+        );
+        const features: unknown[] = [];
+        let ok = 0;
+        for (const r of results) {
+          if (r.status === 'fulfilled' && Array.isArray(r.value.features)) {
+            features.push(...r.value.features);
+            ok += 1;
+          }
+        }
+        if (ok === 0) throw new Error('all line sources failed');
+        return { type: 'FeatureCollection', features };
+      },
       {
         fresh: LINES_FRESH_MS,
         stale: LINES_STALE_MS,
