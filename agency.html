@@ -10,6 +10,7 @@
   <meta name="description" content="NSW Public Safety Network agency talkgroup IDs and aliases.">
   <meta name="author" content="Forcequit">
 
+  <link rel="canonical" href="https://nswpsn.forcequit.xyz/agency">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./assets/fqlogo.png">
   <link rel="stylesheet" href="styles.css" />
@@ -179,6 +180,14 @@
       if (!agency) { setNotFound(slug); return; }
 
       document.title = `NSW PSN Quick Reference – ${agency.name}`;
+
+      // Per-agency SEO: point the canonical at this slug and describe the page
+      // by agency name so each of the 46 agency pages indexes distinctly.
+      const canonical = document.querySelector('link[rel="canonical"]');
+      if (canonical) canonical.href = `https://nswpsn.forcequit.xyz/agency?slug=${encodeURIComponent(slug)}`;
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc) metaDesc.content = `${agency.name} talkgroup IDs, radio reference and NSW PSN monitoring info.`;
+
       document.getElementById('agency-breadcrumb').textContent = agency.category;
       document.getElementById('agency-title').textContent = agency.name;
       document.getElementById('agency-meta').textContent = agency.count > 0
