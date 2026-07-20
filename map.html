@@ -2427,6 +2427,10 @@
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <!-- Leaflet.heat — used by the Police Heatmap layer. -->
   <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <!-- Parallel-line offsetting for the transport network (the AnyTrip
+       tiles carry per-feature pixel offsets so shared rail corridors
+       render as cleanly spaced parallel lines). -->
+  <script src="https://unpkg.com/leaflet-polylineoffset@1.1.1/leaflet.polylineoffset.js"></script>
   <script>
     // NSW PSN Map v2.3 - Updated for backend pre-warming cache system
     // Data is served from pre-warmed backend cache for instant loading
@@ -11675,6 +11679,25 @@ function initPagerHoursFromStorage() {
     // ("stroke"), served through the backend with a day-long cache.
     // Loaded once per session, visible whenever the layer is on — gives
     // the layer presence even below the vehicle zoom gate.
+    // Chaikin corner-cutting — rounds the sharp vertices of sparse
+    // polylines without changing their course. Each iteration doubles
+    // the point count, so keep iterations low.
+    function chaikinSmooth(pts, iterations) {
+      let out = pts;
+      for (let it = 0; it < iterations; it++) {
+        if (out.length < 3) break;
+        const next = [out[0]];
+        for (let i = 0; i < out.length - 1; i++) {
+          const a = out[i], b = out[i + 1];
+          next.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+          next.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+        }
+        next.push(out[out.length - 1]);
+        out = next;
+      }
+      return out;
+    }
+
     let _transportLinesLoaded = false;
     async function loadTransportLines() {
       if (_transportLinesLoaded) return;
@@ -11683,15 +11706,32 @@ function initPagerHoursFromStorage() {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
-        L.geoJSON(geo, {
-          interactive: false,
-          style: (f) => ({
-            color: (f.properties && f.properties.stroke) || '#64748b',
-            weight: 2,
-            opacity: (f.properties && f.properties.opacity != null) ? f.properties.opacity : 0.75
-          })
-        }).addTo(transportLinesLayer);
-        console.log('[transport] network lines loaded:', (geo.features || []).length, 'segments');
+        // Built by hand rather than L.geoJSON so the tiles' per-feature
+        // pixel `offset` reaches the polyline options — that's what
+        // spaces parallel lines in shared corridors (polylineoffset
+        // plugin; harmlessly ignored if the plugin failed to load).
+        let count = 0;
+        for (const f of (geo.features || [])) {
+          if (!f || !f.geometry) continue;
+          const coordsList = f.geometry.type === 'LineString' ? [f.geometry.coordinates]
+            : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
+          const p = f.properties || {};
+          for (const coords of coordsList) {
+            if (!Array.isArray(coords) || coords.length < 2) continue;
+            const latlngs = chaikinSmooth(coords.map((c) => [c[1], c[0]]), 1);
+            transportLinesLayer.addLayer(L.polyline(latlngs, {
+              color: p.stroke || '#64748b',
+              weight: 2,
+              opacity: p.opacity != null ? p.opacity : 0.75,
+              offset: typeof p.offset === 'number' ? p.offset : 0,
+              lineJoin: 'round',
+              lineCap: 'round',
+              interactive: false
+            }));
+            count++;
+          }
+        }
+        console.log('[transport] network lines loaded:', count, 'segments');
       } catch (e) {
         _transportLinesLoaded = false; // allow retry on next enable
         console.warn('[transport] lines failed to load:', e);
@@ -11742,7 +11782,9 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         if (!data.enc) return null;
-        pts = decodePolyline(data.enc);
+        // Two smoothing passes — GTFS shapes are often sparse and render
+        // with visibly sharp corners otherwise. Cached smoothed.
+        pts = chaikinSmooth(decodePolyline(data.enc), 2);
         _transportShapeCache.set(shapeId, pts);
         return pts;
       } catch (e) {
@@ -11982,15 +12024,20 @@ function initPagerHoursFromStorage() {
               ? '<span style="background:#1e293b;color:#cbd5e1;font-size:8px;padding:1px 5px;border-radius:3px;white-space:nowrap;display:inline-block;">pick up only</span>'
               : '';
           const occHtml = tptOccupancyHtml(s.occupancy);
-          // Vehicle position marker on the progress rail: at the stop →
-          // centred on the row; in transit → straddling the boundary
-          // ABOVE the next stop (between the previous stop and this one).
+          // Every row gets a stop node on the rail — without them the
+          // vehicle marker was the only dot and read as a station state
+          // ("past Gerringong") instead of a position between stops.
+          const stopNode = '<span style="position:absolute;left:-6px;top:11px;width:5px;height:5px;border-radius:50%;background:#0f172a;border:2px solid ' +
+            (past ? 'rgba(148,163,184,0.45)' : railColor) + ';z-index:1;"></span>';
+          // Vehicle position marker: at the stop → centred on the row
+          // (over its node); in transit → on the rail segment BETWEEN
+          // the previous stop's node and this one's.
           const posDot = isNext
-            ? '<span style="position:absolute;left:-7px;top:' + (atStop ? '10px' : '-6px') + ';width:11px;height:11px;border-radius:50%;background:' + railColor + ';border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);z-index:1;"></span>'
+            ? '<span style="position:absolute;left:-8px;top:' + (atStop ? '9px' : '-7px') + ';width:9px;height:9px;border-radius:50%;background:#fff;border:2px solid ' + railColor + ';box-shadow:0 0 6px rgba(0,0,0,0.7);z-index:2;"></span>'
             : '';
           return '<div ' + (isNext ? 'id="tpt-next-stop"' : '') + ' style="position:relative;display:flex;gap:8px;padding:6px 12px 6px 14px;margin-left:8px;border-left:3px solid ' +
             (past ? 'rgba(148,163,184,0.25)' : railColor) + ';border-bottom:1px solid rgba(148,163,184,0.06);' +
-            (past ? 'opacity:0.5;' : '') + (isNext && atStop ? 'background:rgba(148,163,184,0.09);' : '') + '">' + posDot +
+            (past ? 'opacity:0.5;' : '') + (isNext && atStop ? 'background:rgba(148,163,184,0.09);' : '') + '">' + stopNode + posDot +
             '<div style="flex:1;min-width:0;">' +
               '<div style="display:flex;justify-content:space-between;gap:6px;">' +
                 '<span style="font-size:8px;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">' + escapeHtml(s.locality || '') + '</span>' +
