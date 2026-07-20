@@ -41,6 +41,9 @@ describe('adsb.classifyEmergencyService', () => {
     const { classifyEmergencyService } = await import('../../../src/sources/adsb.js');
     expect(classifyEmergencyService('POL30', undefined)).toBe('polair');
     expect(classifyEmergencyService('RSCU201', undefined)).toBe('rescue');
+    expect(classifyEmergencyService('LIFS21', undefined)).toBe('rescue'); // Westpac Life Saver
+    expect(classifyEmergencyService('WPR1', undefined)).toBe('rescue'); // Westpac Rescue
+    expect(classifyEmergencyService('TOL403', undefined)).toBe('rescue'); // Toll
     expect(classifyEmergencyService('BMBR210', undefined)).toBe('firebomber');
     expect(classifyEmergencyService('FIRE07', undefined)).toBe('firebomber');
     expect(classifyEmergencyService('BDOG241', undefined)).toBe('firebomber');
