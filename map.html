@@ -11427,9 +11427,11 @@ function initPagerHoursFromStorage() {
     const _transportMarkers = new Map(); // id → { marker, iconKey }
     let transportRefreshInterval = null;
     let _transportMoveTimer = null;
+    // Buses and ferries start OFF (user preference — buses dominate the
+    // map; the pills in the filter panel turn them on).
     const transportModeFilter = {
-      buses: true, sydneytrains: true, metro: true,
-      nswtrains: true, ferries: true, lightrail: true
+      buses: false, sydneytrains: true, metro: true,
+      nswtrains: true, ferries: false, lightrail: true
     };
     let transportStationsEnabled = true;
     let _transportStopsKey = null; // last stops fetch key — skip refetch if unchanged
@@ -11771,8 +11773,15 @@ function initPagerHoursFromStorage() {
     // route track is drawn from its GTFS shape (deduped per shape,
     // thin, in the route colour). Buses stay click-to-show — Sydney's
     // bus shape density would paint the whole map.
-    const _transportAutoTracks = new Map(); // shapeId → polyline | null (fetch in flight)
-    const TRANSPORT_AUTO_TRACK_CAP = 60;
+    // shapeId → { line: polyline|null (null while fetch in flight),
+    //             lastWanted: ts }. Tracks are RETAINED after their
+    // vehicle leaves the (padded) viewport — shapes are geographically
+    // static, and removing them the moment the owning vehicle scrolled
+    // out made lines vanish while zooming along a corridor. Pruning is
+    // least-recently-wanted, only once over the retention cap.
+    const _transportAutoTracks = new Map();
+    const TRANSPORT_AUTO_TRACK_CAP = 60;   // max new shapes wanted per sync
+    const TRANSPORT_AUTO_TRACK_KEEP = 150; // retention cap before LRU pruning
     // Bounds of AnyTrip's static network tiles (greater Sydney). Rail /
     // metro / light-rail corridors inside them are already drawn by the
     // network layer — auto-drawing those shapes too stacked two lines in
@@ -11791,27 +11800,48 @@ function initPagerHoursFromStorage() {
         // Skip shapes the static network already covers.
         if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
-          want.set(v.shapeId, (v.route && v.route.color) || transportModeColor(v.mode));
+          want.set(v.shapeId, {
+            color: (v.route && v.route.color) || transportModeColor(v.mode),
+            mode: v.mode
+          });
         }
       }
-      for (const [sid, line] of _transportAutoTracks) {
-        if (!want.has(sid)) {
-          if (line) transportAutoTracksLayer.removeLayer(line);
+      // Tracks stay visible even when the vehicle list empties (zoom
+      // gate, quiet viewport) — only the LRU cap and mode filters
+      // remove them. Toggling the layer off hides them with the layer.
+      // Retained tracks whose mode filter was switched off get removed
+      // immediately (retention must not override an explicit filter).
+      for (const [sid, e] of _transportAutoTracks) {
+        if (e.mode && !transportModeFilter[e.mode]) {
+          if (e.line) transportAutoTracksLayer.removeLayer(e.line);
           _transportAutoTracks.delete(sid);
         }
       }
-      for (const [sid, color] of want) {
-        if (_transportAutoTracks.has(sid)) continue;
-        _transportAutoTracks.set(sid, null); // reserve — fetch in flight
+      const now = Date.now();
+      for (const [sid, w] of want) {
+        const existing = _transportAutoTracks.get(sid);
+        if (existing) { existing.lastWanted = now; continue; }
+        const entry = { line: null, lastWanted: now, mode: w.mode }; // reserve — fetch in flight
+        _transportAutoTracks.set(sid, entry);
         fetchTransportShapePts(sid).then((pts) => {
           if (!pts) { _transportAutoTracks.delete(sid); return; }
-          if (!_transportAutoTracks.has(sid)) return; // dropped while fetching
+          if (_transportAutoTracks.get(sid) !== entry) return; // pruned meanwhile
           // Same weight/opacity as the static network so all tracks
           // render at one consistent thickness.
-          const line = L.polyline(pts, { color: color, weight: 2, opacity: 0.75, interactive: false });
-          transportAutoTracksLayer.addLayer(line);
-          _transportAutoTracks.set(sid, line);
+          entry.line = L.polyline(pts, { color: w.color, weight: 2, opacity: 0.75, interactive: false });
+          transportAutoTracksLayer.addLayer(entry.line);
         });
+      }
+      // LRU prune, unwanted-first, only once over the retention cap.
+      if (_transportAutoTracks.size > TRANSPORT_AUTO_TRACK_KEEP) {
+        const prunable = Array.from(_transportAutoTracks.entries())
+          .filter(([sid]) => !want.has(sid))
+          .sort((a, b) => a[1].lastWanted - b[1].lastWanted);
+        for (const [sid, e] of prunable) {
+          if (_transportAutoTracks.size <= TRANSPORT_AUTO_TRACK_KEEP) break;
+          if (e.line) transportAutoTracksLayer.removeLayer(e.line);
+          _transportAutoTracks.delete(sid);
+        }
       }
     }
 
