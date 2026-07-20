@@ -228,6 +228,15 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Kill switch for the AnyTrip public-transport proxy. When true both
+  // /api/transport/* endpoints return empty snapshots and never hit
+  // upstream. Escape hatch if AnyTrip blocks us or the (unofficial)
+  // API drifts.
+  TRANSPORT_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
   // ---------------------------------------------------------------------
   // rdio → ntfy "major incident" push notifier (services/rdioIncidentAlerts).
   // Detects bursts of radio traffic per talkgroup off the rdio-scanner DB
