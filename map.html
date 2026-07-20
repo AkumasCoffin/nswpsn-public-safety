@@ -11728,18 +11728,33 @@ function initPagerHoursFromStorage() {
               return p;
             }, this));
             if (this.options.offset) {
-              // Zoom-aware, UNIFORM simplification. High zoom offsets
-              // the RAW projected geometry (any simplification there
-              // diverges corridor-mates whose source points differ
-              // slightly). Low zoom NEEDS simplification — dense
-              // projected points make the offset output noisy beyond
-              // what the windowed loop remover can clean — and because
-              // the tolerance depends only on zoom, corridor-mates
-              // still simplify identically and stay parallel. This
-              // hook re-runs on every zoom, so it adapts by itself.
               const z = this._map.getZoom();
+              // 1) SNAP projected points to a small pixel grid and drop
+              //    consecutive duplicates. Corridor-mates are separate
+              //    features whose source points differ by fractions of
+              //    a pixel — quantising makes near-identical geometries
+              //    EXACTLY identical, so every later step treats them
+              //    the same and the offset lines stay truly parallel.
+              const grid = z >= 14 ? 1 : 2;
+              const snapped = [];
+              let prevPt = null;
+              for (const p of ring) {
+                const qx = Math.round(p.x / grid) * grid;
+                const qy = Math.round(p.y / grid) * grid;
+                if (!prevPt || qx !== prevPt.x || qy !== prevPt.y) {
+                  prevPt = { x: qx, y: qy };
+                  snapped.push(prevPt);
+                }
+              }
+              ring = snapped;
+              // 2) Zoom-aware UNIFORM simplification (none at high
+              //    zoom for fidelity; low zoom needs it — dense points
+              //    make the offset output noisier than the loop
+              //    remover can clean). Tolerance depends only on zoom,
+              //    so identical inputs stay identical.
               const tol = z >= 14 ? 0 : z >= 13 ? 1 : z >= 11 ? 2 : 3;
-              if (tol) ring = L.LineUtil.simplify(ring, tol);
+              if (tol && ring.length > 2) ring = L.LineUtil.simplify(ring, tol);
+              // 3) Offset, then cut the corner loops out.
               ring = _removeOffsetLoops(
                 L.PolylineOffset.offsetPoints(ring, this.options.offset),
               );
