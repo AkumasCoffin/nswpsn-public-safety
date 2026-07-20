@@ -11679,6 +11679,41 @@ function initPagerHoursFromStorage() {
     // ("stroke"), served through the backend with a day-long cache.
     // Loaded once per session, visible whenever the layer is on — gives
     // the layer presence even below the vehicle zoom gate.
+    // leaflet-polylineoffset generates ring/loop artifacts whenever a
+    // projected segment is shorter than the pixel offset — its arc
+    // joins wrap around. At low zooms even the raw tile geometry
+    // projects that densely. AnyTrip escapes this because their live
+    // renderer is MapLibre GL (shader-side line-offset can't
+    // self-intersect); the Leaflet equivalent is to SIMPLIFY the
+    // projected points to the offset's scale before offsetting, so no
+    // segment is ever shorter than the offset. High zooms are
+    // untouched (segments are long, simplify removes ~nothing).
+    (function () {
+      if (!L.PolylineOffset || !L.LineUtil || !L.LineUtil.simplify) return;
+      L.Polyline.include({
+        _projectLatlngs: function (latlngs, result, projectedBounds) {
+          const flat = latlngs.length > 0 && latlngs[0] instanceof L.LatLng;
+          if (flat) {
+            let ring = latlngs.map(L.bind(function (ll) {
+              const p = this._map.latLngToLayerPoint(ll);
+              if (projectedBounds) projectedBounds.extend(p);
+              return p;
+            }, this));
+            if (this.options.offset) {
+              const tol = Math.max(1.5, Math.abs(this.options.offset) * 0.75);
+              ring = L.LineUtil.simplify(ring, tol);
+              ring = L.PolylineOffset.offsetPoints(ring, this.options.offset);
+            }
+            result.push(ring.map(function (p) { return L.point(p.x, p.y); }));
+          } else {
+            latlngs.forEach(L.bind(function (ll) {
+              this._projectLatlngs(ll, result, projectedBounds);
+            }, this));
+          }
+        }
+      });
+    })();
+
     // Chaikin corner-cutting — rounds the sharp vertices of sparse
     // polylines without changing their course. Each iteration doubles
     // the point count, so keep iterations low.
