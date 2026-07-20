@@ -2215,6 +2215,21 @@
         </div>
         <div class="ais-list-body" id="ais-list-body"></div>
       </div>
+      <!-- Aircraft list — mirrors the AIS vessel list panel. Reuses the
+           ais-list-panel classes so the styling and mobile sidebar
+           relocation come for free. Populated by adsbListRender(). -->
+      <div class="ais-list-panel" id="adsb-list-panel">
+        <div class="ais-list-header">
+          <i class="fa-solid fa-plane" style="color:#c084fc;"></i>
+          <h4>Aircraft</h4>
+          <span class="ais-list-count" id="adsb-list-count">0</span>
+          <button class="ais-list-close" onclick="closeAdsbListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="ais-list-search">
+          <input type="text" id="adsb-list-search" placeholder="Search callsign, rego, hex, type…" autocomplete="off" oninput="adsbListOnSearch(this.value)">
+        </div>
+        <div class="ais-list-body" id="adsb-list-body"></div>
+      </div>
       </div><!-- /map-filters-for-sidebar -->
 
       <div class="map-type-controls">
@@ -3713,6 +3728,19 @@
         } else {
           removeFilterButton('ais');
           closeAisListPanel();
+        }
+        if (typeof updateSidebarFilterVisibility === 'function') {
+          updateSidebarFilterVisibility();
+        }
+      }
+      if (target === 'adsb') {
+        const enabled = map.hasLayer(adsbLayer);
+        if (enabled) {
+          addFilterButton('adsb');
+          openAdsbListPanel();
+        } else {
+          removeFilterButton('adsb');
+          closeAdsbListPanel();
         }
         if (typeof updateSidebarFilterVisibility === 'function') {
           updateSidebarFilterVisibility();
@@ -10381,6 +10409,33 @@ function initPagerHoursFromStorage() {
     let _adsbAircraft = [];
     const _adsbMarkers = new Map(); // hex → { marker, iconKey }
     let adsbRefreshInterval = null;
+    // Search box in the floating Aircraft list panel — filters both the
+    // list and the map markers (same behaviour as the AIS search).
+    let _adsbListSearch = '';
+    // Aircraft whose tooltip is pinned open by a click; also the
+    // highlighted row in the list panel.
+    let _adsbPinnedHex = null;
+    // On-map labels under each plane. `enabled` is the master switch in
+    // the floating filter panel; the field keys are the sub-toggles that
+    // appear once labels are on. Identity (callsign/rego/hex) always
+    // shows when labels are enabled.
+    const adsbLabelSettings = {
+      enabled: false,
+      alt: true,
+      speed: true,
+      track: false,
+      reg: false,
+      type: false,
+      squawk: false
+    };
+    const ADSB_LABEL_FIELDS = [
+      { key: 'alt',    label: 'Altitude' },
+      { key: 'speed',  label: 'Speed' },
+      { key: 'track',  label: 'Track' },
+      { key: 'reg',    label: 'Registration' },
+      { key: 'type',   label: 'Type' },
+      { key: 'squawk', label: 'Squawk' }
+    ];
     // Ground targets only render at/above this zoom — Sydney KSA alone
     // parks dozens of them on one pixel at state-wide zoom.
     const ADSB_GROUND_MIN_ZOOM = 10;
@@ -10418,6 +10473,21 @@ function initPagerHoursFromStorage() {
       return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
     }
 
+    // Optional-field label text (second line of the marker label).
+    // Returns '' when no enabled field has a value.
+    function buildAircraftLabelFields(a) {
+      const parts = [];
+      if (adsbLabelSettings.alt) {
+        parts.push(a.onGround ? 'GND' : (a.altFt != null ? a.altFt.toLocaleString() + 'ft' : null));
+      }
+      if (adsbLabelSettings.speed && a.gsKt != null) parts.push(Math.round(a.gsKt) + 'kt');
+      if (adsbLabelSettings.track && Number.isFinite(a.trackDeg)) parts.push(Math.round(a.trackDeg) + '°');
+      if (adsbLabelSettings.reg && a.reg) parts.push(a.reg);
+      if (adsbLabelSettings.type && a.type) parts.push(a.type);
+      if (adsbLabelSettings.squawk && a.squawk) parts.push('sq ' + a.squawk);
+      return parts.filter(Boolean).join(' · ');
+    }
+
     function buildAircraftIcon(a) {
       const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
       const color = es ? es.color : adsbAltColor(a.altFt);
@@ -10440,9 +10510,20 @@ function initPagerHoursFromStorage() {
         // No track — plain dot, same fallback as AIS.
         glyph = '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';margin:5px;"></div>';
       }
+      // Optional label chip under the glyph: identity line (callsign /
+      // rego / hex) plus whichever fields are toggled on.
+      let labelHtml = '';
+      if (adsbLabelSettings.enabled) {
+        const identity = a.callsign || a.reg || a.hex.toUpperCase();
+        const fields = buildAircraftLabelFields(a);
+        labelHtml = '<div style="position:absolute;top:21px;left:50%;transform:translateX(-50%);background:rgba(10,14,26,0.85);border:1px solid ' + hexToRgba(color, 0.5) + ';color:#e2e8f0;font-size:9px;line-height:1.3;padding:1px 4px;border-radius:4px;white-space:nowrap;text-align:center;pointer-events:none;font-family:system-ui,sans-serif;">' +
+          '<div style="font-weight:700;color:' + color + ';">' + escapeHtml(identity) + '</div>' +
+          (fields ? '<div>' + escapeHtml(fields) + '</div>' : '') +
+        '</div>';
+      }
       return L.divIcon({
         className: 'adsb-pin',
-        html: '<div ' + pulse + '>' + glyph + '</div>',
+        html: '<div style="position:relative;width:20px;height:20px;"><div ' + pulse + '>' + glyph + '</div>' + labelHtml + '</div>',
         iconSize: [20, 20],
         iconAnchor: [10, 10]
       });
@@ -10450,9 +10531,14 @@ function initPagerHoursFromStorage() {
 
     // Icon cache key — setIcon() only fires when this changes. Track is
     // bucketed to 5° so 1° jitter doesn't rebuild the divIcon every tick.
+    // When labels are on, the label text joins the key so value changes
+    // (alt/speed/…) re-render the chip.
     function _adsbIconKey(a) {
       const trackBucket = Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg / 5) : 'x';
-      return [a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0].join('|');
+      const label = adsbLabelSettings.enabled
+        ? (a.callsign || a.reg || a.hex) + '|' + buildAircraftLabelFields(a)
+        : '';
+      return [a.esTag || '-', a.emergencySquawk ? 1 : 0, trackBucket, adsbAltBand(a.altFt), a.onGround ? 1 : 0, label].join('|');
     }
 
     function buildAdsbTooltipHtml(a) {
@@ -10472,8 +10558,7 @@ function initPagerHoursFromStorage() {
         row('Altitude', a.onGround ? 'On ground' : (a.altFt != null ? a.altFt.toLocaleString() + ' ft' : null)),
         row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null),
         row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null),
-        row('Position age', Math.round(a.ageSec) + 's'),
-        row('Sources', (a.sources || []).join(', '))
+        row('Position age', Math.round(a.ageSec) + 's')
       ].join('');
       const squawkRow = a.squawk
         ? '<div style="display:flex;gap:6px;font-size:12px;line-height:1.4;"><span style="color:#94a3b8;min-width:90px;">Squawk</span><span style="font-weight:700;color:' + (sqBad ? '#ef4444' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span></div>'
@@ -10491,14 +10576,23 @@ function initPagerHoursFromStorage() {
     // Diff-update: move existing markers with setLatLng, swap icons only
     // on iconKey change, add new hexes, drop vanished ones. A full
     // clearLayers()+rebuild of ~300 divIcons every 15 s visibly flickers.
+    function _adsbSearchHay(a) {
+      return [a.callsign, a.reg, a.hex, a.type, a.squawk]
+        .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
+    }
+
     function _rebuildAdsb() {
       const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
+      const q = _adsbListSearch;
       const seen = new Set();
       let rendered = 0;
       for (const a of _adsbAircraft) {
         if (rendered >= ADSB_MAX_RENDER) break;
         if (a.onGround && !showGround) continue;
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
+        // Search filters map markers too, so the map matches the list
+        // (same behaviour as AIS).
+        if (q && !_adsbSearchHay(a).includes(q)) continue;
         rendered++;
         seen.add(a.hex);
         const key = _adsbIconKey(a);
@@ -10515,6 +10609,13 @@ function initPagerHoursFromStorage() {
             .bindTooltip(buildAdsbTooltipHtml(a), {
               className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
+          // Click → pin tooltip + highlight the list row (AIS pattern).
+          marker.on('click', (ev) => {
+            if (ev && ev.originalEvent && typeof ev.originalEvent.stopPropagation === 'function') {
+              L.DomEvent.stopPropagation(ev.originalEvent);
+            }
+            adsbPinAircraft(a.hex);
+          });
           adsbLayer.addLayer(marker);
           _adsbMarkers.set(a.hex, { marker: marker, iconKey: key });
         }
@@ -10525,6 +10626,12 @@ function initPagerHoursFromStorage() {
           _adsbMarkers.delete(hex);
         }
       }
+      // Keep the pinned tooltip open across refreshes.
+      if (_adsbPinnedHex && _adsbMarkers.has(_adsbPinnedHex)) {
+        _adsbMarkers.get(_adsbPinnedHex).marker.openTooltip();
+      }
+      adsbListRender();
+      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     }
 
     async function loadAdsbData() {
@@ -10565,6 +10672,185 @@ function initPagerHoursFromStorage() {
         console.log('✈️ ADS-B refresh stopped');
       }
     }
+
+    // ---------- Aircraft list panel (mirrors the AIS vessel list) ----------
+    function openAdsbListPanel() {
+      const p = document.getElementById('adsb-list-panel');
+      if (p) p.classList.add('open');
+      adsbListRender();
+    }
+    function closeAdsbListPanel() {
+      const p = document.getElementById('adsb-list-panel');
+      if (p) p.classList.remove('open');
+    }
+    window.closeAdsbListPanel = closeAdsbListPanel;
+
+    function adsbListOnSearch(q) {
+      _adsbListSearch = (q || '').toLowerCase().trim();
+      // _rebuildAdsb applies the same filter to the map markers and
+      // calls adsbListRender() at the end, keeping list and map in sync.
+      _rebuildAdsb();
+    }
+    window.adsbListOnSearch = adsbListOnSearch;
+
+    function adsbListGlyph(a) {
+      const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+      const color = es ? es.color : adsbAltColor(a.altFt);
+      if (!Number.isFinite(a.trackDeg)) {
+        return `<svg viewBox="0 0 24 24" width="14" height="14" style="margin:2px;"><circle cx="12" cy="12" r="6" fill="${color}" stroke="#fff" stroke-width="1.5"/></svg>`;
+      }
+      return `<svg viewBox="0 0 24 24" width="18" height="18" style="transform:rotate(${a.trackDeg}deg);"><path d="M12 1.5 L13.8 8 L22 12 L13.8 12.8 L13.8 18 L16.8 20.6 L12 19.2 L7.2 20.6 L10.2 18 L10.2 12.8 L2 12 L10.2 8 Z" fill="${color}" stroke="#fff" stroke-width="1"/></svg>`;
+    }
+
+    // Build the list. Filters by the search box (callsign / rego / hex /
+    // type / squawk) or, with no search, the current map viewport — same
+    // shape as aisListRender().
+    function adsbListRender() {
+      const body = document.getElementById('adsb-list-body');
+      const countEl = document.getElementById('adsb-list-count');
+      if (!body) return;
+      if (_adsbAircraft.length === 0) {
+        body.innerHTML = '<div class="ais-list-empty">No aircraft loaded yet.</div>';
+        if (countEl) countEl.textContent = '0';
+        return;
+      }
+      const bounds = map.getBounds();
+      const q = _adsbListSearch;
+      const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
+      const matches = [];
+      for (const a of _adsbAircraft) {
+        if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
+        // Ground targets are hidden from the map at low zoom, but a
+        // search should still find them (the user typed something
+        // specific — don't make them zoom in first).
+        if (!q && a.onGround && !showGround) continue;
+        if (!q && !bounds.contains([a.lat, a.lon])) continue;
+        if (q && !_adsbSearchHay(a).includes(q)) continue;
+        matches.push(a);
+      }
+      // Emergency services first, then by identity.
+      matches.sort((x, y) => {
+        const xe = x.esTag !== null || x.emergencySquawk ? 0 : 1;
+        const ye = y.esTag !== null || y.emergencySquawk ? 0 : 1;
+        if (xe !== ye) return xe - ye;
+        return (x.callsign || x.reg || x.hex).localeCompare(y.callsign || y.reg || y.hex);
+      });
+      if (countEl) {
+        countEl.textContent = q
+          ? `${matches.length} match${matches.length === 1 ? '' : 'es'}`
+          : `${matches.length} in view`;
+      }
+      if (matches.length === 0) {
+        body.innerHTML = '<div class="ais-list-empty">' +
+          (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No aircraft in current view.') +
+          '</div>';
+        return;
+      }
+      const cap = 250;
+      const rowsHtml = matches.slice(0, cap).map((a) => {
+        const es = a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+        const name = a.callsign || a.reg || a.hex.toUpperCase();
+        const altTxt = a.onGround ? 'On ground' : (a.altFt != null ? a.altFt.toLocaleString() + ' ft' : '');
+        const meta = [a.type, altTxt, es ? es.label : null].filter(Boolean).map((s) => escapeHtml(String(s))).join(' · ');
+        const speedTxt = a.gsKt != null ? Math.round(a.gsKt) + ' kt' : '—';
+        const selected = _adsbPinnedHex === a.hex ? ' selected' : '';
+        return `
+          <div class="ais-list-row${selected}" onclick="adsbListClickRow('${escapeHtml(a.hex)}', event)">
+            <div class="ais-list-glyph">${adsbListGlyph(a)}</div>
+            <div class="ais-list-info">
+              <div class="ais-list-name">${escapeHtml(name)}</div>
+              <div class="ais-list-meta">${meta}</div>
+            </div>
+            <div class="ais-list-speed">${speedTxt}</div>
+          </div>
+        `;
+      }).join('');
+      const overflow = matches.length > cap
+        ? `<div class="ais-list-empty">+ ${matches.length - cap} more — refine search to narrow.</div>`
+        : '';
+      body.innerHTML = rowsHtml + overflow;
+    }
+
+    function adsbListClickRow(hex, ev) {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      adsbPinAircraft(hex);
+    }
+    window.adsbListClickRow = adsbListClickRow;
+
+    // Pin an aircraft: pan to it, keep its tooltip open, highlight and
+    // scroll to its list row. Replaces any previous pin.
+    function adsbPinAircraft(hex) {
+      if (!hex) return;
+      if (_adsbPinnedHex && _adsbPinnedHex !== hex) {
+        const prev = _adsbMarkers.get(_adsbPinnedHex);
+        if (prev) prev.marker.closeTooltip();
+      }
+      _adsbPinnedHex = hex;
+      const entry = _adsbMarkers.get(hex);
+      if (entry) {
+        try {
+          map.panTo(entry.marker.getLatLng(), { animate: true, duration: 0.4 });
+          entry.marker.openTooltip();
+        } catch (e) { /* ignore */ }
+      }
+      adsbListRender();
+      const body = document.getElementById('adsb-list-body');
+      const row = body && body.querySelector('.ais-list-row.selected');
+      if (body && row && typeof body.scrollTo === 'function') {
+        const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
+        body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+      }
+    }
+
+    // Clicking the map background clears the pin (matches AIS).
+    map.on('click', () => {
+      if (_adsbPinnedHex) {
+        const entry = _adsbMarkers.get(_adsbPinnedHex);
+        if (entry) entry.marker.closeTooltip();
+        _adsbPinnedHex = null;
+        adsbListRender();
+      }
+    });
+
+    // ---------- Floating filter panel: label toggles ----------
+    window.toggleAdsbLabelsPill = function () {
+      adsbLabelSettings.enabled = !adsbLabelSettings.enabled;
+      _rebuildAdsb();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAdsbLabelFieldPill = function (key) {
+      adsbLabelSettings[key] = !adsbLabelSettings[key];
+      _rebuildAdsb();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.adsb = {
+      icon: 'fa-plane',
+      label: 'Aircraft',
+      color: '#c084fc',
+      render() {
+        const master = _ffPill(
+          adsbLabelSettings.enabled,
+          '<i class="fa-solid fa-tag"></i> Labels',
+          'toggleAdsbLabelsPill()'
+        );
+        // Field sub-toggles only appear while labels are on.
+        let fieldsHtml = '';
+        if (adsbLabelSettings.enabled) {
+          const pills = ADSB_LABEL_FIELDS.map((f) =>
+            _ffPill(adsbLabelSettings[f.key], f.label, `toggleAdsbLabelFieldPill('${f.key}')`)
+          ).join('');
+          fieldsHtml = `
+            <div class="ff-section-label">Label fields</div>
+            <div class="floating-filter-pills">${pills}</div>
+          `;
+        }
+        return `
+          <h4><i class="fa-solid fa-plane" style="color:#c084fc;"></i> Aircraft</h4>
+          <div class="floating-filter-pills">${master}</div>
+          ${fieldsHtml}
+        `;
+      },
+    };
 
     // Ground-target visibility depends on zoom; re-diff when the zoom
     // crosses the threshold while the layer is on.
