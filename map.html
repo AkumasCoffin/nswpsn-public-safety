@@ -11832,11 +11832,58 @@ function initPagerHoursFromStorage() {
       const d = new Date(epoch * 1000);
       return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     }
+    // AnyTrip-style 12h time ("6:31 am").
+    function tptTime12(epoch) {
+      if (epoch == null) return '—';
+      const d = new Date(epoch * 1000);
+      let h = d.getHours();
+      const ap = h >= 12 ? 'pm' : 'am';
+      h = h % 12 || 12;
+      return h + ':' + String(d.getMinutes()).padStart(2, '0') + ' ' + ap;
+    }
+    // AnyTrip wording: "on time" / "2m early" / "3m late".
     function tptDelayBadge(delay) {
       if (delay == null) return '';
-      if (delay >= 120) return '<span style="color:#f87171;font-weight:700;">+' + Math.round(delay / 60) + 'm</span>';
-      if (delay <= -120) return '<span style="color:#67e8f9;font-weight:700;">' + Math.round(delay / 60) + 'm</span>';
+      const m = Math.round(Math.abs(delay) / 60);
+      if (delay >= 60 && m >= 1) return '<span style="color:#fb923c;font-weight:600;">' + m + 'm late</span>';
+      if (delay <= -60 && m >= 1) return '<span style="color:#fbbf24;font-weight:600;">' + m + 'm early</span>';
       return '<span style="color:#4ade80;">on time</span>';
+    }
+    // Occupancy: buses (single value) → three person icons filled to the
+    // level; trains (per-carriage array) → AnyTrip-style numbered car
+    // boxes, first car on the left, coloured by crowding.
+    function tptOccColor(o) {
+      if (o == null) return 'rgba(148,163,184,0.25)';
+      if (o <= 1) return '#16a34a';
+      if (o <= 3) return '#d97706';
+      return '#dc2626';
+    }
+    function tptOccupancyHtml(occ) {
+      if (!occ || !occ.length || occ.every((o) => o == null)) return '';
+      if (occ.length === 1) {
+        const o = occ[0];
+        const filled = o == null ? 0 : o <= 1 ? 1 : o <= 3 ? 2 : 3;
+        const color = tptOccColor(o);
+        let html = '';
+        for (let i = 0; i < 3; i++) {
+          html += '<i class="fa-solid fa-user" style="font-size:8px;margin-right:1px;color:' +
+            (i < filled ? color : 'rgba(148,163,184,0.3)') + ';"></i>';
+        }
+        return html;
+      }
+      // Per-carriage boxes, car count descending like AnyTrip.
+      return occ.map((o, i) =>
+        '<span style="display:inline-block;width:11px;height:11px;line-height:11px;text-align:center;font-size:7px;font-weight:700;color:#fff;background:' + tptOccColor(o) + ';border-radius:2px;margin-right:1px;">' + (occ.length - i) + '</span>'
+      ).join('');
+    }
+    function tptRelRow(label, rel) {
+      if (!rel) return '';
+      const chip = tptRouteChip({ name: rel.routeName, color: rel.routeColor, textColor: rel.routeTextColor });
+      return '<div onclick="showTransportTripFromRow(\'' + escapeHtml(rel.startDate) + '\',\'' + escapeHtml(rel.tripId) + '\',' + rel.instanceNumber + ')" ' +
+        'style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:10px;color:#94a3b8;border-bottom:1px solid rgba(148,163,184,0.1);background:rgba(148,163,184,0.05);">' +
+        '<span style="letter-spacing:0.5px;font-weight:700;">' + label + ':</span> ' + chip +
+        '<span style="color:#cbd5e1;">' + escapeHtml(rel.headsign || '') + '</span>' +
+        '<i class="fa-solid fa-chevron-right" style="margin-left:auto;font-size:8px;color:#475569;"></i></div>';
     }
     function tptRouteChip(route) {
       if (!route || !route.name) return '';
@@ -11876,25 +11923,69 @@ function initPagerHoursFromStorage() {
         const now = Date.now() / 1000;
         let nextIdx = trip.stops.findIndex((s) => (s.dep ?? s.arr ?? 0) >= now - 30);
         if (nextIdx === -1) nextIdx = trip.stops.length; // trip finished
+        const railColor = (route && route.color) || '#f6891f';
+        // "39s ago: at Lakemba Station, Stand D" status line.
+        let statusHtml = '';
+        if (trip.vehicle && trip.vehicle.statusString) {
+          const ago = trip.vehicle.time ? Math.max(0, Math.round(now - trip.vehicle.time)) + 's ago: ' : '';
+          statusHtml = '<div style="padding:6px 12px;font-size:10px;color:#94a3b8;border-bottom:1px solid rgba(148,163,184,0.1);">' +
+            '<i class="fa-solid fa-location-arrow" style="margin-right:4px;color:' + railColor + ';"></i>' +
+            escapeHtml(ago + trip.vehicle.statusString) + '</div>';
+        }
+        const alertsHtml = (trip.alerts || []).map((a) =>
+          '<div style="padding:5px 12px;font-size:10px;color:#fbbf24;border-bottom:1px solid rgba(148,163,184,0.08);"><i class="fa-solid fa-circle-exclamation" style="margin-right:4px;"></i>' + escapeHtml(a) + '</div>'
+        ).join('');
         const rows = trip.stops.map((s, i) => {
           const past = i < nextIdx;
           const isNext = i === nextIdx;
-          const t = s.dep ?? s.arr;
-          return '<div ' + (isNext ? 'id="tpt-next-stop"' : '') + ' style="display:flex;gap:8px;align-items:baseline;padding:5px 12px;border-bottom:1px solid rgba(148,163,184,0.06);' +
-            (past ? 'opacity:0.45;' : '') + (isNext ? 'background:rgba(246,137,31,0.12);' : '') + '">' +
-            '<span style="font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;color:#e2e8f0;min-width:38px;">' + tptTime(t) + '</span>' +
-            '<span style="font-size:11px;min-width:44px;">' + tptDelayBadge(s.depDelay ?? s.arrDelay) + '</span>' +
-            '<span style="flex:1;font-size:12px;color:#f1f5f9;">' + escapeHtml(s.name) +
-              (s.platform ? '<span style="color:#94a3b8;font-size:10px;"> · ' + escapeHtml(s.platform) + '</span>' : '') +
-            '</span></div>';
+          const first = i === 0;
+          const t = first ? (s.dep ?? s.arr) : (s.arr ?? s.dep);
+          // pickUp/dropOff: GTFS type 1 = not available at this stop.
+          const badge = s.pickUp === 1
+            ? '<span style="background:#1e293b;color:#cbd5e1;font-size:8px;padding:1px 5px;border-radius:3px;white-space:nowrap;display:inline-block;">drop off only</span>'
+            : s.dropOff === 1
+              ? '<span style="background:#1e293b;color:#cbd5e1;font-size:8px;padding:1px 5px;border-radius:3px;white-space:nowrap;display:inline-block;">pick up only</span>'
+              : '';
+          const occHtml = tptOccupancyHtml(s.occupancy);
+          // Vehicle position marker on the progress rail.
+          const posDot = isNext
+            ? '<span style="position:absolute;left:-7px;top:10px;width:11px;height:11px;border-radius:50%;background:' + railColor + ';border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);"></span>'
+            : '';
+          return '<div ' + (isNext ? 'id="tpt-next-stop"' : '') + ' style="position:relative;display:flex;gap:8px;padding:6px 12px 6px 14px;margin-left:8px;border-left:3px solid ' +
+            (past ? 'rgba(148,163,184,0.25)' : railColor) + ';border-bottom:1px solid rgba(148,163,184,0.06);' +
+            (past ? 'opacity:0.5;' : '') + (isNext ? 'background:rgba(148,163,184,0.09);' : '') + '">' + posDot +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="display:flex;justify-content:space-between;gap:6px;">' +
+                '<span style="font-size:8px;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">' + escapeHtml(s.locality || '') + '</span>' +
+                '<span style="font-size:8px;color:#475569;">' + escapeHtml(s.code || '') + '</span>' +
+              '</div>' +
+              '<div style="font-size:12px;font-weight:700;color:#f1f5f9;line-height:1.25;">' + escapeHtml(s.name) + ' ' + badge + '</div>' +
+              (s.platform ? '<div style="font-size:10px;color:#94a3b8;">' + escapeHtml(s.platform) + '</div>' : '') +
+              (occHtml ? '<div style="margin-top:2px;">' + occHtml + '</div>' : '') +
+            '</div>' +
+            '<div style="text-align:right;flex-shrink:0;">' +
+              '<div style="font-size:8px;letter-spacing:0.5px;color:#64748b;">' + (first ? 'DEPARTS' : 'ARRIVES') + '</div>' +
+              '<div style="font-size:12px;font-weight:700;color:#e2e8f0;font-variant-numeric:tabular-nums;">' + tptTime12(t) + '</div>' +
+              '<div style="font-size:10px;">' + tptDelayBadge(first ? (s.depDelay ?? s.arrDelay) : (s.arrDelay ?? s.depDelay)) + '</div>' +
+            '</div>' +
+          '</div>';
         }).join('');
         const bodyEl = document.getElementById('transport-info-body');
         if (bodyEl) {
+          // Only auto-scroll when a DIFFERENT trip opens — the 10s
+          // refresh must not yank the user's scroll position.
+          const isNewTrip = bodyEl.dataset.tripId !== ref.tripId;
+          const keepScroll = bodyEl.scrollTop;
           bodyEl.dataset.tripId = ref.tripId;
-          bodyEl.innerHTML = rows || '<div class="ais-list-empty">No stop data for this trip.</div>';
+          bodyEl.innerHTML = statusHtml + alertsHtml +
+            tptRelRow('PRECEDED BY', trip.prev) +
+            (rows || '<div class="ais-list-empty">No stop data for this trip.</div>') +
+            tptRelRow('CONTINUES AS', trip.next);
           const next = document.getElementById('tpt-next-stop');
-          if (next && typeof bodyEl.scrollTo === 'function') {
+          if (isNewTrip && next && typeof bodyEl.scrollTo === 'function') {
             bodyEl.scrollTo({ top: Math.max(0, next.offsetTop - bodyEl.clientHeight / 3) });
+          } else if (!isNewTrip) {
+            bodyEl.scrollTop = keepScroll;
           }
         }
       } catch (e) {
@@ -11932,7 +12023,7 @@ function initPagerHoursFromStorage() {
             ? ' onclick="showTransportTripFromRow(\'' + escapeHtml(d.startDate) + '\',\'' + escapeHtml(d.tripId) + '\',' + d.instanceNumber + ')" style="cursor:pointer;"'
             : '';
           return '<div class="ais-list-row" ' + onclick + '>' +
-            '<div style="font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;color:#e2e8f0;">' + tptTime(d.dep) + '</div>' +
+            '<div style="font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;color:#e2e8f0;">' + tptTime12(d.dep) + '</div>' +
             '<div class="ais-list-info">' +
               '<div style="display:flex;align-items:center;gap:6px;">' + tptRouteChip(d.route) +
                 '<span class="ais-list-name">' + escapeHtml(d.headsign || '') + '</span></div>' +
