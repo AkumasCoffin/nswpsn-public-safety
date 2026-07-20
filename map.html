@@ -10478,6 +10478,10 @@ function initPagerHoursFromStorage() {
     // Aircraft whose tooltip is pinned open by a click; also the
     // highlighted row in the list panel.
     let _adsbPinnedHex = null;
+    // hex → '__loading__' | '__none__' | {src, link, photographer}.
+    // Populated lazily when an aircraft is pinned, via the backend
+    // Planespotters proxy (/api/adsb/photo/:hex).
+    const _adsbPhotoCache = new Map();
     // On-map labels under each plane. `enabled` is the master switch in
     // the floating filter panel; the field keys are the sub-toggles that
     // appear once labels are on. Identity (callsign/rego/hex) always
@@ -10804,6 +10808,7 @@ function initPagerHoursFromStorage() {
         const meta = [a.type, altTxt, es ? es.label : null].filter(Boolean).map((s) => escapeHtml(String(s))).join(' · ');
         const speedTxt = a.gsKt != null ? Math.round(a.gsKt) + ' kt' : '—';
         const selected = _adsbPinnedHex === a.hex ? ' selected' : '';
+        const detail = _adsbPinnedHex === a.hex ? adsbListDetailHtml(a) : '';
         return `
           <div class="ais-list-row${selected}" onclick="adsbListClickRow('${escapeHtml(a.hex)}', event)">
             <div class="ais-list-glyph">${adsbListGlyph(a)}</div>
@@ -10812,6 +10817,7 @@ function initPagerHoursFromStorage() {
               <div class="ais-list-meta">${meta}</div>
             </div>
             <div class="ais-list-speed">${speedTxt}</div>
+            ${detail}
           </div>
         `;
       }).join('');
@@ -10826,6 +10832,44 @@ function initPagerHoursFromStorage() {
       adsbPinAircraft(hex);
     }
     window.adsbListClickRow = adsbListClickRow;
+
+    // Photo card inside the pinned row. Planespotters' API terms require
+    // attribution — keep the photographer credit + link.
+    function adsbListDetailHtml(a) {
+      const cached = _adsbPhotoCache.get(a.hex);
+      let inner = '';
+      if (cached === '__loading__') {
+        inner = '<div class="row"><span class="k">Loading photo…</span></div>';
+      } else if (cached && cached !== '__none__') {
+        inner = '<img src="' + escapeHtml(cached.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';">' +
+          '<div class="row" style="font-size:10px;color:#94a3b8;">Photo © ' + escapeHtml(cached.photographer || 'unknown') +
+          (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">Planespotters.net</a>' : '') +
+          '</div>';
+      } else if (cached === '__none__') {
+        inner = '<div class="row" style="color:#94a3b8;">No photo available.</div>';
+      }
+      if (!inner) return '';
+      return '<div class="ais-list-detail" onclick="event.stopPropagation();">' + inner + '</div>';
+    }
+
+    async function adsbFetchPhoto(a) {
+      const existing = _adsbPhotoCache.get(a.hex);
+      if (existing !== undefined) return; // cached, loading, or known-none
+      _adsbPhotoCache.set(a.hex, '__loading__');
+      adsbListRender();
+      try {
+        const url = `${PROXY_BASE}/api/adsb/photo/${encodeURIComponent(a.hex)}` +
+          (a.reg ? `?reg=${encodeURIComponent(a.reg)}` : '');
+        const res = await apiFetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _adsbPhotoCache.set(a.hex, data.photo ? data.photo : '__none__');
+      } catch (e) {
+        console.warn('[adsb] photo fetch failed', e);
+        _adsbPhotoCache.set(a.hex, '__none__');
+      }
+      adsbListRender();
+    }
 
     // Pin an aircraft: pan to it, keep its tooltip open, highlight and
     // scroll to its list row. Replaces any previous pin.
@@ -10850,6 +10894,9 @@ function initPagerHoursFromStorage() {
         const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
         body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
       }
+      // Lazy-load the Planespotters photo for the pinned row.
+      const a = _adsbAircraft.find((x) => x.hex === hex);
+      if (a) adsbFetchPhoto(a);
     }
 
     // Clicking the map background clears the pin (matches AIS).
