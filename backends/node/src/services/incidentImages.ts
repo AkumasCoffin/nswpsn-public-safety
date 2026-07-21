@@ -13,12 +13,13 @@
  * the box, and @hono/node-server buffers whole bodies by default.
  */
 import { createWriteStream } from 'node:fs';
-import { mkdir, rm, unlink, rename } from 'node:fs/promises';
+import { mkdir, rm, unlink, rename, readdir, stat } from 'node:fs/promises';
 import { once } from 'node:events';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { stripMetadataToFile } from './imageMetadata.js';
 
 /** Hard per-image ceiling. Mirrored by the editor's client-side check. */
 export const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
@@ -98,7 +99,10 @@ export function sniffImageType(header: Buffer): string | null {
  * the uploads root. UUIDs and the deterministic stub ids both satisfy this.
  */
 export function isSafeIdSegment(id: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && !id.includes('..');
+  // No '.' — UUIDs and the deterministic RFS/pager stub ids don't contain
+  // one, and allowing it would let an editor-chosen incident id create a
+  // directory like `evil.php/` inside the webroot.
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id);
 }
 
 /** Absolute path of the uploads root (resolved from the backend's cwd). */
@@ -129,12 +133,14 @@ export class ImageTypeMismatchError extends Error {
 }
 
 /**
- * Stream an upload to disk, enforcing the size ceiling and verifying the
- * magic bytes as the first chunks arrive.
+ * Stream an upload to disk, enforcing the size ceiling, verifying the
+ * magic bytes as the first chunks arrive, and stripping EXIF/XMP/comment
+ * metadata before the file becomes publicly reachable.
  *
- * Writes to `<id>.<ext>.part` and renames on success, so a half-written
- * file is never reachable at its public URL. Any failure removes the
- * partial file before rethrowing.
+ * The upload lands in `<id>.<ext>.part`; the metadata-stripped rewrite is
+ * what gets renamed into place, so the raw bytes (with any GPS in them)
+ * are never served. Any failure removes both temporaries before
+ * rethrowing.
  */
 export async function saveIncidentImageStream(
   incidentId: string,
@@ -144,6 +150,13 @@ export async function saveIncidentImageStream(
 ): Promise<{ size: number; fileName: string; publicPath: string }> {
   const ext = extForContentType(contentType);
   if (!ext) throw new ImageTypeMismatchError(null);
+  // Self-guard: callers pass these from route params. Every sibling helper
+  // validates them; do so here too so a future call site can't write
+  // outside the uploads tree. The route already rejects bad ids, so this
+  // is unreachable defense-in-depth.
+  if (!isSafeIdSegment(incidentId) || !isSafeIdSegment(imageId)) {
+    throw new Error('incidentImages: unsafe id segment');
+  }
 
   const dir = incidentDir(incidentId);
   await mkdir(dir, { recursive: true });
@@ -151,6 +164,7 @@ export async function saveIncidentImageStream(
   const fileName = `${imageId}.${ext}`;
   const finalPath = path.join(dir, fileName);
   const partPath = `${finalPath}.part`;
+  const strippedPath = `${finalPath}.stripped`;
 
   const out = createWriteStream(partPath);
   let size = 0;
@@ -187,11 +201,18 @@ export async function saveIncidentImageStream(
     await new Promise<void>((resolve, reject) => {
       out.end((err?: NodeJS.ErrnoException | null) => (err ? reject(err) : resolve()));
     });
-    await rename(partPath, finalPath);
-    return { size, fileName, publicPath: publicPathFor(incidentId, fileName) };
+
+    // Scrub EXIF/GPS before the file is reachable. Throws (and so rejects
+    // the upload) if the image doesn't parse — we never publish bytes we
+    // couldn't scrub.
+    const strippedSize = await stripMetadataToFile(partPath, strippedPath, contentType);
+    await rename(strippedPath, finalPath);
+    await unlink(partPath).catch(() => undefined);
+    return { size: strippedSize, fileName, publicPath: publicPathFor(incidentId, fileName) };
   } catch (err) {
     out.destroy();
     await unlink(partPath).catch(() => undefined);
+    await unlink(strippedPath).catch(() => undefined);
     throw err;
   }
 }
@@ -216,6 +237,49 @@ export async function removeIncidentImageDir(incidentId: string): Promise<void> 
   } catch (err) {
     log.warn({ err, incidentId }, 'incident images: directory removal failed');
   }
+}
+
+/**
+ * Sweep abandoned `.part`/`.stripped` temp files older than one hour. A
+ * process kill mid-upload leaves these behind; they're never servable
+ * (the .htaccess denies them) but would otherwise leak disk forever.
+ * Called from the periodic cleanup job.
+ */
+export async function sweepStaleUploadParts(maxAgeMs = 3_600_000): Promise<number> {
+  const base = path.join(uploadsRoot(), IMAGE_SUBDIR);
+  const cutoff = Date.now() - maxAgeMs;
+  let removed = 0;
+  let dirs: string[];
+  try {
+    dirs = await readdir(base);
+  } catch {
+    return 0; // nothing uploaded yet
+  }
+  for (const dir of dirs) {
+    if (!isSafeIdSegment(dir)) continue;
+    const full = path.join(base, dir);
+    let files: string[];
+    try {
+      files = await readdir(full);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      if (!f.endsWith('.part') && !f.endsWith('.stripped')) continue;
+      const p = path.join(full, f);
+      try {
+        const st = await stat(p);
+        if (st.mtimeMs < cutoff) {
+          await unlink(p);
+          removed += 1;
+        }
+      } catch {
+        /* raced with another sweep / delete — ignore */
+      }
+    }
+  }
+  if (removed > 0) log.info({ removed }, 'incident images: swept stale upload temp files');
+  return removed;
 }
 
 /** Coerce a stored JSONB value into a typed image list. */

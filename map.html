@@ -5878,17 +5878,28 @@ function initPagerHoursFromStorage() {
       return IMAGE_ORIGIN + '/cdn-cgi/image/width=' + width +
         ',quality=78,format=auto' + filePath;
     }
+    // Only render paths that match exactly what the uploader generates.
+    // Anything else (legacy row, hand-edited DB, future import) is dropped
+    // rather than trusted — the stored value ends up in URLs and markup.
+    const _SAFE_IMAGE_PATH = /^\/uploads\/incident-images\/[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9-]{1,64}\.(jpg|png|webp|gif)$/;
+    function _isSafeImagePath(file) {
+      return typeof file === 'string' && _SAFE_IMAGE_PATH.test(file);
+    }
     function _incidentPhotosHtml(images, opts) {
-      const list = (images || []).filter((i) => i && typeof i.file === 'string');
+      const list = (images || []).filter((i) => i && _isSafeImagePath(i.file));
       if (!list.length) return '';
       const size = (opts && opts.size) || 96;
+      // No inline onclick/onerror: an HTML attribute is decoded before the
+      // JS in it is parsed, so escapeHtml() cannot safely quote a value
+      // into a handler. data-* is a plain HTML context where it can, and
+      // the listeners below are delegated.
       const tiles = list.map((img) => {
         const orig = escapeHtml(IMAGE_ORIGIN + img.file);
         const thumb = escapeHtml(cfImageUrl(img.file, 320));
         const by = img.uploaded_by_name ? 'Photo by ' + img.uploaded_by_name : 'Incident photo';
         return '<img src="' + thumb + '" alt="' + escapeHtml(by) + '" title="' + escapeHtml(by) + '"' +
-          ' loading="lazy" onclick="openIncidentPhoto(\'' + escapeHtml(img.file) + '\')"' +
-          ' onerror="this.onerror=null;this.src=\'' + orig + '\'"' +
+          ' loading="lazy" class="incident-photo"' +
+          ' data-file="' + escapeHtml(img.file) + '" data-orig="' + orig + '"' +
           ' style="width:' + size + 'px; height:' + size + 'px; object-fit:cover; border-radius:6px;' +
           ' border:1px solid rgba(148,163,184,0.3); cursor:zoom-in; display:block;">';
       }).join('');
@@ -5896,8 +5907,21 @@ function initPagerHoursFromStorage() {
         '<div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-soft); margin-bottom:0.35rem;">Photos</div>' +
         '<div style="display:flex; flex-wrap:wrap; gap:0.4rem;">' + tiles + '</div></div>';
     }
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest && e.target.closest('img.incident-photo');
+      if (t && t.dataset.file) openIncidentPhoto(t.dataset.file);
+    });
+    // 'error' doesn't bubble — listen in the capture phase.
+    document.addEventListener('error', (e) => {
+      const t = e.target;
+      if (t && t.matches && t.matches('img.incident-photo') && !t._fellBack && t.dataset.orig) {
+        t._fellBack = true;
+        t.src = t.dataset.orig;
+      }
+    }, true);
     // Minimal lightbox — one reusable overlay, Esc / click-outside closes.
     function openIncidentPhoto(filePath) {
+      if (!_isSafeImagePath(filePath)) return;
       closeIncidentPhoto();
       const overlay = document.createElement('div');
       overlay.id = 'photo-lightbox';

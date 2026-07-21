@@ -26,7 +26,7 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
-import { removeIncidentImageDir } from './incidentImages.js';
+import { removeIncidentImageDir, sweepStaleUploadParts } from './incidentImages.js';
 
 // Accept both the canonical var and the name env.sample documented for
 // years (DATA_CLEANUP_INTERVAL) — previously only _SECS was read here
@@ -428,6 +428,9 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         for (const id of purgeIds) {
           await removeIncidentImageDir(id);
         }
+        // Sweep temp files abandoned by killed uploads (belongs to no
+        // incident directory in particular; runs once per cleanup pass).
+        await sweepStaleUploadParts();
       } catch (err) {
         log.warn(
           { err: (err as Error).message },

@@ -49,7 +49,6 @@ import {
   userIncidentArchiveRow,
   type UserIncidentRow,
 } from '../sources/userIncidents.js';
-import { bodyLimit } from 'hono/body-limit';
 import { randomUUID } from 'node:crypto';
 import {
   MAX_IMAGE_BYTES,
@@ -63,6 +62,7 @@ import {
   saveIncidentImageStream,
   type IncidentImage,
 } from '../services/incidentImages.js';
+import { MetadataStripError } from '../services/imageMetadata.js';
 
 export const incidentsRouter = new Hono();
 
@@ -709,6 +709,20 @@ incidentsRouter.delete('/api/incidents/:id', async (c) => {
 // entries pointing at arbitrary paths.
 // ---------------------------------------------------------------------------
 
+// Bound concurrent uploads: each holds up to MAX_IMAGE_BYTES of streamed
+// disk + the metadata-strip pass. Without a global rate limiter this cap
+// is what stops a burst of parallel uploads from exhausting the box.
+const MAX_CONCURRENT_UPLOADS = 6;
+let _uploadsInFlight = 0;
+function acquireUploadSlot(): boolean {
+  if (_uploadsInFlight >= MAX_CONCURRENT_UPLOADS) return false;
+  _uploadsInFlight += 1;
+  return true;
+}
+function releaseUploadSlot(): void {
+  if (_uploadsInFlight > 0) _uploadsInFlight -= 1;
+}
+
 /** Read the current images array under a row lock. Returns null if the
  *  incident is missing or soft-deleted. */
 async function lockIncidentImages(
@@ -725,10 +739,13 @@ async function lockIncidentImages(
 
 incidentsRouter.post(
   '/api/incidents/:id/images',
-  bodyLimit({
-    maxSize: MAX_IMAGE_BYTES,
-    onError: (c) => c.json({ error: 'Image is too large (50MB max).' }, 413),
-  }),
+  // NOTE: deliberately NOT using hono's bodyLimit here. On a chunked
+  // request (no Content-Length) it buffers the ENTIRE body into memory
+  // before the handler runs — a 50MB heap allocation per request, which
+  // is exactly the OOM the streaming write avoids. saveIncidentImageStream
+  // enforces MAX_IMAGE_BYTES against bytes as they arrive instead, and the
+  // Content-Length pre-check below rejects an honest oversized upload for
+  // free.
   async (c) => {
     const id = c.req.param('id');
     if (!isSafeIdSegment(id)) return c.json({ error: 'Incident not found' }, 404);
@@ -740,8 +757,21 @@ incidentsRouter.post(
         415,
       );
     }
+    // Cheap early-out on an honest Content-Length; the streaming counter is
+    // the authoritative limit for chunked/lying uploads.
+    const declaredLen = Number(c.req.header('content-length'));
+    if (Number.isFinite(declaredLen) && declaredLen > MAX_IMAGE_BYTES) {
+      return c.json({ error: 'Image is too large (50MB max).' }, 413);
+    }
     const body = c.req.raw.body;
     if (!body) return c.json({ error: 'Empty upload' }, 400);
+
+    // Bound concurrent in-flight uploads so a burst of parallel 50MB
+    // streams can't pin unbounded RAM + disk at once (there is no global
+    // rate limiter in front of this).
+    if (!acquireUploadSlot()) {
+      return c.json({ error: 'Too many uploads in progress. Try again shortly.' }, 503);
+    }
 
     const imageId = randomUUID();
     let saved: Awaited<ReturnType<typeof saveIncidentImageStream>> | null = null;
@@ -799,6 +829,10 @@ incidentsRouter.post(
           [JSON.stringify([...current, entry]), id],
         );
         await client.query('COMMIT');
+        // Past this point the row references the file; a later throw must
+        // NOT unlink it (that would dangle the reference). Clear `saved`
+        // so the outer catch's cleanup skips it.
+        saved = null;
       } catch (err) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw err;
@@ -820,8 +854,19 @@ incidentsRouter.post(
           415,
         );
       }
+      // Fail-closed: we could not scrub the file's metadata, so we refuse
+      // to publish it rather than leak whatever EXIF/GPS it carries.
+      if (err instanceof MetadataStripError) {
+        log.warn({ id, err: (err as Error).message }, 'Rejected image: metadata strip failed');
+        return c.json(
+          { error: 'That image could not be processed. Try re-saving or exporting it first.' },
+          415,
+        );
+      }
       log.error({ err, id }, 'Error uploading incident image');
       return c.json({ error: 'Failed to upload image' }, 500);
+    } finally {
+      releaseUploadSlot();
     }
   },
 );
