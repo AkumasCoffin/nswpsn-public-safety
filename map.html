@@ -12221,10 +12221,10 @@ function initPagerHoursFromStorage() {
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              // Geographic width: 3px at gz12, exact ×2 per zoom above
+              // Geographic width: 2px at gz12, exact ×2 per zoom above
               // gz9; floored at 0.35px below gz9 so the network stays
               // a visible hairline at overview zooms.
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 3, 20, 768],
+              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 2, 20, 512],
               'line-offset': offsetExpr,
               'line-opacity': opacityExpr
             }
@@ -12324,12 +12324,12 @@ function initPagerHoursFromStorage() {
     }
 
     // Line weights scale with the map (mirror of the GL geographic
-    // width curve: 3px at gz12 doubling per zoom, floored at 0.35px
-    // below gz9; factor = width/3). Applied to the Leaflet fallback
-    // network + auto tracks via _applyTransportWeights.
+    // width curve: 2px at gz12 doubling per zoom, floored at 0.35px
+    // below gz9; factor = width / base-weight 3). Applied to the
+    // Leaflet fallback network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
       const gz = Math.min(20, map.getZoom() - 1);
-      const w = Math.max(0.35, 3 * Math.pow(2, gz - 12));
+      const w = Math.max(0.35, 2 * Math.pow(2, gz - 12));
       return w / 3;
     }
     let _transportLastWeightFactor = null;
@@ -12423,7 +12423,7 @@ function initPagerHoursFromStorage() {
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 3.8, 20, 972.8],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 2.6, 20, 665.6],
                   'line-offset': offsetExpr,
                   'line-opacity': 1
                 }
