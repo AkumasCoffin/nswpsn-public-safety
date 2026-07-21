@@ -35,9 +35,10 @@ const POS_FRESH_MS = 15_000;
 // Long stale window: while a refresh fails, serving the last-good
 // decode keeps matched vehicles in the TfNSW frame of reference
 // instead of snapping back to AnyTrip's (~30s ahead) interpolation —
-// the alternation is what looked like random teleporting. Entities
-// carry their own timestamps and age out at decode regardless.
-const POS_STALE_MS = 90_000;
+// the alternation is what looked like random teleporting. Sized to
+// bridge a full 2-min rate-limit park. Entities carry their own
+// timestamps and age out at decode regardless.
+const POS_STALE_MS = 300_000;
 const ALERT_FRESH_MS = 60_000;
 const ALERT_STALE_MS = 600_000;
 // Positions older than this are dropped — a stale GTFS-R entity is
@@ -236,7 +237,13 @@ export async function fetchTfnswPositions(
           path,
           async () => {
             const msg = await fetchFeed(path);
-            return msg ? decodePositions(msg, mode) : [];
+            // THROW on failure/park — returning [] here would cache an
+            // empty batch as a SUCCESSFUL refresh, dropping last-good
+            // data and flipping every matched vehicle to the AnyTrip
+            // frame (the teleport glitch). The throw makes SwrCache
+            // serve the previous batch through the stale window.
+            if (!msg) throw new Error(`feed unavailable: ${path}`);
+            return decodePositions(msg, mode);
           },
           {
             fresh: POS_FRESH_MS + feedJitterMs(path),
