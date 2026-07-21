@@ -11106,13 +11106,14 @@ function initPagerHoursFromStorage() {
     // on iconKey change, add new hexes, drop vanished ones. A full
     // clearLayers()+rebuild of ~300 divIcons every 15 s visibly flickers.
     // Closest point on a polyline (equirectangular approx — fine at
-    // metro scale). Returns { latlng, distDeg, i } (i = index of the
-    // matched segment's first vertex) or null.
+    // metro scale). Returns { latlng, distDeg, i, t } (i = index of
+    // the matched segment's first vertex, t = fraction along it, so
+    // i + t orders points along the line) or null.
     function snapToPolylinePts(pts, lat, lon) {
       if (!pts || pts.length < 2) return null;
       const cosLat = Math.cos(lat * Math.PI / 180) || 1;
       const px = lon * cosLat, py = lat;
-      let bestD = Infinity, bx2 = 0, by2 = 0, bi = 0;
+      let bestD = Infinity, bx2 = 0, by2 = 0, bi = 0, bt = 0;
       for (let i = 0; i < pts.length - 1; i++) {
         const ax = pts[i][1] * cosLat, ay = pts[i][0];
         const bx = pts[i + 1][1] * cosLat, by = pts[i + 1][0];
@@ -11123,9 +11124,9 @@ function initPagerHoursFromStorage() {
         const qx = ax + t * dx, qy = ay + t * dy;
         const ddx = px - qx, ddy = py - qy;
         const d = ddx * ddx + ddy * ddy;
-        if (d < bestD) { bestD = d; bx2 = qx; by2 = qy; bi = i; }
+        if (d < bestD) { bestD = d; bx2 = qx; by2 = qy; bi = i; bt = t; }
       }
-      return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD), i: bi };
+      return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD), i: bi, t: bt };
     }
 
     function _adsbSearchHay(a) {
@@ -11776,6 +11777,50 @@ function initPagerHoursFromStorage() {
       return best;
     }
 
+    // ---------- Marker glide (smooth movement between data ticks) ----------
+    // Positions arrive every 10s; setting them directly teleports the
+    // markers. Glide each moving marker to its new position with a
+    // shared rAF loop instead. Big jumps (first fix, reroute) and
+    // off-screen markers snap instantly.
+    const _transportGlides = new Map(); // id → glide state
+    let _transportGlideRaf = null;
+    const TRANSPORT_GLIDE_MS = 4000;
+    function _transportGlideMarker(id, marker, toLat, toLon) {
+      const cur = marker.getLatLng();
+      const dLat = toLat - cur.lat, dLon = toLon - cur.lng;
+      const d2 = dLat * dLat + dLon * dLon;
+      if (d2 < 1e-14) { _transportGlides.delete(id); return; }
+      if (d2 > 0.03 * 0.03 || document.hidden ||
+          !map.getBounds().pad(0.2).contains(cur)) {
+        _transportGlides.delete(id);
+        marker.setLatLng([toLat, toLon]);
+        return;
+      }
+      _transportGlides.set(id, {
+        marker: marker, fromLat: cur.lat, fromLon: cur.lng,
+        toLat: toLat, toLon: toLon, t0: performance.now()
+      });
+      if (!_transportGlideRaf) _transportGlideRaf = requestAnimationFrame(_transportGlideTick);
+    }
+    function _transportGlideTick(now) {
+      _transportGlideRaf = null;
+      for (const [id, g] of _transportGlides) {
+        const t = (now - g.t0) / TRANSPORT_GLIDE_MS;
+        if (t >= 1) {
+          g.marker.setLatLng([g.toLat, g.toLon]);
+          _transportGlides.delete(id);
+          continue;
+        }
+        // Near-linear (vehicles move at ~constant speed), soft landing.
+        const e = t < 0.8 ? t : 0.8 + (1 - Math.pow(1 - (t - 0.8) / 0.2, 2)) * 0.2;
+        g.marker.setLatLng([
+          g.fromLat + (g.toLat - g.fromLat) * e,
+          g.fromLon + (g.toLon - g.fromLon) * e
+        ]);
+      }
+      if (_transportGlides.size) _transportGlideRaf = requestAnimationFrame(_transportGlideTick);
+    }
+
     // Displace a lane-snapped point sideways by offset × k px.
     // MapLibre line-offset is positive to the RIGHT of line direction,
     // which in y-down screen space is the normal (-dy, dx).
@@ -11876,7 +11921,9 @@ function initPagerHoursFromStorage() {
       let snapFetchBudget = 40;
       for (const v of list) {
         seen.add(v.id);
+        const existing = _transportMarkers.get(v.id);
         let dispLat = v.lat, dispLon = v.lon;
+        let prog = null;
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
           if (shapePts) {
@@ -11884,6 +11931,21 @@ function initPagerHoursFromStorage() {
             if (s && s.distDeg < SNAP_MAX_DEG) {
               dispLat = s.latlng[0];
               dispLon = s.latlng[1];
+              prog = { shapeId: v.shapeId, p: s.i + s.t, lat: dispLat, lon: dispLon };
+              // Jitter guard: successive fetches (each zoom/pan
+              // refetches) sometimes step the reported position a few
+              // metres BACKWARD along the route, so markers oscillated
+              // while zooming. Hold the previous position for small
+              // reversals; real corrections (>~200 m) pass through.
+              const prev = existing && existing.prog;
+              if (prev && prev.shapeId === v.shapeId && prog.p < prev.p) {
+                const jLat = dispLat - prev.lat, jLon = dispLon - prev.lon;
+                if (jLat * jLat + jLon * jLon < 0.002 * 0.002) {
+                  dispLat = prev.lat;
+                  dispLon = prev.lon;
+                  prog = prev;
+                }
+              }
             }
           } else if (snapFetchBudget > 0) {
             snapFetchBudget--;
@@ -11899,10 +11961,10 @@ function initPagerHoursFromStorage() {
           dispLon = ll.lng;
         }
         const key = _transportIconKey(v);
-        const existing = _transportMarkers.get(v.id);
         if (existing) {
-          existing.marker.setLatLng([dispLat, dispLon]);
+          existing.prog = prog;
           existing.laneSnap = laneSnap;
+          _transportGlideMarker(v.id, existing.marker, dispLat, dispLon);
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
             existing.iconKey = key;
@@ -11927,13 +11989,14 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap });
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog });
         }
       }
       for (const [id, entry] of _transportMarkers) {
         if (!seen.has(id)) {
           transportLayer.removeLayer(entry.marker);
           _transportMarkers.delete(id);
+          _transportGlides.delete(id);
         }
       }
       syncTransportAutoTracks();
@@ -12117,7 +12180,10 @@ function initPagerHoursFromStorage() {
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': '#FFFFFF',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 10, 3, 12, 4],
+              // Exponential base 2 ≈ width tied to ground scale: lines
+              // shrink/grow WITH the map instead of clamping to a
+              // constant px width outside the stop range.
+              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.7, 12, 4, 15, 10],
               'line-offset': offsetExpr,
               'line-opacity': ['*', opacityExpr, 0.85]
             }
@@ -12127,7 +12193,7 @@ function initPagerHoursFromStorage() {
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.3, 10, 2.3, 12, 3],
+              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.5, 12, 3, 15, 7.5],
               'line-offset': offsetExpr,
               'line-opacity': opacityExpr
             }
@@ -12232,14 +12298,18 @@ function initPagerHoursFromStorage() {
       }
     }
 
-    // Line weights shrink as the user zooms out so the network doesn't
-    // read as fat ropes at overview zooms.
+    // Line weights scale with the map (continuous, mirrors the GL
+    // exponential width curve: gz stops 6→0.7px, 12→4px, 15→10px on
+    // the base-4 outline; factor = width/4). Applied to the Leaflet
+    // fallback network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
-      const z = map.getZoom();
-      if (z >= 14) return 1;
-      if (z >= 12) return 0.85;
-      if (z >= 10) return 0.6;
-      return 0.45;
+      const gz = map.getZoom() - 1; // GL zoom, same reference as the style
+      let w;
+      if (gz <= 6) w = 0.7;
+      else if (gz >= 15) w = 10;
+      else if (gz <= 12) w = 0.7 + 3.3 * (Math.pow(2, gz - 6) - 1) / 63;
+      else w = 4 + 6 * (Math.pow(2, gz - 12) - 1) / 7;
+      return w / 4;
     }
     let _transportLastWeightFactor = null;
     function _applyTransportWeights() {
@@ -12259,10 +12329,13 @@ function initPagerHoursFromStorage() {
 
     // Lane-offset displacement is in px, so its geographic size changes
     // with zoom — re-place lane-snapped markers from their stored snap.
+    // Cancels any in-flight glide for the marker (the re-placement is
+    // a few px; gliding it would fight the next tick's target).
     function _transportReoffsetMarkers() {
       if (!map.hasLayer(transportLayer)) return;
-      for (const entry of _transportMarkers.values()) {
+      for (const [id, entry] of _transportMarkers) {
         if (entry.laneSnap) {
+          _transportGlides.delete(id);
           entry.marker.setLatLng(_transportApplyLaneOffset(entry.laneSnap));
         }
       }
@@ -12331,7 +12404,7 @@ function initPagerHoursFromStorage() {
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': '#FFFFFF',
-                  'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2.2, 10, 3.6, 12, 5],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 1, 12, 5, 15, 12.5],
                   'line-offset': offsetExpr,
                   'line-opacity': 0.9
                 }
@@ -12341,7 +12414,7 @@ function initPagerHoursFromStorage() {
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-                  'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.6, 10, 2.8, 12, 3.8],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.7, 12, 3.8, 15, 9.5],
                   'line-offset': offsetExpr,
                   'line-opacity': 1
                 }
@@ -12479,8 +12552,11 @@ function initPagerHoursFromStorage() {
       if (laneGeo) {
         _transportHlGeo = laneGeo;
       } else {
-        const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
-        const line = L.polyline(pts, { color: color || '#f18500', weight: 4, opacity: 0.95, interactive: false });
+        // Track weight follows the zoom curve too (floored so the
+        // highlight stays legible at overview zooms).
+        const hf = Math.max(0.5, _transportWeightFactor());
+        const casing = L.polyline(pts, { color: '#0b1220', weight: 8 * hf, opacity: 0.75, interactive: false });
+        const line = L.polyline(pts, { color: color || '#f18500', weight: 4 * hf, opacity: 0.95, interactive: false });
         casing.addTo(transportLayer);
         line.addTo(transportLayer);
         _transportTrackLines = [casing, line];
