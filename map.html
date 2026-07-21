@@ -2574,9 +2574,20 @@
     // mouseout never does — tooltip stays stuck until the user clicks
     // somewhere. Closing on gesture start clears stuck tooltips.
     function _closeAllTooltips() {
+      // Pinned (clicked) AIS/aircraft tooltips are deliberately held
+      // open — a pan must not clear them, especially our own
+      // click-to-recentre pan which would otherwise close the tooltip
+      // it just opened.
+      const keep = new Set();
+      try {
+        if (_aisPinnedId && _aisMarkers.has(_aisPinnedId)) keep.add(_aisMarkers.get(_aisPinnedId));
+      } catch (e) {}
+      try {
+        if (_adsbPinnedHex && _adsbMarkers.has(_adsbPinnedHex)) keep.add(_adsbMarkers.get(_adsbPinnedHex).marker);
+      } catch (e) {}
       const closeRecursive = (layer) => {
         try {
-          if (typeof layer.closeTooltip === 'function') layer.closeTooltip();
+          if (!keep.has(layer) && typeof layer.closeTooltip === 'function') layer.closeTooltip();
         } catch (e) {}
         if (typeof layer.eachLayer === 'function') {
           try { layer.eachLayer(closeRecursive); } catch (e) {}
@@ -2664,6 +2675,55 @@
         if (marker.getTooltip()) {
           marker.openTooltip();
         }
+      }
+    }
+
+    // Pan to a marker, but leave room for its open tooltip. Centring
+    // the marker puts a tall tooltip (direction:'top') under the
+    // floating layer-toggle bar — the bar sits above the tooltip pane,
+    // so the tooltip header gets covered. Measure where the tooltip's
+    // top edge would land with the marker centred and shift the target
+    // down just enough to clear the bar. Open the tooltip BEFORE
+    // calling this so it can be measured.
+    function panToMarkerClearingUi(marker, duration) {
+      const latlng = marker.getLatLng();
+      let shift = 0;
+      try {
+        const tt = marker.getTooltip();
+        const el = tt && typeof tt.getElement === 'function' ? tt.getElement() : null;
+        if (el && marker.isTooltipOpen && marker.isTooltipOpen()) {
+          const mapRect = map.getContainer().getBoundingClientRect();
+          // Top chrome the tooltip must clear: the layer-toggle bar
+          // AND the floating search bar below it. Only count pieces
+          // that actually sit in the top third of the map (they move
+          // on some viewports).
+          let clearance = 10;
+          for (const sel of ['.layer-toggles', '#map-search-bar']) {
+            const el2 = document.querySelector(sel);
+            const r2 = el2 ? el2.getBoundingClientRect() : null;
+            if (r2 && r2.height && r2.top - mapRect.top < mapRect.height / 3) {
+              clearance = Math.max(clearance, (r2.bottom - mapRect.top) + 10);
+            }
+          }
+          // Height of the tooltip above the marker anchor, from its
+          // current on-screen position (covers any direction/offset).
+          const markerY = map.latLngToContainerPoint(latlng).y;
+          const ttTop = el.getBoundingClientRect().top - mapRect.top;
+          const aboveMarker = markerY - ttTop;
+          const centreY = mapRect.height / 2;
+          const topAtCentre = centreY - aboveMarker;
+          if (aboveMarker > 0 && topAtCentre < clearance) {
+            // Cap so the marker itself stays comfortably on screen.
+            shift = Math.min(clearance - topAtCentre, mapRect.height / 2 - 80);
+          }
+        }
+      } catch (e) { /* best effort — fall back to plain centring */ }
+      if (shift > 0) {
+        const z = map.getZoom();
+        const target = map.project(latlng, z).subtract([0, shift]);
+        map.panTo(map.unproject(target, z), { animate: true, duration: duration || 0.4 });
+      } else {
+        map.panTo(latlng, { animate: true, duration: duration || 0.4 });
       }
     }
 
@@ -10582,8 +10642,8 @@ function initPagerHoursFromStorage() {
       const marker = _aisMarkers.get(shipId);
       if (marker) {
         try {
-          map.panTo(marker.getLatLng(), { animate: true, duration: 0.4 });
           marker.openTooltip();
+          panToMarkerClearingUi(marker, 0.4);
         } catch (e) { /* ignore */ }
       }
       // The floating list panel is opened with the AIS layer toggle
@@ -11147,7 +11207,7 @@ function initPagerHoursFromStorage() {
         if (_adsbFollowActive && _adsbPinnedHex) {
           const followed = _adsbMarkers.get(_adsbPinnedHex);
           if (followed) {
-            map.panTo(followed.marker.getLatLng(), { animate: true, duration: 0.8 });
+            panToMarkerClearingUi(followed.marker, 0.8);
           } else {
             _adsbFollowActive = false;
           }
@@ -11469,8 +11529,8 @@ function initPagerHoursFromStorage() {
       const entry = _adsbMarkers.get(hex);
       if (entry) {
         try {
-          map.panTo(entry.marker.getLatLng(), { animate: true, duration: 0.4 });
           entry.marker.openTooltip();
+          panToMarkerClearingUi(entry.marker, 0.4);
         } catch (e) { /* ignore */ }
       }
       adsbListRender();
@@ -12008,6 +12068,19 @@ function initPagerHoursFromStorage() {
             pane: 'transportGlPane',
             interactive: false
           });
+          // The bridge sizes/positions its canvas from Leaflet move
+          // events — added to a still map it can paint blank until the
+          // user pans (which is why the network would only appear
+          // after clicking a train: the click pans). Nudge it after
+          // every add (incl. layer re-enables) so it draws right away.
+          gl.on('add', () => {
+            setTimeout(() => {
+              try {
+                const m = gl.getMaplibreMap && gl.getMaplibreMap();
+                if (m) { m.resize(); m.triggerRepaint(); }
+              } catch (e) { /* ignore */ }
+            }, 100);
+          });
           transportLinesLayer.addLayer(gl);
           console.log('[transport] network lines loaded (GL):', (geo.features || []).length, 'features');
         } else {
@@ -12483,6 +12556,10 @@ function initPagerHoursFromStorage() {
       if (transportRefreshInterval) return;
       transportRefreshInterval = setInterval(() => {
         if (document.hidden || !map.hasLayer(transportLayer)) return;
+        // A failed /lines fetch only reset the loaded flag — nothing
+        // retried it until the layer was toggled off/on, leaving the
+        // network invisible. No-ops once loaded.
+        if (!_transportLinesLoaded) loadTransportLines();
         loadTransportData();
         refreshTransportInfo();
       }, 10000);
