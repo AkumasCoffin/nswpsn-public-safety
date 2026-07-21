@@ -130,6 +130,25 @@ describe('decodePositions', () => {
     const msg = rt.FeedMessage.decode(encodeVehicleFeed([stale, noPos]));
     expect(_testables.decodePositions(msg, 'sydneytrains')).toHaveLength(0);
   });
+
+  it('treats ABSENT bearing/speed/occupancy as null, not protobuf default 0', () => {
+    // A feed entity with position only — protobufjs serves 0 for the
+    // missing fields via the prototype; they must decode as null so
+    // the join keeps AnyTrip's real bearing/speed/occupancy.
+    const bare = {
+      trip: { tripId: 'W123' },
+      position: { latitude: -33.87, longitude: 151.2 },
+      timestamp: NOW_SEC() - 5,
+    };
+    const msg = rt.FeedMessage.decode(encodeVehicleFeed([bare]));
+    const out = _testables.decodePositions(msg, 'sydneytrains');
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ bearing: null, speedKmh: null, occupancy: null });
+    // ...but a REAL 0 bearing (due north) survives.
+    const north = { ...bare, position: { latitude: -33.87, longitude: 151.2, bearing: 0 } };
+    const out2 = _testables.decodePositions(rt.FeedMessage.decode(encodeVehicleFeed([north])), 'sydneytrains');
+    expect(out2[0]!.bearing).toBe(0);
+  });
 });
 
 describe('routeNameFromId', () => {
@@ -195,6 +214,35 @@ describe('applyTfnswPositions', () => {
     const list = [anytripVehicle()];
     const { vehicles } = applyTfnswPositions(list, [], BBOX, 1500);
     expect(vehicles).toBe(list);
+  });
+
+  it('keeps AnyTrip bearing/speed/occupancy when TfNSW decoded them as null', () => {
+    const { vehicles } = applyTfnswPositions(
+      [anytripVehicle({ bearing: 123, speedKmh: 77, occupancy: 4 })],
+      [tfPos({ bearing: null, speedKmh: null, occupancy: null })],
+      BBOX, 1500,
+    );
+    expect(vehicles[0]).toMatchObject({ bearing: 123, speedKmh: 77, occupancy: 4 });
+  });
+
+  it('suppresses synthetic adds for a mode with AnyTrip coverage but zero matches', () => {
+    // Trip-id space mismatch: AnyTrip trains present, nothing matched →
+    // TfNSW "extras" are the same physical trains and must NOT append.
+    const { vehicles, matched, added } = applyTfnswPositions(
+      [anytripVehicle({ tripId: 'anytrip-style-id' })],
+      [tfPos({ tripId: 'gtfs-style-id' })],
+      BBOX, 1500,
+    );
+    expect(matched).toBe(0);
+    expect(added).toBe(0);
+    expect(vehicles).toHaveLength(1);
+    // ...but a mode absent from AnyTrip entirely (coverage gap) still adds.
+    const gap = applyTfnswPositions(
+      [anytripVehicle({ tripId: 'anytrip-style-id' })],
+      [tfPos({ tripId: 'M999', mode: 'metro', routeId: 'SMNW_M1' })],
+      BBOX, 1500,
+    );
+    expect(gap.added).toBe(1);
   });
 });
 
