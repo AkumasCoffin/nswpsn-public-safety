@@ -11729,7 +11729,7 @@ function initPagerHoursFromStorage() {
     // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr):
     // geographic — px offset doubles per zoom, anchored ×0.9 at gz12.
     function _transportOffsetK() {
-      const gz = Math.min(20, Math.max(4, map.getZoom() - 1));
+      const gz = Math.min(14, Math.max(4, map.getZoom() - 1));
       return 0.9 * Math.pow(2, gz - 12);
     }
 
@@ -12216,9 +12216,12 @@ function initPagerHoursFromStorage() {
       // fan is anchored to the ground like painted geometry — lanes
       // never slide relative to the map while zooming. Anchor ×0.9 at
       // gz12, proportional to the 2px line width (gap ≈ width).
+      // Clamped at gz14: past there unbounded doubling turned the
+      // stylized fan into 60px slabs pushed hundreds of px off their
+      // geometry, with feature end-caps rendering as broken blocks.
       return ['interpolate', ['exponential', 2], ['zoom'],
         4, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 / 256],
-        20, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 * 256]
+        14, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 * 4]
       ];
     }
 
@@ -12237,7 +12240,7 @@ function initPagerHoursFromStorage() {
               // Geographic width: 2px at gz12, exact ×2 per zoom above
               // gz9; floored at 0.35px below gz9 so the network stays
               // a visible hairline at overview zooms.
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 2, 20, 512],
+              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 2, 14, 8],
               'line-offset': offsetExpr,
               'line-opacity': opacityExpr
             }
@@ -12341,7 +12344,7 @@ function initPagerHoursFromStorage() {
     // below gz9; factor = width / base-weight 3). Applied to the
     // Leaflet fallback network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
-      const gz = Math.min(20, map.getZoom() - 1);
+      const gz = Math.min(14, map.getZoom() - 1);
       const w = Math.max(0.35, 2 * Math.pow(2, gz - 12));
       return w / 3;
     }
@@ -12439,7 +12442,7 @@ function initPagerHoursFromStorage() {
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 2.6, 20, 665.6],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 2.6, 14, 10.4],
                   'line-offset': offsetExpr,
                   'line-opacity': 1
                 }
