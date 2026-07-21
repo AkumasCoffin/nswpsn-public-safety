@@ -523,6 +523,15 @@ incidentsRouter.post('/api/incidents', async (c) => {
 incidentsRouter.put('/api/incidents/:id', async (c) => {
   const id = c.req.param('id');
   try {
+    const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    // Units are COLLABORATIVE dispatch info: any editor may attach or
+    // remove callsigns on any incident (incl. shared RFS/pager stubs),
+    // so a units-only update bypasses the creator-or-admin gate that
+    // protects the descriptive fields.
+    const unitsOnly =
+      Object.prototype.hasOwnProperty.call(data, 'units') &&
+      Object.keys(data).every((k) => k === 'units' || k === 'updated_at');
+
     // Ownership gate: only the creator or a site admin may edit. A
     // non-owner editor must use the suggestion flow instead.
     const gate = await withPool(async (pool) => {
@@ -535,14 +544,13 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     });
     if (isUnavailable(gate)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in gate) return c.json({ error: 'Incident not found' }, 404);
-    if (!(await userCanModifyIncident(currentUserId(c), gate.createdBy))) {
+    if (!unitsOnly && !(await userCanModifyIncident(currentUserId(c), gate.createdBy))) {
       return c.json(
         { error: 'Only the incident creator or an admin can edit it; suggest an edit instead.' },
         403,
       );
     }
 
-    const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const sets: string[] = [];
     const vals: unknown[] = [];
     for (const key of UPDATABLE_FIELDS) {

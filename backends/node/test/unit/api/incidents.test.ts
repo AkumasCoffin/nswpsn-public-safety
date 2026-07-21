@@ -261,6 +261,19 @@ describe('PUT /api/incidents/:id', () => {
     expect(await res.json()).toEqual({ callsigns: ['PUM391', 'RFS WYEE 1'] });
   });
 
+  it('allows a units-only update from a non-owner editor (collaborative field)', async () => {
+    canManageUsersMock.mockResolvedValue(false); // not an admin
+    nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ units: ['PUM391'], updated_at: new Date() }),
+    });
+    expect(res.status).toBe(200);
+    canManageUsersMock.mockResolvedValue(true);
+  });
+
   it('403s when a non-owner, non-admin tries to edit', async () => {
     canManageUsersMock.mockResolvedValue(false); // not an admin
     nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
