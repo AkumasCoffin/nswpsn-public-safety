@@ -11818,6 +11818,7 @@ function initPagerHoursFromStorage() {
     let _transportVehicles = [];
     let _transportFetchedAt = 0;
     let _transportFetchSeq = 0;
+    let _transportNetworkCounts = null; // state-wide per-mode tallies (TfNSW)
     const _transportMarkers = new Map(); // id → { marker, iconKey }
     let transportRefreshInterval = null;
     let _transportMoveTimer = null;
@@ -12074,6 +12075,7 @@ function initPagerHoursFromStorage() {
         // clear the map — deliberately NOT the ADS-B keep-stale guard.
         // Only fetch errors keep the previous markers.
         _transportVehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+        _transportNetworkCounts = data.network_counts || null;
         _transportFetchedAt = Date.now();
         _rebuildTransport();
       } catch (e) {
@@ -13386,11 +13388,16 @@ function initPagerHoursFromStorage() {
       label: 'Transport',
       color: '#f18500',
       render() {
+        // Pill counts are STATE-WIDE (TfNSW network tallies) — the
+        // viewport-scoped vehicle list only feeds the fallback when
+        // TfNSW is unavailable.
         const counts = {};
         for (const v of _transportVehicles) counts[v.mode] = (counts[v.mode] || 0) + 1;
+        const nc = _transportNetworkCounts;
         const pills = TRANSPORT_MODES.map((m) => {
           const glyph = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${m.color};vertical-align:0;"></span>`;
-          return _ffPillColored(transportModeFilter[m.key], m.color, glyph, `${m.label} (${counts[m.key] || 0})`, `toggleTransportModePill('${m.key}')`);
+          const n = (nc && nc[m.key] != null) ? nc[m.key] : (counts[m.key] || 0);
+          return _ffPillColored(transportModeFilter[m.key], m.color, glyph, `${m.label} (${n.toLocaleString()})`, `toggleTransportModePill('${m.key}')`);
         }).join('');
         const zoomNote = map.getZoom() < TRANSPORT_MIN_ZOOM
           ? '<div class="floating-filter-status">Zoom in to see live transport (vehicles from zoom ' + TRANSPORT_MIN_ZOOM + ', stations from ' + TRANSPORT_STOPS_MIN_ZOOM + ').</div>'

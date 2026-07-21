@@ -116,6 +116,11 @@ export interface TransportVehicle {
 export interface TransportVehiclesSnapshot {
   vehicles: TransportVehicle[];
   count: number;
+  /** NETWORK-WIDE active-vehicle tally per mode, from the TfNSW GTFS-R
+   *  feeds (which are state-wide, unlike the bbox-scoped vehicle list).
+   *  Absent when TfNSW is unconfigured. Drives the frontend's filter
+   *  pill counts so they show ALL vehicles, not just the viewport. */
+  network_counts?: Record<string, number>;
   fetched_at: string;
 }
 
@@ -446,9 +451,14 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
           fetchTfnswPositions(feeds),
         ]);
         let vehicles = normalizeVehicles(raw);
+        let networkCounts: Record<string, number> | undefined;
         if (tfnsw.length) {
           const joined = applyTfnswPositions(vehicles, tfnsw, bbox, MAX_VEHICLES);
           vehicles = joined.vehicles;
+          networkCounts = {};
+          for (const p of tfnsw) {
+            networkCounts[p.mode] = (networkCounts[p.mode] ?? 0) + 1;
+          }
           log.debug(
             { matched: joined.matched, added: joined.added, tfnsw: tfnsw.length },
             'transport: tfnsw position join',
@@ -457,6 +467,7 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
         return {
           vehicles,
           count: vehicles.length,
+          ...(networkCounts ? { network_counts: networkCounts } : {}),
           fetched_at: new Date().toISOString(),
         };
       },
