@@ -236,6 +236,31 @@ describe('PUT /api/incidents/:id', () => {
     expect(callWith('SELECT created_by FROM incidents')?.params).toEqual(['inc1']);
   });
 
+  it('sanitizes units (trim/uppercase/dedupe) and upserts the callsign dictionary', async () => {
+    nextResult = { rows: [{ created_by: 'editor-1' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ units: [' pum391 ', 'PUM391', 'RFS Wyee 1', 42, ''] }),
+    });
+    expect(res.status).toBe(200);
+    const upd = callWith('UPDATE incidents SET');
+    expect(upd?.sql).toContain('units = $1');
+    expect(upd?.params?.[0]).toBe(JSON.stringify(['PUM391', 'RFS WYEE 1']));
+    // Both surviving callsigns were remembered for tab completion.
+    const upserts = calls.filter((c) => c.sql.includes('INSERT INTO callsigns'));
+    expect(upserts.map((u) => u.params?.[0])).toEqual(['PUM391', 'RFS WYEE 1']);
+  });
+
+  it('GET /api/incidents/callsigns returns the dictionary', async () => {
+    nextResult = { rows: [{ callsign: 'PUM391' }, { callsign: 'RFS WYEE 1' }] };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/callsigns');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ callsigns: ['PUM391', 'RFS WYEE 1'] });
+  });
+
   it('403s when a non-owner, non-admin tries to edit', async () => {
     canManageUsersMock.mockResolvedValue(false); // not an admin
     nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };

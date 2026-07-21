@@ -3946,6 +3946,8 @@
       if (map.hasLayer(layer)) {
         map.removeLayer(layer);
         btn.classList.remove('active');
+        if (target === 'user') { removeFilterButton('user'); refreshMapAndList(); }
+        if (target === 'rfs') { removeFilterButton('rfs'); refreshMapAndList(); }
         // If turning off the pager layer, clear selection state
         if (target === 'pager') {
           document.querySelectorAll('.pager-pin-dot.pin-selected').forEach(el => {
@@ -3962,6 +3964,8 @@
       } else {
         map.addLayer(layer);
         btn.classList.add('active');
+        if (target === 'user') { addFilterButton('user'); refreshMapAndList(); }
+        if (target === 'rfs') { addFilterButton('rfs'); refreshMapAndList(); }
         // Load data when layer is first enabled
         if (target === 'hazards' && hazardsLayer.getLayers().length === 0) loadHazardsData();
         if (target === 'police' && policeLayer.getLayers().length === 0) loadPoliceData();
@@ -3990,6 +3994,10 @@
           loadTransportStops();
           loadTransportAlerts();
           startTransportRefresh();
+          // Static dock card: service alerts are the default view;
+          // vehicle/station selections replace them until cleared.
+          openTransportInfoPanel();
+          if (!_transportInfo) renderTransportAlertsPanel();
         }
       }
       if (target === 'ais') {
@@ -4858,6 +4866,10 @@ function initPagerHoursFromStorage() {
             if (!showPager) return false;
           }
         }
+
+        // RFS-specific filters (alert level + parsed incident type)
+        // from the floating RFS filter panel.
+        if (item.source === 'rfs' && !_rfsPassesFilters(item)) return false;
 
         if (item.source !== 'pager') {
           item.agenciesList.forEach(a => counts.agency[a] = (counts.agency[a] || 0) + 1);
@@ -6154,6 +6166,9 @@ function initPagerHoursFromStorage() {
           <strong>Status:</strong> ${escapeHtml(status)}<br>
           <strong>Type:</strong> ${escapeHtml(typeRaw)}<br>
           <strong>Size:</strong> ${escapeHtml(size)}
+          ${(Array.isArray(data.units) && data.units.length)
+            ? '<div style="margin-top:0.45rem;"><strong>Units:</strong> ' + data.units.map(u => '<span style="display:inline-block;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#bbf7d0;font-size:0.72rem;font-weight:600;padding:0.1rem 0.5rem;border-radius:999px;margin:0 0.25rem 0.2rem 0;">' + escapeHtml(u) + '</span>').join('') + '</div>'
+            : ''}
         </div>
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log</h3>
         ${updatesHtml}
@@ -9790,6 +9805,120 @@ function initPagerHoursFromStorage() {
       },
     };
 
+    // ---------- RFS incident filters ----------
+    // Alert-level buckets + incident types parsed from the feed's
+    // description ("TYPE: Grass fire"). Types are discovered
+    // dynamically — the feed's taxonomy (Bush Fire, Grass Fire, Hazard
+    // Reduction, Burn off, MVA/Transport, Fire Alarm...) drifts, so a
+    // hardcoded list would rot.
+    const RFS_ALERT_BUCKETS = [
+      { key: 'emergency', label: 'Emergency Warning', color: '#ef4444' },
+      { key: 'watchact',  label: 'Watch and Act',     color: '#f97316' },
+      { key: 'advice',    label: 'Advice',            color: '#3b82f6' },
+      { key: 'other',     label: 'Not Applicable',    color: '#94a3b8' }
+    ];
+    const rfsAlertFilter = { emergency: true, watchact: true, advice: true, other: true };
+    const rfsTypeFilter = {}; // typeKey → bool; absent = on
+    function rfsAlertBucket(item) {
+      const lvl = ((item.rawDetails && item.rawDetails['ALERT LEVEL']) || '').toLowerCase();
+      if (lvl.includes('emergency')) return 'emergency';
+      if (lvl.includes('watch')) return 'watchact';
+      if (lvl.includes('advice')) return 'advice';
+      return 'other';
+    }
+    function rfsTypeKey(item) {
+      return (((item.rawDetails && item.rawDetails['TYPE']) || 'Other') + '').trim().toLowerCase() || 'other';
+    }
+    function _rfsPassesFilters(item) {
+      if (!rfsAlertFilter[rfsAlertBucket(item)]) return false;
+      if (rfsTypeFilter[rfsTypeKey(item)] === false) return false;
+      return true;
+    }
+    window.toggleRfsAlertPill = function (key) {
+      rfsAlertFilter[key] = !rfsAlertFilter[key];
+      refreshMapAndList();
+      refreshActiveFilterPanel();
+    };
+    window.toggleRfsTypePill = function (key) {
+      rfsTypeFilter[key] = rfsTypeFilter[key] === false;
+      refreshMapAndList();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.rfs = {
+      icon: 'fa-fire',
+      label: 'RFS Incidents',
+      color: '#ef4444',
+      render() {
+        const rfsItems = unifiedIncidents.filter((i) => i.source === 'rfs');
+        const alertCounts = {};
+        const typeCounts = {}; // key → { label, n }
+        for (const it of rfsItems) {
+          const b = rfsAlertBucket(it);
+          alertCounts[b] = (alertCounts[b] || 0) + 1;
+          const k = rfsTypeKey(it);
+          const label = ((it.rawDetails && it.rawDetails['TYPE']) || 'Other') + '';
+          if (!typeCounts[k]) typeCounts[k] = { label: label, n: 0 };
+          typeCounts[k].n += 1;
+        }
+        const alertPills = RFS_ALERT_BUCKETS.map((b) => {
+          const glyph = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color};vertical-align:0;"></span>`;
+          return _ffPillColored(rfsAlertFilter[b.key], b.color, glyph, `${b.label} (${alertCounts[b.key] || 0})`, `toggleRfsAlertPill('${b.key}')`);
+        }).join('');
+        const typePills = Object.keys(typeCounts).sort().map((k) =>
+          _ffPill(rfsTypeFilter[k] !== false, `${escapeHtml(typeCounts[k].label)} (${typeCounts[k].n})`, `toggleRfsTypePill('${k}')`)
+        ).join('');
+        return `
+          <h4><i class="fa-solid fa-fire" style="color:#ef4444;"></i> RFS Incidents</h4>
+          <div class="ff-section-label">Alert level</div>
+          <div class="floating-filter-pills">${alertPills}</div>
+          <div class="ff-section-label">Incident type</div>
+          <div class="floating-filter-pills">${typePills || '<span style="font-size:10px;color:#64748b;">No incidents loaded</span>'}</div>
+        `;
+      },
+    };
+
+    // ---------- User incident filters ----------
+    // Pills over the SAME filterState.agency / filterState.type the
+    // incident-list sidebar uses, so the two stay in sync.
+    window.toggleUserAgencyPill = function (key) {
+      filterState.agency[key] = !filterState.agency[key];
+      refreshMapAndList();
+      refreshActiveFilterPanel();
+    };
+    window.toggleUserTypePill = function (key) {
+      filterState.type[key] = !filterState.type[key];
+      refreshMapAndList();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.user = {
+      icon: 'fa-user',
+      label: 'User Incidents',
+      color: '#a855f7',
+      render() {
+        const userItems = unifiedIncidents.filter((i) => i.source === 'user');
+        const agencyCounts = {};
+        const typeCounts = {};
+        for (const it of userItems) {
+          (it.agenciesList || []).forEach((a) => { agencyCounts[a] = (agencyCounts[a] || 0) + 1; });
+          (it.typesList || []).forEach((t) => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
+        }
+        const agencyPills = Object.keys(filterState.agency).sort().map((a) =>
+          _ffPill(filterState.agency[a] === true, `${escapeHtml(a)} (${agencyCounts[a] || 0})`, `toggleUserAgencyPill('${a.replace(/'/g, "\\'")}')`)
+        ).join('');
+        const typeKeys = Object.keys(typeCounts).sort();
+        const typePills = typeKeys.map((t) =>
+          _ffPill(filterState.type[t] !== false, `${escapeHtml(t)} (${typeCounts[t]})`, `toggleUserTypePill('${t.replace(/'/g, "\\'")}')`)
+        ).join('');
+        return `
+          <h4><i class="fa-solid fa-user" style="color:#a855f7;"></i> User Incidents</h4>
+          <div class="ff-section-label">Responding agency</div>
+          <div class="floating-filter-pills">${agencyPills || '<span style="font-size:10px;color:#64748b;">No incidents loaded</span>'}</div>
+          <div class="ff-section-label">Incident type</div>
+          <div class="floating-filter-pills">${typePills || '<span style="font-size:10px;color:#64748b;">No incidents loaded</span>'}</div>
+        `;
+      },
+    };
+
     // AIS Ships — type and status pills mirror the inline checkbox state
     // so the existing toggleAisType / toggleAisStatus handlers keep
     // working on mobile. Counts reflect the entire fetched fleet, not
@@ -12963,14 +13092,22 @@ function initPagerHoursFromStorage() {
       const p = document.getElementById('transport-info-panel');
       if (p) p.classList.add('open');
     }
-    // No close button — the panel opens when a vehicle/station/alerts
-    // pill is clicked and closes on a map-background click (below),
-    // matching the AIS/aircraft pin-clearing pattern.
+    // Static dock card (no close button, like the vessels/aircraft
+    // list): while the transport layer is on the panel always shows —
+    // service alerts by default, replaced by the trip/departures view
+    // when a vehicle or station is clicked. A map-background click
+    // clears the selection back to the alerts view; only the layer
+    // toggle hides the panel.
     function closeTransportInfo() {
-      const p = document.getElementById('transport-info-panel');
-      if (p) p.classList.remove('open');
       _transportInfo = null;
       clearTransportTrack();
+      const p = document.getElementById('transport-info-panel');
+      if (map.hasLayer(transportLayer)) {
+        if (p) p.classList.add('open');
+        renderTransportAlertsPanel();
+      } else if (p) {
+        p.classList.remove('open');
+      }
     }
     window.closeTransportInfo = closeTransportInfo;
     map.on('click', () => {
@@ -13244,7 +13381,9 @@ function initPagerHoursFromStorage() {
         _transportAlertsConfigured = data.configured !== false;
         _transportAlertsAt = Date.now();
         if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
-        if (_transportInfo && _transportInfo.kind === 'alerts') renderTransportAlertsPanel();
+        // Alerts are the static panel's default view — refresh it when
+        // no vehicle/station selection is showing.
+        if (!_transportInfo && map.hasLayer(transportLayer)) renderTransportAlertsPanel();
       } catch (e) {
         console.warn('[transport] alerts failed to load:', e);
       }
@@ -13270,6 +13409,7 @@ function initPagerHoursFromStorage() {
       if (!body) return;
       _setTransportInfoHeader('fa-triangle-exclamation', '#f59e0b', 'Service alerts',
         _transportAlerts.length + ' active');
+      delete body.dataset.tripId;
       if (!_transportAlerts.length) {
         body.innerHTML = '<div class="ais-list-empty">No current service alerts.</div>';
         return;
@@ -13279,8 +13419,13 @@ function initPagerHoursFromStorage() {
         const d = new Date(sec * 1000);
         return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
       };
-      const rows = _transportAlerts.map((a) => {
+      // Most recent first, with alerts that started in the last 24h
+      // visually highlighted.
+      const nowSec = Date.now() / 1000;
+      const sorted = _transportAlerts.slice().sort((a, b) => (b.start || 0) - (a.start || 0));
+      const rows = sorted.map((a) => {
         const sev = _TPT_ALERT_SEV[a.severity] || _TPT_ALERT_SEV.UNKNOWN_SEVERITY;
+        const isRecent = a.start != null && nowSec - a.start < 24 * 3600 && a.start <= nowSec;
         const routeChips = (a.routes || []).map(_tptAlertRouteName).filter(Boolean)
           .filter((v, i, arr) => arr.indexOf(v) === i).slice(0, 6)
           .map((n) => '<span style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;">' + escapeHtml(n) + '</span>')
@@ -13296,8 +13441,12 @@ function initPagerHoursFromStorage() {
         const link = a.url
           ? ' <a href="' + escapeHtml(a.url) + '" target="_blank" rel="noopener" style="color:#38bdf8;font-size:9px;">more</a>'
           : '';
-        return '<div style="padding:8px 12px;border-bottom:1px solid rgba(148,163,184,0.1);border-left:3px solid ' + sev + ';">' +
-          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">' + effect + routeChips +
+        const newBadge = isRecent
+          ? '<span style="background:' + sev + ';color:#fff;font-size:8px;font-weight:800;letter-spacing:0.5px;padding:1px 5px;border-radius:3px;">NEW</span>'
+          : '';
+        return '<div style="padding:8px 12px;border-bottom:1px solid rgba(148,163,184,0.1);border-left:3px solid ' + sev + ';' +
+            (isRecent ? 'background:rgba(245,158,11,0.07);' : '') + '">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">' + newBadge + effect + routeChips +
             (period ? '<span style="color:#64748b;font-size:9px;margin-left:auto;">' + escapeHtml(period) + '</span>' : '') +
           '</div>' +
           '<div style="color:#e2e8f0;font-size:11px;font-weight:600;line-height:1.4;">' + escapeHtml(a.header) + link + '</div>' +
@@ -13308,10 +13457,8 @@ function initPagerHoursFromStorage() {
     }
 
     window.showTransportAlerts = function () {
-      _transportInfo = { kind: 'alerts' };
-      clearTransportTrack();
-      openTransportInfoPanel();
-      renderTransportAlertsPanel();
+      // Alerts are the panel's default view — just clear any selection.
+      closeTransportInfo();
       if (Date.now() - _transportAlertsAt > 60_000) loadTransportAlerts();
     };
 
@@ -13402,11 +13549,9 @@ function initPagerHoursFromStorage() {
         const zoomNote = map.getZoom() < TRANSPORT_MIN_ZOOM
           ? '<div class="floating-filter-status">Zoom in to see live transport (vehicles from zoom ' + TRANSPORT_MIN_ZOOM + ', stations from ' + TRANSPORT_STOPS_MIN_ZOOM + ').</div>'
           : '';
-        // Alerts row only when the backend has a TfNSW key configured.
-        const sevCount = _transportAlerts.length;
-        const alertsRow = _transportAlertsConfigured === false ? '' : `
-          <div class="ff-section-label">Disruptions</div>
-          <div class="floating-filter-pills">${_ffPillColored(sevCount > 0, '#f59e0b', '<i class="fa-solid fa-triangle-exclamation"></i>', `Service alerts (${sevCount})`, 'showTransportAlerts()')}</div>`;
+        // Service alerts live in the static right-dock panel now (its
+        // default view) — no pill needed here.
+        const alertsRow = '';
         // Field sub-toggles only appear while labels are on (aircraft
         // panel pattern).
         let labelFieldsHtml = '';
@@ -15159,6 +15304,8 @@ function initPagerHoursFromStorage() {
       // (e.g. URL deep-link restoration paths).
       if (typeof addFilterButton === 'function') {
         const _layerByKey = {
+          user: typeof userLayer !== 'undefined' ? userLayer : null,
+          rfs: typeof rfsLayer !== 'undefined' ? rfsLayer : null,
           firms: typeof firmsLayer !== 'undefined' ? firmsLayer : null,
           hazards: typeof hazardsLayer !== 'undefined' ? hazardsLayer : null,
           police: typeof policeLayer !== 'undefined' ? policeLayer : null,
@@ -15192,6 +15339,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=9"></script>
+  <script src="map-editor-module.js?v=10"></script>
 </body>
 </html>
