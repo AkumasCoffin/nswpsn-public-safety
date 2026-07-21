@@ -11890,17 +11890,13 @@ function initPagerHoursFromStorage() {
             fetchTransportShapePts(v.shapeId); // warms cache; snaps next tick
           }
         }
-        // Second stage: shift onto the RENDERED lane (GL px offset).
-        // Suppressed for the vehicle whose trip track is highlighted —
-        // that marker rides the centreline highlight instead.
-        let laneSnap = null;
-        if (!(v.shapeId && v.shapeId === _transportTrackShapeId)) {
-          laneSnap = _transportLaneSnap(v, dispLat, dispLon);
-          if (laneSnap) {
-            const ll = _transportApplyLaneOffset(laneSnap);
-            dispLat = ll.lat;
-            dispLon = ll.lng;
-          }
+        // Second stage: shift onto the RENDERED lane (GL px offset) —
+        // vehicles ride the drawn lines, highlighted or not.
+        const laneSnap = _transportLaneSnap(v, dispLat, dispLon);
+        if (laneSnap) {
+          const ll = _transportApplyLaneOffset(laneSnap);
+          dispLat = ll.lat;
+          dispLon = ll.lng;
         }
         const key = _transportIconKey(v);
         const existing = _transportMarkers.get(v.id);
@@ -12095,16 +12091,22 @@ function initPagerHoursFromStorage() {
     // line when zoomed out. NOTE: the Leaflet bridge runs the GL map at
     // Leaflet zoom − 1, so these stops are GL zooms (Leaflet 9/12/14 →
     // GL 8/11/13).
-    function _transportGlStyle(geo) {
-      // AnyTrip's offsets place some corridor-mates fractions of a
-      // pixel apart, which reads as overlap at 3px line width — scale
-      // all offsets ×1.5 at full zoom so parallel lanes get clear
-      // spacing, converging proportionally when zoomed out.
-      const offsetExpr = ['interpolate', ['linear'], ['zoom'],
+    // AnyTrip's offsets place some corridor-mates fractions of a
+    // pixel apart, which reads as overlap at 3px line width — scale
+    // all offsets ×1.5 at full zoom so parallel lanes get clear
+    // spacing, converging proportionally when zoomed out. Shared by
+    // the network layers and the trip-highlight layers so both render
+    // lanes in exactly the same place.
+    function _transportGlOffsetExpr() {
+      return ['interpolate', ['linear'], ['zoom'],
         8, ['*', ['coalesce', ['get', 'offset'], 0], 0.4],
         10, ['*', ['coalesce', ['get', 'offset'], 0], 0.9],
         12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35]
       ];
+    }
+
+    function _transportGlStyle(geo) {
+      const offsetExpr = _transportGlOffsetExpr();
       const opacityExpr = ['coalesce', ['get', 'opacity'], 1];
       return {
         version: 8,
@@ -12162,7 +12164,7 @@ function initPagerHoursFromStorage() {
           const latlngs = coords.map((c) => [c[1], c[0]]);
           const opacity = p.opacity != null ? p.opacity : 1;
           const wf = _transportWeightFactor();
-          const df = _transportNetworkDimmed ? 0 : 1;
+          const df = _transportNetworkDimmed ? 0.15 : 1;
           const ol = L.polyline(latlngs, { color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           ol._tptBaseWeight = 4;
@@ -12292,13 +12294,15 @@ function initPagerHoursFromStorage() {
       return pts;
     }
 
-    // ---------- Focus state: hide the network behind a trip track ----------
-    // Which parallel lane a trip uses isn't derivable from the data,
-    // so the centreline highlight can never perfectly overlay the
-    // offset GL lane — a mere dim still read as "a new line beside the
-    // old ones". While a trip track is shown the network hides
-    // entirely: the highlighted route is the only line on the map.
+    // ---------- Focus state: dim the network behind a highlighted trip ----------
+    // While a trip is highlighted the network dims to 15% and the
+    // exact lane features the trip rides are RE-RENDERED at full
+    // strength in a dedicated GL highlight source — same geometry,
+    // same offset expression, so the highlight sits pixel-perfect on
+    // the drawn lanes instead of adding a misaligned centreline copy.
     let _transportNetworkDimmed = false;
+    let _transportHlGeo = null; // FeatureCollection of the trip's lane features
+    const _TPT_EMPTY_FC = { type: 'FeatureCollection', features: [] };
     function _applyTransportNetworkDim() {
       const dimmed = _transportNetworkDimmed;
       const OP = ['coalesce', ['get', 'opacity'], 1]; // per-feature opacity, as in _transportGlStyle
@@ -12309,16 +12313,47 @@ function initPagerHoursFromStorage() {
             // setPaintProperty on a missing layer fails SILENTLY (error
             // event, no throw) — the getLayer gate is the real guard.
             if (!glMap.getLayer('lines-colour')) return;
-            const vis = dimmed ? 'none' : 'visible';
-            glMap.setLayoutProperty('lines-colour', 'visibility', vis);
-            glMap.setLayoutProperty('lines-outline', 'visibility', vis);
+            glMap.setPaintProperty('lines-colour', 'line-opacity',
+              dimmed ? ['*', OP, 0.15] : OP);
+            glMap.setPaintProperty('lines-outline', 'line-opacity',
+              dimmed ? ['*', OP, 0.85 * 0.15] : ['*', OP, 0.85]);
+            // Highlight source/layers live on top of the dimmed
+            // network; created once per GL map, cleared via empty data.
+            const hlData = (dimmed && _transportHlGeo) ? _transportHlGeo : _TPT_EMPTY_FC;
+            const src = glMap.getSource('tpt-hl');
+            if (src) {
+              src.setData(hlData);
+            } else {
+              glMap.addSource('tpt-hl', { type: 'geojson', data: hlData });
+              const offsetExpr = _transportGlOffsetExpr();
+              glMap.addLayer({
+                id: 'tpt-hl-outline', type: 'line', source: 'tpt-hl',
+                layout: { 'line-cap': 'round', 'line-join': 'bevel' },
+                paint: {
+                  'line-color': '#FFFFFF',
+                  'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2.2, 10, 3.6, 12, 5],
+                  'line-offset': offsetExpr,
+                  'line-opacity': 0.9
+                }
+              });
+              glMap.addLayer({
+                id: 'tpt-hl-colour', type: 'line', source: 'tpt-hl',
+                layout: { 'line-cap': 'round', 'line-join': 'bevel' },
+                paint: {
+                  'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
+                  'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.6, 10, 2.8, 12, 3.8],
+                  'line-offset': offsetExpr,
+                  'line-opacity': 1
+                }
+              });
+            }
           };
           if (glMap.getLayer('lines-colour')) apply();
           else glMap.once('load', apply);
         }
       } catch (e) { /* ignore */ }
       // Leaflet-drawn network fallback + auto tracks.
-      const f = dimmed ? 0 : 1;
+      const f = dimmed ? 0.15 : 1;
       const applyLeaflet = (l) => {
         if (l instanceof L.LayerGroup) { l.eachLayer(applyLeaflet); return; }
         if (l._tptBaseOpacity != null && typeof l.setStyle === 'function') {
@@ -12329,9 +12364,57 @@ function initPagerHoursFromStorage() {
       transportAutoTracksLayer.eachLayer(applyLeaflet);
     }
     function _setTransportNetworkDim(d) {
-      if (_transportNetworkDimmed === d) return;
       _transportNetworkDimmed = d;
-      _applyTransportNetworkDim();
+      _applyTransportNetworkDim(); // idempotent — also refreshes highlight data
+    }
+
+    // Which network lane features does this trip ride? Sample each
+    // candidate lane (route-id / colour matched, like vehicle lane
+    // snapping) against the trip shape; lanes mostly within ~120 m of
+    // the shape are the corridor sections the trip traverses. Returns
+    // a FeatureCollection for the GL highlight, or null when the
+    // network doesn't cover this trip (bus/regional/fallback) — the
+    // caller then falls back to the centreline track.
+    function _transportHlLanesForShape(shapeId, shapePts, color) {
+      if (_transportNetworkMode !== 'gl' || !_transportLanes) return null;
+      const v = _transportVehicles.find((x) => x.shapeId === shapeId);
+      let cands = null;
+      if (v && TRANSPORT_MODE_BY_KEY[v.mode]) {
+        if (!TRANSPORT_TILED_MODES[v.mode]) return null;
+        cands = _transportLaneCandidates(v);
+      } else if (color) {
+        const c = String(color).toUpperCase();
+        cands = _transportLanes.filter((l) => l.stroke === c);
+      }
+      if (!cands || !cands.length) return null;
+      let sMinLat = Infinity, sMaxLat = -Infinity, sMinLon = Infinity, sMaxLon = -Infinity;
+      for (const p of shapePts) {
+        if (p[0] < sMinLat) sMinLat = p[0];
+        if (p[0] > sMaxLat) sMaxLat = p[0];
+        if (p[1] < sMinLon) sMinLon = p[1];
+        if (p[1] > sMaxLon) sMaxLon = p[1];
+      }
+      const feats = [];
+      for (const lane of cands) {
+        if (lane.minLat > sMaxLat + 0.01 || lane.maxLat < sMinLat - 0.01 ||
+            lane.minLon > sMaxLon + 0.01 || lane.maxLon < sMinLon - 0.01) continue;
+        const n = lane.pts.length;
+        const stride = Math.max(1, Math.floor(n / 40));
+        let hit = 0, total = 0;
+        for (let i = 0; i < n; i += stride) {
+          total++;
+          const s = snapToPolylinePts(shapePts, lane.pts[i][0], lane.pts[i][1]);
+          if (s && s.distDeg < 0.0012) hit++;
+        }
+        if (total && hit / total >= 0.65) {
+          feats.push({
+            type: 'Feature',
+            properties: { stroke: lane.stroke, offset: lane.offset },
+            geometry: { type: 'LineString', coordinates: lane.pts.map((p) => [p[1], p[0]]) }
+          });
+        }
+      }
+      return feats.length ? { type: 'FeatureCollection', features: feats } : null;
     }
 
     let _transportTrackShapeId = null;
@@ -12341,10 +12424,8 @@ function initPagerHoursFromStorage() {
         _transportTrackLines = null;
       }
       _transportTrackShapeId = null;
+      _transportHlGeo = null;
       _setTransportNetworkDim(false);
-      // Re-place markers: the highlighted vehicle hops back onto its
-      // offset lane.
-      _rebuildTransport();
     }
 
     // Shared shape fetch (client-cached decoded points). Returns null on
@@ -12382,23 +12463,30 @@ function initPagerHoursFromStorage() {
 
     async function showTransportTrack(shapeId, color) {
       // The 10s info refresh re-fires this — skip if the same track is
-      // already drawn so the polyline doesn't blink.
-      if (shapeId && shapeId === _transportTrackShapeId && _transportTrackLines) return;
+      // already drawn so the highlight doesn't blink.
+      if (shapeId && shapeId === _transportTrackShapeId && (_transportTrackLines || _transportHlGeo)) return;
       clearTransportTrack();
       if (!shapeId) return;
       _transportTrackShapeId = shapeId;
       const pts = await fetchTransportShapePts(shapeId);
       if (!pts || _transportTrackShapeId !== shapeId) return;
-      const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
-      const line = L.polyline(pts, { color: color || '#f18500', weight: 4, opacity: 0.95, interactive: false });
-      casing.addTo(transportLayer);
-      line.addTo(transportLayer);
-      _transportTrackLines = [casing, line];
-      // Focus: dim the network (only after the track actually drew)
-      // and re-place markers so the highlighted vehicle hops onto the
-      // centreline track immediately, not at the next 10s tick.
+      // Preferred: re-render the network's OWN lane features for this
+      // trip at full strength (exact overlay — no misaligned copy).
+      // Fallback: the raw centreline track, for trips the network
+      // doesn't draw (buses, regional, WebGL-less clients) — there the
+      // auto-track it overlays uses the same un-offset shape anyway.
+      const laneGeo = _transportHlLanesForShape(shapeId, pts, color);
+      if (laneGeo) {
+        _transportHlGeo = laneGeo;
+      } else {
+        const casing = L.polyline(pts, { color: '#0b1220', weight: 8, opacity: 0.75, interactive: false });
+        const line = L.polyline(pts, { color: color || '#f18500', weight: 4, opacity: 0.95, interactive: false });
+        casing.addTo(transportLayer);
+        line.addTo(transportLayer);
+        _transportTrackLines = [casing, line];
+      }
+      // Dim only after the highlight actually drew.
       _setTransportNetworkDim(true);
-      _rebuildTransport();
     }
 
     // ---------- Auto route tracks for visible vehicles ----------
@@ -12475,8 +12563,8 @@ function initPagerHoursFromStorage() {
           // are single-route shapes.
           const wf = _transportWeightFactor();
           // A track finishing its fetch while the focus state is
-          // active must be created hidden.
-          const df = _transportNetworkDimmed ? 0 : 1;
+          // active must be created dimmed.
+          const df = _transportNetworkDimmed ? 0.15 : 1;
           const tOl = L.polyline(pts, { color: '#FFFFFF', weight: 4 * wf, opacity: 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           tOl._tptBaseWeight = 4;
