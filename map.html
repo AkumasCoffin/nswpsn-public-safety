@@ -4948,7 +4948,7 @@ function initPagerHoursFromStorage() {
                 }
               };
               // For merged user incidents, show the attached pagerDetails
-              handleMarkerTap(marker, () => showPagerDetails({ rawDetails: item.pagerDetails }), selectionAction);
+              handleMarkerTap(marker, () => showIncidentDetails(item.rawDetails, item.pagerDetails), selectionAction);
             });
             return;
           }
@@ -5000,7 +5000,7 @@ function initPagerHoursFromStorage() {
                   }
                 }
               };
-              handleMarkerTap(marker, () => showPagerDetails({ rawDetails: item.pagerDetails }), selectionAction);
+              handleMarkerTap(marker, () => showIncidentDetails(item.rawDetails, item.pagerDetails), selectionAction);
             });
             return;
           }
@@ -5199,7 +5199,7 @@ function initPagerHoursFromStorage() {
                 }
               };
               // For merged RFS incidents, show the attached pagerDetails
-              handleMarkerTap(marker, () => showPagerDetails({ rawDetails: item.pagerDetails }), selectionAction);
+              handleMarkerTap(marker, () => showRfsDetails(item), selectionAction);
             });
             return;
           }
@@ -5252,7 +5252,7 @@ function initPagerHoursFromStorage() {
                   }
                 }
               };
-              handleMarkerTap(marker, () => showPagerDetails({ rawDetails: item.pagerDetails }), selectionAction);
+              handleMarkerTap(marker, () => showRfsDetails(item), selectionAction);
             });
             return;
           }
