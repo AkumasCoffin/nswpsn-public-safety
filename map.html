@@ -11669,6 +11669,7 @@ function initPagerHoursFromStorage() {
     ];
     let _transportVehicles = [];
     let _transportFetchedAt = 0;
+    let _transportFetchSeq = 0;
     const _transportMarkers = new Map(); // id → { marker, iconKey }
     let transportRefreshInterval = null;
     let _transportMoveTimer = null;
@@ -11910,10 +11911,17 @@ function initPagerHoursFromStorage() {
       }
       const feeds = transportEnabledFeeds();
       if (!feeds) { _clearTransportVehicleMarkers(); return; }
+      // Pans + ticks race: two fetches with different bbox URLs can
+      // resolve out of order, and the backend's per-cell caches were
+      // built at different times — an older response landing last
+      // yanked every vehicle BACKWARD then forward again on the next
+      // tick. Only the newest-issued fetch may apply.
+      const seq = ++_transportFetchSeq;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/vehicles?` + transportBboxParams() + '&feeds=' + feeds);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
+        if (seq !== _transportFetchSeq) return; // superseded by a newer fetch
         // Empty is a legitimate viewport state (rural, 2am) and must
         // clear the map — deliberately NOT the ADS-B keep-stale guard.
         // Only fetch errors keep the previous markers.
@@ -11962,15 +11970,17 @@ function initPagerHoursFromStorage() {
               dispLat = s.latlng[0];
               dispLon = s.latlng[1];
               prog = { shapeId: v.shapeId, p: s.i + s.t, lat: dispLat, lon: dispLon };
-              // Jitter guard: successive fetches (each zoom/pan
-              // refetches) sometimes step the reported position a few
-              // metres BACKWARD along the route, so markers oscillated
-              // while zooming. Hold the previous position for small
-              // reversals; real corrections (>~200 m) pass through.
+              // Jitter guard: successive fetches sometimes step the
+              // reported position BACKWARD along the route (feed
+              // noise; backend cache cells built seconds apart while
+              // panning). A same-trip backward step under ~550 m is
+              // essentially always noise — genuine direction changes
+              // start a new trip/shape — so hold the previous
+              // position; larger corrections pass through.
               const prev = existing && existing.prog;
               if (prev && prev.shapeId === v.shapeId && prog.p < prev.p) {
                 const jLat = dispLat - prev.lat, jLon = dispLon - prev.lon;
-                if (jLat * jLat + jLon * jLon < 0.002 * 0.002) {
+                if (jLat * jLat + jLon * jLon < 0.005 * 0.005) {
                   dispLat = prev.lat;
                   dispLon = prev.lon;
                   prog = prev;
