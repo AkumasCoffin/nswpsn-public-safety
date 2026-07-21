@@ -11785,8 +11785,21 @@ function initPagerHoursFromStorage() {
     // reroute) and off-screen markers snap instantly.
     const _transportGlides = new Map(); // id → glide state
     let _transportGlideRaf = null;
-    const TRANSPORT_GLIDE_MS = 4000;
+    // Just under the 10s data tick, so motion is near-continuous: a
+    // fresh position usually lands while the previous glide is still
+    // in flight and simply retargets it.
+    const TRANSPORT_GLIDE_MS = 9000;
     function _transportGlideMarker(id, marker, toLat, toLon, path) {
+      // Same destination as the in-flight glide (rebuilds fire far
+      // more often than the data changes: pans, panel refreshes, the
+      // 10s tick on cached data) → leave it alone. Restarting reset
+      // the easing every few seconds and made motion visibly stutter.
+      const existing = _transportGlides.get(id);
+      if (existing &&
+          Math.abs(existing.toLat - toLat) < 1e-9 &&
+          Math.abs(existing.toLon - toLon) < 1e-9) {
+        return;
+      }
       const cur = marker.getLatLng();
       const dLat = toLat - cur.lat, dLon = toLon - cur.lng;
       const d2 = dLat * dLat + dLon * dLon;
@@ -12350,15 +12363,18 @@ function initPagerHoursFromStorage() {
 
     // Lane-offset displacement is in px, so its geographic size changes
     // with zoom — re-place lane-snapped markers from their stored snap.
-    // Cancels any in-flight glide for the marker (the re-placement is
-    // a few px; gliding it would fight the next tick's target).
+    // Path glides are left running: they re-apply the lane offset with
+    // the CURRENT zoom every frame, so snapping them to the target here
+    // made markers jump ahead mid-glide. Only straight (pathless)
+    // glides get cancelled and re-placed.
     function _transportReoffsetMarkers() {
       if (!map.hasLayer(transportLayer)) return;
       for (const [id, entry] of _transportMarkers) {
-        if (entry.laneSnap) {
-          _transportGlides.delete(id);
-          entry.marker.setLatLng(_transportApplyLaneOffset(entry.laneSnap));
-        }
+        if (!entry.laneSnap) continue;
+        const g = _transportGlides.get(id);
+        if (g && g.path) continue;
+        _transportGlides.delete(id);
+        entry.marker.setLatLng(_transportApplyLaneOffset(entry.laneSnap));
       }
     }
     map.on('zoomend', _transportReoffsetMarkers);
