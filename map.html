@@ -12162,7 +12162,7 @@ function initPagerHoursFromStorage() {
           const latlngs = coords.map((c) => [c[1], c[0]]);
           const opacity = p.opacity != null ? p.opacity : 1;
           const wf = _transportWeightFactor();
-          const df = _transportNetworkDimmed ? 0.15 : 1;
+          const df = _transportNetworkDimmed ? 0 : 1;
           const ol = L.polyline(latlngs, { color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           ol._tptBaseWeight = 4;
@@ -12292,11 +12292,12 @@ function initPagerHoursFromStorage() {
       return pts;
     }
 
-    // ---------- Focus state: dim the network behind a trip track ----------
+    // ---------- Focus state: hide the network behind a trip track ----------
     // Which parallel lane a trip uses isn't derivable from the data,
     // so the centreline highlight can never perfectly overlay the
-    // offset GL lane — fading everything else makes it read as a
-    // highlight of the route instead of a duplicate line beside it.
+    // offset GL lane — a mere dim still read as "a new line beside the
+    // old ones". While a trip track is shown the network hides
+    // entirely: the highlighted route is the only line on the map.
     let _transportNetworkDimmed = false;
     function _applyTransportNetworkDim() {
       const dimmed = _transportNetworkDimmed;
@@ -12308,17 +12309,16 @@ function initPagerHoursFromStorage() {
             // setPaintProperty on a missing layer fails SILENTLY (error
             // event, no throw) — the getLayer gate is the real guard.
             if (!glMap.getLayer('lines-colour')) return;
-            glMap.setPaintProperty('lines-colour', 'line-opacity',
-              dimmed ? ['*', OP, 0.15] : OP);
-            glMap.setPaintProperty('lines-outline', 'line-opacity',
-              dimmed ? ['*', OP, 0.85 * 0.15] : ['*', OP, 0.85]);
+            const vis = dimmed ? 'none' : 'visible';
+            glMap.setLayoutProperty('lines-colour', 'visibility', vis);
+            glMap.setLayoutProperty('lines-outline', 'visibility', vis);
           };
           if (glMap.getLayer('lines-colour')) apply();
           else glMap.once('load', apply);
         }
       } catch (e) { /* ignore */ }
       // Leaflet-drawn network fallback + auto tracks.
-      const f = dimmed ? 0.15 : 1;
+      const f = dimmed ? 0 : 1;
       const applyLeaflet = (l) => {
         if (l instanceof L.LayerGroup) { l.eachLayer(applyLeaflet); return; }
         if (l._tptBaseOpacity != null && typeof l.setStyle === 'function') {
@@ -12474,9 +12474,9 @@ function initPagerHoursFromStorage() {
           // indistinguishable from the tiled ones. No offset — these
           // are single-route shapes.
           const wf = _transportWeightFactor();
-          // A track finishing its fetch while the focus dim is active
-          // must be created dimmed.
-          const df = _transportNetworkDimmed ? 0.15 : 1;
+          // A track finishing its fetch while the focus state is
+          // active must be created hidden.
+          const df = _transportNetworkDimmed ? 0 : 1;
           const tOl = L.polyline(pts, { color: '#FFFFFF', weight: 4 * wf, opacity: 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           tOl._tptBaseWeight = 4;
