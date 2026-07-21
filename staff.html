@@ -1223,7 +1223,7 @@
             <span>📻 Radio Contributor</span>
             <span style="color: var(--text-soft); font-size: 0.75rem;">- Can stream radio</span>
           </label>
-          <div style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
+          <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
               <input type="checkbox" id="edit-role-team-member" style="width: 16px; height: 16px; accent-color: var(--accent);">
               <span>👥 Team Member</span>
@@ -2037,6 +2037,7 @@
       const shown = q
         ? allUsers.filter(u =>
             (u.email || '').toLowerCase().includes(q) ||
+            (u.username || '').toLowerCase().includes(q) ||
             (u.roles || []).some(r => (r.role || '').toLowerCase().includes(q)))
         : allUsers;
 
@@ -2081,6 +2082,9 @@
         
         return `
           <tr>
+            <td>${user.username
+              ? `<span style="font-weight: 600;">${escapeHtml(user.username)}</span>`
+              : '<span class="no-roles">—</span>'}</td>
             <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(user.email)}</td>
             <td>${rolesHtml}</td>
             <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
@@ -2098,6 +2102,7 @@
         <table class="requests-table">
           <thead>
             <tr>
+              <th>Username</th>
               <th>Email</th>
               <th>Roles</th>
               <th>Last Login</th>
@@ -2117,8 +2122,9 @@
       if (!user) return;
       
       currentEditUserId = userId;
-      
-      document.getElementById('edit-user-email').textContent = user.email;
+
+      document.getElementById('edit-user-email').textContent =
+        user.username ? `${user.username} (${user.email})` : user.email;
       document.getElementById('edit-user-id').textContent = userId;
       
       // Set checkbox states based on current roles
@@ -2129,7 +2135,14 @@
       document.getElementById('edit-role-team-member').checked = userRoles.includes('team_member');
       document.getElementById('edit-role-dev').checked = userRoles.includes('dev');
       document.getElementById('edit-role-owner').checked = userRoles.includes('owner');
-      
+
+      // Team members can only manage the feature roles — hide the
+      // privileged section for them (the checkboxes keep the user's
+      // current values, so saving passes the privileged set through
+      // unchanged; the backend enforces this too).
+      document.getElementById('edit-privileged-roles-section').style.display =
+        userPermissions.can_assign_privileged_roles ? 'block' : 'none';
+
       document.getElementById('edit-roles-modal').style.display = 'flex';
     }
     

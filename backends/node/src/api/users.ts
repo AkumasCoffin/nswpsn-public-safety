@@ -17,8 +17,14 @@
  * Auth: these endpoints require a verified Supabase user (JWT) with the
  * right role — NOT just the public NSWPSN_API_KEY (which is handed to
  * every visitor via /api/config, so key-only gating was effectively
- * unauthenticated). Reads require owner|team_member (canManageUsers);
- * role mutations require owner (canAssignPrivilegedRoles).
+ * unauthenticated). Reads require owner|team_member (canManageUsers).
+ *
+ * Role mutations are tiered: owners and team members can add/remove the
+ * feature roles (map_editor, pager_contributor, radio_contributor), but
+ * ONLY owners may add or remove the privileged roles (team_member, dev,
+ * owner). Each mutating handler checks the specific roles being touched
+ * against the actor's ownership, so a team member's PUT that carries an
+ * unchanged privileged set through the atomic replace still succeeds.
  */
 import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
@@ -35,6 +41,9 @@ import {
 export const usersRouter = new Hono();
 
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
+const PRIVILEGED_ONLY = {
+  error: 'Only owners can add or remove the team_member, dev, or owner roles.',
+} as const;
 
 interface SupabaseUser {
   id?: string;
@@ -42,6 +51,22 @@ interface SupabaseUser {
   created_at?: string;
   last_sign_in_at?: string;
   email_confirmed_at?: string | null;
+  user_metadata?: Record<string, unknown>;
+}
+
+/**
+ * Display username for the admin panel. Same priority chain as the
+ * JWT-side displayNameFromClaims: explicit username first, then the
+ * display/full-name variants (Discord OAuth populates full_name/name),
+ * null when nothing is set.
+ */
+function usernameFromMetadata(meta: Record<string, unknown> | undefined): string | null {
+  if (!meta) return null;
+  for (const key of ['username', 'display_name', 'full_name', 'name', 'user_name', 'preferred_username']) {
+    const v = meta[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
 }
 interface SupabaseUsersResponse {
   users?: SupabaseUser[];
@@ -112,6 +137,7 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
     const result = usersList.map((u) => ({
       id: u.id,
       email: u.email,
+      username: usernameFromMetadata(u.user_metadata),
       created_at: u.created_at,
       last_sign_in: u.last_sign_in_at,
       email_confirmed: u.email_confirmed_at !== null && u.email_confirmed_at !== undefined,
@@ -134,7 +160,7 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
 // ---------------------------------------------------------------------------
 // PUT /api/users/:userId/roles  — atomic replace.
 // ---------------------------------------------------------------------------
-usersRouter.put('/api/users/:userId/roles', requireRole(canAssignPrivilegedRoles), async (c) => {
+usersRouter.put('/api/users/:userId/roles', requireRole(canManageUsers), async (c) => {
   const userId = c.req.param('userId');
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -145,6 +171,25 @@ usersRouter.put('/api/users/:userId/roles', requireRole(canAssignPrivilegedRoles
 
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    // Team members may replace the feature roles but must leave the
+    // privileged set exactly as it is — the replace is all-roles-atomic,
+    // so compare the target's CURRENT privileged roles against the
+    // incoming set and 403 on any difference (add or remove).
+    if (!(await canAssignPrivilegedRoles(c.get('userId') as string))) {
+      const existing = await pool.query<{ role: string }>(
+        'SELECT role FROM user_roles WHERE user_id = $1',
+        [userId],
+      );
+      const currentPriv = existing.rows
+        .map((r) => r.role)
+        .filter(isPrivilegedRole)
+        .sort();
+      const newPriv = [...new Set(newRoles.filter(isPrivilegedRole))].sort();
+      if (currentPriv.join('\x00') !== newPriv.join('\x00')) {
+        return c.json(PRIVILEGED_ONLY, 403);
+      }
+    }
 
     // Atomic: DELETE then INSERT in one transaction so a concurrent
     // reader never sees a partial role set. Python issues both
@@ -183,13 +228,16 @@ usersRouter.put('/api/users/:userId/roles', requireRole(canAssignPrivilegedRoles
 // ---------------------------------------------------------------------------
 // POST /api/users/:userId/roles  — add a single role.
 // ---------------------------------------------------------------------------
-usersRouter.post('/api/users/:userId/roles', requireRole(canAssignPrivilegedRoles), async (c) => {
+usersRouter.post('/api/users/:userId/roles', requireRole(canManageUsers), async (c) => {
   const userId = c.req.param('userId');
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const role = data['role'];
     if (typeof role !== 'string' || !role) {
       return c.json({ error: 'Role is required' }, 400);
+    }
+    if (isPrivilegedRole(role) && !(await canAssignPrivilegedRoles(c.get('userId') as string))) {
+      return c.json(PRIVILEGED_ONLY, 403);
     }
 
     const pool = await getPool();
@@ -214,10 +262,14 @@ usersRouter.post('/api/users/:userId/roles', requireRole(canAssignPrivilegedRole
 // ---------------------------------------------------------------------------
 // DELETE /api/users/:userId/roles/:role
 // ---------------------------------------------------------------------------
-usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canAssignPrivilegedRoles), async (c) => {
+usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canManageUsers), async (c) => {
   const userId = c.req.param('userId');
   const role = c.req.param('role');
   try {
+    if (isPrivilegedRole(role) && !(await canAssignPrivilegedRoles(c.get('userId') as string))) {
+      return c.json(PRIVILEGED_ONLY, 403);
+    }
+
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
 
@@ -235,7 +287,4 @@ usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canAssignPrivil
   }
 });
 
-// `isPrivilegedRole` is exported from roles.ts for the eventual
-// permission-check tightening; re-exported here so the route file is
-// the single import surface for the W5 wire-up agent.
 export { isPrivilegedRole };
