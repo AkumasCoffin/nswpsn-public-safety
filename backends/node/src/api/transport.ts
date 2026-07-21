@@ -67,6 +67,8 @@ const SPEED_FILTER = 15;
 
 const VEH_FRESH_MS = 10_000;
 const VEH_STALE_MS = 30_000;
+// Drop vehicles whose last position report is older than this.
+const MAX_VEHICLE_AGE_SEC = 600;
 const STOPS_FRESH_MS = 3_600_000;
 const STOPS_STALE_MS = 86_400_000;
 const MAX_VEHICLES = 1500;
@@ -307,6 +309,16 @@ export function normalizeVehicles(raw: RawVehiclesResponse): TransportVehicle[] 
       typeof occRaw === 'number' && Number.isInteger(occRaw) && occRaw >= 0 && occRaw <= 6
         ? occRaw
         : null;
+    // Parked/ghost vehicles: OCCP track-occupation entries and stabled
+    // sets report positions that are an hour old — a vehicle whose
+    // last report is older than this is not usefully "live". Trains
+    // dwelling at platforms keep reporting and stay well under it.
+    if (
+      typeof pos?.time === 'number' && pos.time > 0 &&
+      nowSec - pos.time > MAX_VEHICLE_AGE_SEC
+    ) {
+      continue;
+    }
     const speed = pos?.speed;
     const bearing = pos?.bearing;
     out.set(id, {
