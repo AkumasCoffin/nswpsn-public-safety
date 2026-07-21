@@ -7,23 +7,32 @@
 # No directory listings — the file index is the incidents API, not Apache.
 Options -Indexes -ExecCGI
 
-# Belt-and-braces against a handler being mapped to one of these by a
-# server-wide config: serve as bytes, never run.
+# Deny by default; allow ONLY a bare UUID-style basename with exactly one
+# image extension. This is an allowlist, so multi-extension tricks
+# (photo.php.jpg), extensionless files, and dotfiles are all denied — the
+# uploader only ever writes <uuid>.<jpg|png|webp|gif>, nothing else should
+# be reachable.
+<FilesMatch ".*">
+  Require all denied
+</FilesMatch>
+<FilesMatch "^[A-Za-z0-9][A-Za-z0-9-]*\.(?i:jpe?g|png|webp|gif)$">
+  Require all granted
+</FilesMatch>
+
+# Never hand any PHP-ish name to an interpreter. RemoveHandler only undoes
+# AddHandler; SetHandler none also overrides an inherited PHP-FPM
+# `SetHandler proxy:fcgi` from a server/vhost config, which RemoveHandler
+# cannot. Covers mod_php and PHP-FPM, PHP 7 and 8.
+<FilesMatch "\.(?i:php|phar|phtml|php[0-9]*)$">
+  SetHandler none
+  Require all denied
+</FilesMatch>
 <IfModule mod_php.c>
   php_flag engine off
 </IfModule>
-RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .phps .cgi .pl .py .jsp .asp .htm .html .shtml
-AddType text/plain .php .phtml .php3 .php4 .php5 .php7 .phps .cgi .pl .py .jsp .asp
-
-# Only ever serve image files from this tree.
-<FilesMatch "\.(?!jpe?g$|png$|webp$|gif$)[^.]*$">
-  Require all denied
-</FilesMatch>
-
-# Partial uploads are renamed into place on completion; never serve one.
-<FilesMatch "\.part$">
-  Require all denied
-</FilesMatch>
+<IfModule mod_php7.c>
+  php_flag engine off
+</IfModule>
 
 <IfModule mod_headers.c>
   # Immutable UUID filenames: a given URL's bytes never change.

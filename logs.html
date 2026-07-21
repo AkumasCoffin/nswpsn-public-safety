@@ -4635,14 +4635,22 @@
         // Photos ride along inside the archived incident snapshot. Thumbs
         // go through Cloudflare's resizer, with the original as fallback.
         const IMAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
-        const imgs = Array.isArray(inc.images) ? inc.images.filter(i => i && i.file) : [];
+        // Same strict shape the uploader generates; anything else is dropped
+        // rather than interpolated into markup.
+        const SAFE_IMG = /^\/uploads\/incident-images\/[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9-]{1,64}\.(jpg|png|webp|gif)$/;
+        const imgs = Array.isArray(inc.images)
+          ? inc.images.filter(i => i && typeof i.file === 'string' && SAFE_IMG.test(i.file))
+          : [];
+        // data-orig + the delegated capture listener below instead of an
+        // inline onerror: attribute values are HTML-decoded before the JS
+        // in them is parsed, so esc() can't safely quote into a handler.
         const photosHtml = imgs.length ? `
           <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.6rem;">
             ${imgs.map(i => `
               <a href="${esc(IMAGE_ORIGIN + i.file)}" target="_blank" rel="noopener noreferrer" title="Open full size">
                 <img src="${esc(IMAGE_ORIGIN + '/cdn-cgi/image/width=320,quality=78,format=auto' + i.file)}"
-                     alt="Incident photo" loading="lazy"
-                     onerror="this.onerror=null;this.src='${esc(IMAGE_ORIGIN + i.file)}'"
+                     alt="Incident photo" loading="lazy" class="archived-photo"
+                     data-orig="${esc(IMAGE_ORIGIN + i.file)}"
                      style="width:96px; height:96px; object-fit:cover; border-radius:6px; border:1px solid rgba(148,163,184,0.3); display:block;">
               </a>`).join('')}
           </div>` : '';
@@ -4657,6 +4665,17 @@
         box.innerHTML = `<div style="color:#ef4444; font-size:0.78rem;">Error loading detail: ${e.message}</div>`;
       }
     }
+
+    // Archived-photo thumbnails fall back to the original file when
+    // Cloudflare's resizer isn't available. 'error' doesn't bubble, so
+    // this listens in the capture phase.
+    document.addEventListener('error', (e) => {
+      const t = e.target;
+      if (t && t.matches && t.matches('img.archived-photo') && !t._fellBack && t.dataset.orig) {
+        t._fellBack = true;
+        t.src = t.dataset.orig;
+      }
+    }, true);
 
     // === RADIO SCANNER SUMMARIES ===
     let summariesPage = 1;

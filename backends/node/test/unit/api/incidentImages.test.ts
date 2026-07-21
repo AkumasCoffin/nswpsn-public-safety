@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { Hono } from 'hono';
-import { mkdtempSync, existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -53,17 +53,43 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
 const { incidentsRouter } = await import('../../../src/api/incidents.js');
 const images = await import('../../../src/services/incidentImages.js');
 
-const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 7)]);
-const PNG = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  Buffer.alloc(64, 3),
+// Structurally valid fixtures: uploads are metadata-stripped, and the
+// stripper is fail-closed, so a fixture has to actually parse.
+const EXIF_APP1 = (() => {
+  const payload = Buffer.from('Exif\0\0GPS:-33.87,151.20', 'latin1');
+  const len = Buffer.alloc(2);
+  len.writeUInt16BE(payload.length + 2, 0); // length includes its own 2 bytes
+  return Buffer.concat([Buffer.from([0xff, 0xe1]), len, payload]);
+})();
+const JPEG = Buffer.concat([
+  Buffer.from([0xff, 0xd8]),
+  EXIF_APP1,
+  Buffer.from([0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]),
+  Buffer.from([0x11, 0x22, 0x33]),
+  Buffer.from([0xff, 0xd9]),
 ]);
+const PNG = (() => {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    return Buffer.concat([len, Buffer.from(type, 'latin1'), data, Buffer.alloc(4)]);
+  };
+  return Buffer.concat([
+    sig,
+    chunk('IHDR', Buffer.alloc(13, 2)),
+    chunk('IDAT', Buffer.from('PIX', 'latin1')),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+})();
 
-function makeApp(userId = 'editor-1') {
+function makeApp(userId: string | null = 'editor-1') {
   const app = new Hono();
   app.use('*', async (c, next) => {
-    c.set('userId' as never, userId as never);
-    c.set('userName' as never, 'Test Editor' as never);
+    if (userId) {
+      c.set('userId' as never, userId as never);
+      c.set('userName' as never, 'Test Editor' as never);
+    }
     await next();
   });
   app.route('/', incidentsRouter);
@@ -98,6 +124,29 @@ beforeEach(() => {
 
 afterAll(() => {
   rmSync(UPLOADS, { recursive: true, force: true });
+});
+
+describe('sweepStaleUploadParts', () => {
+  it('removes old .part/.stripped temp files, keeps recent ones and real images', async () => {
+    const { mkdirSync, utimesSync } = await import('node:fs');
+    const dir = path.join(UPLOADS, 'incident-images', 'sweep-inc');
+    mkdirSync(dir, { recursive: true });
+    const old = path.join(dir, 'a.jpg.part');
+    const oldStripped = path.join(dir, 'b.png.stripped');
+    const fresh = path.join(dir, 'c.jpg.part');
+    const real = path.join(dir, 'd.jpg');
+    for (const f of [old, oldStripped, fresh, real]) writeFileSync(f, 'x');
+    const twoHoursAgo = Date.now() / 1000 - 7200;
+    utimesSync(old, twoHoursAgo, twoHoursAgo);
+    utimesSync(oldStripped, twoHoursAgo, twoHoursAgo);
+
+    const removed = await images.sweepStaleUploadParts();
+    expect(removed).toBe(2);
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(oldStripped)).toBe(false);
+    expect(existsSync(fresh)).toBe(true); // under the 1h cutoff
+    expect(existsSync(real)).toBe(true);  // never a temp file
+  });
 });
 
 describe('storage helpers', () => {
@@ -137,6 +186,35 @@ describe('storage helpers', () => {
   });
 });
 
+// The editor gate is applied by router-level middleware on
+// '/api/incidents/*'. These prove it actually covers the NESTED image
+// routes — if Hono's wildcard didn't match, uploads would be open to
+// anyone holding the public API key.
+describe('auth gate', () => {
+  it('401s an unauthenticated upload before writing anything', async () => {
+    const res = await upload(makeApp(null), 'inc-auth', JPEG);
+    expect(res.status).toBe(401);
+    expect(storedFiles('inc-auth')).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('401s an unauthenticated delete', async () => {
+    const res = await makeApp(null).request(
+      '/api/incidents/inc-auth/images/11111111-2222-3333-4444-555555555555',
+      { method: 'DELETE' },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('403s a logged-in user who is not an editor', async () => {
+    const roles = await import('../../../src/services/auth/roles.js');
+    vi.mocked(roles.canEditIncidents).mockResolvedValueOnce(false);
+    const res = await upload(makeApp(), 'inc-auth', JPEG);
+    expect(res.status).toBe(403);
+    expect(storedFiles('inc-auth')).toHaveLength(0);
+  });
+});
+
 describe('POST /api/incidents/:id/images', () => {
   it('streams the file to disk and appends the JSONB entry', async () => {
     resultQueue = [
@@ -150,17 +228,22 @@ describe('POST /api/incidents/:id/images', () => {
     expect(res.status).toBe(201);
     const body = (await res.json()) as { image: Record<string, unknown> };
     expect(body.image['content_type']).toBe('image/jpeg');
-    expect(body.image['size']).toBe(JPEG.length);
+    // Size is the STRIPPED size — the EXIF block is gone by now.
+    expect(body.image['size']).toBe(JPEG.length - EXIF_APP1.length);
     expect(body.image['uploaded_by']).toBe('editor-1');
     expect(body.image['uploaded_by_name']).toBe('Test Editor');
     expect(String(body.image['file'])).toMatch(
       /^\/uploads\/incident-images\/inc-1\/[0-9a-f-]{36}\.jpg$/,
     );
 
-    // File landed, and no .part leftover.
+    // File landed, no .part/.stripped leftovers, and the GPS is gone from
+    // the bytes that are now publicly served.
     const files = storedFiles('inc-1');
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/\.jpg$/);
+    const onDisk = readFileSync(path.join(UPLOADS, 'incident-images', 'inc-1', files[0]!));
+    expect(onDisk.includes(Buffer.from('GPS:-33.87'))).toBe(false);
+    expect(onDisk.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
 
     const update = txCalls.find((c) => c.sql.includes('UPDATE incidents SET images'));
     const stored = JSON.parse(String(update?.params?.[0])) as unknown[];
@@ -213,6 +296,16 @@ describe('POST /api/incidents/:id/images', () => {
   it('404s an id that could escape the uploads directory', async () => {
     const res = await upload(makeApp(), '..%2F..%2Fetc', JPEG);
     expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('413s an oversized Content-Length before reading the body', async () => {
+    const res = await makeApp().request('/api/incidents/inc-big/images', {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/jpeg', 'Content-Length': String(60 * 1024 * 1024) },
+      body: JPEG as unknown as BodyInit,
+    });
+    expect(res.status).toBe(413);
     expect(calls).toHaveLength(0);
   });
 });
