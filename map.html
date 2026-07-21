@@ -11726,23 +11726,11 @@ function initPagerHoursFromStorage() {
       return lanes;
     }
 
-    // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr,
-    // incl. GL zoom = Leaflet zoom − 1; MapLibre clamps to the
-    // terminal outputs outside the stop range and interpolates
-    // exponentially base 2 between stops).
+    // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr):
+    // geographic — px offset doubles per zoom, anchored ×1.35 at gz12.
     function _transportOffsetK() {
-      const gz = map.getZoom() - 1;
-      const STOPS = [[6, 0.03], [8, 0.1], [10, 0.45], [12, 1.35], [15, 3.375]];
-      if (gz <= STOPS[0][0]) return STOPS[0][1];
-      if (gz >= STOPS[STOPS.length - 1][0]) return STOPS[STOPS.length - 1][1];
-      for (let i = 0; i < STOPS.length - 1; i++) {
-        const [z1, k1] = STOPS[i], [z2, k2] = STOPS[i + 1];
-        if (gz <= z2) {
-          const t = (Math.pow(2, gz - z1) - 1) / (Math.pow(2, z2 - z1) - 1);
-          return k1 + (k2 - k1) * t;
-        }
-      }
-      return STOPS[STOPS.length - 1][1];
+      const gz = Math.min(20, Math.max(4, map.getZoom() - 1));
+      return 1.35 * Math.pow(2, gz - 12);
     }
 
     function _transportLaneCandidates(v) {
@@ -12210,21 +12198,14 @@ function initPagerHoursFromStorage() {
     // the network layers and the trip-highlight layers so both render
     // lanes in exactly the same place.
     function _transportGlOffsetExpr() {
-      // Offsets collapse hard at overview zooms — a corridor's 6-8
-      // parallel lanes otherwise fan into a fat multi-colour rope that
-      // reads as "lines get BIGGER when zooming out". Above gz12 they
-      // must keep GROWING on the same exponential curve as the line
-      // widths (3px→7.5px is ×2.5 by gz15), or the fattening lanes
-      // swallow their own gaps when zooming in.
-      // Mid-zoom factors stay LOW (an offset-16 lane at ×0.9 sat
-      // ~14px off the real corridor at z11 — "lines away from where
-      // they should be"); the fan only opens fully from gz12 up.
+      // GEOGRAPHIC lane fan: offset px double per zoom level (base-2
+      // exponential between two stops is EXACTLY o·2^(z−z12)), so the
+      // fan is anchored to the ground like painted geometry — lanes
+      // never slide relative to the map while zooming. Anchor ×1.35
+      // at gz12 (the tuned Leaflet-z13 look).
       return ['interpolate', ['exponential', 2], ['zoom'],
-        6, ['*', ['coalesce', ['get', 'offset'], 0], 0.03],
-        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.1],
-        10, ['*', ['coalesce', ['get', 'offset'], 0], 0.45],
-        12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35],
-        15, ['*', ['coalesce', ['get', 'offset'], 0], 3.375]
+        4, ['*', ['coalesce', ['get', 'offset'], 0], 1.35 / 256],
+        20, ['*', ['coalesce', ['get', 'offset'], 0], 1.35 * 256]
       ];
     }
 
@@ -12240,10 +12221,10 @@ function initPagerHoursFromStorage() {
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              // Exponential base 2 ≈ width tied to ground scale: lines
-              // shrink/grow WITH the map instead of clamping to a
-              // constant px width outside the stop range.
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.3, 12, 3, 15, 7.5],
+              // Geographic width: 3px at gz12, exact ×2 per zoom above
+              // gz9; floored at 0.35px below gz9 so the network stays
+              // a visible hairline at overview zooms.
+              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 3, 20, 768],
               'line-offset': offsetExpr,
               'line-opacity': opacityExpr
             }
@@ -12342,17 +12323,13 @@ function initPagerHoursFromStorage() {
       }
     }
 
-    // Line weights scale with the map (continuous, mirrors the GL
-    // exponential width curve: gz stops 6→0.3px, 12→3px, 15→7.5px on
-    // the base-3 colour line; factor = width/3). Applied to the
-    // Leaflet fallback network + auto tracks via _applyTransportWeights.
+    // Line weights scale with the map (mirror of the GL geographic
+    // width curve: 3px at gz12 doubling per zoom, floored at 0.35px
+    // below gz9; factor = width/3). Applied to the Leaflet fallback
+    // network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
-      const gz = map.getZoom() - 1; // GL zoom, same reference as the style
-      let w;
-      if (gz <= 6) w = 0.3;
-      else if (gz >= 15) w = 7.5;
-      else if (gz <= 12) w = 0.3 + 2.7 * (Math.pow(2, gz - 6) - 1) / 63;
-      else w = 3 + 4.5 * (Math.pow(2, gz - 12) - 1) / 7;
+      const gz = Math.min(20, map.getZoom() - 1);
+      const w = Math.max(0.35, 3 * Math.pow(2, gz - 12));
       return w / 3;
     }
     let _transportLastWeightFactor = null;
@@ -12446,7 +12423,7 @@ function initPagerHoursFromStorage() {
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.5, 12, 3.8, 15, 9.5],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 3.8, 20, 972.8],
                   'line-offset': offsetExpr,
                   'line-opacity': 1
                 }
