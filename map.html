@@ -4889,7 +4889,11 @@ function initPagerHoursFromStorage() {
         if (item.source !== 'pager') {
           if (!item.agenciesList.some(a => filterState.agency[a] === true)) return false;
         }
-        if (!item.typesList.some(t => filterState.type[t] === true)) return false;
+        // Typeless items always pass: a freshly created user incident
+        // has type [] until its first save, and .some() over an empty
+        // array is false — the brand-new pin was invisible while the
+        // editor filled in its details.
+        if (item.typesList.length && !item.typesList.some(t => filterState.type[t] === true)) return false;
         return true;
       });
 
