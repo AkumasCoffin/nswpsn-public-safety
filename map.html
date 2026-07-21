@@ -11732,7 +11732,7 @@ function initPagerHoursFromStorage() {
     // exponentially base 2 between stops).
     function _transportOffsetK() {
       const gz = map.getZoom() - 1;
-      const STOPS = [[6, 0.05], [8, 0.15], [10, 0.9], [12, 1.35], [15, 3.375]];
+      const STOPS = [[6, 0.03], [8, 0.1], [10, 0.45], [12, 1.35], [15, 3.375]];
       if (gz <= STOPS[0][0]) return STOPS[0][1];
       if (gz >= STOPS[STOPS.length - 1][0]) return STOPS[STOPS.length - 1][1];
       for (let i = 0; i < STOPS.length - 1; i++) {
@@ -12216,10 +12216,13 @@ function initPagerHoursFromStorage() {
       // must keep GROWING on the same exponential curve as the line
       // widths (3px→7.5px is ×2.5 by gz15), or the fattening lanes
       // swallow their own gaps when zooming in.
+      // Mid-zoom factors stay LOW (an offset-16 lane at ×0.9 sat
+      // ~14px off the real corridor at z11 — "lines away from where
+      // they should be"); the fan only opens fully from gz12 up.
       return ['interpolate', ['exponential', 2], ['zoom'],
-        6, ['*', ['coalesce', ['get', 'offset'], 0], 0.05],
-        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.15],
-        10, ['*', ['coalesce', ['get', 'offset'], 0], 0.9],
+        6, ['*', ['coalesce', ['get', 'offset'], 0], 0.03],
+        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.1],
+        10, ['*', ['coalesce', ['get', 'offset'], 0], 0.45],
         12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35],
         15, ['*', ['coalesce', ['get', 'offset'], 0], 3.375]
       ];
