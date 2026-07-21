@@ -303,6 +303,27 @@ export function routeNameFromId(routeId: string | null): string | null {
   return /^[A-Za-z0-9]{1,4}$/.test(tail) ? tail.toUpperCase() : null;
 }
 
+// Per-trip stickiness: GTFS-R entities BLINK — a vehicle that misses
+// one batch would flip to AnyTrip's ~30s-ahead frame (fast forward
+// glide) and back (ratcheted, then a backward snap) — the "vehicles
+// jump around" cycle. Remember each trip's last TfNSW position and
+// keep serving it through blinks; only a sustained absence hands the
+// vehicle back to AnyTrip (one flip, no oscillation).
+const TFNSW_STICKY_MS = 60_000;
+const _lastByTrip = new Map<string, { p: TfnswPosition; at: number }>();
+
+function _rememberPositions(positions: TfnswPosition[]): void {
+  const now = Date.now();
+  for (const p of positions) {
+    if (p.tripId) _lastByTrip.set(p.tripId, { p, at: now });
+  }
+  if (_lastByTrip.size > 4000) {
+    for (const [k, v] of _lastByTrip) {
+      if (now - v.at > TFNSW_STICKY_MS) _lastByTrip.delete(k);
+    }
+  }
+}
+
 /**
  * Join: TfNSW positions become authoritative for AnyTrip vehicles with
  * a matching trip id; TfNSW-only trips inside the bbox are appended as
@@ -317,10 +338,12 @@ export function applyTfnswPositions(
   maxVehicles: number,
 ): { vehicles: TransportVehicle[]; matched: number; added: number } {
   if (!positions.length) return { vehicles, matched: 0, added: 0 };
+  _rememberPositions(positions);
   const byTrip = new Map<string, TfnswPosition>();
   for (const p of positions) {
     if (p.tripId) byTrip.set(p.tripId, p);
   }
+  const stickyNow = Date.now();
   const nowSec = Date.now() / 1000;
   let matched = 0;
   const usedTrips = new Set<string>();
@@ -330,7 +353,11 @@ export function applyTfnswPositions(
     anytripByMode.set(v.mode, (anytripByMode.get(v.mode) ?? 0) + 1);
   }
   const out = vehicles.map((v) => {
-    const p = v.tripId ? byTrip.get(v.tripId) : undefined;
+    let p = v.tripId ? byTrip.get(v.tripId) : undefined;
+    if (!p && v.tripId) {
+      const mem = _lastByTrip.get(v.tripId);
+      if (mem && stickyNow - mem.at < TFNSW_STICKY_MS) p = mem.p;
+    }
     if (!p) return v;
     usedTrips.add(v.tripId as string);
     matched += 1;
@@ -534,6 +561,7 @@ export function _resetTfnswForTests(): void {
   positionsCache.clear();
   alertsCache.clear();
   _parkedFeeds.clear();
+  _lastByTrip.clear();
 }
 
 /** TEST-ONLY: decode helpers exposed for fixture-based tests. */
