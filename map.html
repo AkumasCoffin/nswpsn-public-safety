@@ -11727,10 +11727,10 @@ function initPagerHoursFromStorage() {
     }
 
     // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr):
-    // geographic — px offset doubles per zoom, anchored ×1.35 at gz12.
+    // geographic — px offset doubles per zoom, anchored ×0.9 at gz12.
     function _transportOffsetK() {
       const gz = Math.min(20, Math.max(4, map.getZoom() - 1));
-      return 1.35 * Math.pow(2, gz - 12);
+      return 0.9 * Math.pow(2, gz - 12);
     }
 
     function _transportLaneCandidates(v) {
@@ -12201,11 +12201,11 @@ function initPagerHoursFromStorage() {
       // GEOGRAPHIC lane fan: offset px double per zoom level (base-2
       // exponential between two stops is EXACTLY o·2^(z−z12)), so the
       // fan is anchored to the ground like painted geometry — lanes
-      // never slide relative to the map while zooming. Anchor ×1.35
-      // at gz12 (the tuned Leaflet-z13 look).
+      // never slide relative to the map while zooming. Anchor ×0.9 at
+      // gz12, proportional to the 2px line width (gap ≈ width).
       return ['interpolate', ['exponential', 2], ['zoom'],
-        4, ['*', ['coalesce', ['get', 'offset'], 0], 1.35 / 256],
-        20, ['*', ['coalesce', ['get', 'offset'], 0], 1.35 * 256]
+        4, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 / 256],
+        20, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 * 256]
       ];
     }
 
