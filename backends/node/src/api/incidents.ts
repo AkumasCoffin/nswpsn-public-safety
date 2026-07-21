@@ -49,6 +49,20 @@ import {
   userIncidentArchiveRow,
   type UserIncidentRow,
 } from '../sources/userIncidents.js';
+import { bodyLimit } from 'hono/body-limit';
+import { randomUUID } from 'node:crypto';
+import {
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_INCIDENT,
+  ImageTooLargeError,
+  ImageTypeMismatchError,
+  deleteIncidentImageFile,
+  isSafeIdSegment,
+  normaliseContentType,
+  parseIncidentImages,
+  saveIncidentImageStream,
+  type IncidentImage,
+} from '../services/incidentImages.js';
 
 export const incidentsRouter = new Hono();
 
@@ -204,7 +218,7 @@ interface IncidentRow {
 
 function normaliseIncident(row: IncidentRow): Record<string, unknown> {
   const out: Record<string, unknown> = { ...row };
-  for (const k of ['type', 'responding_agencies', 'units']) {
+  for (const k of ['type', 'responding_agencies', 'units', 'images']) {
     const v = out[k];
     if (typeof v === 'string') {
       try {
@@ -677,6 +691,193 @@ incidentsRouter.delete('/api/incidents/:id', async (c) => {
   } catch (err) {
     log.error({ err, id }, 'Error deleting incident');
     return c.json({ error: 'Failed to delete incident' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// INCIDENT IMAGES
+//
+// POST   /api/incidents/:id/images            — upload one photo (raw body)
+// DELETE /api/incidents/:id/images/:imageId   — remove one photo
+//
+// Uploading is collaborative (any editor, like units) so a responding
+// editor can add photos to someone else's pin; DELETING is restricted to
+// the uploader, with the usual admin moderation override.
+//
+// `images` is deliberately absent from UPDATABLE_FIELDS: the column is
+// only writable through these two handlers, so a crafted PUT can't forge
+// entries pointing at arbitrary paths.
+// ---------------------------------------------------------------------------
+
+/** Read the current images array under a row lock. Returns null if the
+ *  incident is missing or soft-deleted. */
+async function lockIncidentImages(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<{ images: unknown }>; rowCount: number | null }> },
+  id: string,
+): Promise<IncidentImage[] | null> {
+  const r = await client.query(
+    'SELECT images FROM incidents WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+    [id],
+  );
+  if (!r.rowCount) return null;
+  return parseIncidentImages(r.rows[0]?.images);
+}
+
+incidentsRouter.post(
+  '/api/incidents/:id/images',
+  bodyLimit({
+    maxSize: MAX_IMAGE_BYTES,
+    onError: (c) => c.json({ error: 'Image is too large (50MB max).' }, 413),
+  }),
+  async (c) => {
+    const id = c.req.param('id');
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Incident not found' }, 404);
+
+    const contentType = normaliseContentType(c.req.header('content-type'));
+    if (!contentType) {
+      return c.json(
+        { error: 'Unsupported image type. Use JPEG, PNG, WebP or GIF.' },
+        415,
+      );
+    }
+    const body = c.req.raw.body;
+    if (!body) return c.json({ error: 'Empty upload' }, 400);
+
+    const imageId = randomUUID();
+    let saved: Awaited<ReturnType<typeof saveIncidentImageStream>> | null = null;
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+      // Cheap pre-checks before spending disk on the stream. The
+      // authoritative capacity check happens under the row lock below.
+      const pre = await pool.query<{ images: unknown }>(
+        'SELECT images FROM incidents WHERE id = $1 AND deleted_at IS NULL',
+        [id],
+      );
+      if (!pre.rowCount) return c.json({ error: 'Incident not found' }, 404);
+      if (parseIncidentImages(pre.rows[0]?.images).length >= MAX_IMAGES_PER_INCIDENT) {
+        return c.json(
+          { error: `This incident already has ${MAX_IMAGES_PER_INCIDENT} photos.` },
+          409,
+        );
+      }
+
+      saved = await saveIncidentImageStream(id, imageId, contentType, body);
+
+      const entry: IncidentImage = {
+        id: imageId,
+        file: saved.publicPath,
+        size: saved.size,
+        content_type: contentType,
+        uploaded_by: currentUserId(c) ?? null,
+        uploaded_by_name: currentUserName(c),
+        uploaded_at: new Date().toISOString(),
+      };
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const current = await lockIncidentImages(client, id);
+        if (current === null) {
+          await client.query('ROLLBACK');
+          await deleteIncidentImageFile(id, saved.publicPath);
+          return c.json({ error: 'Incident not found' }, 404);
+        }
+        // Re-check under the lock: two concurrent uploads could both pass
+        // the pre-check above and push the incident to 5 photos.
+        if (current.length >= MAX_IMAGES_PER_INCIDENT) {
+          await client.query('ROLLBACK');
+          await deleteIncidentImageFile(id, saved.publicPath);
+          return c.json(
+            { error: `This incident already has ${MAX_IMAGES_PER_INCIDENT} photos.` },
+            409,
+          );
+        }
+        await client.query(
+          'UPDATE incidents SET images = $1::jsonb, updated_at = NOW() WHERE id = $2',
+          [JSON.stringify([...current, entry]), id],
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      log.info({ id, imageId, size: entry.size }, 'Incident image uploaded');
+      return c.json({ success: true, image: entry }, 201);
+    } catch (err) {
+      // Never leave an orphan file behind when the DB half failed.
+      if (saved) await deleteIncidentImageFile(id, saved.publicPath);
+      if (err instanceof ImageTooLargeError) {
+        return c.json({ error: 'Image is too large (50MB max).' }, 413);
+      }
+      if (err instanceof ImageTypeMismatchError) {
+        return c.json(
+          { error: 'That file is not a valid JPEG, PNG, WebP or GIF image.' },
+          415,
+        );
+      }
+      log.error({ err, id }, 'Error uploading incident image');
+      return c.json({ error: 'Failed to upload image' }, 500);
+    }
+  },
+);
+
+incidentsRouter.delete('/api/incidents/:id/images/:imageId', async (c) => {
+  const id = c.req.param('id');
+  const imageId = c.req.param('imageId');
+  if (!isSafeIdSegment(id) || !isSafeIdSegment(imageId)) {
+    return c.json({ error: 'Image not found' }, 404);
+  }
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    let removed: IncidentImage | null = null;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await lockIncidentImages(client, id);
+      if (current === null) {
+        await client.query('ROLLBACK');
+        return c.json({ error: 'Incident not found' }, 404);
+      }
+      const target = current.find((img) => img.id === imageId);
+      if (!target) {
+        await client.query('ROLLBACK');
+        return c.json({ error: 'Image not found' }, 404);
+      }
+      // Author-only, with the same admin moderation override log entries use.
+      if (!(await userCanModifyUpdate(currentUserId(c), target.uploaded_by))) {
+        await client.query('ROLLBACK');
+        return c.json(
+          { error: 'Only the editor who uploaded this photo (or an admin) can remove it.' },
+          403,
+        );
+      }
+      await client.query(
+        'UPDATE incidents SET images = $1::jsonb, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(current.filter((img) => img.id !== imageId)), id],
+      );
+      await client.query('COMMIT');
+      removed = target;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Best-effort: the row is already updated, so a stray file is cosmetic.
+    if (removed) await deleteIncidentImageFile(id, removed.file);
+    log.info({ id, imageId }, 'Incident image removed');
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id, imageId }, 'Error removing incident image');
+    return c.json({ error: 'Failed to remove image' }, 500);
   }
 });
 

@@ -1,0 +1,34 @@
+# Editor-uploaded incident photos.
+#
+# Everything here is untrusted user content living inside the webroot, so
+# this file's job is: never execute anything, never list anything, and let
+# Cloudflare cache aggressively (filenames are immutable UUIDs).
+
+# No directory listings — the file index is the incidents API, not Apache.
+Options -Indexes -ExecCGI
+
+# Belt-and-braces against a handler being mapped to one of these by a
+# server-wide config: serve as bytes, never run.
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .phps .cgi .pl .py .jsp .asp .htm .html .shtml
+AddType text/plain .php .phtml .php3 .php4 .php5 .php7 .phps .cgi .pl .py .jsp .asp
+
+# Only ever serve image files from this tree.
+<FilesMatch "\.(?!jpe?g$|png$|webp$|gif$)[^.]*$">
+  Require all denied
+</FilesMatch>
+
+# Partial uploads are renamed into place on completion; never serve one.
+<FilesMatch "\.part$">
+  Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+  # Immutable UUID filenames: a given URL's bytes never change.
+  Header set Cache-Control "public, max-age=31536000, immutable"
+  # Don't let a mislabelled upload be sniffed into something executable.
+  Header set X-Content-Type-Options "nosniff"
+  Header set Content-Disposition "inline"
+</IfModule>

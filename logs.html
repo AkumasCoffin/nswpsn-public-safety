@@ -2647,6 +2647,8 @@
           let details = [];
           if (agencies.length) details.push(`<span style="color:#94a3b8;"><i class="fas fa-users"></i> ${escapeHtml(agencies.join(', '))}</span>`);
           if (units.length) details.push(`<span style="color:#94a3b8;"><i class="fas fa-truck"></i> ${escapeHtml(units.join(', '))}</span>`);
+          const photoCount = Array.isArray(data.images) ? data.images.length : 0;
+          if (photoCount) details.push(`<span style="color:#94a3b8;"><i class="fas fa-camera"></i> ${photoCount} photo${photoCount === 1 ? '' : 's'}</span>`);
           if (desc) details.push(`<span style="color:#c4b5fd; font-style:italic; word-break:break-word;">${escapeHtml(desc)}</span>`);
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'traffic_incident') {
@@ -4630,13 +4632,27 @@
         const logs = Array.isArray(data.logs) ? data.logs : [];
         const desc = inc.description
           ? `<div style="font-size:0.8rem; color:#cbd5e1; white-space:pre-wrap; margin-bottom:0.5rem;">${esc(inc.description)}</div>` : '';
+        // Photos ride along inside the archived incident snapshot. Thumbs
+        // go through Cloudflare's resizer, with the original as fallback.
+        const IMAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
+        const imgs = Array.isArray(inc.images) ? inc.images.filter(i => i && i.file) : [];
+        const photosHtml = imgs.length ? `
+          <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.6rem;">
+            ${imgs.map(i => `
+              <a href="${esc(IMAGE_ORIGIN + i.file)}" target="_blank" rel="noopener noreferrer" title="Open full size">
+                <img src="${esc(IMAGE_ORIGIN + '/cdn-cgi/image/width=320,quality=78,format=auto' + i.file)}"
+                     alt="Incident photo" loading="lazy"
+                     onerror="this.onerror=null;this.src='${esc(IMAGE_ORIGIN + i.file)}'"
+                     style="width:96px; height:96px; object-fit:cover; border-radius:6px; border:1px solid rgba(148,163,184,0.3); display:block;">
+              </a>`).join('')}
+          </div>` : '';
         const logsHtml = logs.length ? logs.map((l) => `
           <div style="border-top:1px solid rgba(255,255,255,0.08); padding:0.4rem 0;">
             <div style="font-size:0.68rem; color:#64748b;">${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : ''}</div>
             <div style="font-size:0.8rem; color:#e2e8f0; white-space:pre-wrap;">${esc(l.message || '')}</div>
           </div>`).join('')
           : '<div style="font-size:0.78rem; color:#64748b; font-style:italic;">No logs were recorded.</div>';
-        box.innerHTML = desc + logsHtml;
+        box.innerHTML = desc + photosHtml + logsHtml;
       } catch (e) {
         box.innerHTML = `<div style="color:#ef4444; font-size:0.78rem;">Error loading detail: ${e.message}</div>`;
       }

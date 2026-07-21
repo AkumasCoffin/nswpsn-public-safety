@@ -58,6 +58,12 @@ const Schema = z.object({
   // either the previous snapshot or a complete current one.
   STATE_DIR: z.string().default('./state'),
 
+  // Root for user-uploaded files (incident photos). Must be inside the
+  // Apache webroot: the repo IS the webroot, so the default resolves to
+  // <repo>/uploads and files land at nswpsn.forcequit.xyz/uploads/...
+  // (backend cwd is backends/node, hence the ../..).
+  UPLOADS_DIR: z.string().default('../../uploads'),
+
   // ArchiveWriter flush cadence in ms. Falls back to Python's
   // seconds-based ARCHIVE_FLUSH_INTERVAL when only the legacy var is
   // set in the shared .env, so a single env source drives both backends.

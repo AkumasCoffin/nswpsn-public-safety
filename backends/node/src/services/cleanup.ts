@@ -26,6 +26,7 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
+import { removeIncidentImageDir } from './incidentImages.js';
 
 // Accept both the canonical var and the name env.sample documented for
 // years (DATA_CLEANUP_INTERVAL) — previously only _SECS was read here
@@ -387,6 +388,24 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       try {
         const purgeDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
         const cond = `deleted_at IS NOT NULL AND deleted_at < (NOW() - ($1 || ' days')::interval)`;
+        // Collect the ids first: once the rows are gone we can't tell which
+        // upload directories to drop. Archived incidents are excluded —
+        // their snapshot (and its photos) is the permanent record.
+        let purgeIds: string[] = [];
+        try {
+          const ids = await client.query<{ id: string }>(
+            `SELECT id FROM incidents
+              WHERE ${cond}
+                AND id NOT IN (SELECT id FROM archived_incidents)`,
+            [String(purgeDays)],
+          );
+          purgeIds = ids.rows.map((r) => r.id);
+        } catch (err) {
+          log.warn(
+            { err: (err as Error).message },
+            'cleanup: could not resolve purge ids for image removal',
+          );
+        }
         await client.query(
           `DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE ${cond})`,
           [String(purgeDays)],
@@ -404,6 +423,10 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
             { rows: purged.rowCount, retentionDays: purgeDays },
             'cleanup: purged soft-deleted incidents',
           );
+        }
+        // Drop each purged incident's uploaded photos from disk.
+        for (const id of purgeIds) {
+          await removeIncidentImageDir(id);
         }
       } catch (err) {
         log.warn(
