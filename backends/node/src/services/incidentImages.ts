@@ -240,6 +240,54 @@ export async function removeIncidentImageDir(incidentId: string): Promise<void> 
 }
 
 /**
+ * Reconcile the image directories on disk against the database: any
+ * directory whose incident id no longer exists as a live OR archived
+ * incident is deleted. This is the definitive guarantee that image files
+ * don't outlive their incident's DB row — it catches every removal path
+ * (retention purge, a failed purge-id lookup, stub incidents that never
+ * hit the soft-delete purge, manual DB surgery) with one sweep.
+ *
+ * `resolveKnownIds` is handed the on-disk ids and returns the subset that
+ * still exists in the DB (live incidents.id ∪ archived_incidents.id).
+ * Soft-deleted-but-not-yet-purged incidents still HAVE a row, so their
+ * ids come back "known" and their photos survive the recoverable window.
+ * Passing the resolver in keeps this module free of a DB dependency.
+ */
+export async function reconcileOrphanImageDirs(
+  resolveKnownIds: (ids: string[]) => Promise<Set<string>>,
+): Promise<number> {
+  const base = path.join(uploadsRoot(), IMAGE_SUBDIR);
+  let dirs: string[];
+  try {
+    dirs = await readdir(base);
+  } catch {
+    return 0; // nothing uploaded yet
+  }
+  const ids = dirs.filter(isSafeIdSegment);
+  if (!ids.length) return 0;
+
+  let known: Set<string>;
+  try {
+    known = await resolveKnownIds(ids);
+  } catch (err) {
+    // Fail SAFE: if we can't confirm which incidents still exist, delete
+    // nothing rather than risk removing a live incident's photos.
+    log.warn({ err: (err as Error).message }, 'incident images: orphan reconcile skipped (id lookup failed)');
+    return 0;
+  }
+
+  let removed = 0;
+  for (const id of ids) {
+    if (!known.has(id)) {
+      await removeIncidentImageDir(id);
+      removed += 1;
+    }
+  }
+  if (removed > 0) log.info({ removed }, 'incident images: removed orphaned directories');
+  return removed;
+}
+
+/**
  * Sweep abandoned `.part`/`.stripped` temp files older than one hour. A
  * process kill mid-upload leaves these behind; they're never servable
  * (the .htaccess denies them) but would otherwise leak disk forever.
