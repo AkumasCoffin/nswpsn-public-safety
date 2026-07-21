@@ -29,7 +29,9 @@ const rt = GtfsRealtimeBindings.transit_realtime;
 
 const TFNSW_BASE = 'https://api.transport.nsw.gov.au';
 const FEED_TIMEOUT_MS = 12_000;
-const POS_FRESH_MS = 10_000;
+// 15s + per-feed jitter: seven concurrent 10s-cadence fetches tripped
+// TfNSW's burst rate limit (429s in prod) and ran the daily quota hot.
+const POS_FRESH_MS = 15_000;
 // Long stale window: while a refresh fails, serving the last-good
 // decode keeps matched vehicles in the TfNSW frame of reference
 // instead of snapping back to AnyTrip's (~30s ahead) interpolation —
@@ -105,23 +107,35 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `apikey ${config.TFNSW_API_KEY}` };
 }
 
-// Feeds that 404/410 (moved or unlicensed for this key) are skipped for
-// an hour instead of being re-hit and re-logged every poll.
-const _deadFeeds = new Map<string, number>();
-const DEAD_FEED_TTL_MS = 3_600_000;
+// Erroring feeds get PARKED (skipped without fetching) so they can't
+// hammer upstream: 404/410 (moved or unlicensed for this key) for an
+// hour, 429 (rate limited) for two minutes — retrying a rate limit on
+// the regular cadence just feeds the limiter.
+const _parkedFeeds = new Map<string, number>(); // path → parked-until ts
+const DEAD_FEED_PARK_MS = 3_600_000;
+const RATE_LIMIT_PARK_MS = 120_000;
 
-function feedDead(path: string): boolean {
-  const at = _deadFeeds.get(path);
-  if (at == null) return false;
-  if (Date.now() - at > DEAD_FEED_TTL_MS) {
-    _deadFeeds.delete(path);
+function feedParked(path: string): boolean {
+  const until = _parkedFeeds.get(path);
+  if (until == null) return false;
+  if (Date.now() >= until) {
+    _parkedFeeds.delete(path);
     return false;
   }
   return true;
 }
 
+// Stable per-feed cache-window jitter (0-5s) so the feeds' refresh
+// times drift apart instead of bursting together every window —
+// concurrent bursts are what trip TfNSW's per-second rate limit.
+function feedJitterMs(path: string): number {
+  let h = 0;
+  for (let i = 0; i < path.length; i += 1) h = (h * 31 + path.charCodeAt(i)) | 0;
+  return Math.abs(h) % 5000;
+}
+
 async function fetchFeed(path: string): Promise<GtfsRealtimeBindings.transit_realtime.FeedMessage | null> {
-  if (feedDead(path)) return null;
+  if (feedParked(path)) return null;
   try {
     const buf = await fetchBuffer(`${TFNSW_BASE}${path}`, {
       timeoutMs: FEED_TIMEOUT_MS,
@@ -131,8 +145,11 @@ async function fetchFeed(path: string): Promise<GtfsRealtimeBindings.transit_rea
   } catch (err) {
     const status = (err as { status?: number | null }).status;
     if (status === 404 || status === 410) {
-      _deadFeeds.set(path, Date.now());
+      _parkedFeeds.set(path, Date.now() + DEAD_FEED_PARK_MS);
       log.warn({ path, status }, 'tfnsw: feed unavailable — parked for 1h');
+    } else if (status === 429) {
+      _parkedFeeds.set(path, Date.now() + RATE_LIMIT_PARK_MS);
+      log.warn({ path }, 'tfnsw: rate limited — parked for 2min');
     } else {
       log.warn({ err, path }, 'tfnsw: feed fetch failed');
     }
@@ -222,7 +239,7 @@ export async function fetchTfnswPositions(
             return msg ? decodePositions(msg, mode) : [];
           },
           {
-            fresh: POS_FRESH_MS,
+            fresh: POS_FRESH_MS + feedJitterMs(path),
             stale: POS_STALE_MS,
             onError: (err) => log.warn({ err, path }, 'tfnsw: positions refresh failed'),
           },
@@ -479,7 +496,7 @@ export async function fetchTfnswAlerts(): Promise<TfnswAlert[]> {
 export function _resetTfnswForTests(): void {
   positionsCache.clear();
   alertsCache.clear();
-  _deadFeeds.clear();
+  _parkedFeeds.clear();
 }
 
 /** TEST-ONLY: decode helpers exposed for fixture-based tests. */
