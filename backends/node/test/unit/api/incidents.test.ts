@@ -361,9 +361,24 @@ describe('incident_updates routes', () => {
     expect(callWith('DELETE FROM incident_updates WHERE id = $1')?.params).toEqual(['u1']);
   });
 
-  it('any editor may edit another author\'s log (collaborative)', async () => {
+  it('403s when a non-author, non-admin edits a log (author-only)', async () => {
     canManageUsersMock.mockResolvedValue(false); // not an admin either
-    nextResult = { rows: [{ update_by: 'other', incident_by: 'other' }], rowCount: 1 };
+    nextResult = { rows: [{ update_by: 'other', incident_by: 'editor-1' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/updates/u1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'x' }),
+    });
+    // Even the INCIDENT owner can't edit someone else's log entry.
+    expect(res.status).toBe(403);
+    expect(callWith('UPDATE incident_updates SET message')).toBeUndefined();
+    canManageUsersMock.mockResolvedValue(true);
+  });
+
+  it('the author may edit their own log entry', async () => {
+    canManageUsersMock.mockResolvedValue(false);
+    nextResult = { rows: [{ update_by: 'editor-1', incident_by: 'other' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/updates/u1', {
       method: 'PUT',

@@ -836,15 +836,21 @@
         return;
       }
 
-      container.innerHTML = data.map(log => `
-        <div id="log-item-${log.id}" style="border-bottom:1px solid rgba(255,255,255,0.1); padding:0.6rem 0.4rem;" data-original-message="${escapeHtml(log.message).replace(/"/g, '&quot;')}">
-          <div style="font-size:0.7rem; color:var(--text-soft); display:flex; justify-content:space-between; margin-bottom:0.3rem;">
-            <span>${new Date(log.created_at).toLocaleString()}${log.created_by_name ? ` · <strong style="color:#cbd5e1;">${escapeHtml(log.created_by_name)}</strong>` : ''}</span>
+      container.innerHTML = data.map(log => {
+        // Edit/Delete are AUTHOR-ONLY (admins get a moderation
+        // override) — matching the backend gate, so no dead buttons.
+        const mine = !!(log.created_by && log.created_by === currentUserId) || currentIsAdmin;
+        const actions = mine ? `
             <div style="display:flex; gap:0.5rem;">
               <span style="cursor:pointer; color:var(--accent);" onclick="startEditLog('${log.id}')">Edit</span>
               <span style="cursor:pointer; color:#8b5cf6;" onclick="checkGrammar('${log.id}')" title="Check grammar">✓ Grammar</span>
               <span style="cursor:pointer; color:#ef4444;" onclick="deleteLog('${log.id}')">Delete</span>
-            </div>
+            </div>` : '';
+        return `
+        <div id="log-item-${log.id}" style="border-bottom:1px solid rgba(255,255,255,0.1); padding:0.6rem 0.4rem;" data-original-message="${escapeHtml(log.message).replace(/"/g, '&quot;')}">
+          <div style="font-size:0.7rem; color:var(--text-soft); display:flex; justify-content:space-between; margin-bottom:0.3rem;">
+            <span>${new Date(log.created_at).toLocaleString()}${log.created_by_name ? ` · <strong style="color:#cbd5e1;">${escapeHtml(log.created_by_name)}</strong>` : ''}</span>
+            ${actions}
           </div>
           <div class="log-content markdown-body" id="log-text-${log.id}" style="font-size:0.85rem; color:#e2e8f0; line-height:1.4;">
             ${DOMPurify.sanitize(marked.parse(log.message))}
@@ -857,7 +863,7 @@
           </div>
           <div id="log-grammar-results-${log.id}" style="display:none; margin-top:0.5rem;"></div>
         </div>
-      `).join('');
+      `; }).join('');
     }
 
     function startEditLog(id) {

@@ -94,6 +94,17 @@ function currentUserName(c: { get: (k: string) => unknown }): string | null {
   return typeof v === 'string' && v ? v : null;
 }
 
+/** Log entries may only be edited/deleted by their AUTHOR (site admins
+ * retain a moderation override). */
+async function userCanModifyUpdate(
+  userId: string | undefined,
+  updateBy: string | null,
+): Promise<boolean> {
+  if (!userId) return false;
+  if (updateBy && updateBy === userId) return true;
+  return canManageUsers(userId);
+}
+
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
 
 // Whitelist of columns that PUT /api/incidents/:id may update. Mirrors
@@ -691,9 +702,9 @@ incidentsRouter.put('/api/incidents/updates/:updateId', async (c) => {
     const result = await withPool(async (pool) => {
       const owner = await loadUpdateAuthority(pool, updateId);
       if (!owner) return { notFound: true as const };
-      // Logs are COLLABORATIVE: any editor may edit any entry (across
-      // user pins, RFS stubs and pager stubs) — author attribution is
-      // preserved via created_by / created_by_name.
+      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy))) {
+        return { forbidden: true as const };
+      }
       await pool.query(
         'UPDATE incident_updates SET message = $1 WHERE id = $2',
         [message, updateId],
@@ -702,6 +713,9 @@ incidentsRouter.put('/api/incidents/updates/:updateId', async (c) => {
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in result) return c.json({ error: 'Update not found' }, 404);
+    if ('forbidden' in result) {
+      return c.json({ error: 'Only the log author (or an admin) can edit it.' }, 403);
+    }
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, updateId }, 'Error updating incident update');
@@ -718,12 +732,17 @@ incidentsRouter.delete('/api/incidents/updates/:updateId', async (c) => {
     const result = await withPool(async (pool) => {
       const owner = await loadUpdateAuthority(pool, updateId);
       if (!owner) return { notFound: true as const };
-      // Collaborative, like edits — any editor may remove any entry.
+      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy))) {
+        return { forbidden: true as const };
+      }
       await pool.query('DELETE FROM incident_updates WHERE id = $1', [updateId]);
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in result) return c.json({ error: 'Update not found' }, 404);
+    if ('forbidden' in result) {
+      return c.json({ error: 'Only the log author (or an admin) can delete it.' }, 403);
+    }
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, updateId }, 'Error deleting incident update');
