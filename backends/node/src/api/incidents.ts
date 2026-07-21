@@ -114,11 +114,50 @@ const UPDATABLE_FIELDS = [
   'status',
   'size',
   'responding_agencies',
+  'units',
   'expires_at',
   'updated_at',
 ] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
-const JSONB_FIELDS: ReadonlySet<string> = new Set(['type', 'responding_agencies']);
+const JSONB_FIELDS: ReadonlySet<string> = new Set(['type', 'responding_agencies', 'units']);
+
+/**
+ * Sanitize an editor-supplied units list: strings only, trimmed,
+ * uppercased, de-duped, bounded (24 chars each, 50 units max) so a
+ * malformed payload can't bloat the row or the callsign dictionary.
+ */
+export function sanitizeUnits(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of raw) {
+    if (typeof u !== 'string') continue;
+    const s = u.trim().toUpperCase().slice(0, 24);
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+/** Upsert saved callsigns into the persistent dictionary (best-effort —
+ * a failure here must never fail the incident save). */
+async function rememberCallsigns(pool: Pool, units: string[]): Promise<void> {
+  for (const cs of units) {
+    try {
+      await pool.query(
+        `INSERT INTO callsigns (callsign) VALUES ($1)
+         ON CONFLICT (callsign) DO UPDATE
+           SET last_used = now(), use_count = callsigns.use_count + 1`,
+        [cs],
+      );
+    } catch (err) {
+      log.warn({ err, cs }, 'callsigns: upsert failed');
+      return;
+    }
+  }
+}
 
 /**
  * Coerce an untrusted JSON value into a finite coordinate number.
@@ -155,7 +194,7 @@ interface IncidentRow {
 
 function normaliseIncident(row: IncidentRow): Record<string, unknown> {
   const out: Record<string, unknown> = { ...row };
-  for (const k of ['type', 'responding_agencies']) {
+  for (const k of ['type', 'responding_agencies', 'units']) {
     const v = out[k];
     if (typeof v === 'string') {
       try {
@@ -252,6 +291,30 @@ incidentsRouter.get('/api/incidents', async (c) => {
 // Archived rows live in their own table, are exempt from data retention,
 // and are publicly searchable from the logs page.
 // ---------------------------------------------------------------------------
+
+// GET /api/incidents/callsigns — the persistent callsign dictionary for
+// the editor's unit-input tab completion. Registered before /:id so the
+// static segment wins the route match. Tolerates a missing table (un-run
+// migration) by returning an empty list rather than 500ing the editor.
+incidentsRouter.get('/api/incidents/callsigns', async (c) => {
+  try {
+    const result = await withPool(async (pool) => {
+      try {
+        const r = await pool.query<{ callsign: string }>(
+          'SELECT callsign FROM callsigns ORDER BY use_count DESC, last_used DESC LIMIT 500',
+        );
+        return r.rows.map((row) => row.callsign);
+      } catch {
+        return [] as string[];
+      }
+    });
+    if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
+    return c.json({ callsigns: result });
+  } catch (err) {
+    log.error({ err }, 'Error fetching callsigns');
+    return c.json({ error: 'Failed to fetch callsigns' }, 500);
+  }
+});
 
 // GET /api/incidents/archived — public search (?q=&limit=&offset=).
 // Registered before /:id so the static segment wins the route match.
@@ -486,7 +549,9 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
       if (Object.prototype.hasOwnProperty.call(data, key)) {
         const raw = data[key as UpdatableField];
         let val: unknown;
-        if (JSONB_FIELDS.has(key)) {
+        if (key === 'units') {
+          val = JSON.stringify(sanitizeUnits(raw));
+        } else if (JSONB_FIELDS.has(key)) {
           val = JSON.stringify(raw);
         } else if (key === 'lat' || key === 'lng') {
           // Never trust unvalidated JSON straight into the geo columns —
@@ -508,8 +573,14 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     }
     vals.push(id);
     const sql = `UPDATE incidents SET ${sets.join(', ')} WHERE id = $${vals.length}`;
+    const savedUnits = Object.prototype.hasOwnProperty.call(data, 'units')
+      ? sanitizeUnits(data['units'])
+      : [];
     const result = await withPool(async (pool) => {
       await pool.query(sql, vals);
+      // Feed the callsign dictionary so future unit inputs can
+      // tab-complete what anyone has typed before.
+      if (savedUnits.length) await rememberCallsigns(pool, savedUnits);
       return true;
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
