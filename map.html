@@ -5731,6 +5731,25 @@ function initPagerHoursFromStorage() {
       return !btn || btn.classList.contains('active');
     }
 
+    // Attached-unit chips (read-only) — shown to everyone; only editors
+    // can modify the list (via the editor panel / stub rows).
+    function _unitsChipsHtml(units) {
+      return (units || []).map((u) =>
+        '<span style="display:inline-block;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#bbf7d0;font-size:0.72rem;font-weight:600;padding:0.1rem 0.5rem;border-radius:999px;margin:0 0.25rem 0.2rem 0;">' + escapeHtml(u) + '</span>'
+      ).join('');
+    }
+    // Fetch a stub incident's attached units (RFS incidents / pager
+    // clusters store theirs on shared stub rows). Resolves [] when the
+    // stub doesn't exist yet.
+    async function _fetchStubUnits(stubId) {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stubId}`);
+        if (!res.ok) return [];
+        const j = await res.json();
+        return Array.isArray(j.units) ? j.units : [];
+      } catch (e) { return []; }
+    }
+
     // Right-dock incident details card (public pager/RFS pin clicks) —
     // matches the vessels/aircraft/transport dock chrome instead of the
     // full-height incident sidebar. Closed by map-background clicks.
@@ -5752,14 +5771,26 @@ function initPagerHoursFromStorage() {
     }
     window.closeIncidentInfoPanel = closeIncidentInfoPanel;
 
-    function showPagerDetails(item) {
+    async function showPagerDetails(item) {
       // Editor mode: pager cluster details open in the editor panel.
       if (_editorHooksUsable()) { return NSWPSNEditorHooks.openPager(item); }
-      const hits = (item.rawDetails && item.rawDetails.hits) ? item.rawDetails.hits.length : 0;
+      const raw = item.rawDetails || {};
+      const hits = raw.hits ? raw.hits.length : 0;
       const body = _openIncidentInfoPanel('fa-pager', '#22c55e', 'Pager hits',
         hits ? hits + ' call' + (hits === 1 ? '' : 's') : '');
       if (!body) return;
-      body.innerHTML = renderPagerDetailsHtml(item.rawDetails || {});
+      body.innerHTML = renderPagerDetailsHtml(raw);
+      // Attached units (read-only) — same deterministic stub id the
+      // editor's pager view saves to (keep the key derivation in sync
+      // with map-editor-module showPagerClusterEditor).
+      const stubKey = 'pager:' + (raw.incidentId ||
+        (raw.incidentIds && raw.incidentIds[0]) ||
+        (item.lat + ',' + item.lng));
+      const units = await _fetchStubUnits(generateRfsId(stubKey));
+      if (units.length && body.isConnected) {
+        body.insertAdjacentHTML('afterbegin',
+          '<div style="font-size:0.8rem;color:#cbd5e1;margin:0.2rem 0 0.6rem;"><strong>Attached Units:</strong><br>' + _unitsChipsHtml(units) + '</div>');
+      }
     }
 
 
@@ -6170,7 +6201,7 @@ function initPagerHoursFromStorage() {
           <strong>Type:</strong> ${escapeHtml(typeRaw)}<br>
           <strong>Size:</strong> ${escapeHtml(size)}
           ${(Array.isArray(data.units) && data.units.length)
-            ? '<div style="margin-top:0.45rem;"><strong>Units:</strong> ' + data.units.map(u => '<span style="display:inline-block;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#bbf7d0;font-size:0.72rem;font-weight:600;padding:0.1rem 0.5rem;border-radius:999px;margin:0 0.25rem 0.2rem 0;">' + escapeHtml(u) + '</span>').join('') + '</div>'
+            ? '<div style="margin-top:0.45rem;"><strong>Attached Units:</strong> ' + _unitsChipsHtml(data.units) + '</div>'
             : ''}
         </div>
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log</h3>
@@ -6271,6 +6302,14 @@ function initPagerHoursFromStorage() {
       }
 
       content.innerHTML = html;
+
+      // Attached units (read-only, from the shared RFS stub row).
+      const stubUnits = await _fetchStubUnits(item.id);
+      if (stubUnits.length && content.isConnected) {
+        const div = document.createElement('div');
+        div.innerHTML = '<div style="font-size:0.85rem;color:#cbd5e1;margin:0.6rem 0 1rem;"><strong>Attached Units:</strong><br>' + _unitsChipsHtml(stubUnits) + '</div>';
+        content.insertBefore(div, content.children[3] || null);
+      }
     }
 
     function getAgencyClass(agency) {
@@ -15363,6 +15402,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=12"></script>
+  <script src="map-editor-module.js?v=13"></script>
 </body>
 </html>
