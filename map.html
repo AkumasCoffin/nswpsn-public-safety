@@ -76,9 +76,12 @@
     .layer-toggles .btn-toggle i { font-size: 13px; }
     .layer-toggles .btn-toggle.active i { text-shadow: 0 0 8px currentColor; }
     /* styles.css strikes through inactive .btn-toggle labels; at 8.5px
-       that makes them unreadable. Off-state is already clear from the
-       reduced opacity and missing glow/border. */
-    .layer-toggles .btn-toggle:not(.active) { text-decoration: none; }
+       that makes them unreadable. Instead the off-state dims AND
+       desaturates — the inline-coloured icons otherwise stayed at full
+       saturation and disabled layers didn't read as off. */
+    .layer-toggles .btn-toggle:not(.active) { text-decoration: none; opacity: 0.4; }
+    .layer-toggles .btn-toggle:not(.active) i { filter: grayscale(0.7) brightness(0.85); }
+    .layer-toggles .btn-toggle:not(.active):hover { opacity: 0.75; }
     
     /* PC: Only show scrollbar when actually needed (when content overflows) */
     @media (min-width: 901px) {
@@ -9985,12 +9988,25 @@ function initPagerHoursFromStorage() {
             <span id="ff-ais-age-val" style="font-size:10px;color:#cbd5e1;min-width:60px;text-align:right;font-variant-numeric:tabular-nums;">${_aisFormatAge(aisMaxAgeMin)}</span>
           </div>
         `;
+        // Labels master + field sub-toggles (aircraft panel pattern).
+        let labelFieldsHtml = '';
+        if (aisLabelSettings.enabled) {
+          const lp = AIS_LABEL_FIELDS.map((f) =>
+            _ffPill(aisLabelSettings[f.key], f.label, `toggleAisLabelFieldPill('${f.key}')`)
+          ).join('');
+          labelFieldsHtml = `
+          <div class="ff-section-label">Label fields</div>
+          <div class="floating-filter-pills">${lp}</div>`;
+        }
         return `
           <h4><i class="fa-solid fa-ship" style="color:#0284c7;"></i> AIS Ships</h4>
           <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
           <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
           <div class="ff-section-label" style="margin-top:8px;">Status</div>
           <div class="floating-filter-pills">${statusPills}</div>
+          <div class="ff-section-label" style="margin-top:8px;">Labels</div>
+          <div class="floating-filter-pills">${_ffPill(aisLabelSettings.enabled, '<i class="fa-solid fa-tag"></i> Labels', 'toggleAisLabelsPill()')}</div>
+          ${labelFieldsHtml}
           <div class="ff-section-label" style="margin-top:8px;">Last seen</div>
           ${ageSlider}
           <div class="floating-filter-status">${escapeHtml(visibleTxt)}</div>
@@ -10282,15 +10298,67 @@ function initPagerHoursFromStorage() {
       }
     }
 
-    function buildAisIcon(category, headingDeg, isSatAis) {
+    // On-map labels under each vessel, mirroring the aircraft layer:
+    // `enabled` is the master switch in the floating filter panel, the
+    // field keys are sub-toggles. Identity (ship name / MMSI) always
+    // shows when enabled.
+    const aisLabelSettings = {
+      enabled: false,
+      speed: true,
+      dest: true,
+      course: false,
+      type: false,
+      flag: false
+    };
+    const AIS_LABEL_FIELDS = [
+      { key: 'speed',  label: 'Speed' },
+      { key: 'dest',   label: 'Destination' },
+      { key: 'course', label: 'Course' },
+      { key: 'type',   label: 'Type' },
+      { key: 'flag',   label: 'Flag' }
+    ];
+    function buildVesselLabelFields(v) {
+      const parts = [];
+      if (aisLabelSettings.speed && v.SPEED != null && v.SPEED !== '') {
+        parts.push((parseFloat(v.SPEED) / 10).toFixed(1) + ' kn'); // MT speed is 1/10 kn
+      }
+      if (aisLabelSettings.dest && v.DESTINATION) parts.push(_tptTrunc(v.DESTINATION, 18));
+      if (aisLabelSettings.course && v.COURSE != null && v.COURSE !== '') {
+        parts.push(Math.round(parseFloat(v.COURSE)) + '°');
+      }
+      if (aisLabelSettings.type) {
+        const t = v.TYPE_NAME || v.TYPE_SUMMARY;
+        if (t) parts.push(_tptTrunc(t, 16));
+      }
+      if (aisLabelSettings.flag && v.FLAG) parts.push(String(v.FLAG));
+      return parts;
+    }
+    function _aisLabelHtml(v, color, topPx) {
+      if (!v || !aisLabelSettings.enabled) return '';
+      const identity = (v.SHIPNAME || v.NAME || v.MMSI || 'Vessel').toString();
+      const lines = buildVesselLabelFields(v)
+        .map((p) => '<div>' + escapeHtml(p) + '</div>').join('');
+      return '<div style="position:absolute;top:' + topPx + 'px;left:50%;transform:translateX(-50%);background:rgba(10,14,26,0.85);border:1px solid ' + hexToRgba(color, 0.5) + ';color:#e2e8f0;font-size:9px;line-height:1.45;padding:2px 6px;border-radius:4px;white-space:nowrap;text-align:center;pointer-events:none;font-family:system-ui,sans-serif;">' +
+        '<div style="font-weight:700;color:' + color + ';">' + escapeHtml(identity) + '</div>' +
+        lines +
+      '</div>';
+    }
+
+    function buildAisIcon(category, headingDeg, isSatAis, v) {
       const color = AIS_TYPE_COLOR[category] || AIS_TYPE_COLOR.unspecified;
       const op = isSatAis ? 0.55 : 1;
+      const wrap = (inner, size, labelTop) => {
+        const label = _aisLabelHtml(v, color, labelTop);
+        return label
+          ? '<div style="position:relative;width:' + size + 'px;height:' + size + 'px;">' + inner + label + '</div>'
+          : inner;
+      };
       // Navigation aids — diamond marker (matches MT's icon legend).
       // Always shown as a diamond regardless of heading.
       if (category === 'navaid') {
         return L.divIcon({
           className: 'ais-pin',
-          html: '<svg viewBox="0 0 24 24" width="16" height="16" style="display:block;opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+          html: wrap('<svg viewBox="0 0 24 24" width="16" height="16" style="display:block;opacity:' + op + ';filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));"><path d="M12 2 L22 12 L12 22 L2 12 Z" fill="' + color + '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>', 16, 17),
           iconSize: [16, 16],
           iconAnchor: [8, 8]
         });
@@ -10299,14 +10367,14 @@ function initPagerHoursFromStorage() {
       if (!isFinite(headingDeg)) {
         return L.divIcon({
           className: 'ais-pin',
-          html: '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';"></div>',
+          html: wrap('<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.6);opacity:' + op + ';"></div>', 12, 13),
           iconSize: [12, 12],
           iconAnchor: [6, 6]
         });
       }
       return L.divIcon({
         className: 'ais-pin',
-        html: aisIconSvg(category, color, headingDeg, 20, op),
+        html: wrap(aisIconSvg(category, color, headingDeg, 20, op), 20, 21),
         iconSize: [20, 20],
         iconAnchor: [10, 10]
       });
@@ -10421,7 +10489,7 @@ function initPagerHoursFromStorage() {
         }
         const heading = parseFloat(v.HEADING);
         const isSatAis = (v.SHIPNAME || '').toString() === '[SAT-AIS]';
-        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis);
+        const icon = buildAisIcon(cat, isFinite(heading) && heading !== 511 ? heading : null, isSatAis, v);
         const id = _aisVesselId(v);
         const marker = L.marker([lat, lon], { icon }).bindTooltip(buildAisPopupHtml(v), {
           className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
@@ -11635,6 +11703,16 @@ function initPagerHoursFromStorage() {
     map.on('dragstart', () => { _adsbFollowActive = false; });
 
     // ---------- Floating filter panel: type filters + label toggles ----------
+    window.toggleAisLabelsPill = function () {
+      aisLabelSettings.enabled = !aisLabelSettings.enabled;
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
+    window.toggleAisLabelFieldPill = function (key) {
+      aisLabelSettings[key] = !aisLabelSettings[key];
+      _rebuildAis();
+      refreshActiveFilterPanel();
+    };
     window.toggleAdsbLabelsPill = function () {
       adsbLabelSettings.enabled = !adsbLabelSettings.enabled;
       _rebuildAdsb();
