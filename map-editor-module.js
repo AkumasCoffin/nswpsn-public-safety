@@ -117,6 +117,21 @@
       });
       if (!res.ok) showToast('Failed to save units.', 'error');
     }
+    // In the RFS/pager read-only views the units input reads best just
+    // above the Incident Logs (under the read-only details block); user
+    // pins keep it in the form between agencies and description. Moving
+    // the same node preserves its input listeners.
+    function placeUnitsGroup(beforeLogs) {
+      const g = document.getElementById('units-group');
+      if (!g) return;
+      if (beforeLogs) {
+        const logs = document.getElementById('log-section');
+        if (logs && logs.parentNode) logs.parentNode.insertBefore(g, logs);
+      } else {
+        const desc = document.getElementById('desc-group');
+        if (desc && desc.parentNode) desc.parentNode.insertBefore(g, desc);
+      }
+    }
     async function loadStubUnits(stub) {
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`);
@@ -288,6 +303,7 @@
       _unitsStub = null; // user pins persist units via Save
       currentUnits = Array.isArray(inc.units) ? inc.units.slice() : [];
       renderUnitChips();
+      placeUnitsGroup(false); // back to its form position
       const unitsGroup = document.getElementById('units-group');
       if (unitsGroup) unitsGroup.style.display = 'block';
 
@@ -717,10 +733,12 @@
       if (existingRFSBlock) existingRFSBlock.remove();
       
       const logSection = document.getElementById('log-section');
-      editorPanel.insertBefore(customRFSBlock, logSection); 
+      editorPanel.insertBefore(customRFSBlock, logSection);
+      // Units sit between the read-only details and the logs.
+      placeUnitsGroup(true);
 
       logSection.style.display = 'block';
-      document.getElementById('new-update-msg').value = ''; 
+      document.getElementById('new-update-msg').value = '';
 
       loadIncidentLogs(data.id);
       const [lat, lng] = data.point.split(' ').map(Number);
@@ -780,6 +798,7 @@
       currentUnits = [];
       _unitsStub = null;
       renderUnitChips();
+      placeUnitsGroup(false);
 
       // Clear ownership-aware injected panels so state never leaks between pins.
       const ownershipNotice = document.getElementById('ownership-notice');
@@ -1929,6 +1948,7 @@
           currentUnits = [];
           renderUnitChips();
           document.getElementById('units-group').style.display = 'block';
+          placeUnitsGroup(true); // under the pager details block
           loadStubUnits(_unitsStub);
         } else {
           _unitsStub = null;
