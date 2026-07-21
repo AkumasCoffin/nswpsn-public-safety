@@ -30,7 +30,12 @@ const rt = GtfsRealtimeBindings.transit_realtime;
 const TFNSW_BASE = 'https://api.transport.nsw.gov.au';
 const FEED_TIMEOUT_MS = 12_000;
 const POS_FRESH_MS = 10_000;
-const POS_STALE_MS = 30_000;
+// Long stale window: while a refresh fails, serving the last-good
+// decode keeps matched vehicles in the TfNSW frame of reference
+// instead of snapping back to AnyTrip's (~30s ahead) interpolation —
+// the alternation is what looked like random teleporting. Entities
+// carry their own timestamps and age out at decode regardless.
+const POS_STALE_MS = 90_000;
 const ALERT_FRESH_MS = 60_000;
 const ALERT_STALE_MS = 600_000;
 // Positions older than this are dropped — a stale GTFS-R entity is
@@ -276,20 +281,15 @@ export function applyTfnswPositions(
     usedTrips.add(v.tripId as string);
     matched += 1;
     matchedByMode.set(v.mode, (matchedByMode.get(v.mode) ?? 0) + 1);
-    // AnyTrip's position is interpolated + map-matched from the SAME
-    // GTFS-R telemetry, so it runs ahead of the raw feed (up to ~30s
-    // of travel) and always sits on the track. Preferring the raw
-    // coordinates every tick flipped pins between the two frames of
-    // reference — random forward/backward teleports and off-track /
-    // wrong-lane positions. TfNSW coordinates are a per-vehicle
-    // FAILOVER (AnyTrip position stale or ageless), not an override;
-    // a fresh AnyTrip vehicle only gets metadata enrichment.
-    const anytripFresh = v.ageSec != null && v.ageSec <= POS_MAX_AGE_SEC / 2;
-    if (anytripFresh) {
-      return v.occupancy == null && p.occupancy != null
-        ? { ...v, occupancy: p.occupancy }
-        : v;
-    }
+    // TfNSW telemetry is PRIMARY for matched vehicles (fresher, and
+    // the official source). The one hard rule: never ALTERNATE frames
+    // of reference — AnyTrip's interpolation runs up to ~30s of travel
+    // ahead of the raw feed, so flip-flopping between them (e.g. on a
+    // transient feed failure) teleports pins back and forth. Matched
+    // vehicles therefore always take the TfNSW position (entities are
+    // age-filtered at decode), and the positions cache holds last-good
+    // data long enough to ride out fetch blips; the frontend's shape
+    // snap, backward-jitter guard and glide smooth the raw telemetry.
     return {
       ...v,
       lat: p.lat,
