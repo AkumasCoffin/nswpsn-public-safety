@@ -45,6 +45,11 @@ const PRIVILEGED_ONLY = {
   error: 'Only owners can add or remove the team_member, dev, or owner roles.',
 } as const;
 
+interface SupabaseIdentity {
+  provider?: string;
+  identity_data?: Record<string, unknown>;
+}
+
 interface SupabaseUser {
   id?: string;
   email?: string;
@@ -52,6 +57,7 @@ interface SupabaseUser {
   last_sign_in_at?: string;
   email_confirmed_at?: string | null;
   user_metadata?: Record<string, unknown>;
+  identities?: SupabaseIdentity[];
 }
 
 /**
@@ -67,6 +73,30 @@ function usernameFromMetadata(meta: Record<string, unknown> | undefined): string
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return null;
+}
+
+/**
+ * Discord linkage for the admin panel:
+ *   discord_linked — the account has a Discord OAuth identity attached.
+ *   discord_id     — the Discord user id (identity provider_id/sub), or
+ *                    the discord_id stored in user_metadata by the
+ *                    approval flow / signup form when there's no OAuth
+ *                    identity. Used by the frontend to spot the same
+ *                    person signing up under multiple accounts.
+ * Exported for tests.
+ */
+export function discordInfo(u: SupabaseUser): { discord_linked: boolean; discord_id: string | null } {
+  const identity = (u.identities ?? []).find((i) => i.provider === 'discord');
+  const idData = identity?.identity_data ?? {};
+  const fromIdentity = [idData['provider_id'], idData['sub']].find(
+    (v): v is string => typeof v === 'string' && v.trim() !== '',
+  );
+  const metaId = u.user_metadata?.['discord_id'];
+  const fromMeta = typeof metaId === 'string' && metaId.trim() !== '' ? metaId.trim() : null;
+  return {
+    discord_linked: identity !== undefined,
+    discord_id: fromIdentity ?? fromMeta,
+  };
 }
 interface SupabaseUsersResponse {
   users?: SupabaseUser[];
@@ -138,6 +168,7 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
       id: u.id,
       email: u.email,
       username: usernameFromMetadata(u.user_metadata),
+      ...discordInfo(u),
       created_at: u.created_at,
       last_sign_in: u.last_sign_in_at,
       email_confirmed: u.email_confirmed_at !== null && u.email_confirmed_at !== undefined,

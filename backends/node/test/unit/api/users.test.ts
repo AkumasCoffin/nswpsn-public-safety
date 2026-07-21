@@ -44,7 +44,7 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   };
 });
 
-const { usersRouter } = await import('../../../src/api/users.js');
+const { usersRouter, discordInfo } = await import('../../../src/api/users.js');
 const roles = await import('../../../src/services/auth/roles.js');
 const { _resetRolesCacheForTests } = roles;
 
@@ -73,6 +73,32 @@ beforeEach(() => {
   fakeClient.release.mockClear();
   _resetRolesCacheForTests();
   vi.unstubAllGlobals();
+});
+
+describe('discordInfo', () => {
+  it('reports an OAuth-linked Discord identity with its provider id', () => {
+    expect(
+      discordInfo({
+        identities: [
+          { provider: 'email', identity_data: {} },
+          { provider: 'discord', identity_data: { provider_id: '123456789', sub: '123456789' } },
+        ],
+      }),
+    ).toEqual({ discord_linked: true, discord_id: '123456789' });
+  });
+
+  it('falls back to sub, then to the metadata discord_id (unlinked)', () => {
+    expect(
+      discordInfo({ identities: [{ provider: 'discord', identity_data: { sub: '42' } }] }),
+    ).toEqual({ discord_linked: true, discord_id: '42' });
+    expect(
+      discordInfo({ identities: [], user_metadata: { discord_id: ' 987 ' } }),
+    ).toEqual({ discord_linked: false, discord_id: '987' });
+  });
+
+  it('returns null id when nothing is recorded', () => {
+    expect(discordInfo({})).toEqual({ discord_linked: false, discord_id: null });
+  });
 });
 
 describe('GET /api/users', () => {

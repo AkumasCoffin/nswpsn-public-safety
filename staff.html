@@ -1010,13 +1010,24 @@
             <div class="stat-value" id="stat-radio" style="color: #4ade80;">-</div>
             <div class="stat-label">Radio Contributors</div>
           </div>
+          <div class="stat-card" style="border-color: rgba(88, 101, 242, 0.3);">
+            <div class="stat-value" id="stat-discord" style="color: #818cf8;">-</div>
+            <div class="stat-label">Discord Linked</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-dupes">-</div>
+            <div class="stat-label">Possible Duplicates</div>
+          </div>
         </div>
         
         <div class="filter-bar">
           <div class="search-box">
             <i class="fas fa-search"></i>
-            <input type="text" id="user-search" placeholder="Search email or role..." oninput="renderUsers()">
+            <input type="text" id="user-search" placeholder="Search email, username, role or Discord ID..." oninput="renderUsers()">
           </div>
+          <button class="filter-btn" id="dupes-filter-btn" onclick="toggleDupesFilter()" title="Show only accounts that share a Discord ID with another account">
+            <i class="fas fa-clone"></i> Duplicates only
+          </button>
           <div class="filter-spacer"></div>
           <span class="result-count" id="user-count"></span>
         </div>
@@ -1986,15 +1997,48 @@
       }
     }
     
+    // Accounts that share a Discord ID are (almost certainly) the same
+    // person signing up more than once — emails are unique in Supabase,
+    // so the Discord ID is the cross-account signal we have. Returns a
+    // Map of normalised discord_id -> account count.
+    function _userDupeGroups() {
+      const groups = new Map();
+      for (const u of allUsers) {
+        const key = (u.discord_id || '').trim().toLowerCase();
+        if (!key) continue;
+        groups.set(key, (groups.get(key) || 0) + 1);
+      }
+      return groups;
+    }
+
+    function _isDupeUser(user, groups) {
+      const key = (user.discord_id || '').trim().toLowerCase();
+      return !!key && (groups.get(key) || 0) > 1;
+    }
+
     function updateUserStats() {
       const editors = allUsers.filter(u => (u.roles || []).some(r => r.role === 'map_editor')).length;
       const pager = allUsers.filter(u => (u.roles || []).some(r => r.role === 'pager_contributor')).length;
       const radio = allUsers.filter(u => (u.roles || []).some(r => r.role === 'radio_contributor')).length;
-      
+      const discordLinked = allUsers.filter(u => u.discord_linked).length;
+      const groups = _userDupeGroups();
+      const dupes = allUsers.filter(u => _isDupeUser(u, groups)).length;
+
       document.getElementById('stat-users').textContent = allUsers.length;
       document.getElementById('stat-editors').textContent = editors;
       document.getElementById('stat-pager').textContent = pager;
       document.getElementById('stat-radio').textContent = radio;
+      document.getElementById('stat-discord').textContent = discordLinked;
+      const dupesEl = document.getElementById('stat-dupes');
+      dupesEl.textContent = dupes;
+      dupesEl.style.color = dupes > 0 ? 'var(--warning)' : 'var(--success)';
+    }
+
+    let dupesOnly = false;
+    function toggleDupesFilter() {
+      dupesOnly = !dupesOnly;
+      document.getElementById('dupes-filter-btn').classList.toggle('active', dupesOnly);
+      renderUsers();
     }
     
     async function loadUsers() {
@@ -2034,12 +2078,15 @@
     
     function renderUsers() {
       const q = (document.getElementById('user-search')?.value || '').trim().toLowerCase();
-      const shown = q
+      const dupeGroups = _userDupeGroups();
+      let shown = q
         ? allUsers.filter(u =>
             (u.email || '').toLowerCase().includes(q) ||
             (u.username || '').toLowerCase().includes(q) ||
+            (u.discord_id || '').toLowerCase().includes(q) ||
             (u.roles || []).some(r => (r.role || '').toLowerCase().includes(q)))
         : allUsers;
+      if (dupesOnly) shown = shown.filter(u => _isDupeUser(u, dupeGroups));
 
       const countEl = document.getElementById('user-count');
       if (countEl) {
@@ -2080,12 +2127,27 @@
           rolesHtml = '<span class="no-roles">No roles</span>';
         }
         
+        // Discord cell: OAuth-linked gets the Discord mark; a metadata-only
+        // ID (from the signup form / approval) shows gray. Accounts sharing
+        // a Discord ID get a warning badge — same person, multiple signups.
+        let discordHtml = '<span class="no-roles">—</span>';
+        if (user.discord_linked) {
+          discordHtml = `<span title="Discord account linked (OAuth)" style="color:#818cf8;"><i class="fab fa-discord"></i>${user.discord_id ? ` <span class="discord-id">${escapeHtml(user.discord_id)}</span>` : ' Linked'}</span>`;
+        } else if (user.discord_id) {
+          discordHtml = `<span class="discord-id" title="Discord ID from signup form (account not OAuth-linked)">${escapeHtml(user.discord_id)}</span>`;
+        }
+        if (_isDupeUser(user, dupeGroups)) {
+          const n = dupeGroups.get((user.discord_id || '').trim().toLowerCase());
+          discordHtml += ` <span class="status-badge pending" title="${n} accounts share this Discord ID — likely the same person signed up more than once">shared ×${n}</span>`;
+        }
+
         return `
           <tr>
             <td>${user.username
               ? `<span style="font-weight: 600;">${escapeHtml(user.username)}</span>`
               : '<span class="no-roles">—</span>'}</td>
             <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(user.email)}</td>
+            <td>${discordHtml}</td>
             <td>${rolesHtml}</td>
             <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
             <td><span class="timestamp">${fmtDate(user.created_at)}</span></td>
@@ -2104,6 +2166,7 @@
             <tr>
               <th>Username</th>
               <th>Email</th>
+              <th>Discord</th>
               <th>Roles</th>
               <th>Last Login</th>
               <th>Created</th>
@@ -2229,6 +2292,17 @@
         return;
       }
       
+      // Repeat applicants: tally every request (any status) by email and
+      // by Discord ID so a resubmission is visible at a glance.
+      const emailCounts = new Map();
+      const discordCounts = new Map();
+      for (const r of allRequests) {
+        const e = (r.email || '').trim().toLowerCase();
+        const d = (r.discord_id || '').trim().toLowerCase();
+        if (e) emailCounts.set(e, (emailCounts.get(e) || 0) + 1);
+        if (d) discordCounts.set(d, (discordCounts.get(d) || 0) + 1);
+      }
+
       const rows = filtered.map(req => {
         // Format request types
         const typeLabels = {
@@ -2279,12 +2353,19 @@
           `;
         }
         
+        const emailN = emailCounts.get((req.email || '').trim().toLowerCase()) || 0;
+        const discordN = discordCounts.get((req.discord_id || '').trim().toLowerCase()) || 0;
+        const emailChip = emailN > 1
+          ? ` <span class="status-badge pending" title="This email appears in ${emailN} requests">×${emailN}</span>` : '';
+        const discordChip = discordN > 1
+          ? ` <span class="status-badge pending" title="This Discord ID appears in ${discordN} requests">×${discordN}</span>` : '';
+
         return `
           <tr>
             <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span></td>
             <td>${typesHtml}</td>
-            <td>${escapeHtml(req.email)}</td>
-            <td><span class="discord-id">${escapeHtml(req.discord_id)}</span></td>
+            <td>${escapeHtml(req.email)}${emailChip}</td>
+            <td><span class="discord-id">${escapeHtml(req.discord_id)}</span>${discordChip}</td>
             <td>${regionHtml}</td>
             <td><span class="timestamp">${fmtDate(req.created_at)}</span></td>
             <td>${actionsHtml}</td>
