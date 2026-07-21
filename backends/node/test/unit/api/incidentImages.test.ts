@@ -126,6 +126,39 @@ afterAll(() => {
   rmSync(UPLOADS, { recursive: true, force: true });
 });
 
+describe('reconcileOrphanImageDirs', () => {
+  it('removes dirs whose incident is gone from the DB, keeps known ones', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const base = path.join(UPLOADS, 'incident-images');
+    // live (in incidents), archived (in archived_incidents), and orphan.
+    for (const id of ['rec-live', 'rec-archived', 'rec-orphan']) {
+      mkdirSync(path.join(base, id), { recursive: true });
+      writeFileSync(path.join(base, id, 'a.jpg'), 'x');
+    }
+    const removed = await images.reconcileOrphanImageDirs(async (ids) => {
+      // Simulate the DB knowing only the live + archived ids.
+      expect(new Set(ids)).toContain('rec-orphan');
+      return new Set(ids.filter((i) => i === 'rec-live' || i === 'rec-archived'));
+    });
+    expect(removed).toBe(1);
+    expect(existsSync(path.join(base, 'rec-live'))).toBe(true);
+    expect(existsSync(path.join(base, 'rec-archived'))).toBe(true);
+    expect(existsSync(path.join(base, 'rec-orphan'))).toBe(false);
+  });
+
+  it('fails safe: removes nothing if the id lookup throws', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const dir = path.join(UPLOADS, 'incident-images', 'rec-safe');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'a.jpg'), 'x');
+    const removed = await images.reconcileOrphanImageDirs(async () => {
+      throw new Error('db down');
+    });
+    expect(removed).toBe(0);
+    expect(existsSync(dir)).toBe(true); // never deleted on uncertainty
+  });
+});
+
 describe('sweepStaleUploadParts', () => {
   it('removes old .part/.stripped temp files, keeps recent ones and real images', async () => {
     const { mkdirSync, utimesSync } = await import('node:fs');
