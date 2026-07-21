@@ -11725,14 +11725,16 @@ function initPagerHoursFromStorage() {
       return lanes;
     }
 
-    // GL line-offset zoom scaling (mirror of _transportGlStyle's
-    // interpolate, incl. GL zoom = Leaflet zoom − 1; MapLibre clamps
-    // to the terminal outputs outside the stop range).
+    // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr,
+    // incl. GL zoom = Leaflet zoom − 1; MapLibre clamps to the
+    // terminal outputs outside the stop range).
     function _transportOffsetK() {
       const gz = map.getZoom() - 1;
-      if (gz <= 8) return 0.4;
+      if (gz <= 6) return 0.05;
       if (gz >= 12) return 1.35;
-      return gz <= 10 ? 0.4 + (gz - 8) * 0.25 : 0.9 + (gz - 10) * 0.225;
+      if (gz <= 8) return 0.05 + (gz - 6) * 0.05;
+      if (gz <= 10) return 0.15 + (gz - 8) * 0.375;
+      return 0.9 + (gz - 10) * 0.225;
     }
 
     function _transportLaneCandidates(v) {
@@ -12161,8 +12163,12 @@ function initPagerHoursFromStorage() {
     // the network layers and the trip-highlight layers so both render
     // lanes in exactly the same place.
     function _transportGlOffsetExpr() {
+      // Offsets collapse hard at overview zooms — a corridor's 6-8
+      // parallel lanes otherwise fan into a fat multi-colour rope that
+      // reads as "lines get BIGGER when zooming out".
       return ['interpolate', ['linear'], ['zoom'],
-        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.4],
+        6, ['*', ['coalesce', ['get', 'offset'], 0], 0.05],
+        8, ['*', ['coalesce', ['get', 'offset'], 0], 0.15],
         10, ['*', ['coalesce', ['get', 'offset'], 0], 0.9],
         12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35]
       ];
@@ -12176,24 +12182,14 @@ function initPagerHoursFromStorage() {
         sources: { lines: { type: 'geojson', data: geo } },
         layers: [
           {
-            id: 'lines-outline', type: 'line', source: 'lines',
-            layout: { 'line-cap': 'round', 'line-join': 'bevel' },
-            paint: {
-              'line-color': '#FFFFFF',
-              // Exponential base 2 ≈ width tied to ground scale: lines
-              // shrink/grow WITH the map instead of clamping to a
-              // constant px width outside the stop range.
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.7, 12, 4, 15, 10],
-              'line-offset': offsetExpr,
-              'line-opacity': ['*', opacityExpr, 0.85]
-            }
-          },
-          {
             id: 'lines-colour', type: 'line', source: 'lines',
             layout: { 'line-cap': 'round', 'line-join': 'bevel' },
             paint: {
               'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.5, 12, 3, 15, 7.5],
+              // Exponential base 2 ≈ width tied to ground scale: lines
+              // shrink/grow WITH the map instead of clamping to a
+              // constant px width outside the stop range.
+              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.3, 12, 3, 15, 7.5],
               'line-offset': offsetExpr,
               'line-opacity': opacityExpr
             }
@@ -12212,13 +12208,12 @@ function initPagerHoursFromStorage() {
       }
     }
 
-    // Fallback for WebGL-less clients: plain Leaflet dual-layer lines
-    // with offsets OMITTED — corridors overlap into one strand, but
-    // there are no offset artifacts by construction. Weights use the
+    // Fallback for WebGL-less clients: plain Leaflet lines with
+    // offsets OMITTED — corridors overlap into one strand, but there
+    // are no offset artifacts by construction. Weights use the
     // existing zoomend sweep.
     function _buildLeafletNetworkFallback(geo) {
       let count = 0;
-      const outlines = [];
       const colours = [];
       for (const f of (geo.features || [])) {
         if (!f || !f.geometry) continue;
@@ -12231,18 +12226,13 @@ function initPagerHoursFromStorage() {
           const opacity = p.opacity != null ? p.opacity : 1;
           const wf = _transportWeightFactor();
           const df = _transportNetworkDimmed ? 0.15 : 1;
-          const ol = L.polyline(latlngs, { color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
-          ol._tptBaseWeight = 4;
           cl._tptBaseWeight = 3;
-          ol._tptBaseOpacity = opacity * 0.85;
           cl._tptBaseOpacity = opacity;
-          outlines.push(ol);
           colours.push(cl);
           count++;
         }
       }
-      for (const l of outlines) transportLinesLayer.addLayer(l);
       for (const l of colours) transportLinesLayer.addLayer(l);
       return count;
     }
@@ -12299,17 +12289,17 @@ function initPagerHoursFromStorage() {
     }
 
     // Line weights scale with the map (continuous, mirrors the GL
-    // exponential width curve: gz stops 6→0.7px, 12→4px, 15→10px on
-    // the base-4 outline; factor = width/4). Applied to the Leaflet
-    // fallback network + auto tracks via _applyTransportWeights.
+    // exponential width curve: gz stops 6→0.3px, 12→3px, 15→7.5px on
+    // the base-3 colour line; factor = width/3). Applied to the
+    // Leaflet fallback network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
       const gz = map.getZoom() - 1; // GL zoom, same reference as the style
       let w;
-      if (gz <= 6) w = 0.7;
-      else if (gz >= 15) w = 10;
-      else if (gz <= 12) w = 0.7 + 3.3 * (Math.pow(2, gz - 6) - 1) / 63;
-      else w = 4 + 6 * (Math.pow(2, gz - 12) - 1) / 7;
-      return w / 4;
+      if (gz <= 6) w = 0.3;
+      else if (gz >= 15) w = 7.5;
+      else if (gz <= 12) w = 0.3 + 2.7 * (Math.pow(2, gz - 6) - 1) / 63;
+      else w = 3 + 4.5 * (Math.pow(2, gz - 12) - 1) / 7;
+      return w / 3;
     }
     let _transportLastWeightFactor = null;
     function _applyTransportWeights() {
@@ -12388,8 +12378,6 @@ function initPagerHoursFromStorage() {
             if (!glMap.getLayer('lines-colour')) return;
             glMap.setPaintProperty('lines-colour', 'line-opacity',
               dimmed ? ['*', OP, 0.15] : OP);
-            glMap.setPaintProperty('lines-outline', 'line-opacity',
-              dimmed ? ['*', OP, 0.85 * 0.15] : ['*', OP, 0.85]);
             // Highlight source/layers live on top of the dimmed
             // network; created once per GL map, cleared via empty data.
             const hlData = (dimmed && _transportHlGeo) ? _transportHlGeo : _TPT_EMPTY_FC;
@@ -12400,21 +12388,11 @@ function initPagerHoursFromStorage() {
               glMap.addSource('tpt-hl', { type: 'geojson', data: hlData });
               const offsetExpr = _transportGlOffsetExpr();
               glMap.addLayer({
-                id: 'tpt-hl-outline', type: 'line', source: 'tpt-hl',
-                layout: { 'line-cap': 'round', 'line-join': 'bevel' },
-                paint: {
-                  'line-color': '#FFFFFF',
-                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 1, 12, 5, 15, 12.5],
-                  'line-offset': offsetExpr,
-                  'line-opacity': 0.9
-                }
-              });
-              glMap.addLayer({
                 id: 'tpt-hl-colour', type: 'line', source: 'tpt-hl',
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.7, 12, 3.8, 15, 9.5],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 6, 0.5, 12, 3.8, 15, 9.5],
                   'line-offset': offsetExpr,
                   'line-opacity': 1
                 }
@@ -12633,21 +12611,17 @@ function initPagerHoursFromStorage() {
         fetchTransportShapePts(sid).then((pts) => {
           if (!pts) { _transportAutoTracks.delete(sid); return; }
           if (_transportAutoTracks.get(sid) !== entry) return; // pruned meanwhile
-          // Same dual-layer style as the static network (white outline
-          // under the route colour) so shape-drawn tracks are
+          // Same style as the static network so shape-drawn tracks are
           // indistinguishable from the tiled ones. No offset — these
           // are single-route shapes.
           const wf = _transportWeightFactor();
           // A track finishing its fetch while the focus state is
           // active must be created dimmed.
           const df = _transportNetworkDimmed ? 0.15 : 1;
-          const tOl = L.polyline(pts, { color: '#FFFFFF', weight: 4 * wf, opacity: 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
-          tOl._tptBaseWeight = 4;
           tCl._tptBaseWeight = 3;
-          tOl._tptBaseOpacity = 0.85;
           tCl._tptBaseOpacity = 1;
-          entry.line = L.layerGroup([tOl, tCl]);
+          entry.line = tCl;
           transportAutoTracksLayer.addLayer(entry.line);
         });
       }
