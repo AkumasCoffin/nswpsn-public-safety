@@ -1507,6 +1507,9 @@
     /* Transport timetable card sits below the vessels/aircraft section
        and gets its own divider when both are open. */
     #right-dock #transport-info-panel { order: 2; border-top: 1px solid rgba(148, 163, 184, 0.18); }
+    /* The (long) service-alerts list must yield to the other dock cards
+       instead of squishing them: high shrink factor + a usable floor. */
+    #right-dock #transport-info-panel { flex-shrink: 6; min-height: 140px; }
     #right-dock #incident-info-panel { order: 3; border-top: 1px solid rgba(148, 163, 184, 0.18); }
     #incident-info-panel .ais-list-body { padding: 10px 12px; font-size: 0.8rem; }
     #incident-info-panel h2 { font-size: 1.15rem !important; }
@@ -3210,7 +3213,7 @@
     // Maximum allowed ELAPSED (minutes since last AIS position
     // report) for a vessel to render. 1440 = 24 h = "show any age".
     // The slider in the AIS filter panel writes this value.
-    let aisMaxAgeMin = 1440;
+    let aisMaxAgeMin = 5; // default: only vessels seen in the last 5 min
     function _aisFormatAge(min) {
       if (min >= 1440) return 'Any age';
       if (min < 60) return '≤ ' + min + ' min';
@@ -9878,15 +9881,27 @@ function initPagerHoursFromStorage() {
     };
 
     // ---------- User incident filters ----------
-    // Pills over the SAME filterState.agency / filterState.type the
-    // incident-list sidebar uses, so the two stay in sync.
+    // The type pills are the SAME curated taxonomy editors pick from
+    // when creating an incident (mirror of the editor module's
+    // INCIDENT_TYPE_GROUPS — keep the two in sync), and agencies are
+    // the fixed responding-agency list. Toggles write the same
+    // filterState the incident-list sidebar uses, so the two stay in
+    // sync. Legacy types on old pins appear in their own section.
+    const USER_INCIDENT_TYPE_GROUPS = [
+      { label: 'Fire', types: ["Bush Fire", "Grass Fire", "Structure Fire", "Vehicle Fire", "Hazard Reduction", "Pile Burn", "Fire Alarm (AFA)"] },
+      { label: 'Rescue', types: ["MVA / Transport", "Road Crash Rescue", "Search & Rescue", "Vertical Rescue", "Land Rescue", "Flood Rescue", "Animal Rescue"] },
+      { label: 'Medical', types: ["Cardiac Arrest", "Medical Emergency", "Overdose / Poisoning", "Mental Health / Self-harm"] },
+      { label: 'Hazard / Weather', types: ["Hazmat", "Storm Damage", "Flood", "Tree Down / Powerlines"] },
+      { label: 'Other', types: ["Police Operation", "Assist Other Agency", "Resupply", "Planned Event", "Other"] }
+    ];
+    const USER_AGENCIES = ['RFS', 'FRNSW', 'NSWAS', 'SES', 'Police', 'VRA'];
     window.toggleUserAgencyPill = function (key) {
-      filterState.agency[key] = !filterState.agency[key];
+      filterState.agency[key] = filterState.agency[key] === false;
       refreshMapAndList();
       refreshActiveFilterPanel();
     };
     window.toggleUserTypePill = function (key) {
-      filterState.type[key] = !filterState.type[key];
+      filterState.type[key] = filterState.type[key] === false;
       refreshMapAndList();
       refreshActiveFilterPanel();
     };
@@ -9902,19 +9917,28 @@ function initPagerHoursFromStorage() {
           (it.agenciesList || []).forEach((a) => { agencyCounts[a] = (agencyCounts[a] || 0) + 1; });
           (it.typesList || []).forEach((t) => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
         }
-        const agencyPills = Object.keys(filterState.agency).sort().map((a) =>
-          _ffPill(filterState.agency[a] === true, `${escapeHtml(a)} (${agencyCounts[a] || 0})`, `toggleUserAgencyPill('${a.replace(/'/g, "\\'")}')`)
+        const esc = (s) => s.replace(/'/g, "\\'");
+        const pillFor = (t) =>
+          _ffPill(filterState.type[t] !== false, `${escapeHtml(t)} (${typeCounts[t] || 0})`, `toggleUserTypePill('${esc(t)}')`);
+        const agencyPills = USER_AGENCIES.map((a) =>
+          _ffPill(filterState.agency[a] !== false, `${escapeHtml(a)} (${agencyCounts[a] || 0})`, `toggleUserAgencyPill('${esc(a)}')`)
         ).join('');
-        const typeKeys = Object.keys(typeCounts).sort();
-        const typePills = typeKeys.map((t) =>
-          _ffPill(filterState.type[t] !== false, `${escapeHtml(t)} (${typeCounts[t]})`, `toggleUserTypePill('${t.replace(/'/g, "\\'")}')`)
-        ).join('');
+        const groupsHtml = USER_INCIDENT_TYPE_GROUPS.map((g) => `
+          <div class="ff-section-label" style="margin-top:6px;">${g.label}</div>
+          <div class="floating-filter-pills">${g.types.map(pillFor).join('')}</div>`).join('');
+        const inTaxonomy = new Set(USER_INCIDENT_TYPE_GROUPS.flatMap((g) => g.types));
+        const extras = Object.keys(typeCounts)
+          .filter((t) => !inTaxonomy.has(t) && t !== 'Pager' && !USER_AGENCIES.includes(t))
+          .sort();
+        const extraHtml = extras.length ? `
+          <div class="ff-section-label" style="margin-top:6px;">Legacy types</div>
+          <div class="floating-filter-pills">${extras.map(pillFor).join('')}</div>` : '';
         return `
           <h4><i class="fa-solid fa-user" style="color:#a855f7;"></i> User Incidents</h4>
           <div class="ff-section-label">Responding agency</div>
-          <div class="floating-filter-pills">${agencyPills || '<span style="font-size:10px;color:#64748b;">No incidents loaded</span>'}</div>
-          <div class="ff-section-label">Incident type</div>
-          <div class="floating-filter-pills">${typePills || '<span style="font-size:10px;color:#64748b;">No incidents loaded</span>'}</div>
+          <div class="floating-filter-pills">${agencyPills}</div>
+          ${groupsHtml}
+          ${extraHtml}
         `;
       },
     };
@@ -9954,7 +9978,7 @@ function initPagerHoursFromStorage() {
     // Last-seen slider input handler. The slider value is the index
     // into a non-linear age scale below — gives finer steps in the
     // "minutes" range and coarser steps once you're into hours/days.
-    const _AIS_AGE_STOPS = [5, 10, 15, 30, 60, 120, 360, 720, 1440];
+    const _AIS_AGE_STOPS = [5, 10, 15, 30, 45, 60];
     // Live preview while the user drags — show the snap-target
     // label but don't commit (rebuilding the AIS layer on every
     // pixel of drag is way too expensive).
@@ -15339,6 +15363,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=10"></script>
+  <script src="map-editor-module.js?v=11"></script>
 </body>
 </html>

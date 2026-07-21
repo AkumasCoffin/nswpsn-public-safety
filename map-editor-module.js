@@ -78,6 +78,56 @@
     // typing the same one later can Tab-complete it. Enter adds.
     let currentUnits = [];
     let _callsignDict = [];
+    // Non-user contexts (RFS incidents, pager clusters) have no Save
+    // button — their units persist immediately against a shared stub
+    // incident row (same stub mechanism the RFS log flow uses).
+    let _unitsStub = null; // { id, title, lat, lng, tag } | null
+    async function ensureStubIncident(stub) {
+      try {
+        const check = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`);
+        if (check.ok) return true;
+      } catch (e) { /* fall through to create */ }
+      const expireTime = new Date(Date.now() + 48 * 3600000);
+      const res = await apiFetch(`${PROXY_BASE}/api/incidents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: stub.id,
+          title: stub.title,
+          lat: stub.lat || 0,
+          lng: stub.lng || 0,
+          is_rfs_stub: true,
+          type: [stub.tag],
+          status: 'Monitoring',
+          description: 'Auto-created stub for ' + stub.tag + ' log.',
+          expires_at: expireTime
+        })
+      });
+      return res.ok;
+    }
+    async function persistStubUnits() {
+      if (!_unitsStub) return;
+      const stub = _unitsStub;
+      const ok = await ensureStubIncident(stub);
+      if (!ok || _unitsStub !== stub) { if (!ok) showToast('Failed to save units.', 'error'); return; }
+      const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ units: currentUnits, updated_at: new Date() })
+      });
+      if (!res.ok) showToast('Failed to save units.', 'error');
+    }
+    async function loadStubUnits(stub) {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`);
+        if (!res.ok) return;
+        const j = await res.json();
+        if (_unitsStub && _unitsStub.id === stub.id) {
+          currentUnits = Array.isArray(j.units) ? j.units : [];
+          renderUnitChips();
+        }
+      } catch (e) { /* stays empty */ }
+    }
     async function loadCallsignDict() {
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/incidents/callsigns`);
@@ -100,7 +150,11 @@
         x.textContent = '×';
         x.title = 'Remove unit';
         x.style.cssText = 'background:none; border:0; color:#86efac; cursor:pointer; font-size:0.85rem; padding:0; line-height:1;';
-        x.onclick = () => { currentUnits.splice(i, 1); renderUnitChips(); };
+        x.onclick = () => {
+          currentUnits.splice(i, 1);
+          renderUnitChips();
+          if (_unitsStub) persistStubUnits();
+        };
         chip.appendChild(x);
         box.appendChild(chip);
       });
@@ -114,6 +168,7 @@
       if (!_callsignDict.includes(val)) _callsignDict.unshift(val);
       input.value = '';
       renderUnitChips();
+      if (_unitsStub) persistStubUnits();
     }
     function wireUnitInput() {
       const input = document.getElementById('unit-input');
@@ -230,6 +285,7 @@
         typeBox.appendChild(label);
       });
 
+      _unitsStub = null; // user pins persist units via Save
       currentUnits = Array.isArray(inc.units) ? inc.units.slice() : [];
       renderUnitChips();
       const unitsGroup = document.getElementById('units-group');
@@ -606,11 +662,27 @@
       document.getElementById('expiry-group').style.display = 'none';
       document.getElementById('type-group').style.display = 'none';
       document.getElementById('agency-group').style.display = 'none';
-      document.getElementById('units-group').style.display = 'none';
       document.getElementById('desc-group').style.display = 'none';
       document.getElementById('save-delete-group').style.display = 'none';
       const _ab1 = document.getElementById('btn-archive');
       if (_ab1) _ab1.style.display = 'none';
+
+      // Units ARE editable on RFS incidents — they persist immediately
+      // against the shared RFS stub row (no Save button in this view).
+      {
+        const pt = (data.point || '').split(' ').map(Number);
+        _unitsStub = {
+          id: data.id,
+          title: 'RFS Incident Log',
+          lat: Number.isFinite(pt[0]) ? pt[0] : 0,
+          lng: Number.isFinite(pt[1]) ? pt[1] : 0,
+          tag: 'RFS'
+        };
+        currentUnits = [];
+        renderUnitChips();
+        document.getElementById('units-group').style.display = 'block';
+        loadStubUnits(_unitsStub);
+      }
 
       // Clear any ownership-aware panels left over from a user-pin selection.
       const _on = document.getElementById('ownership-notice');
@@ -706,6 +778,7 @@
       document.getElementById('save-delete-group').style.display = 'grid';
       document.getElementById('log-section').style.display = 'block';
       currentUnits = [];
+      _unitsStub = null;
       renderUnitChips();
 
       // Clear ownership-aware injected panels so state never leaks between pins.
@@ -1808,7 +1881,6 @@
         document.getElementById('expiry-group').style.display = 'none';
         document.getElementById('type-group').style.display = 'none';
         document.getElementById('agency-group').style.display = 'none';
-        document.getElementById('units-group').style.display = 'none';
         document.getElementById('desc-group').style.display = 'none';
         document.getElementById('save-delete-group').style.display = 'none';
         document.getElementById('log-section').style.display = 'none';
@@ -1839,6 +1911,29 @@
 
         const logSection = document.getElementById('log-section');
         editorPanel.insertBefore(pagerBlock, logSection);
+
+        // Units are editable on pager clusters too, persisted against a
+        // deterministic stub row keyed on the cluster's incident id (or
+        // its coordinates when it has none).
+        const stubKey = 'pager:' + (details.incidentId ||
+          (details.incidentIds && details.incidentIds[0]) ||
+          (clusterEntry.lat + ',' + clusterEntry.lon));
+        if (typeof generateRfsId === 'function') {
+          _unitsStub = {
+            id: generateRfsId(stubKey),
+            title: 'Pager Incident Log',
+            lat: clusterEntry.lat || 0,
+            lng: clusterEntry.lon || 0,
+            tag: 'Pager'
+          };
+          currentUnits = [];
+          renderUnitChips();
+          document.getElementById('units-group').style.display = 'block';
+          loadStubUnits(_unitsStub);
+        } else {
+          _unitsStub = null;
+          document.getElementById('units-group').style.display = 'none';
+        }
 
         if (clusterEntry.lat != null && clusterEntry.lon != null && map) {
           map.panTo([clusterEntry.lat, clusterEntry.lon]);
