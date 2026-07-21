@@ -11941,6 +11941,10 @@ function initPagerHoursFromStorage() {
       const list = _transportVehicles
         .filter((v) => {
           if (!isFinite(v.lat) || !isFinite(v.lon)) return false;
+          // Parked/ghost vehicles (OCCP occupations, stabled sets)
+          // report hour-old positions — hide them. Safety net for the
+          // backend's identical filter.
+          if (v.ageSec != null && v.ageSec > 600) return false;
           const key = TRANSPORT_MODE_BY_KEY[v.mode] ? v.mode : null;
           return key === null || transportModeFilter[key]; // 'other' always shown
         })
@@ -12189,13 +12193,34 @@ function initPagerHoursFromStorage() {
             iconSize: [14, 14],
             iconAnchor: [7, 7]
           });
-          const rows = [
-            s.locality ? '<div style="font-size:11px;color:#94a3b8;">' + escapeHtml(s.locality) + '</div>' : '',
-            (s.modes || []).length ? '<div style="font-size:11px;color:#cbd5e1;margin-top:3px;">' + s.modes.map((m) => escapeHtml(TRANSPORT_MODE_BY_KEY[m] ? TRANSPORT_MODE_BY_KEY[m].label : m)).join(' · ') + '</div>' : '',
-            (s.accessibility || []).length ? '<div style="font-size:10px;color:#94a3b8;margin-top:4px;">' + s.accessibility.slice(0, 5).map((a) => escapeHtml(a)).join('<br>') + '</div>' : ''
-          ].join('');
+          // Mode chips in official mode colours; secondary feeds
+          // (temp/school buses) get readable labels on neutral chips.
+          const MODE_CHIP_LABELS = { tempbuses: 'Temp buses', schoolbuses: 'School buses', coach: 'Coaches' };
+          const modeChips = (s.modes || []).map((m) => {
+            const def = TRANSPORT_MODE_BY_KEY[m];
+            const label = def ? def.label : (MODE_CHIP_LABELS[m] || m.charAt(0).toUpperCase() + m.slice(1));
+            const bg = def ? def.color : '#475569';
+            return '<span style="background:' + bg + ';color:#fff;font-size:9px;padding:1.5px 6px;border-radius:3px;font-weight:700;white-space:nowrap;">' + escapeHtml(label) + '</span>';
+          }).join('');
+          const wcChip = s.wheelchair === true
+            ? '<span style="background:rgba(34,197,94,0.2);color:#4ade80;font-size:9px;padding:1.5px 6px;border-radius:3px;font-weight:700;white-space:nowrap;"><i class="fa-solid fa-wheelchair" style="font-size:8px;"></i> Accessible</span>'
+            : '';
+          const acc = (s.accessibility || []).slice(0, 5);
+          const accHtml = acc.length
+            ? '<div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(148,163,184,0.15);font-size:9.5px;color:#94a3b8;line-height:1.55;">' +
+              acc.map((a) => '<div><i class="fa-solid fa-circle-check" style="color:#22c55e;font-size:8px;margin-right:5px;"></i>' + escapeHtml(a) + '</div>').join('') +
+              '</div>'
+            : '';
+          const tip =
+            '<div style="max-width:300px;font-family:system-ui,sans-serif;color:#e2e8f0;">' +
+              '<div style="font-weight:700;font-size:13px;color:' + color + ';">' + escapeHtml(s.name) +
+                (s.locality ? ' <span style="color:#64748b;font-size:10px;font-weight:500;">' + escapeHtml(s.locality) + '</span>' : '') +
+              '</div>' +
+              ((modeChips || wcChip) ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;">' + modeChips + wcChip + '</div>' : '') +
+              accHtml +
+            '</div>';
           const stopMarker = L.marker([s.lat, s.lon], { icon: icon, zIndexOffset: -100 })
-            .bindTooltip('<div style="max-width:300px;font-family:system-ui,sans-serif;color:#e2e8f0;"><div style="font-weight:700;font-size:13px;color:' + color + ';">' + escapeHtml(s.name) + '</div>' + rows + '</div>', {
+            .bindTooltip(tip, {
               className: 'ais-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
           // Click → departures board for this station.
