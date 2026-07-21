@@ -194,6 +194,8 @@ export function createApp() {
     // Aircraft trails: prebuilt per poll, frontend fetches at the same
     // 30s cadence as this cache window — the CDN absorbs all clients.
     '/api/adsb/trails',
+    // TfNSW service alerts: fixed path, no viewport scoping.
+    '/api/transport/alerts',
   ];
   app.use('*', async (c, next) => {
     await next();

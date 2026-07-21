@@ -237,6 +237,19 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Transport for NSW Open Data API key (https://opendata.transport.nsw.gov.au,
+  // sent as `Authorization: apikey <key>`). Enables the official GTFS-realtime
+  // feeds: primary vehicle positions joined over the AnyTrip list, and
+  // /api/transport/alerts. Optional — unset means AnyTrip-only positions
+  // and an empty alerts endpoint, exactly the pre-TfNSW behaviour.
+  TFNSW_API_KEY: z.string().optional(),
+
+  // Kill switch for the TfNSW feeds specifically (key stays configured).
+  TFNSW_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
   // ---------------------------------------------------------------------
   // rdio → ntfy "major incident" push notifier (services/rdioIncidentAlerts).
   // Detects bursts of radio traffic per talkgroup off the rdio-scanner DB
