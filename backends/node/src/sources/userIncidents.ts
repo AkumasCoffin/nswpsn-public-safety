@@ -22,6 +22,7 @@
  */
 import { getPool } from '../db/pool.js';
 import { registerSource } from '../services/sourceRegistry.js';
+import { parseIncidentImages } from '../services/incidentImages.js';
 import type { ArchiveRow } from '../store/archive.js';
 
 export interface UserIncidentRow {
@@ -36,6 +37,7 @@ export interface UserIncidentRow {
   size: string | null;
   responding_agencies: unknown;
   units: unknown;
+  images?: unknown;
   created_at: Date | string | null;
   updated_at: Date | string | null;
   expires_at: Date | string | null;
@@ -117,6 +119,7 @@ export function userIncidentArchiveRow(
       type: types,
       responding_agencies: asStringArray(row.responding_agencies),
       units: asStringArray(row.units),
+      images: parseIncidentImages(row.images),
       is_active: isActive,
       created_at: toIso(row.created_at),
       updated_at: toIso(row.updated_at),
@@ -130,7 +133,7 @@ async function fetchUserIncidents(): Promise<UserIncidentRow[]> {
   if (!pool) return [];
   const r = await pool.query<UserIncidentRow>(
     `SELECT id, title, description, lat, lng, location, type, status, size,
-            responding_agencies, units, created_at, updated_at, expires_at
+            responding_agencies, units, images, created_at, updated_at, expires_at
        FROM incidents
       WHERE deleted_at IS NULL AND is_rfs_stub IS NOT TRUE`,
   );

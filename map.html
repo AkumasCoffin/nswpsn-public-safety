@@ -5854,16 +5854,71 @@ function initPagerHoursFromStorage() {
         '<span style="display:inline-block;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.5);color:#bbf7d0;font-size:0.72rem;font-weight:600;padding:0.1rem 0.5rem;border-radius:999px;margin:0 0.25rem 0.2rem 0;">' + escapeHtml(u) + '</span>'
       ).join('');
     }
-    // Fetch a stub incident's attached units (RFS incidents / pager
-    // clusters store theirs on shared stub rows). Resolves [] when the
-    // stub doesn't exist yet.
-    async function _fetchStubUnits(stubId) {
+    // Fetch a stub incident's attached units + photos (RFS incidents /
+    // pager clusters store theirs on shared stub rows). Resolves empty
+    // when the stub doesn't exist yet.
+    async function _fetchStubExtras(stubId) {
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stubId}`);
-        if (!res.ok) return [];
+        if (!res.ok) return { units: [], images: [] };
         const j = await res.json();
-        return Array.isArray(j.units) ? j.units : [];
-      } catch (e) { return []; }
+        return {
+          units: Array.isArray(j.units) ? j.units : [],
+          images: Array.isArray(j.images) ? j.images : [],
+        };
+      } catch (e) { return { units: [], images: [] }; }
+    }
+
+    // --- Incident photos (read-only for everyone) -----------------------
+    // Files live on the webroot; Cloudflare Image Transformations resize
+    // them per request. If transformations aren't enabled the <img>
+    // onerror falls back to the original file, so photos always render.
+    const IMAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
+    function cfImageUrl(filePath, width) {
+      return IMAGE_ORIGIN + '/cdn-cgi/image/width=' + width +
+        ',quality=78,format=auto' + filePath;
+    }
+    function _incidentPhotosHtml(images, opts) {
+      const list = (images || []).filter((i) => i && typeof i.file === 'string');
+      if (!list.length) return '';
+      const size = (opts && opts.size) || 96;
+      const tiles = list.map((img) => {
+        const orig = escapeHtml(IMAGE_ORIGIN + img.file);
+        const thumb = escapeHtml(cfImageUrl(img.file, 320));
+        const by = img.uploaded_by_name ? 'Photo by ' + img.uploaded_by_name : 'Incident photo';
+        return '<img src="' + thumb + '" alt="' + escapeHtml(by) + '" title="' + escapeHtml(by) + '"' +
+          ' loading="lazy" onclick="openIncidentPhoto(\'' + escapeHtml(img.file) + '\')"' +
+          ' onerror="this.onerror=null;this.src=\'' + orig + '\'"' +
+          ' style="width:' + size + 'px; height:' + size + 'px; object-fit:cover; border-radius:6px;' +
+          ' border:1px solid rgba(148,163,184,0.3); cursor:zoom-in; display:block;">';
+      }).join('');
+      return '<div style="margin:0.6rem 0;">' +
+        '<div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-soft); margin-bottom:0.35rem;">Photos</div>' +
+        '<div style="display:flex; flex-wrap:wrap; gap:0.4rem;">' + tiles + '</div></div>';
+    }
+    // Minimal lightbox — one reusable overlay, Esc / click-outside closes.
+    function openIncidentPhoto(filePath) {
+      closeIncidentPhoto();
+      const overlay = document.createElement('div');
+      overlay.id = 'photo-lightbox';
+      overlay.style.cssText = 'position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,0.9); display:flex; align-items:center; justify-content:center; padding:2rem; cursor:zoom-out;';
+      const img = document.createElement('img');
+      img.src = cfImageUrl(filePath, 1600);
+      img.alt = 'Incident photo';
+      img.style.cssText = 'max-width:100%; max-height:100%; border-radius:8px; box-shadow:0 20px 60px rgba(0,0,0,0.6);';
+      img.onerror = () => { img.onerror = null; img.src = IMAGE_ORIGIN + filePath; };
+      overlay.appendChild(img);
+      overlay.addEventListener('click', closeIncidentPhoto);
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', _photoLightboxKey);
+    }
+    function closeIncidentPhoto() {
+      const el = document.getElementById('photo-lightbox');
+      if (el) el.remove();
+      document.removeEventListener('keydown', _photoLightboxKey);
+    }
+    function _photoLightboxKey(e) {
+      if (e.key === 'Escape') closeIncidentPhoto();
     }
 
     // Right-dock incident details card (public pager/RFS pin clicks) —
@@ -5903,10 +5958,13 @@ function initPagerHoursFromStorage() {
         (raw.incidentIds && raw.incidentIds[0]) ||
         (item.lat + ',' + item.lng));
       const stubId = generateRfsId(stubKey);
-      const units = await _fetchStubUnits(stubId);
+      const { units, images } = await _fetchStubExtras(stubId);
       if (units.length && body.isConnected) {
         body.insertAdjacentHTML('afterbegin',
           '<div style="font-size:0.8rem;color:#cbd5e1;margin:0.2rem 0 0.6rem;"><strong>Attached Units:</strong><br>' + _unitsChipsHtml(units) + '</div>');
+      }
+      if (images.length && body.isConnected) {
+        body.insertAdjacentHTML('afterbegin', _incidentPhotosHtml(images, { size: 72 }));
       }
       // Incident log (editor entries on the pager stub) — read-only.
       try {
@@ -6338,6 +6396,7 @@ function initPagerHoursFromStorage() {
             ? '<div style="margin-top:0.45rem;"><strong>Attached Units:</strong> ' + _unitsChipsHtml(data.units) + '</div>'
             : ''}
         </div>
+        ${_incidentPhotosHtml(data.images)}
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log</h3>
         ${updatesHtml}
       `;
@@ -6431,11 +6490,15 @@ function initPagerHoursFromStorage() {
 
       content.innerHTML = html;
 
-      // Attached units (read-only, from the shared RFS stub row).
-      const stubUnits = await _fetchStubUnits(item.id);
-      if (stubUnits.length && content.isConnected) {
+      // Attached units + photos (read-only, from the shared RFS stub row).
+      const stubExtras = await _fetchStubExtras(item.id);
+      if ((stubExtras.units.length || stubExtras.images.length) && content.isConnected) {
         const div = document.createElement('div');
-        div.innerHTML = '<div style="font-size:0.85rem;color:#cbd5e1;margin:0.6rem 0 1rem;"><strong>Attached Units:</strong><br>' + _unitsChipsHtml(stubUnits) + '</div>';
+        div.innerHTML =
+          (stubExtras.units.length
+            ? '<div style="font-size:0.85rem;color:#cbd5e1;margin:0.6rem 0 1rem;"><strong>Attached Units:</strong><br>' + _unitsChipsHtml(stubExtras.units) + '</div>'
+            : '') +
+          _incidentPhotosHtml(stubExtras.images);
         content.insertBefore(div, content.children[3] || null);
       }
     }
@@ -15528,6 +15591,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=18"></script>
+  <script src="map-editor-module.js?v=19"></script>
 </body>
 </html>
