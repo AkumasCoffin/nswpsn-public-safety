@@ -274,6 +274,22 @@ describe('fetchTfnswPositions', () => {
     fetchBufferMock.mockRejectedValue(new Error('boom'));
     expect(await fetchTfnswPositions(['st'])).toEqual([]);
   });
+
+  it('parks a 429-rate-limited feed instead of re-hitting it', async () => {
+    fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 429'), { status: 429 }));
+    expect(await _testables.fetchFeed('/v2/gtfs/vehiclepos/sydneytrains')).toBeNull();
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+    // Parked — the next attempt short-circuits without a fetch.
+    expect(await _testables.fetchFeed('/v2/gtfs/vehiclepos/sydneytrains')).toBeNull();
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('parks a 404 feed for the long window', async () => {
+    fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 404'), { status: 404 }));
+    await _testables.fetchFeed('/v1/gtfs/vehiclepos/lightrail/innerwest');
+    await _testables.fetchFeed('/v1/gtfs/vehiclepos/lightrail/innerwest');
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('alerts', () => {
