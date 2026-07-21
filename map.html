@@ -11970,21 +11970,45 @@ function initPagerHoursFromStorage() {
               dispLat = s.latlng[0];
               dispLon = s.latlng[1];
               prog = { shapeId: v.shapeId, p: s.i + s.t, lat: dispLat, lon: dispLon };
-              // Jitter guard: successive fetches sometimes step the
-              // reported position BACKWARD along the route (feed
-              // noise; backend cache cells built seconds apart while
-              // panning). A same-trip backward step under ~550 m is
-              // essentially always noise — genuine direction changes
-              // start a new trip/shape — so hold the previous
-              // position; larger corrections pass through.
+              // Forward ratchet: BACKWARD steps along the same route
+              // are almost always noise — a vehicle's TfNSW entity
+              // blinking out of a batch flips it to AnyTrip's
+              // ~30s-ahead frame and back, cache cells skew while
+              // panning, and the raw feed itself occasionally corrects
+              // a few hundred metres. Displayed progress therefore
+              // only moves FORWARD; a backward reading is held at the
+              // frontier unless it's huge (>~1.5km — reroute) or has
+              // persisted for 45s (real correction; a bogus forward
+              // spike unfreezes within that bound). Accepted
+              // corrections SNAP instead of gliding — a marker
+              // animating backward reads as a train driving in
+              // reverse. Progress compares across AnyTrip's dynamic
+              // shape-id churn by re-snapping the held position onto
+              // the new shape.
               const prev = existing && existing.prog;
-              if (prev && prev.shapeId === v.shapeId && prog.p < prev.p) {
+              let prevP = null;
+              if (prev) {
+                if (prev.shapeId === v.shapeId) {
+                  prevP = prev.p;
+                } else {
+                  const ps = snapToPolylinePts(shapePts, prev.lat, prev.lon);
+                  if (ps && ps.distDeg < SNAP_MAX_DEG) prevP = ps.i + ps.t;
+                }
+              }
+              if (prevP != null && prog.p < prevP - 1e-9) {
+                if (!existing.backSince) existing.backSince = Date.now();
                 const jLat = dispLat - prev.lat, jLon = dispLon - prev.lon;
-                if (jLat * jLat + jLon * jLon < 0.005 * 0.005) {
+                const huge = jLat * jLat + jLon * jLon > 0.015 * 0.015;
+                if (!huge && Date.now() - existing.backSince < 45_000) {
                   dispLat = prev.lat;
                   dispLon = prev.lon;
-                  prog = prev;
+                  prog = { shapeId: v.shapeId, p: prevP, lat: prev.lat, lon: prev.lon };
+                } else {
+                  existing.backSince = null;
+                  existing.snapNext = true; // accepted correction — no reverse glide
                 }
+              } else if (existing) {
+                existing.backSince = null;
               }
             }
           } else if (snapFetchBudget > 0) {
@@ -12004,6 +12028,12 @@ function initPagerHoursFromStorage() {
         if (existing) {
           existing.prog = prog;
           existing.laneSnap = laneSnap;
+          if (existing.snapNext) {
+            // Accepted backward correction: reposition instantly.
+            existing.snapNext = false;
+            _transportGlides.delete(v.id);
+            existing.marker.setLatLng([dispLat, dispLon]);
+          } else {
           // Glide along the route shape when both ends sit on it —
           // straight-chord glides cut corners off curved track. The
           // start progress comes from the marker's CURRENT position
@@ -12025,6 +12055,7 @@ function initPagerHoursFromStorage() {
             }
           }
           _transportGlideMarker(v.id, existing.marker, dispLat, dispLon, glidePath);
+          }
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
             existing.iconKey = key;
