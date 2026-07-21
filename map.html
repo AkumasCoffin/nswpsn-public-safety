@@ -11730,7 +11730,7 @@ function initPagerHoursFromStorage() {
     // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr):
     // geographic — px offset doubles per zoom, anchored ×0.9 at gz12.
     function _transportOffsetK() {
-      const gz = Math.min(14, Math.max(4, map.getZoom() - 1));
+      const gz = Math.min(15, Math.max(4, map.getZoom() - 1));
       return 0.9 * Math.pow(2, gz - 12);
     }
 
@@ -12257,12 +12257,15 @@ function initPagerHoursFromStorage() {
       // fan is anchored to the ground like painted geometry — lanes
       // never slide relative to the map while zooming. Anchor ×0.9 at
       // gz12, proportional to the 2px line width (gap ≈ width).
-      // Clamped at gz14: past there unbounded doubling turned the
-      // stylized fan into 60px slabs pushed hundreds of px off their
-      // geometry, with feature end-caps rendering as broken blocks.
+      // Geographic through gz15 (Leaflet 16) so the fan never slides
+      // relative to the ground at normal zooms — vehicles stay glued
+      // to their lanes through zooms. Clamped past gz15: bigger
+      // offsets exceed curve radii and sawtooth the offset geometry
+      // (widths clamp separately at gz14 — that's what made the
+      // giant-slab glitch, not the offsets).
       return ['interpolate', ['exponential', 2], ['zoom'],
         4, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 / 256],
-        14, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 * 4]
+        15, ['*', ['coalesce', ['get', 'offset'], 0], 0.9 * 8]
       ];
     }
 
