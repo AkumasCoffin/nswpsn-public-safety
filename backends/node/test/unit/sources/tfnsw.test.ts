@@ -210,6 +210,31 @@ describe('applyTfnswPositions', () => {
     expect(r2.vehicles).toHaveLength(1); // cap blocks the append
   });
 
+  it('keeps serving a blinked-out entity via per-trip stickiness', () => {
+    const first = applyTfnswPositions([anytripVehicle()], [tfPos()], BBOX, 1500);
+    expect(first.vehicles[0]!.lat).toBe(-33.85);
+    // The entity misses the next batch (GTFS-R blink) — the vehicle
+    // must STAY in the TfNSW frame via the remembered position, not
+    // flip to AnyTrip's ~30s-ahead interpolation and back.
+    const other = tfPos({ tripId: 'OTHER', lat: -33.86, lon: 151.0 });
+    const second = applyTfnswPositions([anytripVehicle()], [other], BBOX, 1500);
+    expect(second.vehicles[0]!.lat).toBe(-33.85);
+    expect(second.vehicles[0]!.lon).toBe(151.21);
+  });
+
+  it('hands back to AnyTrip only after a sustained absence', () => {
+    vi.useFakeTimers();
+    try {
+      applyTfnswPositions([anytripVehicle()], [tfPos()], BBOX, 1500);
+      vi.advanceTimersByTime(70_000); // past the 60s sticky window
+      const other = tfPos({ tripId: 'OTHER', lat: -33.86, lon: 151.0 });
+      const r = applyTfnswPositions([anytripVehicle()], [other], BBOX, 1500);
+      expect(r.vehicles[0]!.lat).toBe(-33.9); // AnyTrip position again
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is a no-op passthrough with no TfNSW positions', () => {
     const list = [anytripVehicle()];
     const { vehicles } = applyTfnswPositions(list, [], BBOX, 1500);
