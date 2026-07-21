@@ -12,6 +12,7 @@ import registerPager from './pager.js';
 import registerAviation from './aviation.js';
 import registerFirms from './firms.js';
 import registerAdsb from './adsb.js';
+import registerUserIncidents from './userIncidents.js';
 
 export function registerAllSources(): void {
   registerRfs();
@@ -23,4 +24,5 @@ export function registerAllSources(): void {
   registerAviation();
   registerFirms();
   registerAdsb();
+  registerUserIncidents();
 }

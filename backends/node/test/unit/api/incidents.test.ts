@@ -54,6 +54,7 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
 });
 
 const { incidentsRouter } = await import('../../../src/api/incidents.js');
+const { archiveWriter } = await import('../../../src/store/archive.js');
 
 function makeApp() {
   const app = new Hono();
@@ -314,6 +315,51 @@ describe('DELETE /api/incidents/:id', () => {
     expect(res.status).toBe(403);
     expect(callWith('DELETE FROM incidents WHERE id = $1')).toBeUndefined();
   });
+
+  it('pushes a final inactive snapshot to the logs archive on delete', async () => {
+    const push = vi.spyOn(archiveWriter, 'push').mockImplementation(() => {});
+    try {
+      resultQueue = [
+        { rows: [{ created_by: 'editor-1' }], rowCount: 1 }, // ownership SELECT
+        {
+          rows: [{
+            id: 'del-id', title: 'T', description: '', lat: -33, lng: 151,
+            location: 'X', type: ['Flood'], status: 'Going', size: '-',
+            responding_agencies: [], units: [], created_at: new Date(),
+            updated_at: new Date(), expires_at: null, is_rfs_stub: false,
+          }],
+          rowCount: 1,
+        }, // UPDATE ... RETURNING *
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/incidents/del-id', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      expect(push).toHaveBeenCalledOnce();
+      const [table, row] = push.mock.calls[0] as [string, { source: string; source_id: string; data: Record<string, unknown> }];
+      expect(table).toBe('archive_misc');
+      expect(row.source).toBe('user_incident');
+      expect(row.source_id).toBe('del-id');
+      expect(row.data['is_active']).toBe(false);
+    } finally {
+      push.mockRestore();
+    }
+  });
+
+  it('does not push a logs-archive snapshot for RFS/pager unit stubs', async () => {
+    const push = vi.spyOn(archiveWriter, 'push').mockImplementation(() => {});
+    try {
+      resultQueue = [
+        { rows: [{ created_by: 'editor-1' }], rowCount: 1 },
+        { rows: [{ id: 'stub-1', is_rfs_stub: true }], rowCount: 1 },
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/incidents/stub-1', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      expect(push).not.toHaveBeenCalled();
+    } finally {
+      push.mockRestore();
+    }
+  });
 });
 
 describe('incident_updates routes', () => {
@@ -477,6 +523,11 @@ describe('incident archive', () => {
     expect(ins?.params?.[1]).toBe('Major fire');
     const soft = callWith('UPDATE incidents SET deleted_at = NOW()');
     expect(soft?.params).toEqual(['arc-1']);
+    // Archived incidents move OUT of the regular logs feed — their
+    // archive_misc snapshots (and sidecar row) are removed so they only
+    // appear in the logs page's "Archived Incidents" area.
+    expect(callWith('DELETE FROM archive_misc WHERE')?.params).toEqual(['arc-1']);
+    expect(callWith('DELETE FROM archive_misc_latest WHERE')?.params).toEqual(['arc-1']);
   });
 
   it('403s archive for non-staff editors', async () => {
