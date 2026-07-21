@@ -333,28 +333,36 @@
           Your request will be reviewed and you'll be contacted via Discord.
         </div>
 
-        <!-- Discord signup: sign in first so the request is tied to the
-             account and approval can unlock it directly. -->
-        <div id="discord-signup-box" style="margin-bottom: 1.5rem;">
+        <!-- Step 1: pick a signup method. The request form stays hidden
+             until a method is chosen (or an existing session is found). -->
+        <div id="signup-method-chooser" style="margin-bottom: 0.5rem;">
+          <p style="color: var(--text-soft); font-size: 0.85rem; margin-bottom: 1rem;">
+            First, choose how you'd like to create your account — then fill out the request form.
+          </p>
           <button type="button" id="discord-signup-btn" onclick="signUpWithDiscord()" style="width:100%; padding:0.9rem 1.5rem; background:#5865F2; color:#fff; border:none; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
             <i class="fab fa-discord"></i>
             Sign up with Discord
           </button>
           <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
-            No separate password to remember — your email and Discord details are filled in automatically.
+            No separate password to remember — your username, email and Discord details are filled in automatically.
           </p>
-          <div style="display:flex; align-items:center; gap:0.75rem; margin-top:1rem; color:#64748b; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">
-            <span style="flex:1; border-top:1px solid var(--border-subtle);"></span>
-            <span>or sign up with email</span>
-            <span style="flex:1; border-top:1px solid var(--border-subtle);"></span>
-          </div>
+          <button type="button" id="email-signup-btn" onclick="chooseEmailSignup()" style="width:100%; margin-top:0.9rem; padding:0.9rem 1.5rem; background:rgba(255,255,255,0.07); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
+            <i class="fas fa-envelope"></i>
+            Sign up with Email
+          </button>
+          <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
+            You'll choose a username and password as part of the form.
+          </p>
         </div>
         <div id="discord-linked-box" style="display:none; margin-bottom:1.5rem; background:rgba(88,101,242,0.12); border:1px solid rgba(88,101,242,0.4); border-radius:8px; padding:0.85rem 1rem; font-size:0.85rem; color:#c7d2fe;">
           <i class="fab fa-discord" style="margin-right:0.4rem;"></i>
           Signed in as <strong id="discord-linked-name"></strong> — this request will be linked to your account.
         </div>
 
-        <form id="signup-form" onsubmit="submitRequest(event); return false;">
+        <form id="signup-form" style="display: none;" onsubmit="submitRequest(event); return false;">
+          <a id="choose-method-back" href="#" onclick="backToMethodChooser(); return false;" style="display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-soft); text-decoration: none; font-size: 0.8rem; margin-bottom: 1rem;">
+            <i class="fas fa-arrow-left"></i> Choose a different signup method
+          </a>
           <!-- Request Type -->
           <div class="form-group">
             <label class="form-label">
@@ -598,6 +606,21 @@
       }[c]));
     }
 
+    // Step-1 chooser → email path: reveal the form with the account
+    // fields (username + password) visible.
+    function chooseEmailSignup() {
+      document.getElementById('signup-method-chooser').style.display = 'none';
+      document.getElementById('signup-form').style.display = 'block';
+      document.getElementById('password-group').style.display = 'block';
+      document.getElementById('choose-method-back').style.display = 'inline-flex';
+      document.getElementById('email').focus();
+    }
+
+    function backToMethodChooser() {
+      document.getElementById('signup-form').style.display = 'none';
+      document.getElementById('signup-method-chooser').style.display = 'block';
+    }
+
     async function signUpWithDiscord() {
       const btn = document.getElementById('discord-signup-btn');
       btn.disabled = true;
@@ -658,8 +681,13 @@
       if (nameEl) {
         nameEl.textContent = meta.full_name || meta.name || meta.user_name || user.email || 'your account';
       }
-      document.getElementById('discord-signup-box').style.display = 'none';
+      // Signed in (Discord return or existing session): skip the method
+      // chooser and open the request form directly — account fields and
+      // the back-to-chooser link don't apply.
+      document.getElementById('signup-method-chooser').style.display = 'none';
       document.getElementById('discord-linked-box').style.display = 'block';
+      document.getElementById('signup-form').style.display = 'block';
+      document.getElementById('choose-method-back').style.display = 'none';
       // Already signed in — no password to create.
       document.getElementById('password-group').style.display = 'none';
     }
