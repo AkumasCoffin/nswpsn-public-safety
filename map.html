@@ -15111,10 +15111,16 @@ function initPagerHoursFromStorage() {
 
     // ==================== WHAT3WORDS ====================
     let _w3wGridDebounce = null;
-    let _w3wGridRequestId = 0; // prevents stale API responses from drawing
     let _w3wClickRequestId = 0; // prevents out-of-order click responses from drawing
-    let _w3wLoadedBounds = null; // last fetched bounds — skip refetch if viewport still inside
-    let _w3wLoadedZoom = null;   // zoom level of last fetch
+    // Chunked grid cache: the grid is STATIC geometry, so it's fetched
+    // in fixed global chunks (0.005° ≈ 550 m) whose bbox URLs are
+    // deterministic — the same chunk URL repeats for every user, pan
+    // and zoom, so the browser/CDN/backend caches all hit. Panning
+    // within loaded chunks and zooming cost ZERO network.
+    const W3W_CHUNK_DEG = 0.005;
+    const W3W_CHUNK_KEEP = 220;      // LRU cap on cached chunk layers
+    const W3W_MAX_CHUNKS_VIEW = 48;  // sanity cap per viewport pass
+    const _w3wChunks = new Map();    // "iy,ix" → { layer|null, at }
     // Minimum zoom to fetch/draw the grid. Below this a 3m W3W square is only a
     // pixel or two, so the grid is a dense, slow haze with no real detail. 18 is
     // where squares are clearly visible (~6px) and the data volume is small.
@@ -15165,8 +15171,8 @@ function initPagerHoursFromStorage() {
         if (label) label.classList.remove('active');
         const w3wPane = map.getPane('w3wPane');
         if (w3wPane) w3wPane.style.opacity = 0;
-        _w3wLoadedBounds = null;
-        _w3wLoadedZoom = null;
+        w3wGridLayer.clearLayers();
+        _w3wChunks.clear();
         map.removeLayer(w3wGridLayer);
         map.off('moveend', onW3WMoveEnd);
         map.off('click', onW3WMapClick);
@@ -15179,12 +15185,8 @@ function initPagerHoursFromStorage() {
     }
 
     function onW3WZoomStart() {
-      // Invalidate any in-flight requests so stale responses are discarded
-      _w3wGridRequestId++;
-      // Invalidate cached bounds since zoom is changing
-      _w3wLoadedBounds = null;
-      _w3wLoadedZoom = null;
-      // Keep existing grid visible — Leaflet CSS-scales the SVG during zoom
+      // Nothing to invalidate — chunks are zoom-independent and Leaflet
+      // CSS-scales the canvas during the zoom animation.
     }
 
     function onW3WZoomEnd() {
@@ -15195,12 +15197,13 @@ function initPagerHoursFromStorage() {
         map.removeLayer(w3wHighlight);
         w3wHighlight = null;
       }
-      // Show or dismiss the zoom-in toast based on current zoom
+      // Show or dismiss the zoom-in toast based on current zoom.
+      // Below the min zoom the pane just hides — cached chunks are
+      // kept so zooming back in is instant.
       if (zoom < W3W_MIN_ZOOM) {
         showW3WToast('Zoom in to select a What3Words grid square');
         const w3wPane = map.getPane('w3wPane');
         if (w3wPane) w3wPane.style.opacity = 0;
-        w3wGridLayer.clearLayers();
       } else {
         dismissW3WToast();
         // Reload grid immediately on zoom change (no debounce)
@@ -15216,94 +15219,89 @@ function initPagerHoursFromStorage() {
       _w3wGridDebounce = setTimeout(loadW3WGrid, 50);
     }
 
-    async function loadW3WGrid(force) {
-      if (!w3wEnabled) return;
-      
-      const zoom = map.getZoom();
-      const w3wPane = map.getPane('w3wPane');
-      // Show grid at zoom >= W3W_MIN_ZOOM — below that the squares are sub-pixel
-      if (zoom < W3W_MIN_ZOOM) {
-        w3wPane.style.opacity = 0;
-        w3wGridLayer.clearLayers();
-        _w3wLoadedBounds = null;
-        _w3wLoadedZoom = null;
-        return;
-      }
-      
-      const viewBounds = map.getBounds();
-      
-      // Skip refetch if viewport is still inside previously loaded bounds at same zoom
-      if (!force && _w3wLoadedBounds && _w3wLoadedZoom === zoom &&
-          _w3wLoadedBounds.contains(viewBounds)) {
-        w3wPane.style.opacity = 1;
-        return;
-      }
-      
-      // Fetch a modestly padded area so small pans don't trigger new requests.
-      // Kept tighter than before (0.4 vs 0.6) to cut the grid-line count per
-      // fetch — the padded area shrinks from ~4.8x to ~3.2x the viewport.
-      const fetchBounds = viewBounds.pad(0.4);
-      const sw = fetchBounds.getSouthWest();
-      const ne = fetchBounds.getNorthEast();
-      const bbox = `${sw.lat},${sw.lng},${ne.lat},${ne.lng}`;
-      
-      // Track this request so stale responses are discarded
-      const requestId = ++_w3wGridRequestId;
-      
+    // Deterministic chunk bbox — fixed 6dp strings so the URL for a
+    // given chunk is byte-identical everywhere (cache key at every
+    // layer: browser HTTP cache, CDN, backend).
+    function _w3wChunkBbox(iy, ix) {
+      const s = (iy * W3W_CHUNK_DEG).toFixed(6);
+      const w = (ix * W3W_CHUNK_DEG).toFixed(6);
+      const n = ((iy + 1) * W3W_CHUNK_DEG).toFixed(6);
+      const e = ((ix + 1) * W3W_CHUNK_DEG).toFixed(6);
+      return s + ',' + w + ',' + n + ',' + e;
+    }
+
+    async function _w3wFetchChunk(iy, ix) {
+      const key = iy + ',' + ix;
+      const entry = { layer: null, at: Date.now() };
+      _w3wChunks.set(key, entry);
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/w3w/grid-section?bounding-box=${encodeURIComponent(bbox)}`);
-        if (requestId !== _w3wGridRequestId) return; // stale response — discard
+        const res = await apiFetch(`${PROXY_BASE}/api/w3w/grid-section?bounding-box=${encodeURIComponent(_w3wChunkBbox(iy, ix))}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        if (requestId !== _w3wGridRequestId) return; // stale response — discard
-        if (data.error) {
-          console.warn('W3W grid error:', data.error);
-          return;
+        if (data.error) throw new Error(data.error);
+        // Discarded meanwhile (toggle off / pruned)?
+        if (!w3wEnabled || _w3wChunks.get(key) !== entry) return;
+        if (!w3wGridRenderer) {
+          w3wGridRenderer = L.canvas({ pane: 'w3wPane', padding: 0.4 });
         }
-        
-        // W3W returns ONE Feature with a MultiLineString geometry (every grid
-        // line in a single geometry). L.geoJSON renders that as one multi-part
-        // polyline, and the canvas renderer draws it in a single pass — cheap.
-        if (data.features || data.lines) {
-          let geoData = data;
-          // If lines array (json format), convert to a GeoJSON FeatureCollection
-          if (data.lines && !data.features) {
-            geoData = {
-              type: 'FeatureCollection',
-              features: data.lines.map(line => ({
-                type: 'Feature',
-                geometry: {
-                  type: 'LineString',
-                  coordinates: [[line.start.lng, line.start.lat], [line.end.lng, line.end.lat]]
-                },
-                properties: {}
-              }))
-            };
-          }
-          if (!w3wGridRenderer) {
-            w3wGridRenderer = L.canvas({ pane: 'w3wPane', padding: 0.4 });
-          }
-          const gridGeoJSON = L.geoJSON(geoData, {
-            pane: 'w3wPane',
-            renderer: w3wGridRenderer,
-            style: {
-              color: '#D1D5DB',
-              weight: 1,
-              opacity: 0.4,
-              interactive: false
-            }
-          });
-          // Swap: clear old, add new in one go — no visible gap
-          w3wGridLayer.clearLayers();
-          w3wGridLayer.addLayer(gridGeoJSON);
-          // Remember what we loaded so we can skip redundant fetches
-          _w3wLoadedBounds = fetchBounds;
-          _w3wLoadedZoom = zoom;
-          // Ensure pane is visible (fade in on first load)
-          w3wPane.style.opacity = 1;
-        }
+        entry.layer = L.geoJSON(data, {
+          pane: 'w3wPane',
+          renderer: w3wGridRenderer,
+          style: { color: '#D1D5DB', weight: 1, opacity: 0.4, interactive: false }
+        });
+        w3wGridLayer.addLayer(entry.layer);
       } catch (e) {
-        console.warn('W3W grid load error:', e);
+        // Drop the placeholder so the next pass retries this chunk.
+        if (_w3wChunks.get(key) === entry) _w3wChunks.delete(key);
       }
+    }
+
+    function _w3wPruneChunks() {
+      if (_w3wChunks.size <= W3W_CHUNK_KEEP) return;
+      const entries = Array.from(_w3wChunks.entries()).sort((a, b) => a[1].at - b[1].at);
+      for (const [key, entry] of entries) {
+        if (_w3wChunks.size <= W3W_CHUNK_KEEP) break;
+        if (entry.layer) w3wGridLayer.removeLayer(entry.layer);
+        _w3wChunks.delete(key);
+      }
+    }
+
+    async function loadW3WGrid() {
+      if (!w3wEnabled) return;
+      const w3wPane = map.getPane('w3wPane');
+      // Below the min zoom the squares are sub-pixel: hide the pane but
+      // KEEP the cached chunks so zooming back in is instant.
+      if (map.getZoom() < W3W_MIN_ZOOM) {
+        w3wPane.style.opacity = 0;
+        return;
+      }
+      const b = map.getBounds().pad(0.1);
+      const iy0 = Math.floor(b.getSouth() / W3W_CHUNK_DEG);
+      const iy1 = Math.floor(b.getNorth() / W3W_CHUNK_DEG);
+      const ix0 = Math.floor(b.getWest() / W3W_CHUNK_DEG);
+      const ix1 = Math.floor(b.getEast() / W3W_CHUNK_DEG);
+      if ((iy1 - iy0 + 1) * (ix1 - ix0 + 1) > W3W_MAX_CHUNKS_VIEW) return;
+      const jobs = [];
+      for (let iy = iy0; iy <= iy1; iy++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const have = _w3wChunks.get(iy + ',' + ix);
+          if (have) { have.at = Date.now(); continue; }
+          jobs.push([iy, ix]);
+        }
+      }
+      w3wPane.style.opacity = 1;
+      if (jobs.length) {
+        // Small concurrency limit; chunks draw as they arrive.
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(6, jobs.length) }, async () => {
+          while (next < jobs.length) {
+            const j = jobs[next];
+            next += 1;
+            await _w3wFetchChunk(j[0], j[1]);
+          }
+        }));
+      }
+      _w3wPruneChunks();
     }
 
     async function onW3WMapClick(e) {
