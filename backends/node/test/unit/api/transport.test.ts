@@ -13,12 +13,16 @@ const configMock: Record<string, unknown> = {
   NSWPSN_API_KEY: 'test-key',
   PORT: 3001,
   TRANSPORT_DISABLED: false,
+  // TfNSW disabled in these tests — the join must be a passthrough.
+  TFNSW_API_KEY: undefined,
+  TFNSW_DISABLED: false,
 };
 
 vi.mock('../../../src/sources/shared/http.js', () => ({
   fetchText: vi.fn(),
   fetchJson: fetchJsonMock,
   fetchRaw: vi.fn(),
+  fetchBuffer: vi.fn(),
   HttpError: class extends Error {},
 }));
 

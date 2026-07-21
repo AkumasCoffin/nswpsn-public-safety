@@ -25,6 +25,12 @@ import { fetchJson } from '../sources/shared/http.js';
 import { SwrCache } from '../services/swrCache.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import {
+  fetchTfnswPositions,
+  applyTfnswPositions,
+  fetchTfnswAlerts,
+  tfnswConfigured,
+} from '../sources/tfnsw.js';
 
 export const transportRouter = new Hono();
 
@@ -418,10 +424,24 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
         const url =
           `${ANYTRIP_BASE}/vehicles?feeds=${encodeURIComponent(feedList)}` +
           `&${bboxParams(bbox)}&otrFilter=${OTR_FILTER}&speedFilter=${SPEED_FILTER}`;
-        const raw = await fetchJson<RawVehiclesResponse>(url, {
-          timeoutMs: UPSTREAM_TIMEOUT_MS,
-        });
-        const vehicles = normalizeVehicles(raw);
+        // AnyTrip (metadata + interpolated fallback positions) and the
+        // official TfNSW GTFS-R positions fetch concurrently; TfNSW is
+        // authoritative for trips it knows, AnyTrip fills the rest.
+        // fetchTfnswPositions returns [] when unconfigured or failing,
+        // so the join degrades to AnyTrip-only.
+        const [raw, tfnsw] = await Promise.all([
+          fetchJson<RawVehiclesResponse>(url, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
+          fetchTfnswPositions(feeds),
+        ]);
+        let vehicles = normalizeVehicles(raw);
+        if (tfnsw.length) {
+          const joined = applyTfnswPositions(vehicles, tfnsw, bbox, MAX_VEHICLES);
+          vehicles = joined.vehicles;
+          log.debug(
+            { matched: joined.matched, added: joined.added, tfnsw: tfnsw.length },
+            'transport: tfnsw position join',
+          );
+        }
         return {
           vehicles,
           count: vehicles.length,
@@ -941,5 +961,30 @@ transportRouter.get('/api/transport/stops', async (c) => {
   } catch (err) {
     log.warn({ err, key }, 'transport: stops upstream unavailable');
     return c.json({ error: 'transport upstream unavailable' }, 502);
+  }
+});
+
+// Service alerts (official TfNSW GTFS-realtime alert feeds). Fixed
+// path, no viewport scoping — safe for the CDN cache list. Returns
+// `configured:false` (not an error) when no TFNSW_API_KEY is set so
+// the frontend can hide the UI.
+transportRouter.get('/api/transport/alerts', async (c) => {
+  if (config.TRANSPORT_DISABLED) {
+    return c.json({ alerts: [], count: 0, configured: false, disabled: true });
+  }
+  if (!tfnswConfigured()) {
+    return c.json({ alerts: [], count: 0, configured: false });
+  }
+  try {
+    const alerts = await fetchTfnswAlerts();
+    return c.json({
+      alerts,
+      count: alerts.length,
+      configured: true,
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    log.warn({ err }, 'transport: alerts unavailable');
+    return c.json({ error: 'alerts upstream unavailable' }, 502);
   }
 });

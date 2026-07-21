@@ -3953,6 +3953,7 @@
           loadTransportLines();
           loadTransportData();
           loadTransportStops();
+          loadTransportAlerts();
           startTransportRefresh();
         }
       }
@@ -12941,6 +12942,92 @@ function initPagerHoursFromStorage() {
       else if (_transportInfo.kind === 'departures') showTransportDepartures(_transportInfo.stopId, _transportInfo.stopName);
     }
 
+    // ---------- Service alerts (official TfNSW feed via backend) ----------
+    let _transportAlerts = [];
+    let _transportAlertsConfigured = null; // null = unknown yet
+    let _transportAlertsAt = 0;
+    const TRANSPORT_ALERTS_REFRESH_MS = 5 * 60 * 1000;
+
+    async function loadTransportAlerts() {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/transport/alerts`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _transportAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+        _transportAlertsConfigured = data.configured !== false;
+        _transportAlertsAt = Date.now();
+        if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+        if (_transportInfo && _transportInfo.kind === 'alerts') renderTransportAlertsPanel();
+      } catch (e) {
+        console.warn('[transport] alerts failed to load:', e);
+      }
+    }
+
+    // Best-effort line code from a GTFS route id ("CTY_T1" → "T1").
+    function _tptAlertRouteName(routeId) {
+      const m = /(?:^|[_-])(T\d{1,2}|M\d{1,2}|L\d|F\d{1,2})(?![A-Za-z0-9])/i.exec(routeId || '');
+      if (m) return m[1].toUpperCase();
+      const tail = String(routeId || '').split(/[_:]/).pop() || '';
+      return /^[A-Za-z0-9]{1,4}$/.test(tail) ? tail.toUpperCase() : null;
+    }
+
+    const _TPT_ALERT_SEV = {
+      SEVERE: '#ef4444',
+      WARNING: '#f59e0b',
+      INFO: '#38bdf8',
+      UNKNOWN_SEVERITY: '#94a3b8',
+    };
+
+    function renderTransportAlertsPanel() {
+      const body = document.getElementById('transport-info-body');
+      if (!body) return;
+      _setTransportInfoHeader('fa-triangle-exclamation', '#f59e0b', 'Service alerts',
+        _transportAlerts.length + ' active');
+      if (!_transportAlerts.length) {
+        body.innerHTML = '<div class="ais-list-empty">No current service alerts.</div>';
+        return;
+      }
+      const fmtDay = (sec) => {
+        if (!sec) return null;
+        const d = new Date(sec * 1000);
+        return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+      };
+      const rows = _transportAlerts.map((a) => {
+        const sev = _TPT_ALERT_SEV[a.severity] || _TPT_ALERT_SEV.UNKNOWN_SEVERITY;
+        const routeChips = (a.routes || []).map(_tptAlertRouteName).filter(Boolean)
+          .filter((v, i, arr) => arr.indexOf(v) === i).slice(0, 6)
+          .map((n) => '<span style="background:rgba(148,163,184,0.15);color:#cbd5e1;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;">' + escapeHtml(n) + '</span>')
+          .join(' ');
+        const period = [fmtDay(a.start), fmtDay(a.end)].filter(Boolean).join(' → ');
+        const effect = a.effect && a.effect !== 'UNKNOWN_EFFECT'
+          ? '<span style="color:' + sev + ';font-size:9px;font-weight:700;letter-spacing:0.5px;">' + escapeHtml(a.effect.replace(/_/g, ' ')) + '</span>'
+          : '';
+        const desc = a.description
+          ? '<details style="margin-top:3px;"><summary style="cursor:pointer;color:#64748b;font-size:10px;">Details</summary>' +
+            '<div style="color:#94a3b8;font-size:10px;line-height:1.5;margin-top:3px;white-space:pre-wrap;">' + escapeHtml(a.description) + '</div></details>'
+          : '';
+        const link = a.url
+          ? ' <a href="' + escapeHtml(a.url) + '" target="_blank" rel="noopener" style="color:#38bdf8;font-size:9px;">more</a>'
+          : '';
+        return '<div style="padding:8px 12px;border-bottom:1px solid rgba(148,163,184,0.1);border-left:3px solid ' + sev + ';">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">' + effect + routeChips +
+            (period ? '<span style="color:#64748b;font-size:9px;margin-left:auto;">' + escapeHtml(period) + '</span>' : '') +
+          '</div>' +
+          '<div style="color:#e2e8f0;font-size:11px;font-weight:600;line-height:1.4;">' + escapeHtml(a.header) + link + '</div>' +
+          desc +
+        '</div>';
+      }).join('');
+      body.innerHTML = '<div>' + rows + '</div>';
+    }
+
+    window.showTransportAlerts = function () {
+      _transportInfo = { kind: 'alerts' };
+      clearTransportTrack();
+      openTransportInfoPanel();
+      renderTransportAlertsPanel();
+      if (Date.now() - _transportAlertsAt > 60_000) loadTransportAlerts();
+    };
+
     function startTransportRefresh() {
       if (transportRefreshInterval) return;
       transportRefreshInterval = setInterval(() => {
@@ -12951,6 +13038,10 @@ function initPagerHoursFromStorage() {
         if (!_transportLinesLoaded) loadTransportLines();
         loadTransportData();
         refreshTransportInfo();
+        // Alerts change slowly — refresh every 5 min on the same tick.
+        if (Date.now() - _transportAlertsAt > TRANSPORT_ALERTS_REFRESH_MS) {
+          loadTransportAlerts();
+        }
       }, 10000);
       console.log('🚌 Transport refresh started (10s)');
     }
@@ -13009,12 +13100,18 @@ function initPagerHoursFromStorage() {
         const zoomNote = map.getZoom() < TRANSPORT_MIN_ZOOM
           ? '<div class="floating-filter-status">Zoom in to see live transport (vehicles from zoom ' + TRANSPORT_MIN_ZOOM + ', stations from ' + TRANSPORT_STOPS_MIN_ZOOM + ').</div>'
           : '';
+        // Alerts row only when the backend has a TfNSW key configured.
+        const sevCount = _transportAlerts.length;
+        const alertsRow = _transportAlertsConfigured === false ? '' : `
+          <div class="ff-section-label">Disruptions</div>
+          <div class="floating-filter-pills">${_ffPillColored(sevCount > 0, '#f59e0b', '<i class="fa-solid fa-triangle-exclamation"></i>', `Service alerts (${sevCount})`, 'showTransportAlerts()')}</div>`;
         return `
           <h4><i class="fa-solid fa-bus" style="color:#f18500;"></i> Transport</h4>
           <div class="ff-section-label">Mode</div>
           <div class="floating-filter-pills">${pills}</div>
           <div class="ff-section-label">Stations</div>
           <div class="floating-filter-pills">${_ffPill(transportStationsEnabled, '<i class="fa-solid fa-train"></i> Stations', 'toggleTransportStationsPill()')}</div>
+          ${alertsRow}
           ${zoomNote}
         `;
       },
