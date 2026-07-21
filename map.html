@@ -11728,14 +11728,21 @@ function initPagerHoursFromStorage() {
 
     // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr,
     // incl. GL zoom = Leaflet zoom − 1; MapLibre clamps to the
-    // terminal outputs outside the stop range).
+    // terminal outputs outside the stop range and interpolates
+    // exponentially base 2 between stops).
     function _transportOffsetK() {
       const gz = map.getZoom() - 1;
-      if (gz <= 6) return 0.05;
-      if (gz >= 12) return 1.35;
-      if (gz <= 8) return 0.05 + (gz - 6) * 0.05;
-      if (gz <= 10) return 0.15 + (gz - 8) * 0.375;
-      return 0.9 + (gz - 10) * 0.225;
+      const STOPS = [[6, 0.05], [8, 0.15], [10, 0.9], [12, 1.35], [15, 3.375]];
+      if (gz <= STOPS[0][0]) return STOPS[0][1];
+      if (gz >= STOPS[STOPS.length - 1][0]) return STOPS[STOPS.length - 1][1];
+      for (let i = 0; i < STOPS.length - 1; i++) {
+        const [z1, k1] = STOPS[i], [z2, k2] = STOPS[i + 1];
+        if (gz <= z2) {
+          const t = (Math.pow(2, gz - z1) - 1) / (Math.pow(2, z2 - z1) - 1);
+          return k1 + (k2 - k1) * t;
+        }
+      }
+      return STOPS[STOPS.length - 1][1];
     }
 
     function _transportLaneCandidates(v) {
@@ -12205,12 +12212,16 @@ function initPagerHoursFromStorage() {
     function _transportGlOffsetExpr() {
       // Offsets collapse hard at overview zooms — a corridor's 6-8
       // parallel lanes otherwise fan into a fat multi-colour rope that
-      // reads as "lines get BIGGER when zooming out".
-      return ['interpolate', ['linear'], ['zoom'],
+      // reads as "lines get BIGGER when zooming out". Above gz12 they
+      // must keep GROWING on the same exponential curve as the line
+      // widths (3px→7.5px is ×2.5 by gz15), or the fattening lanes
+      // swallow their own gaps when zooming in.
+      return ['interpolate', ['exponential', 2], ['zoom'],
         6, ['*', ['coalesce', ['get', 'offset'], 0], 0.05],
         8, ['*', ['coalesce', ['get', 'offset'], 0], 0.15],
         10, ['*', ['coalesce', ['get', 'offset'], 0], 0.9],
-        12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35]
+        12, ['*', ['coalesce', ['get', 'offset'], 0], 1.35],
+        15, ['*', ['coalesce', ['get', 'offset'], 0], 3.375]
       ];
     }
 
