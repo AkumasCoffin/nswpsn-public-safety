@@ -42,6 +42,8 @@ import {
   invalidateUserRolesCache,
   requireRole,
   canManageUsers,
+  canAssignPrivilegedRoles,
+  isPrivilegedRole,
 } from '../services/auth/roles.js';
 
 export const editorRouter = new Hono();
@@ -271,6 +273,20 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     const roles = asArrayOfString(data['roles']);
     const createAccount = data['create_account'] === true;
 
+    // Team members can approve with the feature roles only — assigning
+    // team_member / dev / owner during approval is owner-only. The UI
+    // hides those checkboxes for team members; this enforces it server-
+    // side so a hand-crafted request can't escalate.
+    if (
+      roles.some(isPrivilegedRole) &&
+      !(await canAssignPrivilegedRoles(c.get('userId') as string))
+    ) {
+      return c.json(
+        { error: 'Only owners can assign the team_member, dev, or owner roles.' },
+        403,
+      );
+    }
+
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
 
@@ -335,6 +351,11 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
                 approved_request_id: requestId,
                 roles,
                 force_password_change: true,
+                // Admin-created accounts never went through the signup
+                // form's username field — default to the email local part
+                // so the account still shows a name on logs/admin.
+                username: req.email.split('@')[0] ?? req.email,
+                display_name: req.email.split('@')[0] ?? req.email,
               },
             }),
             signal: AbortSignal.timeout(15_000),
