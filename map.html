@@ -5786,11 +5786,29 @@ function initPagerHoursFromStorage() {
       const stubKey = 'pager:' + (raw.incidentId ||
         (raw.incidentIds && raw.incidentIds[0]) ||
         (item.lat + ',' + item.lng));
-      const units = await _fetchStubUnits(generateRfsId(stubKey));
+      const stubId = generateRfsId(stubKey);
+      const units = await _fetchStubUnits(stubId);
       if (units.length && body.isConnected) {
         body.insertAdjacentHTML('afterbegin',
           '<div style="font-size:0.8rem;color:#cbd5e1;margin:0.2rem 0 0.6rem;"><strong>Attached Units:</strong><br>' + _unitsChipsHtml(units) + '</div>');
       }
+      // Incident log (editor entries on the pager stub) — read-only.
+      try {
+        const r = await apiFetch(`${PROXY_BASE}/api/incidents/${stubId}/updates`);
+        const upd = r.ok ? await r.json() : [];
+        if (Array.isArray(upd) && upd.length && body.isConnected) {
+          body.insertAdjacentHTML('beforeend',
+            '<div style="padding:8px 0 2px;border-top:1px solid rgba(148,163,184,0.15);margin-top:8px;">' +
+              '<div style="font-weight:700;font-size:10px;letter-spacing:0.5px;color:#94a3b8;margin-bottom:5px;">INCIDENT LOG</div>' +
+              upd.map((u) =>
+                '<div style="font-size:10px;color:#cbd5e1;margin-bottom:6px;">' +
+                  '<span style="color:#64748b;">' + escapeHtml(new Date(u.created_at).toLocaleString()) +
+                    (u.created_by_name ? ' · ' + escapeHtml(u.created_by_name) : '') + '</span><br>' +
+                  escapeHtml(u.message || '') +
+                '</div>').join('') +
+            '</div>');
+        }
+      } catch (e) { /* log stays hidden */ }
     }
 
 
@@ -6163,7 +6181,7 @@ function initPagerHoursFromStorage() {
             if (updates && updates.length > 0) {
               updatesHtml = `<div class="update-timeline">` + updates.map(u => `
                 <div class="update-item">
-                  <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
+                  <div class="update-time">${new Date(u.created_at).toLocaleString()}${u.created_by_name ? ` · ${escapeHtml(u.created_by_name)}` : ""}</div>
                   <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
                 </div>`).join('') + `</div>`;
             } else {
@@ -6244,7 +6262,7 @@ function initPagerHoursFromStorage() {
             updates = updates.map(u => ({...u, isNew: u.id === item.latestUpdateId}));
             updatesHtml = `<div class="update-timeline">` + updates.map(u => `
               <div class="update-item">
-                <div class="update-time">${new Date(u.created_at).toLocaleString()}</div>
+                <div class="update-time">${new Date(u.created_at).toLocaleString()}${u.created_by_name ? ` · ${escapeHtml(u.created_by_name)}` : ""}</div>
                 <div class="update-msg markdown-body">${DOMPurify.sanitize(marked.parse(u.message))}</div>
               </div>`).join('') + `</div>`;
           } else {
@@ -15402,6 +15420,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=13"></script>
+  <script src="map-editor-module.js?v=14"></script>
 </body>
 </html>
