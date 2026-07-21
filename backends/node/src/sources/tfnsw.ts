@@ -276,6 +276,20 @@ export function applyTfnswPositions(
     usedTrips.add(v.tripId as string);
     matched += 1;
     matchedByMode.set(v.mode, (matchedByMode.get(v.mode) ?? 0) + 1);
+    // AnyTrip's position is interpolated + map-matched from the SAME
+    // GTFS-R telemetry, so it runs ahead of the raw feed (up to ~30s
+    // of travel) and always sits on the track. Preferring the raw
+    // coordinates every tick flipped pins between the two frames of
+    // reference — random forward/backward teleports and off-track /
+    // wrong-lane positions. TfNSW coordinates are a per-vehicle
+    // FAILOVER (AnyTrip position stale or ageless), not an override;
+    // a fresh AnyTrip vehicle only gets metadata enrichment.
+    const anytripFresh = v.ageSec != null && v.ageSec <= POS_MAX_AGE_SEC / 2;
+    if (anytripFresh) {
+      return v.occupancy == null && p.occupancy != null
+        ? { ...v, occupancy: p.occupancy }
+        : v;
+    }
     return {
       ...v,
       lat: p.lat,

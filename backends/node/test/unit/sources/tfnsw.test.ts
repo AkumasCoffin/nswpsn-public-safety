@@ -172,18 +172,34 @@ describe('applyTfnswPositions', () => {
     ...overrides,
   });
 
-  it('overrides position of trip-matched AnyTrip vehicles, keeps metadata', () => {
+  it('keeps a FRESH AnyTrip position (interpolated/map-matched), enriching occupancy only', () => {
     const { vehicles, matched, added } = applyTfnswPositions(
-      [anytripVehicle()], [tfPos()], BBOX, 1500,
+      [anytripVehicle({ ageSec: 30 })], [tfPos()], BBOX, 1500,
     );
     expect(matched).toBe(1);
     expect(added).toBe(0);
     expect(vehicles[0]).toMatchObject({
-      lat: -33.85, lon: 151.21, bearing: 100, speedKmh: 55, occupancy: 3,
-      route: { name: 'T1', color: '#F18500' }, // AnyTrip metadata retained
+      lat: -33.9, lon: 151.1, bearing: 45, speedKmh: 40, // AnyTrip position kept
+      occupancy: 3, // TfNSW enrichment (AnyTrip had none)
+      route: { name: 'T1', color: '#F18500' },
       shapeId: 'au2:st:shape1',
     });
+  });
+
+  it('fails over to TfNSW coordinates when the AnyTrip position is stale', () => {
+    const { vehicles } = applyTfnswPositions(
+      [anytripVehicle({ ageSec: 120 })], [tfPos()], BBOX, 1500,
+    );
+    expect(vehicles[0]).toMatchObject({
+      lat: -33.85, lon: 151.21, bearing: 100, speedKmh: 55, occupancy: 3,
+      route: { name: 'T1', color: '#F18500' }, // metadata still AnyTrip's
+    });
     expect(vehicles[0]!.ageSec).toBeLessThan(10); // TfNSW timestamp won
+    // Ageless AnyTrip positions also fail over.
+    const r2 = applyTfnswPositions(
+      [anytripVehicle({ ageSec: null })], [tfPos()], BBOX, 1500,
+    );
+    expect(r2.vehicles[0]!.lat).toBe(-33.85);
   });
 
   it('appends TfNSW-only trips inside the bbox as synthetic vehicles', () => {
