@@ -297,6 +297,157 @@
       white-space: pre-line;
     }
 
+    /* Redesigned pager details (summary + grouped message cards) */
+    .pager-summary-card {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 10px;
+      padding: 0.7rem 0.8rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.8rem;
+    }
+
+    .pager-section-h {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--text-soft);
+      margin: 0.9rem 0 0.45rem;
+    }
+    .pager-section-h::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(148, 163, 184, 0.22);
+    }
+
+    .pager-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      margin-bottom: 0.5rem;
+    }
+    .pager-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.13rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: rgba(148, 163, 184, 0.14);
+      color: #cbd5e1;
+      white-space: nowrap;
+    }
+    .pager-chip-type { background: rgba(245, 158, 11, 0.16); color: #fbbf24; }
+    .pager-chip-stop { background: rgba(239, 68, 68, 0.16); color: #f87171; }
+    .pager-chip-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: rgba(34, 197, 94, 0.13);
+      color: #4ade80;
+    }
+    .pager-chip-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .pager-kv {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.18rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    .pager-kv .k {
+      color: var(--text-soft);
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding-top: 0.14rem;
+      white-space: nowrap;
+    }
+    .pager-kv .v {
+      color: #e2e8f0;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .pager-meta-line {
+      margin-top: 0.55rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid rgba(148, 163, 184, 0.15);
+      font-size: 0.72rem;
+      color: var(--text-soft);
+    }
+
+    .pager-hit-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 0.5rem;
+      margin-bottom: 0.35rem;
+    }
+    .pager-hit-head .pager-hit-time { margin-bottom: 0; white-space: nowrap; }
+
+    .pager-hit-location {
+      font-size: 0.82rem;
+      line-height: 1.4;
+      color: #e2e8f0;
+      word-break: break-word;
+    }
+
+    .pager-hit-paged {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.3rem;
+      margin-top: 0.4rem;
+      font-size: 0.7rem;
+      color: var(--text-soft);
+    }
+    .pager-unit-chip {
+      display: inline-flex;
+      padding: 0.1rem 0.45rem;
+      border-radius: 5px;
+      background: rgba(56, 189, 248, 0.12);
+      color: #7dd3fc;
+      font-size: 0.7rem;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .pager-raw {
+      margin-top: 0.45rem;
+      font-size: 0.7rem;
+      color: var(--text-soft);
+    }
+    .pager-raw summary {
+      cursor: pointer;
+      user-select: none;
+    }
+    .pager-raw summary:hover { color: #cbd5e1; }
+    .pager-raw code {
+      display: block;
+      margin-top: 0.3rem;
+      padding: 0.4rem 0.55rem;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.32);
+      color: #94a3b8;
+      font-size: 0.68rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .pager-footnote {
+      margin-top: 0.8rem;
+      font-size: 0.72rem;
+      color: var(--text-soft);
+      font-style: italic;
+      line-height: 1.45;
+    }
+
     .map-type-controls {
       position: absolute; bottom: 30px; left: 20px; z-index: 800;
       display: flex; align-items: center; gap: 6px; background: rgba(15, 23, 42, 0.9); padding: 6px 10px;
@@ -5511,7 +5662,8 @@ function initPagerHoursFromStorage() {
       return null;
     }
 
-    function renderPagerDetailsHtml(details) {
+    function renderPagerDetailsHtml(details, opts) {
+      const withHeading = !!(opts && opts.heading);
       const hits = (details && details.hits) ? details.hits : [];
       const aliases = (details && details.clusterAliases) ? details.clusterAliases : [];
       const agencies = (details && details.clusterAgencies) ? details.clusterAgencies : [];
@@ -5526,8 +5678,14 @@ function initPagerHoursFromStorage() {
         `;
       }
 
-      // Use first hit to derive shared fields: roads, council, type, message type
-      const firstParsed = parsePagerMessage(hits[0].message || hits[0].raw_message || '');
+      // Parse every hit once, newest first — the newest message drives the
+      // shared summary fields (roads, council, type).
+      const enriched = hits.map(h => ({
+        hit: h,
+        parsed: parsePagerMessage(h.message || h.raw_message || ''),
+        ms: getPagerHitTimestampMs(h),
+      })).sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0));
+      const firstParsed = enriched[0].parsed;
 
       // Aliases = distinct devices that paged
       const aliasSet = new Set();
@@ -5567,159 +5725,113 @@ function initPagerHoursFromStorage() {
       const incidentIds = Array.from(incidentIdSet);
       const incidentIdsText = incidentIds.length ? incidentIds.join(', ') : '';
 
-      // MAIN SUMMARY CARD
-      const councilDisplay = firstParsed.council || 'Unknown';
-      const typeDisplay = firstParsed.typeDisplay || 'Unknown';
-      const messageTypeDisplay = firstParsed.incidentMessageType || 'Unknown';
-
-      // Overview timestamp (most recent hit time)
-      let overviewTimeStr = '';
-      try {
-        let bestMs = null;
-        hits.forEach(h => {
-          const ms = getPagerHitTimestampMs(h);
-          if (ms !== null && (bestMs === null || ms > bestMs)) bestMs = ms;
-        });
-        if (bestMs !== null) {
-          overviewTimeStr = new Date(bestMs).toLocaleString();
-        }
-      } catch (e) {}
-
-      // --- OVERVIEW / SUMMARY CARD ---
-      let summaryTimeStr = '';
-      try {
-        let latestIncidentId = null;
-        let latestIncidentMs = null;
-
-        // Determine the most recent incident_id among all hits
-        hits.forEach(h => {
-          const ms = getPagerHitTimestampMs(h);
-          if (!h.incident_id || ms === null) return;
-          if (latestIncidentMs === null || ms > latestIncidentMs) {
-            latestIncidentMs = ms;
-            latestIncidentId = h.incident_id;
-          }
-        });
-
-        if (latestIncidentId) {
-          let mostRecentForId = null;
-          hits.forEach(h => {
-            if (String(h.incident_id) !== String(latestIncidentId)) return;
-            const ms = getPagerHitTimestampMs(h);
-            if (ms !== null && (mostRecentForId === null || ms > mostRecentForId)) {
-              mostRecentForId = ms;
-            }
-          });
-          if (mostRecentForId !== null) {
-            summaryTimeStr = new Date(mostRecentForId).toLocaleString();
-          }
-        } else {
-          // fallback: use latest time overall (regardless of incident_id), as before
-          let bestMs = null;
-          hits.forEach(h => {
-            const ms = getPagerHitTimestampMs(h);
-            if (ms !== null && (bestMs === null || ms > bestMs)) {
-              bestMs = ms;
-            }
-          });
-          if (bestMs !== null) {
-            summaryTimeStr = new Date(bestMs).toLocaleString();
-          }
-        }
-      } catch (e) {}
-
-      const summaryHtml = `
-        <div class="incident-card pager-main-card"
-             style="border-radius:8px; border:1px solid rgba(148,163,184,0.35);
-                    padding:0.6rem 0.7rem; margin-bottom:0.45rem;
-                    background:rgba(15,23,42,0.9); font-size:0.8rem;">
-          <div class="pager-main-header"
-               style="font-size:0.9rem; font-weight:600; margin:0 0 0.4rem 0;">
-            Pager hits at this location
-          </div>
-
-          <div style="margin-bottom:0.4rem;">
-            <span class="pill pill-agency-rfs">Pager Call</span>
-          </div>
-
-          <div style="font-size:0.8rem; margin-bottom:0.4rem; color:var(--text-soft);">
-            ${summaryTimeStr ? `
-              <div><span class="pager-main-label">Time:</span> ${escapeHtml(summaryTimeStr)}</div>
-            ` : ''}
-            ${incidentIdsText ? `
-              <div><span class="pager-main-label">Incident ID:</span> ${escapeHtml(incidentIdsText)}</div>
-            ` : ''}
-          </div>
-
-          <div style="margin-top:0.25rem;">
-            <div class="pager-main-label">Closest Road:</div>
-            <div>${escapeHtml(firstParsed.closestRoad || 'Unknown')}</div>
-          </div>
-
-          <div style="margin-top:0.25rem;">
-            <div class="pager-main-label">Council:</div>
-            <div>${escapeHtml(councilDisplay)}</div>
-          </div>
-
-          <div style="margin-top:0.25rem;">
-            <div class="pager-main-label">Type:</div>
-            <div>${escapeHtml(typeDisplay)}</div>
-          </div>
-
-          <div style="margin-top:0.25rem;">
-            <div class="pager-main-label">Incident Message Type:</div>
-            <div>${escapeHtml(messageTypeDisplay)}</div>
-          </div>
-        </div>
-      `;
-      // INDIVIDUAL PAGER HIT CARDS (no coords)
-      const cardsHtml = hits.map(hit => {
-        const parsed = parsePagerMessage(hit.message || hit.raw_message || '');
-        const alias = hit.alias || hit.capcode || hit.address || 'Unknown??';
-
-        const hitMs = getPagerHitTimestampMs(hit);
-        const dt = hitMs !== null ? new Date(hitMs) : new Date();
-        const timeStr = dt.toLocaleString();
-
-        const hitIncidentId = hit.incident_id || '';
-        const incidentIdLine = hitIncidentId
-          ? `<div class="pager-hit-time">Incident ID: ${escapeHtml(hitIncidentId)}</div>`
+      // --- SUMMARY CARD -------------------------------------------------
+      const titleCase = (s) => String(s || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      const councilDisplay = firstParsed.council ? titleCase(firstParsed.council) : '';
+      const typeDisplay = firstParsed.typeDisplay || '';
+      // The parsed "incident message type" usually just echoes the type in
+      // a different case (MVA vs Mva) — only show it when it adds info.
+      const messageTypeDisplay =
+        firstParsed.incidentMessageType &&
+        firstParsed.incidentMessageType.toLowerCase() !== (typeDisplay || '').toLowerCase()
+          ? firstParsed.incidentMessageType
           : '';
 
-        // Use coord-less message and make it a bit nicer
-        let body = parsed.messageNoCoords || '';
-        body = body.replace(/,/g, ', ');   // ensure space after commas
-        const prettyBody = body.replace(/ - /g, ' -\n'); // newline after segments
+      const isStop = /stop message/i.test(typeDisplay);
+      const summaryTimeStr = enriched[0].ms !== null ? new Date(enriched[0].ms).toLocaleString() : '';
 
+      const idChips = incidentIds
+        .map(id => `<span class="pager-chip pager-chip-id">${escapeHtml(id)}</span>`)
+        .join('');
+
+      const kvRow = (label, value) => value
+        ? `<div class="k">${label}</div><div class="v">${escapeHtml(value)}</div>`
+        : '';
+
+      const metaBits = [
+        `${totalHits} pager hit${totalHits === 1 ? '' : 's'}`,
+        `${deviceCount} unit${deviceCount === 1 ? '' : 's'} paged`,
+      ];
+      if (agencySet.size) metaBits.push(escapeHtml(agenciesText));
+
+      const summaryHtml = `
+        ${withHeading ? '<div class="pager-section-h">Pager activity</div>' : ''}
+        <div class="pager-summary-card">
+          <div class="pager-chip-row">
+            ${typeDisplay ? `<span class="pager-chip ${isStop ? 'pager-chip-stop' : 'pager-chip-type'}">${escapeHtml(typeDisplay)}</span>` : ''}
+            ${idChips}
+          </div>
+          <div class="pager-kv">
+            ${kvRow('Latest', summaryTimeStr)}
+            ${kvRow('Location', firstParsed.closestRoad || firstParsed.locationStr || '')}
+            ${kvRow('Council', councilDisplay)}
+            ${kvRow('Msg type', messageTypeDisplay)}
+          </div>
+          <div class="pager-meta-line">${metaBits.join(' · ')}</div>
+        </div>
+      `;
+
+      // --- MESSAGE CARDS ------------------------------------------------
+      // Identical messages paged to several units (SHMITTA + SHMITTA1 etc.)
+      // collapse into ONE card listing every unit that received it, instead
+      // of repeating the same text per device.
+      const groups = new Map();
+      enriched.forEach(({ hit, parsed, ms }) => {
+        const key = (parsed.messageNoCoords || '')
+          .toUpperCase().replace(/\s+/g, ' ').replace(/\s*-\s*$/, '').trim() || `__empty:${groups.size}`;
+        let g = groups.get(key);
+        if (!g) {
+          g = { parsed, ms, aliases: [] };
+          groups.set(key, g);
+        }
+        if (ms !== null && (g.ms === null || ms > g.ms)) { g.ms = ms; g.parsed = parsed; }
+        const alias = (hit.alias || hit.capcode || hit.address || 'Unknown').trim();
+        if (alias && !g.aliases.includes(alias)) g.aliases.push(alias);
+      });
+
+      const cardsHtml = Array.from(groups.values()).map(g => {
+        const timeStr = g.ms !== null ? new Date(g.ms).toLocaleString() : '';
+        const p = g.parsed;
+        const gStop = /stop message/i.test(p.typeDisplay || '');
+        const chips = [
+          p.typeDisplay ? `<span class="pager-chip ${gStop ? 'pager-chip-stop' : 'pager-chip-type'}">${escapeHtml(p.typeDisplay)}</span>` : '',
+          p.incidentId ? `<span class="pager-chip pager-chip-id">${escapeHtml(p.incidentId)}</span>` : '',
+          p.code ? `<span class="pager-chip pager-chip-code">${escapeHtml(p.code)}</span>` : '',
+        ].join('');
+        const aliasChips = g.aliases
+          .map(a => `<span class="pager-unit-chip">${escapeHtml(a)}</span>`)
+          .join('');
+        // Structured location when the parse worked; otherwise fall back to
+        // the cleaned message text (normal wrapping — no forced "-" lines).
+        const bodyHtml = p.locationStr
+          ? `<div class="pager-hit-location">${escapeHtml(p.locationStr.replace(/\s*-\s*$/, ''))}</div>`
+          : `<div class="pager-hit-location">${escapeHtml((p.messageNoCoords || '').replace(/\s*-\s*$/, ''))}</div>`;
+        const raw = (p.messageNoCoords || '').trim();
         return `
           <div class="pager-hit-card">
-            <div class="pager-hit-alias">${escapeHtml(alias)}</div>
-            <div class="pager-hit-time">${escapeHtml(timeStr)}</div>
-            ${incidentIdLine}
-            <div class="pager-hit-message">${escapeHtml(prettyBody)}</div>
+            <div class="pager-hit-head">
+              <div class="pager-chip-row" style="margin-bottom:0;">${chips}</div>
+              <span class="pager-hit-time">${escapeHtml(timeStr)}</span>
+            </div>
+            ${bodyHtml}
+            <div class="pager-hit-paged">Paged: ${aliasChips}</div>
+            ${raw ? `
+              <details class="pager-raw">
+                <summary>Raw message</summary>
+                <code>${escapeHtml(raw)}</code>
+              </details>` : ''}
           </div>
         `;
       }).join('');
 
       return `
         ${summaryHtml}
-        
-        <div style="margin-top:0.6rem;">
-          <h3 style="font-size:0.95rem; margin-bottom:0.3rem;">Pager messages at this location</h3>
-          </h2>
-          <div class="pager-main-meta">
-            <div class="pager-pill-row">
-              <span class="pill pill-red">Total Pager Hits: ${totalHits}</span>
-              <span class="pill pill-green">Aliases Paged: ${deviceCount}</span>
-            </div>
-            <div>
-          <div class="pager-hit-list">
-            ${cardsHtml}
-          </div>
+        <div class="pager-section-h">Messages${groups.size !== totalHits ? ` (${groups.size} unique of ${totalHits})` : ''}</div>
+        <div class="pager-hit-list">
+          ${cardsHtml}
         </div>
-        <hr style="border:0; border-top:1px solid var(--border-subtle); margin:1.5rem 0;">
-        <div style="font-size:0.8rem; color:var(--text-soft); font-style:italic;">
-          These entries are grouped by GPS location. Summary card shows combinded data as well as deduplicated aliases paged. Individual pager messages are shown below summary card. Map shows pager calls from the last ${pagerHours} hours.
+        <div class="pager-footnote">
+          Hits are grouped by GPS location; identical messages paged to multiple units are shown once. Map shows pager calls from the last ${pagerHours} hours.
         </div>
       `;
     }
@@ -6232,10 +6344,7 @@ function initPagerHoursFromStorage() {
 
       // If this incident has merged pager hits, append the pager summary block
       if (pagerDetails && pagerDetails.hits && pagerDetails.hits.length) {
-        html += `
-          <hr style="border:0; border-top:1px solid var(--border-subtle); margin:2rem 0 1rem 0;">
-        `;
-        html += renderPagerDetailsHtml(pagerDetails);
+        html += renderPagerDetailsHtml(pagerDetails, { heading: true });
       }
 
       content.innerHTML = html;
@@ -6317,10 +6426,7 @@ function initPagerHoursFromStorage() {
       `;
 
       if (pagerDetails && pagerDetails.hits && pagerDetails.hits.length) {
-        html += `
-          <hr style="border:0; border-top:1px solid var(--border-subtle); margin:2rem 0 1rem 0;">
-        `;
-        html += renderPagerDetailsHtml(pagerDetails);
+        html += renderPagerDetailsHtml(pagerDetails, { heading: true });
       }
 
       content.innerHTML = html;
