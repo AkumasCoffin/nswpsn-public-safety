@@ -54,8 +54,9 @@ const POSITION_FEEDS: Record<string, string[]> = {
   mt: ['/v2/gtfs/vehiclepos/metro'],
   nt: ['/v1/gtfs/vehiclepos/nswtrains'],
   fr: ['/v1/gtfs/vehiclepos/ferries/sydneyferries'],
+  // innerwest removed: retired upstream (404s in prod) — L1 reports
+  // via the remaining feeds.
   lr: [
-    '/v1/gtfs/vehiclepos/lightrail/innerwest',
     '/v1/gtfs/vehiclepos/lightrail/cbdandsoutheast',
     '/v1/gtfs/vehiclepos/lightrail/newcastle',
     '/v1/gtfs/vehiclepos/lightrail/parramatta',
@@ -217,9 +218,31 @@ function decodePositions(
 
 const positionsCache = new SwrCache<TfnswPosition[]>(20);
 
-/** All TfNSW positions for the requested short feed codes. Feeds fetch
- * concurrently, each behind its own SWR window; one failed feed just
- * contributes nothing. Returns [] when unconfigured. */
+// Bounded-concurrency map: TfNSW rate-limits ~5 req/s and a burst of
+// 6+ simultaneous feed fetches trips it (429s in prod). Two at a time
+// spreads a full refresh over a second or two.
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next;
+      next += 1;
+      results[idx] = await fn(items[idx] as T);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** All TfNSW positions for the requested short feed codes, each feed
+ * behind its own SWR window; a failed feed serves last-good data
+ * through the stale window and contributes nothing after that.
+ * Returns [] when unconfigured. */
 export async function fetchTfnswPositions(
   feedCodes: string[],
 ): Promise<TfnswPosition[]> {
@@ -230,33 +253,40 @@ export async function fetchTfnswPositions(
       paths.push({ path, mode: FEED_MODE[code] ?? 'other' });
     }
   }
-  const results = await Promise.all(
-    paths.map(async ({ path, mode }) => {
-      try {
-        const { value } = await positionsCache.get(
-          path,
-          async () => {
-            const msg = await fetchFeed(path);
-            // THROW on failure/park — returning [] here would cache an
-            // empty batch as a SUCCESSFUL refresh, dropping last-good
-            // data and flipping every matched vehicle to the AnyTrip
-            // frame (the teleport glitch). The throw makes SwrCache
-            // serve the previous batch through the stale window.
-            if (!msg) throw new Error(`feed unavailable: ${path}`);
-            return decodePositions(msg, mode);
+  const results = await mapLimit(paths, 2, async ({ path, mode }) => {
+    try {
+      const { value } = await positionsCache.get(
+        path,
+        async () => {
+          // Parked feeds throw QUIETLY (no fetch, no warn) — a parked
+          // 404 feed otherwise dumped a stack trace every window.
+          if (feedParked(path)) {
+            throw Object.assign(new Error(`feed parked: ${path}`), { parked: true });
+          }
+          const msg = await fetchFeed(path);
+          // THROW on failure — returning [] here would cache an empty
+          // batch as a SUCCESSFUL refresh, dropping last-good data and
+          // flipping every matched vehicle to the AnyTrip frame (the
+          // teleport glitch). The throw makes SwrCache serve the
+          // previous batch through the stale window.
+          if (!msg) throw new Error(`feed unavailable: ${path}`);
+          return decodePositions(msg, mode);
+        },
+        {
+          fresh: POS_FRESH_MS + feedJitterMs(path),
+          stale: POS_STALE_MS,
+          onError: (err) => {
+            if (!(err as { parked?: boolean }).parked) {
+              log.warn({ err, path }, 'tfnsw: positions refresh failed');
+            }
           },
-          {
-            fresh: POS_FRESH_MS + feedJitterMs(path),
-            stale: POS_STALE_MS,
-            onError: (err) => log.warn({ err, path }, 'tfnsw: positions refresh failed'),
-          },
-        );
-        return value;
-      } catch {
-        return [];
-      }
-    }),
-  );
+        },
+      );
+      return value;
+    } catch {
+      return [] as TfnswPosition[];
+    }
+  });
   return results.flat();
 }
 
