@@ -11106,12 +11106,13 @@ function initPagerHoursFromStorage() {
     // on iconKey change, add new hexes, drop vanished ones. A full
     // clearLayers()+rebuild of ~300 divIcons every 15 s visibly flickers.
     // Closest point on a polyline (equirectangular approx — fine at
-    // metro scale). Returns { latlng, distDeg } or null.
+    // metro scale). Returns { latlng, distDeg, i } (i = index of the
+    // matched segment's first vertex) or null.
     function snapToPolylinePts(pts, lat, lon) {
       if (!pts || pts.length < 2) return null;
       const cosLat = Math.cos(lat * Math.PI / 180) || 1;
       const px = lon * cosLat, py = lat;
-      let bestD = Infinity, bx2 = 0, by2 = 0;
+      let bestD = Infinity, bx2 = 0, by2 = 0, bi = 0;
       for (let i = 0; i < pts.length - 1; i++) {
         const ax = pts[i][1] * cosLat, ay = pts[i][0];
         const bx = pts[i + 1][1] * cosLat, by = pts[i + 1][0];
@@ -11122,9 +11123,9 @@ function initPagerHoursFromStorage() {
         const qx = ax + t * dx, qy = ay + t * dy;
         const ddx = px - qx, ddy = py - qy;
         const d = ddx * ddx + ddy * ddy;
-        if (d < bestD) { bestD = d; bx2 = qx; by2 = qy; }
+        if (d < bestD) { bestD = d; bx2 = qx; by2 = qy; bi = i; }
       }
-      return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD) };
+      return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD), i: bi };
     }
 
     function _adsbSearchHay(a) {
@@ -11679,6 +11680,118 @@ function initPagerHoursFromStorage() {
     let _transportStopsKey = null; // last stops fetch key — skip refetch if unchanged
     let _transportZoomHintAt = 0;  // throttle the "zoom in" toast
 
+    // ---------- Lane snapping (GL network offsets) ----------
+    // The GL network fans parallel corridor lanes apart with a
+    // per-feature PIXEL offset; the lanes' stored geometry is ~the
+    // corridor centreline, same as the GTFS shapes vehicles snap to.
+    // So a centreline-snapped marker floats beside the drawn lane (up
+    // to ~22 px). Which parallel lane a trip uses isn't derivable
+    // geometrically — pick it non-geometrically (AnyTrip's `line`
+    // route id where present, else mode/route colour, smallest
+    // |offset| on ties), then displace the snapped point sideways by
+    // that lane's offset in px, replicating the GL zoom curve.
+    let _transportLanes = null;        // flattened lines.json lane records
+    let _transportNetworkMode = null;  // 'gl' | 'fallback'
+    let _transportGlLayer = null;      // L.maplibreGL instance when GL
+    const _transportLaneCandCache = new Map(); // mode|route|colour → lanes
+
+    function _transportBuildLanes(geo) {
+      const lanes = [];
+      for (const f of (geo.features || [])) {
+        if (!f || !f.geometry) continue;
+        const parts = f.geometry.type === 'LineString' ? [f.geometry.coordinates]
+          : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
+        const p = f.properties || {};
+        for (const coords of parts) {
+          if (!Array.isArray(coords) || coords.length < 2) continue;
+          let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+          const pts = coords.map((c) => {
+            if (c[1] < minLat) minLat = c[1];
+            if (c[1] > maxLat) maxLat = c[1];
+            if (c[0] < minLon) minLon = c[0];
+            if (c[0] > maxLon) maxLon = c[0];
+            return [c[1], c[0]];
+          });
+          lanes.push({
+            pts: pts,
+            offset: Number(p.offset) || 0,
+            stroke: String(p.stroke || '').toUpperCase(),
+            line: String(p.line || '').toUpperCase(),
+            minLat: minLat, maxLat: maxLat, minLon: minLon, maxLon: maxLon
+          });
+        }
+      }
+      return lanes;
+    }
+
+    // GL line-offset zoom scaling (mirror of _transportGlStyle's
+    // interpolate, incl. GL zoom = Leaflet zoom − 1; MapLibre clamps
+    // to the terminal outputs outside the stop range).
+    function _transportOffsetK() {
+      const gz = map.getZoom() - 1;
+      if (gz <= 8) return 0.4;
+      if (gz >= 12) return 1.35;
+      return gz <= 10 ? 0.4 + (gz - 8) * 0.25 : 0.9 + (gz - 10) * 0.225;
+    }
+
+    function _transportLaneCandidates(v) {
+      const routeName = (v.route && v.route.name ? String(v.route.name) : '').toUpperCase();
+      const routeColor = (v.route && v.route.color ? String(v.route.color) : '').toUpperCase();
+      const key = v.mode + '|' + routeName + '|' + routeColor;
+      let cands = _transportLaneCandCache.get(key);
+      if (cands) return cands;
+      const colours = new Set([String(transportModeColor(v.mode)).toUpperCase()]);
+      if (routeColor) colours.add(routeColor);
+      const byColour = _transportLanes.filter((l) => colours.has(l.stroke));
+      // Where AnyTrip labels lanes with a route id, prefer the exact
+      // route's lanes — but never narrow the pool to zero.
+      const byLine = routeName ? byColour.filter((l) => l.line === routeName) : [];
+      cands = byLine.length ? byLine : byColour;
+      _transportLaneCandCache.set(key, cands);
+      return cands;
+    }
+
+    const TRANSPORT_LANE_SNAP_MAX_DEG = 0.0010; // ~100 m centreline mismatch
+    function _transportLaneSnap(v, lat, lon) {
+      if (_transportNetworkMode !== 'gl' || !_transportLanes) return null;
+      // Only where the GL network actually draws this vehicle's
+      // corridor; elsewhere (auto-tracks, fallback) lines are un-offset
+      // and the centreline snap is already the drawn position.
+      if (!TRANSPORT_TILED_MODES[v.mode] || !_transportInTileBounds(v)) return null;
+      const cands = _transportLaneCandidates(v);
+      let best = null;
+      for (const lane of cands) {
+        if (lat < lane.minLat - 0.01 || lat > lane.maxLat + 0.01 ||
+            lon < lane.minLon - 0.01 || lon > lane.maxLon + 0.01) continue;
+        const s = snapToPolylinePts(lane.pts, lat, lon);
+        if (!s || s.distDeg > TRANSPORT_LANE_SNAP_MAX_DEG) continue;
+        if (!best || s.distDeg < best.distDeg - 1e-7 ||
+            (Math.abs(s.distDeg - best.distDeg) <= 1e-7 && Math.abs(lane.offset) < Math.abs(best.offset))) {
+          best = {
+            lat: s.latlng[0], lon: s.latlng[1], distDeg: s.distDeg,
+            a: lane.pts[s.i], b: lane.pts[s.i + 1], offset: lane.offset
+          };
+        }
+      }
+      return best;
+    }
+
+    // Displace a lane-snapped point sideways by offset × k px.
+    // MapLibre line-offset is positive to the RIGHT of line direction,
+    // which in y-down screen space is the normal (-dy, dx).
+    function _transportApplyLaneOffset(s) {
+      const p = map.latLngToLayerPoint([s.lat, s.lon]);
+      const pa = map.latLngToLayerPoint(s.a);
+      const pb = map.latLngToLayerPoint(s.b);
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (!len) return L.latLng(s.lat, s.lon);
+      const off = s.offset * _transportOffsetK();
+      return map.layerPointToLatLng(
+        L.point(p.x + (-dy / len) * off, p.y + (dx / len) * off)
+      );
+    }
+
     function transportModePrio(mode) {
       const m = TRANSPORT_MODE_BY_KEY[mode];
       return m ? m.prio : 6;
@@ -11777,10 +11890,23 @@ function initPagerHoursFromStorage() {
             fetchTransportShapePts(v.shapeId); // warms cache; snaps next tick
           }
         }
+        // Second stage: shift onto the RENDERED lane (GL px offset).
+        // Suppressed for the vehicle whose trip track is highlighted —
+        // that marker rides the centreline highlight instead.
+        let laneSnap = null;
+        if (!(v.shapeId && v.shapeId === _transportTrackShapeId)) {
+          laneSnap = _transportLaneSnap(v, dispLat, dispLon);
+          if (laneSnap) {
+            const ll = _transportApplyLaneOffset(laneSnap);
+            dispLat = ll.lat;
+            dispLon = ll.lng;
+          }
+        }
         const key = _transportIconKey(v);
         const existing = _transportMarkers.get(v.id);
         if (existing) {
           existing.marker.setLatLng([dispLat, dispLon]);
+          existing.laneSnap = laneSnap;
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
             existing.iconKey = key;
@@ -11805,7 +11931,7 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key });
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap });
         }
       }
       for (const [id, entry] of _transportMarkers) {
@@ -12036,10 +12162,13 @@ function initPagerHoursFromStorage() {
           const latlngs = coords.map((c) => [c[1], c[0]]);
           const opacity = p.opacity != null ? p.opacity : 1;
           const wf = _transportWeightFactor();
-          const ol = L.polyline(latlngs, { color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85, lineCap: 'round', lineJoin: 'bevel', interactive: false });
-          const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          const df = _transportNetworkDimmed ? 0.15 : 1;
+          const ol = L.polyline(latlngs, { color: '#FFFFFF', weight: 4 * wf, opacity: opacity * 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           ol._tptBaseWeight = 4;
           cl._tptBaseWeight = 3;
+          ol._tptBaseOpacity = opacity * 0.85;
+          cl._tptBaseOpacity = opacity;
           outlines.push(ol);
           colours.push(cl);
           count++;
@@ -12058,6 +12187,8 @@ function initPagerHoursFromStorage() {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
+        _transportLanes = _transportBuildLanes(geo);
+        _transportLaneCandCache.clear();
         if (_transportGlAvailable()) {
           // The GeoJSON is embedded in the style (the endpoint is
           // API-key-gated, so GL's own fetch can't load it by URL).
@@ -12073,17 +12204,23 @@ function initPagerHoursFromStorage() {
           // user pans (which is why the network would only appear
           // after clicking a train: the click pans). Nudge it after
           // every add (incl. layer re-enables) so it draws right away.
+          // Re-adds also rebuild the GL map from options.style, losing
+          // any focus-dim state — re-apply it here too.
           gl.on('add', () => {
             setTimeout(() => {
               try {
                 const m = gl.getMaplibreMap && gl.getMaplibreMap();
                 if (m) { m.resize(); m.triggerRepaint(); }
               } catch (e) { /* ignore */ }
+              _applyTransportNetworkDim();
             }, 100);
           });
+          _transportNetworkMode = 'gl';
+          _transportGlLayer = gl;
           transportLinesLayer.addLayer(gl);
           console.log('[transport] network lines loaded (GL):', (geo.features || []).length, 'features');
         } else {
+          _transportNetworkMode = 'fallback';
           const count = _buildLeafletNetworkFallback(geo);
           console.log('[transport] network lines loaded (fallback, no offsets):', count, 'segments');
         }
@@ -12118,6 +12255,18 @@ function initPagerHoursFromStorage() {
     }
     map.on('zoomend', _applyTransportWeights);
 
+    // Lane-offset displacement is in px, so its geographic size changes
+    // with zoom — re-place lane-snapped markers from their stored snap.
+    function _transportReoffsetMarkers() {
+      if (!map.hasLayer(transportLayer)) return;
+      for (const entry of _transportMarkers.values()) {
+        if (entry.laneSnap) {
+          entry.marker.setLatLng(_transportApplyLaneOffset(entry.laneSnap));
+        }
+      }
+    }
+    map.on('zoomend', _transportReoffsetMarkers);
+
     // ---------- Route track highlight + timetable panel ----------
     // Clicking a vehicle draws its trip's track (casing + route colour)
     // and opens the timetable card with the stop sequence; clicking a
@@ -12143,6 +12292,48 @@ function initPagerHoursFromStorage() {
       return pts;
     }
 
+    // ---------- Focus state: dim the network behind a trip track ----------
+    // Which parallel lane a trip uses isn't derivable from the data,
+    // so the centreline highlight can never perfectly overlay the
+    // offset GL lane — fading everything else makes it read as a
+    // highlight of the route instead of a duplicate line beside it.
+    let _transportNetworkDimmed = false;
+    function _applyTransportNetworkDim() {
+      const dimmed = _transportNetworkDimmed;
+      const OP = ['coalesce', ['get', 'opacity'], 1]; // per-feature opacity, as in _transportGlStyle
+      try {
+        const glMap = _transportGlLayer && _transportGlLayer.getMaplibreMap && _transportGlLayer.getMaplibreMap();
+        if (glMap) {
+          const apply = () => {
+            // setPaintProperty on a missing layer fails SILENTLY (error
+            // event, no throw) — the getLayer gate is the real guard.
+            if (!glMap.getLayer('lines-colour')) return;
+            glMap.setPaintProperty('lines-colour', 'line-opacity',
+              dimmed ? ['*', OP, 0.15] : OP);
+            glMap.setPaintProperty('lines-outline', 'line-opacity',
+              dimmed ? ['*', OP, 0.85 * 0.15] : ['*', OP, 0.85]);
+          };
+          if (glMap.getLayer('lines-colour')) apply();
+          else glMap.once('load', apply);
+        }
+      } catch (e) { /* ignore */ }
+      // Leaflet-drawn network fallback + auto tracks.
+      const f = dimmed ? 0.15 : 1;
+      const applyLeaflet = (l) => {
+        if (l instanceof L.LayerGroup) { l.eachLayer(applyLeaflet); return; }
+        if (l._tptBaseOpacity != null && typeof l.setStyle === 'function') {
+          l.setStyle({ opacity: l._tptBaseOpacity * f });
+        }
+      };
+      transportLinesLayer.eachLayer(applyLeaflet);
+      transportAutoTracksLayer.eachLayer(applyLeaflet);
+    }
+    function _setTransportNetworkDim(d) {
+      if (_transportNetworkDimmed === d) return;
+      _transportNetworkDimmed = d;
+      _applyTransportNetworkDim();
+    }
+
     let _transportTrackShapeId = null;
     function clearTransportTrack() {
       if (_transportTrackLines) {
@@ -12150,29 +12341,40 @@ function initPagerHoursFromStorage() {
         _transportTrackLines = null;
       }
       _transportTrackShapeId = null;
+      _setTransportNetworkDim(false);
+      // Re-place markers: the highlighted vehicle hops back onto its
+      // offset lane.
+      _rebuildTransport();
     }
 
     // Shared shape fetch (client-cached decoded points). Returns null on
-    // failure or missing geometry. Failures are NEGATIVE-CACHED — the
-    // snap warm-up re-requests wanted shapes every tick, and without
-    // this a 4xx id hammered the backend on every rebuild.
-    const _transportShapeFailed = new Set();
+    // failure or missing geometry. Failures are NEGATIVE-CACHED with a
+    // TTL — the snap warm-up re-requests wanted shapes every tick, and
+    // without the cache a 4xx id hammered the backend on every rebuild;
+    // without the TTL a transient failure left its vehicles unsnapped
+    // for the whole session.
+    const _transportShapeFailed = new Map(); // shapeId → failure ts
+    const TRANSPORT_SHAPE_FAIL_TTL = 5 * 60 * 1000;
     async function fetchTransportShapePts(shapeId) {
       let pts = _transportShapeCache.get(shapeId);
       if (pts) return pts;
-      if (_transportShapeFailed.has(shapeId)) return null;
+      const failedAt = _transportShapeFailed.get(shapeId);
+      if (failedAt != null) {
+        if (Date.now() - failedAt < TRANSPORT_SHAPE_FAIL_TTL) return null;
+        _transportShapeFailed.delete(shapeId); // stale — retry
+      }
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        if (!data.enc) { _transportShapeFailed.add(shapeId); return null; }
+        if (!data.enc) { _transportShapeFailed.set(shapeId, Date.now()); return null; }
         // Two smoothing passes — GTFS shapes are often sparse and render
         // with visibly sharp corners otherwise. Cached smoothed.
         pts = chaikinSmooth(decodePolyline(data.enc), 2);
         _transportShapeCache.set(shapeId, pts);
         return pts;
       } catch (e) {
-        _transportShapeFailed.add(shapeId);
+        _transportShapeFailed.set(shapeId, Date.now());
         console.warn('[transport] shape failed:', shapeId, e);
         return null;
       }
@@ -12192,6 +12394,11 @@ function initPagerHoursFromStorage() {
       casing.addTo(transportLayer);
       line.addTo(transportLayer);
       _transportTrackLines = [casing, line];
+      // Focus: dim the network (only after the track actually drew)
+      // and re-place markers so the highlighted vehicle hops onto the
+      // centreline track immediately, not at the next 10s tick.
+      _setTransportNetworkDim(true);
+      _rebuildTransport();
     }
 
     // ---------- Auto route tracks for visible vehicles ----------
@@ -12267,10 +12474,15 @@ function initPagerHoursFromStorage() {
           // indistinguishable from the tiled ones. No offset — these
           // are single-route shapes.
           const wf = _transportWeightFactor();
-          const tOl = L.polyline(pts, { color: '#FFFFFF', weight: 4 * wf, opacity: 0.85, lineCap: 'round', lineJoin: 'bevel', interactive: false });
-          const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          // A track finishing its fetch while the focus dim is active
+          // must be created dimmed.
+          const df = _transportNetworkDimmed ? 0.15 : 1;
+          const tOl = L.polyline(pts, { color: '#FFFFFF', weight: 4 * wf, opacity: 0.85 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           tOl._tptBaseWeight = 4;
           tCl._tptBaseWeight = 3;
+          tOl._tptBaseOpacity = 0.85;
+          tCl._tptBaseOpacity = 1;
           entry.line = L.layerGroup([tOl, tCl]);
           transportAutoTracksLayer.addLayer(entry.line);
         });
