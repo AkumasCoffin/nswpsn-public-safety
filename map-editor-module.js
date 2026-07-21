@@ -905,10 +905,13 @@
     }
 
     async function deleteLog(id) {
-      if (!confirm("Delete this log entry?")) return;
+      const ok = await askConfirm(
+        'Delete this log entry? This cannot be undone.',
+        { confirmLabel: 'Delete', danger: true },
+      );
+      if (!ok) return;
       const res = await apiFetch(`${PROXY_BASE}/api/incidents/updates/${id}`, { method: 'DELETE' });
-      const error = res.ok ? null : { message: 'Failed to delete log' };
-      if (error) alert(error.message);
+      if (!res.ok) showToast('Failed to delete log entry.', 'error');
       else loadIncidentLogs(selectedId);
     }
 
