@@ -1846,7 +1846,7 @@
 
     async function deleteIncident() {
       if (!selectedId) return;
-      const ok = await askConfirm('Delete this pin? This removes the incident and its logs.', {
+      const ok = await askConfirm('Delete this pin? It comes off the map now; its data stays in the logs until the data retention window expires, then is permanently deleted.', {
         confirmLabel: 'Delete', danger: true,
       });
       if (!ok) return;

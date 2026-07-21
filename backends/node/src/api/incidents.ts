@@ -44,6 +44,11 @@ import {
   canEditIncidents,
   canManageUsers,
 } from '../services/auth/roles.js';
+import { archiveWriter } from '../store/archive.js';
+import {
+  userIncidentArchiveRow,
+  type UserIncidentRow,
+} from '../sources/userIncidents.js';
 
 export const incidentsRouter = new Hono();
 
@@ -432,6 +437,22 @@ incidentsRouter.post('/api/incidents/:id/archive', requireRole(canManageUsers), 
       );
       // Off the live map; the archive copy is the permanent record.
       await pool.query('UPDATE incidents SET deleted_at = NOW() WHERE id = $1', [id]);
+      // Pull the incident's snapshots out of the regular logs feed —
+      // archived incidents live ONLY in the "Archived Incidents" area,
+      // non-archived ones stay in the feed until retention. Best-effort:
+      // a missing archive table must not fail the archive action itself.
+      try {
+        await pool.query(
+          `DELETE FROM archive_misc WHERE source = 'user_incident' AND source_id = $1`,
+          [id],
+        );
+        await pool.query(
+          `DELETE FROM archive_misc_latest WHERE source = 'user_incident' AND source_id = $1`,
+          [id],
+        );
+      } catch (err) {
+        log.warn({ err, id }, 'archive: failed to remove logs-feed snapshots');
+      }
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
@@ -625,7 +646,23 @@ incidentsRouter.delete('/api/incidents/:id', async (c) => {
       // from the API but keep everything in the database. The hourly
       // cleanup hard-deletes rows once deleted_at ages past
       // DATA_RETENTION_DAYS, so accidental deletes stay recoverable.
-      await pool.query('UPDATE incidents SET deleted_at = NOW() WHERE id = $1', [id]);
+      const deleted = await pool.query<UserIncidentRow & { is_rfs_stub: boolean | null }>(
+        'UPDATE incidents SET deleted_at = NOW() WHERE id = $1 RETURNING *',
+        [id],
+      );
+      // Push a final is_active:false snapshot to the logs-page archive.
+      // The user_incidents poller no longer sees soft-deleted rows, so
+      // without this the incident's last archived state would read
+      // "active" until retention drops it.
+      const row = deleted.rows[0];
+      if (row && row.is_rfs_stub !== true) {
+        archiveWriter.push(
+          'archive_misc',
+          userIncidentArchiveRow(row, Math.floor(Date.now() / 1000), {
+            forceInactive: true,
+          }),
+        );
+      }
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
