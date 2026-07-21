@@ -11782,12 +11782,15 @@ function initPagerHoursFromStorage() {
     // ---------- Marker glide (smooth movement between data ticks) ----------
     // Positions arrive every 10s; setting them directly teleports the
     // markers. Glide each moving marker to its new position with a
-    // shared rAF loop instead. Big jumps (first fix, reroute) and
-    // off-screen markers snap instantly.
+    // shared rAF loop instead. When the vehicle's shape is cached the
+    // glide interpolates PROGRESS ALONG THE ROUTE and walks the
+    // polyline (a straight-chord lerp cuts corners on curves), keeping
+    // the lane offset applied per segment. Big jumps (first fix,
+    // reroute) and off-screen markers snap instantly.
     const _transportGlides = new Map(); // id → glide state
     let _transportGlideRaf = null;
     const TRANSPORT_GLIDE_MS = 4000;
-    function _transportGlideMarker(id, marker, toLat, toLon) {
+    function _transportGlideMarker(id, marker, toLat, toLon, path) {
       const cur = marker.getLatLng();
       const dLat = toLat - cur.lat, dLon = toLon - cur.lng;
       const d2 = dLat * dLat + dLon * dLon;
@@ -11800,7 +11803,7 @@ function initPagerHoursFromStorage() {
       }
       _transportGlides.set(id, {
         marker: marker, fromLat: cur.lat, fromLon: cur.lng,
-        toLat: toLat, toLon: toLon, t0: performance.now()
+        toLat: toLat, toLon: toLon, path: path || null, t0: performance.now()
       });
       if (!_transportGlideRaf) _transportGlideRaf = requestAnimationFrame(_transportGlideTick);
     }
@@ -11815,10 +11818,26 @@ function initPagerHoursFromStorage() {
         }
         // Near-linear (vehicles move at ~constant speed), soft landing.
         const e = t < 0.8 ? t : 0.8 + (1 - Math.pow(1 - (t - 0.8) / 0.2, 2)) * 0.2;
-        g.marker.setLatLng([
-          g.fromLat + (g.toLat - g.fromLat) * e,
-          g.fromLon + (g.toLon - g.fromLon) * e
-        ]);
+        if (g.path) {
+          const pts = g.path.pts;
+          let p = g.path.fromP + (g.path.toP - g.path.fromP) * e;
+          const maxP = pts.length - 1.000001;
+          if (p < 0) p = 0; else if (p > maxP) p = maxP;
+          const i = Math.floor(p), frac = p - i;
+          const a = pts[i], b = pts[i + 1];
+          const lat = a[0] + (b[0] - a[0]) * frac;
+          const lon = a[1] + (b[1] - a[1]) * frac;
+          if (g.path.offset) {
+            g.marker.setLatLng(_transportApplyLaneOffset({ lat: lat, lon: lon, a: a, b: b, offset: g.path.offset }));
+          } else {
+            g.marker.setLatLng([lat, lon]);
+          }
+        } else {
+          g.marker.setLatLng([
+            g.fromLat + (g.toLat - g.fromLat) * e,
+            g.fromLon + (g.toLon - g.fromLon) * e
+          ]);
+        }
       }
       if (_transportGlides.size) _transportGlideRaf = requestAnimationFrame(_transportGlideTick);
     }
@@ -11966,7 +11985,27 @@ function initPagerHoursFromStorage() {
         if (existing) {
           existing.prog = prog;
           existing.laneSnap = laneSnap;
-          _transportGlideMarker(v.id, existing.marker, dispLat, dispLon);
+          // Glide along the route shape when both ends sit on it —
+          // straight-chord glides cut corners off curved track. The
+          // start progress comes from the marker's CURRENT position
+          // (correct even when retargeting mid-glide).
+          let glidePath = null;
+          if (prog) {
+            const shapePts = _transportShapeCache.get(v.shapeId);
+            if (shapePts) {
+              const curLl = existing.marker.getLatLng();
+              const curSnap = snapToPolylinePts(shapePts, curLl.lat, curLl.lng);
+              if (curSnap && curSnap.distDeg < SNAP_MAX_DEG) {
+                glidePath = {
+                  pts: shapePts,
+                  fromP: curSnap.i + curSnap.t,
+                  toP: prog.p,
+                  offset: laneSnap ? laneSnap.offset : 0
+                };
+              }
+            }
+          }
+          _transportGlideMarker(v.id, existing.marker, dispLat, dispLon, glidePath);
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
             existing.iconKey = key;
