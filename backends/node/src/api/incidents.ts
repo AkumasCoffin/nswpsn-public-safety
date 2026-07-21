@@ -89,15 +89,9 @@ async function userCanModifyIncident(
  * incident's creator, or a site admin. `updateBy` is the log author,
  * `incidentBy` the incident creator (both may be null on legacy rows).
  */
-async function userCanModifyUpdate(
-  userId: string | undefined,
-  updateBy: string | null,
-  incidentBy: string | null,
-): Promise<boolean> {
-  if (!userId) return false;
-  if (updateBy && updateBy === userId) return true;
-  if (incidentBy && incidentBy === userId) return true;
-  return canManageUsers(userId);
+function currentUserName(c: { get: (k: string) => unknown }): string | null {
+  const v = c.get('userName');
+  return typeof v === 'string' && v ? v : null;
 }
 
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
@@ -667,13 +661,14 @@ incidentsRouter.post('/api/incidents/:id/updates', async (c) => {
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const message = (data['message'] as string | undefined) ?? '';
-    // Any editor may add a log directly (requirement) — stamp the author
-    // so the log can later be edited/deleted by its author or the owner.
+    // Stamp the author id + display name (username only) so every log
+    // entry shows who wrote it.
     const createdBy = currentUserId(c) ?? null;
+    const createdByName = currentUserName(c);
     const result = await withPool(async (pool) => {
       const r = await pool.query<{ id: string }>(
-        'INSERT INTO incident_updates (incident_id, message, created_by) VALUES ($1, $2, $3) RETURNING id',
-        [id, message, createdBy],
+        'INSERT INTO incident_updates (incident_id, message, created_by, created_by_name) VALUES ($1, $2, $3, $4) RETURNING id',
+        [id, message, createdBy, createdByName],
       );
       return r.rows[0]?.id ?? null;
     });
@@ -696,9 +691,9 @@ incidentsRouter.put('/api/incidents/updates/:updateId', async (c) => {
     const result = await withPool(async (pool) => {
       const owner = await loadUpdateAuthority(pool, updateId);
       if (!owner) return { notFound: true as const };
-      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy, owner.incidentBy))) {
-        return { forbidden: true as const };
-      }
+      // Logs are COLLABORATIVE: any editor may edit any entry (across
+      // user pins, RFS stubs and pager stubs) — author attribution is
+      // preserved via created_by / created_by_name.
       await pool.query(
         'UPDATE incident_updates SET message = $1 WHERE id = $2',
         [message, updateId],
@@ -707,9 +702,6 @@ incidentsRouter.put('/api/incidents/updates/:updateId', async (c) => {
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in result) return c.json({ error: 'Update not found' }, 404);
-    if ('forbidden' in result) {
-      return c.json({ error: 'Only the log author, incident owner, or an admin can edit it.' }, 403);
-    }
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, updateId }, 'Error updating incident update');
@@ -726,17 +718,12 @@ incidentsRouter.delete('/api/incidents/updates/:updateId', async (c) => {
     const result = await withPool(async (pool) => {
       const owner = await loadUpdateAuthority(pool, updateId);
       if (!owner) return { notFound: true as const };
-      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy, owner.incidentBy))) {
-        return { forbidden: true as const };
-      }
+      // Collaborative, like edits — any editor may remove any entry.
       await pool.query('DELETE FROM incident_updates WHERE id = $1', [updateId]);
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in result) return c.json({ error: 'Update not found' }, 404);
-    if ('forbidden' in result) {
-      return c.json({ error: 'Only the log author, incident owner, or an admin can delete it.' }, 403);
-    }
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, updateId }, 'Error deleting incident update');

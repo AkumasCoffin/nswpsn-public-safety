@@ -839,7 +839,7 @@
       container.innerHTML = data.map(log => `
         <div id="log-item-${log.id}" style="border-bottom:1px solid rgba(255,255,255,0.1); padding:0.6rem 0.4rem;" data-original-message="${escapeHtml(log.message).replace(/"/g, '&quot;')}">
           <div style="font-size:0.7rem; color:var(--text-soft); display:flex; justify-content:space-between; margin-bottom:0.3rem;">
-            <span>${new Date(log.created_at).toLocaleString()}</span>
+            <span>${new Date(log.created_at).toLocaleString()}${log.created_by_name ? ` · <strong style="color:#cbd5e1;">${escapeHtml(log.created_by_name)}</strong>` : ''}</span>
             <div style="display:flex; gap:0.5rem;">
               <span style="cursor:pointer; color:var(--accent);" onclick="startEditLog('${log.id}')">Edit</span>
               <span style="cursor:pointer; color:#8b5cf6;" onclick="checkGrammar('${log.id}')" title="Check grammar">✓ Grammar</span>
@@ -1586,49 +1586,13 @@
       const msg = document.getElementById('new-update-msg').value;
       if (!msg) return;
 
-      let incidentType = "User";
-      let lat = null, lng = null;
-
-      const RFS_BLOCK = document.getElementById('rfs-read-only-data');
-      if (RFS_BLOCK) {
-        incidentType = "RFS";
-        const title = "RFS Incident Log"; 
-        const pointStr = RFS_BLOCK.dataset.point; 
-        [lat, lng] = pointStr ? pointStr.split(' ').map(Number) : [null, null];
-
-        const checkRes = await apiFetch(`${PROXY_BASE}/api/incidents`);
-        const allInc = checkRes.ok ? await checkRes.json() : [];
-        const existing = allInc.filter(i => i.id === selectedId);
-        const selectError = checkRes.ok ? null : { message: 'Failed to check stub' };
-        
-        if (selectError) {
-          alert(`Error checking stub: ${selectError.message}`);
+      // RFS incidents and pager clusters store logs against a shared
+      // stub row — make sure it exists before the first entry.
+      if (_unitsStub && _unitsStub.id === selectedId) {
+        const ok = await ensureStubIncident(_unitsStub);
+        if (!ok) {
+          alert('Error creating stub for log.');
           return;
-        }
-
-        if (!existing || existing.length === 0) {
-          const expireTime = new Date(Date.now() + 48 * 3600000); 
-          const stubRes = await apiFetch(`${PROXY_BASE}/api/incidents`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: selectedId,
-              title: title,
-              lat: lat || 0,
-              lng: lng || 0,
-              is_rfs_stub: true,
-              type: ['RFS'],
-              status: 'Monitoring',
-              description: 'Auto-created stub for RFS fire log.',
-              expires_at: expireTime
-            })
-          });
-          const insertError = stubRes.ok ? null : { message: 'Failed to create stub' };
-          
-          if (insertError) {
-            alert(`Error creating stub for RFS log: ${insertError.message}`); 
-            return;
-          }
         }
       }
 
@@ -1950,6 +1914,12 @@
           document.getElementById('units-group').style.display = 'block';
           placeUnitsGroup(true); // under the pager details block
           loadStubUnits(_unitsStub);
+          // Incident logs work on pager clusters too, against the same
+          // stub row (created on the first entry).
+          selectedId = _unitsStub.id;
+          document.getElementById('log-section').style.display = 'block';
+          document.getElementById('new-update-msg').value = '';
+          loadIncidentLogs(_unitsStub.id);
         } else {
           _unitsStub = null;
           document.getElementById('units-group').style.display = 'none';

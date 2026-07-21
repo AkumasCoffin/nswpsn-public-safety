@@ -60,6 +60,7 @@ function makeApp() {
   // Simulate optionalSupabaseJwt having verified a logged-in editor.
   app.use('*', async (c, next) => {
     c.set('userId' as never, 'editor-1' as never);
+    c.set('userName' as never, 'Test Editor' as never);
     await next();
   });
   app.route('/', incidentsRouter);
@@ -334,8 +335,8 @@ describe('incident_updates routes', () => {
     });
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ id: 'upd-1', success: true });
-    // created_by (the editor) is now recorded as the third param.
-    expect(callWith('INSERT INTO incident_updates')?.params).toEqual(['inc1', 'hello', 'editor-1']);
+    // created_by + created_by_name (username only) are recorded.
+    expect(callWith('INSERT INTO incident_updates')?.params).toEqual(['inc1', 'hello', 'editor-1', 'Test Editor']);
   });
 
   it('PUT /api/incidents/updates/:id updates the message column (author/owner/admin)', async () => {
@@ -360,8 +361,8 @@ describe('incident_updates routes', () => {
     expect(callWith('DELETE FROM incident_updates WHERE id = $1')?.params).toEqual(['u1']);
   });
 
-  it('403s when a non-author non-owner non-admin edits a log', async () => {
-    canManageUsersMock.mockResolvedValue(false);
+  it('any editor may edit another author\'s log (collaborative)', async () => {
+    canManageUsersMock.mockResolvedValue(false); // not an admin either
     nextResult = { rows: [{ update_by: 'other', incident_by: 'other' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/updates/u1', {
@@ -369,8 +370,9 @@ describe('incident_updates routes', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'x' }),
     });
-    expect(res.status).toBe(403);
-    expect(callWith('UPDATE incident_updates SET message')).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(callWith('UPDATE incident_updates SET message')?.params).toEqual(['x', 'u1']);
+    canManageUsersMock.mockResolvedValue(true);
   });
 });
 
