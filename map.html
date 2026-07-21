@@ -2310,7 +2310,6 @@
           <i id="unified-list-icon" class="fa-solid fa-ship" style="color:#7dd3fc;"></i>
           <h4 id="unified-list-title">AIS Vessels</h4>
           <span class="ais-list-count" id="ais-list-count">0</span>
-          <button class="ais-list-close" onclick="closeAisListPanel()" title="Hide list"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="ais-list-search">
           <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="unifiedListOnSearch(this.value)">
@@ -2335,7 +2334,6 @@
           <i class="fa-solid fa-bus" style="color:#f18500;" id="transport-info-icon"></i>
           <h4 id="transport-info-title">Transport</h4>
           <span class="ais-list-count" id="transport-info-sub"></span>
-          <button class="ais-list-close" onclick="closeTransportInfo()" title="Close"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="ais-list-body" id="transport-info-body"></div>
       </div>
@@ -5670,9 +5668,20 @@ function initPagerHoursFromStorage() {
       `;
     }
 
+    // Editor reroute guard: the editor panel is USER-layer-gated, so
+    // when that layer is off the hooks would render pin details (incl.
+    // a pager cluster's connected calls) into a hidden panel and the
+    // click appeared to do nothing. Fall back to the public sidebar
+    // whenever the editor panel can't actually show.
+    function _editorHooksUsable() {
+      if (!window.__editorActive || !window.NSWPSNEditorHooks) return false;
+      const btn = document.getElementById('btn-user');
+      return !btn || btn.classList.contains('active');
+    }
+
     function showPagerDetails(item) {
       // Editor mode: pager cluster details open in the editor panel.
-      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openPager(item); }
+      if (_editorHooksUsable()) { return NSWPSNEditorHooks.openPager(item); }
       const sidebar = document.getElementById('incident-sidebar');
       const content = document.getElementById('sidebar-content');
       sidebar.classList.add('open');
@@ -6030,7 +6039,7 @@ function initPagerHoursFromStorage() {
     
     async function showIncidentDetails(incident, pagerDetails) {
       // Editor mode: pin details open in the editor panel instead.
-      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openUser(incident, pagerDetails); }
+      if (_editorHooksUsable()) { return NSWPSNEditorHooks.openUser(incident, pagerDetails); }
       // Ensure we always have an object to work with
       const data = incident || {};
       const sidebar = document.getElementById('incident-sidebar');
@@ -6107,7 +6116,7 @@ function initPagerHoursFromStorage() {
     
     async function showRfsDetails(item) {
       // Editor mode: RFS details open in the editor panel (read-only + logs).
-      if (window.__editorActive && window.NSWPSNEditorHooks) { return NSWPSNEditorHooks.openRfs(item); }
+      if (_editorHooksUsable()) { return NSWPSNEditorHooks.openRfs(item); }
       const data = item.rawDetails;
       const pagerDetails = item.pagerDetails;
       const sidebar = document.getElementById('incident-sidebar');
@@ -12098,6 +12107,39 @@ function initPagerHoursFromStorage() {
       if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
     }
 
+    // On-map labels under each vehicle, mirroring the aircraft layer:
+    // `enabled` is the master switch in the floating filter panel, the
+    // field keys are sub-toggles that appear once labels are on. The
+    // identity line (route name / mode) always shows when enabled.
+    const transportLabelSettings = {
+      enabled: false,
+      dest: true,
+      speed: true,
+      route: false,
+      occ: false,
+      model: false
+    };
+    const TRANSPORT_LABEL_FIELDS = [
+      { key: 'dest',  label: 'Destination' },
+      { key: 'speed', label: 'Speed' },
+      { key: 'route', label: 'Route name' },
+      { key: 'occ',   label: 'Occupancy' },
+      { key: 'model', label: 'Vehicle' }
+    ];
+    function _tptTrunc(s, n) {
+      s = String(s);
+      return s.length > n ? s.slice(0, n - 1) + '…' : s;
+    }
+    function buildTransportLabelFields(v) {
+      const parts = [];
+      if (transportLabelSettings.dest && v.headsign) parts.push(_tptTrunc(v.headsign, 22));
+      if (transportLabelSettings.speed && v.speedKmh != null) parts.push(Math.round(v.speedKmh) + ' km/h');
+      if (transportLabelSettings.route && v.route && v.route.longName) parts.push(_tptTrunc(v.route.longName, 26));
+      if (transportLabelSettings.occ && v.occupancy != null) parts.push(TRANSPORT_OCCUPANCY[v.occupancy]);
+      if (transportLabelSettings.model && v.model) parts.push(_tptTrunc(v.model, 20));
+      return parts;
+    }
+
     function buildTransportIcon(v) {
       const modeColor = transportModeColor(v.mode);
       const bg = (v.route && v.route.color) || modeColor;
@@ -12116,19 +12158,36 @@ function initPagerHoursFromStorage() {
       if (v.bearing != null && Number.isFinite(v.bearing)) {
         needle = '<div class="tpt-ptr" style="color:' + bg + ';"><span style="transform:rotate(' + v.bearing + 'deg);"></span></div>';
       }
+      // Optional label chip under the marker (aircraft-label styling);
+      // long text fields get one line each so the chip stays narrow.
+      let labelHtml = '';
+      if (transportLabelSettings.enabled) {
+        const identity = (v.route && v.route.name) ||
+          (TRANSPORT_MODE_BY_KEY[v.mode] ? TRANSPORT_MODE_BY_KEY[v.mode].label : 'Service');
+        const lines = buildTransportLabelFields(v)
+          .map((p) => '<div>' + escapeHtml(p) + '</div>').join('');
+        labelHtml = '<div style="position:absolute;top:10px;left:0;transform:translateX(-50%);background:rgba(10,14,26,0.85);border:1px solid ' + hexToRgba(bg, 0.5) + ';color:#e2e8f0;font-size:9px;line-height:1.45;padding:2px 6px;border-radius:4px;white-space:nowrap;text-align:center;pointer-events:none;font-family:system-ui,sans-serif;">' +
+          '<div style="font-weight:700;color:' + bg + ';">' + escapeHtml(identity) + '</div>' +
+          lines +
+        '</div>';
+      }
       return L.divIcon({
         className: 'tpt-pin',
-        html: '<div style="position:relative;width:0;height:0;">' + inner + needle + '</div>',
+        html: '<div style="position:relative;width:0;height:0;">' + inner + needle + labelHtml + '</div>',
         iconSize: [0, 0],
         iconAnchor: [0, 0]
       });
     }
 
     // Chip text/colour are static per trip, so only route identity,
-    // mode and a 10° bearing bucket matter.
+    // mode and a 10° bearing bucket matter — plus the label text when
+    // labels are on, so value changes rebuild the divIcon.
     function _transportIconKey(v) {
       const b = v.bearing != null && Number.isFinite(v.bearing) ? Math.round(v.bearing / 10) : 'x';
-      return [(v.route && (v.route.id || v.route.name)) || '', v.mode, b].join('|');
+      const label = transportLabelSettings.enabled
+        ? '|L|' + buildTransportLabelFields(v).join(',')
+        : '';
+      return [(v.route && (v.route.id || v.route.name)) || '', v.mode, b].join('|') + label;
     }
 
     function buildTransportTooltipHtml(v) {
@@ -12763,6 +12822,9 @@ function initPagerHoursFromStorage() {
       const p = document.getElementById('transport-info-panel');
       if (p) p.classList.add('open');
     }
+    // No close button — the panel opens when a vehicle/station/alerts
+    // pill is clicked and closes on a map-background click (below),
+    // matching the AIS/aircraft pin-clearing pattern.
     function closeTransportInfo() {
       const p = document.getElementById('transport-info-panel');
       if (p) p.classList.remove('open');
@@ -12770,6 +12832,9 @@ function initPagerHoursFromStorage() {
       clearTransportTrack();
     }
     window.closeTransportInfo = closeTransportInfo;
+    map.on('click', () => {
+      if (_transportInfo) closeTransportInfo();
+    });
 
     function tptTime(epoch) {
       if (epoch == null) return '—';
@@ -13167,6 +13232,16 @@ function initPagerHoursFromStorage() {
       }
       refreshActiveFilterPanel();
     };
+    window.toggleTransportLabelsPill = function () {
+      transportLabelSettings.enabled = !transportLabelSettings.enabled;
+      _rebuildTransport();
+      refreshActiveFilterPanel();
+    };
+    window.toggleTransportLabelFieldPill = function (key) {
+      transportLabelSettings[key] = !transportLabelSettings[key];
+      _rebuildTransport();
+      refreshActiveFilterPanel();
+    };
     FILTER_REGISTRY.transport = {
       icon: 'fa-bus',
       label: 'Transport',
@@ -13186,12 +13261,24 @@ function initPagerHoursFromStorage() {
         const alertsRow = _transportAlertsConfigured === false ? '' : `
           <div class="ff-section-label">Disruptions</div>
           <div class="floating-filter-pills">${_ffPillColored(sevCount > 0, '#f59e0b', '<i class="fa-solid fa-triangle-exclamation"></i>', `Service alerts (${sevCount})`, 'showTransportAlerts()')}</div>`;
+        // Field sub-toggles only appear while labels are on (aircraft
+        // panel pattern).
+        let labelFieldsHtml = '';
+        if (transportLabelSettings.enabled) {
+          const lp = TRANSPORT_LABEL_FIELDS.map((f) =>
+            _ffPill(transportLabelSettings[f.key], f.label, `toggleTransportLabelFieldPill('${f.key}')`)
+          ).join('');
+          labelFieldsHtml = `
+          <div class="ff-section-label">Label fields</div>
+          <div class="floating-filter-pills">${lp}</div>`;
+        }
         return `
           <h4><i class="fa-solid fa-bus" style="color:#f18500;"></i> Transport</h4>
           <div class="ff-section-label">Mode</div>
           <div class="floating-filter-pills">${pills}</div>
-          <div class="ff-section-label">Stations</div>
-          <div class="floating-filter-pills">${_ffPill(transportStationsEnabled, '<i class="fa-solid fa-train"></i> Stations', 'toggleTransportStationsPill()')}</div>
+          <div class="ff-section-label">Display</div>
+          <div class="floating-filter-pills">${_ffPill(transportStationsEnabled, '<i class="fa-solid fa-train"></i> Stations', 'toggleTransportStationsPill()')}${_ffPill(transportLabelSettings.enabled, '<i class="fa-solid fa-tag"></i> Labels', 'toggleTransportLabelsPill()')}</div>
+          ${labelFieldsHtml}
           ${alertsRow}
           ${zoomNote}
         `;
