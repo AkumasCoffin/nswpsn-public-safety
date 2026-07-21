@@ -145,6 +145,16 @@ describe('transport feeds/modes params', () => {
 });
 
 describe('transport vehicle normalization', () => {
+  it('drops vehicles with stale positions (parked sets / OCCP ghosts)', async () => {
+    const stale = rawVehicle();
+    (stale.vehicleInstance as { lastPosition: { time: number } }).lastPosition.time =
+      Math.floor(Date.now() / 1000) - 3600;
+    fetchJsonMock.mockResolvedValue({ response: { vehicles: [stale, rawVehicle()] } });
+    const res = await getVehicles(`${CBD}&feeds=bs`);
+    const body = await res.json();
+    expect(body.count).toBe(1); // only the fresh one survives
+  });
+
   it('normalizes a full record', async () => {
     fetchJsonMock.mockResolvedValue({ response: { vehicles: [rawVehicle()] } });
     const res = await getVehicles(`${CBD}&feeds=bs`);
