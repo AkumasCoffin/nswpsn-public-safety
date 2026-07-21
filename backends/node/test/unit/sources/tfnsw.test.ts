@@ -275,6 +275,25 @@ describe('fetchTfnswPositions', () => {
     expect(await fetchTfnswPositions(['st'])).toEqual([]);
   });
 
+  it('serves LAST-GOOD positions through a failing refresh — never an empty flip', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchBufferMock.mockResolvedValueOnce(encodeVehicleFeed([fixtureVehicle()]));
+      const first = await fetchTfnswPositions(['st']);
+      expect(first).toHaveLength(1);
+      vi.advanceTimersByTime(25_000); // past fresh (15s + ≤5s jitter)
+      fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 429'), { status: 429 }));
+      const second = await fetchTfnswPositions(['st']);
+      // A failed refresh must serve the previous batch (stale window),
+      // not cache [] as a success — an empty batch flips every matched
+      // vehicle back to the AnyTrip frame and teleports pins.
+      expect(second).toHaveLength(1);
+      expect(second[0]!.tripId).toBe('W123');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('parks a 429-rate-limited feed instead of re-hitting it', async () => {
     fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 429'), { status: 429 }));
     expect(await _testables.fetchFeed('/v2/gtfs/vehiclepos/sydneytrains')).toBeNull();
