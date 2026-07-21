@@ -1498,6 +1498,8 @@
     /* Transport timetable card sits below the vessels/aircraft section
        and gets its own divider when both are open. */
     #right-dock #transport-info-panel { order: 2; border-top: 1px solid rgba(148, 163, 184, 0.18); }
+    #right-dock #incident-info-panel { order: 3; border-top: 1px solid rgba(148, 163, 184, 0.18); }
+    #incident-info-panel .ais-list-body { padding: 10px 12px; font-size: 0.8rem; }
     @media (max-width: 900px) { #right-dock { display: none !important; } }
     @media (max-width: 720px) {
       .ais-list-panel { width: calc(100vw - 24px); top: 60px; max-height: 50vh; }
@@ -2337,6 +2339,18 @@
         </div>
         <div class="ais-list-body" id="transport-info-body"></div>
       </div>
+      <!-- Incident details card (public pager clusters / RFS incidents).
+           Same dock-card chrome as the other right-side panels; opened
+           by clicking a pager or RFS pin (non-editor sessions), closed
+           by a map-background click. -->
+      <div class="ais-list-panel" id="incident-info-panel">
+        <div class="ais-list-header">
+          <i class="fa-solid fa-pager" style="color:#22c55e;" id="incident-info-icon"></i>
+          <h4 id="incident-info-title">Details</h4>
+          <span class="ais-list-count" id="incident-info-sub"></span>
+        </div>
+        <div class="ais-list-body" id="incident-info-body"></div>
+      </div>
       </div><!-- /map-filters-for-sidebar -->
 
       <!-- Right-side panel dock (desktop). Every floating panel on the
@@ -2504,7 +2518,7 @@
       // (so it relocates into the sidebar) and Map Controls returns to
       // .map-container (so its bottom-sheet positioning works).
       const dock = document.getElementById('right-dock');
-      for (const id of ['ais-list-panel', 'transport-info-panel']) {
+      for (const id of ['ais-list-panel', 'transport-info-panel', 'incident-info-panel']) {
         const panel = document.getElementById(id);
         if (!dock || !panel) continue;
         if (isMobile && panel.parentElement === dock) wrapper.appendChild(panel);
@@ -2728,8 +2742,10 @@
     // Close sidebars + clear SELECTION state when clicking anywhere on the map
     // Note: Don't remove rfs-pulse or pager-pulse as those indicate recent items, not selection
     map.on('click', () => {
-      // Close incident sidebar
+      // Close incident sidebar + the right-dock details card
       document.getElementById('incident-sidebar').classList.remove('open');
+      const infoPanel = document.getElementById('incident-info-panel');
+      if (infoPanel) infoPanel.classList.remove('open');
 
       // Remove selection indicator from pager pins (but keep pulse for recent items)
       document.querySelectorAll('.pager-pin-dot.pin-selected')
@@ -5679,15 +5695,35 @@ function initPagerHoursFromStorage() {
       return !btn || btn.classList.contains('active');
     }
 
+    // Right-dock incident details card (public pager/RFS pin clicks) —
+    // matches the vessels/aircraft/transport dock chrome instead of the
+    // full-height incident sidebar. Closed by map-background clicks.
+    function _openIncidentInfoPanel(iconCls, color, title, sub) {
+      const p = document.getElementById('incident-info-panel');
+      if (!p) return null;
+      const icon = document.getElementById('incident-info-icon');
+      if (icon) { icon.className = 'fa-solid ' + iconCls; icon.style.color = color; }
+      const t = document.getElementById('incident-info-title');
+      if (t) t.textContent = title;
+      const s = document.getElementById('incident-info-sub');
+      if (s) s.textContent = sub || '';
+      p.classList.add('open');
+      return document.getElementById('incident-info-body');
+    }
+    function closeIncidentInfoPanel() {
+      const p = document.getElementById('incident-info-panel');
+      if (p) p.classList.remove('open');
+    }
+    window.closeIncidentInfoPanel = closeIncidentInfoPanel;
+
     function showPagerDetails(item) {
       // Editor mode: pager cluster details open in the editor panel.
       if (_editorHooksUsable()) { return NSWPSNEditorHooks.openPager(item); }
-      const sidebar = document.getElementById('incident-sidebar');
-      const content = document.getElementById('sidebar-content');
-      sidebar.classList.add('open');
-
-      const html = renderPagerDetailsHtml(item.rawDetails || {});
-      content.innerHTML = html;
+      const hits = (item.rawDetails && item.rawDetails.hits) ? item.rawDetails.hits.length : 0;
+      const body = _openIncidentInfoPanel('fa-pager', '#22c55e', 'Pager hits',
+        hits ? hits + ' call' + (hits === 1 ? '' : 's') : '');
+      if (!body) return;
+      body.innerHTML = renderPagerDetailsHtml(item.rawDetails || {});
     }
 
 
@@ -6119,9 +6155,11 @@ function initPagerHoursFromStorage() {
       if (_editorHooksUsable()) { return NSWPSNEditorHooks.openRfs(item); }
       const data = item.rawDetails;
       const pagerDetails = item.pagerDetails;
-      const sidebar = document.getElementById('incident-sidebar');
-      const content = document.getElementById('sidebar-content');
-      sidebar.classList.add('open');
+      // Public sessions get the right-dock details card (same chrome as
+      // the vessels/transport panels), not the full incident sidebar.
+      const content = _openIncidentInfoPanel('fa-fire', '#ef4444', 'RFS incident',
+        (item.rawDetails && item.rawDetails['ALERT LEVEL']) || '');
+      if (!content) return;
 
       content.innerHTML = '<p style="color:var(--text-soft); text-align:center; margin-top:2rem;">Loading details and log...</p>';
 
@@ -7319,6 +7357,11 @@ function initPagerHoursFromStorage() {
         map.addLayer(pagerLayer);
         addFilterButton('pager');
       }
+      // Re-render from the in-memory data: the periodic refresh clears
+      // pagerLayer while the toggle is off, so re-enabling showed an
+      // EMPTY layer group until the next refetch — and user/RFS pins
+      // need their pager badges added/removed either way.
+      if (typeof refreshMapAndList === 'function') refreshMapAndList();
       updateFilterPanelPositions();
       updateSettingsBackdrop();
     }
