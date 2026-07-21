@@ -135,6 +135,15 @@ async function fetchFeed(path: string): Promise<GtfsRealtimeBindings.transit_rea
   }
 }
 
+// protobufjs serves DEFAULT VALUES (0) through the message prototype
+// for fields absent from the wire — `pos.bearing === 0` can mean
+// "heading north" or "no bearing at all". Only own properties were
+// actually decoded; treating defaults as data pointed every
+// bearing-less vehicle north and overrode real AnyTrip speeds and
+// occupancy with zeros.
+const hasOwn = (obj: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key);
+
 function decodePositions(
   msg: GtfsRealtimeBindings.transit_realtime.FeedMessage,
   mode: TransportMode,
@@ -149,10 +158,14 @@ function decodePositions(
     const lon = pos.longitude;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     const ts =
-      v.timestamp != null && Number(v.timestamp) > 0 ? Number(v.timestamp) : null;
+      hasOwn(v, 'timestamp') && Number(v.timestamp) > 0
+        ? Number(v.timestamp)
+        : null;
     if (ts != null && nowSec - ts > POS_MAX_AGE_SEC) continue;
     const occ =
-      typeof v.occupancyStatus === 'number' && v.occupancyStatus >= 0
+      hasOwn(v, 'occupancyStatus') &&
+      typeof v.occupancyStatus === 'number' &&
+      v.occupancyStatus >= 0
         ? Math.min(6, v.occupancyStatus)
         : null;
     out.push({
@@ -162,13 +175,11 @@ function decodePositions(
       lat,
       lon,
       bearing:
-        Number.isFinite(pos.bearing) && (pos.bearing as number) !== 0
+        hasOwn(pos, 'bearing') && Number.isFinite(pos.bearing)
           ? (pos.bearing as number)
-          : Number.isFinite(pos.bearing)
-            ? 0
-            : null,
+          : null,
       speedKmh:
-        Number.isFinite(pos.speed) && (pos.speed as number) >= 0
+        hasOwn(pos, 'speed') && Number.isFinite(pos.speed) && (pos.speed as number) >= 0
           ? Math.round((pos.speed as number) * 36) / 10
           : null,
       timestamp: ts,
@@ -254,11 +265,17 @@ export function applyTfnswPositions(
   const nowSec = Date.now() / 1000;
   let matched = 0;
   const usedTrips = new Set<string>();
+  const anytripByMode = new Map<string, number>();
+  const matchedByMode = new Map<string, number>();
+  for (const v of vehicles) {
+    anytripByMode.set(v.mode, (anytripByMode.get(v.mode) ?? 0) + 1);
+  }
   const out = vehicles.map((v) => {
     const p = v.tripId ? byTrip.get(v.tripId) : undefined;
     if (!p) return v;
     usedTrips.add(v.tripId as string);
     matched += 1;
+    matchedByMode.set(v.mode, (matchedByMode.get(v.mode) ?? 0) + 1);
     return {
       ...v,
       lat: p.lat,
@@ -279,6 +296,18 @@ export function applyTfnswPositions(
     if (
       p.lat < bbox.minLat || p.lat > bbox.maxLat ||
       p.lon < bbox.minLon || p.lon > bbox.maxLon
+    ) {
+      continue;
+    }
+    // Duplicate guard: if AnyTrip has vehicles of this mode in view
+    // but NONE of them trip-matched, the feed's trip-id space differs
+    // from AnyTrip's rtTripId — every "TfNSW-only" entity is then the
+    // SAME physical vehicle AnyTrip already shows, and appending it
+    // duplicates trains with degraded labels. Only append for modes
+    // that are genuinely absent from AnyTrip or provably id-compatible.
+    if (
+      (anytripByMode.get(p.mode) ?? 0) > 0 &&
+      (matchedByMode.get(p.mode) ?? 0) === 0
     ) {
       continue;
     }
