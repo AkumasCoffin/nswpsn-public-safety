@@ -2041,16 +2041,15 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       });
-      const error = res.ok ? null : { message: 'Failed to save incident' };
-      if (error) {
-        alert(error.message);
+      if (!res.ok) {
+        showToast('Failed to save incident.', 'error');
       } else {
         // Hide grammar results when saving
         const titleResults = document.getElementById('title-grammar-results');
         const descResults = document.getElementById('description-grammar-results');
         if (titleResults) titleResults.style.display = 'none';
         if (descResults) descResults.style.display = 'none';
-        alert("Saved.");
+        showToast('Incident saved.', 'success');
         reloadIncidents();
       }
     }
