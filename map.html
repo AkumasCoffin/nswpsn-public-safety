@@ -12540,6 +12540,31 @@ function initPagerHoursFromStorage() {
         const existing = _transportMarkers.get(v.id);
         let dispLat = v.lat, dispLon = v.lon;
         let prog = null;
+        // Speed: AnyTrip sends speed:null for NSW trains, so derive it
+        // from how far the reported position moved between updates. Only
+        // fills in when the feed gives nothing — real feed speeds win.
+        // AnyTrip refreshes a train's position ~every 30s but we poll
+        // ~10s, so most polls repeat the last position. `spd` anchors the
+        // last DISTINCT position + its time (so dt is the true update
+        // interval); the computed value is HELD between updates and only
+        // drops to 0 after a genuine ~90s of no movement (dwelling).
+        if (existing) {
+          const s = existing.spd;
+          const now = Date.now();
+          const moved = !s || Math.abs(s.lat - v.lat) > 1e-7 || Math.abs(s.lon - v.lon) > 1e-7;
+          if (moved && s) {
+            const dt = (now - s.t) / 1000;
+            if (dt >= 3 && dt <= 180) {
+              existing.calcSpeed = Math.round(haversineMeters(s.lat, s.lon, v.lat, v.lon) / dt * 3.6);
+            }
+          }
+          if (moved) existing.spd = { lat: v.lat, lon: v.lon, t: now };
+          else if (s && now - s.t > 90000) existing.calcSpeed = 0; // stopped >90s
+          if (v.speedKmh == null && existing.calcSpeed != null) {
+            v.speedKmh = existing.calcSpeed;
+            v.speedEstimated = true;
+          }
+        }
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
           if (shapePts) {
@@ -12670,7 +12695,7 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog });
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog, spd: { lat: v.lat, lon: v.lon, t: Date.now() } });
         }
       }
       for (const [id, entry] of _transportMarkers) {
@@ -12789,7 +12814,7 @@ function initPagerHoursFromStorage() {
         row('Route', v.route && v.route.longName),
         row('Destination', v.headsign ? v.headsign + (v.headsignSub ? ' (' + v.headsignSub + ')' : '') : null),
         row('Operator', v.agency),
-        row('Speed', v.speedKmh != null ? Math.round(v.speedKmh) + ' km/h' : null),
+        row('Speed', v.speedKmh != null ? Math.round(v.speedKmh) + ' km/h' + (v.speedEstimated ? ' (est.)' : '') : null),
         row('Occupancy', v.occupancy != null ? TRANSPORT_OCCUPANCY[v.occupancy] : null),
         row('Vehicle', v.model),
         row('Comfort', comfort || null),
