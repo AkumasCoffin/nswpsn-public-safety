@@ -303,12 +303,10 @@ export function routeNameFromId(routeId: string | null): string | null {
   return /^[A-Za-z0-9]{1,4}$/.test(tail) ? tail.toUpperCase() : null;
 }
 
-// Per-trip stickiness: GTFS-R entities BLINK — a vehicle that misses
-// one batch would flip to AnyTrip's ~30s-ahead frame (fast forward
-// glide) and back (ratcheted, then a backward snap) — the "vehicles
-// jump around" cycle. Remember each trip's last TfNSW position and
-// keep serving it through blinks; only a sustained absence hands the
-// vehicle back to AnyTrip (one flip, no oscillation).
+// Per-trip TfNSW position stickiness. GTFS-R entities BLINK — a vehicle
+// can miss one decode batch and reappear next tick. Remember each trip's
+// last TfNSW position and keep serving it through short blinks so the
+// marker holds still rather than vanishing for a beat.
 const TFNSW_STICKY_MS = 60_000;
 const _lastByTrip = new Map<string, { p: TfnswPosition; at: number }>();
 
@@ -324,12 +322,65 @@ function _rememberPositions(positions: TfnswPosition[]): void {
   }
 }
 
+// Per-trip AnyTrip METADATA cache (everything except position). Lets a
+// train keep its stable id, route colours/name, headsign and — crucially
+// — its route SHAPE (so it still snaps to track) on the ticks AnyTrip
+// drops it while TfNSW still reports a position. Without this a matched
+// train would flip to a synthetic marker with a new id and no shape,
+// which recreated the marker (teleport) and lost route-snapping.
+interface TripMeta {
+  id: string;
+  mode: TransportMode;
+  route: TransportVehicle['route'];
+  headsign: string | null;
+  headsignSub: string | null;
+  agency: string | null;
+  wheelchair: boolean | null;
+  aircon: boolean | null;
+  model: string | null;
+  shapeId: string | null;
+  startDate: string | null;
+  instanceNumber: number | null;
+  at: number;
+}
+const _metaByTrip = new Map<string, TripMeta>();
+
+function _rememberMeta(v: TransportVehicle, now: number): void {
+  if (!v.tripId) return;
+  _metaByTrip.set(v.tripId, {
+    id: v.id,
+    mode: v.mode,
+    route: v.route,
+    headsign: v.headsign,
+    headsignSub: v.headsignSub,
+    agency: v.agency,
+    wheelchair: v.wheelchair,
+    aircon: v.aircon,
+    model: v.model,
+    shapeId: v.shapeId,
+    startDate: v.startDate,
+    instanceNumber: v.instanceNumber,
+    at: now,
+  });
+  if (_metaByTrip.size > 4000) {
+    for (const [k, m] of _metaByTrip) {
+      if (now - m.at > TFNSW_STICKY_MS) _metaByTrip.delete(k);
+    }
+  }
+}
+
 /**
- * Join: TfNSW positions become authoritative for AnyTrip vehicles with
- * a matching trip id; TfNSW-only trips inside the bbox are appended as
- * synthetic vehicles (mode colours, no shape — the frontend renders
- * them un-snapped, and the trip panel still works because AnyTrip's
- * tripInstance API accepts the GTFS-R trip id).
+ * TfNSW GTFS-Realtime is the SINGLE source of vehicle POSITIONS — AnyTrip
+ * (which derives its own positions from the same TfNSW feed, interpolated
+ * ~30s ahead) is used only for metadata: route colours/names, headsigns,
+ * shapes and trip-instance ids. Mixing the two produced the "trains jump
+ * around" behaviour (two frames of reference ~30s apart alternating).
+ *
+ * So: every emitted vehicle is positioned by a real TfNSW entity (fresh,
+ * or its last position through a short blink). An AnyTrip vehicle with no
+ * TfNSW position is DROPPED rather than shown at AnyTrip's interpolated
+ * coordinates. TfNSW trips AnyTrip doesn't list are emitted too, reusing
+ * cached AnyTrip metadata (stable id + shape) when we've seen the trip.
  */
 export function applyTfnswPositions(
   vehicles: TransportVehicle[],
@@ -337,41 +388,39 @@ export function applyTfnswPositions(
   bbox: { minLat: number; maxLat: number; minLon: number; maxLon: number },
   maxVehicles: number,
 ): { vehicles: TransportVehicle[]; matched: number; added: number } {
-  if (!positions.length) return { vehicles, matched: 0, added: 0 };
+  if (!positions.length) {
+    // No TfNSW positions at all this cycle → we have no authoritative
+    // location for anything. Serve nothing rather than fall back to
+    // AnyTrip's interpolated frame; the positions SWR cache already
+    // bridges transient upstream failures with last-good data.
+    return { vehicles: [], matched: 0, added: 0 };
+  }
   _rememberPositions(positions);
+  const now = Date.now();
+  const nowSec = now / 1000;
   const byTrip = new Map<string, TfnswPosition>();
   for (const p of positions) {
     if (p.tripId) byTrip.set(p.tripId, p);
   }
-  const stickyNow = Date.now();
-  const nowSec = Date.now() / 1000;
-  let matched = 0;
+
+  const out: TransportVehicle[] = [];
   const usedTrips = new Set<string>();
-  const anytripByMode = new Map<string, number>();
-  const matchedByMode = new Map<string, number>();
+  let matched = 0;
+
+  // Pass 1 — AnyTrip vehicles positioned by TfNSW (fresh, else sticky).
+  // AnyTrip contributes metadata only; no TfNSW position ⇒ dropped.
   for (const v of vehicles) {
-    anytripByMode.set(v.mode, (anytripByMode.get(v.mode) ?? 0) + 1);
-  }
-  const out = vehicles.map((v) => {
-    let p = v.tripId ? byTrip.get(v.tripId) : undefined;
-    if (!p && v.tripId) {
+    if (!v.tripId) continue; // no key to match a TfNSW position → drop
+    _rememberMeta(v, now);
+    let p = byTrip.get(v.tripId);
+    if (!p) {
       const mem = _lastByTrip.get(v.tripId);
-      if (mem && stickyNow - mem.at < TFNSW_STICKY_MS) p = mem.p;
+      if (mem && now - mem.at < TFNSW_STICKY_MS) p = mem.p;
     }
-    if (!p) return v;
-    usedTrips.add(v.tripId as string);
+    if (!p) continue; // no authoritative position → drop
+    usedTrips.add(v.tripId);
     matched += 1;
-    matchedByMode.set(v.mode, (matchedByMode.get(v.mode) ?? 0) + 1);
-    // TfNSW telemetry is PRIMARY for matched vehicles (fresher, and
-    // the official source). The one hard rule: never ALTERNATE frames
-    // of reference — AnyTrip's interpolation runs up to ~30s of travel
-    // ahead of the raw feed, so flip-flopping between them (e.g. on a
-    // transient feed failure) teleports pins back and forth. Matched
-    // vehicles therefore always take the TfNSW position (entities are
-    // age-filtered at decode), and the positions cache holds last-good
-    // data long enough to ride out fetch blips; the frontend's shape
-    // snap, backward-jitter guard and glide smooth the raw telemetry.
-    return {
+    out.push({
       ...v,
       lat: p.lat,
       lon: p.lon,
@@ -382,8 +431,12 @@ export function applyTfnswPositions(
         p.timestamp != null
           ? Math.max(0, Math.round(nowSec - p.timestamp))
           : v.ageSec,
-    };
-  });
+    });
+  }
+
+  // Pass 2 — TfNSW trips AnyTrip didn't list this tick. Real vehicles;
+  // reuse cached AnyTrip metadata (stable id + shape colour/name) so a
+  // train that AnyTrip momentarily drops keeps its marker and snapping.
   let added = 0;
   for (const p of positions) {
     if (out.length >= maxVehicles) break;
@@ -394,49 +447,43 @@ export function applyTfnswPositions(
     ) {
       continue;
     }
-    // Duplicate guard: if AnyTrip has vehicles of this mode in view
-    // but NONE of them trip-matched, the feed's trip-id space differs
-    // from AnyTrip's rtTripId — every "TfNSW-only" entity is then the
-    // SAME physical vehicle AnyTrip already shows, and appending it
-    // duplicates trains with degraded labels. Only append for modes
-    // that are genuinely absent from AnyTrip or provably id-compatible.
-    if (
-      (anytripByMode.get(p.mode) ?? 0) > 0 &&
-      (matchedByMode.get(p.mode) ?? 0) === 0
-    ) {
-      continue;
-    }
     usedTrips.add(p.tripId);
     added += 1;
+    const meta = _metaByTrip.get(p.tripId);
     out.push({
-      id: p.vehicleId || `tfnsw:${p.tripId}`,
+      // Stable id: the id AnyTrip assigned this trip if we've seen it,
+      // so a matched↔TfNSW-only flip retargets the SAME marker instead
+      // of recreating it (which teleported the pin).
+      id: meta?.id || p.vehicleId || `tfnsw:${p.tripId}`,
       lat: p.lat,
       lon: p.lon,
       bearing: p.bearing,
       speedKmh: p.speedKmh,
-      mode: p.mode,
-      route: {
+      mode: meta?.mode ?? p.mode,
+      route: meta?.route ?? {
         id: p.routeId,
         name: routeNameFromId(p.routeId),
         longName: null,
         color: null,
         textColor: null,
       },
-      headsign: null,
-      headsignSub: null,
-      agency: null,
+      headsign: meta?.headsign ?? null,
+      headsignSub: meta?.headsignSub ?? null,
+      agency: meta?.agency ?? null,
       occupancy: p.occupancy,
-      wheelchair: null,
-      aircon: null,
-      model: p.label,
+      wheelchair: meta?.wheelchair ?? null,
+      aircon: meta?.aircon ?? null,
+      model: meta?.model ?? p.label,
       ageSec:
         p.timestamp != null
           ? Math.max(0, Math.round(nowSec - p.timestamp))
           : null,
       tripId: p.tripId,
-      shapeId: null,
-      startDate: p.startDate,
-      instanceNumber: 0,
+      // Cached shape lets the frontend keep snapping this train to its
+      // route track even on ticks AnyTrip drops it.
+      shapeId: meta?.shapeId ?? null,
+      startDate: meta?.startDate ?? p.startDate,
+      instanceNumber: meta?.instanceNumber ?? 0,
     });
   }
   return { vehicles: out, matched, added };
@@ -562,6 +609,7 @@ export function _resetTfnswForTests(): void {
   alertsCache.clear();
   _parkedFeeds.clear();
   _lastByTrip.clear();
+  _metaByTrip.clear();
 }
 
 /** TEST-ONLY: decode helpers exposed for fixture-based tests. */

@@ -12313,8 +12313,17 @@ function initPagerHoursFromStorage() {
       return cands;
     }
 
+    // Lane offset displaces a marker sideways from the GTFS centreline
+    // onto the specific drawn GL lane. It re-derives the sideways
+    // direction from screen geometry every frame and flips sign on
+    // curved / out-and-back track, so vehicles visibly jump side to side
+    // as they move. Disabled — markers ride the route centreline instead,
+    // which is stable and, on the common single-track sections, IS the
+    // drawn line. Flip to true to restore lane-riding.
+    const TRANSPORT_LANE_OFFSET = false;
     const TRANSPORT_LANE_SNAP_MAX_DEG = 0.0010; // ~100 m centreline mismatch
     function _transportLaneSnap(v, lat, lon) {
+      if (!TRANSPORT_LANE_OFFSET) return null;
       if (_transportNetworkMode !== 'gl' || !_transportLanes) return null;
       // Only where the GL network actually draws this vehicle's
       // corridor; elsewhere (auto-tracks, fallback) lines are un-offset
