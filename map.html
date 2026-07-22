@@ -12254,6 +12254,68 @@ function initPagerHoursFromStorage() {
     ];
     const TRANSPORT_MODE_BY_KEY = {};
     TRANSPORT_MODES.forEach((m) => { TRANSPORT_MODE_BY_KEY[m.key] = m; });
+    // The static network (AnyTrip lines.json) tags features by `stroke`
+    // colour, not mode, so map each line colour to its mode to let the
+    // filter pills hide/show whole modes of track. Derived from the
+    // feature `line` ids where present (T3→#F37021, M1→#168388, L3→#781140,
+    // L2→#DD1E25, L4→#BB2043, SW1→#ED2891, T6→#7C3E21) plus the standard
+    // NSW Sydney Trains line colours for the (unlabelled) rest. Regional
+    // strokes come from otherrail.json → nswtrains. Unmapped strokes stay
+    // visible (never hidden) so a new colour can't silently disappear.
+    const TRANSPORT_LINE_STROKE_MODE = {
+      '#F7A700': 'sydneytrains', // T1
+      '#0098CD': 'sydneytrains', // T2
+      '#F37021': 'sydneytrains', // T3 (labelled)
+      '#005AA3': 'sydneytrains', // T4
+      '#C4258F': 'sydneytrains', // T5
+      '#7C3E21': 'sydneytrains', // T6 (labelled)
+      '#6F818E': 'sydneytrains', // T7 (grey)
+      '#00954C': 'sydneytrains', // T8
+      '#D11F2F': 'sydneytrains', // T9
+      '#833034': 'sydneytrains', // suburban (maroon)
+      '#168388': 'metro',        // M1 (labelled)
+      '#781140': 'lightrail',    // L3 (labelled)
+      '#DD1E25': 'lightrail',    // L2 (labelled)
+      '#BB2043': 'lightrail',    // L4 (labelled)
+      '#ED2891': 'lightrail',    // SW1 (labelled)
+      '#4D9C2D': 'lightrail',    // light-rail green variant
+      '#BE1622': 'nswtrains',    // regional (otherrail.json)
+      '#EE343F': 'nswtrains',
+      '#BD0021': 'nswtrains'
+    };
+    function _transportStrokeMode(stroke) {
+      return TRANSPORT_LINE_STROKE_MODE[String(stroke || '').toUpperCase()] || null;
+    }
+    // MapLibre filter for 'lines-colour': hide strokes whose mode is off.
+    // Null → show everything (no disabled modes among mapped strokes).
+    function _transportLineFilterExpr() {
+      const disabled = [];
+      for (const stroke in TRANSPORT_LINE_STROKE_MODE) {
+        if (transportModeFilter[TRANSPORT_LINE_STROKE_MODE[stroke]] === false) disabled.push(stroke);
+      }
+      if (!disabled.length) return null;
+      return ['!', ['in', ['upcase', ['coalesce', ['get', 'stroke'], '']], ['literal', disabled]]];
+    }
+    // Apply the current mode filters to the static network tracks (GL layer
+    // filter + Leaflet-fallback per-line opacity). Called on load and on
+    // every filter-pill toggle.
+    function _applyTransportLineFilter() {
+      const expr = _transportLineFilterExpr();
+      const glMap = _transportGlLayer && _transportGlLayer.getMaplibreMap && _transportGlLayer.getMaplibreMap();
+      if (glMap) {
+        const doIt = () => { try { if (glMap.getLayer('lines-colour')) glMap.setFilter('lines-colour', expr); } catch (e) { /* ignore */ } };
+        if (glMap.getLayer && glMap.getLayer('lines-colour')) doIt();
+        else if (glMap.once) glMap.once('load', doIt);
+      }
+      if (_transportNetworkMode === 'fallback') {
+        const df = _transportNetworkDimmed ? 0.15 : 1;
+        transportLinesLayer.eachLayer((l) => {
+          if (l._tptMode == null || typeof l.setStyle !== 'function') return;
+          const vis = transportModeFilter[l._tptMode] !== false;
+          l.setStyle({ opacity: vis ? (l._tptBaseOpacity * df) : 0 });
+        });
+      }
+    }
     // AnyTrip regions.json occupancyDescription (nsw), verbatim.
     const TRANSPORT_OCCUPANCY = [
       'space available', 'space available', 'limited space available',
@@ -13003,24 +13065,27 @@ function initPagerHoursFromStorage() {
     function _transportGlStyle(geo) {
       const offsetExpr = _transportGlOffsetExpr();
       const opacityExpr = ['coalesce', ['get', 'opacity'], 1];
+      const layer = {
+        id: 'lines-colour', type: 'line', source: 'lines',
+        layout: { 'line-cap': 'round', 'line-join': 'bevel' },
+        paint: {
+          'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
+          // Geographic width: 2px at gz12, exact ×2 per zoom above
+          // gz9; floored at 0.35px below gz9 so the network stays
+          // a visible hairline at overview zooms.
+          'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 1.4, 17, 44.8],
+          'line-offset': offsetExpr,
+          'line-opacity': opacityExpr
+        }
+      };
+      // Honour the mode filters from first paint (e.g. a mode toggled off
+      // before the network finished loading).
+      const filt = _transportLineFilterExpr();
+      if (filt) layer.filter = filt;
       return {
         version: 8,
         sources: { lines: { type: 'geojson', data: geo } },
-        layers: [
-          {
-            id: 'lines-colour', type: 'line', source: 'lines',
-            layout: { 'line-cap': 'round', 'line-join': 'bevel' },
-            paint: {
-              'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              // Geographic width: 2px at gz12, exact ×2 per zoom above
-              // gz9; floored at 0.35px below gz9 so the network stays
-              // a visible hairline at overview zooms.
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 1.4, 17, 44.8],
-              'line-offset': offsetExpr,
-              'line-opacity': opacityExpr
-            }
-          }
-        ]
+        layers: [layer]
       };
     }
 
@@ -13055,6 +13120,7 @@ function initPagerHoursFromStorage() {
           const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           cl._tptBaseWeight = 3;
           cl._tptBaseOpacity = opacity;
+          cl._tptMode = _transportStrokeMode(p.stroke); // for filter-pill hiding
           colours.push(cl);
           count++;
         }
@@ -13108,6 +13174,7 @@ function initPagerHoursFromStorage() {
           const count = _buildLeafletNetworkFallback(geo);
           console.log('[transport] network lines loaded (fallback, no offsets):', count, 'segments');
         }
+        _applyTransportLineFilter(); // honour any modes toggled off pre-load
       } catch (e) {
         _transportLinesLoaded = false; // allow retry on next enable
         console.warn('[transport] lines failed to load:', e);
@@ -13893,6 +13960,7 @@ function initPagerHoursFromStorage() {
 
     window.toggleTransportModePill = function (key) {
       transportModeFilter[key] = !transportModeFilter[key];
+      _applyTransportLineFilter(); // show/hide this mode's static track lines
       _rebuildTransport();
       refreshActiveFilterPanel();
       // Refire so a newly enabled mode appears immediately (the fetch
