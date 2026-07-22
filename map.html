@@ -11897,12 +11897,15 @@ function initPagerHoursFromStorage() {
         if (e) for (const s of e.segs) adsbTrailsLayer.removeLayer(s);
         e = { segs: [], sig: sig };
         _adsbTrailLines.set(hex, e);
-        const es = a && a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+        // Trails always use the altitude gradient — even for special
+        // aircraft (POLAIR/ambulance/firebomber/military). Their esTag
+        // colour stays on the ICON to make them stand out; the trail still
+        // reads as altitude like every other aircraft.
         const weight = focused ? 3 : 2;
         for (let s = 0; s < n; s += step) {
           const end = Math.min(n, s + step);
           const t = end / n; // 0 tail → 1 head
-          const color = es ? es.color : adsbTrailAltColor(alts[end] != null ? alts[end] : alts[s]);
+          const color = adsbTrailAltColor(alts[end] != null ? alts[end] : alts[s]);
           const opacity = focused ? 0.25 + 0.7 * t : 0.12 + 0.38 * t;
           const seg = L.polyline(latlngs.slice(s, end + 1), {
             color: color, opacity: opacity, weight: weight,
