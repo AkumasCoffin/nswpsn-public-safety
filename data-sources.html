@@ -772,6 +772,74 @@
 
 
       <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <h2 style="font-size: 1.1rem; color: #818cf8; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <span><i class="fa-solid fa-plane-up"></i></span> Aviation &amp; Transport
+        </h2>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Live aircraft and public-transport tracking</p>
+      </div>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-plane-up"></i> Live Aircraft (ADS-B)</div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live aircraft positions across NSW, merged from four free community ADS-B networks — adsb.lol, adsb.fi, airplanes.live and adsb.one — for the widest feeder coverage. Powers the aircraft layer on the incident map, refreshing roughly every 15 seconds. Emergency squawks (7500 hijack, 7600 radio failure, 7700 general emergency) are highlighted.</p>
+          <p><strong>Data:</strong> Position, altitude, ground speed, heading, callsign/registration, aircraft type, transponder squawk &amp; emergency status</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#3b82f6;">Commercial</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Airliners &amp; freight</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">General Aviation</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Light &amp; private aircraft</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#a855f7;">Rotary</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Helicopters, rescue &amp; HEMS</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#ef4444;">Emergency</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">7500 / 7600 / 7700 squawks</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://adsb.lol/" target="_blank">adsb.lol</a> · <a href="https://adsb.fi/" target="_blank">adsb.fi</a> · <a href="https://airplanes.live/" target="_blank">airplanes.live</a> · <a href="https://adsb.one/" target="_blank">adsb.one</a></p>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-train-subway"></i> Public Transport (Transport for NSW)</div>
+          <div class="card-tag card-tag-live">Live</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Live public-transport vehicle positions from Transport for NSW's GTFS-Realtime feed (via AnyTrip), with official TfNSW service alerts. Powers the transport layer on the incident map — loaded on demand as you pan — showing where trains, metro, buses, ferries and light rail are right now.</p>
+          <p><strong>Data:</strong> Vehicle positions, route &amp; destination, occupancy, delay, stop locations, and service alerts</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#f97316;">Trains &amp; Metro</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Sydney Trains, NSW TrainLink, Metro</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#0ea5e9;">Buses</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Regular &amp; school services</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Ferries</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Sydney Ferries &amp; fast ferries</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#eab308;">Light Rail</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Sydney &amp; Newcastle</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://opendata.transport.nsw.gov.au/" target="_blank">Transport for NSW Open Data</a> · <a href="https://anytrip.com.au/" target="_blank">AnyTrip</a></p>
+        </div>
+      </article>
+
+
+      <div class="card-grid-section" style="grid-column: 1 / -1; margin-top: 1.5rem; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
         <h2 style="font-size: 1.1rem; color: #60a5fa; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
           <span><i class="fa-solid fa-newspaper"></i></span> News &amp; Media
         </h2>
@@ -1091,6 +1159,8 @@
                 <li>RFS Major Incidents</li>
                 <li>Waze Hazards, Police & Traffic Jams</li>
                 <li>MarineTraffic Vessel Positions (AIS)</li>
+                <li>Live Aircraft Positions (ADS-B)</li>
+                <li>Public Transport Vehicles (TfNSW / AnyTrip)</li>
               </ul>
             </div>
             <div>
