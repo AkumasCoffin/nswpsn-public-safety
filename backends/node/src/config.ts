@@ -256,6 +256,18 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Vehicle POSITIONS from TfNSW GTFS-Realtime. Off by default: AnyTrip
+  // interpolates its own positions from the same TfNSW feed, so pure
+  // AnyTrip is smooth and self-consistent (position + name + shape from
+  // one source), whereas layering the raw TfNSW frame on top caused
+  // jumpy/mis-tracked trains and hammered TfNSW's rate limit. TfNSW
+  // service ALERTS are unaffected (gated only by TFNSW_DISABLED). Set
+  // 'false' to re-enable the position join.
+  TFNSW_POSITIONS_DISABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((s) => s === 'true'),
+
   // ---------------------------------------------------------------------
   // rdio → ntfy "major incident" push notifier (services/rdioIncidentAlerts).
   // Detects bursts of radio traffic per talkgroup off the rdio-scanner DB

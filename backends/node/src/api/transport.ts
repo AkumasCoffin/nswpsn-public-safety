@@ -30,6 +30,7 @@ import {
   applyTfnswPositions,
   fetchTfnswAlerts,
   tfnswConfigured,
+  tfnswPositionsEnabled,
 } from '../sources/tfnsw.js';
 
 export const transportRouter = new Hono();
@@ -441,29 +442,28 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
         const url =
           `${ANYTRIP_BASE}/vehicles?feeds=${encodeURIComponent(feedList)}` +
           `&${bboxParams(bbox)}&otrFilter=${OTR_FILTER}&speedFilter=${SPEED_FILTER}`;
-        // AnyTrip (metadata + interpolated fallback positions) and the
-        // official TfNSW GTFS-R positions fetch concurrently; TfNSW is
-        // authoritative for trips it knows, AnyTrip fills the rest.
-        // fetchTfnswPositions returns [] when unconfigured or failing,
-        // so the join degrades to AnyTrip-only.
+        // Positions are AnyTrip-only by default: AnyTrip interpolates its
+        // own (smooth, self-consistent) positions from the same TfNSW
+        // feed, so pure AnyTrip beats layering the raw TfNSW frame on top
+        // (which jumped/mis-tracked trains and hit TfNSW's rate limit).
+        // The TfNSW position join is off unless TFNSW_POSITIONS_DISABLED
+        // is set false; when off we don't even fetch the position feeds.
+        const wantTfnsw = tfnswPositionsEnabled();
         const [raw, tfnsw] = await Promise.all([
           fetchJson<RawVehiclesResponse>(url, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
-          fetchTfnswPositions(feeds),
+          wantTfnsw ? fetchTfnswPositions(feeds) : Promise.resolve([]),
         ]);
         let vehicles = normalizeVehicles(raw);
         const vehiclesBeforeJoin = vehicles.length;
         let networkCounts: Record<string, number> | undefined;
-        if (tfnsw.length) {
+        if (wantTfnsw && tfnsw.length) {
           const joined = applyTfnswPositions(vehicles, tfnsw, bbox, MAX_VEHICLES);
           vehicles = joined.vehicles;
           networkCounts = {};
           for (const p of tfnsw) {
             networkCounts[p.mode] = (networkCounts[p.mode] ?? 0) + 1;
           }
-          // TEMP info-level so the join breakdown shows in prod logs while
-          // confirming trains match by vehicle id (byVeh) — drop back to
-          // debug once verified.
-          log.info(
+          log.debug(
             {
               matched: joined.matched,
               byTrip: joined.byTrip,

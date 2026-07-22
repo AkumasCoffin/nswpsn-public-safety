@@ -90,6 +90,11 @@ const ALERT_FEEDS_FALLBACK = [
 export const tfnswConfigured = (): boolean =>
   Boolean(config.TFNSW_API_KEY) && !config.TFNSW_DISABLED;
 
+/** Whether to fetch + join TfNSW GTFS-R vehicle POSITIONS. Off by default
+ *  (AnyTrip-only positions); alerts stay on via tfnswConfigured(). */
+export const tfnswPositionsEnabled = (): boolean =>
+  tfnswConfigured() && !config.TFNSW_POSITIONS_DISABLED;
+
 export interface TfnswPosition {
   tripId: string | null;
   routeId: string | null;
