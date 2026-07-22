@@ -12500,12 +12500,14 @@ function initPagerHoursFromStorage() {
           let p = g.path.fromP + (g.path.toP - g.path.fromP) * e;
           const maxP = pts.length - 1.000001;
           if (p < 0) p = 0; else if (p > maxP) p = maxP;
+          const i = Math.floor(p), frac = p - i;
+          const a = pts[i], b = pts[i + 1];
+          const lat = a[0] + (b[0] - a[0]) * frac;
+          const lon = a[1] + (b[1] - a[1]) * frac;
           if (g.path.offset) {
-            g.marker.setLatLng(_transportOffsetPointAt(pts, p, g.path.offset));
+            g.marker.setLatLng(_transportApplyLaneOffset({ lat: lat, lon: lon, a: a, b: b, offset: g.path.offset }));
           } else {
-            const i = Math.floor(p), frac = p - i;
-            const a = pts[i], b = pts[i + 1];
-            g.marker.setLatLng([a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]);
+            g.marker.setLatLng([lat, lon]);
           }
         } else {
           g.marker.setLatLng([
@@ -12515,59 +12517,6 @@ function initPagerHoursFromStorage() {
         }
       }
       if (_transportGlides.size) _transportGlideRaf = requestAnimationFrame(_transportGlideTick);
-    }
-
-    // Per-route sideways offset (in the same units as _transportApplyLaneOffset,
-    // ×_transportOffsetK px). Drawn route tracks AND their vehicle pins both
-    // use this exact value, so a pin always lands on its own line, and
-    // parallel routes sharing a corridor are fanned apart into separate
-    // tracks. Fixed slots for the NSW lines (so corridor-mates get distinct
-    // lanes); a stable hash covers anything unlisted.
-    const TRANSPORT_ROUTE_OFFSET = {
-      T1: 8, T2: 6, T3: 4, T4: 2, T5: 0, T6: -2, T7: -4, T8: -6, T9: -8,
-      M1: 10, L1: 0, L2: 2, L3: 4, L4: 6, SW1: -3
-    };
-    function _transportRouteOffset(v) {
-      const name = (v && v.route && v.route.name) ? String(v.route.name).toUpperCase() : '';
-      if (name && Object.prototype.hasOwnProperty.call(TRANSPORT_ROUTE_OFFSET, name)) {
-        return TRANSPORT_ROUTE_OFFSET[name];
-      }
-      let h = 0;
-      for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
-      return (h % 17) - 8; // -8..8
-    }
-    // Offset one shape vertex sideways (perpendicular to its forward
-    // segment). The drawn track offsets EVERY vertex this way, so anything
-    // that wants to sit exactly ON the track must offset the same vertices
-    // and interpolate BETWEEN them — offsetting an interpolated centreline
-    // point instead drifts off the track on curves.
-    function _offsetVertex(pts, i, offset) {
-      const n = pts.length;
-      const a = pts[i], b = pts[Math.min(n - 1, i + 1)] || pts[i];
-      const ll = _transportApplyLaneOffset({ lat: pts[i][0], lon: pts[i][1], a: a, b: b, offset: offset });
-      return [ll.lat, ll.lng];
-    }
-    // Point at fractional index `p` on the OFFSET track (offset the two
-    // bounding vertices, then lerp) — so a pin/glide lands exactly on the
-    // drawn line even through curves.
-    function _transportOffsetPointAt(pts, p, offset) {
-      const n = pts.length;
-      let i = Math.floor(p);
-      if (i < 0) i = 0; else if (i > n - 2) i = n - 2;
-      const t = p - i;
-      if (!offset) {
-        const a = pts[i], b = pts[i + 1];
-        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      }
-      const A = _offsetVertex(pts, i, offset), B = _offsetVertex(pts, i + 1, offset);
-      return [A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t];
-    }
-    // Offset a whole shape sideways — the drawn track geometry.
-    function _offsetShapeLatLngs(pts, offset) {
-      if (!offset) return pts.map((p) => [p[0], p[1]]);
-      const out = [];
-      for (let i = 0; i < pts.length; i++) out.push(_offsetVertex(pts, i, offset));
-      return out;
     }
 
     // Displace a lane-snapped point sideways by offset × k px.
@@ -12790,24 +12739,24 @@ function initPagerHoursFromStorage() {
         // basis the glide uses — so the marker doesn't jump sideways at
         // glide boundaries. Falls back to the lane's own segment only when
         // the shape isn't available here.
-        // Per-route sideways offset: the pin rides its own route track
-        // (drawn from the same shape with the same offset by
-        // syncTransportAutoTracks), so it sits exactly on its line and
-        // parallel routes stay split. Only tiled modes get a fanned track;
-        // buses/ferries keep their single un-offset shape.
-        const routeOff = (prog && TRANSPORT_TILED_MODES[v.mode]) ? _transportRouteOffset(v) : 0;
-        if (routeOff && prog) {
-          const shapePts = _transportShapeCache.get(v.shapeId);
+        const laneSnap = _transportLaneSnap(v, dispLat, dispLon);
+        if (laneSnap) {
+          let ll = null;
+          const shapePts = prog ? _transportShapeCache.get(v.shapeId) : null;
           if (shapePts && shapePts.length >= 2) {
-            const pt = _transportOffsetPointAt(shapePts, prog.p, routeOff);
-            dispLat = pt[0];
-            dispLon = pt[1];
+            const i = Math.min(Math.max(0, Math.floor(prog.p)), shapePts.length - 2);
+            ll = _transportApplyLaneOffset({
+              lat: dispLat, lon: dispLon, a: shapePts[i], b: shapePts[i + 1], offset: laneSnap.offset
+            });
           }
+          if (!ll) ll = _transportApplyLaneOffset(laneSnap);
+          dispLat = ll.lat;
+          dispLon = ll.lng;
         }
         const key = _transportIconKey(v);
         if (existing) {
           existing.prog = prog;
-          existing.routeOff = routeOff;
+          existing.laneSnap = laneSnap;
           if (existing.snapNext) {
             // Accepted backward correction: reposition instantly.
             existing.snapNext = false;
@@ -12829,7 +12778,7 @@ function initPagerHoursFromStorage() {
                   pts: shapePts,
                   fromP: curSnap.i + curSnap.t,
                   toP: prog.p,
-                  offset: routeOff
+                  offset: laneSnap ? laneSnap.offset : 0
                 };
               }
             }
@@ -12860,7 +12809,7 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key, routeOff: routeOff, prog: prog, spd: { lat: v.lat, lon: v.lon, t: Date.now() } });
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog, spd: { lat: v.lat, lon: v.lon, t: Date.now() } });
         }
       }
       for (const [id, entry] of _transportMarkers) {
@@ -13265,16 +13214,6 @@ function initPagerHoursFromStorage() {
       transportAutoTracksLayer.eachLayer(apply);
     }
     map.on('zoomend', _applyTransportWeights);
-    // The per-route track fan is a px offset, so it must be recomputed
-    // when the zoom changes (same as the marker re-offset).
-    function _transportReoffsetTracks() {
-      for (const [, e] of _transportAutoTracks) {
-        if (e.line && e.pts && e.offset) {
-          e.line.setLatLngs(_offsetShapeLatLngs(e.pts, e.offset));
-        }
-      }
-    }
-    map.on('zoomend', _transportReoffsetTracks);
 
     // Lane-offset displacement is in px, so its geographic size changes
     // with zoom — re-place lane-snapped markers from their stored snap.
@@ -13285,16 +13224,24 @@ function initPagerHoursFromStorage() {
     function _transportReoffsetMarkers() {
       if (!map.hasLayer(transportLayer)) return;
       for (const [id, entry] of _transportMarkers) {
-        if (!entry.routeOff || !entry.prog) continue;
+        if (!entry.laneSnap) continue;
         const g = _transportGlides.get(id);
-        if (g && g.path) continue; // path glides re-apply the offset each frame
+        if (g && g.path) continue;
         _transportGlides.delete(id);
-        // Re-place from the stored centreline (entry.prog) with the current
-        // zoom's px offset, using the shape tangent — same basis as rebuild.
-        const shapePts = _transportShapeCache.get(entry.prog.shapeId);
+        // Re-place from the stored centreline (entry.prog) using the shape
+        // basis — same as rebuild/glide — so zoom doesn't pop the marker
+        // to a different sideways direction.
+        let ll = null;
+        const shapePts = entry.prog ? _transportShapeCache.get(entry.prog.shapeId) : null;
         if (shapePts && shapePts.length >= 2) {
-          entry.marker.setLatLng(_transportOffsetPointAt(shapePts, entry.prog.p, entry.routeOff));
+          const i = Math.min(Math.max(0, Math.floor(entry.prog.p)), shapePts.length - 2);
+          ll = _transportApplyLaneOffset({
+            lat: entry.prog.lat, lon: entry.prog.lon,
+            a: shapePts[i], b: shapePts[i + 1], offset: entry.laneSnap.offset
+          });
         }
+        if (!ll) ll = _transportApplyLaneOffset(entry.laneSnap);
+        entry.marker.setLatLng(ll);
       }
     }
     map.on('zoomend', _transportReoffsetMarkers);
@@ -13343,11 +13290,8 @@ function initPagerHoursFromStorage() {
             // setPaintProperty on a missing layer fails SILENTLY (error
             // event, no throw) — the getLayer gate is the real guard.
             if (!glMap.getLayer('lines-colour')) return;
-            // The AnyTrip network is now a faint corridor basemap — the
-            // bright per-route auto-tracks (which the pins sit on) are the
-            // primary lines, so this stays dim to avoid doubling each line.
             glMap.setPaintProperty('lines-colour', 'line-opacity',
-              dimmed ? ['*', OP, 0.12] : ['*', OP, 0.45]);
+              dimmed ? ['*', OP, 0.15] : OP);
             // Highlight source/layers live on top of the dimmed
             // network; created once per GL map, cleared via empty data.
             const hlData = (dimmed && _transportHlGeo) ? _transportHlGeo : _TPT_EMPTY_FC;
@@ -13552,15 +13496,15 @@ function initPagerHoursFromStorage() {
       for (const v of byPrio) {
         if (v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
-        // Draw every active route's OWN shape as its track. Tiled modes get
-        // a per-route sideways offset (matching their pins) so parallel
-        // routes split into separate lines instead of stacking; buses/
-        // ferries stay un-offset. The dim AnyTrip network stays underneath.
+        // Skip shapes the static (fanned) network already draws. Drawing
+        // the vehicle's own un-offset GTFS shape on top stacked parallel
+        // routes into overlapping blobs — the fanned network is the only
+        // track drawing for tiled modes.
+        if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, {
             color: (v.route && v.route.color) || transportModeColor(v.mode),
-            mode: v.mode,
-            offset: TRANSPORT_TILED_MODES[v.mode] ? _transportRouteOffset(v) : 0
+            mode: v.mode
           });
         }
       }
@@ -13579,19 +13523,19 @@ function initPagerHoursFromStorage() {
       for (const [sid, w] of want) {
         const existing = _transportAutoTracks.get(sid);
         if (existing) { existing.lastWanted = now; continue; }
-        const entry = { line: null, lastWanted: now, mode: w.mode, offset: w.offset || 0, pts: null }; // reserve — fetch in flight
+        const entry = { line: null, lastWanted: now, mode: w.mode }; // reserve — fetch in flight
         _transportAutoTracks.set(sid, entry);
         fetchTransportShapePts(sid).then((pts) => {
           if (!pts) { _transportAutoTracks.delete(sid); return; }
           if (_transportAutoTracks.get(sid) !== entry) return; // pruned meanwhile
-          // Draw the route shape, fanned sideways by the per-route offset
-          // (same math as the pin, so the two coincide). Raw pts kept for
-          // the zoom re-offset (the px displacement is zoom-dependent).
+          // Same style as the static network so shape-drawn tracks are
+          // indistinguishable from the tiled ones. No offset — these
+          // are single-route shapes.
           const wf = _transportWeightFactor();
+          // A track finishing its fetch while the focus state is
+          // active must be created dimmed.
           const df = _transportNetworkDimmed ? 0.15 : 1;
-          entry.pts = pts;
-          const latlngs = _offsetShapeLatLngs(pts, entry.offset);
-          const tCl = L.polyline(latlngs, { color: w.color, weight: 3 * wf, opacity: 1 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
+          const tCl = L.polyline(pts, { color: w.color, weight: 3 * wf, opacity: 1 * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           tCl._tptBaseWeight = 3;
           tCl._tptBaseOpacity = 1;
           entry.line = tCl;
