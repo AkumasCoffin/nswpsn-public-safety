@@ -12384,7 +12384,7 @@ function initPagerHoursFromStorage() {
     }
 
     // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr):
-    // geographic — px offset doubles per zoom, anchored ×0.9 at gz12.
+    // geographic — px offset doubles per zoom, anchored 0.2 at gz12.
     function _transportOffsetK() {
       const gz = Math.min(17, Math.max(4, map.getZoom() - 1)); // ground-fixed ×2/zoom
       return 0.2 * Math.pow(2, gz - 12);
@@ -13084,9 +13084,9 @@ function initPagerHoursFromStorage() {
         layout: { 'line-cap': 'round', 'line-join': 'bevel' },
         paint: {
           'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-          // Geographic width: 2px at gz12, exact ×2 per zoom above
-          // gz9; floored at 0.35px below gz9 so the network stays
-          // a visible hairline at overview zooms.
+          // Geographic width: 0.6px at gz12, exact ×2 per zoom above
+          // gz12 (→ ~19px at gz17); floored at 0.35px below gz9 so the
+          // network stays a visible hairline at overview zooms.
           'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 0.6, 17, 19.2],
           'line-offset': offsetExpr,
           'line-opacity': opacityExpr
@@ -13196,7 +13196,7 @@ function initPagerHoursFromStorage() {
     }
 
     // Line weights scale with the map (mirror of the GL geographic
-    // width curve: 2px at gz12 doubling per zoom, floored at 0.35px
+    // width curve: 0.6px at gz12 doubling per zoom, floored at 0.35px
     // below gz9; factor = width / base-weight 3). Applied to the
     // Leaflet fallback network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
@@ -13327,7 +13327,11 @@ function initPagerHoursFromStorage() {
       const applyLeaflet = (l) => {
         if (l instanceof L.LayerGroup) { l.eachLayer(applyLeaflet); return; }
         if (l._tptBaseOpacity != null && typeof l.setStyle === 'function') {
-          l.setStyle({ opacity: l._tptBaseOpacity * f });
+          // Respect the mode filter: a line whose mode is toggled off stays
+          // hidden even through a focus-dim (otherwise clicking a train
+          // re-showed filtered-off tracks on WebGL-less clients).
+          const hidden = l._tptMode != null && transportModeFilter[l._tptMode] === false;
+          l.setStyle({ opacity: hidden ? 0 : l._tptBaseOpacity * f });
         }
       };
       transportLinesLayer.eachLayer(applyLeaflet);
