@@ -343,11 +343,16 @@ interface TripMeta {
   instanceNumber: number | null;
   at: number;
 }
+// AnyTrip metadata is indexed by BOTH keys we can join on: the trip id
+// and the vehicle id (a train's set/consist number, which GTFS-R also
+// carries). Trains frequently DON'T share a trip-id format between AnyTrip
+// and TfNSW, but the vehicle id lines up — that's what recovers their
+// rich labels (route name, destination, colour) while positioned by TfNSW.
 const _metaByTrip = new Map<string, TripMeta>();
+const _metaByVeh = new Map<string, TripMeta>();
 
 function _rememberMeta(v: TransportVehicle, now: number): void {
-  if (!v.tripId) return;
-  _metaByTrip.set(v.tripId, {
+  const meta: TripMeta = {
     id: v.id,
     mode: v.mode,
     route: v.route,
@@ -361,10 +366,17 @@ function _rememberMeta(v: TransportVehicle, now: number): void {
     startDate: v.startDate,
     instanceNumber: v.instanceNumber,
     at: now,
-  });
+  };
+  if (v.tripId) _metaByTrip.set(v.tripId, meta);
+  if (v.id) _metaByVeh.set(v.id, meta);
   if (_metaByTrip.size > 4000) {
     for (const [k, m] of _metaByTrip) {
       if (now - m.at > TFNSW_STICKY_MS) _metaByTrip.delete(k);
+    }
+  }
+  if (_metaByVeh.size > 4000) {
+    for (const [k, m] of _metaByVeh) {
+      if (now - m.at > TFNSW_STICKY_MS) _metaByVeh.delete(k);
     }
   }
 }
@@ -372,53 +384,76 @@ function _rememberMeta(v: TransportVehicle, now: number): void {
 /**
  * TfNSW GTFS-Realtime is the SINGLE source of vehicle POSITIONS — AnyTrip
  * (which derives its own positions from the same TfNSW feed, interpolated
- * ~30s ahead) is used only for metadata: route colours/names, headsigns,
- * shapes and trip-instance ids. Mixing the two produced the "trains jump
- * around" behaviour (two frames of reference ~30s apart alternating).
+ * ~30s ahead) is used only for METADATA: route colours/names, headsigns,
+ * shapes and trip-instance ids. Mixing the two positions produced the
+ * "trains jump around" behaviour (two frames of reference alternating).
  *
- * So: every emitted vehicle is positioned by a real TfNSW entity (fresh,
- * or its last position through a short blink). An AnyTrip vehicle with no
- * TfNSW position is DROPPED rather than shown at AnyTrip's interpolated
- * coordinates. TfNSW trips AnyTrip doesn't list are emitted too, reusing
- * cached AnyTrip metadata (stable id + shape) when we've seen the trip.
+ * Each AnyTrip vehicle is positioned by a matching TfNSW entity — matched
+ * by trip id, then by VEHICLE id (train set numbers line up even when trip
+ * ids don't), then by a short-blink sticky. That keeps the rich AnyTrip
+ * labels while moving on the smooth TfNSW frame. A vehicle with no TfNSW
+ * position at all is dropped (never shown at AnyTrip's interpolated frame).
+ * TfNSW trips AnyTrip doesn't list are emitted too, reusing cached AnyTrip
+ * metadata (by trip or vehicle id) so they still show a route/destination.
  */
 export function applyTfnswPositions(
   vehicles: TransportVehicle[],
   positions: TfnswPosition[],
   bbox: { minLat: number; maxLat: number; minLon: number; maxLon: number },
   maxVehicles: number,
-): { vehicles: TransportVehicle[]; matched: number; added: number } {
+): {
+  vehicles: TransportVehicle[];
+  matched: number;
+  added: number;
+  byTrip: number;
+  byVeh: number;
+} {
   if (!positions.length) {
     // No TfNSW positions at all this cycle → we have no authoritative
     // location for anything. Serve nothing rather than fall back to
     // AnyTrip's interpolated frame; the positions SWR cache already
     // bridges transient upstream failures with last-good data.
-    return { vehicles: [], matched: 0, added: 0 };
+    return { vehicles: [], matched: 0, added: 0, byTrip: 0, byVeh: 0 };
   }
   _rememberPositions(positions);
   const now = Date.now();
   const nowSec = now / 1000;
   const byTrip = new Map<string, TfnswPosition>();
+  const byVeh = new Map<string, TfnswPosition>();
   for (const p of positions) {
     if (p.tripId) byTrip.set(p.tripId, p);
+    if (p.vehicleId) byVeh.set(p.vehicleId, p);
   }
 
   const out: TransportVehicle[] = [];
   const usedTrips = new Set<string>();
+  const usedVeh = new Set<string>();
   let matched = 0;
+  let matchedByTrip = 0;
+  let matchedByVeh = 0;
 
-  // Pass 1 — AnyTrip vehicles positioned by TfNSW (fresh, else sticky).
-  // AnyTrip contributes metadata only; no TfNSW position ⇒ dropped.
+  const _consume = (p: TfnswPosition): void => {
+    if (p.tripId) usedTrips.add(p.tripId);
+    if (p.vehicleId) usedVeh.add(p.vehicleId);
+  };
+
+  // Pass 1 — AnyTrip vehicles (rich metadata) positioned by TfNSW,
+  // matched by trip id → vehicle id → short-blink sticky. No match ⇒
+  // dropped rather than shown at AnyTrip's interpolated coordinates.
   for (const v of vehicles) {
-    if (!v.tripId) continue; // no key to match a TfNSW position → drop
     _rememberMeta(v, now);
-    let p = byTrip.get(v.tripId);
-    if (!p) {
+    let p = v.tripId ? byTrip.get(v.tripId) : undefined;
+    if (p) matchedByTrip += 1;
+    if (!p && v.id) {
+      const pv = byVeh.get(v.id);
+      if (pv) { p = pv; matchedByVeh += 1; }
+    }
+    if (!p && v.tripId) {
       const mem = _lastByTrip.get(v.tripId);
       if (mem && now - mem.at < TFNSW_STICKY_MS) p = mem.p;
     }
     if (!p) continue; // no authoritative position → drop
-    usedTrips.add(v.tripId);
+    _consume(p);
     matched += 1;
     out.push({
       ...v,
@@ -434,26 +469,30 @@ export function applyTfnswPositions(
     });
   }
 
-  // Pass 2 — TfNSW trips AnyTrip didn't list this tick. Real vehicles;
-  // reuse cached AnyTrip metadata (stable id + shape colour/name) so a
-  // train that AnyTrip momentarily drops keeps its marker and snapping.
+  // Pass 2 — TfNSW trips no AnyTrip vehicle claimed. Real vehicles; reuse
+  // cached AnyTrip metadata (by trip OR vehicle id) so a train AnyTrip
+  // momentarily dropped keeps its stable id, route/destination and shape.
   let added = 0;
   for (const p of positions) {
     if (out.length >= maxVehicles) break;
     if (!p.tripId || usedTrips.has(p.tripId)) continue;
+    if (p.vehicleId && usedVeh.has(p.vehicleId)) continue;
     if (
       p.lat < bbox.minLat || p.lat > bbox.maxLat ||
       p.lon < bbox.minLon || p.lon > bbox.maxLon
     ) {
       continue;
     }
-    usedTrips.add(p.tripId);
+    _consume(p);
     added += 1;
-    const meta = _metaByTrip.get(p.tripId);
+    const meta =
+      (p.vehicleId ? _metaByVeh.get(p.vehicleId) : undefined) ??
+      _metaByTrip.get(p.tripId);
     out.push({
-      // Stable id: the id AnyTrip assigned this trip if we've seen it,
+      // Stable id: the id AnyTrip assigned this vehicle if we've seen it,
       // so a matched↔TfNSW-only flip retargets the SAME marker instead
-      // of recreating it (which teleported the pin).
+      // of recreating it (which teleported the pin). Prefer the vehicle
+      // id (stable across trips for a train set).
       id: meta?.id || p.vehicleId || `tfnsw:${p.tripId}`,
       lat: p.lat,
       lon: p.lon,
@@ -486,7 +525,7 @@ export function applyTfnswPositions(
       instanceNumber: meta?.instanceNumber ?? 0,
     });
   }
-  return { vehicles: out, matched, added };
+  return { vehicles: out, matched, added, byTrip: matchedByTrip, byVeh: matchedByVeh };
 }
 
 // ---------------------------------------------------------------------
@@ -610,6 +649,7 @@ export function _resetTfnswForTests(): void {
   _parkedFeeds.clear();
   _lastByTrip.clear();
   _metaByTrip.clear();
+  _metaByVeh.clear();
 }
 
 /** TEST-ONLY: decode helpers exposed for fixture-based tests. */
