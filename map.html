@@ -12313,14 +12313,16 @@ function initPagerHoursFromStorage() {
       return cands;
     }
 
-    // Lane offset displaces a marker sideways from the GTFS centreline
-    // onto the specific drawn GL lane (the network fans parallel tracks
-    // apart in px). Without it a train floats beside its drawn line on
-    // multi-track sections. The sideways DIRECTION is always taken from
-    // the vehicle's SHAPE (travel) segment — the same basis the glide
-    // uses — so the offset doesn't pop as the marker crosses glide
-    // boundaries. Set false to ride the bare centreline instead.
-    const TRANSPORT_LANE_OFFSET = true;
+    // Lane offset used to displace a marker sideways onto one of the
+    // drawn GL lanes. DISABLED: the network's fan offset is a per-segment
+    // RENDERING gradient (e.g. 8, 7.4, 6.8 … −1.6 along one corridor) and
+    // most lanes carry no route id, so there's no stable "this vehicle's
+    // lane" to snap to — adopting the nearest lane's offset made the
+    // marker skate side-to-side as the offset varied/flipped each tick.
+    // Vehicles now ride their own GTFS shape centreline (stable), and each
+    // active vehicle's shape is drawn as a bright track so it visibly sits
+    // on a line. The static network stays fanned as the corridor basemap.
+    const TRANSPORT_LANE_OFFSET = false;
     const TRANSPORT_LANE_SNAP_MAX_DEG = 0.0010; // ~100 m centreline mismatch
     function _transportLaneSnap(v, lat, lon) {
       if (!TRANSPORT_LANE_OFFSET) return null;
@@ -13350,8 +13352,11 @@ function initPagerHoursFromStorage() {
       for (const v of byPrio) {
         if (v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
-        // Skip shapes the static network already covers.
-        if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
+        // Draw each active vehicle's own GTFS shape as its track — trains
+        // and metro included. The vehicle rides this exact shape's
+        // centreline, so it sits precisely on the drawn track instead of
+        // floating in the middle of the static network's fanned bundle.
+        // The fanned static network stays underneath as corridor context.
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, {
             color: (v.route && v.route.color) || transportModeColor(v.mode),
