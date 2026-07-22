@@ -13352,11 +13352,11 @@ function initPagerHoursFromStorage() {
       for (const v of byPrio) {
         if (v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
-        // Draw each active vehicle's own GTFS shape as its track — trains
-        // and metro included. The vehicle rides this exact shape's
-        // centreline, so it sits precisely on the drawn track instead of
-        // floating in the middle of the static network's fanned bundle.
-        // The fanned static network stays underneath as corridor context.
+        // Skip shapes the static (fanned) network already draws. Drawing
+        // the vehicle's own un-offset GTFS shape on top stacked parallel
+        // routes into overlapping blobs — the fanned network is the only
+        // track drawing for tiled modes.
+        if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, {
             color: (v.route && v.route.color) || transportModeColor(v.mode),
