@@ -1624,8 +1624,18 @@
       font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
       text-transform: uppercase;
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      display: flex; align-items: center; cursor: pointer; user-select: none;
     }
+    .unified-list-section-header:hover { background: rgba(30, 41, 59, 0.97); }
     .unified-list-section-header i { margin-right: 5px; }
+    /* Collapse caret sits at the far right and rotates when collapsed. */
+    .unified-list-section-header .list-caret {
+      display: inline-block; /* transforms are ignored on inline elements */
+      margin-left: auto; margin-right: 0; opacity: 0.6;
+      font-size: 0.9em; transition: transform 0.15s;
+    }
+    .list-section.collapsed .list-caret { transform: rotate(-90deg); }
+    .list-section.collapsed .unified-list-section-rows { display: none; }
     /* Right-side dock: ONE card. The dock itself carries the panel
        chrome (background, border, radius, shadow); the panels inside —
        Map Controls (order 0, injected by map-editor-module.js) and the
@@ -2473,6 +2483,7 @@
         <label><input type="checkbox" id="chk-ais-st-underway" checked onchange="toggleAisStatus('underway', this.checked)" style="accent-color:#0284c7;"> Underway</label>
         <label><input type="checkbox" id="chk-ais-st-anchored" checked onchange="toggleAisStatus('anchored', this.checked)" style="accent-color:#0284c7;"> Anchored</label>
         <label><input type="checkbox" id="chk-ais-st-other" checked onchange="toggleAisStatus('other', this.checked)" style="accent-color:#0284c7;"> Other</label>
+        <label><input type="checkbox" id="chk-ais-hide-docked" onchange="toggleAisHideDocked(this.checked)" style="accent-color:#0284c7;"> Hide docked (≤0.1 kn)</label>
         <div id="ais-status-line" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;">No vessels loaded yet.</div>
       </div>
       <!-- AIS vessel list — kept INSIDE this wrapper so it relocates into the
@@ -2494,13 +2505,13 @@
           <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="unifiedListOnSearch(this.value)">
         </div>
         <div class="ais-list-body" id="ais-list-body">
-          <div id="adsb-list-section" style="display:none;">
-            <div class="unified-list-section-header" id="adsb-section-header" style="color:#c084fc;"><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span></div>
-            <div id="adsb-list-rows"></div>
+          <div id="adsb-list-section" class="list-section" style="display:none;">
+            <div class="unified-list-section-header" id="adsb-section-header" style="color:#c084fc;" onclick="toggleListSection('adsb')"><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span><span class="list-caret">&#9662;</span></div>
+            <div id="adsb-list-rows" class="unified-list-section-rows"></div>
           </div>
-          <div id="ais-list-section" style="display:none;">
-            <div class="unified-list-section-header" id="ais-section-header" style="color:#7dd3fc;"><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span></div>
-            <div id="ais-list-rows"></div>
+          <div id="ais-list-section" class="list-section" style="display:none;">
+            <div class="unified-list-section-header" id="ais-section-header" style="color:#7dd3fc;" onclick="toggleListSection('ais')"><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span><span class="list-caret">&#9662;</span></div>
+            <div id="ais-list-rows" class="unified-list-section-rows"></div>
           </div>
         </div>
       </div>
@@ -3355,6 +3366,14 @@
     // Anchored / Other to match MT's "Current Status" toggles.
     let aisTypeFilter = { cargo:true, tanker:true, passenger:true, hsc:true, tug:true, fishing:true, pleasure:true, navaid:true, unspecified:true };
     let aisStatusFilter = { underway:true, anchored:true, other:true };
+    let aisHideDocked = false; // hide vessels stopped at berth (speed ≤ 0.1 kn)
+    // Docked = reports a speed of 0.1 kn or less. MarineTraffic SPEED is in
+    // 1/10 kn, so ≤ 1. NO speed reported → NOT docked (unknown, keep it).
+    function aisIsDocked(v) {
+      if (v == null || v.SPEED == null || v.SPEED === '') return false;
+      const s = parseFloat(v.SPEED);
+      return Number.isFinite(s) && s <= 1;
+    }
     // Subtype filter (GT_SHIPTYPE id → bool). Populated lazily once
     // AIS_SUBTYPES is defined below — we initialise this to {} here
     // and treat undefined entries as "enabled" so the panel works
@@ -10221,6 +10240,13 @@ function initPagerHoursFromStorage() {
       _rebuildAis();
       refreshActiveFilterPanel();
     };
+    window.toggleAisHideDockedPill = function () {
+      aisHideDocked = !aisHideDocked;
+      _ffSetCheckbox('chk-ais-hide-docked', aisHideDocked);
+      _rebuildAis();
+      if (document.getElementById('ais-list-panel')?.classList.contains('open')) aisListRender();
+      refreshActiveFilterPanel();
+    };
     // GT_SHIPTYPE subtype pill — toggles the filter and re-renders.
     // Default state for unknown ids is "on", so the first click sets
     // false, the second sets true again.
@@ -10418,7 +10444,7 @@ function initPagerHoursFromStorage() {
           <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
           <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
           <div class="ff-section-label" style="margin-top:8px;">Status</div>
-          <div class="floating-filter-pills">${statusPills}</div>
+          <div class="floating-filter-pills">${statusPills}${_ffPill(aisHideDocked, '<i class="fa-solid fa-anchor"></i> Hide docked', 'toggleAisHideDockedPill()')}</div>
           <div class="ff-section-label" style="margin-top:8px;">Labels</div>
           <div class="floating-filter-pills">${_ffPill(aisLabelSettings.enabled, '<i class="fa-solid fa-tag"></i> Labels', 'toggleAisLabelsPill()')}</div>
           ${labelFieldsHtml}
@@ -10882,6 +10908,7 @@ function initPagerHoursFromStorage() {
         const st = aisStatusBucket(v);
         if (!aisTypeFilter[cat]) return;
         if (!aisStatusFilter[st]) return;
+        if (aisHideDocked && aisIsDocked(v)) return;
         const gt = aisGtSubtype(v);
         // Subtype map only contains entries the user has explicitly
         // toggled OFF. Vessels with GT_SHIPTYPE not in the legend, or
@@ -10984,6 +11011,14 @@ function initPagerHoursFromStorage() {
         : `${total} in view`;
     }
 
+    // Collapse/expand a list section (Aircraft / Vessels) by its header.
+    // The rows stay in the DOM (re-renders just refill them), so the
+    // collapsed state survives data polls and viewport updates.
+    window.toggleListSection = function (which) {
+      const sec = document.getElementById(which + '-list-section');
+      if (sec) sec.classList.toggle('collapsed');
+    };
+
     // Called from the layer toggles: open the panel while either layer
     // is on, close it when both are off, and resync the sections.
     function syncUnifiedListPanel() {
@@ -11044,6 +11079,7 @@ function initPagerHoursFromStorage() {
         const st = aisStatusBucket(v);
         if (!aisTypeFilter[cat]) continue;
         if (!aisStatusFilter[st]) continue;
+        if (aisHideDocked && aisIsDocked(v)) continue;
         // Only filter by viewport when there's no search; otherwise the
         // user might be looking for a vessel that's just off-screen.
         if (!q && !bounds.contains([lat, lon])) continue;
@@ -11274,6 +11310,11 @@ function initPagerHoursFromStorage() {
     function toggleAisStatus(key, on) {
       aisStatusFilter[key] = !!on;
       _rebuildAis();
+    }
+    function toggleAisHideDocked(on) {
+      aisHideDocked = !!on;
+      _rebuildAis();
+      if (document.getElementById('ais-list-panel')?.classList.contains('open')) aisListRender();
     }
 
     async function loadAisData() {
