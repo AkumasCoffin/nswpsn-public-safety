@@ -11681,6 +11681,38 @@ function initPagerHoursFromStorage() {
       return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD), i: bi, t: bt };
     }
 
+    // Cumulative metres along a cached shape (memoised per shapeId). Lets
+    // us place a vehicle at AnyTrip's `vdap` (distance along path) — an
+    // exact on-shape position that can't land on a parallel track the way
+    // lat/lon snapping does.
+    const _transportShapeCumM = new Map(); // shapeId → Float64Array
+    function _transportShapeCum(shapeId, pts) {
+      let cum = _transportShapeCumM.get(shapeId);
+      if (cum) return cum;
+      cum = new Float64Array(pts.length);
+      for (let i = 1; i < pts.length; i++) {
+        cum[i] = cum[i - 1] + haversineMeters(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+      }
+      _transportShapeCumM.set(shapeId, cum);
+      return cum;
+    }
+    // Point at `dist` metres along the shape → { lat, lon, p } where p is
+    // the fractional point index (so the glide can interpolate as usual).
+    function _transportPointAtDist(pts, cum, dist) {
+      const n = pts.length - 1;
+      if (!(dist > 0)) return { lat: pts[0][0], lon: pts[0][1], p: 0 };
+      if (dist >= cum[n]) return { lat: pts[n][0], lon: pts[n][1], p: n };
+      let lo = 0, hi = n;
+      while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= dist) lo = mid; else hi = mid; }
+      const seg = cum[lo + 1] - cum[lo] || 1;
+      const t = (dist - cum[lo]) / seg;
+      return {
+        lat: pts[lo][0] + (pts[lo + 1][0] - pts[lo][0]) * t,
+        lon: pts[lo][1] + (pts[lo + 1][1] - pts[lo][1]) * t,
+        p: lo + t
+      };
+    }
+
     function _adsbSearchHay(a) {
       return [a.callsign, a.reg, a.hex, a.type, a.squawk]
         .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
@@ -12567,7 +12599,18 @@ function initPagerHoursFromStorage() {
         }
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
-          if (shapePts) {
+          if (shapePts && v.vdap != null && shapePts.length >= 2) {
+            // Authoritative placement: put the vehicle at the feed's exact
+            // distance along its own shape. No lat/lon snap, so it can't
+            // land on a parallel track; vdap only advances along the trip,
+            // so there's no wrong-limb flip and no ratchet is needed.
+            const cum = _transportShapeCum(v.shapeId, shapePts);
+            const at = _transportPointAtDist(shapePts, cum, v.vdap);
+            dispLat = at.lat;
+            dispLon = at.lon;
+            prog = { shapeId: v.shapeId, p: at.p, lat: dispLat, lon: dispLon };
+            if (existing) existing.backSince = null;
+          } else if (shapePts) {
             const s = snapToPolylinePts(shapePts, v.lat, v.lon);
             if (s && s.distDeg < SNAP_MAX_DEG) {
               dispLat = s.latlng[0];

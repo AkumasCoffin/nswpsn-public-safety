@@ -109,6 +109,11 @@ export interface TransportVehicle {
   tripId: string | null;
   /** GTFS shape id — resolves to the route track via /api/transport/shape. */
   shapeId: string | null;
+  /** Vehicle distance along path (metres from the shape start), from
+   *  AnyTrip's lastPosition. Lets the client place the vehicle at its
+   *  exact point ON the shape instead of snapping lat/lon (which lands on
+   *  the wrong parallel track). Null when the feed omits it. */
+  vdap: number | null;
   /** Trip-instance coordinates for /api/transport/trip lookups. */
   startDate: string | null; // YYYYMMDD
   instanceNumber: number | null;
@@ -175,6 +180,7 @@ interface RawVehicleEntry {
       time?: number; // epoch seconds
       bearing?: number;
       speed?: number; // m/s
+      vdap?: number; // vehicle distance along path, metres from shape start
       occupancy?: number[];
       vehicleOccupancy?: number;
       coordinates?: { lat?: number; lon?: number };
@@ -357,6 +363,7 @@ export function normalizeVehicles(raw: RawVehiclesResponse): TransportVehicle[] 
           : null,
       tripId: trip?.rtTripId ?? trip?.id ?? null,
       shapeId: entry.tripInstance?.shapeId ?? trip?.shapeId ?? null,
+      vdap: Number.isFinite(pos?.vdap) ? (pos!.vdap as number) : null,
       startDate: entry.tripInstance?.startDate ?? null,
       instanceNumber:
         typeof entry.tripInstance?.instanceNumber === 'number'
