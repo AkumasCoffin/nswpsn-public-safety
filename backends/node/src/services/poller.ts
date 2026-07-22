@@ -40,6 +40,9 @@ const SKIP_ARCHIVE = new Set<string>([
   'ausgrid_stats',
   'beachsafe',
   'beachwatch',
+  // Live-only aircraft positions — a 12 s cadence would flood
+  // archive_misc with hundreds of rows per tick for zero incident value.
+  'adsb_aircraft',
 ]);
 
 interface SourceState {

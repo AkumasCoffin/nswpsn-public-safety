@@ -58,6 +58,12 @@ const Schema = z.object({
   // either the previous snapshot or a complete current one.
   STATE_DIR: z.string().default('./state'),
 
+  // Root for user-uploaded files (incident photos). Must be inside the
+  // Apache webroot: the repo IS the webroot, so the default resolves to
+  // <repo>/uploads and files land at nswpsn.forcequit.xyz/uploads/...
+  // (backend cwd is backends/node, hence the ../..).
+  UPLOADS_DIR: z.string().default('../../uploads'),
+
   // ArchiveWriter flush cadence in ms. Falls back to Python's
   // seconds-based ARCHIVE_FLUSH_INTERVAL when only the legacy var is
   // set in the shared .env, so a single env source drives both backends.
@@ -215,6 +221,37 @@ const Schema = z.object({
   // and the image batch loop stays idle. Reads use the last-good JSON
   // file. Mirrors python's _playwright_available short-circuit.
   CENTRALWATCH_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
+  // Kill switch for the ADS-B aircraft source (adsb.lol / adsb.fi /
+  // airplanes.live fan-out). When true the source isn't registered and
+  // /api/adsb/aircraft serves an empty snapshot. Escape hatch if an
+  // upstream starts rate-limit banning us.
+  ADSB_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
+  // Kill switch for the AnyTrip public-transport proxy. When true both
+  // /api/transport/* endpoints return empty snapshots and never hit
+  // upstream. Escape hatch if AnyTrip blocks us or the (unofficial)
+  // API drifts.
+  TRANSPORT_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
+  // Transport for NSW Open Data API key (https://opendata.transport.nsw.gov.au,
+  // sent as `Authorization: apikey <key>`). Enables the official GTFS-realtime
+  // feeds: primary vehicle positions joined over the AnyTrip list, and
+  // /api/transport/alerts. Optional — unset means AnyTrip-only positions
+  // and an empty alerts endpoint, exactly the pre-TfNSW behaviour.
+  TFNSW_API_KEY: z.string().optional(),
+
+  // Kill switch for the TfNSW feeds specifically (key stays configured).
+  TFNSW_DISABLED: z
     .enum(['true', 'false'])
     .default('false')
     .transform((s) => s === 'true'),

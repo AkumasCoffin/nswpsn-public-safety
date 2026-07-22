@@ -24,6 +24,7 @@ import { beachRouter } from './api/beach.js';
 import { weatherRouter } from './api/weather.js';
 import { pagerRouter } from './api/pager.js';
 import { firmsRouter } from './api/firms.js';
+import { adsbRouter } from './api/adsb.js';
 // Power sources + heartbeat + stats (W4).
 import { endeavourRouter } from './api/endeavour.js';
 import { ausgridRouter } from './api/ausgrid.js';
@@ -50,6 +51,7 @@ import { dashboardRouter } from './api/dashboard.js';
 import { statusRouter } from './api/status.js';
 // What3Words proxy + system/debug/admin.
 import { w3wRouter } from './api/w3w.js';
+import { transportRouter } from './api/transport.js';
 import { systemRouter } from './api/system.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
@@ -189,6 +191,11 @@ export function createApp() {
     '/api/beachsafe',
     '/api/pager/hits',
     '/api/firms/hotspots',
+    // Aircraft trails: prebuilt per poll, frontend fetches at the same
+    // 30s cadence as this cache window — the CDN absorbs all clients.
+    '/api/adsb/trails',
+    // TfNSW service alerts: fixed path, no viewport scoping.
+    '/api/transport/alerts',
   ];
   app.use('*', async (c, next) => {
     await next();
@@ -287,6 +294,7 @@ export function createApp() {
   app.route('/', weatherRouter);
   app.route('/', pagerRouter);
   app.route('/', firmsRouter);
+  app.route('/', adsbRouter);
   // Power + heartbeat + stats
   app.route('/', endeavourRouter);
   app.route('/', ausgridRouter);
@@ -312,6 +320,10 @@ export function createApp() {
   app.route('/', statusRouter);
   // What3Words proxy
   app.route('/', w3wRouter);
+  // AnyTrip public-transport proxy. Deliberately NOT in CACHEABLE_PATHS —
+  // that middleware ignores query strings, so a CDN would cross-serve one
+  // viewport's vehicles to every viewport.
+  app.route('/', transportRouter);
   // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
   app.route('/', systemRouter);
 

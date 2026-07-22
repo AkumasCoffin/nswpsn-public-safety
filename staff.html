@@ -31,146 +31,202 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
-      --bg-dark: #020617;
-      --bg-card: #1e293b;
-      --border-subtle: rgba(148, 163, 184, 0.2);
-      --text-primary: #fff;
+      --bg-dark: #060a15;
+      --bg-card: #0e1728;
+      --bg-card-2: #121e33;
+      --border-subtle: rgba(148, 163, 184, 0.16);
+      --text-primary: #f1f5f9;
       --text-soft: #94a3b8;
-      --accent: #f97316;
+      --brand: #f97316;              /* orange stays reserved for the wordmark */
+      --accent: #38bdf8;             /* sky — interactive accent */
+      --accent-soft: rgba(56, 189, 248, 0.14);
+      --accent-border: rgba(56, 189, 248, 0.35);
       --success: #22c55e;
       --danger: #ef4444;
       --warning: #f59e0b;
     }
-    
+
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
     }
-    
+
     body {
       font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg-dark);
+      background:
+        radial-gradient(900px 480px at 85% -10%, rgba(56, 189, 248, 0.06), transparent 60%),
+        radial-gradient(700px 420px at -10% 0%, rgba(249, 115, 22, 0.05), transparent 55%),
+        var(--bg-dark);
+      background-attachment: fixed;
       color: var(--text-primary);
       min-height: 100vh;
     }
-    
+
+    ::selection { background: rgba(56, 189, 248, 0.3); }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.25);
+      border-radius: 5px;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.4); }
+
     .container {
       max-width: 1200px;
       margin: 0 auto;
-      padding: 2rem;
+      padding: 1.5rem 2rem 3rem;
     }
-    
+
+    /* === Header — sticky glassy topbar ================================ */
     .header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 2rem;
-      padding-bottom: 1rem;
+      gap: 1rem;
+      margin: 0 -2rem 1.75rem;
+      padding: 1rem 2rem;
+      background: rgba(6, 10, 21, 0.82);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border-subtle);
     }
-    
+
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      min-width: 0;
+    }
+
     .header h1 {
-      font-size: 1.75rem;
+      font-size: 1.35rem;
       font-weight: 700;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
     }
-    
-    .header h1 span {
-      color: var(--accent);
+
+    .header h1 span { color: var(--brand); }
+
+    .role-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.7rem;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-soft);
+      font-size: 0.75rem;
+      font-weight: 500;
+      white-space: nowrap;
     }
-    
+
     .header-actions {
       display: flex;
-      gap: 1rem;
+      gap: 0.6rem;
       align-items: center;
+      flex-shrink: 0;
     }
-    
+
+    /* === Buttons — slate base, sky interactive, semantic tints ======== */
     .btn {
-      padding: 0.6rem 1.2rem;
+      padding: 0.55rem 1.1rem;
       border-radius: 8px;
-      border: none;
+      border: 1px solid var(--border-subtle);
+      font-family: inherit;
       font-weight: 600;
       cursor: pointer;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       text-decoration: none;
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
-      transition: all 0.2s;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
     }
-    
+    .btn:active { transform: translateY(1px); }
+    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
     .btn-primary {
-      background: var(--accent);
-      color: white;
+      background: var(--accent-soft);
+      color: #7dd3fc;
+      border-color: var(--accent-border);
     }
-    
-    .btn-primary:hover {
-      background: #ea580c;
+    .btn-primary:hover:not(:disabled) {
+      background: rgba(56, 189, 248, 0.25);
+      color: #bae6fd;
     }
-    
+
     .btn-secondary {
-      background: rgba(255,255,255,0.1);
+      background: rgba(255, 255, 255, 0.05);
       color: var(--text-primary);
-      border: 1px solid var(--border-subtle);
     }
-    
-    .btn-secondary:hover {
-      background: rgba(255,255,255,0.15);
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(148, 163, 184, 0.35);
     }
-    
+
     .btn-success {
-      background: var(--success);
-      color: white;
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border-color: rgba(34, 197, 94, 0.4);
     }
-    
-    .btn-success:hover {
-      background: #16a34a;
-    }
-    
+    .btn-success:hover:not(:disabled) { background: rgba(34, 197, 94, 0.28); color: #86efac; }
+
     .btn-danger {
-      background: var(--danger);
-      color: white;
+      background: rgba(239, 68, 68, 0.13);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.4);
     }
-    
-    .btn-danger:hover {
-      background: #dc2626;
-    }
-    
+    .btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.26); color: #fca5a5; }
+
     .btn-sm {
-      padding: 0.4rem 0.8rem;
-      font-size: 0.8rem;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.78rem;
     }
-    
+
+    /* === Stat cards ==================================================== */
     .stats-bar {
-      display: flex;
-      gap: 1.5rem;
-      margin-bottom: 2rem;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.75rem;
     }
-    
+
     .stat-card {
-      background: var(--bg-card);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 55%),
+        var(--bg-card);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
-      padding: 1.25rem 1.5rem;
-      min-width: 150px;
+      padding: 1.1rem 1.3rem;
+      transition: border-color 0.15s ease, transform 0.15s ease;
     }
-    
+    .stat-card:hover { transform: translateY(-1px); border-color: rgba(148, 163, 184, 0.3); }
+
     .stat-card .stat-value {
-      font-size: 2rem;
+      font-size: 1.9rem;
       font-weight: 700;
       color: var(--accent);
+      line-height: 1.1;
+      letter-spacing: -0.02em;
     }
-    
+
     .stat-card .stat-label {
-      font-size: 0.85rem;
+      font-size: 0.72rem;
       color: var(--text-soft);
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-top: 0.25rem;
+      letter-spacing: 0.08em;
+      margin-top: 0.35rem;
+      font-weight: 600;
     }
-    
-    .stat-card.pending .stat-value { color: var(--warning); }
+
+    .stat-card.pending  .stat-value { color: var(--warning); }
     .stat-card.approved .stat-value { color: var(--success); }
     .stat-card.rejected .stat-value { color: var(--danger); }
 
@@ -229,6 +285,11 @@
       background: rgba(239, 68, 68, 0.18);
       color: var(--danger);
       border-color: rgba(239, 68, 68, 0.4);
+    }
+    .dev-overall-badge.unknown {
+      background: rgba(148, 163, 184, 0.14);
+      color: var(--text-soft);
+      border-color: rgba(148, 163, 184, 0.35);
     }
     .dev-overall-meta {
       color: var(--text-soft);
@@ -387,34 +448,67 @@
     }
     .dev-status-pill.degraded { background: var(--warning); box-shadow: 0 0 6px rgba(234, 179, 8, 0.55); }
     .dev-status-pill.down     { background: var(--danger);  box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
-    
+
+    /* === Filter / toolbar row ========================================= */
     .filter-bar {
       display: flex;
       gap: 0.5rem;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+      align-items: center;
     }
-    
+    .filter-spacer { flex: 1; }
+
     .filter-btn {
-      padding: 0.5rem 1rem;
-      background: rgba(255,255,255,0.05);
+      padding: 0.45rem 1rem;
+      background: rgba(255, 255, 255, 0.04);
       border: 1px solid var(--border-subtle);
-      border-radius: 6px;
+      border-radius: 999px;
       color: var(--text-soft);
       cursor: pointer;
-      font-size: 0.85rem;
-      transition: all 0.2s;
+      font-family: inherit;
+      font-size: 0.82rem;
+      font-weight: 500;
+      transition: all 0.15s ease;
     }
-    
-    .filter-btn:hover {
-      background: rgba(255,255,255,0.1);
-    }
-    
+    .filter-btn:hover { background: rgba(255, 255, 255, 0.09); color: var(--text-primary); }
     .filter-btn.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: white;
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
+      color: #7dd3fc;
     }
-    
+
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 0.45rem 0.8rem;
+      min-width: 230px;
+      transition: border-color 0.15s ease;
+    }
+    .search-box:focus-within { border-color: var(--accent-border); }
+    .search-box i { color: var(--text-soft); font-size: 0.8rem; }
+    .search-box input {
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.85rem;
+      width: 100%;
+    }
+    .search-box input::placeholder { color: rgba(148, 163, 184, 0.6); }
+
+    .result-count {
+      color: var(--text-soft);
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    /* === Tables ======================================================== */
     .requests-table {
       width: 100%;
       border-collapse: collapse;
@@ -423,345 +517,370 @@
       overflow: hidden;
       border: 1px solid var(--border-subtle);
     }
-    
+
     .requests-table th,
     .requests-table td {
-      padding: 1rem;
+      padding: 0.85rem 1rem;
       text-align: left;
-      border-bottom: 1px solid var(--border-subtle);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.09);
+      font-size: 0.88rem;
     }
-    
+
     .requests-table th {
-      background: rgba(0,0,0,0.2);
+      background: rgba(0, 0, 0, 0.25);
       font-weight: 600;
-      font-size: 0.8rem;
+      font-size: 0.72rem;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.07em;
       color: var(--text-soft);
     }
-    
-    .requests-table tr:last-child td {
-      border-bottom: none;
-    }
-    
-    .requests-table tr:hover td {
-      background: rgba(255,255,255,0.02);
-    }
-    
+
+    .requests-table tr:last-child td { border-bottom: none; }
+    .requests-table tbody tr { transition: background 0.1s ease; }
+    .requests-table tbody tr:hover td { background: rgba(56, 189, 248, 0.04); }
+
     .status-badge {
       display: inline-block;
-      padding: 0.25rem 0.6rem;
-      border-radius: 4px;
-      font-size: 0.75rem;
+      padding: 0.22rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
       font-weight: 600;
       text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
-    
-    .status-badge.pending {
-      background: rgba(245, 158, 11, 0.2);
-      color: var(--warning);
-    }
-    
-    .status-badge.approved {
-      background: rgba(34, 197, 94, 0.2);
-      color: var(--success);
-    }
-    
-    .status-badge.rejected {
-      background: rgba(239, 68, 68, 0.2);
-      color: var(--danger);
-    }
-    
-    .action-buttons {
-      display: flex;
-      gap: 0.5rem;
-    }
-    
+    .status-badge.pending  { background: rgba(245, 158, 11, 0.16); color: var(--warning); }
+    .status-badge.approved { background: rgba(34, 197, 94, 0.16);  color: var(--success); }
+    .status-badge.rejected { background: rgba(239, 68, 68, 0.16);  color: var(--danger); }
+
+    .action-buttons { display: flex; gap: 0.4rem; }
+
     .discord-id {
-      font-family: monospace;
-      background: rgba(0,0,0,0.3);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: rgba(0, 0, 0, 0.3);
       padding: 0.2rem 0.5rem;
       border-radius: 4px;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
+      color: var(--text-soft);
     }
-    
-    .website-link {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    
-    .website-link:hover {
-      text-decoration: underline;
-    }
-    
+
+    .website-link { color: var(--accent); text-decoration: none; }
+    .website-link:hover { text-decoration: underline; }
+
     .empty-state {
       text-align: center;
       padding: 4rem 2rem;
       color: var(--text-soft);
+      background: var(--bg-card);
+      border: 1px dashed var(--border-subtle);
+      border-radius: 12px;
     }
-    
-    .empty-state i {
-      font-size: 3rem;
-      margin-bottom: 1rem;
-      opacity: 0.5;
-    }
-    
+    .empty-state i { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.4; display: block; }
+
+    /* === Modals ======================================================== */
     .modal {
       display: none;
       position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.8);
+      inset: 0;
+      background: rgba(3, 7, 18, 0.72);
+      backdrop-filter: blur(5px);
+      -webkit-backdrop-filter: blur(5px);
       z-index: 1000;
       align-items: flex-start;
       justify-content: center;
       overflow-y: auto;
       padding: 2rem 1rem;
     }
-    
+
     .modal-content {
-      background: var(--bg-card);
-      border: 1px solid var(--border-subtle);
-      border-radius: 12px;
-      padding: 2rem;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 40%),
+        var(--bg-card-2);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 14px;
+      padding: 1.75rem 2rem 2rem;
       max-width: 500px;
       width: 100%;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.8);
       margin: auto;
+      animation: modal-in 0.18s ease-out;
     }
-    
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(10px) scale(0.985); }
+      to   { opacity: 1; transform: none; }
+    }
+
     .modal-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 1.5rem;
     }
-    
-    .modal-header h2 {
-      font-size: 1.25rem;
-      font-weight: 700;
-    }
-    
+    .modal-header h2 { font-size: 1.15rem; font-weight: 700; }
+
     .modal-close {
-      background: none;
-      border: none;
-      color: var(--text-soft);
-      font-size: 1.5rem;
-      cursor: pointer;
-    }
-    
-    .credential-box {
-      background: rgba(0,0,0,0.3);
+      background: rgba(255, 255, 255, 0.05);
       border: 1px solid var(--border-subtle);
       border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1rem;
+      width: 32px; height: 32px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--text-soft);
+      font-size: 1.15rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
     }
-    
+    .modal-close:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.1); }
+
+    .credential-box {
+      background: rgba(0, 0, 0, 0.28);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.85rem;
+    }
     .credential-box label {
       display: block;
-      font-size: 0.75rem;
+      font-size: 0.68rem;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.08em;
       color: var(--text-soft);
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.4rem;
+      font-weight: 600;
     }
-    
     .credential-box .value {
-      font-family: monospace;
-      font-size: 1.1rem;
-      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.98rem;
+      color: #7dd3fc;
       word-break: break-all;
     }
-    
+
+    .field-label {
+      display: block;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-soft);
+      margin: 0.25rem 0 0.5rem;
+      font-weight: 600;
+    }
+    .field-input {
+      width: 100%;
+      padding: 0.7rem 0.85rem;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.9rem;
+      resize: vertical;
+      transition: border-color 0.15s ease;
+    }
+    .field-input:focus { outline: none; border-color: var(--accent-border); }
+
     .copy-btn {
-      background: rgba(255,255,255,0.1);
+      background: rgba(255, 255, 255, 0.08);
       border: 1px solid var(--border-subtle);
       color: var(--text-primary);
       padding: 0.3rem 0.6rem;
-      border-radius: 4px;
+      border-radius: 6px;
       cursor: pointer;
-      font-size: 0.75rem;
+      font-family: inherit;
+      font-size: 0.72rem;
       margin-left: 0.5rem;
+      transition: background 0.15s ease;
     }
-    
-    .copy-btn:hover {
-      background: rgba(255,255,255,0.2);
-    }
-    
+    .copy-btn:hover { background: rgba(255, 255, 255, 0.16); }
+
+    /* === Login overlay ================================================= */
     .login-overlay {
       position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: var(--bg-dark);
+      inset: 0;
+      background:
+        radial-gradient(700px 420px at 50% -10%, rgba(56, 189, 248, 0.08), transparent 60%),
+        var(--bg-dark);
       z-index: 9999;
       display: flex;
       align-items: center;
       justify-content: center;
       flex-direction: column;
+      padding: 1rem;
     }
-    
+
     .login-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-subtle);
-      border-radius: 12px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 45%),
+        var(--bg-card-2);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 16px;
       padding: 2.5rem;
       max-width: 400px;
-      width: 90%;
+      width: 100%;
       text-align: center;
+      box-shadow: 0 25px 60px -20px rgba(0, 0, 0, 0.8);
     }
-    
-    .login-card h2 {
-      margin-bottom: 1rem;
-      font-size: 1.5rem;
-    }
-    
-    .login-card h2 span {
-      color: var(--accent);
-    }
-    
-    .login-card p {
-      color: var(--text-soft);
-      margin-bottom: 1.5rem;
-    }
-    
+    .login-card h2 { margin-bottom: 0.75rem; font-size: 1.5rem; }
+    .login-card h2 span { color: var(--brand); }
+    .login-card p { color: var(--text-soft); margin-bottom: 1.5rem; font-size: 0.9rem; }
+    .login-card input:focus { outline: none; border-color: var(--accent-border) !important; }
+
     .loading {
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 4rem;
     }
-    
     .loading i {
-      font-size: 2rem;
+      font-size: 1.8rem;
       color: var(--accent);
       animation: spin 1s linear infinite;
     }
-    
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    
-    .timestamp {
-      color: var(--text-soft);
-      font-size: 0.85rem;
-    }
-    
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .timestamp { color: var(--text-soft); font-size: 0.82rem; }
+
     .type-badge {
       display: inline-block;
-      padding: 0.15rem 0.4rem;
-      border-radius: 4px;
-      font-size: 0.7rem;
-      background: rgba(249, 115, 22, 0.15);
-      color: var(--accent);
+      padding: 0.16rem 0.45rem;
+      border-radius: 5px;
+      font-size: 0.72rem;
+      background: var(--accent-soft);
+      color: #7dd3fc;
       margin-right: 0.25rem;
+      white-space: nowrap;
     }
-    
-    /* Tabs */
+
+    /* === Tabs — segmented pill nav ==================================== */
     .tab-nav {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 2rem;
-      border-bottom: 1px solid var(--border-subtle);
-      padding-bottom: 0;
+      display: inline-flex;
+      gap: 0.25rem;
+      margin-bottom: 1.75rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 0.3rem;
     }
-    
+
     .tab-btn {
-      padding: 0.75rem 1.5rem;
+      padding: 0.55rem 1.2rem;
       background: transparent;
       border: none;
-      border-bottom: 2px solid transparent;
+      border-radius: 9px;
       color: var(--text-soft);
       cursor: pointer;
-      font-size: 0.95rem;
-      font-weight: 500;
-      transition: all 0.2s;
+      font-family: inherit;
+      font-size: 0.88rem;
+      font-weight: 600;
+      transition: all 0.15s ease;
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      margin-bottom: -1px;
     }
-    
-    .tab-btn:hover {
-      color: var(--text-primary);
-    }
-    
+    .tab-btn:hover { color: var(--text-primary); }
     .tab-btn.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
+      color: #7dd3fc;
+      background: var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--accent-border);
     }
-    
+
     .tab-btn .badge {
       background: rgba(245, 158, 11, 0.2);
       color: var(--warning);
-      padding: 0.15rem 0.5rem;
-      border-radius: 10px;
-      font-size: 0.75rem;
-      font-weight: 600;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
     }
-    
-    .tab-content {
-      display: none;
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: tab-in 0.15s ease-out; }
+    @keyframes tab-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: none; }
     }
-    
-    .tab-content.active {
-      display: block;
-    }
-    
-    /* Role badges */
+
+    /* === Role badges =================================================== */
     .role-badge {
       display: inline-flex;
       align-items: center;
       gap: 0.25rem;
       padding: 0.2rem 0.5rem;
-      border-radius: 4px;
+      border-radius: 5px;
       font-size: 0.7rem;
       font-weight: 500;
       margin-right: 0.25rem;
       margin-bottom: 0.25rem;
+      white-space: nowrap;
     }
-    
-    .role-badge.map_editor { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
-    .role-badge.pager_contributor { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
-    .role-badge.radio_contributor { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
-    .role-badge.team_member { background: rgba(249, 115, 22, 0.2); color: #fb923c; }
-    .role-badge.dev { background: rgba(236, 72, 153, 0.2); color: #f472b6; }
-    .role-badge.owner { background: rgba(234, 179, 8, 0.2); color: #fbbf24; }
-    
-    .no-roles {
-      color: var(--text-soft);
-      font-style: italic;
-      font-size: 0.8rem;
+    .role-badge.map_editor        { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+    .role-badge.pager_contributor { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
+    .role-badge.radio_contributor { background: rgba(34, 197, 94, 0.18);  color: #4ade80; }
+    .role-badge.team_member       { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
+    .role-badge.dev               { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
+    .role-badge.owner             { background: rgba(234, 179, 8, 0.18);  color: #fbbf24; }
+
+    .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
+
+    /* === Toasts ======================================================== */
+    #toast-stack {
+      position: fixed;
+      bottom: 1.25rem;
+      right: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      z-index: 3000;
+      pointer-events: none;
     }
-    
+    .toast {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: var(--bg-card-2);
+      border: 1px solid var(--border-subtle);
+      border-left: 3px solid var(--accent);
+      border-radius: 10px;
+      padding: 0.7rem 1rem;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+      box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.6);
+      max-width: 340px;
+      animation: toast-in 0.2s ease-out;
+    }
+    .toast.success { border-left-color: var(--success); }
+    .toast.success i { color: var(--success); }
+    .toast.error   { border-left-color: var(--danger); }
+    .toast.error i { color: var(--danger); }
+    .toast.warn    { border-left-color: var(--warning); }
+    .toast.warn i  { color: var(--warning); }
+    .toast.fade-out { opacity: 0; transition: opacity 0.3s ease; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(12px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    /* === Responsive ==================================================== */
     @media (max-width: 768px) {
-      .container {
-        padding: 1rem;
-      }
-      
+      .container { padding: 1rem 1rem 2rem; }
+
       .header {
-        flex-direction: column;
-        gap: 1rem;
-        align-items: flex-start;
+        margin: 0 -1rem 1.25rem;
+        padding: 0.85rem 1rem;
+        flex-wrap: wrap;
       }
-      
-      .requests-table {
-        display: block;
+      .header-actions { flex-wrap: wrap; }
+
+      .tab-nav {
+        display: flex;
+        width: 100%;
         overflow-x: auto;
       }
-      
-      .stats-bar {
-        gap: 1rem;
-      }
-      
-      .stat-card {
-        flex: 1;
-        min-width: 120px;
-      }
+      .tab-btn { flex-shrink: 0; }
+
+      .requests-table { display: block; overflow-x: auto; }
+
+      .search-box { min-width: 0; flex: 1 1 100%; }
+      .filter-spacer { display: none; }
+
+      .modal-content { padding: 1.4rem 1.25rem 1.5rem; }
     }
   </style>
 </head>
@@ -777,7 +896,7 @@
       <div id="login-form-container">
         <div style="margin-bottom: 1rem;">
           <label style="display: block; color: #cbd5e1; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; font-weight: 600;">Email Address</label>
-          <input type="email" id="admin-login-email" style="width: 100%; padding: 0.75rem; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-primary); font-size: 0.95rem; box-sizing: border-box;" placeholder="name@forcequit.xyz">
+          <input type="email" id="admin-login-email" style="width: 100%; padding: 0.75rem; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-primary); font-size: 0.95rem; box-sizing: border-box;" placeholder="name@forcequit.xyz" onkeydown="if(event.key==='Enter') document.getElementById('admin-login-password').focus()">
         </div>
         <div style="margin-bottom: 1.5rem;">
           <label style="display: block; color: #cbd5e1; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; font-weight: 600;">Password</label>
@@ -800,7 +919,10 @@
   <div id="main-content" style="display: none;">
     <div class="container">
       <div class="header">
-        <h1>User <span>Management</span></h1>
+        <div class="header-title">
+          <h1>Forcequit <span>Admin</span></h1>
+          <span class="role-chip" id="role-chip" style="display: none;"></span>
+        </div>
         <div class="header-actions">
           <button class="btn btn-secondary" onclick="refreshAll()">
             <i class="fas fa-sync-alt"></i> Refresh
@@ -855,6 +977,11 @@
           <button class="filter-btn" data-filter="pending" onclick="setFilter('pending')">Pending</button>
           <button class="filter-btn" data-filter="approved" onclick="setFilter('approved')">Approved</button>
           <button class="filter-btn" data-filter="rejected" onclick="setFilter('rejected')">Rejected</button>
+          <div class="filter-spacer"></div>
+          <div class="search-box">
+            <i class="fas fa-search"></i>
+            <input type="text" id="request-search" placeholder="Search email, Discord, region..." oninput="renderRequests()">
+          </div>
         </div>
 
         <div id="requests-container">
@@ -883,8 +1010,28 @@
             <div class="stat-value" id="stat-radio" style="color: #4ade80;">-</div>
             <div class="stat-label">Radio Contributors</div>
           </div>
+          <div class="stat-card" style="border-color: rgba(88, 101, 242, 0.3);">
+            <div class="stat-value" id="stat-discord" style="color: #818cf8;">-</div>
+            <div class="stat-label">Discord Linked</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-dupes">-</div>
+            <div class="stat-label">Possible Duplicates</div>
+          </div>
         </div>
         
+        <div class="filter-bar">
+          <div class="search-box">
+            <i class="fas fa-search"></i>
+            <input type="text" id="user-search" placeholder="Search email, username, role or Discord ID..." oninput="renderUsers()">
+          </div>
+          <button class="filter-btn" id="dupes-filter-btn" onclick="toggleDupesFilter()" title="Show only accounts that share a Discord ID with another account">
+            <i class="fas fa-clone"></i> Duplicates only
+          </button>
+          <div class="filter-spacer"></div>
+          <span class="result-count" id="user-count"></span>
+        </div>
+
         <div id="users-container">
           <div class="loading">
             <i class="fas fa-spinner"></i>
@@ -1087,7 +1234,7 @@
             <span>📻 Radio Contributor</span>
             <span style="color: var(--text-soft); font-size: 0.75rem;">- Can stream radio</span>
           </label>
-          <div style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
+          <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
               <input type="checkbox" id="edit-role-team-member" style="width: 16px; height: 16px; accent-color: var(--accent);">
               <span>👥 Team Member</span>
@@ -1157,6 +1304,30 @@
     </div>
   </div>
 
+  <!-- Reject Reason Modal -->
+  <div id="reject-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><i class="fas fa-user-xmark" style="color: var(--danger);"></i> Reject Request</h2>
+        <button class="modal-close" onclick="closeRejectModal()">&times;</button>
+      </div>
+      <div class="credential-box">
+        <label>Applicant</label>
+        <div class="value" id="reject-email">-</div>
+      </div>
+      <label class="field-label" for="reject-reason">Reason (optional)</label>
+      <textarea id="reject-reason" class="field-input" rows="3" placeholder="e.g. Not enough detail provided"></textarea>
+      <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+        <button class="btn btn-secondary" onclick="closeRejectModal()" style="flex: 1;">Cancel</button>
+        <button class="btn btn-danger" onclick="confirmReject()" style="flex: 1;">
+          <i class="fas fa-times"></i> Reject
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-stack"></div>
+
   <script src="config.js"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -1173,6 +1344,22 @@
         if (token) return `Bearer ${token}`;
       } catch (e) { /* fall through */ }
       return `Bearer ${API_KEY}`;
+    }
+
+    // Small in-page toast — replaces the browser alert()s this page used.
+    function showToast(message, kind = 'success', ms = 3500) {
+      const stack = document.getElementById('toast-stack');
+      if (!stack) return;
+      const icons = { success: 'fa-check-circle', error: 'fa-exclamation-circle', warn: 'fa-triangle-exclamation' };
+      const el = document.createElement('div');
+      el.className = `toast ${kind}`;
+      el.innerHTML = `<i class="fas ${icons[kind] || icons.success}"></i><span></span>`;
+      el.querySelector('span').textContent = message;
+      stack.appendChild(el);
+      setTimeout(() => {
+        el.classList.add('fade-out');
+        setTimeout(() => el.remove(), 350);
+      }, ms);
     }
 
     // Escape user/backend-supplied strings before interpolating into innerHTML.
@@ -1386,6 +1573,9 @@
       ausgrid_stats:        'chart-line',
       essential_current:    'plug',
       essential_future:     'clock',
+      firms_hotspots:       'satellite',
+      adsb_aircraft:        'plane-up',
+      user_incidents:       'user',
     };
 
     function _sourceCard(name, s) {
@@ -1707,8 +1897,14 @@
       // Authenticated
       document.getElementById('login-overlay').style.display = 'none';
       document.getElementById('main-content').style.display = 'block';
-      
-      await loadRequests();
+
+      // Only fetch the requests list when the viewer can actually open
+      // that tab — a dev-only user's /api/editor-requests call would just
+      // 403 into a hidden container. applyPermissionRestrictions already
+      // switched them onto their default tab (which loads its own data).
+      if (userPermissions.tabs.requests) {
+        await loadRequests();
+      }
     }
     
     function applyPermissionRestrictions() {
@@ -1734,15 +1930,16 @@
         switchTab(defaultTab);
       }
 
-      // Header — use the broadest title so a dev-only user doesn't see
-      // "User Management" on a page where Users is hidden.
+      // Role chip next to the wordmark — shows the viewer's own role mix.
       const roleBits = [];
       if (userPermissions.is_owner)       roleBits.push('👑 Owner');
       if (userPermissions.is_team_member) roleBits.push('👥 Team Member');
       if (userPermissions.is_dev)         roleBits.push('🛠️ Dev');
-      const roleIndicator = roleBits.join(' · ') || 'Authenticated';
-      document.querySelector('.header h1').innerHTML =
-        `Admin <span style="font-size: 0.7rem; color: var(--text-soft); margin-left: 0.5rem; font-weight: 400;">${roleIndicator}</span>`;
+      const chip = document.getElementById('role-chip');
+      if (chip) {
+        chip.textContent = roleBits.join(' · ') || 'Authenticated';
+        chip.style.display = '';
+      }
     }
     
     async function loadRequests() {
@@ -1800,15 +1997,48 @@
       }
     }
     
+    // Accounts that share a Discord ID are (almost certainly) the same
+    // person signing up more than once — emails are unique in Supabase,
+    // so the Discord ID is the cross-account signal we have. Returns a
+    // Map of normalised discord_id -> account count.
+    function _userDupeGroups() {
+      const groups = new Map();
+      for (const u of allUsers) {
+        const key = (u.discord_id || '').trim().toLowerCase();
+        if (!key) continue;
+        groups.set(key, (groups.get(key) || 0) + 1);
+      }
+      return groups;
+    }
+
+    function _isDupeUser(user, groups) {
+      const key = (user.discord_id || '').trim().toLowerCase();
+      return !!key && (groups.get(key) || 0) > 1;
+    }
+
     function updateUserStats() {
       const editors = allUsers.filter(u => (u.roles || []).some(r => r.role === 'map_editor')).length;
       const pager = allUsers.filter(u => (u.roles || []).some(r => r.role === 'pager_contributor')).length;
       const radio = allUsers.filter(u => (u.roles || []).some(r => r.role === 'radio_contributor')).length;
-      
+      const discordLinked = allUsers.filter(u => u.discord_linked).length;
+      const groups = _userDupeGroups();
+      const dupes = allUsers.filter(u => _isDupeUser(u, groups)).length;
+
       document.getElementById('stat-users').textContent = allUsers.length;
       document.getElementById('stat-editors').textContent = editors;
       document.getElementById('stat-pager').textContent = pager;
       document.getElementById('stat-radio').textContent = radio;
+      document.getElementById('stat-discord').textContent = discordLinked;
+      const dupesEl = document.getElementById('stat-dupes');
+      dupesEl.textContent = dupes;
+      dupesEl.style.color = dupes > 0 ? 'var(--warning)' : 'var(--success)';
+    }
+
+    let dupesOnly = false;
+    function toggleDupesFilter() {
+      dupesOnly = !dupesOnly;
+      document.getElementById('dupes-filter-btn').classList.toggle('active', dupesOnly);
+      renderUsers();
     }
     
     async function loadUsers() {
@@ -1847,16 +2077,34 @@
     }
     
     function renderUsers() {
-      if (allUsers.length === 0) {
+      const q = (document.getElementById('user-search')?.value || '').trim().toLowerCase();
+      const dupeGroups = _userDupeGroups();
+      let shown = q
+        ? allUsers.filter(u =>
+            (u.email || '').toLowerCase().includes(q) ||
+            (u.username || '').toLowerCase().includes(q) ||
+            (u.discord_id || '').toLowerCase().includes(q) ||
+            (u.roles || []).some(r => (r.role || '').toLowerCase().includes(q)))
+        : allUsers;
+      if (dupesOnly) shown = shown.filter(u => _isDupeUser(u, dupeGroups));
+
+      const countEl = document.getElementById('user-count');
+      if (countEl) {
+        countEl.textContent = q
+          ? `${shown.length} of ${allUsers.length} users`
+          : `${allUsers.length} users`;
+      }
+
+      if (shown.length === 0) {
         document.getElementById('users-container').innerHTML = `
           <div class="empty-state">
             <i class="fas fa-users"></i>
-            <p>No users found.</p>
+            <p>No ${q ? 'matching ' : ''}users found.</p>
           </div>
         `;
         return;
       }
-      
+
       const roleLabels = {
         'map_editor': { icon: '📝', label: 'Editor' },
         'pager_contributor': { icon: '📟', label: 'Pager' },
@@ -1866,7 +2114,7 @@
         'owner': { icon: '👑', label: 'Owner' }
       };
       
-      const rows = allUsers.map(user => {
+      const rows = shown.map(user => {
 
         // Render roles
         let rolesHtml = '';
@@ -1879,9 +2127,27 @@
           rolesHtml = '<span class="no-roles">No roles</span>';
         }
         
+        // Discord cell: OAuth-linked gets the Discord mark; a metadata-only
+        // ID (from the signup form / approval) shows gray. Accounts sharing
+        // a Discord ID get a warning badge — same person, multiple signups.
+        let discordHtml = '<span class="no-roles">—</span>';
+        if (user.discord_linked) {
+          discordHtml = `<span title="Discord account linked (OAuth)" style="color:#818cf8;"><i class="fab fa-discord"></i>${user.discord_id ? ` <span class="discord-id">${escapeHtml(user.discord_id)}</span>` : ' Linked'}</span>`;
+        } else if (user.discord_id) {
+          discordHtml = `<span class="discord-id" title="Discord ID from signup form (account not OAuth-linked)">${escapeHtml(user.discord_id)}</span>`;
+        }
+        if (_isDupeUser(user, dupeGroups)) {
+          const n = dupeGroups.get((user.discord_id || '').trim().toLowerCase());
+          discordHtml += ` <span class="status-badge pending" title="${n} accounts share this Discord ID — likely the same person signed up more than once">shared ×${n}</span>`;
+        }
+
         return `
           <tr>
+            <td>${user.username
+              ? `<span style="font-weight: 600;">${escapeHtml(user.username)}</span>`
+              : '<span class="no-roles">—</span>'}</td>
             <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(user.email)}</td>
+            <td>${discordHtml}</td>
             <td>${rolesHtml}</td>
             <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
             <td><span class="timestamp">${fmtDate(user.created_at)}</span></td>
@@ -1898,7 +2164,9 @@
         <table class="requests-table">
           <thead>
             <tr>
+              <th>Username</th>
               <th>Email</th>
+              <th>Discord</th>
               <th>Roles</th>
               <th>Last Login</th>
               <th>Created</th>
@@ -1917,8 +2185,9 @@
       if (!user) return;
       
       currentEditUserId = userId;
-      
-      document.getElementById('edit-user-email').textContent = user.email;
+
+      document.getElementById('edit-user-email').textContent =
+        user.username ? `${user.username} (${user.email})` : user.email;
       document.getElementById('edit-user-id').textContent = userId;
       
       // Set checkbox states based on current roles
@@ -1929,7 +2198,14 @@
       document.getElementById('edit-role-team-member').checked = userRoles.includes('team_member');
       document.getElementById('edit-role-dev').checked = userRoles.includes('dev');
       document.getElementById('edit-role-owner').checked = userRoles.includes('owner');
-      
+
+      // Team members can only manage the feature roles — hide the
+      // privileged section for them (the checkboxes keep the user's
+      // current values, so saving passes the privileged set through
+      // unchanged; the backend enforces this too).
+      document.getElementById('edit-privileged-roles-section').style.display =
+        userPermissions.can_assign_privileged_roles ? 'block' : 'none';
+
       document.getElementById('edit-roles-modal').style.display = 'flex';
     }
     
@@ -1965,12 +2241,13 @@
         }
         
         closeEditRolesModal();
-        
+        showToast('Roles updated.');
+
         // Reload users
         await loadUsers();
-        
+
       } catch (error) {
-        alert('Error: ' + error.message);
+        showToast(`Failed to update roles: ${error.message}`, 'error');
       }
     }
     
@@ -1990,21 +2267,42 @@
     
     function renderRequests() {
       let filtered = allRequests;
-      
+
       if (currentFilter !== 'all') {
         filtered = allRequests.filter(r => r.status === currentFilter);
       }
-      
+
+      const q = (document.getElementById('request-search')?.value || '').trim().toLowerCase();
+      if (q) {
+        filtered = filtered.filter(r =>
+          (r.email || '').toLowerCase().includes(q) ||
+          (r.discord_id || '').toLowerCase().includes(q) ||
+          (r.region || '').toLowerCase().includes(q) ||
+          (r.request_type || []).some(t => t.toLowerCase().includes(q))
+        );
+      }
+
       if (filtered.length === 0) {
         document.getElementById('requests-container').innerHTML = `
           <div class="empty-state">
             <i class="fas fa-inbox"></i>
-            <p>No ${currentFilter === 'all' ? '' : currentFilter + ' '}requests found.</p>
+            <p>No ${q ? 'matching ' : ''}${currentFilter === 'all' ? '' : currentFilter + ' '}requests found.</p>
           </div>
         `;
         return;
       }
       
+      // Repeat applicants: tally every request (any status) by email and
+      // by Discord ID so a resubmission is visible at a glance.
+      const emailCounts = new Map();
+      const discordCounts = new Map();
+      for (const r of allRequests) {
+        const e = (r.email || '').trim().toLowerCase();
+        const d = (r.discord_id || '').trim().toLowerCase();
+        if (e) emailCounts.set(e, (emailCounts.get(e) || 0) + 1);
+        if (d) discordCounts.set(d, (discordCounts.get(d) || 0) + 1);
+      }
+
       const rows = filtered.map(req => {
         // Format request types
         const typeLabels = {
@@ -2055,12 +2353,19 @@
           `;
         }
         
+        const emailN = emailCounts.get((req.email || '').trim().toLowerCase()) || 0;
+        const discordN = discordCounts.get((req.discord_id || '').trim().toLowerCase()) || 0;
+        const emailChip = emailN > 1
+          ? ` <span class="status-badge pending" title="This email appears in ${emailN} requests">×${emailN}</span>` : '';
+        const discordChip = discordN > 1
+          ? ` <span class="status-badge pending" title="This Discord ID appears in ${discordN} requests">×${discordN}</span>` : '';
+
         return `
           <tr>
             <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span></td>
             <td>${typesHtml}</td>
-            <td>${escapeHtml(req.email)}</td>
-            <td><span class="discord-id">${escapeHtml(req.discord_id)}</span></td>
+            <td>${escapeHtml(req.email)}${emailChip}</td>
+            <td><span class="discord-id">${escapeHtml(req.discord_id)}</span>${discordChip}</td>
             <td>${regionHtml}</td>
             <td><span class="timestamp">${fmtDate(req.created_at)}</span></td>
             <td>${actionsHtml}</td>
@@ -2091,14 +2396,9 @@
     let pendingApprovalId = null;
     
     function approveRequest(requestId) {
-      console.log('approveRequest called with ID:', requestId);
       const req = allRequests.find(r => r.id === requestId);
-      if (!req) {
-        console.error('Request not found:', requestId);
-        return;
-      }
-      console.log('Found request:', req);
-      
+      if (!req) return;
+
       pendingApprovalId = requestId;
       
       // Show applicant info
@@ -2137,11 +2437,7 @@
       // Default to create account if map editor is requested
       document.getElementById('create-account-toggle').checked = !isLinked && (req.request_type || []).includes('editor');
       
-      console.log('Showing approve-confirm-modal');
-      const modal = document.getElementById('approve-confirm-modal');
-      console.log('Modal element:', modal);
-      modal.style.display = 'flex';
-      console.log('Modal display set to flex');
+      document.getElementById('approve-confirm-modal').style.display = 'flex';
     }
     
     function closeApproveConfirmModal() {
@@ -2164,9 +2460,9 @@
       if (document.getElementById('role-dev').checked) roles.push('dev');
       
       const createAccount = document.getElementById('create-account-toggle').checked;
-      
+
       if (roles.length === 0) {
-        alert('Please select at least one role.');
+        showToast('Select at least one role before approving.', 'warn');
         return;
       }
       
@@ -2250,22 +2546,39 @@
         }
         
         document.getElementById('approve-modal').style.display = 'flex';
-        
+
         // Refresh list
         await loadRequests();
-        
+
       } catch (error) {
-        alert('Error: ' + error.message);
+        showToast(`Approval failed: ${error.message}`, 'error');
       }
     }
-    
-    async function rejectRequest(requestId) {
-      const reason = prompt('Enter rejection reason (optional):');
-      
-      if (reason === null) {
-        return; // Cancelled
-      }
-      
+
+    // Reject flow — in-page modal instead of the browser prompt().
+    let pendingRejectId = null;
+
+    function rejectRequest(requestId) {
+      const req = allRequests.find(r => r.id === requestId);
+      if (!req) return;
+      pendingRejectId = requestId;
+      document.getElementById('reject-email').textContent = req.email;
+      document.getElementById('reject-reason').value = '';
+      document.getElementById('reject-modal').style.display = 'flex';
+      document.getElementById('reject-reason').focus();
+    }
+
+    function closeRejectModal() {
+      document.getElementById('reject-modal').style.display = 'none';
+      pendingRejectId = null;
+    }
+
+    async function confirmReject() {
+      if (!pendingRejectId) return;
+      const requestId = pendingRejectId;
+      const reason = document.getElementById('reject-reason').value.trim();
+      closeRejectModal();
+
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}/reject`, {
           method: 'POST',
@@ -2275,17 +2588,17 @@
           },
           body: JSON.stringify({ reason })
         });
-        
+
         if (!response.ok) {
           const error = await response.json();
           throw new Error(error.error || 'Failed to reject request');
         }
-        
-        // Refresh list
+
+        showToast('Request rejected.');
         await loadRequests();
-        
+
       } catch (error) {
-        alert('Error: ' + error.message);
+        showToast(`Reject failed: ${error.message}`, 'error');
       }
     }
     
@@ -2518,6 +2831,12 @@
       }
     });
 
+    document.getElementById('reject-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('reject-modal')) {
+        closeRejectModal();
+      }
+    });
+
     // Delegated handler for per-user "edit roles" buttons (id passed via data attr).
     document.getElementById('users-container').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-user-id]');
@@ -2531,6 +2850,7 @@
         closeApproveConfirmModal();
         closeDetailsModal();
         closeEditRolesModal();
+        closeRejectModal();
       }
     });
     

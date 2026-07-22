@@ -42,6 +42,12 @@ npm install --no-audit --no-fund
 echo "[deploy] npm run build…"
 npm run build
 
+# Apply any pending DB migrations BEFORE the restart — new code often
+# depends on new columns (e.g. incidents.units), and the migration
+# runner is idempotent so this is a no-op when everything is applied.
+echo "[deploy] npm run migrate…"
+npm run migrate
+
 echo "[deploy] pm2 restart api-node…"
 # Try `api-node` by name first; if that fails, try id 6 (current
 # process id on the host as of writing). Either resolves to the same
