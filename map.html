@@ -12661,18 +12661,27 @@ function initPagerHoursFromStorage() {
         }
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
+          let _vdapPlaced = false;
           if (shapePts && v.vdap != null && shapePts.length >= 2) {
             // Authoritative placement: put the vehicle at the feed's exact
             // distance along its own shape. No lat/lon snap, so it can't
             // land on a parallel track; vdap only advances along the trip,
             // so there's no wrong-limb flip and no ratchet is needed.
             const cum = _transportShapeCum(v.shapeId, shapePts);
-            const at = _transportPointAtDist(shapePts, cum, v.vdap);
-            dispLat = at.lat;
-            dispLon = at.lon;
-            prog = { shapeId: v.shapeId, p: at.p, lat: dispLat, lon: dispLon };
-            if (existing) existing.backSince = null;
-          } else if (shapePts) {
+            const total = cum[cum.length - 1];
+            // Guard garbage vdap — some regional services report absurd
+            // values (millions of km). If it's beyond the shape, ignore it
+            // and fall back to the lat/lon snap below.
+            if (v.vdap >= 0 && v.vdap <= total + 50) {
+              const at = _transportPointAtDist(shapePts, cum, v.vdap);
+              dispLat = at.lat;
+              dispLon = at.lon;
+              prog = { shapeId: v.shapeId, p: at.p, lat: dispLat, lon: dispLon };
+              if (existing) existing.backSince = null;
+              _vdapPlaced = true;
+            }
+          }
+          if (!_vdapPlaced && shapePts) {
             const s = snapToPolylinePts(shapePts, v.lat, v.lon);
             if (s && s.distDeg < SNAP_MAX_DEG) {
               dispLat = s.latlng[0];
@@ -12719,9 +12728,9 @@ function initPagerHoursFromStorage() {
                 existing.backSince = null;
               }
             }
-          } else if (snapFetchBudget > 0) {
+          } else if (!shapePts && snapFetchBudget > 0) {
             snapFetchBudget--;
-            fetchTransportShapePts(v.shapeId); // warms cache; snaps next tick
+            fetchTransportShapePts(v.shapeId); // warms cache; places next tick
           }
         }
         // Second stage: shift onto the RENDERED lane (GL px offset) —
