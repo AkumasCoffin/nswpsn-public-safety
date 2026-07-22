@@ -451,6 +451,7 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
           fetchTfnswPositions(feeds),
         ]);
         let vehicles = normalizeVehicles(raw);
+        const vehiclesBeforeJoin = vehicles.length;
         let networkCounts: Record<string, number> | undefined;
         if (tfnsw.length) {
           const joined = applyTfnswPositions(vehicles, tfnsw, bbox, MAX_VEHICLES);
@@ -459,8 +460,18 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
           for (const p of tfnsw) {
             networkCounts[p.mode] = (networkCounts[p.mode] ?? 0) + 1;
           }
-          log.debug(
-            { matched: joined.matched, added: joined.added, tfnsw: tfnsw.length },
+          // TEMP info-level so the join breakdown shows in prod logs while
+          // confirming trains match by vehicle id (byVeh) — drop back to
+          // debug once verified.
+          log.info(
+            {
+              matched: joined.matched,
+              byTrip: joined.byTrip,
+              byVeh: joined.byVeh,
+              added: joined.added,
+              anytrip: vehiclesBeforeJoin,
+              tfnsw: tfnsw.length,
+            },
             'transport: tfnsw position join',
           );
         }
