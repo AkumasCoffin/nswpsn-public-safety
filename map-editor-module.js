@@ -26,15 +26,35 @@
   let currentIsAdmin = false;
   let currentUserEmail = null;
 
-    const INCIDENT_TYPES = [
-      "Bush Fire", "Grass Fire", "Structure Fire", "MVA", "Transport",
-      "Car / Vehicle Fire", "Hazard Reduction", "Pile Burn", "Search / Rescue",
-      "Assist Other Agency", "Animal Rescue", "Building Fire", "Rescue", "Hazmat",
-      "Salvage", "AFA", "Cardiac Arrest", "Abdominal Pain", "Fracture",
-      "Chest Pain", "Amb Collision", "Drug Overdose", "Suicide / Self-harm",
-      "Storm Damage", "Flood Rescue", "Road Crash Rescue", "Vertical Rescue",
-      "General Land Rescue", "Assist Police", "Resupply", "Police Operation", "Other"
+    // Curated from each agency's documented taxonomies: RFS CAP-feed
+    // IncidentTypes (Bush Fire / Grass Fire / Hazard Reduction / Pile
+    // Burn / AFA...), FRNSW eAIRS classes (hazmat, rescue/USAR, special
+    // service, storm), NSW Ambulance AMPDS chief complaints (condensed
+    // to map-useful buckets), SES statutory + specialist categories,
+    // and police operations. Grouped for the picker; the flat list
+    // keeps every existing consumer working.
+    const INCIDENT_TYPE_GROUPS = [
+      { label: 'Fire', types: [
+        "Bush Fire", "Grass Fire", "Structure Fire", "Vehicle Fire",
+        "Hazard Reduction", "Pile Burn", "Fire Alarm (AFA)"
+      ] },
+      { label: 'Rescue', types: [
+        "MVA / Transport", "Road Crash Rescue", "Search & Rescue",
+        "Vertical Rescue", "Land Rescue", "Flood Rescue", "Animal Rescue"
+      ] },
+      { label: 'Medical', types: [
+        "Cardiac Arrest", "Medical Emergency", "Overdose / Poisoning",
+        "Mental Health / Self-harm"
+      ] },
+      { label: 'Hazard / Weather', types: [
+        "Hazmat", "Storm Damage", "Flood", "Tree Down / Powerlines"
+      ] },
+      { label: 'Other', types: [
+        "Police Operation", "Assist Other Agency", "Resupply",
+        "Planned Event", "Other"
+      ] }
     ];
+    const INCIDENT_TYPES = INCIDENT_TYPE_GROUPS.flatMap((g) => g.types);
     const AGENCY_COLORS = {
       'RFS': '#ff6600',
       'FRNSW': '#ef4444',
@@ -52,13 +72,372 @@
       'MEDICAL': '#3b82f6',
       'DEFAULT': '#000000'
     };
+    // --- Responding units (callsigns) -----------------------------------
+    // Editors attach unit callsigns to a call. Every saved callsign goes
+    // into a persistent dictionary (backend `callsigns` table) so anyone
+    // typing the same one later can Tab-complete it. Enter adds.
+    let currentUnits = [];
+    let _callsignDict = [];
+    // Non-user contexts (RFS incidents, pager clusters) have no Save
+    // button — their units persist immediately against a shared stub
+    // incident row (same stub mechanism the RFS log flow uses).
+    let _unitsStub = null; // { id, title, lat, lng, tag } | null
+    async function ensureStubIncident(stub) {
+      try {
+        const check = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`);
+        if (check.ok) return true;
+      } catch (e) { /* fall through to create */ }
+      const expireTime = new Date(Date.now() + 48 * 3600000);
+      const res = await apiFetch(`${PROXY_BASE}/api/incidents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: stub.id,
+          title: stub.title,
+          lat: stub.lat || 0,
+          lng: stub.lng || 0,
+          is_rfs_stub: true,
+          type: [stub.tag],
+          status: 'Monitoring',
+          description: 'Auto-created stub for ' + stub.tag + ' log.',
+          expires_at: expireTime
+        })
+      });
+      return res.ok;
+    }
+    async function persistStubUnits() {
+      if (!_unitsStub) return;
+      const stub = _unitsStub;
+      const ok = await ensureStubIncident(stub);
+      if (!ok || _unitsStub !== stub) { if (!ok) showToast('Failed to save units.', 'error'); return; }
+      const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ units: currentUnits, updated_at: new Date() })
+      });
+      if (!res.ok) showToast('Failed to save units.', 'error');
+    }
+    // In the RFS/pager read-only views the units input reads best just
+    // above the Incident Logs (under the read-only details block); user
+    // pins keep it in the form between agencies and description. Moving
+    // the same node preserves its input listeners.
+    function placeUnitsGroup(beforeLogs) {
+      const g = document.getElementById('units-group');
+      if (!g) return;
+      if (beforeLogs) {
+        const logs = document.getElementById('log-section');
+        if (logs && logs.parentNode) logs.parentNode.insertBefore(g, logs);
+      } else {
+        const desc = document.getElementById('desc-group');
+        if (desc && desc.parentNode) desc.parentNode.insertBefore(g, desc);
+      }
+      // Photos travel with the units group so the two stay together in
+      // every context (user form, RFS block, pager cluster).
+      const p = document.getElementById('photos-group');
+      if (p && g.parentNode) g.parentNode.insertBefore(p, g.nextSibling);
+    }
+    async function loadStubUnits(stub) {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`);
+        if (!res.ok) return;
+        const j = await res.json();
+        if (_unitsStub && _unitsStub.id === stub.id) {
+          currentUnits = Array.isArray(j.units) ? j.units : [];
+          renderUnitChips();
+          currentImages = Array.isArray(j.images) ? j.images : [];
+          renderPhotoTiles();
+        }
+      } catch (e) { /* stays empty */ }
+    }
+    async function loadCallsignDict() {
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/callsigns`);
+        if (res.ok) {
+          const d = await res.json();
+          _callsignDict = Array.isArray(d.callsigns) ? d.callsigns : [];
+        }
+      } catch (e) { /* completion just stays empty */ }
+    }
+    // --- Incident photos ------------------------------------------------
+    // Up to 4 images per incident, 50MB each. Uploads commit immediately
+    // against the incident row (they are NOT part of the Save payload), so
+    // RFS/pager contexts create their stub first, exactly like units do.
+    // Files are stored on the webroot and resized by Cloudflare on demand.
+    const MAX_INCIDENT_IMAGES = 4;
+    const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+    const IMAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
+    let currentImages = [];
+    let _photoBusy = false;
+
+    // Cloudflare Image Transformations URL. Falls back (via onerror on the
+    // <img>) to the original file if transformations aren't enabled.
+    function cfImg(filePath, width) {
+      return IMAGE_ORIGIN + '/cdn-cgi/image/width=' + width +
+        ',quality=78,format=auto' + filePath;
+    }
+
+    // Which incident do photos attach to? User pins use the selected id;
+    // RFS/pager views attach to their shared stub row (created on demand).
+    async function _photoTargetId() {
+      if (_unitsStub) {
+        const ok = await ensureStubIncident(_unitsStub);
+        return ok ? _unitsStub.id : null;
+      }
+      return selectedId || null;
+    }
+
+    function renderPhotoTiles() {
+      const box = document.getElementById('photo-tiles');
+      const countEl = document.getElementById('photo-count');
+      if (!box) return;
+      if (countEl) {
+        countEl.textContent = currentImages.length
+          ? '(' + currentImages.length + '/' + MAX_INCIDENT_IMAGES + ')'
+          : '';
+      }
+      box.innerHTML = '';
+
+      currentImages.forEach((img) => {
+        const tile = document.createElement('div');
+        tile.style.cssText = 'position:relative; width:64px; height:64px; border-radius:6px; overflow:hidden; border:1px solid rgba(148,163,184,0.35); background:rgba(0,0,0,0.3);';
+        const a = document.createElement('a');
+        a.href = IMAGE_ORIGIN + img.file;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.title = 'Open full size';
+        const el = document.createElement('img');
+        el.src = cfImg(img.file, 128);
+        el.alt = 'Incident photo';
+        el.loading = 'lazy';
+        el.style.cssText = 'width:100%; height:100%; object-fit:cover; display:block;';
+        el.onerror = () => { el.onerror = null; el.src = IMAGE_ORIGIN + img.file; };
+        a.appendChild(el);
+        tile.appendChild(a);
+
+        // Only the uploader (or an admin) may remove a photo.
+        const mine = !!(img.uploaded_by && img.uploaded_by === currentUserId) || currentIsAdmin;
+        if (mine) {
+          const x = document.createElement('button');
+          x.type = 'button';
+          x.textContent = '\u00d7';
+          x.title = 'Remove photo';
+          x.style.cssText = 'position:absolute; top:2px; right:2px; width:18px; height:18px; padding:0; line-height:1; border:0; border-radius:4px; background:rgba(15,23,42,0.85); color:#fca5a5; cursor:pointer; font-size:0.85rem;';
+          x.onclick = (ev) => { ev.preventDefault(); deleteIncidentPhoto(img.id); };
+          tile.appendChild(x);
+        }
+        box.appendChild(tile);
+      });
+
+      if (_photoBusy) {
+        const busy = document.createElement('div');
+        busy.style.cssText = 'width:64px; height:64px; border-radius:6px; border:1px dashed rgba(148,163,184,0.4); display:flex; align-items:center; justify-content:center; color:#94a3b8;';
+        busy.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        box.appendChild(busy);
+      } else if (currentImages.length < MAX_INCIDENT_IMAGES) {
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.title = 'Add a photo';
+        add.style.cssText = 'width:64px; height:64px; border-radius:6px; border:1px dashed rgba(148,163,184,0.4); background:rgba(255,255,255,0.03); color:#94a3b8; cursor:pointer; font-size:1.1rem;';
+        add.innerHTML = '<i class="fas fa-plus"></i>';
+        add.onclick = () => {
+          const input = document.getElementById('photo-input');
+          if (input) { input.value = ''; input.click(); }
+        };
+        box.appendChild(add);
+      }
+    }
+
+    async function uploadIncidentPhoto(file) {
+      if (!file) return;
+      if (currentImages.length >= MAX_INCIDENT_IMAGES) {
+        showToast('Up to ' + MAX_INCIDENT_IMAGES + ' photos per incident.', 'error');
+        return;
+      }
+      const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+      if (allowed.indexOf(file.type) === -1) {
+        showToast('Photos must be JPEG, PNG, WebP or GIF.', 'error');
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        showToast('That photo is over the 50MB limit.', 'error');
+        return;
+      }
+      const targetId = await _photoTargetId();
+      if (!targetId) {
+        showToast('Select or save the incident before adding photos.', 'error');
+        return;
+      }
+      _photoBusy = true;
+      renderPhotoTiles();
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${targetId}/images`, {
+          method: 'POST',
+          headers: { 'Content-Type': file.type },
+          body: file
+        });
+        if (!res.ok) {
+          let msg = 'Failed to upload photo.';
+          try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) {}
+          showToast(msg, 'error');
+          return;
+        }
+        const data = await res.json();
+        if (data && data.image) {
+          currentImages.push(data.image);
+          showToast('Photo added.', 'success');
+        }
+      } catch (e) {
+        showToast('Failed to upload photo.', 'error');
+      } finally {
+        _photoBusy = false;
+        renderPhotoTiles();
+      }
+    }
+
+    async function deleteIncidentPhoto(imageId) {
+      const ok = await askConfirm('Remove this photo? This cannot be undone.', {
+        confirmLabel: 'Remove', danger: true,
+      });
+      if (!ok) return;
+      const targetId = _unitsStub ? _unitsStub.id : selectedId;
+      if (!targetId) return;
+      try {
+        const res = await apiFetch(
+          `${PROXY_BASE}/api/incidents/${targetId}/images/${imageId}`,
+          { method: 'DELETE' }
+        );
+        if (!res.ok) {
+          let msg = 'Failed to remove photo.';
+          try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) {}
+          showToast(msg, 'error');
+          return;
+        }
+        currentImages = currentImages.filter((i) => i.id !== imageId);
+        renderPhotoTiles();
+      } catch (e) {
+        showToast('Failed to remove photo.', 'error');
+      }
+    }
+
+    function wirePhotoInput() {
+      const input = document.getElementById('photo-input');
+      if (!input || input._wired) return;
+      input._wired = true;
+      input.addEventListener('change', () => {
+        const file = input.files && input.files[0];
+        input.value = '';
+        if (file) uploadIncidentPhoto(file);
+      });
+    }
+
+    function renderUnitChips() {
+      const box = document.getElementById('unit-chips');
+      if (!box) return;
+      box.innerHTML = '';
+      currentUnits.forEach((u, i) => {
+        const chip = document.createElement('span');
+        chip.style.cssText = 'display:inline-flex; align-items:center; gap:0.35rem; background:rgba(34,197,94,0.15); border:1px solid rgba(34,197,94,0.5); color:#bbf7d0; font-size:0.72rem; font-weight:600; padding:0.2rem 0.5rem; border-radius:999px;';
+        chip.appendChild(document.createTextNode(u));
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.textContent = '×';
+        x.title = 'Remove unit';
+        x.style.cssText = 'background:none; border:0; color:#86efac; cursor:pointer; font-size:0.85rem; padding:0; line-height:1;';
+        x.onclick = () => {
+          currentUnits.splice(i, 1);
+          renderUnitChips();
+          if (_unitsStub) persistStubUnits();
+        };
+        chip.appendChild(x);
+        box.appendChild(chip);
+      });
+    }
+    function addUnitFromInput() {
+      const input = document.getElementById('unit-input');
+      if (!input) return;
+      const val = input.value.trim().toUpperCase();
+      if (!val) return;
+      if (!currentUnits.includes(val)) currentUnits.push(val);
+      if (!_callsignDict.includes(val)) _callsignDict.unshift(val);
+      input.value = '';
+      renderUnitChips();
+      if (_unitsStub) persistStubUnits();
+    }
+    function wireUnitInput() {
+      const input = document.getElementById('unit-input');
+      if (!input) return;
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addUnitFromInput();
+        } else if (e.key === 'Tab') {
+          const prefix = input.value.trim().toUpperCase();
+          if (!prefix) return; // empty input: let Tab move focus normally
+          const hit = _callsignDict.find((cs) =>
+            cs.toUpperCase().startsWith(prefix) && !currentUnits.includes(cs.toUpperCase()));
+          if (hit) { e.preventDefault(); input.value = hit; }
+        }
+      });
+    }
+
     function renderTypeCheckboxes() {
       const container = document.getElementById('type-checkboxes');
-      container.innerHTML = INCIDENT_TYPES.map(t => `
-        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.75rem; width:45%;">
-          <input type="checkbox" value="${t}"> ${t}
-        </label>
+      // Toggle pills (hidden checkbox drives the checked state so the
+      // existing `#type-checkboxes input:checked` read + selectIncident's
+      // per-value restore keep working).
+      container.innerHTML = INCIDENT_TYPE_GROUPS.map(g => `
+        <div class="type-group-label">${g.label}</div>
+        ${g.types.map(t => `
+        <label class="type-pill"><input type="checkbox" value="${t}"> ${t}</label>`).join('')}
       `).join('');
+    }
+
+    // --- Auto-remove slider -------------------------------------------
+    // Discrete stops from 20 min to 12 hours. Index-based so the thumb
+    // snaps to sensible values instead of arbitrary minute counts.
+    const EXPIRY_STOPS_MIN = [20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720];
+    const EXPIRY_DEFAULT_INDEX = 5; // 120 min = 2 hours
+    function _fmtExpiry(min) {
+      if (min < 60) return min + ' min';
+      const h = Math.floor(min / 60), m = min % 60;
+      if (!m) return h + (h === 1 ? ' hour' : ' hours');
+      return h + 'h ' + m + 'm';
+    }
+    function _expiryIndexForMinutes(min) {
+      let best = EXPIRY_DEFAULT_INDEX, bd = Infinity;
+      EXPIRY_STOPS_MIN.forEach((s, i) => {
+        const d = Math.abs(s - min);
+        if (d < bd) { bd = d; best = i; }
+      });
+      return best;
+    }
+    function updateExpiryLabel() {
+      const r = document.getElementById('edit-expiry-range');
+      const lbl = document.getElementById('edit-expiry-label');
+      if (r && lbl) {
+        lbl.textContent = _fmtExpiry(EXPIRY_STOPS_MIN[parseInt(r.value, 10) || 0]);
+        // Fill the track up to the thumb (matches the pager-hours slider).
+        const pct = (parseInt(r.value, 10) / (EXPIRY_STOPS_MIN.length - 1)) * 100;
+        r.style.setProperty('--percent', pct + '%');
+      }
+    }
+    function setExpirySlider(minutes) {
+      const r = document.getElementById('edit-expiry-range');
+      if (!r) return;
+      r.value = String(Number.isFinite(minutes) ? _expiryIndexForMinutes(minutes) : EXPIRY_DEFAULT_INDEX);
+      updateExpiryLabel();
+    }
+    function getExpiryMinutes() {
+      const r = document.getElementById('edit-expiry-range');
+      const idx = r ? parseInt(r.value, 10) : EXPIRY_DEFAULT_INDEX;
+      return EXPIRY_STOPS_MIN[idx] ?? EXPIRY_STOPS_MIN[EXPIRY_DEFAULT_INDEX];
+    }
+    // Minutes left before an incident's stored expiry, or null.
+    function _minutesUntilExpiry(expiresAt) {
+      if (!expiresAt) return null;
+      const t = new Date(expiresAt).getTime();
+      if (!Number.isFinite(t)) return null;
+      return Math.round((t - Date.now()) / 60000);
     }
     async function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
@@ -103,13 +482,22 @@
 
       selectedId = inc.id;
       currentIncident = inc;
+      // Reset the shared header (other views retitle/recolour it).
+      const userHeader = document.querySelector('#edit-header h4');
+      if (userHeader) { userHeader.textContent = 'Edit Incident'; userHeader.style.color = '#7dd3fc'; }
       document.getElementById('selection-editor').style.display = 'block';
       document.getElementById('instruction-text').style.display = 'none';
       document.getElementById('edit-id').value = inc.id;
       document.getElementById('edit-id-display').textContent = "ID: " + inc.id.split('-')[0];
       document.getElementById('edit-title').value = inc.title || '';
       document.getElementById('edit-desc').value = inc.description || '';
-      document.getElementById('edit-expiry').value = "2"; // Default to 2 hours
+      // Load the slider at the incident's remaining time (snapped to the
+      // nearest stop, clamped into the 20m-12h range); default 2h when it
+      // has no future expiry.
+      {
+        const left = _minutesUntilExpiry(inc.expires_at);
+        setExpirySlider(left != null && left > 0 ? left : EXPIRY_STOPS_MIN[EXPIRY_DEFAULT_INDEX]);
+      }
       document.getElementById('edit-status').value = inc.status || 'Going';
       document.getElementById('edit-size').value = inc.size || '';
       
@@ -127,13 +515,38 @@
       document.getElementById('save-delete-group').style.display = 'grid';
       document.getElementById('log-section').style.display = 'block';
 
-      const typeInputs = document.querySelectorAll('#type-checkboxes input');
-      typeInputs.forEach(cb => cb.checked = false);
+      // Fresh render drops any legacy-type entries appended for the
+      // previously selected pin.
+      renderTypeCheckboxes();
+      const typeBox = document.getElementById('type-checkboxes');
       const incTypes = Array.isArray(inc.type) ? inc.type : (inc.type ? [inc.type] : []);
       incTypes.forEach(t => {
-        const match = Array.from(typeInputs).find(i => i.value === t);
-        if (match) match.checked = true;
+        const match = Array.from(typeBox.querySelectorAll('input')).find(i => i.value === t);
+        if (match) { match.checked = true; return; }
+        // Type saved before the taxonomy cleanup — keep it selectable
+        // so saving doesn't silently drop it.
+        const label = document.createElement('label');
+        label.style.cssText = 'display:flex; align-items:center; gap:0.4rem; font-size:0.75rem; width:45%; color:#94a3b8;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = t;
+        cb.checked = true;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(' ' + t));
+        typeBox.appendChild(label);
       });
+
+      _unitsStub = null; // user pins persist units via Save
+      currentUnits = Array.isArray(inc.units) ? inc.units.slice() : [];
+      renderUnitChips();
+      // Photos are already persisted server-side; just mirror the row.
+      currentImages = Array.isArray(inc.images) ? inc.images.slice() : [];
+      renderPhotoTiles();
+      placeUnitsGroup(false); // back to its form position
+      const unitsGroup = document.getElementById('units-group');
+      if (unitsGroup) unitsGroup.style.display = 'block';
+      const photosGroup = document.getElementById('photos-group');
+      if (photosGroup) photosGroup.style.display = 'block';
 
       const agencyInputs = document.querySelectorAll('#agency-checkboxes input');
       agencyInputs.forEach(cb => cb.checked = false);
@@ -511,6 +924,26 @@
       const _ab1 = document.getElementById('btn-archive');
       if (_ab1) _ab1.style.display = 'none';
 
+      // Units ARE editable on RFS incidents — they persist immediately
+      // against the shared RFS stub row (no Save button in this view).
+      {
+        const pt = (data.point || '').split(' ').map(Number);
+        _unitsStub = {
+          id: data.id,
+          title: 'RFS Incident Log',
+          lat: Number.isFinite(pt[0]) ? pt[0] : 0,
+          lng: Number.isFinite(pt[1]) ? pt[1] : 0,
+          tag: 'RFS'
+        };
+        currentUnits = [];
+        renderUnitChips();
+        currentImages = [];
+        renderPhotoTiles();
+        document.getElementById('units-group').style.display = 'block';
+        document.getElementById('photos-group').style.display = 'block';
+        loadStubUnits(_unitsStub);
+      }
+
       // Clear any ownership-aware panels left over from a user-pin selection.
       const _on = document.getElementById('ownership-notice');
       if (_on) { _on.style.display = 'none'; _on.innerHTML = ''; }
@@ -524,19 +957,24 @@
       document.getElementById('selection-editor').style.display = 'block';
       document.getElementById('instruction-text').style.display = 'none';
       document.getElementById('edit-id').value = data.id;
-      document.getElementById('edit-id-display').textContent = "RFS Log ID: " + data.id.slice(0, 8); 
-      
+      document.getElementById('edit-id-display').textContent = "RFS Log ID: " + data.id.slice(0, 8);
+      // Header is shared across the user/RFS/pager views — always set
+      // it, or the previous view's title (e.g. "Pager hits at this
+      // location") leaks into this one.
+      const rfsHeader = document.querySelector('#edit-header h4');
+      if (rfsHeader) { rfsHeader.textContent = 'RFS Incident'; rfsHeader.style.color = '#ef4444'; }
+
       const customRFSBlock = document.createElement('div');
       customRFSBlock.id = 'rfs-read-only-data';
       customRFSBlock.dataset.point = data.point;
-      
+
       customRFSBlock.innerHTML = `
-        <div style="background:rgba(249, 115, 22, 0.1); border:1px solid #f97316; padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
-          <h5 style="margin-top:0.3rem; margin-bottom:0.5rem; color:#f97316;">RFS Incident Details (Read Only)</h5>
+        <div style="background:rgba(148,163,184,0.07); border:1px solid rgba(148,163,184,0.25); padding:0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.85rem;">
+          <h5 style="margin-top:0.3rem; margin-bottom:0.5rem; color:#ef4444;">RFS Incident Details (Read Only)</h5>
           <strong>Title:</strong> ${escapeHtml(data.title || 'N/A')}<br>
           <strong>Status:</strong> ${escapeHtml(data.STATUS || 'Unknown')}<br>
           <strong>Location:</strong> ${escapeHtml(data.LOCATION || 'N/A')}<br>
-          <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block;">View on Fires Near Me →</a>
+          <a href="${data.link}" target="_blank" style="font-size:0.8rem; margin-top:0.5rem; display:inline-block; color:#7dd3fc;">View on Fires Near Me →</a>
         </div>
       `;
       const editorPanel = document.getElementById('selection-editor');
@@ -544,10 +982,12 @@
       if (existingRFSBlock) existingRFSBlock.remove();
       
       const logSection = document.getElementById('log-section');
-      editorPanel.insertBefore(customRFSBlock, logSection); 
+      editorPanel.insertBefore(customRFSBlock, logSection);
+      // Units sit between the read-only details and the logs.
+      placeUnitsGroup(true);
 
       logSection.style.display = 'block';
-      document.getElementById('new-update-msg').value = ''; 
+      document.getElementById('new-update-msg').value = '';
 
       loadIncidentLogs(data.id);
       const [lat, lng] = data.point.split(' ').map(Number);
@@ -600,9 +1040,17 @@
       document.getElementById('expiry-group').style.display = 'block';
       document.getElementById('type-group').style.display = 'block';
       document.getElementById('agency-group').style.display = 'block';
+      document.getElementById('units-group').style.display = 'block';
+      document.getElementById('photos-group').style.display = 'block';
       document.getElementById('desc-group').style.display = 'block';
       document.getElementById('save-delete-group').style.display = 'grid';
       document.getElementById('log-section').style.display = 'block';
+      currentUnits = [];
+      _unitsStub = null;
+      renderUnitChips();
+      currentImages = [];
+      renderPhotoTiles();
+      placeUnitsGroup(false);
 
       // Clear ownership-aware injected panels so state never leaks between pins.
       const ownershipNotice = document.getElementById('ownership-notice');
@@ -640,15 +1088,21 @@
         return;
       }
 
-      container.innerHTML = data.map(log => `
-        <div id="log-item-${log.id}" style="border-bottom:1px solid rgba(255,255,255,0.1); padding:0.6rem 0.4rem;" data-original-message="${escapeHtml(log.message).replace(/"/g, '&quot;')}">
-          <div style="font-size:0.7rem; color:var(--text-soft); display:flex; justify-content:space-between; margin-bottom:0.3rem;">
-            <span>${new Date(log.created_at).toLocaleString()}</span>
+      container.innerHTML = data.map(log => {
+        // Edit/Delete are AUTHOR-ONLY (admins get a moderation
+        // override) — matching the backend gate, so no dead buttons.
+        const mine = !!(log.created_by && log.created_by === currentUserId) || currentIsAdmin;
+        const actions = mine ? `
             <div style="display:flex; gap:0.5rem;">
               <span style="cursor:pointer; color:var(--accent);" onclick="startEditLog('${log.id}')">Edit</span>
               <span style="cursor:pointer; color:#8b5cf6;" onclick="checkGrammar('${log.id}')" title="Check grammar">✓ Grammar</span>
               <span style="cursor:pointer; color:#ef4444;" onclick="deleteLog('${log.id}')">Delete</span>
-            </div>
+            </div>` : '';
+        return `
+        <div id="log-item-${log.id}" style="border-bottom:1px solid rgba(255,255,255,0.1); padding:0.6rem 0.4rem;" data-original-message="${escapeHtml(log.message).replace(/"/g, '&quot;')}">
+          <div style="font-size:0.7rem; color:var(--text-soft); display:flex; justify-content:space-between; margin-bottom:0.3rem;">
+            <span>${new Date(log.created_at).toLocaleString()}${log.created_by_name ? ` · <strong style="color:#cbd5e1;">${escapeHtml(log.created_by_name)}</strong>` : ''}</span>
+            ${actions}
           </div>
           <div class="log-content markdown-body" id="log-text-${log.id}" style="font-size:0.85rem; color:#e2e8f0; line-height:1.4;">
             ${DOMPurify.sanitize(marked.parse(log.message))}
@@ -661,7 +1115,7 @@
           </div>
           <div id="log-grammar-results-${log.id}" style="display:none; margin-top:0.5rem;"></div>
         </div>
-      `).join('');
+      `; }).join('');
     }
 
     function startEditLog(id) {
@@ -703,10 +1157,13 @@
     }
 
     async function deleteLog(id) {
-      if (!confirm("Delete this log entry?")) return;
+      const ok = await askConfirm(
+        'Delete this log entry? This cannot be undone.',
+        { confirmLabel: 'Delete', danger: true },
+      );
+      if (!ok) return;
       const res = await apiFetch(`${PROXY_BASE}/api/incidents/updates/${id}`, { method: 'DELETE' });
-      const error = res.ok ? null : { message: 'Failed to delete log' };
-      if (error) alert(error.message);
+      if (!res.ok) showToast('Failed to delete log entry.', 'error');
       else loadIncidentLogs(selectedId);
     }
 
@@ -1390,49 +1847,13 @@
       const msg = document.getElementById('new-update-msg').value;
       if (!msg) return;
 
-      let incidentType = "User";
-      let lat = null, lng = null;
-
-      const RFS_BLOCK = document.getElementById('rfs-read-only-data');
-      if (RFS_BLOCK) {
-        incidentType = "RFS";
-        const title = "RFS Incident Log"; 
-        const pointStr = RFS_BLOCK.dataset.point; 
-        [lat, lng] = pointStr ? pointStr.split(' ').map(Number) : [null, null];
-
-        const checkRes = await apiFetch(`${PROXY_BASE}/api/incidents`);
-        const allInc = checkRes.ok ? await checkRes.json() : [];
-        const existing = allInc.filter(i => i.id === selectedId);
-        const selectError = checkRes.ok ? null : { message: 'Failed to check stub' };
-        
-        if (selectError) {
-          alert(`Error checking stub: ${selectError.message}`);
+      // RFS incidents and pager clusters store logs against a shared
+      // stub row — make sure it exists before the first entry.
+      if (_unitsStub && _unitsStub.id === selectedId) {
+        const ok = await ensureStubIncident(_unitsStub);
+        if (!ok) {
+          alert('Error creating stub for log.');
           return;
-        }
-
-        if (!existing || existing.length === 0) {
-          const expireTime = new Date(Date.now() + 48 * 3600000); 
-          const stubRes = await apiFetch(`${PROXY_BASE}/api/incidents`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: selectedId,
-              title: title,
-              lat: lat || 0,
-              lng: lng || 0,
-              is_rfs_stub: true,
-              type: ['RFS'],
-              status: 'Monitoring',
-              description: 'Auto-created stub for RFS fire log.',
-              expires_at: expireTime
-            })
-          });
-          const insertError = stubRes.ok ? null : { message: 'Failed to create stub' };
-          
-          if (insertError) {
-            alert(`Error creating stub for RFS log: ${insertError.message}`); 
-            return;
-          }
         }
       }
 
@@ -1548,33 +1969,47 @@
       const title = await askIncidentTitle();
       if (!title) { if (addMode) toggleAddMode(); return; }
 
-      const location = await reverseGeocode(lat, lng);
-      const expireTime = new Date(Date.now() + 2 * 3600000); // Default: 2 hours
-      const res = await apiFetch(`${PROXY_BASE}/api/incidents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title, lat, lng, location: location || '', type: [], description: '',
-          status: 'Going', size: '-', responding_agencies: [], expires_at: expireTime
-        })
+      // Temp pin the moment the title is confirmed — the real pin only
+      // renders after create + reload, and until then the chosen spot
+      // was invisible while the editor filled in details.
+      const tempIcon = L.divIcon({
+        className: 'custom-pin',
+        html: '<div style="width:22px;height:22px;border-radius:50%;border:2px dashed #f59e0b;background:rgba(245,158,11,0.25);box-shadow:0 0 12px rgba(245,158,11,0.8);animation:pulse 1.4s infinite;"></div>',
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
       });
-      // Always reset add-mode so the next map click doesn't create another.
-      if (addMode) toggleAddMode();
-      if (!res.ok) {
-        showToast('Failed to create incident.', 'error');
-        return;
+      const tempMarker = L.marker([lat, lng], { icon: tempIcon, zIndexOffset: 1000, interactive: false }).addTo(map);
+      try {
+        const location = await reverseGeocode(lat, lng);
+        const expireTime = new Date(Date.now() + 2 * 3600000); // Default: 2 hours
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title, lat, lng, location: location || '', type: [], description: '',
+            status: 'Going', size: '-', responding_agencies: [], expires_at: expireTime
+          })
+        });
+        // Always reset add-mode so the next map click doesn't create another.
+        if (addMode) toggleAddMode();
+        if (!res.ok) {
+          showToast('Failed to create incident.', 'error');
+          return;
+        }
+        let newId = null;
+        try { newId = (await res.json())?.id ?? null; } catch (e) { /* ignore */ }
+        await reloadIncidents();
+        // Open the freshly-created pin so the user can fill in details + save.
+        if (newId) {
+          try {
+            const one = await apiFetch(`${PROXY_BASE}/api/incidents/${newId}`);
+            if (one.ok) selectIncident(await one.json());
+          } catch (e) { /* pin still created; user can click it */ }
+        }
+        showToast('Incident created.', 'success');
+      } finally {
+        map.removeLayer(tempMarker);
       }
-      let newId = null;
-      try { newId = (await res.json())?.id ?? null; } catch (e) { /* ignore */ }
-      await reloadIncidents();
-      // Open the freshly-created pin so the user can fill in details + save.
-      if (newId) {
-        try {
-          const one = await apiFetch(`${PROXY_BASE}/api/incidents/${newId}`);
-          if (one.ok) selectIncident(await one.json());
-        } catch (e) { /* pin still created; user can click it */ }
-      }
-      showToast('Incident created.', 'success');
     }
 
     async function saveIncident() {
@@ -1585,19 +2020,22 @@
       const types = Array
         .from(document.querySelectorAll('#type-checkboxes input:checked'))
         .map(cb => cb.value);
-      const updates = { 
-        title: document.getElementById('edit-title').value, 
-        type: types, 
+      // A typed-but-not-yet-added callsign still counts — pressing Save
+      // shouldn't silently drop it.
+      addUnitFromInput();
+      const updates = {
+        title: document.getElementById('edit-title').value,
+        type: types,
         description: document.getElementById('edit-desc').value,
         status: document.getElementById('edit-status').value,
         size: document.getElementById('edit-size').value,
-        responding_agencies: agencies, 
-        updated_at: new Date() 
+        responding_agencies: agencies,
+        units: currentUnits,
+        updated_at: new Date()
       };
-      const expiryOption = parseInt(document.getElementById('edit-expiry').value);
-      if (expiryOption > 0) {
-        updates.expires_at = new Date(Date.now() + expiryOption * 3600000);
-      }
+      // The slider always carries a value, so the incident's auto-remove
+      // time is set from it on every save (20 min – 12 h).
+      updates.expires_at = new Date(Date.now() + getExpiryMinutes() * 60000);
       const res = await apiFetch(`${PROXY_BASE}/api/incidents/${selectedId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1651,7 +2089,7 @@
 
     async function deleteIncident() {
       if (!selectedId) return;
-      const ok = await askConfirm('Delete this pin? This removes the incident and its logs.', {
+      const ok = await askConfirm('Delete this pin? It comes off the map now; its data stays in the logs until the data retention window expires, then is permanently deleted.', {
         confirmLabel: 'Delete', danger: true,
       });
       if (!ok) return;
@@ -1675,7 +2113,7 @@
         instruction.style.display = 'none';
 
         const header = document.querySelector('#edit-header h4');
-        if (header) header.textContent = 'Pager hits at this location';
+        if (header) { header.textContent = 'Pager hits at this location'; header.style.color = '#22c55e'; }
 
         const idDisplay = document.getElementById('edit-id-display');
         if (idDisplay) idDisplay.textContent = '';
@@ -1716,6 +2154,39 @@
 
         const logSection = document.getElementById('log-section');
         editorPanel.insertBefore(pagerBlock, logSection);
+
+        // Units are editable on pager clusters too, persisted against a
+        // deterministic stub row keyed on the cluster's incident id (or
+        // its coordinates when it has none).
+        const stubKey = 'pager:' + (details.incidentId ||
+          (details.incidentIds && details.incidentIds[0]) ||
+          (clusterEntry.lat + ',' + clusterEntry.lon));
+        if (typeof generateRfsId === 'function') {
+          _unitsStub = {
+            id: generateRfsId(stubKey),
+            title: 'Pager Incident Log',
+            lat: clusterEntry.lat || 0,
+            lng: clusterEntry.lon || 0,
+            tag: 'Pager'
+          };
+          currentUnits = [];
+          renderUnitChips();
+          currentImages = [];
+          renderPhotoTiles();
+          document.getElementById('units-group').style.display = 'block';
+          document.getElementById('photos-group').style.display = 'block';
+          placeUnitsGroup(true); // under the pager details block
+          loadStubUnits(_unitsStub);
+          // Incident logs work on pager clusters too, against the same
+          // stub row (created on the first entry).
+          selectedId = _unitsStub.id;
+          document.getElementById('log-section').style.display = 'block';
+          document.getElementById('new-update-msg').value = '';
+          loadIncidentLogs(_unitsStub.id);
+        } else {
+          _unitsStub = null;
+          document.getElementById('units-group').style.display = 'none';
+        }
 
         if (clusterEntry.lat != null && clusterEntry.lon != null && map) {
           map.panTo([clusterEntry.lat, clusterEntry.lon]);
@@ -1782,11 +2253,13 @@
 
 
   // --- Panel visibility -------------------------------------------------
-  // Desktop: the panel floats top-right whenever the User layer is on and
-  // the AIS vessel list is closed. Mobile (<=900px): .map-sidebar becomes a
-  // 60% bottom sheet, so it stays COLLAPSED behind a floating button and
-  // only opens when the user taps a pin or the button; a close X collapses
-  // it again.
+  // Desktop: the panel floats top-right whenever the User layer is on.
+  // The vessels/aircraft list panel no longer competes for that corner —
+  // map.html docks it INSIDE this panel while Map Controls is open (see
+  // syncUnifiedListPanelDock), so the old mutual-exclusion with the AIS
+  // list is gone. Mobile (<=900px): .map-sidebar becomes a 60% bottom
+  // sheet, so it stays COLLAPSED behind a floating button and only opens
+  // when the user taps a pin or the button; a close X collapses it again.
   let mobileSheetOpen = false;
 
   function isMobileLayout() {
@@ -1796,12 +2269,10 @@
   function editorPanelVisibility() {
     const editorPanel = document.getElementById('editor-panel');
     if (!editorPanel) return;
-    const aisPanel = document.getElementById('ais-list-panel');
     const userBtn = document.getElementById('btn-user');
-    const aisOpen = !!(aisPanel && aisPanel.classList.contains('open'));
     const userOn = !userBtn || userBtn.classList.contains('active');
     const mobile = isMobileLayout();
-    const open = userOn && !aisOpen && (!mobile || mobileSheetOpen);
+    const open = userOn && (!mobile || mobileSheetOpen);
     editorPanel.classList.toggle('open', open);
 
     const fab = document.getElementById('editor-mobile-fab');
@@ -1821,9 +2292,9 @@
   }
 
   // --- DOM injection (CSS + floating panel), done only on activation ---
-  const EDITOR_CSS = '    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      overflow-y: auto;\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: detach the incident/RFS panel (the RIGHT sidebar) into a\n       floating card over the map — rounded, detached from the edges, all-\n       round border + shadow — matching the AIS list-panel treatment. The\n       base .map-sidebar (styles.css) docks it flush to right:0/top:0/height:\n       100%; we only override the geometry here. The slide-in transform\n       (translateX) still hides/shows it. Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px; /* below the layer bar AND the top-right zoom buttons */\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(148, 163, 184, 0.28);\n        border-radius: 14px;\n        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }';
+  const EDITOR_CSS = '    /* --- Editor sidebar custom scrollbar --- */\n    #editor-panel {\n      overflow-y: auto;\n      scrollbar-width: thin;\n      scrollbar-color: transparent transparent; /* Firefox default: hidden */\n    }\n    /* Desktop: Map Controls is the top SECTION of the single #right-dock\n       card (map.html owns the card chrome) — flat background, divider\n       below separating it from the vessels/aircraft section. A\n       floating-card fallback covers the rare case the dock is missing.\n       Mobile keeps its bottom-sheet. */\n    @media (min-width: 901px) {\n      #right-dock #editor-panel.map-sidebar {\n        position: static;\n        transform: none;\n        visibility: visible;\n        width: 100%;\n        height: auto;\n        max-height: none;\n        flex: 0 1 auto;\n        min-height: 0;\n        padding: 12px;\n        order: 0;\n        background: transparent;\n        border: 0;\n        border-bottom: 1px solid rgba(148, 163, 184, 0.18);\n        border-radius: 0;\n        box-shadow: none;\n        backdrop-filter: none;\n      }\n      #right-dock #editor-panel.map-sidebar:not(.open) { display: none; }\n      .map-container > #editor-panel.map-sidebar {\n        right: 14px;\n        top: 96px;\n        height: auto;\n        max-height: calc(100% - 110px);\n        border: 1px solid rgba(125, 211, 252, 0.35);\n        border-radius: 10px;\n        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);\n      }\n      #editor-panel h3 {\n        margin: 0 0 10px;\n        font-size: 13px;\n        font-weight: 600;\n        color: #7dd3fc;\n        letter-spacing: 0.02em;\n      }\n    }\n    #editor-panel::-webkit-scrollbar {\n      width: 10px;\n    }\n    #editor-panel::-webkit-scrollbar-track {\n      background: transparent;\n    }\n    #editor-panel::-webkit-scrollbar-thumb {\n      background: transparent;\n      border-radius: 999px;\n      border: 2px solid transparent;\n      box-shadow: none;\n      transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;\n    }\n    /* Show + animate thumb while hovering or actively scrolling */\n    #editor-panel:hover,\n    #editor-panel.scrolling {\n      scrollbar-color: #4ade80 rgba(15,23,42,0.9); /* Firefox thumb + track */\n    }\n    #editor-panel:hover::-webkit-scrollbar-thumb,\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      background: linear-gradient(180deg, #22c55e, #0ea5e9);\n      border-color: rgba(15,23,42,0.9);\n      box-shadow: 0 0 8px rgba(34,197,94,0.8);\n    }\n    /* Extra glow animation while scrolling */\n    #editor-panel.scrolling::-webkit-scrollbar-thumb {\n      animation: sidebarScrollGlow 1.2s infinite alternate;\n    }\n    @keyframes sidebarScrollGlow {\n      0% { box-shadow: 0 0 4px rgba(34,197,94,0.4); }\n      100% { box-shadow: 0 0 14px rgba(34,197,94,1); }\n    }\n    \n    .pill-checkbox {\n      display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;\n      border-radius: 20px; border: 1px solid rgba(255,255,255,0.2);\n      background: rgba(255,255,255,0.05); color: #cbd5e1; font-size: 0.75rem;\n      cursor: pointer; user-select: none; transition: all 0.2s;\n    }\n    .pill-checkbox:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.4); color: #fff; }\n    .pill-checkbox input { accent-color: var(--accent); }\n    .pill-checkbox:has(input:checked) { background: rgba(249, 115, 22, 0.2); border-color: #f97316; color: #fdba74; }\n\n    /* Incident Type(s) toggle pills + group headings */\n    .type-group-label {\n      width: 100%; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em;\n      text-transform: uppercase; color: var(--text-soft); margin: 0.45rem 0 0.15rem;\n    }\n    .type-group-label:first-child { margin-top: 0; }\n    .type-pill {\n      display: inline-flex; align-items: center; padding: 5px 11px; border-radius: 999px;\n      border: 1px solid rgba(148,163,184,0.3); background: rgba(255,255,255,0.04);\n      color: #cbd5e1; font-size: 0.72rem; font-weight: 500; cursor: pointer;\n      user-select: none; transition: background 0.15s, border-color 0.15s, color 0.15s;\n    }\n    .type-pill:hover { background: rgba(255,255,255,0.09); border-color: rgba(148,163,184,0.5); color: #fff; }\n    .type-pill input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }\n    .type-pill:has(input:checked) {\n      background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.6); color: #7dd3fc;\n    }\n    .type-pill:focus-within { outline: 2px solid rgba(56,189,248,0.5); outline-offset: 1px; }\n    \n    /* Auto-remove slider */\n    .expiry-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }\n    .expiry-value {\n      font-size: 0.8rem; font-weight: 700; color: #7dd3fc;\n      background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.35);\n      padding: 0.1rem 0.55rem; border-radius: 999px;\n    }\n    .expiry-range {\n      -webkit-appearance: none; appearance: none; width: 100%; height: 6px;\n      border-radius: 4px; outline: none; margin: 0.1rem 0;\n      background: rgba(255,255,255,0.15);\n    }\n    .expiry-range::-webkit-slider-runnable-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-moz-range-track {\n      height: 6px; border-radius: 4px;\n      background: linear-gradient(90deg, #38bdf8 var(--percent, 50%), rgba(255,255,255,0.15) var(--percent, 50%));\n    }\n    .expiry-range::-webkit-slider-thumb {\n      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;\n      background: #38bdf8; border: 2px solid #e0f2fe; cursor: pointer; margin-top: -5px;\n      box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-range::-moz-range-thumb {\n      width: 16px; height: 16px; border-radius: 50%; background: #38bdf8;\n      border: 2px solid #e0f2fe; cursor: pointer; box-shadow: 0 0 8px rgba(56,189,248,0.7);\n    }\n    .expiry-scale {\n      display: flex; justify-content: space-between; margin-top: 0.25rem;\n      font-size: 0.62rem; color: var(--text-soft);\n    }\n\n    /* Pin-move grab overlay: sized like the user pin icon so the ring\n       hugs the pin exactly. Hidden until hovered/dragged (the suggest\n       flow adds .always since its UI copy references the handle). */\n    .editor-move-ghost { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: move; }\n    .editor-move-ghost .ghost-ring { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--ghost-color, #a855f7); box-shadow: 0 0 10px var(--ghost-glow, rgba(168, 85, 247, 0.8)); opacity: 0; transition: opacity 0.15s; }\n    .editor-move-ghost.always .ghost-ring,\n    .editor-move-ghost:hover .ghost-ring,\n    .ghost-dragging .editor-move-ghost .ghost-ring { opacity: 1; }\n    /* Neutral (non-orange) primary buttons inside the editor panel;\n       danger buttons keep their red. */\n    #editor-panel .btn-primary {\n      background: rgba(148, 163, 184, 0.12);\n      border: 1px solid rgba(148, 163, 184, 0.4);\n      color: #cbd5e1;\n    }\n    #editor-panel .btn-primary:hover {\n      background: rgba(125, 211, 252, 0.12);\n      border-color: #7dd3fc;\n      color: #e0f2fe;\n    }';
 
-  const PANEL_HTML = '      <div class="map-sidebar open" id="editor-panel">\n        <h3 style="margin-top:0; color:#fff;">Map Controls</h3>\n\n        <div style="display:flex; gap:0.5rem; margin-bottom:1.5rem;">\n          <button class="btn btn-primary btn-block" id="btn-add-mode" onclick="toggleAddMode()">+ Add Pin</button>\n          <button class="btn btn-secondary" onclick="refreshData()" title="Reload Data">↻</button>\n        </div>\n        <hr style="border:0; border-top:1px solid var(--border-subtle); margin-bottom:1.5rem;">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <label class="form-label" for="edit-expiry">Auto-Remove In...</label>\n            <select id="edit-expiry" class="form-select" style="border-color:var(--accent);">\n              <option value="0">Keep Current Expiry</option>\n              <option value="1">1 Hour</option>\n              <option value="2" selected>2 Hours (Default)</option>\n              <option value="4">4 Hours</option>\n              <option value="12">12 Hours</option>\n              <option value="24">24 Hours</option>\n              <option value="48">48 Hours</option>\n            </select>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:2rem;">\n          Select a pin to edit<br>or click <strong>+ Add Pin</strong> to create new.\n        </div>\n      </div>';
+  const PANEL_HTML = '      <div class="map-sidebar open" id="editor-panel">\n        <h3>Map Controls</h3>\n\n        <div style="display:flex; gap:0.5rem; margin-bottom:1.5rem;">\n          <button class="btn btn-primary btn-block" id="btn-add-mode" onclick="toggleAddMode()">+ Add Pin</button>\n          <button class="btn btn-secondary" onclick="refreshData()" title="Reload Data">↻</button>\n        </div>\n        <hr style="border:0; border-top:1px solid var(--border-subtle); margin-bottom:1.5rem;">\n        <div id="selection-editor" style="display:none;">\n          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;" id="edit-header">\n            <h4 style="margin:0; color:var(--accent);">Edit Incident</h4>\n            <span style="font-size:0.7rem; color:var(--text-soft);" id="edit-id-display"></span>\n          </div>\n          <input type="hidden" id="edit-id">\n          <div class="form-group" id="title-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-title" style="margin-bottom:0;">Title</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForTitle()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <input type="text" id="edit-title" class="form-input">\n            <div id="title-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          \n          <div class="form-group" id="location-group" style="display:none;">\n            <label class="form-label">Location</label>\n            <div id="edit-location-display" style="color:#94a3b8; font-size:0.85rem; padding:0.5rem; background:rgba(0,0,0,0.2); border-radius:6px; border:1px solid var(--border-subtle);">\n              <i class="fa-solid fa-location-dot" style="margin-right:0.4rem; color:#f59e0b;"></i>\n              <span id="edit-location-text">-</span>\n            </div>\n          </div>\n          \n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;" id="status-size-group">\n            <div class="form-group">\n              <label class="form-label" for="edit-status">Status</label>\n              <select id="edit-status" class="form-select">\n                <option value="Going">Going</option>\n                <option value="In Route">In Route</option>\n                <option value="On Scene">On Scene</option>\n                <option value="Out of Control">Out of Control</option>\n                <option value="Being Controlled">Being Controlled</option>\n                <option value="Emergency Warning">Emergency Warning</option>\n                <option value="Watch and Act">Watch and Act</option>\n                <option value="Advice">Advice</option>\n                <option value="Under Control">Under Control</option>\n                <option value="Pending">Pending</option>\n                <option value="Investigation">Investigation</option>\n                <option value="Monitor">Monitor</option>\n                <option value="Patrol">Patrol</option>\n                <option value="Off Scene">Off Scene</option>\n                <option value="Safe">Safe</option>\n              </select>\n            </div>\n            <div class="form-group">\n              <label class="form-label" for="edit-size">Size</label>\n              <input type="text" id="edit-size" class="form-input" placeholder="e.g. 5 ha">\n            </div>\n          </div>\n\n          <div class="form-group" id="expiry-group">\n            <div class="expiry-head">\n              <label class="form-label" for="edit-expiry-range" style="margin-bottom:0;">Auto-Remove In</label>\n              <span id="edit-expiry-label" class="expiry-value">2 hours</span>\n            </div>\n            <input type="range" id="edit-expiry-range" class="expiry-range" min="0" max="10" step="1" value="5" oninput="updateExpiryLabel()">\n            <div class="expiry-scale"><span>20 min</span><span>12 hrs</span></div>\n          </div>\n          <div class="form-group" id="type-group">\n            <div class="form-label">Incident Type(s)</div>\n            <div id="type-checkboxes" style="display:flex; flex-wrap:wrap; gap:0.4rem; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:6px; border:1px solid var(--border-subtle);"></div>\n          </div>\n          <div class="form-group" id="agency-group">\n            <div class="form-label">Responding Agencies</div>\n            <div style="display:flex; flex-wrap:wrap; gap:0.5rem;" id="agency-checkboxes">\n              <label class="pill-checkbox"><input type="checkbox" value="RFS"> RFS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="FRNSW"> FRNSW</label>\n              <label class="pill-checkbox"><input type="checkbox" value="NSWAS"> NSWAS</label>\n              <label class="pill-checkbox"><input type="checkbox" value="SES"> SES</label>\n              <label class="pill-checkbox"><input type="checkbox" value="Police"> Police</label>\n              <label class="pill-checkbox"><input type="checkbox" value="VRA"> VRA</label>\n            </div>\n          </div>\n          <div class="form-group" id="units-group">\n            <div class="form-label">Attached Units</div>\n            <div id="unit-chips" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.4rem;"></div>\n            <input type="text" id="unit-input" class="form-input" placeholder="Callsign - Enter adds, Tab completes" autocomplete="off">\n          </div>\n          <div class="form-group" id="photos-group">\n            <div class="form-label">Photos <span id="photo-count" style="color:#94a3b8; font-weight:400;"></span></div>\n            <div id="photo-tiles" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>\n            <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;">\n          </div>\n          <div class="form-group" id="desc-group">\n            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n              <label class="form-label" for="edit-desc" style="margin-bottom:0;">Description (Markdown)</label>\n              <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForDescription()" title="Check grammar">✓ Grammar</button>\n            </div>\n            <textarea id="edit-desc" class="form-textarea" placeholder="Use **bold**, *italics*, or lists..."></textarea>\n            <div id="description-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n          </div>\n          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom:1.5rem;" id="save-delete-group">\n            <button class="btn btn-primary" onclick="saveIncident()">Save Changes</button>\n            <button class="btn btn-danger" onclick="deleteIncident()">Delete Pin</button>\n          </div>\n          <button class="btn btn-secondary btn-block" id="btn-archive" style="display:none; margin-bottom:1.5rem;" onclick="archiveIncident()" title="Staff only - preserves this incident forever">\n            <i class="fa-solid fa-box-archive"></i> Archive Incident\n          </button>\n\n          <!-- Ownership-aware panels (rebuilt per-selection in selectIncident):\n               - ownership-notice: shown to non-owners in place of direct edit.\n               - suggest-panel: non-owners propose edits / notes.\n               - suggestions-review-panel: owners/admins review pending items. -->\n          <div id="ownership-notice" style="display:none; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.3); color:#93c5fd; padding:0.7rem 0.8rem; border-radius:6px; margin-bottom:1rem; font-size:0.8rem;"></div>\n          <div id="suggest-panel" style="display:none; margin-bottom:1.5rem;"></div>\n          <div id="suggestions-review-panel" style="display:none; margin-bottom:1.5rem;"></div>\n\n          <div class="form-group" style="margin-top:1.5rem; border-top:1px solid rgba(255,255,255,0.1); padding-top:1rem;" id="log-section">\n            <div class="form-label">Incident Logs</div>\n            <div id="editor-logs-container" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle); border-radius: 6px; margin-bottom:0.8rem;">\n              <div style="padding:1rem; color:var(--text-soft); font-size:0.8rem;">Loading...</div>\n            </div>\n            <div style="background:rgba(255,255,255,0.03); padding:0.8rem; border-radius:8px;">\n              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">\n                <label class="form-label" for="new-update-msg" style="margin-bottom:0;">New Log Entry</label>\n                <button class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.7rem;" onclick="checkGrammarForNew()" title="Check grammar">✓ Grammar</button>\n              </div>\n              <textarea id="new-update-msg" class="form-textarea" placeholder="Type update here..." style="min-height:50px; font-size:0.85rem; margin-bottom:0.5rem;"></textarea>\n              <div id="new-log-grammar-results" style="display:none; margin-top:0.5rem;"></div>\n              <button class="btn btn-secondary btn-block" style="padding:0.4rem;" onclick="addUpdate()">Post Update</button>\n            </div>\n          </div>\n\n        </div>\n        <div id="instruction-text" style="color:var(--text-soft); font-size:0.9rem; text-align:center; margin-top:2rem;">\n          Select a pin to edit<br>or click <strong>+ Add Pin</strong> to create new.\n        </div>\n      </div>';
 
   function injectEditorDom() {
     if (document.getElementById('editor-panel')) return;
@@ -1832,8 +2303,13 @@
     style.textContent = EDITOR_CSS;
     document.head.appendChild(style);
 
-    // .map-sidebar positions absolutely within .map-container (styles.css).
-    const host = document.querySelector('.map-container') || document.body;
+    // Desktop: stack inside the shared right-side dock (map.html) so
+    // panels never overlap; mobile keeps .map-container so the
+    // bottom-sheet positioning works. map.html re-homes the panel on
+    // breakpoint changes (updateMobileFiltersPlacement).
+    const mapContainer = document.querySelector('.map-container') || document.body;
+    const desktop = window.matchMedia('(min-width: 901px)').matches;
+    const host = (desktop && document.getElementById('right-dock')) || mapContainer;
     const wrap = document.createElement('div');
     wrap.innerHTML = PANEL_HTML;
     host.appendChild(wrap.firstElementChild);
@@ -1847,7 +2323,9 @@
     fab.innerHTML = '<i class="fa-solid fa-map-pin"></i>';
     fab.style.cssText = 'display:none; position:fixed; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); right:12px; z-index:1004; width:48px; height:48px; border-radius:50%; background:#f97316; color:#fff; border:none; box-shadow:0 6px 20px rgba(0,0,0,0.5); font-size:1.05rem; align-items:center; justify-content:center; cursor:pointer;';
     fab.onclick = openEditorSheet;
-    host.appendChild(fab);
+    // The fab is position:fixed and mobile-only — keep it out of the
+    // dock (which is display:none on mobile) so it can always show.
+    mapContainer.appendChild(fab);
 
     // Mobile: close X inside the sheet (hidden on desktop).
     const panel = document.getElementById('editor-panel');
@@ -1901,16 +2379,39 @@
     }
   }
 
+  // Invisible-until-hover grab overlay sized/anchored EXACTLY like the
+  // user pin icons (32px box, centre anchor) so the highlight ring hugs
+  // the pin instead of floating off-centre. `always` keeps the ring
+  // visible (used by the suggest-a-move flow, which tells the user to
+  // drag "the blue handle").
+  function buildGhostIcon(color, glow, title, always) {
+    return L.divIcon({
+      className: 'custom-pin',
+      html: '<div class="editor-move-ghost' + (always ? ' always' : '') + '" title="' + title + '" style="--ghost-color:' + color + ';--ghost-glow:' + glow + ';"><div class="ghost-ring"></div></div>',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+    });
+  }
+
+  // Show the ring while dragging too (the hover state doesn't survive
+  // the pointer leaving the element mid-drag).
+  function wireGhostDragClass(marker) {
+    marker.on('dragstart', () => {
+      const el = marker.getElement();
+      if (el) el.classList.add('ghost-dragging');
+    });
+    marker.on('dragend', () => {
+      const el = marker.getElement();
+      if (el) el.classList.remove('ghost-dragging');
+    });
+  }
+
   function updateDragGhost(inc, canModify) {
     removeDragGhost();
     if (!canModify || !Number.isFinite(+inc.lat) || !Number.isFinite(+inc.lng)) return;
-    const icon = L.divIcon({
-      className: 'custom-pin',
-      html: '<div title="Drag to move this pin" style="width:34px;height:34px;border-radius:50%;border:2px dashed #a855f7;box-shadow:0 0 10px rgba(168,85,247,0.7);cursor:move;"></div>',
-      iconSize: [34, 34],
-      iconAnchor: [17, 17],
-    });
+    const icon = buildGhostIcon('#a855f7', 'rgba(168,85,247,0.8)', 'Drag to move this pin', false);
     dragGhost = L.marker([inc.lat, inc.lng], { icon, draggable: true, zIndexOffset: 2000 }).addTo(map);
+    wireGhostDragClass(dragGhost);
     dragGhost.bindTooltip('Drag to move this pin', { direction: 'top', offset: [0, -14], opacity: 0.9 });
     dragGhost.on('dragend', async (e) => {
       const pos = e.target.getLatLng();
@@ -1961,13 +2462,9 @@
     clearSuggestMove();
     const inc = currentIncident;
     if (!Number.isFinite(+inc.lat) || !Number.isFinite(+inc.lng)) return;
-    const icon = L.divIcon({
-      className: 'custom-pin',
-      html: '<div title="Drag to the proposed location" style="width:34px;height:34px;border-radius:50%;border:2px dashed #38bdf8;box-shadow:0 0 10px rgba(56,189,248,0.7);cursor:move;"></div>',
-      iconSize: [34, 34],
-      iconAnchor: [17, 17],
-    });
+    const icon = buildGhostIcon('#38bdf8', 'rgba(56,189,248,0.8)', 'Drag to the proposed location', true);
     suggestGhost = L.marker([inc.lat, inc.lng], { icon, draggable: true, zIndexOffset: 2000 }).addTo(map);
+    wireGhostDragClass(suggestGhost);
     suggestGhost.bindTooltip('Drag to the proposed location', { direction: 'top', offset: [0, -14], opacity: 0.9 });
     const disp = document.getElementById('sugg-move-display');
     if (disp) disp.textContent = 'Drag the blue handle to where the pin should be.';
@@ -2002,6 +2499,10 @@
 
       injectEditorDom();
       renderTypeCheckboxes();
+      wireUnitInput();
+      wirePhotoInput();
+      renderPhotoTiles();
+      loadCallsignDict();
 
       // Pins stay with the public unified renderer (user/RFS/pager keep
       // merging and every layer toggle keeps working). The hooks below
@@ -2091,7 +2592,9 @@
   window.checkGrammarForNew = checkGrammarForNew;
   window.checkGrammarForTitle = checkGrammarForTitle;
   window.deleteIncident = deleteIncident;
+  window.deleteIncidentPhoto = deleteIncidentPhoto;
   window.deleteLog = deleteLog;
+  window.updateExpiryLabel = updateExpiryLabel;
   window.deselectAllGrammarFixes = deselectAllGrammarFixes;
   window.refreshData = refreshData;
   window.rejectSuggestion = rejectSuggestion;

@@ -54,12 +54,14 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
 });
 
 const { incidentsRouter } = await import('../../../src/api/incidents.js');
+const { archiveWriter } = await import('../../../src/store/archive.js');
 
 function makeApp() {
   const app = new Hono();
   // Simulate optionalSupabaseJwt having verified a logged-in editor.
   app.use('*', async (c, next) => {
     c.set('userId' as never, 'editor-1' as never);
+    c.set('userName' as never, 'Test Editor' as never);
     await next();
   });
   app.route('/', incidentsRouter);
@@ -236,6 +238,44 @@ describe('PUT /api/incidents/:id', () => {
     expect(callWith('SELECT created_by FROM incidents')?.params).toEqual(['inc1']);
   });
 
+  it('sanitizes units (trim/uppercase/dedupe) and upserts the callsign dictionary', async () => {
+    nextResult = { rows: [{ created_by: 'editor-1' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ units: [' pum391 ', 'PUM391', 'RFS Wyee 1', 42, ''] }),
+    });
+    expect(res.status).toBe(200);
+    const upd = callWith('UPDATE incidents SET');
+    expect(upd?.sql).toContain('units = $1');
+    expect(upd?.params?.[0]).toBe(JSON.stringify(['PUM391', 'RFS WYEE 1']));
+    // Both surviving callsigns were remembered for tab completion.
+    const upserts = calls.filter((c) => c.sql.includes('INSERT INTO callsigns'));
+    expect(upserts.map((u) => u.params?.[0])).toEqual(['PUM391', 'RFS WYEE 1']);
+  });
+
+  it('GET /api/incidents/callsigns returns the dictionary', async () => {
+    nextResult = { rows: [{ callsign: 'PUM391' }, { callsign: 'RFS WYEE 1' }] };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/callsigns');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ callsigns: ['PUM391', 'RFS WYEE 1'] });
+  });
+
+  it('allows a units-only update from a non-owner editor (collaborative field)', async () => {
+    canManageUsersMock.mockResolvedValue(false); // not an admin
+    nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/inc1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ units: ['PUM391'], updated_at: new Date() }),
+    });
+    expect(res.status).toBe(200);
+    canManageUsersMock.mockResolvedValue(true);
+  });
+
   it('403s when a non-owner, non-admin tries to edit', async () => {
     canManageUsersMock.mockResolvedValue(false); // not an admin
     nextResult = { rows: [{ created_by: 'someone-else' }], rowCount: 1 };
@@ -275,6 +315,51 @@ describe('DELETE /api/incidents/:id', () => {
     expect(res.status).toBe(403);
     expect(callWith('DELETE FROM incidents WHERE id = $1')).toBeUndefined();
   });
+
+  it('pushes a final inactive snapshot to the logs archive on delete', async () => {
+    const push = vi.spyOn(archiveWriter, 'push').mockImplementation(() => {});
+    try {
+      resultQueue = [
+        { rows: [{ created_by: 'editor-1' }], rowCount: 1 }, // ownership SELECT
+        {
+          rows: [{
+            id: 'del-id', title: 'T', description: '', lat: -33, lng: 151,
+            location: 'X', type: ['Flood'], status: 'Going', size: '-',
+            responding_agencies: [], units: [], created_at: new Date(),
+            updated_at: new Date(), expires_at: null, is_rfs_stub: false,
+          }],
+          rowCount: 1,
+        }, // UPDATE ... RETURNING *
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/incidents/del-id', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      expect(push).toHaveBeenCalledOnce();
+      const [table, row] = push.mock.calls[0] as [string, { source: string; source_id: string; data: Record<string, unknown> }];
+      expect(table).toBe('archive_misc');
+      expect(row.source).toBe('user_incident');
+      expect(row.source_id).toBe('del-id');
+      expect(row.data['is_active']).toBe(false);
+    } finally {
+      push.mockRestore();
+    }
+  });
+
+  it('does not push a logs-archive snapshot for RFS/pager unit stubs', async () => {
+    const push = vi.spyOn(archiveWriter, 'push').mockImplementation(() => {});
+    try {
+      resultQueue = [
+        { rows: [{ created_by: 'editor-1' }], rowCount: 1 },
+        { rows: [{ id: 'stub-1', is_rfs_stub: true }], rowCount: 1 },
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/incidents/stub-1', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      expect(push).not.toHaveBeenCalled();
+    } finally {
+      push.mockRestore();
+    }
+  });
 });
 
 describe('incident_updates routes', () => {
@@ -296,8 +381,8 @@ describe('incident_updates routes', () => {
     });
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ id: 'upd-1', success: true });
-    // created_by (the editor) is now recorded as the third param.
-    expect(callWith('INSERT INTO incident_updates')?.params).toEqual(['inc1', 'hello', 'editor-1']);
+    // created_by + created_by_name (username only) are recorded.
+    expect(callWith('INSERT INTO incident_updates')?.params).toEqual(['inc1', 'hello', 'editor-1', 'Test Editor']);
   });
 
   it('PUT /api/incidents/updates/:id updates the message column (author/owner/admin)', async () => {
@@ -322,17 +407,33 @@ describe('incident_updates routes', () => {
     expect(callWith('DELETE FROM incident_updates WHERE id = $1')?.params).toEqual(['u1']);
   });
 
-  it('403s when a non-author non-owner non-admin edits a log', async () => {
-    canManageUsersMock.mockResolvedValue(false);
-    nextResult = { rows: [{ update_by: 'other', incident_by: 'other' }], rowCount: 1 };
+  it('403s when a non-author, non-admin edits a log (author-only)', async () => {
+    canManageUsersMock.mockResolvedValue(false); // not an admin either
+    nextResult = { rows: [{ update_by: 'other', incident_by: 'editor-1' }], rowCount: 1 };
     const app = makeApp();
     const res = await app.request('/api/incidents/updates/u1', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'x' }),
     });
+    // Even the INCIDENT owner can't edit someone else's log entry.
     expect(res.status).toBe(403);
     expect(callWith('UPDATE incident_updates SET message')).toBeUndefined();
+    canManageUsersMock.mockResolvedValue(true);
+  });
+
+  it('the author may edit their own log entry', async () => {
+    canManageUsersMock.mockResolvedValue(false);
+    nextResult = { rows: [{ update_by: 'editor-1', incident_by: 'other' }], rowCount: 1 };
+    const app = makeApp();
+    const res = await app.request('/api/incidents/updates/u1', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'x' }),
+    });
+    expect(res.status).toBe(200);
+    expect(callWith('UPDATE incident_updates SET message')?.params).toEqual(['x', 'u1']);
+    canManageUsersMock.mockResolvedValue(true);
   });
 });
 
@@ -422,6 +523,11 @@ describe('incident archive', () => {
     expect(ins?.params?.[1]).toBe('Major fire');
     const soft = callWith('UPDATE incidents SET deleted_at = NOW()');
     expect(soft?.params).toEqual(['arc-1']);
+    // Archived incidents move OUT of the regular logs feed — their
+    // archive_misc snapshots (and sidecar row) are removed so they only
+    // appear in the logs page's "Archived Incidents" area.
+    expect(callWith('DELETE FROM archive_misc WHERE')?.params).toEqual(['arc-1']);
+    expect(callWith('DELETE FROM archive_misc_latest WHERE')?.params).toEqual(['arc-1']);
   });
 
   it('403s archive for non-staff editors', async () => {

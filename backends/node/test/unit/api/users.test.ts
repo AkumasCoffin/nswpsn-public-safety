@@ -44,7 +44,7 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   };
 });
 
-const { usersRouter } = await import('../../../src/api/users.js');
+const { usersRouter, discordInfo } = await import('../../../src/api/users.js');
 const roles = await import('../../../src/services/auth/roles.js');
 const { _resetRolesCacheForTests } = roles;
 
@@ -73,6 +73,32 @@ beforeEach(() => {
   fakeClient.release.mockClear();
   _resetRolesCacheForTests();
   vi.unstubAllGlobals();
+});
+
+describe('discordInfo', () => {
+  it('reports an OAuth-linked Discord identity with its provider id', () => {
+    expect(
+      discordInfo({
+        identities: [
+          { provider: 'email', identity_data: {} },
+          { provider: 'discord', identity_data: { provider_id: '123456789', sub: '123456789' } },
+        ],
+      }),
+    ).toEqual({ discord_linked: true, discord_id: '123456789' });
+  });
+
+  it('falls back to sub, then to the metadata discord_id (unlinked)', () => {
+    expect(
+      discordInfo({ identities: [{ provider: 'discord', identity_data: { sub: '42' } }] }),
+    ).toEqual({ discord_linked: true, discord_id: '42' });
+    expect(
+      discordInfo({ identities: [], user_metadata: { discord_id: ' 987 ' } }),
+    ).toEqual({ discord_linked: false, discord_id: '987' });
+  });
+
+  it('returns null id when nothing is recorded', () => {
+    expect(discordInfo({})).toEqual({ discord_linked: false, discord_id: null });
+  });
 });
 
 describe('GET /api/users', () => {
@@ -196,8 +222,8 @@ describe('auth gate', () => {
     expect(res.status).toBe(401);
   });
 
-  it('403 when authenticated but not an owner', async () => {
-    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+  it('403 when authenticated but lacks canManageUsers', async () => {
+    vi.mocked(roles.canManageUsers).mockResolvedValueOnce(false);
     const app = makeApp();
     const res = await app.request('/api/users/abc/roles', {
       method: 'POST',
@@ -212,5 +238,97 @@ describe('auth gate', () => {
     const app = makeApp();
     const res = await app.request('/api/users');
     expect(res.status).toBe(403);
+  });
+});
+
+// Team members (canManageUsers=true, canAssignPrivilegedRoles=false) may
+// only touch the feature roles; the privileged trio is owner-only.
+describe('team member role tiering', () => {
+  it('POST: team member can add a feature role', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValue(false);
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'pager_contributor' }),
+    });
+    expect(res.status).toBe(200);
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValue(true);
+  });
+
+  it('POST: team member cannot add a privileged role', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'dev' }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toContain('Only owners');
+    expect(calls.some((q) => q.sql.includes('INSERT INTO user_roles'))).toBe(false);
+  });
+
+  it('DELETE: team member can remove a feature role but not a privileged one', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValue(false);
+    const app = makeApp();
+    const ok = await app.request('/api/users/abc/roles/radio_contributor', { method: 'DELETE' });
+    expect(ok.status).toBe(200);
+    const denied = await app.request('/api/users/abc/roles/owner', { method: 'DELETE' });
+    expect(denied.status).toBe(403);
+    expect(calls.filter((q) => q.sql.includes('DELETE FROM user_roles'))).toHaveLength(1);
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValue(true);
+  });
+
+  it('PUT: team member replace succeeds when the privileged set is unchanged', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+    // First pool.query = current-roles SELECT; target already holds team_member.
+    resultQueue = [{ rows: [{ role: 'team_member' }, { role: 'map_editor' }] }];
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: ['team_member', 'pager_contributor'] }),
+    });
+    expect(res.status).toBe(200);
+    expect(txCalls[0]?.sql).toBe('BEGIN');
+    expect(txCalls.at(-1)?.sql).toBe('COMMIT');
+  });
+
+  it('PUT: team member replace 403s when it would drop a privileged role', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+    resultQueue = [{ rows: [{ role: 'dev' }, { role: 'map_editor' }] }];
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: ['map_editor'] }),
+    });
+    expect(res.status).toBe(403);
+    expect(txCalls).toHaveLength(0);
+  });
+
+  it('PUT: team member replace 403s when it would add a privileged role', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+    resultQueue = [{ rows: [{ role: 'map_editor' }] }];
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: ['map_editor', 'owner'] }),
+    });
+    expect(res.status).toBe(403);
+    expect(txCalls).toHaveLength(0);
+  });
+
+  it('PUT: owner replace skips the current-roles lookup entirely', async () => {
+    const app = makeApp();
+    const res = await app.request('/api/users/abc/roles', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: ['owner', 'dev'] }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls.some((q) => q.sql.includes('SELECT role FROM user_roles'))).toBe(false);
   });
 });

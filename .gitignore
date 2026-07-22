@@ -73,3 +73,10 @@ backends/data/centralwatch_cameras.json
 # Local Firefox profile for the Waze userscript ingest browser — cookies,
 # cache, and sqlite session state. Machine-local; never committed.
 backends/data/.waze-browser-profile/
+
+# Editor-uploaded incident photos. The repo root doubles as the Apache
+# webroot, so these land in-tree at uploads/incident-images/<id>/ and are
+# served (and Cloudflare-resized) from nswpsn.forcequit.xyz. Machine-local
+# user data — only the hardening .htaccess is tracked.
+uploads/*
+!uploads/.htaccess

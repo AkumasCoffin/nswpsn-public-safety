@@ -253,6 +253,27 @@ def build_map_url(lat: float, lon: float, label: str = "", layer: str = "inciden
     return f"{MAP_BASE_URL}/map.html?lat={lat}&lng={lon}&zoom={zoom}&label={label_encoded}&layer={layer}"
 
 
+# Only build URLs for paths that match exactly what the uploader generates.
+# A malformed/hostile `file` value (legacy row, DB tampering) yields None
+# rather than an arbitrary URL — same defence the map/logs pages apply.
+_INCIDENT_IMAGE_PATH_RE = re.compile(
+    r'^/uploads/incident-images/[A-Za-z0-9._-]{1,64}/[A-Za-z0-9-]{1,64}\.(?:jpe?g|png|webp|gif)$'
+)
+
+
+def build_incident_image_url(file_path: str, width: int = 1024) -> Optional[str]:
+    """Full public URL for an incident photo, resized by Cloudflare.
+
+    `file_path` is the stored root-relative path
+    (/uploads/incident-images/<id>/<uuid>.<ext>). Resizing keeps the payload
+    small enough for Discord's media proxy (originals can be up to 50MB).
+    Returns None for anything that doesn't match the expected shape.
+    """
+    if not isinstance(file_path, str) or not _INCIDENT_IMAGE_PATH_RE.match(file_path):
+        return None
+    return f"{MAP_BASE_URL}/cdn-cgi/image/width={width},quality=80,format=auto{file_path}"
+
+
 def representative_lonlat(coords: Any):
     """Reduce a GeoJSON `coordinates` array to one representative
     (lon, lat) numeric pair, regardless of geometry type.
@@ -2098,6 +2119,45 @@ class EmbedBuilder:
             container.add_item(discord.ui.TextDisplay(
                 content=self._clip_text(f"Responding: {' • '.join(agency_list)}")
             ))
+
+        # Attached units (editor-entered callsigns).
+        units = data.get('units', [])
+        if isinstance(units, str):
+            units = [units]
+        if isinstance(units, list):
+            unit_labels = [strip_html(str(u)) for u in units if u and str(u).strip()]
+            if unit_labels:
+                container.add_item(discord.ui.TextDisplay(
+                    content=self._clip_text(f"🚒 **Units:** {', '.join(unit_labels)}")
+                ))
+
+        # Attached photos → a media gallery (max 4, matching the uploader
+        # cap). Degrades to a text link list if the gallery component is
+        # unavailable so a photo never breaks the whole card.
+        images = data.get('images', [])
+        if isinstance(images, list) and images:
+            photo_urls = []
+            for img in images:
+                if isinstance(img, dict):
+                    url = build_incident_image_url(img.get('file'))
+                    if url:
+                        photo_urls.append(url)
+                        if len(photo_urls) >= 4:
+                            break
+            if photo_urls:
+                try:
+                    gallery_items = [
+                        discord.MediaGalleryItem(u, description="Incident photo")
+                        for u in photo_urls
+                    ]
+                    container.add_item(discord.ui.MediaGallery(*gallery_items))
+                except Exception:
+                    links = ' • '.join(
+                        f"[Photo {i + 1}]({u})" for i, u in enumerate(photo_urls)
+                    )
+                    container.add_item(discord.ui.TextDisplay(
+                        content=self._clip_text(f"📷 {links}")
+                    ))
 
         if logs and len(logs) > 0:
             dict_logs = [x for x in logs if isinstance(x, dict)]

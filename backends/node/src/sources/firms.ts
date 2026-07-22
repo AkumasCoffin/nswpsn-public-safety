@@ -101,11 +101,20 @@ export interface FirmsSnapshot {
     label: string;
     ok: boolean;
     count: number;
+    /** true when serving the source's last-good detections through a
+     *  transient upstream outage. */
+    stale?: boolean;
     error?: string;
   }>;
   bbox: string;
   fetched_at: string;
 }
+
+// Per-source last-good detections, served through transient upstream
+// outages (FIRMS features span 24h, so a couple-hours-old fetch is
+// still valid — dropping a satellite made its hotspots blink).
+const _lastGoodBySource = new Map<string, { features: FirmsFeature[]; at: number }>();
+const SOURCE_LAST_GOOD_MS = 2 * 3600_000;
 
 const EMPTY_SNAPSHOT: FirmsSnapshot = {
   type: 'FeatureCollection',
@@ -316,26 +325,27 @@ export async function fetchFirmsHotspots(): Promise<FirmsSnapshot> {
     // No key — return empty so the frontend just shows nothing.
     return { ...EMPTY_SNAPSHOT, fetched_at: new Date().toISOString() };
   }
-  // Stagger the fan-out by 500 ms per source. NASA's AU→US gateway
-  // routinely drops 2 of 3 simultaneous TLS connections from the same
-  // IP, leaving S-NPP up while NOAA-20/21 ETIMEDOUT. A small offset
-  // keeps the connections from racing, dropping wallclock from worst-
-  // case 240 s (3× max retry timeout) to ~7-8 s on the happy path
-  // and ~30 s on a flaky day. Per-source failures still don't fail
-  // the whole snapshot.
-  const results = await Promise.all(
-    FIRMS_SOURCES.map(async (src, i) => {
-      if (i > 0) await new Promise((r) => setTimeout(r, i * 500));
-      return fetchOneFirmsSource(key, src);
-    }),
-  );
+  // STRICTLY SEQUENTIAL fan-out: NASA's AU→US gateway reliably drops
+  // concurrent TLS connections from the same IP — even a 500 ms
+  // stagger left S-NPP up while NOAA-20/21 ETIMEDOUT on every poll in
+  // prod. One request at a time also lets undici reuse the established
+  // connection for the follow-up sources. A 15-min poller doesn't care
+  // about the extra wallclock.
+  const results: Array<
+    { ok: true; features: FirmsFeature[] } | { ok: false; error: string }
+  > = [];
+  for (const src of FIRMS_SOURCES) {
+    results.push(await fetchOneFirmsSource(key, src));
+  }
   const features: FirmsFeature[] = [];
   const sourceStatus: FirmsSnapshot['source_status'] = [];
+  const now = Date.now();
   for (let i = 0; i < FIRMS_SOURCES.length; i++) {
     const src = FIRMS_SOURCES[i];
     const r = results[i];
     if (!src || !r) continue;
     if (r.ok) {
+      _lastGoodBySource.set(src.id, { features: r.features, at: now });
       features.push(...r.features);
       sourceStatus.push({
         source: src.id,
@@ -345,14 +355,32 @@ export async function fetchFirmsHotspots(): Promise<FirmsSnapshot> {
         count: r.features.length,
       });
     } else {
-      sourceStatus.push({
-        source: src.id,
-        satellite: src.satellite,
-        label: src.label,
-        ok: false,
-        count: 0,
-        error: r.error,
-      });
+      // Serve the source's last-good detections through a transient
+      // outage — FIRMS features span 24 h, so hotspots from a fetch a
+      // couple of hours ago are still valid detections, and dropping a
+      // satellite made its hotspots blink off the map.
+      const mem = _lastGoodBySource.get(src.id);
+      if (mem && now - mem.at < SOURCE_LAST_GOOD_MS) {
+        features.push(...mem.features);
+        sourceStatus.push({
+          source: src.id,
+          satellite: src.satellite,
+          label: src.label,
+          ok: false,
+          stale: true,
+          count: mem.features.length,
+          error: r.error,
+        });
+      } else {
+        sourceStatus.push({
+          source: src.id,
+          satellite: src.satellite,
+          label: src.label,
+          ok: false,
+          count: 0,
+          error: r.error,
+        });
+      }
     }
   }
   return {

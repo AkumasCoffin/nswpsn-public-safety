@@ -1287,7 +1287,8 @@
           'Ausgrid': 'plug',
           'Essential Energy': 'bolt',
           'Bureau of Meteorology': 'cloud',
-          'Pager': 'pager'
+          'Pager': 'pager',
+          'NSW PSN User Submissions': 'user'
         };
         const providerColors = {
           'Waze': '#00d4ff',
@@ -1297,7 +1298,8 @@
           'Ausgrid': '#f59e0b',
           'Essential Energy': '#06b6d4',
           'Bureau of Meteorology': '#3b82f6',
-          'Pager': '#8b5cf6'
+          'Pager': '#8b5cf6',
+          'NSW PSN User Submissions': '#a855f7'
         };
 
         // Normalise providers from the new endpoint shape into the structure
@@ -2366,7 +2368,7 @@
       // Type filter - depends on source
       if (typeFilter) {
         // Sources where type = category (including Endeavour where it's PLANNED/UNPLANNED)
-        const categoryBasedSources = ['rfs', 'traffic_incident', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent'];
+        const categoryBasedSources = ['rfs', 'traffic_incident', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent', 'user_incident'];
         if (isEndeavour || (source && categoryBasedSources.includes(source))) {
           params.set('category', typeFilter);
         } else {
@@ -2632,6 +2634,23 @@
           if (incidentId && !incidentId.startsWith('noid-')) extraInfo += `<span class="meta-badge-outline" style="color:#4ade80; border-color:#4ade80;">${escapeHtml(incidentId)}</span>`;
           // Show full message (CSS will handle overflow)
           if (message) extraDetails = `<span style="color:#86efac; font-style:italic; word-break:break-word;">"${escapeHtml(message)}"</span>`;
+        } else if (item.source === 'user_incident') {
+          const status = data.status || item.status || '';
+          const types = Array.isArray(data.type) ? data.type : [];
+          const agencies = Array.isArray(data.responding_agencies) ? data.responding_agencies : [];
+          const units = Array.isArray(data.units) ? data.units : [];
+          const desc = data.description || '';
+          if (status) extraInfo += `<span class="meta-badge" style="background:#a855f7;">${escapeHtml(status)}</span>`;
+          types.slice(0, 3).forEach(t => {
+            extraInfo += `<span class="meta-badge-outline" style="color:#c084fc; border-color:#c084fc;">${escapeHtml(t)}</span>`;
+          });
+          let details = [];
+          if (agencies.length) details.push(`<span style="color:#94a3b8;"><i class="fas fa-users"></i> ${escapeHtml(agencies.join(', '))}</span>`);
+          if (units.length) details.push(`<span style="color:#94a3b8;"><i class="fas fa-truck"></i> ${escapeHtml(units.join(', '))}</span>`);
+          const photoCount = Array.isArray(data.images) ? data.images.length : 0;
+          if (photoCount) details.push(`<span style="color:#94a3b8;"><i class="fas fa-camera"></i> ${photoCount} photo${photoCount === 1 ? '' : 's'}</span>`);
+          if (desc) details.push(`<span style="color:#c4b5fd; font-style:italic; word-break:break-word;">${escapeHtml(desc)}</span>`);
+          if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'traffic_incident') {
           const roads = data.roads ? (Array.isArray(data.roads) ? data.roads.join(', ') : data.roads) : '';
           const advice = data.advice || '';
@@ -2958,9 +2977,10 @@
       const historySection = document.getElementById('incident-history-section');
       if (!historySection) return;
       
-      // Only RFS incidents have meaningful updates (status changes, alert levels, etc.)
-      // Other sources like Waze, Traffic, Pager are point-in-time and don't have updates
-      if (item.source !== 'rfs') {
+      // Only RFS and user incidents have meaningful updates (status changes,
+      // alert levels, edits). Other sources like Waze, Traffic, Pager are
+      // point-in-time and don't have updates.
+      if (item.source !== 'rfs' && item.source !== 'user_incident') {
         historySection.innerHTML = '';
         return;
       }
@@ -3090,7 +3110,8 @@
             
             // Get source-specific color
             let sourceColor = '#64748b';
-            if (item.source.includes('traffic')) sourceColor = '#f97316';
+            if (item.source === 'user_incident') sourceColor = '#a855f7';
+            else if (item.source.includes('traffic')) sourceColor = '#f97316';
             else if (item.source.includes('waze')) sourceColor = '#06b6d4';
             else if (item.source.includes('endeavour') || item.source.includes('ausgrid')) sourceColor = '#eab308';
             else if (item.source.includes('essential')) sourceColor = '#06b6d4';
@@ -3126,7 +3147,7 @@
       
       // Only RFS and Pager have linking (finding related incidents nearby)
       // Waze, Traffic, etc. don't need linking
-      const linkableSources = ['rfs', 'pager', 'traffic_fire'];
+      const linkableSources = ['rfs', 'pager', 'traffic_fire', 'user_incident'];
       if (!linkableSources.includes(item.source)) {
         linkedSection.innerHTML = '';
         return;
@@ -3666,6 +3687,7 @@
         'waze_roadwork': 'Waze Roadwork',
         'waze_jam': 'Waze Jams',
         'pager': 'Pager',
+        'user_incident': 'User Incident',
         'endeavour_current': 'Endeavour',
         'endeavour_planned': 'Endeavour',
         'ausgrid': 'Ausgrid',
@@ -3713,6 +3735,7 @@
       const colors = {
         'rfs': { primary: '#ef4444', secondary: '#f87171' },
         'pager': { primary: '#22c55e', secondary: '#4ade80' },
+        'user_incident': { primary: '#a855f7', secondary: '#c084fc' },
         'traffic_incident': { primary: '#f97316', secondary: '#fb923c' },
         'traffic_roadwork': { primary: '#d97706', secondary: '#fbbf24' },
         'traffic_flood': { primary: '#3b82f6', secondary: '#60a5fa' },
@@ -4136,6 +4159,7 @@
       
       const icons = {
         'rfs': '<i class="fas fa-fire" style="color:#ef4444"></i>',
+        'user_incident': '<i class="fas fa-user" style="color:#a855f7"></i>',
         'traffic_incident': '<i class="fas fa-car-crash" style="color:#f97316"></i>',
         'traffic_roadwork': '<i class="fas fa-hard-hat" style="color:#f97316"></i>',
         'traffic_flood': '<i class="fas fa-water" style="color:#3b82f6"></i>',
@@ -4422,7 +4446,7 @@
         // Check if this is an Endeavour source
         const isEndeavour = source && source.includes('endeavour');
         
-        const categoryBasedSources = ['rfs', 'traffic_incident', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent'];
+        const categoryBasedSources = ['rfs', 'traffic_incident', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent', 'user_incident'];
         if (typeFilter) {
           if (isEndeavour || (source && categoryBasedSources.includes(source))) {
             params.set('category', typeFilter);
@@ -4608,17 +4632,50 @@
         const logs = Array.isArray(data.logs) ? data.logs : [];
         const desc = inc.description
           ? `<div style="font-size:0.8rem; color:#cbd5e1; white-space:pre-wrap; margin-bottom:0.5rem;">${esc(inc.description)}</div>` : '';
+        // Photos ride along inside the archived incident snapshot. Thumbs
+        // go through Cloudflare's resizer, with the original as fallback.
+        const IMAGE_ORIGIN = 'https://nswpsn.forcequit.xyz';
+        // Same strict shape the uploader generates; anything else is dropped
+        // rather than interpolated into markup.
+        const SAFE_IMG = /^\/uploads\/incident-images\/[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9-]{1,64}\.(jpg|png|webp|gif)$/;
+        const imgs = Array.isArray(inc.images)
+          ? inc.images.filter(i => i && typeof i.file === 'string' && SAFE_IMG.test(i.file))
+          : [];
+        // data-orig + the delegated capture listener below instead of an
+        // inline onerror: attribute values are HTML-decoded before the JS
+        // in them is parsed, so esc() can't safely quote into a handler.
+        const photosHtml = imgs.length ? `
+          <div style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.6rem;">
+            ${imgs.map(i => `
+              <a href="${esc(IMAGE_ORIGIN + i.file)}" target="_blank" rel="noopener noreferrer" title="Open full size">
+                <img src="${esc(IMAGE_ORIGIN + '/cdn-cgi/image/width=320,quality=78,format=auto' + i.file)}"
+                     alt="Incident photo" loading="lazy" class="archived-photo"
+                     data-orig="${esc(IMAGE_ORIGIN + i.file)}"
+                     style="width:96px; height:96px; object-fit:cover; border-radius:6px; border:1px solid rgba(148,163,184,0.3); display:block;">
+              </a>`).join('')}
+          </div>` : '';
         const logsHtml = logs.length ? logs.map((l) => `
           <div style="border-top:1px solid rgba(255,255,255,0.08); padding:0.4rem 0;">
             <div style="font-size:0.68rem; color:#64748b;">${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : ''}</div>
             <div style="font-size:0.8rem; color:#e2e8f0; white-space:pre-wrap;">${esc(l.message || '')}</div>
           </div>`).join('')
           : '<div style="font-size:0.78rem; color:#64748b; font-style:italic;">No logs were recorded.</div>';
-        box.innerHTML = desc + logsHtml;
+        box.innerHTML = desc + photosHtml + logsHtml;
       } catch (e) {
         box.innerHTML = `<div style="color:#ef4444; font-size:0.78rem;">Error loading detail: ${e.message}</div>`;
       }
     }
+
+    // Archived-photo thumbnails fall back to the original file when
+    // Cloudflare's resizer isn't available. 'error' doesn't bubble, so
+    // this listens in the capture phase.
+    document.addEventListener('error', (e) => {
+      const t = e.target;
+      if (t && t.matches && t.matches('img.archived-photo') && !t._fellBack && t.dataset.orig) {
+        t._fellBack = true;
+        t.src = t.dataset.orig;
+      }
+    }, true);
 
     // === RADIO SCANNER SUMMARIES ===
     let summariesPage = 1;

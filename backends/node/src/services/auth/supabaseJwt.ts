@@ -90,6 +90,8 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
     );
     if (typeof payload.sub === 'string' && payload.sub.length > 0) {
       c.set('userId', payload.sub);
+      const name = displayNameFromClaims(payload as Record<string, unknown>);
+      if (name) c.set('userName', name);
     }
   } catch (err) {
     // Verification failed — log at debug because clients legitimately
@@ -106,6 +108,22 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
  * (none of W5's python-compat routes do today, but it's the obvious
  * tightening once cutover happens).
  */
+/** Best-effort display name from Supabase JWT claims: user_metadata
+ * username/display_name/full_name, falling back to the email local
+ * part. Username ONLY — never the full email. */
+export function displayNameFromClaims(payload: Record<string, unknown>): string {
+  const meta = payload['user_metadata'] as Record<string, unknown> | undefined;
+  for (const key of ['username', 'display_name', 'full_name', 'name']) {
+    const v = meta?.[key];
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 64);
+  }
+  const email = payload['email'];
+  if (typeof email === 'string' && email.includes('@')) {
+    return email.split('@')[0]?.slice(0, 64) ?? '';
+  }
+  return '';
+}
+
 export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
   const secret = config.SUPABASE_JWT_SECRET;
   if (!secret) {
@@ -129,6 +147,8 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
       return c.json({ error: 'invalid token' }, 401);
     }
     c.set('userId', payload.sub);
+    const name = displayNameFromClaims(payload as Record<string, unknown>);
+    if (name) c.set('userName', name);
   } catch {
     return c.json({ error: 'invalid token' }, 401);
   }

@@ -26,7 +26,11 @@ vi.mock('../../../src/db/pool.js', () => ({
 // routes (GET list, approve, reject) don't need a live user_roles table.
 vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
-  return { ...actual, canManageUsers: vi.fn(async () => true) };
+  return {
+    ...actual,
+    canManageUsers: vi.fn(async () => true),
+    canAssignPrivilegedRoles: vi.fn(async () => true),
+  };
 });
 
 const { editorRouter } = await import('../../../src/api/editor.js');
@@ -191,6 +195,20 @@ describe('GET /api/editor-requests', () => {
 });
 
 describe('POST /api/editor-requests/:id/approve', () => {
+  it('403 when a team member tries to assign a privileged role', async () => {
+    vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests/1/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: ['map_editor', 'team_member'] }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toContain('Only owners');
+    // Denied before any DB work — the request row is never fetched.
+    expect(calls).toHaveLength(0);
+  });
+
   it('404 when request not found', async () => {
     resultQueue = [{ rows: [] }];
     const app = makeApp();
