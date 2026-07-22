@@ -222,23 +222,27 @@ describe('applyTfnswPositions', () => {
     expect(second.vehicles[0]!.lon).toBe(151.21);
   });
 
-  it('hands back to AnyTrip only after a sustained absence', () => {
+  it('drops a vehicle once its TfNSW position goes stale (no AnyTrip fallback)', () => {
     vi.useFakeTimers();
     try {
       applyTfnswPositions([anytripVehicle()], [tfPos()], BBOX, 1500);
       vi.advanceTimersByTime(70_000); // past the 60s sticky window
       const other = tfPos({ tripId: 'OTHER', lat: -33.86, lon: 151.0 });
       const r = applyTfnswPositions([anytripVehicle()], [other], BBOX, 1500);
-      expect(r.vehicles[0]!.lat).toBe(-33.9); // AnyTrip position again
+      // TfNSW is the ONLY position source now: with no fresh/sticky TfNSW
+      // position for W123 it's dropped, never shown at AnyTrip's frame.
+      expect(r.vehicles.find((v) => v.tripId === 'W123')).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('is a no-op passthrough with no TfNSW positions', () => {
-    const list = [anytripVehicle()];
-    const { vehicles } = applyTfnswPositions(list, [], BBOX, 1500);
-    expect(vehicles).toBe(list);
+  it('returns no vehicles when TfNSW has no positions', () => {
+    // TfNSW is the sole position source, so "no positions" ⇒ nothing to
+    // place. (The route only calls this when TfNSW returned data; a total
+    // TfNSW outage is handled upstream by keeping AnyTrip as-is.)
+    const { vehicles } = applyTfnswPositions([anytripVehicle()], [], BBOX, 1500);
+    expect(vehicles).toHaveLength(0);
   });
 
   it('keeps AnyTrip bearing/speed/occupancy when TfNSW decoded them as null', () => {
@@ -250,24 +254,21 @@ describe('applyTfnswPositions', () => {
     expect(vehicles[0]).toMatchObject({ bearing: 123, speedKmh: 77, occupancy: 4 });
   });
 
-  it('suppresses synthetic adds for a mode with AnyTrip coverage but zero matches', () => {
-    // Trip-id space mismatch: AnyTrip trains present, nothing matched →
-    // TfNSW "extras" are the same physical trains and must NOT append.
+  it('on a trip-id mismatch, positions come purely from TfNSW (AnyTrip dropped)', () => {
+    // If AnyTrip's rtTripId space differs from GTFS-R's tripId, nothing
+    // matches: the AnyTrip vehicle (interpolated frame) is dropped and the
+    // TfNSW entity becomes the vehicle — one marker, TfNSW-positioned, no
+    // duplicate. There's no AnyTrip-frame fallback to alternate with.
     const { vehicles, matched, added } = applyTfnswPositions(
       [anytripVehicle({ tripId: 'anytrip-style-id' })],
       [tfPos({ tripId: 'gtfs-style-id' })],
       BBOX, 1500,
     );
     expect(matched).toBe(0);
-    expect(added).toBe(0);
+    expect(added).toBe(1);
     expect(vehicles).toHaveLength(1);
-    // ...but a mode absent from AnyTrip entirely (coverage gap) still adds.
-    const gap = applyTfnswPositions(
-      [anytripVehicle({ tripId: 'anytrip-style-id' })],
-      [tfPos({ tripId: 'M999', mode: 'metro', routeId: 'SMNW_M1' })],
-      BBOX, 1500,
-    );
-    expect(gap.added).toBe(1);
+    expect(vehicles[0]!.tripId).toBe('gtfs-style-id'); // TfNSW, not AnyTrip
+    expect(vehicles[0]!.lat).toBe(-33.85);             // TfNSW coordinates
   });
 });
 
