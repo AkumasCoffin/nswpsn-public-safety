@@ -1631,9 +1631,10 @@
     /* Collapse caret sits at the far right and rotates when collapsed. */
     .unified-list-section-header .list-caret {
       display: inline-block; /* transforms are ignored on inline elements */
-      margin-left: auto; margin-right: 0; opacity: 0.6;
-      font-size: 0.9em; transition: transform 0.15s;
+      margin-left: auto; margin-right: 0; opacity: 0.85;
+      font-size: 15px; line-height: 1; transition: transform 0.15s;
     }
+    .unified-list-section-header:hover .list-caret { opacity: 1; }
     .list-section.collapsed .list-caret { transform: rotate(-90deg); }
     .list-section.collapsed .unified-list-section-rows { display: none; }
     /* Right-side dock: ONE card. The dock itself carries the panel
