@@ -11661,12 +11661,24 @@ function initPagerHoursFromStorage() {
     // metro scale). Returns { latlng, distDeg, i, t } (i = index of
     // the matched segment's first vertex, t = fraction along it, so
     // i + t orders points along the line) or null.
-    function snapToPolylinePts(pts, lat, lon) {
+    // Snap (lat,lon) to the nearest point on a polyline. When `nearI` +
+    // `window` are given, only segments within `window` of index `nearI`
+    // are considered — a continuity bias so a shape that passes near
+    // itself (loops, out-and-back) can't flip the snap to a distant limb
+    // between ticks (which raced the marker along the whole route). The
+    // caller falls back to a full search when the windowed result is
+    // off-route (the vehicle genuinely jumped).
+    function snapToPolylinePts(pts, lat, lon, nearI, window) {
       if (!pts || pts.length < 2) return null;
       const cosLat = Math.cos(lat * Math.PI / 180) || 1;
       const px = lon * cosLat, py = lat;
+      let lo = 0, hi = pts.length - 1;
+      if (Number.isFinite(nearI) && Number.isFinite(window)) {
+        lo = Math.max(0, Math.floor(nearI) - window);
+        hi = Math.min(pts.length - 1, Math.floor(nearI) + window + 1);
+      }
       let bestD = Infinity, bx2 = 0, by2 = 0, bi = 0, bt = 0;
-      for (let i = 0; i < pts.length - 1; i++) {
+      for (let i = lo; i < hi; i++) {
         const ax = pts[i][1] * cosLat, ay = pts[i][0];
         const bx = pts[i + 1][1] * cosLat, by = pts[i + 1][0];
         const dx = bx - ax, dy = by - ay;
@@ -12209,6 +12221,9 @@ function initPagerHoursFromStorage() {
     const TRANSPORT_MIN_ZOOM = 11;
     const TRANSPORT_STOPS_MIN_ZOOM = 13;
     const TRANSPORT_MAX_RENDER = 500;
+    // Missed viewport-fetch ticks a vehicle's marker survives before it's
+    // removed (anti-flicker at the padded bbox edge / on cache skew).
+    const TRANSPORT_MARKER_GRACE = 2;
     // Colours are AnyTrip's own modecolors map (regions.json), verbatim.
     const TRANSPORT_MODES = [
       { key: 'sydneytrains', label: 'Trains',     color: '#F18500', feeds: ['st'], prio: 0 },
@@ -12320,7 +12335,9 @@ function initPagerHoursFromStorage() {
     // the vehicle's SHAPE (travel) segment — the same basis the glide
     // uses — so the offset doesn't pop as the marker crosses glide
     // boundaries. Set false to ride the bare centreline instead.
-    const TRANSPORT_LANE_OFFSET = true;
+    // DISABLED: vehicles now ride the de-fanned centreline; the network is
+    // drawn at line-offset 0 and this whole lane machinery is inert.
+    const TRANSPORT_LANE_OFFSET = false;
     const TRANSPORT_LANE_SNAP_MAX_DEG = 0.0010; // ~100 m centreline mismatch
     function _transportLaneSnap(v, lat, lon) {
       if (!TRANSPORT_LANE_OFFSET) return null;
@@ -12408,11 +12425,7 @@ function initPagerHoursFromStorage() {
           const a = pts[i], b = pts[i + 1];
           const lat = a[0] + (b[0] - a[0]) * frac;
           const lon = a[1] + (b[1] - a[1]) * frac;
-          if (g.path.offset) {
-            g.marker.setLatLng(_transportApplyLaneOffset({ lat: lat, lon: lon, a: a, b: b, offset: g.path.offset }));
-          } else {
-            g.marker.setLatLng([lat, lon]);
-          }
+          g.marker.setLatLng([lat, lon]);
         } else {
           g.marker.setLatLng([
             g.fromLat + (g.toLat - g.fromLat) * e,
@@ -12533,117 +12546,70 @@ function initPagerHoursFromStorage() {
       // reported position rather than gluing them to the wrong line.
       const SNAP_MAX_DEG = 0.0015;
       let snapFetchBudget = 40;
+      // Continuity window: how many shape segments around the previous
+      // snap to search first, so a self-touching shape can't flip limbs.
+      // Big enough for a fast train's per-tick travel, far smaller than a
+      // whole route so distant self-touches (loops) are excluded.
+      const SNAP_WINDOW_SEGS = 400;
       for (const v of list) {
         seen.add(v.id);
         const existing = _transportMarkers.get(v.id);
+        const prevProg = existing && existing.prog;
         let dispLat = v.lat, dispLon = v.lon;
         let prog = null;
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
           if (shapePts) {
-            const s = snapToPolylinePts(shapePts, v.lat, v.lon);
+            // Continuity-biased snap: look near the marker's previous
+            // progress first so a shape that passes near itself (loops,
+            // out-and-back) can't flip the snap to a distant limb and race
+            // the marker along the route. Fall back to a full search when
+            // that's off-route (a real jump / new trip / first sight).
+            const prevP = (prevProg && prevProg.shapeId === v.shapeId) ? prevProg.p : null;
+            let s = (prevP != null)
+              ? snapToPolylinePts(shapePts, v.lat, v.lon, prevP, SNAP_WINDOW_SEGS)
+              : null;
+            if (!s || s.distDeg > SNAP_MAX_DEG) {
+              s = snapToPolylinePts(shapePts, v.lat, v.lon);
+            }
             if (s && s.distDeg < SNAP_MAX_DEG) {
               dispLat = s.latlng[0];
               dispLon = s.latlng[1];
               prog = { shapeId: v.shapeId, p: s.i + s.t, lat: dispLat, lon: dispLon };
-              // Forward ratchet: BACKWARD steps along the same route
-              // are almost always noise — a vehicle's TfNSW entity
-              // blinking out of a batch flips it to AnyTrip's
-              // ~30s-ahead frame and back, cache cells skew while
-              // panning, and the raw feed itself occasionally corrects
-              // a few hundred metres. Displayed progress therefore
-              // only moves FORWARD; a backward reading is held at the
-              // frontier unless it's huge (>~1.5km — reroute) or has
-              // persisted for 45s (real correction; a bogus forward
-              // spike unfreezes within that bound). Accepted
-              // corrections SNAP instead of gliding — a marker
-              // animating backward reads as a train driving in
-              // reverse. Progress compares across AnyTrip's dynamic
-              // shape-id churn by re-snapping the held position onto
-              // the new shape.
-              const prev = existing && existing.prog;
-              let prevP = null;
-              if (prev) {
-                if (prev.shapeId === v.shapeId) {
-                  prevP = prev.p;
-                } else {
-                  const ps = snapToPolylinePts(shapePts, prev.lat, prev.lon);
-                  if (ps && ps.distDeg < SNAP_MAX_DEG) prevP = ps.i + ps.t;
-                }
-              }
-              if (prevP != null && prog.p < prevP - 1e-9) {
-                if (!existing.backSince) existing.backSince = Date.now();
-                const jLat = dispLat - prev.lat, jLon = dispLon - prev.lon;
-                const huge = jLat * jLat + jLon * jLon > 0.015 * 0.015;
-                if (!huge && Date.now() - existing.backSince < 45_000) {
-                  dispLat = prev.lat;
-                  dispLon = prev.lon;
-                  prog = { shapeId: v.shapeId, p: prevP, lat: prev.lat, lon: prev.lon };
-                } else {
-                  existing.backSince = null;
-                  existing.snapNext = true; // accepted correction — no reverse glide
-                }
-              } else if (existing) {
-                existing.backSince = null;
-              }
             }
           } else if (snapFetchBudget > 0) {
             snapFetchBudget--;
             fetchTransportShapePts(v.shapeId); // warms cache; snaps next tick
           }
         }
-        // Second stage: shift onto the RENDERED lane (GL px offset) —
-        // vehicles ride the drawn lines, highlighted or not. Apply the
-        // offset perpendicular to the SHAPE (travel) direction — the same
-        // basis the glide uses — so the marker doesn't jump sideways at
-        // glide boundaries. Falls back to the lane's own segment only when
-        // the shape isn't available here.
-        const laneSnap = _transportLaneSnap(v, dispLat, dispLon);
-        if (laneSnap) {
-          let ll = null;
-          const shapePts = prog ? _transportShapeCache.get(v.shapeId) : null;
-          if (shapePts && shapePts.length >= 2) {
-            const i = Math.min(Math.max(0, Math.floor(prog.p)), shapePts.length - 2);
-            ll = _transportApplyLaneOffset({
-              lat: dispLat, lon: dispLon, a: shapePts[i], b: shapePts[i + 1], offset: laneSnap.offset
-            });
-          }
-          if (!ll) ll = _transportApplyLaneOffset(laneSnap);
-          dispLat = ll.lat;
-          dispLon = ll.lng;
-        }
+        // Vehicles ride their route CENTRELINE. The drawn network is
+        // de-fanned to centreline and each active route's shape is drawn
+        // under the marker, so no sideways lane offset is applied — that
+        // was the source of the side-to-side jump.
         const key = _transportIconKey(v);
         if (existing) {
           existing.prog = prog;
-          existing.laneSnap = laneSnap;
-          if (existing.snapNext) {
-            // Accepted backward correction: reposition instantly.
-            existing.snapNext = false;
-            _transportGlides.delete(v.id);
-            existing.marker.setLatLng([dispLat, dispLon]);
-          } else {
-          // Glide along the route shape when both ends sit on it —
-          // straight-chord glides cut corners off curved track. The
-          // start progress comes from the marker's CURRENT position
-          // (correct even when retargeting mid-glide).
+          existing.miss = 0;
+          // Glide along the route shape (a straight chord cuts corners off
+          // curved track). Start progress is the marker's CURRENT position,
+          // found near its previous progress for continuity. Small moves
+          // glide; large jumps snap (in _transportGlideMarker).
           let glidePath = null;
           if (prog) {
             const shapePts = _transportShapeCache.get(v.shapeId);
             if (shapePts) {
               const curLl = existing.marker.getLatLng();
-              const curSnap = snapToPolylinePts(shapePts, curLl.lat, curLl.lng);
+              const nearP = (prevProg && prevProg.shapeId === v.shapeId) ? prevProg.p : prog.p;
+              let curSnap = snapToPolylinePts(shapePts, curLl.lat, curLl.lng, nearP, SNAP_WINDOW_SEGS);
+              if (!curSnap || curSnap.distDeg > SNAP_MAX_DEG) {
+                curSnap = snapToPolylinePts(shapePts, curLl.lat, curLl.lng);
+              }
               if (curSnap && curSnap.distDeg < SNAP_MAX_DEG) {
-                glidePath = {
-                  pts: shapePts,
-                  fromP: curSnap.i + curSnap.t,
-                  toP: prog.p,
-                  offset: laneSnap ? laneSnap.offset : 0
-                };
+                glidePath = { pts: shapePts, fromP: curSnap.i + curSnap.t, toP: prog.p };
               }
             }
           }
           _transportGlideMarker(v.id, existing.marker, dispLat, dispLon, glidePath);
-          }
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildTransportIcon(v));
             existing.iconKey = key;
@@ -12668,11 +12634,17 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog });
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key, prog: prog, miss: 0 });
         }
       }
+      // Grace period: a vehicle can drop out of one viewport fetch (padded
+      // bbox edge, backend cache-cell skew) and return next tick. Keep its
+      // marker for a couple of missed ticks so it doesn't flicker out and
+      // pop back; remove once it's genuinely gone.
       for (const [id, entry] of _transportMarkers) {
-        if (!seen.has(id)) {
+        if (seen.has(id)) continue;
+        entry.miss = (entry.miss || 0) + 1;
+        if (entry.miss > TRANSPORT_MARKER_GRACE) {
           transportLayer.removeLayer(entry.marker);
           _transportMarkers.delete(id);
           _transportGlides.delete(id);
@@ -12946,7 +12918,12 @@ function initPagerHoursFromStorage() {
               // gz9; floored at 0.35px below gz9 so the network stays
               // a visible hairline at overview zooms.
               'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 1.4, 17, 44.8],
-              'line-offset': offsetExpr,
+              // De-fanned: draw every corridor at its centreline (one
+              // shared line, not parallel per-track lanes). Vehicles ride
+              // that centreline, so they sit ON the drawn line instead of
+              // floating beside a fanned lane. (offsetExpr kept for an easy
+              // revert but no longer applied.)
+              'line-offset': 0,
               'line-opacity': opacityExpr
             }
           }
@@ -13069,36 +13046,9 @@ function initPagerHoursFromStorage() {
     }
     map.on('zoomend', _applyTransportWeights);
 
-    // Lane-offset displacement is in px, so its geographic size changes
-    // with zoom — re-place lane-snapped markers from their stored snap.
-    // Path glides are left running: they re-apply the lane offset with
-    // the CURRENT zoom every frame, so snapping them to the target here
-    // made markers jump ahead mid-glide. Only straight (pathless)
-    // glides get cancelled and re-placed.
-    function _transportReoffsetMarkers() {
-      if (!map.hasLayer(transportLayer)) return;
-      for (const [id, entry] of _transportMarkers) {
-        if (!entry.laneSnap) continue;
-        const g = _transportGlides.get(id);
-        if (g && g.path) continue;
-        _transportGlides.delete(id);
-        // Re-place from the stored centreline (entry.prog) using the shape
-        // basis — same as rebuild/glide — so zoom doesn't pop the marker
-        // to a different sideways direction.
-        let ll = null;
-        const shapePts = entry.prog ? _transportShapeCache.get(entry.prog.shapeId) : null;
-        if (shapePts && shapePts.length >= 2) {
-          const i = Math.min(Math.max(0, Math.floor(entry.prog.p)), shapePts.length - 2);
-          ll = _transportApplyLaneOffset({
-            lat: entry.prog.lat, lon: entry.prog.lon,
-            a: shapePts[i], b: shapePts[i + 1], offset: entry.laneSnap.offset
-          });
-        }
-        if (!ll) ll = _transportApplyLaneOffset(entry.laneSnap);
-        entry.marker.setLatLng(ll);
-      }
-    }
-    map.on('zoomend', _transportReoffsetMarkers);
+    // (Vehicles ride the route centreline now — no zoom-dependent lane
+    // offset to re-place, so the old _transportReoffsetMarkers handler is
+    // gone.)
 
     // ---------- Route track highlight + timetable panel ----------
     // Clicking a vehicle draws its trip's track (casing + route colour)
@@ -13154,14 +13104,14 @@ function initPagerHoursFromStorage() {
               src.setData(hlData);
             } else {
               glMap.addSource('tpt-hl', { type: 'geojson', data: hlData });
-              const offsetExpr = _transportGlOffsetExpr();
               glMap.addLayer({
                 id: 'tpt-hl-colour', type: 'line', source: 'tpt-hl',
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
                   'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 1.9, 17, 60.8],
-                  'line-offset': offsetExpr,
+                  // Centreline (de-fanned) so it overlays the drawn network.
+                  'line-offset': 0,
                   'line-opacity': 1
                 }
               });
@@ -13350,8 +13300,10 @@ function initPagerHoursFromStorage() {
       for (const v of byPrio) {
         if (v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
-        // Skip shapes the static network already covers.
-        if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
+        // Draw the active vehicle's own GTFS shape as its route track —
+        // including tiled modes (trains/metro/light rail). The vehicle
+        // snaps to this same shape, so it sits exactly on the drawn line;
+        // the de-fanned GL network stays underneath as the dim basemap.
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, {
             color: (v.route && v.route.color) || transportModeColor(v.mode),
