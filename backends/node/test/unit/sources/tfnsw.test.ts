@@ -186,6 +186,27 @@ describe('applyTfnswPositions', () => {
     expect(vehicles[0]!.ageSec).toBeLessThan(10); // TfNSW timestamp won
   });
 
+  it('positions an AnyTrip vehicle by VEHICLE id when the trip ids differ', () => {
+    // Trains: AnyTrip's rtTripId format ≠ the GTFS-R tripId, but the set
+    // number (vehicle id) lines up — that recovers the smooth TfNSW
+    // position AND the rich AnyTrip labels.
+    const { vehicles, matched, added, byTrip, byVeh } = applyTfnswPositions(
+      [anytripVehicle({ id: 'A21', tripId: 'anytrip-trip' })],
+      [tfPos({ tripId: 'gtfs-trip', vehicleId: 'A21' })],
+      BBOX, 1500,
+    );
+    expect(byTrip).toBe(0);
+    expect(byVeh).toBe(1);
+    expect(matched).toBe(1);
+    expect(added).toBe(0); // TfNSW position consumed by the AnyTrip vehicle
+    expect(vehicles).toHaveLength(1);
+    expect(vehicles[0]).toMatchObject({
+      id: 'A21', lat: -33.85, lon: 151.21,        // TfNSW position
+      route: { name: 'T1', color: '#F18500' },     // AnyTrip metadata kept
+      headsign: 'City', shapeId: 'au2:st:shape1',
+    });
+  });
+
   it('appends TfNSW-only trips inside the bbox as synthetic vehicles', () => {
     const { vehicles, added } = applyTfnswPositions(
       [anytripVehicle()],
