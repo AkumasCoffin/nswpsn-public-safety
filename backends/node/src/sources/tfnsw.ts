@@ -464,6 +464,9 @@ export function applyTfnswPositions(
       ...v,
       lat: p.lat,
       lon: p.lon,
+      // vdap measured AnyTrip's position, not this TfNSW one — drop it so
+      // the client snaps lat/lon instead of placing at a stale distance.
+      vdap: null,
       bearing: p.bearing ?? v.bearing,
       speedKmh: p.speedKmh ?? v.speedKmh,
       occupancy: p.occupancy ?? v.occupancy,
@@ -526,6 +529,7 @@ export function applyTfnswPositions(
       // Cached shape lets the frontend keep snapping this train to its
       // route track even on ticks AnyTrip drops it.
       shapeId: meta?.shapeId ?? null,
+      vdap: null, // TfNSW positions carry no along-path distance
       startDate: meta?.startDate ?? p.startDate,
       instanceNumber: meta?.instanceNumber ?? 0,
     });
