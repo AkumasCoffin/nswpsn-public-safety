@@ -1663,7 +1663,11 @@
        open cards shrink together and scroll their own bodies. */
     #right-dock .ais-list-panel {
       position: static; width: 100%; max-width: none;
-      max-height: none; flex: 0 1 auto; min-height: 0;
+      /* Don't shrink below content: a collapsed section must always show
+         its header (it was getting squished to a few px by the service-
+         alerts card). Cap the height so a long EXPANDED list still scrolls
+         internally and leaves room for the alerts card below. */
+      max-height: 50vh; flex: 0 0 auto; min-height: 0;
       order: 1;
       background: transparent; border: 0; border-radius: 0;
       box-shadow: none; backdrop-filter: none;
