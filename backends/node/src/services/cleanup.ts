@@ -26,6 +26,11 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
+import {
+  removeIncidentImageDir,
+  sweepStaleUploadParts,
+  reconcileOrphanImageDirs,
+} from './incidentImages.js';
 
 // Accept both the canonical var and the name env.sample documented for
 // years (DATA_CLEANUP_INTERVAL) — previously only _SECS was read here
@@ -387,6 +392,24 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       try {
         const purgeDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
         const cond = `deleted_at IS NOT NULL AND deleted_at < (NOW() - ($1 || ' days')::interval)`;
+        // Collect the ids first: once the rows are gone we can't tell which
+        // upload directories to drop. Archived incidents are excluded —
+        // their snapshot (and its photos) is the permanent record.
+        let purgeIds: string[] = [];
+        try {
+          const ids = await client.query<{ id: string }>(
+            `SELECT id FROM incidents
+              WHERE ${cond}
+                AND id NOT IN (SELECT id FROM archived_incidents)`,
+            [String(purgeDays)],
+          );
+          purgeIds = ids.rows.map((r) => r.id);
+        } catch (err) {
+          log.warn(
+            { err: (err as Error).message },
+            'cleanup: could not resolve purge ids for image removal',
+          );
+        }
         await client.query(
           `DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE ${cond})`,
           [String(purgeDays)],
@@ -405,6 +428,28 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
             'cleanup: purged soft-deleted incidents',
           );
         }
+        // Drop each purged incident's uploaded photos from disk.
+        for (const id of purgeIds) {
+          await removeIncidentImageDir(id);
+        }
+        // Reconcile the whole image tree against the DB: any directory
+        // whose incident no longer exists (as a live OR archived row) is
+        // removed. This is the catch-all guarantee that image files never
+        // outlive their incident's DB row, no matter how the row left —
+        // including RFS/pager stub incidents that never reach the
+        // soft-delete purge above.
+        await reconcileOrphanImageDirs(async (ids) => {
+          const r = await client.query<{ id: string }>(
+            `SELECT id FROM incidents WHERE id = ANY($1::text[])
+             UNION
+             SELECT id FROM archived_incidents WHERE id = ANY($1::text[])`,
+            [ids],
+          );
+          return new Set(r.rows.map((row) => row.id));
+        });
+        // Sweep temp files abandoned by killed uploads (belongs to no
+        // incident directory in particular; runs once per cleanup pass).
+        await sweepStaleUploadParts();
       } catch (err) {
         log.warn(
           { err: (err as Error).message },

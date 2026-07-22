@@ -70,6 +70,7 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   weather_current: 'archive_misc',
   weather_radar: 'archive_misc',
   pager: 'archive_misc',
+  user_incident: 'archive_misc',
   news: 'archive_misc',
   aviation: 'archive_misc',
   centralwatch: 'archive_misc',

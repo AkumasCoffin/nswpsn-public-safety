@@ -1,0 +1,43 @@
+# Editor-uploaded incident photos.
+#
+# Everything here is untrusted user content living inside the webroot, so
+# this file's job is: never execute anything, never list anything, and let
+# Cloudflare cache aggressively (filenames are immutable UUIDs).
+
+# No directory listings — the file index is the incidents API, not Apache.
+Options -Indexes -ExecCGI
+
+# Deny by default; allow ONLY a bare UUID-style basename with exactly one
+# image extension. This is an allowlist, so multi-extension tricks
+# (photo.php.jpg), extensionless files, and dotfiles are all denied — the
+# uploader only ever writes <uuid>.<jpg|png|webp|gif>, nothing else should
+# be reachable.
+<FilesMatch ".*">
+  Require all denied
+</FilesMatch>
+<FilesMatch "^[A-Za-z0-9][A-Za-z0-9-]*\.(?i:jpe?g|png|webp|gif)$">
+  Require all granted
+</FilesMatch>
+
+# Never hand any PHP-ish name to an interpreter. RemoveHandler only undoes
+# AddHandler; SetHandler none also overrides an inherited PHP-FPM
+# `SetHandler proxy:fcgi` from a server/vhost config, which RemoveHandler
+# cannot. Covers mod_php and PHP-FPM, PHP 7 and 8.
+<FilesMatch "\.(?i:php|phar|phtml|php[0-9]*)$">
+  SetHandler none
+  Require all denied
+</FilesMatch>
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag engine off
+</IfModule>
+
+<IfModule mod_headers.c>
+  # Immutable UUID filenames: a given URL's bytes never change.
+  Header set Cache-Control "public, max-age=31536000, immutable"
+  # Don't let a mislabelled upload be sniffed into something executable.
+  Header set X-Content-Type-Options "nosniff"
+  Header set Content-Disposition "inline"
+</IfModule>

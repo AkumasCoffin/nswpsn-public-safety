@@ -44,6 +44,25 @@ import {
   canEditIncidents,
   canManageUsers,
 } from '../services/auth/roles.js';
+import { archiveWriter } from '../store/archive.js';
+import {
+  userIncidentArchiveRow,
+  type UserIncidentRow,
+} from '../sources/userIncidents.js';
+import { randomUUID } from 'node:crypto';
+import {
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_INCIDENT,
+  ImageTooLargeError,
+  ImageTypeMismatchError,
+  deleteIncidentImageFile,
+  isSafeIdSegment,
+  normaliseContentType,
+  parseIncidentImages,
+  saveIncidentImageStream,
+  type IncidentImage,
+} from '../services/incidentImages.js';
+import { MetadataStripError } from '../services/imageMetadata.js';
 
 export const incidentsRouter = new Hono();
 
@@ -89,14 +108,19 @@ async function userCanModifyIncident(
  * incident's creator, or a site admin. `updateBy` is the log author,
  * `incidentBy` the incident creator (both may be null on legacy rows).
  */
+function currentUserName(c: { get: (k: string) => unknown }): string | null {
+  const v = c.get('userName');
+  return typeof v === 'string' && v ? v : null;
+}
+
+/** Log entries may only be edited/deleted by their AUTHOR (site admins
+ * retain a moderation override). */
 async function userCanModifyUpdate(
   userId: string | undefined,
   updateBy: string | null,
-  incidentBy: string | null,
 ): Promise<boolean> {
   if (!userId) return false;
   if (updateBy && updateBy === userId) return true;
-  if (incidentBy && incidentBy === userId) return true;
   return canManageUsers(userId);
 }
 
@@ -114,11 +138,50 @@ const UPDATABLE_FIELDS = [
   'status',
   'size',
   'responding_agencies',
+  'units',
   'expires_at',
   'updated_at',
 ] as const;
 type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
-const JSONB_FIELDS: ReadonlySet<string> = new Set(['type', 'responding_agencies']);
+const JSONB_FIELDS: ReadonlySet<string> = new Set(['type', 'responding_agencies', 'units']);
+
+/**
+ * Sanitize an editor-supplied units list: strings only, trimmed,
+ * uppercased, de-duped, bounded (24 chars each, 50 units max) so a
+ * malformed payload can't bloat the row or the callsign dictionary.
+ */
+export function sanitizeUnits(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of raw) {
+    if (typeof u !== 'string') continue;
+    const s = u.trim().toUpperCase().slice(0, 24);
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+/** Upsert saved callsigns into the persistent dictionary (best-effort —
+ * a failure here must never fail the incident save). */
+async function rememberCallsigns(pool: Pool, units: string[]): Promise<void> {
+  for (const cs of units) {
+    try {
+      await pool.query(
+        `INSERT INTO callsigns (callsign) VALUES ($1)
+         ON CONFLICT (callsign) DO UPDATE
+           SET last_used = now(), use_count = callsigns.use_count + 1`,
+        [cs],
+      );
+    } catch (err) {
+      log.warn({ err, cs }, 'callsigns: upsert failed');
+      return;
+    }
+  }
+}
 
 /**
  * Coerce an untrusted JSON value into a finite coordinate number.
@@ -155,7 +218,7 @@ interface IncidentRow {
 
 function normaliseIncident(row: IncidentRow): Record<string, unknown> {
   const out: Record<string, unknown> = { ...row };
-  for (const k of ['type', 'responding_agencies']) {
+  for (const k of ['type', 'responding_agencies', 'units', 'images']) {
     const v = out[k];
     if (typeof v === 'string') {
       try {
@@ -252,6 +315,30 @@ incidentsRouter.get('/api/incidents', async (c) => {
 // Archived rows live in their own table, are exempt from data retention,
 // and are publicly searchable from the logs page.
 // ---------------------------------------------------------------------------
+
+// GET /api/incidents/callsigns — the persistent callsign dictionary for
+// the editor's unit-input tab completion. Registered before /:id so the
+// static segment wins the route match. Tolerates a missing table (un-run
+// migration) by returning an empty list rather than 500ing the editor.
+incidentsRouter.get('/api/incidents/callsigns', async (c) => {
+  try {
+    const result = await withPool(async (pool) => {
+      try {
+        const r = await pool.query<{ callsign: string }>(
+          'SELECT callsign FROM callsigns ORDER BY use_count DESC, last_used DESC LIMIT 500',
+        );
+        return r.rows.map((row) => row.callsign);
+      } catch {
+        return [] as string[];
+      }
+    });
+    if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
+    return c.json({ callsigns: result });
+  } catch (err) {
+    log.error({ err }, 'Error fetching callsigns');
+    return c.json({ error: 'Failed to fetch callsigns' }, 500);
+  }
+});
 
 // GET /api/incidents/archived — public search (?q=&limit=&offset=).
 // Registered before /:id so the static segment wins the route match.
@@ -364,6 +451,22 @@ incidentsRouter.post('/api/incidents/:id/archive', requireRole(canManageUsers), 
       );
       // Off the live map; the archive copy is the permanent record.
       await pool.query('UPDATE incidents SET deleted_at = NOW() WHERE id = $1', [id]);
+      // Pull the incident's snapshots out of the regular logs feed —
+      // archived incidents live ONLY in the "Archived Incidents" area,
+      // non-archived ones stay in the feed until retention. Best-effort:
+      // a missing archive table must not fail the archive action itself.
+      try {
+        await pool.query(
+          `DELETE FROM archive_misc WHERE source = 'user_incident' AND source_id = $1`,
+          [id],
+        );
+        await pool.query(
+          `DELETE FROM archive_misc_latest WHERE source = 'user_incident' AND source_id = $1`,
+          [id],
+        );
+      } catch (err) {
+        log.warn({ err, id }, 'archive: failed to remove logs-feed snapshots');
+      }
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
@@ -460,6 +563,15 @@ incidentsRouter.post('/api/incidents', async (c) => {
 incidentsRouter.put('/api/incidents/:id', async (c) => {
   const id = c.req.param('id');
   try {
+    const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    // Units are COLLABORATIVE dispatch info: any editor may attach or
+    // remove callsigns on any incident (incl. shared RFS/pager stubs),
+    // so a units-only update bypasses the creator-or-admin gate that
+    // protects the descriptive fields.
+    const unitsOnly =
+      Object.prototype.hasOwnProperty.call(data, 'units') &&
+      Object.keys(data).every((k) => k === 'units' || k === 'updated_at');
+
     // Ownership gate: only the creator or a site admin may edit. A
     // non-owner editor must use the suggestion flow instead.
     const gate = await withPool(async (pool) => {
@@ -472,21 +584,22 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     });
     if (isUnavailable(gate)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in gate) return c.json({ error: 'Incident not found' }, 404);
-    if (!(await userCanModifyIncident(currentUserId(c), gate.createdBy))) {
+    if (!unitsOnly && !(await userCanModifyIncident(currentUserId(c), gate.createdBy))) {
       return c.json(
         { error: 'Only the incident creator or an admin can edit it; suggest an edit instead.' },
         403,
       );
     }
 
-    const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const sets: string[] = [];
     const vals: unknown[] = [];
     for (const key of UPDATABLE_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(data, key)) {
         const raw = data[key as UpdatableField];
         let val: unknown;
-        if (JSONB_FIELDS.has(key)) {
+        if (key === 'units') {
+          val = JSON.stringify(sanitizeUnits(raw));
+        } else if (JSONB_FIELDS.has(key)) {
           val = JSON.stringify(raw);
         } else if (key === 'lat' || key === 'lng') {
           // Never trust unvalidated JSON straight into the geo columns —
@@ -508,8 +621,14 @@ incidentsRouter.put('/api/incidents/:id', async (c) => {
     }
     vals.push(id);
     const sql = `UPDATE incidents SET ${sets.join(', ')} WHERE id = $${vals.length}`;
+    const savedUnits = Object.prototype.hasOwnProperty.call(data, 'units')
+      ? sanitizeUnits(data['units'])
+      : [];
     const result = await withPool(async (pool) => {
       await pool.query(sql, vals);
+      // Feed the callsign dictionary so future unit inputs can
+      // tab-complete what anyone has typed before.
+      if (savedUnits.length) await rememberCallsigns(pool, savedUnits);
       return true;
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
@@ -541,7 +660,23 @@ incidentsRouter.delete('/api/incidents/:id', async (c) => {
       // from the API but keep everything in the database. The hourly
       // cleanup hard-deletes rows once deleted_at ages past
       // DATA_RETENTION_DAYS, so accidental deletes stay recoverable.
-      await pool.query('UPDATE incidents SET deleted_at = NOW() WHERE id = $1', [id]);
+      const deleted = await pool.query<UserIncidentRow & { is_rfs_stub: boolean | null }>(
+        'UPDATE incidents SET deleted_at = NOW() WHERE id = $1 RETURNING *',
+        [id],
+      );
+      // Push a final is_active:false snapshot to the logs-page archive.
+      // The user_incidents poller no longer sees soft-deleted rows, so
+      // without this the incident's last archived state would read
+      // "active" until retention drops it.
+      const row = deleted.rows[0];
+      if (row && row.is_rfs_stub !== true) {
+        archiveWriter.push(
+          'archive_misc',
+          userIncidentArchiveRow(row, Math.floor(Date.now() / 1000), {
+            forceInactive: true,
+          }),
+        );
+      }
       return { ok: true as const };
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
@@ -556,6 +691,238 @@ incidentsRouter.delete('/api/incidents/:id', async (c) => {
   } catch (err) {
     log.error({ err, id }, 'Error deleting incident');
     return c.json({ error: 'Failed to delete incident' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// INCIDENT IMAGES
+//
+// POST   /api/incidents/:id/images            — upload one photo (raw body)
+// DELETE /api/incidents/:id/images/:imageId   — remove one photo
+//
+// Uploading is collaborative (any editor, like units) so a responding
+// editor can add photos to someone else's pin; DELETING is restricted to
+// the uploader, with the usual admin moderation override.
+//
+// `images` is deliberately absent from UPDATABLE_FIELDS: the column is
+// only writable through these two handlers, so a crafted PUT can't forge
+// entries pointing at arbitrary paths.
+// ---------------------------------------------------------------------------
+
+// Bound concurrent uploads: each holds up to MAX_IMAGE_BYTES of streamed
+// disk + the metadata-strip pass. Without a global rate limiter this cap
+// is what stops a burst of parallel uploads from exhausting the box.
+const MAX_CONCURRENT_UPLOADS = 6;
+let _uploadsInFlight = 0;
+function acquireUploadSlot(): boolean {
+  if (_uploadsInFlight >= MAX_CONCURRENT_UPLOADS) return false;
+  _uploadsInFlight += 1;
+  return true;
+}
+function releaseUploadSlot(): void {
+  if (_uploadsInFlight > 0) _uploadsInFlight -= 1;
+}
+
+/** Read the current images array under a row lock. Returns null if the
+ *  incident is missing or soft-deleted. */
+async function lockIncidentImages(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<{ images: unknown }>; rowCount: number | null }> },
+  id: string,
+): Promise<IncidentImage[] | null> {
+  const r = await client.query(
+    'SELECT images FROM incidents WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+    [id],
+  );
+  if (!r.rowCount) return null;
+  return parseIncidentImages(r.rows[0]?.images);
+}
+
+incidentsRouter.post(
+  '/api/incidents/:id/images',
+  // NOTE: deliberately NOT using hono's bodyLimit here. On a chunked
+  // request (no Content-Length) it buffers the ENTIRE body into memory
+  // before the handler runs — a 50MB heap allocation per request, which
+  // is exactly the OOM the streaming write avoids. saveIncidentImageStream
+  // enforces MAX_IMAGE_BYTES against bytes as they arrive instead, and the
+  // Content-Length pre-check below rejects an honest oversized upload for
+  // free.
+  async (c) => {
+    const id = c.req.param('id');
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Incident not found' }, 404);
+
+    const contentType = normaliseContentType(c.req.header('content-type'));
+    if (!contentType) {
+      return c.json(
+        { error: 'Unsupported image type. Use JPEG, PNG, WebP or GIF.' },
+        415,
+      );
+    }
+    // Cheap early-out on an honest Content-Length; the streaming counter is
+    // the authoritative limit for chunked/lying uploads.
+    const declaredLen = Number(c.req.header('content-length'));
+    if (Number.isFinite(declaredLen) && declaredLen > MAX_IMAGE_BYTES) {
+      return c.json({ error: 'Image is too large (50MB max).' }, 413);
+    }
+    const body = c.req.raw.body;
+    if (!body) return c.json({ error: 'Empty upload' }, 400);
+
+    // Bound concurrent in-flight uploads so a burst of parallel 50MB
+    // streams can't pin unbounded RAM + disk at once (there is no global
+    // rate limiter in front of this).
+    if (!acquireUploadSlot()) {
+      return c.json({ error: 'Too many uploads in progress. Try again shortly.' }, 503);
+    }
+
+    const imageId = randomUUID();
+    let saved: Awaited<ReturnType<typeof saveIncidentImageStream>> | null = null;
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+      // Cheap pre-checks before spending disk on the stream. The
+      // authoritative capacity check happens under the row lock below.
+      const pre = await pool.query<{ images: unknown }>(
+        'SELECT images FROM incidents WHERE id = $1 AND deleted_at IS NULL',
+        [id],
+      );
+      if (!pre.rowCount) return c.json({ error: 'Incident not found' }, 404);
+      if (parseIncidentImages(pre.rows[0]?.images).length >= MAX_IMAGES_PER_INCIDENT) {
+        return c.json(
+          { error: `This incident already has ${MAX_IMAGES_PER_INCIDENT} photos.` },
+          409,
+        );
+      }
+
+      saved = await saveIncidentImageStream(id, imageId, contentType, body);
+
+      const entry: IncidentImage = {
+        id: imageId,
+        file: saved.publicPath,
+        size: saved.size,
+        content_type: contentType,
+        uploaded_by: currentUserId(c) ?? null,
+        uploaded_by_name: currentUserName(c),
+        uploaded_at: new Date().toISOString(),
+      };
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const current = await lockIncidentImages(client, id);
+        if (current === null) {
+          await client.query('ROLLBACK');
+          await deleteIncidentImageFile(id, saved.publicPath);
+          return c.json({ error: 'Incident not found' }, 404);
+        }
+        // Re-check under the lock: two concurrent uploads could both pass
+        // the pre-check above and push the incident to 5 photos.
+        if (current.length >= MAX_IMAGES_PER_INCIDENT) {
+          await client.query('ROLLBACK');
+          await deleteIncidentImageFile(id, saved.publicPath);
+          return c.json(
+            { error: `This incident already has ${MAX_IMAGES_PER_INCIDENT} photos.` },
+            409,
+          );
+        }
+        await client.query(
+          'UPDATE incidents SET images = $1::jsonb, updated_at = NOW() WHERE id = $2',
+          [JSON.stringify([...current, entry]), id],
+        );
+        await client.query('COMMIT');
+        // Past this point the row references the file; a later throw must
+        // NOT unlink it (that would dangle the reference). Clear `saved`
+        // so the outer catch's cleanup skips it.
+        saved = null;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      log.info({ id, imageId, size: entry.size }, 'Incident image uploaded');
+      return c.json({ success: true, image: entry }, 201);
+    } catch (err) {
+      // Never leave an orphan file behind when the DB half failed.
+      if (saved) await deleteIncidentImageFile(id, saved.publicPath);
+      if (err instanceof ImageTooLargeError) {
+        return c.json({ error: 'Image is too large (50MB max).' }, 413);
+      }
+      if (err instanceof ImageTypeMismatchError) {
+        return c.json(
+          { error: 'That file is not a valid JPEG, PNG, WebP or GIF image.' },
+          415,
+        );
+      }
+      // Fail-closed: we could not scrub the file's metadata, so we refuse
+      // to publish it rather than leak whatever EXIF/GPS it carries.
+      if (err instanceof MetadataStripError) {
+        log.warn({ id, err: (err as Error).message }, 'Rejected image: metadata strip failed');
+        return c.json(
+          { error: 'That image could not be processed. Try re-saving or exporting it first.' },
+          415,
+        );
+      }
+      log.error({ err, id }, 'Error uploading incident image');
+      return c.json({ error: 'Failed to upload image' }, 500);
+    } finally {
+      releaseUploadSlot();
+    }
+  },
+);
+
+incidentsRouter.delete('/api/incidents/:id/images/:imageId', async (c) => {
+  const id = c.req.param('id');
+  const imageId = c.req.param('imageId');
+  if (!isSafeIdSegment(id) || !isSafeIdSegment(imageId)) {
+    return c.json({ error: 'Image not found' }, 404);
+  }
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    let removed: IncidentImage | null = null;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await lockIncidentImages(client, id);
+      if (current === null) {
+        await client.query('ROLLBACK');
+        return c.json({ error: 'Incident not found' }, 404);
+      }
+      const target = current.find((img) => img.id === imageId);
+      if (!target) {
+        await client.query('ROLLBACK');
+        return c.json({ error: 'Image not found' }, 404);
+      }
+      // Author-only, with the same admin moderation override log entries use.
+      if (!(await userCanModifyUpdate(currentUserId(c), target.uploaded_by))) {
+        await client.query('ROLLBACK');
+        return c.json(
+          { error: 'Only the editor who uploaded this photo (or an admin) can remove it.' },
+          403,
+        );
+      }
+      await client.query(
+        'UPDATE incidents SET images = $1::jsonb, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(current.filter((img) => img.id !== imageId)), id],
+      );
+      await client.query('COMMIT');
+      removed = target;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Best-effort: the row is already updated, so a stray file is cosmetic.
+    if (removed) await deleteIncidentImageFile(id, removed.file);
+    log.info({ id, imageId }, 'Incident image removed');
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id, imageId }, 'Error removing incident image');
+    return c.json({ error: 'Failed to remove image' }, 500);
   }
 });
 
@@ -588,13 +955,14 @@ incidentsRouter.post('/api/incidents/:id/updates', async (c) => {
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const message = (data['message'] as string | undefined) ?? '';
-    // Any editor may add a log directly (requirement) — stamp the author
-    // so the log can later be edited/deleted by its author or the owner.
+    // Stamp the author id + display name (username only) so every log
+    // entry shows who wrote it.
     const createdBy = currentUserId(c) ?? null;
+    const createdByName = currentUserName(c);
     const result = await withPool(async (pool) => {
       const r = await pool.query<{ id: string }>(
-        'INSERT INTO incident_updates (incident_id, message, created_by) VALUES ($1, $2, $3) RETURNING id',
-        [id, message, createdBy],
+        'INSERT INTO incident_updates (incident_id, message, created_by, created_by_name) VALUES ($1, $2, $3, $4) RETURNING id',
+        [id, message, createdBy, createdByName],
       );
       return r.rows[0]?.id ?? null;
     });
@@ -617,7 +985,7 @@ incidentsRouter.put('/api/incidents/updates/:updateId', async (c) => {
     const result = await withPool(async (pool) => {
       const owner = await loadUpdateAuthority(pool, updateId);
       if (!owner) return { notFound: true as const };
-      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy, owner.incidentBy))) {
+      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy))) {
         return { forbidden: true as const };
       }
       await pool.query(
@@ -629,7 +997,7 @@ incidentsRouter.put('/api/incidents/updates/:updateId', async (c) => {
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in result) return c.json({ error: 'Update not found' }, 404);
     if ('forbidden' in result) {
-      return c.json({ error: 'Only the log author, incident owner, or an admin can edit it.' }, 403);
+      return c.json({ error: 'Only the log author (or an admin) can edit it.' }, 403);
     }
     return c.json({ success: true });
   } catch (err) {
@@ -647,7 +1015,7 @@ incidentsRouter.delete('/api/incidents/updates/:updateId', async (c) => {
     const result = await withPool(async (pool) => {
       const owner = await loadUpdateAuthority(pool, updateId);
       if (!owner) return { notFound: true as const };
-      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy, owner.incidentBy))) {
+      if (!(await userCanModifyUpdate(currentUserId(c), owner.updateBy))) {
         return { forbidden: true as const };
       }
       await pool.query('DELETE FROM incident_updates WHERE id = $1', [updateId]);
@@ -656,7 +1024,7 @@ incidentsRouter.delete('/api/incidents/updates/:updateId', async (c) => {
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
     if ('notFound' in result) return c.json({ error: 'Update not found' }, 404);
     if ('forbidden' in result) {
-      return c.json({ error: 'Only the log author, incident owner, or an admin can delete it.' }, 403);
+      return c.json({ error: 'Only the log author (or an admin) can delete it.' }, 403);
     }
     return c.json({ success: true });
   } catch (err) {

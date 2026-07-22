@@ -98,14 +98,11 @@ const gridCache = new Map<string, GridCacheEntry>();
 const GRID_CACHE_TTL_MS = 24 * 60 * 60_000;
 const GRID_CACHE_MAX = 500;
 
-function roundBbox(bbox: string, precision = 3): string {
-  const parts = bbox.split(',').map((s) => Number(s.trim()));
-  if (parts.length !== 4 || !parts.every(Number.isFinite)) return bbox;
-  const factor = 10 ** precision;
-  return parts
-    .map((p) => Math.round(p * factor) / factor)
-    .join(',');
-}
+// Grid geometry is STATIC — a given bbox always yields the same lines,
+// so successful responses carry a week of public cache (browser + CDN
+// cache per-URL; the frontend requests fixed global chunk bboxes whose
+// URLs repeat across users, pans and sessions).
+const GRID_HTTP_CACHE = 'public, max-age=604800, stale-while-revalidate=86400';
 
 w3wRouter.get('/api/w3w/grid-section', async (c) => {
   const url = new URL(c.req.url);
@@ -113,10 +110,14 @@ w3wRouter.get('/api/w3w/grid-section', async (c) => {
   if (!bbox) {
     return c.json({ error: 'Missing bounding-box parameter' }, 400);
   }
-  const key = roundBbox(bbox);
+  // EXACT-key cache: the old 3-decimal rounding (~111 m) could serve a
+  // NEIGHBOURING area's grid for this bbox — visibly wrong lines at
+  // viewport edges.
+  const key = bbox;
   const now = Date.now();
   const cached = gridCache.get(key);
   if (cached && now - cached.ts < GRID_CACHE_TTL_MS) {
+    c.header('Cache-Control', GRID_HTTP_CACHE);
     return c.json(cached.payload);
   }
   try {
@@ -148,6 +149,7 @@ w3wRouter.get('/api/w3w/grid-section', async (c) => {
       if (first) gridCache.delete(first);
     }
     gridCache.set(key, { payload: data, ts: now });
+    c.header('Cache-Control', GRID_HTTP_CACHE);
     return c.json(data);
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'w3w grid-section fetch failed');

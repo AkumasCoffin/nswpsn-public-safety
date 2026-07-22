@@ -99,6 +99,46 @@ async function doFetch(
   }
 }
 
+/**
+ * Binary fetch for protobuf feeds (GTFS-realtime etc.) — doFetch's
+ * text() decode corrupts binary payloads, so this is a parallel path.
+ */
+export async function fetchBuffer(
+  url: string,
+  opts: FetchOptions = {},
+): Promise<Uint8Array> {
+  const ac = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: opts.method ?? 'GET',
+      headers: {
+        'User-Agent': DEFAULT_UA,
+        Accept: 'application/x-google-protobuf, application/octet-stream, */*',
+        ...opts.headers,
+      },
+      signal: ac.signal,
+    });
+    if (!res.ok && !opts.allow_non_2xx) {
+      throw new HttpError(`HTTP ${res.status} for ${url}`, res.status, url);
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    if ((err as Error).name === 'AbortError') {
+      throw new HttpError(`timeout after ${timeoutMs}ms`, null, url);
+    }
+    throw new HttpError(
+      `fetch failed: ${(err as Error).message}`,
+      null,
+      url,
+    );
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export async function fetchJson<T = unknown>(
   url: string,
   opts: FetchOptions = {},
