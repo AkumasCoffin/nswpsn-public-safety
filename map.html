@@ -11846,7 +11846,11 @@ function initPagerHoursFromStorage() {
     // through green to violet at cruise (FR24-style), far more readable
     // than stepping through the marker ramp.
     function adsbTrailAltColor(altFt) {
-      const a = Math.max(0, Math.min(40000, altFt == null ? 0 : altFt));
+      // Genuinely-unknown altitude → neutral grey, so it doesn't masquerade
+      // as 0 ft (orange). 0 ft is always the orange end; 40000 ft the violet
+      // end — an absolute altitude→colour scale, same for every aircraft.
+      if (altFt == null) return 'hsl(220, 9%, 52%)';
+      const a = Math.max(0, Math.min(40000, altFt));
       const hue = 25 + (a / 40000) * 245;
       return 'hsl(' + Math.round(hue) + ', 85%, 55%)';
     }
@@ -11868,6 +11872,19 @@ function initPagerHoursFromStorage() {
         latlngs.push([m.lat, m.lng]);
         const alts = pts.map((p) => p[2]);
         alts.push(a ? a.altFt : alts[alts.length - 1]);
+        // Fill missing per-point altitudes so a segment without one isn't
+        // coloured as 0 ft (orange). Many feeds (TIS-B/ADS-R, dropouts)
+        // omit baro alt on some/all points; carry the nearest known value
+        // forward, seeding leading gaps from the first known altitude, else
+        // the live altitude. A truly all-unknown trail stays null → grey.
+        let _seedAlt = null;
+        for (const av of alts) { if (av != null) { _seedAlt = av; break; } }
+        if (_seedAlt == null && a && a.altFt != null) _seedAlt = a.altFt;
+        let _lastAlt = _seedAlt;
+        for (let i = 0; i < alts.length; i++) {
+          if (alts[i] == null) alts[i] = _lastAlt;
+          else _lastAlt = alts[i];
+        }
         seen.add(hex);
         // Per-segment gradient. The focused trail renders every segment;
         // background trails (pill mode) are grouped to ≤24 segments so
