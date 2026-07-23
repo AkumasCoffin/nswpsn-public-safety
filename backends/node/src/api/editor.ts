@@ -44,6 +44,7 @@ import {
   canManageUsers,
   canAssignPrivilegedRoles,
   isPrivilegedRole,
+  isOwner,
 } from '../services/auth/roles.js';
 
 export const editorRouter = new Hono();
@@ -493,6 +494,40 @@ editorRouter.post('/api/editor-requests/:id/reject', requireRole(canManageUsers)
   } catch (err) {
     log.error({ err }, 'Error rejecting editor request');
     return c.json({ error: 'Failed to reject request' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/editor-requests/:id  — OWNER-only, REJECTED requests only.
+// Lets owners clear out rejected requests. Guarded twice: the owner role
+// (requireRole(isOwner)) and a rejected-status check so a pending/approved
+// request can never be deleted (approved ones own granted user_roles).
+// ---------------------------------------------------------------------------
+editorRouter.delete('/api/editor-requests/:id', requireRole(isOwner), async (c) => {
+  const requestIdRaw = c.req.param('id');
+  if (!/^\d+$/.test(requestIdRaw)) {
+    return c.json({ error: 'Request not found' }, 404);
+  }
+  const requestId = Number.parseInt(requestIdRaw, 10);
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    const req = await fetchRequest(pool, requestId);
+    if (!req) return c.json({ error: 'Request not found' }, 404);
+    if (req.status !== 'rejected') {
+      return c.json(
+        { error: 'Only rejected requests can be deleted' },
+        400,
+      );
+    }
+
+    await pool.query('DELETE FROM editor_requests WHERE id = $1', [requestId]);
+    log.info({ requestId, email: req.email }, 'Deleted rejected editor request');
+    return c.json({ success: true, message: 'Request deleted' });
+  } catch (err) {
+    log.error({ err }, 'Error deleting editor request');
+    return c.json({ error: 'Failed to delete request' }, 500);
   }
 });
 
