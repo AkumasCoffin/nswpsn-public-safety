@@ -2681,7 +2681,14 @@
           'programming': '💻 Programming',
           'none': '🆕 Willing to learn'
         };
-        const techList = req.tech_experience.split(',').map(t => techLabels[t.trim()] || t.trim());
+        // The API returns tech_experience as an ARRAY (backend splitCsv);
+        // tolerate a legacy comma-string too. Calling .split() on the array
+        // used to throw here and silently abort viewDetails — so the "view
+        // details" button appeared to do nothing.
+        const techArr = Array.isArray(req.tech_experience)
+          ? req.tech_experience
+          : String(req.tech_experience).split(',');
+        const techList = techArr.map(t => { const k = String(t).trim(); return techLabels[k] || k; });
         document.getElementById('detail-tech').textContent = techList.join(', ');
       } else {
         techGroup.style.display = 'none';
@@ -2689,11 +2696,12 @@
       
       // Format experience level
       const levelGroup = document.getElementById('detail-level-group');
-      if (req.experience_level) {
+      const lvl = Math.max(0, Math.min(5, parseInt(req.experience_level, 10) || 0)); // clamp — repeat() throws on <0 / huge
+      if (lvl) {
         levelGroup.style.display = 'block';
-        const stars = '⭐'.repeat(req.experience_level);
+        const stars = '⭐'.repeat(lvl);
         const levelLabels = {1: 'Beginner', 2: 'Basic', 3: 'Intermediate', 4: 'Advanced', 5: 'Expert'};
-        document.getElementById('detail-level').textContent = `${stars} (${levelLabels[req.experience_level] || 'Unknown'})`;
+        document.getElementById('detail-level').textContent = `${stars} (${levelLabels[lvl] || 'Unknown'})`;
       } else {
         levelGroup.style.display = 'none';
       }
