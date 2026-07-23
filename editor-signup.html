@@ -667,8 +667,19 @@
         }
       }
 
+      // Discord signup: the login IS this Discord account, and approval
+      // grants roles to it — so the request MUST carry that account's
+      // email. A typed-in/edited email wouldn't match the account, which
+      // is why the email looked like it "changed" after approval. Lock the
+      // field to the account email so the request and the account agree.
       const emailInput = document.getElementById('email');
-      if (emailInput && !emailInput.value && user.email) emailInput.value = user.email;
+      if (emailInput && user.email) {
+        emailInput.value = user.email;
+        emailInput.readOnly = true;
+        emailInput.title = 'Using your Discord account email';
+        emailInput.style.opacity = '0.85';
+        emailInput.style.cursor = 'not-allowed';
+      }
 
       const discordInput = document.getElementById('discord');
       if (discordInput && !discordInput.value) {
