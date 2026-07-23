@@ -2346,10 +2346,18 @@
             </div>
           `;
         } else {
+          // Owners can delete rejected requests to clear them out. The
+          // button is owner-only here; the backend re-checks owner + status.
+          const delBtn = (req.status === 'rejected' && userPermissions.is_owner)
+            ? `<button class="btn btn-danger btn-sm" onclick="deleteRequest(${req.id})" title="Delete rejected request (owner only)"><i class="fas fa-trash"></i></button>`
+            : '';
           actionsHtml = `
-            <button class="btn btn-secondary btn-sm" onclick="viewDetails(${req.id})" title="View details">
-              <i class="fas fa-eye"></i>
-            </button>
+            <div class="action-buttons">
+              <button class="btn btn-secondary btn-sm" onclick="viewDetails(${req.id})" title="View details">
+                <i class="fas fa-eye"></i>
+              </button>
+              ${delBtn}
+            </div>
           `;
         }
         
@@ -2606,7 +2614,32 @@
       document.getElementById('approve-modal').style.display = 'none';
       currentApproval = null;
     }
-    
+
+    // Owner-only: permanently delete a REJECTED request. The backend
+    // re-checks the owner role and the rejected status, so a non-owner
+    // hand-crafting the call still gets a 403/400.
+    async function deleteRequest(requestId) {
+      const req = allRequests.find(r => r.id === requestId);
+      if (!req) return;
+      if (!userPermissions.is_owner) { showToast('Only owners can delete requests.', 'warn'); return; }
+      if (req.status !== 'rejected') { showToast('Only rejected requests can be deleted.', 'warn'); return; }
+      if (!confirm(`Delete this rejected request from ${req.email || 'unknown'}? This cannot be undone.`)) return;
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': await authHeader() },
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.error || 'Failed to delete request');
+        }
+        showToast('Rejected request deleted.', 'success');
+        await loadRequests();
+      } catch (error) {
+        showToast(`Delete failed: ${error.message}`, 'error');
+      }
+    }
+
     function viewDetails(requestId) {
       const req = allRequests.find(r => r.id === requestId);
       if (!req) return;
