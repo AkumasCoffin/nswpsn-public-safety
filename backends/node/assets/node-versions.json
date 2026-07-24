@@ -1,10 +1,10 @@
 {
-  "_comment": "Node self-update manifest. Artifacts are hosted on the SITE repo's GitHub Releases. URLs + sha256 below are PLACEHOLDERS — fill them in at the first real release (replace the .../releases/download/<tag>/ path and the empty sha256 hex). The agent checks this on start, every 6h, and on cmd{action:'update'}: it downloads to .pending, sha256-verifies, then swaps the component dir / self-replaces via a detached helper and restarts.",
+  "_comment": "Node self-update + component manifest. The INITIAL agent binary is served by the backend at /api/node-agent/<platform> (install time). These GitHub Release URLs are for (a) agent SELF-update and (b) the big components (sdrtrunk runtime ~250MB, rdio) the agent fetches on first run — hosted on Releases (a CDN) precisely so they bypass the Cloudflare-proxied backend's request-size limits. URLs + sha256 are PLACEHOLDERS: fill in the real tag path and sha256 hex at first release. The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
   "agent": {
     "version": "0.1.0",
     "urls": {
-      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/nodeagent-windows-amd64.exe",
-      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/nodeagent-linux-amd64"
+      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-public-safety/releases/download/v0.1.0/nodeagent-windows-amd64.exe",
+      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-public-safety/releases/download/v0.1.0/nodeagent-linux-amd64"
     },
     "sha256": {
       "windows-amd64": "",
@@ -14,8 +14,8 @@
   "sdrtrunk": {
     "version": "0.6.1",
     "urls": {
-      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/sdrtrunk-windows-amd64.zip",
-      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/sdrtrunk-linux-amd64.zip"
+      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-public-safety/releases/download/v0.1.0/sdrtrunk-windows-amd64.zip",
+      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-public-safety/releases/download/v0.1.0/sdrtrunk-linux-amd64.zip"
     },
     "sha256": {
       "windows-amd64": "",
@@ -25,8 +25,8 @@
   "rdio": {
     "version": "6.6.3",
     "urls": {
-      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/rdio-scanner-windows-amd64.zip",
-      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/rdio-scanner-linux-amd64.zip"
+      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-public-safety/releases/download/v0.1.0/rdio-scanner-windows-amd64.zip",
+      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-public-safety/releases/download/v0.1.0/rdio-scanner-linux-amd64.zip"
     },
     "sha256": {
       "windows-amd64": "",
