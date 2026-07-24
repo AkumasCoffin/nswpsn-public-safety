@@ -366,6 +366,12 @@ const Schema = z.object({
   // (see scripts/deploy.sh); the big SDR-Trunk runtime is placed there once.
   NODE_DOWNLOADS_BASE: z.string().default('https://nswpsn.forcequit.xyz/downloads'),
 
+  // Local filesystem path of that same downloads dir, so the update manifest
+  // can compute each artifact's sha256 on the fly (no hand-hashing). Default
+  // resolves to <webroot>/downloads relative to the backend cwd
+  // (backends/node → ../../downloads).
+  NODE_DOWNLOADS_DIR: z.string().default('../../downloads'),
+
 });
 
 const parsed = Schema.safeParse(process.env);

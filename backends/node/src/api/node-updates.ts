@@ -13,9 +13,11 @@
  * node authenticates with its feeder token, exactly like /api/node-ingest/.
  */
 import { Hono } from 'hono';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes } from '../services/auth/roles.js';
 import { resolveFeederToken } from '../services/auth/nodeToken.js';
@@ -30,17 +32,65 @@ const MANIFEST_CANDIDATES = [
   path.resolve(HERE, '../../assets/node-versions.json'), // src/api → <backend>/assets
 ];
 
-let manifestCache: unknown = null;
+const DOWNLOADS_DIR = path.isAbsolute(config.NODE_DOWNLOADS_DIR)
+  ? config.NODE_DOWNLOADS_DIR
+  : path.resolve(process.cwd(), config.NODE_DOWNLOADS_DIR);
 
-function loadManifest(): unknown {
-  if (manifestCache) return manifestCache;
+interface Manifest {
+  [component: string]:
+    | { version: string; urls: Record<string, string>; sha256: Record<string, string> }
+    | string;
+}
+
+let baseCache: Manifest | null = null;
+function loadBaseManifest(): Manifest {
+  if (baseCache) return baseCache;
   for (const p of MANIFEST_CANDIDATES) {
     if (existsSync(p)) {
-      manifestCache = JSON.parse(readFileSync(p, 'utf8')) as unknown;
-      return manifestCache;
+      baseCache = JSON.parse(readFileSync(p, 'utf8')) as Manifest;
+      return baseCache;
     }
   }
   throw new Error(`node-versions.json not found in: ${MANIFEST_CANDIDATES.join(', ')}`);
+}
+
+// sha256 cache keyed by file path, invalidated when the file's mtime/size
+// changes (i.e. a new artifact was placed) so a big zip is hashed only once.
+const shaCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
+function sha256OfDownload(filename: string): string {
+  const p = path.join(DOWNLOADS_DIR, filename);
+  let st: import('node:fs').Stats;
+  try {
+    st = statSync(p);
+  } catch {
+    return ''; // not present → empty sha means "no update available"
+  }
+  const cached = shaCache.get(p);
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.hash;
+  const hash = createHash('sha256').update(readFileSync(p)).digest('hex');
+  shaCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, hash });
+  return hash;
+}
+
+/**
+ * The served manifest: the committed versions + urls, with sha256 computed
+ * from whatever artifacts are actually present in the downloads dir. So an
+ * operator just drops files in <webroot>/downloads — no hand-hashing, and the
+ * agent only fetches an artifact whose sha256 is non-empty (present + hashed).
+ */
+function loadManifest(): Manifest {
+  const base = loadBaseManifest();
+  const out: Manifest = JSON.parse(JSON.stringify(base)) as Manifest;
+  for (const key of Object.keys(out)) {
+    const comp = out[key];
+    if (!comp || typeof comp === 'string' || !comp.urls) continue;
+    comp.sha256 = comp.sha256 ?? {};
+    for (const [platform, url] of Object.entries(comp.urls)) {
+      const filename = url.split('/').pop() ?? '';
+      if (filename) comp.sha256[platform] = sha256OfDownload(filename);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

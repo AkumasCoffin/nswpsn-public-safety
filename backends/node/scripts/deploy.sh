@@ -51,13 +51,19 @@ AGENT_SRC="$REPO_ROOT/feeder-nodes/radio-node"
 DOWNLOADS_DIR="$REPO_ROOT/downloads"
 export PATH="$PATH:/snap/bin"
 if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
-  echo "[deploy] building node-agent binaries ($(go version | awk '{print $3}'))…"
+  # Stamp the built agent's version to match the manifest's agent.version, so
+  # the agent's self-update compares EQUAL and doesn't loop. To push a new
+  # agent to running nodes: bump `agent.version` in assets/node-versions.json
+  # and deploy — nodes then see the higher version and self-update.
+  AGENT_VERSION="$(node -e 'process.stdout.write(String(require(process.argv[1]).agent.version||"0.0.0"))' "$NODE_DIR/assets/node-versions.json" 2>/dev/null || echo 0.0.0)"
+  LDFLAGS="-s -w -X github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version.Version=$AGENT_VERSION"
+  echo "[deploy] building node-agent binaries v$AGENT_VERSION ($(go version | awk '{print $3}'))…"
   mkdir -p "$DOWNLOADS_DIR"
   (
     cd "$AGENT_SRC"
-    GOOS=linux   GOARCH=amd64 go build -o "$DOWNLOADS_DIR/nodeagent-linux-amd64"       ./cmd/nodeagent
-    GOOS=windows GOARCH=amd64 go build -o "$DOWNLOADS_DIR/nodeagent-windows-amd64.exe" ./cmd/nodeagent
-    GOOS=linux   GOARCH=arm64 go build -o "$DOWNLOADS_DIR/nodeagent-linux-arm64"       ./cmd/nodeagent
+    GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-linux-amd64"       ./cmd/nodeagent
+    GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-windows-amd64.exe" ./cmd/nodeagent
+    GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-linux-arm64"       ./cmd/nodeagent
   )
   echo "[deploy] node-agent binaries updated in $DOWNLOADS_DIR"
 else
