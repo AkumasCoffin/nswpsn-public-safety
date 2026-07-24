@@ -220,6 +220,18 @@ func (c *Client) SetGain(id string, gain int) error {
 	return c.post("/tuners/"+url.PathEscape(id)+"/gain", map[string]any{"gain": gain})
 }
 
+// SetSampleRate POSTs /tuners/{id}/samplerate. Supported by the control server
+// only for tuners with settable sample rates; a rejection is returned as an
+// error for the caller to log (best-effort).
+func (c *Client) SetSampleRate(id string, hz float64) error {
+	return c.post("/tuners/"+url.PathEscape(id)+"/samplerate", map[string]any{"sampleRate": hz})
+}
+
+// SetAutoPPM POSTs /tuners/{id}/autoppm to toggle automatic PPM correction.
+func (c *Client) SetAutoPPM(id string, enabled bool) error {
+	return c.post("/tuners/"+url.PathEscape(id)+"/autoppm", map[string]any{"enabled": enabled})
+}
+
 // StartChannel POSTs /channels/{id}/start.
 func (c *Client) StartChannel(id int) error {
 	return c.post(fmt.Sprintf("/channels/%d/start", id), nil)

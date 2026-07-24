@@ -390,13 +390,18 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 			}
 			ts = *wildcard
 		}
+		if ts.SampleRate > 0 {
+			_ = d.SDR.SetSampleRate(lt.ID, ts.SampleRate)
+		}
 		if ts.Gain != nil {
 			_ = d.SDR.SetGain(lt.ID, int(*ts.Gain))
 		}
-		if ts.PPM != nil {
+		if ts.AutoPpm {
+			_ = d.SDR.SetAutoPPM(lt.ID, true)
+		} else if ts.PPM != nil {
+			// Manual PPM only when auto-ppm is off (auto would override it).
 			_ = d.SDR.SetPPM(lt.ID, *ts.PPM)
 		}
-		// sampleRate + autoPpm need new control-server actions (Phase D).
 	}
 }
 
