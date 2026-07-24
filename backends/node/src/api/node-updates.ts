@@ -32,9 +32,17 @@ const MANIFEST_CANDIDATES = [
   path.resolve(HERE, '../../assets/node-versions.json'), // src/api → <backend>/assets
 ];
 
+// Resolve a relative NODE_DOWNLOADS_DIR against the backend module dir, NOT
+// process.cwd(): pm2 keeps whatever cwd it was first started with (often the
+// webroot, not backends/node), so a cwd-relative resolve would miss the
+// downloads dir and leave every computed sha256 empty — which the agent reads
+// as "no update available". HERE is <backend>/dist/api (prod) or <backend>/
+// src/api (dev); '../..' is <backend> in both, so the default '../../downloads'
+// lands on <webroot>/downloads regardless of cwd.
+const BACKEND_DIR = path.resolve(HERE, '../..');
 const DOWNLOADS_DIR = path.isAbsolute(config.NODE_DOWNLOADS_DIR)
   ? config.NODE_DOWNLOADS_DIR
-  : path.resolve(process.cwd(), config.NODE_DOWNLOADS_DIR);
+  : path.resolve(BACKEND_DIR, config.NODE_DOWNLOADS_DIR);
 
 interface Manifest {
   [component: string]:
