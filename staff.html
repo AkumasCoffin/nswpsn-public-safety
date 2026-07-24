@@ -449,6 +449,178 @@
     .dev-status-pill.degraded { background: var(--warning); box-shadow: 0 0 6px rgba(234, 179, 8, 0.55); }
     .dev-status-pill.down     { background: var(--danger);  box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
 
+    /* === Nodes tab — feeder node cards =============================== */
+    /* Small inline online dot for a node card head. */
+    .node-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--text-soft); opacity: 0.5;
+      flex-shrink: 0;
+    }
+    .node-dot.online { background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.55); opacity: 1; }
+    /* Small monospace pill for install id / user id. */
+    .node-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      color: var(--text-soft);
+      background: rgba(0, 0, 0, 0.28);
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    /* Version badge row on a node card. */
+    .node-versions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.35rem 0 0.6rem; }
+    .node-ver {
+      display: inline-flex; align-items: baseline; gap: 0.3rem;
+      padding: 0.16rem 0.45rem; border-radius: 5px;
+      background: var(--accent-soft); color: #7dd3fc;
+      font-size: 0.7rem; white-space: nowrap;
+    }
+    .node-ver .k { color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.62rem; }
+    /* iOS-ish enabled toggle switch (mirrors dashboard's .swx). */
+    .node-switch { position: relative; display: inline-block; width: 34px; height: 18px; flex-shrink: 0; }
+    .node-switch input { opacity: 0; width: 0; height: 0; }
+    .node-switch .track {
+      position: absolute; cursor: pointer; inset: 0;
+      background: rgba(148, 163, 184, 0.3); border-radius: 999px; transition: 0.15s;
+    }
+    .node-switch .track::before {
+      content: ''; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px;
+      background: #fff; border-radius: 50%; transition: 0.15s;
+    }
+    .node-switch input:checked + .track { background: var(--success); }
+    .node-switch input:checked + .track::before { transform: translateX(16px); }
+    .node-switch input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
+    .node-enable-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 0.65rem; margin-top: 0.2rem;
+      font-size: 0.75rem; color: var(--text-soft);
+    }
+    .node-enable-row .lbl { flex: 1; }
+
+    /* === Node detail drawer (P3) ====================================== */
+    .node-drawer {
+      position: fixed; inset: 0;
+      background: rgba(3, 7, 18, 0.72);
+      backdrop-filter: blur(5px);
+      -webkit-backdrop-filter: blur(5px);
+      z-index: 1100;
+      display: none;
+      justify-content: flex-end;
+    }
+    .node-drawer.open { display: flex; }
+    .node-drawer-panel {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
+        var(--bg-card-2);
+      border-left: 1px solid rgba(148, 163, 184, 0.22);
+      width: min(680px, 100%);
+      height: 100%;
+      display: flex; flex-direction: column;
+      box-shadow: -25px 0 60px -12px rgba(0, 0, 0, 0.8);
+      animation: drawer-in 0.2s ease-out;
+    }
+    @keyframes drawer-in {
+      from { transform: translateX(36px); opacity: 0.3; }
+      to   { transform: none; opacity: 1; }
+    }
+    .node-drawer-head {
+      display: flex; align-items: center; gap: 0.7rem;
+      padding: 1.1rem 1.4rem;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+    }
+    .node-drawer-title { flex: 1; min-width: 0; }
+    .node-drawer-name {
+      font-weight: 700; font-size: 1.05rem; color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .node-drawer-sub { font-size: 0.72rem; color: var(--text-soft); }
+    .node-drawer-sub.err { color: var(--danger); }
+    .node-drawer-body { flex: 1; overflow-y: auto; padding: 1.2rem 1.4rem 2.5rem; }
+
+    .nd-section { margin-bottom: 1.5rem; }
+    .nd-section-h {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-soft); font-weight: 600; margin-bottom: 0.65rem;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .nd-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+    .nd-banner {
+      padding: 0.7rem 0.9rem; border-radius: 8px; font-size: 0.8rem;
+      margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;
+    }
+    .nd-banner.warn { background: rgba(245, 158, 11, 0.12); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .nd-banner.err  { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+    .nd-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    .nd-table th {
+      text-align: left; color: var(--text-soft); font-weight: 600;
+      font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border-subtle);
+      white-space: nowrap;
+    }
+    .nd-table td {
+      padding: 0.5rem 0.5rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      color: var(--text-primary); vertical-align: middle;
+    }
+    .nd-strong { font-weight: 600; color: var(--text-primary); }
+    .nd-sub { font-size: 0.68rem; color: var(--text-soft); }
+    .nd-unit { font-size: 0.66rem; color: var(--text-soft); margin-left: 0.25rem; }
+    .nd-input {
+      width: 92px; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 6px;
+      color: var(--text-primary); padding: 0.3rem 0.4rem;
+      font-family: inherit; font-size: 0.78rem;
+    }
+    .nd-input:focus { outline: none; border-color: var(--accent-border); }
+    .nd-input-sm { width: 64px; }
+
+    .nd-state {
+      display: inline-block; padding: 0.12rem 0.5rem; border-radius: 999px;
+      font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .nd-state.active { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+    .nd-state.muted  { background: rgba(148, 163, 184, 0.12); color: var(--text-soft); }
+
+    .nd-empty {
+      font-size: 0.78rem; color: var(--text-soft);
+      padding: 0.8rem 0.9rem; background: rgba(0, 0, 0, 0.2);
+      border: 1px dashed var(--border-subtle); border-radius: 8px;
+    }
+    .nd-empty i { margin-right: 0.4rem; opacity: 0.6; }
+
+    .nd-wf-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+    .nd-wf-toolbar select {
+      background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-subtle);
+      border-radius: 6px; color: var(--text-primary); padding: 0.25rem 0.5rem;
+      font-family: inherit; font-size: 0.76rem;
+    }
+    .nd-wf-status { font-size: 0.7rem; color: var(--text-soft); margin-left: auto; }
+    .nd-wf-wrap { background: #05070d; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+    #nd-trace, #nd-waterfall { display: block; width: 100%; }
+    #nd-trace { height: 60px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); }
+    #nd-waterfall { height: 200px; image-rendering: pixelated; }
+    .nd-axis {
+      display: flex; justify-content: space-between; gap: 0.5rem;
+      font-size: 0.62rem; color: var(--text-soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 0.35rem 0.5rem 0;
+    }
+
+    .nd-events { max-height: 220px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 8px; }
+    .nd-event-row {
+      display: flex; gap: 0.7rem; align-items: baseline;
+      padding: 0.35rem 0.6rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      font-size: 0.74rem;
+    }
+    .nd-event-row:last-child { border-bottom: none; }
+    .nd-ev-time { color: var(--text-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.68rem; flex-shrink: 0; }
+    .nd-ev-type { font-weight: 600; color: var(--accent); flex-shrink: 0; }
+    .nd-ev-ft { color: var(--text-primary); margin-left: auto; text-align: right; }
+    .nd-table-scroll { overflow-x: auto; }
+
     /* === Filter / toolbar row ========================================= */
     .filter-bar {
       display: flex;
@@ -949,6 +1121,9 @@
           <i class="fas fa-server"></i> Dev
           <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
         </button>
+        <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
+          <i class="fas fa-satellite-dish"></i> Nodes
+        </button>
       </div>
 
       <!-- Requests Tab -->
@@ -1051,6 +1226,81 @@
 
         <h3 class="dev-section-h">Data Sources</h3>
         <div class="dev-card-grid" id="dev-sources-grid"></div>
+      </div>
+
+      <!-- Nodes Tab -->
+      <div id="nodes-tab" class="tab-content">
+        <div class="dev-section-h" style="margin-top: 0;">
+          Feeder Nodes
+          <button class="btn btn-secondary btn-sm" onclick="loadNodes()" style="margin-left: auto;">
+            <i class="fas fa-sync-alt"></i> Refresh
+          </button>
+        </div>
+        <div class="dev-card-grid" id="nodes-grid">
+          <div class="loading" style="grid-column: 1 / -1;">
+            <i class="fas fa-spinner"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Node Detail Drawer (P3) -->
+  <div id="node-drawer" class="node-drawer" onclick="if(event.target===this) closeNodeDrawer()">
+    <div class="node-drawer-panel">
+      <div class="node-drawer-head">
+        <span class="node-dot" id="nd-dot" title="Node state"></span>
+        <div class="node-drawer-title">
+          <div class="node-drawer-name" id="nd-name">Node</div>
+          <div class="node-drawer-sub" id="nd-conn">connecting…</div>
+        </div>
+        <button class="modal-close" onclick="closeNodeDrawer()" title="Close">&times;</button>
+      </div>
+      <div class="node-drawer-body">
+        <div class="nd-banner" id="nd-banner" style="display: none;"></div>
+
+        <div class="nd-section">
+          <div class="nd-section-h"><i class="fas fa-sliders"></i> Controls</div>
+          <div class="nd-controls">
+            <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
+            <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+            <button class="btn btn-secondary btn-sm" onclick="_ndReloadPlaylist()"><i class="fas fa-list"></i> Reload playlist</button>
+            <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
+            <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
+          </div>
+        </div>
+
+        <div class="nd-section">
+          <div class="nd-section-h"><i class="fas fa-wave-square"></i> Spectrum</div>
+          <div class="nd-wf-toolbar">
+            <select id="nd-wf-tuner" style="display: none;" onchange="_ndSwitchSpectrum(this.value)"></select>
+            <span class="nd-wf-status" id="nd-wf-status">idle</span>
+          </div>
+          <div class="nd-wf-wrap">
+            <canvas id="nd-trace" width="512" height="60"></canvas>
+            <canvas id="nd-waterfall" width="512" height="200"></canvas>
+          </div>
+          <div class="nd-axis">
+            <span id="nd-axis-l">—</span>
+            <span id="nd-axis-m">—</span>
+            <span id="nd-axis-r">—</span>
+          </div>
+        </div>
+
+        <div class="nd-section">
+          <div class="nd-section-h"><i class="fas fa-satellite-dish"></i> Tuners</div>
+          <div class="nd-table-scroll" id="nd-tuners"></div>
+        </div>
+
+        <div class="nd-section">
+          <div class="nd-section-h"><i class="fas fa-broadcast-tower"></i> Channels</div>
+          <div class="nd-table-scroll" id="nd-channels"></div>
+        </div>
+
+        <div class="nd-section">
+          <div class="nd-section-h"><i class="fas fa-clock-rotate-left"></i> Recent events</div>
+          <div class="nd-events" id="nd-events"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1415,7 +1665,7 @@
       is_map_editor: false,
       can_manage_users: false,
       can_assign_privileged_roles: false,
-      tabs: { requests: false, users: false, dev: false }
+      tabs: { requests: false, users: false, dev: false, nodes: false }
     };
 
     // Dev-tab status polling state. We refresh /api/status while the Dev
@@ -1423,6 +1673,12 @@
     // requests in the background.
     let _devStatusTimer = null;
     const _devStatusIntervalMs = 30_000;
+
+    // Nodes-tab polling state. Same pattern as the Dev tab: refresh the
+    // feeder-node list every 10s only while the Nodes panel is active.
+    let allNodes = [];
+    let _nodesTimer = null;
+    const _nodesIntervalMs = 10_000;
     
     function switchTab(tab) {
       currentTab = tab;
@@ -1446,6 +1702,9 @@
       if (tab === 'users' && allUsers.length === 0) {
         loadUsers();
       }
+      if (tab === 'nodes' && allNodes.length === 0) {
+        loadNodes();
+      }
 
       // Dev tab: start polling /api/status when entered, stop when left.
       // Other tabs don't need a per-tab polling loop.
@@ -1453,6 +1712,14 @@
         startDevStatusPolling();
       } else {
         stopDevStatusPolling();
+      }
+
+      // Nodes tab: start the 10s node-list refresh when entered, stop
+      // when left, so we don't leak the interval in the background.
+      if (tab === 'nodes') {
+        startNodesPolling();
+      } else {
+        stopNodesPolling();
       }
     }
 
@@ -1463,6 +1730,8 @@
         await loadUsers();
       } else if (currentTab === 'dev') {
         await refreshDevStatus();
+      } else if (currentTab === 'nodes') {
+        await loadNodes();
       }
     }
 
@@ -1773,6 +2042,602 @@
         .join('');
     }
     
+    // === Nodes tab — feeder node management ============================
+    function startNodesPolling() {
+      // First refresh happens via switchTab's lazy-load / this immediate
+      // call; then every _nodesIntervalMs while the tab stays active.
+      if (allNodes.length > 0) loadNodes();
+      if (_nodesTimer) return;
+      _nodesTimer = setInterval(loadNodes, _nodesIntervalMs);
+    }
+
+    function stopNodesPolling() {
+      if (_nodesTimer) {
+        clearInterval(_nodesTimer);
+        _nodesTimer = null;
+      }
+    }
+
+    async function loadNodes() {
+      const grid = document.getElementById('nodes-grid');
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        allNodes = data.nodes || [];
+        renderNodes();
+      } catch (e) {
+        console.error('Error loading nodes:', e);
+        if (grid) grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <p>Failed to load feeder nodes: ${escapeHtml(e.message)}</p>
+          </div>`;
+      }
+    }
+
+    function _nodeVer(label, v) {
+      return `<span class="node-ver"><span class="k">${escapeHtml(label)}</span>${escapeHtml(v == null ? '—' : v)}</span>`;
+    }
+
+    function _nodeCard(node) {
+      const id = node.id;
+      const online = !!node.online;
+      const name = node.name || 'Unnamed node';
+      const userId = node.userId || '';
+      const userShort = userId ? escapeHtml(userId.slice(0, 8)) + '…' : '—';
+      const installId = node.installId || node.install_id || '';
+      const installShort = installId ? escapeHtml(String(installId).slice(0, 8)) + '…' : '—';
+      const enabled = node.enabled !== false; // default to enabled unless explicitly false
+      const st = node.status || null;
+
+      // Optional status metrics — render a small secondary row when present.
+      const statusBits = [];
+      if (st) {
+        if (st.queueDepth != null) statusBits.push({ label: 'queue', value: st.queueDepth });
+        if (st.callsPerMin != null) statusBits.push({ label: 'calls/min', value: st.callsPerMin });
+        if (st.uploadsPerMin != null) statusBits.push({ label: 'uploads/min', value: st.uploadsPerMin });
+        if (st.errors != null) statusBits.push({ label: 'errors', value: st.errors });
+      }
+      const statusRow = statusBits.length
+        ? `<div class="dev-card-secondary">${statusBits
+            .map(b => `<span>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
+        : '';
+
+      return `
+        <div class="dev-card">
+          <div class="dev-card-head" style="padding-right: 0;">
+            <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
+            <div class="dev-card-name">${escapeHtml(name)}</div>
+          </div>
+          <div class="node-versions">
+            ${_nodeVer('agent', node.agentVersion)}
+            ${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
+            ${_nodeVer('rdio', node.rdioVersion)}
+          </div>
+          <div class="dev-card-secondary">
+            <span>user <span class="node-mono">${userShort}</span></span>
+            <span>install <span class="node-mono">${installShort}</span></span>
+          </div>
+          ${statusRow}
+          <div class="node-enable-row">
+            <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${escapeHtml(String(id))}')">
+              <i class="fas fa-gauge-high"></i> Details
+            </button>
+            <span class="lbl" style="text-align: right;">${enabled ? 'Enabled' : 'Disabled'}</span>
+            <label class="node-switch" title="Enable / disable this node">
+              <input type="checkbox" ${enabled ? 'checked' : ''}
+                     onchange="toggleNode('${escapeHtml(String(id))}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+          </div>
+        </div>`;
+    }
+
+    function renderNodes() {
+      const grid = document.getElementById('nodes-grid');
+      if (!grid) return;
+      if (!allNodes.length) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <i class="fas fa-satellite-dish"></i>
+            <p>No feeder nodes yet. Contributors appear here automatically when their node connects.</p>
+          </div>`;
+        return;
+      }
+      grid.innerHTML = allNodes.map(_nodeCard).join('');
+    }
+
+    async function toggleNode(id, newValue, inputEl) {
+      if (inputEl) inputEl.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': await authHeader(),
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ enabled: newValue })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(`Node ${newValue ? 'enabled' : 'disabled'}.`, 'success');
+        await loadNodes();
+      } catch (e) {
+        console.error('Error toggling node:', e);
+        showToast(`Failed to update node: ${e.message}`, 'error');
+        // Revert the checkbox to its prior state on failure.
+        if (inputEl) { inputEl.checked = !newValue; inputEl.disabled = false; }
+      }
+    }
+
+    // === Node detail drawer (P3) ======================================
+    // One staff WebSocket per open drawer. On open we auth, subscribe to the
+    // node, render its tuners/channels/events from nodeStatus frames, and
+    // stream a spectrum waterfall from BINARY frames. Closing tears the whole
+    // lot down (spectrumStop + unsubscribe + socket close). No reconnect in P3.
+    let _ndWs = null;
+    let _ndNodeId = null;
+    let _ndAuthed = false;
+    let _ndStatus = null;          // last status object we saw (null = none yet)
+    let _ndTuners = [];
+    let _ndChannels = [];
+    let _ndEvents = [];
+    let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
+    let _ndReqSeq = 0;
+    const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
+    const _ndWf = { canvas: null, ctx: null, w: 512, h: 200 };
+
+    // API_BASE_URL is an http(s) URL (config.js: https://api.forcequit.xyz).
+    // Swapping the leading "http" for "ws" turns https->wss and http->ws.
+    function _ndWsUrl() {
+      return API_BASE_URL.replace(/^http/i, 'ws') + '/api/node-ws/staff';
+    }
+
+    function _ndWsSend(obj) {
+      try {
+        if (_ndWs && _ndWs.readyState === WebSocket.OPEN) _ndWs.send(JSON.stringify(obj));
+      } catch (e) { console.error('node-drawer send failed:', e); }
+    }
+
+    async function openNodeDrawer(nodeId) {
+      // Reset per-drawer state.
+      const node = allNodes.find(n => String(n.id) === String(nodeId)) || {};
+      _ndNodeId = nodeId;
+      _ndAuthed = false;
+      _ndStatus = null;
+      _ndTuners = []; _ndChannels = []; _ndEvents = [];
+      _ndSpectrumTunerId = null;
+
+      const drawer = document.getElementById('node-drawer');
+      drawer.classList.add('open');
+      document.getElementById('nd-name').textContent = node.name || 'Node';
+      const dot = document.getElementById('nd-dot');
+      if (dot) dot.classList.toggle('online', !!node.online);
+      _ndSetConn('connecting', node.online);
+      _ndInitWaterfall();
+      _ndRenderAll();
+
+      // Supabase access token — same source as authHeader().
+      let token = null;
+      try {
+        const { data } = await sb.auth.getSession();
+        token = data?.session?.access_token || null;
+      } catch (e) { /* fall through */ }
+      if (!token) { _ndBanner('err', 'No active session — please log in again.'); return; }
+
+      let ws;
+      try { ws = new WebSocket(_ndWsUrl()); }
+      catch (e) { _ndBanner('err', 'Could not open staff socket: ' + e.message); return; }
+      ws.binaryType = 'arraybuffer';
+      _ndWs = ws;
+
+      // Backend requires the auth frame within 5s — guard so we surface a
+      // clear message if authOk never arrives.
+      const authTimer = setTimeout(() => {
+        if (!_ndAuthed && _ndWs === ws) {
+          _ndBanner('err', 'Authentication timed out.');
+          try { ws.close(); } catch (e) {}
+        }
+      }, 6000);
+
+      ws.onopen = () => { _ndWsSend({ t: 'auth', data: { token } }); };
+
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+          _ndHandleText(msg, authTimer);
+        } else if (ev.data instanceof ArrayBuffer) {
+          _ndHandleSpectrum(ev.data);
+        } else if (ev.data instanceof Blob) {
+          // Fallback in case binaryType wasn't honoured.
+          ev.data.arrayBuffer().then(_ndHandleSpectrum).catch(() => {});
+        }
+      };
+
+      ws.onclose = () => {
+        clearTimeout(authTimer);
+        if (_ndWs === ws) {
+          _ndWs = null;
+          const d = document.getElementById('node-drawer');
+          if (d && d.classList.contains('open')) _ndSetConn('disconnected');
+        }
+      };
+      ws.onerror = () => { /* onclose drives the UI */ };
+    }
+
+    function _ndHandleText(msg, authTimer) {
+      const t = msg && msg.t;
+      const d = (msg && msg.data) || {};
+      if (t === 'authOk') {
+        clearTimeout(authTimer);
+        _ndAuthed = true;
+        _ndSetConn('connected');
+        _ndWsSend({ t: 'subscribeNode', data: { nodeId: _ndNodeId } });
+      } else if (t === 'authError') {
+        clearTimeout(authTimer);
+        _ndBanner('err', 'Authorization rejected: ' + (d.message || 'not owner/dev.'));
+        try { if (_ndWs) _ndWs.close(); } catch (e) {}
+      } else if (t === 'nodeStatus') {
+        _ndOnStatus(d);
+      } else if (t === 'event') {
+        if (d.event) {
+          _ndEvents.push(d.event);
+          if (_ndEvents.length > 200) _ndEvents.shift();
+          _ndRenderEvents();
+        }
+      } else if (t === 'cmdResult') {
+        _ndOnCmdResult(d);
+      }
+    }
+
+    function _ndOnStatus(d) {
+      if (String(d.nodeId) !== String(_ndNodeId)) return;
+      _ndSetConn('connected', d.online);
+      const st = d.status || {};
+      _ndStatus = st;
+      _ndTuners = Array.isArray(st.tuners) ? st.tuners : [];
+      _ndChannels = Array.isArray(st.channels) ? st.channels : [];
+      if (Array.isArray(st.events)) _ndEvents = st.events.slice(-200);
+      _ndRenderTuners();
+      _ndRenderChannels();
+      _ndRenderEvents();
+      _ndRenderTunerSelector();
+      // Auto-start the waterfall on the first tuner once tuners are known.
+      if (_ndSpectrumTunerId == null && _ndTuners.length) {
+        const t0 = _ndTuners[0];
+        _ndStartSpectrum(t0.id != null ? t0.id : t0.index);
+      }
+    }
+
+    function _ndOnCmdResult(d) {
+      const meta = _ndReqMeta[d.reqId];
+      const label = meta ? meta.label : 'Command';
+      if (meta) delete _ndReqMeta[d.reqId];
+      if (d.ok) showToast(`${label}: ${d.message || 'OK'}`, 'success');
+      else showToast(`${label}: ${d.message || 'failed'}`, 'error');
+    }
+
+    function _ndCmd(action, args, label) {
+      if (!_ndWs || !_ndAuthed) { showToast('Not connected to node.', 'error'); return; }
+      const reqId = 'r' + (++_ndReqSeq);
+      _ndReqMeta[reqId] = { label: label || action };
+      _ndWsSend({ t: 'cmd', data: { nodeId: _ndNodeId, action, args: args || {}, id: reqId } });
+    }
+
+    // --- Spectrum lifecycle ---
+    function _ndStartSpectrum(tunerId) {
+      if (tunerId == null || !_ndWs || !_ndAuthed) return;
+      _ndSpectrumTunerId = tunerId;
+      _ndWsSend({ t: 'spectrumStart', data: { nodeId: _ndNodeId, tunerId, fps: 10, bins: 512 } });
+      const s = document.getElementById('nd-wf-status');
+      if (s) s.textContent = 'streaming · tuner ' + tunerId;
+    }
+
+    function _ndSwitchSpectrum(tunerId) {
+      if (String(tunerId) === String(_ndSpectrumTunerId)) return;
+      if (_ndSpectrumTunerId != null) {
+        _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
+      }
+      _ndSpectrumTunerId = null;
+      _ndInitWaterfall();
+      _ndStartSpectrum(tunerId);
+    }
+
+    // Parse one BINARY spectrum frame (contract A, little-endian):
+    //   u8 type=0x01 | u8 tunerIndex | u64 centerFreqHz | u32 sampleRateHz |
+    //   u16 binCount | int8[binCount] dB
+    function _ndHandleSpectrum(buf) {
+      const dv = new DataView(buf);
+      if (dv.byteLength < 16) return;           // header is 1+1+8+4+2 = 16 bytes
+      let o = 0;
+      const type = dv.getUint8(o); o += 1;
+      if (type !== 0x01) return;
+      const tunerIndex = dv.getUint8(o); o += 1;
+      // u64 little-endian = lo u32 + hi u32 * 2^32 (freqs fit in a JS double).
+      const lo = dv.getUint32(o, true);
+      const hi = dv.getUint32(o + 4, true);
+      o += 8;
+      const centerFreqHz = hi * 4294967296 + lo;
+      const sampleRate = dv.getUint32(o, true); o += 4;
+      const binCount = dv.getUint16(o, true); o += 2;
+      if (dv.byteLength < o + binCount) return; // truncated frame
+      const bins = new Int8Array(buf, o, binCount);
+      _ndDrawSpectrum(centerFreqHz, sampleRate, bins);
+    }
+
+    function _ndInitWaterfall() {
+      const c = document.getElementById('nd-waterfall');
+      if (!c) return;
+      _ndWf.canvas = c;
+      _ndWf.ctx = c.getContext('2d');
+      _ndWf.w = c.width;   // fixed internal resolution (512); CSS scales width
+      _ndWf.h = c.height;  // 200
+      _ndWf.ctx.fillStyle = '#05070d';
+      _ndWf.ctx.fillRect(0, 0, c.width, c.height);
+      const tr = document.getElementById('nd-trace');
+      if (tr) { const tc = tr.getContext('2d'); tc.fillStyle = '#05070d'; tc.fillRect(0, 0, tr.width, tr.height); }
+    }
+
+    // dB (int8) -> jet-ish colour across a sensible noise-floor window.
+    function _ndDbRgb(db) {
+      const lo = -100, hi = -20;
+      let n = (db - lo) / (hi - lo);
+      n = n < 0 ? 0 : n > 1 ? 1 : n;
+      const r = Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * n - 3), 0), 1));
+      const g = Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * n - 2), 0), 1));
+      const b = Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * n - 1), 0), 1));
+      return [r, g, b];
+    }
+
+    function _ndDrawSpectrum(centerFreqHz, sampleRate, bins) {
+      const ctx = _ndWf.ctx;
+      if (!ctx) return;
+      const W = _ndWf.w, H = _ndWf.h;
+      // Scroll everything down 1px, then paint the new row at the top.
+      const prev = ctx.getImageData(0, 0, W, H - 1);
+      ctx.putImageData(prev, 0, 1);
+      const row = ctx.createImageData(W, 1);
+      const n = bins.length;
+      for (let x = 0; x < W; x++) {
+        const bi = n === W ? x : Math.floor(x * n / W);
+        const rgb = _ndDbRgb(bins[bi]);
+        const p = x * 4;
+        row.data[p] = rgb[0]; row.data[p + 1] = rgb[1]; row.data[p + 2] = rgb[2]; row.data[p + 3] = 255;
+      }
+      ctx.putImageData(row, 0, 0);
+      _ndDrawTrace(bins);
+      _ndUpdateAxis(centerFreqHz, sampleRate);
+    }
+
+    // Live line trace of the current frame above the waterfall.
+    function _ndDrawTrace(bins) {
+      const c = document.getElementById('nd-trace');
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const W = c.width, H = c.height;
+      ctx.fillStyle = '#05070d';
+      ctx.fillRect(0, 0, W, H);
+      const lo = -110, hi = -10, n = bins.length;
+      ctx.beginPath();
+      for (let x = 0; x < W; x++) {
+        const bi = n === W ? x : Math.floor(x * n / W);
+        let v = (bins[bi] - lo) / (hi - lo);
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        const y = H - v * H;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    function _ndUpdateAxis(centerFreqHz, sampleRate) {
+      const half = sampleRate / 2;
+      const fmt = hz => (hz / 1e6).toFixed(3) + ' MHz';
+      const l = document.getElementById('nd-axis-l');
+      const m = document.getElementById('nd-axis-m');
+      const r = document.getElementById('nd-axis-r');
+      if (l) l.textContent = fmt(centerFreqHz - half);
+      if (m) m.textContent = fmt(centerFreqHz);
+      if (r) r.textContent = fmt(centerFreqHz + half);
+    }
+
+    // --- Rendering ---
+    function _ndRenderAll() {
+      _ndBanner(null);
+      _ndRenderTuners();
+      _ndRenderChannels();
+      _ndRenderEvents();
+      _ndRenderTunerSelector();
+    }
+
+    function _ndEmpty(title, sub) {
+      return `<div class="nd-empty"><i class="fas fa-circle-info"></i>${escapeHtml(title)}` +
+        (sub ? ` — ${escapeHtml(sub)}` : '') + `</div>`;
+    }
+
+    function _ndRenderTuners() {
+      const el = document.getElementById('nd-tuners');
+      if (!el) return;
+      if (!_ndTuners.length) {
+        el.innerHTML = _ndEmpty('No tuners reported', _ndStatus ? 'SDR-Trunk may be down or node offline' : 'waiting for node status…');
+        return;
+      }
+      const rows = _ndTuners.map((t, i) => {
+        const tid = t.id != null ? t.id : t.index;
+        const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) : '';
+        const sr = t.sampleRate != null ? (t.sampleRate / 1e6).toFixed(3) + ' MS/s' : '—';
+        const ppm = t.ppm != null ? t.ppm : '';
+        const measured = t.measuredPpmError != null ? Number(t.measuredPpmError).toFixed(2) : '—';
+        const stat = escapeHtml(t.status || (t.available === false ? 'unavailable' : '—'));
+        return `<tr>
+          <td><div class="nd-strong">${escapeHtml(t.name || ('Tuner ' + tid))}</div>
+              <div class="nd-sub">${escapeHtml(t.type || t.tunerClass || '')}</div></td>
+          <td><input class="nd-input" id="nd-freq-${i}" type="number" step="0.0001" value="${escapeHtml(String(freqMhz))}"><span class="nd-unit">MHz</span></td>
+          <td>${sr}</td>
+          <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}"></td>
+          <td>${measured}</td>
+          <td>${stat}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="_ndApplyTuner(${i})">Apply</button></td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `<table class="nd-table"><thead><tr>
+        <th>Tuner</th><th>Frequency</th><th>Sample rate</th><th>PPM</th><th>Meas. err</th><th>Status</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function _ndApplyTuner(i) {
+      const t = _ndTuners[i];
+      if (!t) return;
+      const tid = t.id != null ? t.id : t.index;
+      const fEl = document.getElementById('nd-freq-' + i);
+      const pEl = document.getElementById('nd-ppm-' + i);
+      const fMhz = fEl && fEl.value !== '' ? parseFloat(fEl.value) : null;
+      const ppm = pEl && pEl.value !== '' ? parseFloat(pEl.value) : null;
+      const origMhz = t.frequency != null ? t.frequency / 1e6 : null;
+      const origPpm = t.ppm != null ? Number(t.ppm) : null;
+      let sent = false;
+      if (fMhz != null && !Number.isNaN(fMhz) && (origMhz == null || Math.abs(fMhz - origMhz) > 1e-9)) {
+        _ndCmd('tunerSet', { tunerId: tid, frequency: Math.round(fMhz * 1e6) }, `Set ${t.name || 'tuner'} → ${fMhz} MHz`);
+        sent = true;
+      }
+      if (ppm != null && !Number.isNaN(ppm) && (origPpm == null || Math.abs(ppm - origPpm) > 1e-9)) {
+        _ndCmd('tunerSet', { tunerId: tid, ppm }, `Set ${t.name || 'tuner'} ppm → ${ppm}`);
+        sent = true;
+      }
+      if (sent) showToast('Applying tuner change…', 'success', 1500);
+      else showToast('No changes to apply.', 'warn');
+    }
+
+    function _ndRenderChannels() {
+      const el = document.getElementById('nd-channels');
+      if (!el) return;
+      if (!_ndChannels.length) {
+        el.innerHTML = _ndEmpty('No channels reported', _ndStatus ? '' : 'waiting for node status…');
+        return;
+      }
+      const ACTIVE = new Set(['CALL', 'CONTROL', 'ACTIVE', 'DATA']);
+      const rows = _ndChannels.map((c, i) => {
+        const state = c.state || '—';
+        const isActive = ACTIVE.has(String(state).toUpperCase());
+        const running = c.processing === true || isActive;
+        const fromTo = (c.from || c.to) ? `${escapeHtml(c.from || '—')} → ${escapeHtml(c.to || '—')}` : '—';
+        const freq = c.frequency != null ? (c.frequency / 1e6).toFixed(4) + ' MHz' : '—';
+        const sys = [c.system, c.site].filter(Boolean).map(escapeHtml).join(' · ') || '—';
+        const btn = running
+          ? `<button class="btn btn-danger btn-sm" onclick="_ndChannel(${i}, false)">Stop</button>`
+          : `<button class="btn btn-success btn-sm" onclick="_ndChannel(${i}, true)">Start</button>`;
+        return `<tr>
+          <td><div class="nd-strong">${escapeHtml(c.name || ('Channel ' + (c.id != null ? c.id : i)))}</div>
+              <div class="nd-sub">${sys}</div></td>
+          <td><span class="nd-state ${isActive ? 'active' : 'muted'}">${escapeHtml(state)}</span></td>
+          <td>${fromTo}</td>
+          <td>${freq}</td>
+          <td>${btn}</td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `<table class="nd-table"><thead><tr>
+        <th>Channel</th><th>State</th><th>From → To</th><th>Frequency</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function _ndChannel(i, start) {
+      const c = _ndChannels[i];
+      if (!c) return;
+      const cid = c.id;
+      _ndCmd(start ? 'startChannel' : 'stopChannel', { channelId: cid },
+        `${start ? 'Start' : 'Stop'} ${c.name || ('channel ' + cid)}`);
+    }
+
+    function _ndRenderEvents() {
+      const el = document.getElementById('nd-events');
+      if (!el) return;
+      if (!_ndEvents.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No events yet.</div>`; return; }
+      el.innerHTML = _ndEvents.slice(-60).reverse().map(e => {
+        const at = e.at != null ? new Date(e.at) : null;
+        const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
+        const ft = (e.from || e.to) ? `${escapeHtml(e.from || '—')} → ${escapeHtml(e.to || '—')}` : '';
+        const type = escapeHtml(e.type || 'event');
+        const proto = e.protocol ? ` <span class="nd-sub">${escapeHtml(e.protocol)}</span>` : '';
+        return `<div class="nd-event-row">
+          <span class="nd-ev-time">${escapeHtml(time)}</span>
+          <span class="nd-ev-type">${type}${proto}</span>
+          <span class="nd-ev-ft">${ft}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function _ndRenderTunerSelector() {
+      const el = document.getElementById('nd-wf-tuner');
+      if (!el) return;
+      if (_ndTuners.length <= 1) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      el.style.display = '';
+      el.innerHTML = _ndTuners.map(t => {
+        const tid = t.id != null ? t.id : t.index;
+        const sel = String(tid) === String(_ndSpectrumTunerId) ? 'selected' : '';
+        return `<option value="${escapeHtml(String(tid))}" ${sel}>${escapeHtml(t.name || ('Tuner ' + tid))}</option>`;
+      }).join('');
+    }
+
+    function _ndSetConn(state, online) {
+      const dot = document.getElementById('nd-dot');
+      if (online != null && dot) dot.classList.toggle('online', !!online);
+      const sub = document.getElementById('nd-conn');
+      if (!sub) return;
+      const map = {
+        connecting: 'connecting…',
+        connected: online === false ? 'node offline · live control' : 'online · live control',
+        disconnected: 'disconnected — close and reopen to reconnect'
+      };
+      sub.textContent = map[state] || state;
+      sub.className = 'node-drawer-sub' + (state === 'disconnected' ? ' err' : '');
+      if (state === 'disconnected') _ndBanner('err', 'Connection dropped. Close and reopen this drawer to reconnect.');
+    }
+
+    function _ndBanner(kind, msg) {
+      const el = document.getElementById('nd-banner');
+      if (!el) return;
+      if (!msg) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      el.style.display = '';
+      el.className = 'nd-banner ' + (kind === 'err' ? 'err' : 'warn');
+      el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> ${escapeHtml(msg)}`;
+    }
+
+    // --- Control buttons ---
+    function _ndRestart(name) {
+      if (!confirm(`Restart the "${name}" component on this node?`)) return;
+      _ndCmd('restartComponent', { name }, `Restart ${name}`);
+    }
+    function _ndReloadPlaylist() { _ndCmd('reloadPlaylist', {}, 'Reload playlist'); }
+    function _ndUpdate() {
+      if (!confirm('Trigger a software update on this node? Services may restart.')) return;
+      _ndCmd('update', {}, 'Trigger update');
+    }
+    function _ndReboot() {
+      if (!confirm('Restart the node agent? The node will briefly go offline.')) return;
+      _ndCmd('rebootAgent', {}, 'Restart agent');
+    }
+
+    function closeNodeDrawer() {
+      const drawer = document.getElementById('node-drawer');
+      if (!drawer || !drawer.classList.contains('open')) return;
+      // Stop any live spectrum + unsubscribe while the socket is still open,
+      // then tear the socket down (suppress onclose so it doesn't flip the UI
+      // to a "disconnected" state on an intentional close).
+      if (_ndWs && _ndWs.readyState === WebSocket.OPEN) {
+        if (_ndSpectrumTunerId != null) {
+          _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
+        }
+        _ndWsSend({ t: 'unsubscribeNode', data: { nodeId: _ndNodeId } });
+      }
+      _ndSpectrumTunerId = null;
+      if (_ndWs) { try { _ndWs.onclose = null; _ndWs.close(); } catch (e) {} _ndWs = null; }
+      _ndAuthed = false;
+      drawer.classList.remove('open');
+    }
+
     async function doAdminLogin() {
       const email = document.getElementById('admin-login-email').value;
       const password = document.getElementById('admin-login-password').value;
@@ -1874,6 +2739,7 @@
           requests: !!(result.is_owner || result.is_team_member),
           users:    !!result.can_manage_users,
           dev:      !!result.is_owner,  // legacy: only owners had dev-equivalent access
+          nodes:    !!(result.is_owner || result.is_dev),  // legacy: owner|dev see nodes
         };
         userPermissions = {
           is_owner: !!result.is_owner,
@@ -1916,16 +2782,19 @@
       const reqBtn = document.querySelector('[data-tab="requests"]');
       const usrBtn = document.querySelector('[data-tab="users"]');
       const devBtn = document.querySelector('[data-tab="dev"]');
+      const nodBtn = document.querySelector('[data-tab="nodes"]');
       if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
       if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
+      if (nodBtn) nodBtn.style.display = tabs.nodes    ? '' : 'none';
 
       // Pick a default tab the user can actually see. Without this a
       // dev-only user would open the page on the (now-hidden) Requests
       // tab and stare at an empty container.
       const defaultTab = tabs.requests ? 'requests' :
                          tabs.users    ? 'users' :
-                         tabs.dev      ? 'dev' : null;
+                         tabs.dev      ? 'dev' :
+                         tabs.nodes    ? 'nodes' : null;
       if (defaultTab && defaultTab !== currentTab) {
         switchTab(defaultTab);
       }
@@ -2892,6 +3761,7 @@
         closeDetailsModal();
         closeEditRolesModal();
         closeRejectModal();
+        closeNodeDrawer();
       }
     });
     
