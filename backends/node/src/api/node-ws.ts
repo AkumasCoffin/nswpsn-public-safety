@@ -116,25 +116,43 @@ async function handleAgentUpgrade(
 ): Promise<void> {
   const token = (req.headers['x-node-token'] as string | undefined) ?? '';
   const installId = (req.headers['x-node-install'] as string | undefined) ?? '';
+  // Diagnostic: enough to compare the presented token/install against what a
+  // working curl sends, without logging the full secret.
+  const tokenPrefix = token ? token.slice(0, 14) : '(none)';
+  const tokenLen = token.length;
   if (!installId) {
+    log.warn({ tokenPrefix, tokenLen }, 'agent WS reject: missing install id');
     rejectUpgrade(socket, 400, 'Missing Install Id');
     return;
   }
   const resolved = await resolveFeederToken(token);
   if (!resolved.ok) {
+    log.warn(
+      { tokenPrefix, tokenLen, installId, reason: resolved.reason },
+      'agent WS reject: token resolve failed',
+    );
     rejectUpgrade(socket, resolved.reason === 'no_role' ? 403 : 401, 'Unauthorized');
     return;
   }
   // Create/refresh the node row now so we have its id (auto-link on start).
   const node = await upsertNodeOnHello(resolved.userId, installId, {});
   if (!node) {
+    log.warn({ tokenPrefix, installId, userId: resolved.userId }, 'agent WS reject: registry unavailable');
     rejectUpgrade(socket, 503, 'Registry Unavailable');
     return;
   }
   if (!node.enabled) {
+    log.warn(
+      { tokenPrefix, installId, userId: resolved.userId, nodeId: node.id },
+      'agent WS reject: node disabled',
+    );
     rejectUpgrade(socket, 403, 'Node Disabled');
     return;
   }
+  log.info(
+    { tokenPrefix, installId, userId: resolved.userId, nodeId: node.id },
+    'agent WS accepted',
+  );
   const ctx: AgentCtx = { userId: resolved.userId, installId, nodeId: node.id };
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, ctx);
