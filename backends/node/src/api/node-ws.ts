@@ -210,7 +210,7 @@ async function handleAgentMessage(
       // the agent runs on whatever it last applied.
       if (node) {
         try {
-          const payload = buildConfigPayload(node);
+          const payload = await buildConfigPayload(node);
           const applied = h.appliedConfigVersion ?? null;
           if (applied !== payload.configVersion) {
             hub.sendToAgent(ctx.nodeId, 'configPush', payload);

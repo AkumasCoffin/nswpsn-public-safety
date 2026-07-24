@@ -31,7 +31,12 @@ import {
 import { hub } from '../services/nodes/hub.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
-import { pushConfigToNode } from '../services/nodes/configPush.js';
+import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
+import {
+  getGlobalConfig,
+  saveGlobalConfig,
+  GlobalConfigSchema,
+} from '../services/nodes/globalConfig.js';
 import {
   feederTokensConfigured,
   rotateFeederToken,
@@ -87,6 +92,39 @@ nodesRouter.get('/api/nodes', requireRole(canManageNodes), async (c) => {
   } catch (err) {
     log.error({ err }, 'Error listing nodes');
     return c.json({ error: 'Failed to list nodes' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Global feeder config (synced to ALL nodes). Registered BEFORE /:id so the
+// literal path wins over the :id param route.
+//   GET /api/nodes/global-config  — current global config + version
+//   PUT /api/nodes/global-config  — replace it, then fan out to every node
+// ---------------------------------------------------------------------------
+nodesRouter.get('/api/nodes/global-config', requireRole(canManageNodes), async (c) => {
+  try {
+    const config = await getGlobalConfig();
+    return c.json({ config });
+  } catch (err) {
+    log.error({ err }, 'Error fetching global feeder config');
+    return c.json({ error: 'Failed to fetch global config' }, 500);
+  }
+});
+
+nodesRouter.put('/api/nodes/global-config', requireRole(canManageNodes), async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const parsed = GlobalConfigSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid global config', issues: parsed.error.issues }, 400);
+    }
+    const config = await saveGlobalConfig(parsed.data, c.get('userId') ?? null);
+    // Fan the new config out to every online node so the fleet re-syncs.
+    const fanout = await pushConfigToAllNodes();
+    return c.json({ config, fanout });
+  } catch (err) {
+    log.error({ err }, 'Error saving global feeder config');
+    return c.json({ error: 'Failed to save global config' }, 500);
   }
 });
 
@@ -184,7 +222,7 @@ nodesRouter.get('/api/nodes/:id/config', requireRole(canManageNodes), async (c) 
     // (nodes.config_version), so staff can see when a push is pending.
     let payload;
     try {
-      payload = buildConfigPayload(node);
+      payload = await buildConfigPayload(node);
     } catch (err) {
       log.warn({ err, id }, 'config preview: presets unavailable');
       return c.json({ error: 'presets unavailable' }, 503);

@@ -79,11 +79,28 @@ type StreamTarget struct {
 	Name     string `json:"name"`
 }
 
+// AliasID is one <id> inside an SDR-Trunk alias. Type is the id type; Attrs
+// holds every other attribute verbatim so the element re-emits faithfully.
+type AliasID struct {
+	Type  string            `json:"type"`
+	Attrs map[string]string `json:"attrs"`
+}
+
+// Alias is a global SDR-Trunk alias, rendered into the playlist's <alias> region.
+type Alias struct {
+	Name  string    `json:"name"`
+	List  string    `json:"list"`
+	Group string    `json:"group"`
+	Color string    `json:"color"`
+	IDs   []AliasID `json:"ids"`
+}
+
 // ConfigPayload is the full configPush document from the backend.
 type ConfigPayload struct {
 	ConfigVersion string          `json:"configVersion"`
 	Channels      []ChannelPlan   `json:"channels"`
 	Tuners        []TunerSettings `json:"tuners"`
+	Aliases       []Alias         `json:"aliases"`
 	RdioConfig    map[string]any  `json:"rdioConfig"`
 	StreamTargets []StreamTarget  `json:"streamTargets"`
 }
@@ -175,7 +192,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 
 	// ---- stage: playlist ----------------------------------------------------
 	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, payload.Channels, localKeys)
+	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, localKeys)
 	if err != nil {
 		return stageErr("playlist", "render", err)
 	}
@@ -386,6 +403,7 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 // --- playlist rendering (targeted string edits; see package doc) -------------
 
 var (
+	reAliasRegion  = regexp.MustCompile(`(?s)<alias\b.*</alias>`)
 	reChannelBlock = regexp.MustCompile(`(?s)<channel\b.*?</channel>`)
 	reChannelTag   = regexp.MustCompile(`(?s)<channel\b[^>]*>`)
 	reSourceCfg    = regexp.MustCompile(`(?s)<source_configuration\b[^>]*?/>`)
@@ -406,12 +424,24 @@ var (
 // every <stream>'s api_key + host at the local rdio. With no channels it keeps
 // the template channel but disabled, so SDR-Trunk still loads a valid playlist.
 // It never regenerates XML from scratch — see the package fidelity warning.
-func renderPlaylist(template []byte, channels []ChannelPlan, localKeys map[int]string) ([]byte, error) {
+func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, localKeys map[int]string) ([]byte, error) {
 	out := string(template)
 
 	tmplBlock := reChannelBlock.FindString(out)
 	if tmplBlock == "" {
 		return nil, fmt.Errorf("preset has no <channel> element")
+	}
+
+	// Global aliases: replace the preset's contiguous <alias>…</alias> region
+	// with the fleet-wide aliases. Only when some are provided — an empty global
+	// alias set leaves the preset's aliases untouched. NOTE: aliases are
+	// regenerated from structured data (not edited in place); attribute order/
+	// whitespace may differ from the preset. SDR-Trunk (Jackson) reads attributes
+	// by name so this is safe, but per the fidelity warning it should be spot-
+	// checked on real SDR-Trunk.
+	if len(aliases) > 0 && reAliasRegion.MatchString(out) {
+		rendered := renderAliases(aliases)
+		out = reAliasRegion.ReplaceAllStringFunc(out, func(string) string { return rendered })
 	}
 
 	var rendered string
@@ -529,6 +559,61 @@ func decodeConfigType(decoder string) string {
 // frequency, preserving the preset's sourceConfigTuner shape.
 func renderSource(freq int64) string {
 	return fmt.Sprintf(`<source_configuration type="sourceConfigTuner" source_type="TUNER" frequency="%d"/>`, freq)
+}
+
+// renderAliases renders the global aliases into the playlist's <alias> region.
+// Attributes are emitted in SDR-Trunk's conventional order; extra <id>
+// attributes are sorted for deterministic output (Jackson reads by name).
+func renderAliases(aliases []Alias) string {
+	var b strings.Builder
+	for i, a := range aliases {
+		if i > 0 {
+			b.WriteString("\n  ")
+		}
+		b.WriteString(renderAlias(a))
+	}
+	return b.String()
+}
+
+func renderAlias(a Alias) string {
+	var b strings.Builder
+	b.WriteString("<alias")
+	writeXMLAttr(&b, "color", a.Color)
+	writeXMLAttr(&b, "list", a.List)
+	writeXMLAttr(&b, "group", a.Group)
+	writeXMLAttr(&b, "name", a.Name)
+	if len(a.IDs) == 0 {
+		b.WriteString("/>")
+		return b.String()
+	}
+	b.WriteString(">")
+	for _, id := range a.IDs {
+		b.WriteString("\n    <id")
+		writeXMLAttr(&b, "type", id.Type)
+		keys := make([]string, 0, len(id.Attrs))
+		for k := range id.Attrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			writeXMLAttr(&b, k, id.Attrs[k])
+		}
+		b.WriteString("/>")
+	}
+	b.WriteString("\n  </alias>")
+	return b.String()
+}
+
+// writeXMLAttr appends ` name="escaped-value"` when value is non-empty.
+func writeXMLAttr(b *strings.Builder, name, val string) {
+	if val == "" {
+		return
+	}
+	b.WriteString(" ")
+	b.WriteString(name)
+	b.WriteString(`="`)
+	b.WriteString(xmlAttr(val))
+	b.WriteString(`"`)
 }
 
 // xmlAttr escapes a string for use inside a double-quoted XML attribute,
