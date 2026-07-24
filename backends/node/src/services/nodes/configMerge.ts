@@ -24,30 +24,46 @@ import { createHash } from 'node:crypto';
 import { config } from '../../config.js';
 import { log } from '../../lib/log.js';
 import type { NodeRow } from './registry.js';
-import { ConfigOverrideSchema, type ConfigOverride } from './configSchema.js';
+import {
+  ConfigOverrideSchema,
+  type ConfigOverride,
+  type DecoderType,
+} from './configSchema.js';
 
-// ── payload contract (matches p4-config-contract.md) ───────────────────────
+// ── payload contract ───────────────────────────────────────────────────────
 export interface StreamTarget {
   systemId: number;
   name: string;
 }
 
-export interface TunerPlan {
-  gain?: number;
-  ppm?: number;
-  type?: string;
+/** One SDR-Trunk channel the agent renders into the playlist. */
+export interface ChannelPlan {
+  name: string;
+  frequency: number; // Hz (control-channel freq for trunked P25)
+  decoder: DecoderType;
+  system?: string;
+  site?: string;
+  autoStart?: boolean;
+  order?: number;
+  /** Device serial to pin to; omitted = any available SDR. */
+  sdr?: string;
 }
 
-export interface ChannelPlan {
-  system: string;
-  siteName: string;
-  controlFrequencies: number[]; // Hz
-  tuner: TunerPlan;
+/** Per-SDR tuner settings, keyed by serial ("*" = apply to all SDRs). */
+export interface TunerSettings {
+  serial: string;
+  label?: string;
+  sampleRate?: number;
+  gain?: number;
+  ppm?: number;
+  autoPpm?: boolean;
+  type?: string;
 }
 
 export interface ConfigPayload {
   configVersion: string;
-  channelPlan: ChannelPlan;
+  channels: ChannelPlan[];
+  tuners: TunerSettings[];
   /** The full rdio-scanner.json document (apiKeys[].key empty). */
   rdioConfig: Record<string, unknown>;
   streamTargets: StreamTarget[];
@@ -130,6 +146,46 @@ function parseOverride(raw: Record<string, unknown> | null | undefined): ConfigO
 }
 
 /**
+ * Derive the channel list. Prefers the new `channels[]`; otherwise migrates the
+ * deprecated single-channel `site` form (first control frequency → one channel)
+ * so pre-P5 overrides keep working.
+ */
+function deriveChannels(override: ConfigOverride, node: NodeRow): ChannelPlan[] {
+  if (override.channels && override.channels.length > 0) {
+    return override.channels.map((c) => ({ ...c }));
+  }
+  const freqs = override.site?.controlFrequencies ?? [];
+  const first = freqs[0];
+  if (first === undefined) return [];
+  return [
+    {
+      name: override.site?.name ?? node.name ?? 'Control',
+      frequency: first,
+      decoder: 'p25p2',
+      system: PLAN_SYSTEM,
+      site: override.site?.name,
+      autoStart: true,
+      order: 1,
+    },
+  ];
+}
+
+/**
+ * Derive per-SDR tuner settings. Prefers the new `tuners[]`; otherwise maps the
+ * deprecated node-wide `tuner` to a single "*" (all-SDRs) entry.
+ */
+function deriveTuners(override: ConfigOverride): TunerSettings[] {
+  if (override.tuners && override.tuners.length > 0) {
+    return override.tuners.map((t) => ({ ...t }));
+  }
+  const legacy = override.tuner;
+  if (legacy && (legacy.gain !== undefined || legacy.ppm !== undefined || legacy.type)) {
+    return [{ serial: '*', gain: legacy.gain, ppm: legacy.ppm, type: legacy.type }];
+  }
+  return [];
+}
+
+/**
  * Merge the base presets with a node's `config_override` into the full
  * ConfigPayload pushed to the agent. Throws (via loadPresets) if presets
  * are unavailable.
@@ -138,14 +194,8 @@ export function buildConfigPayload(node: NodeRow): ConfigPayload {
   const presets = loadPresets();
   const override = parseOverride(node.config_override);
 
-  const channelPlan: ChannelPlan = {
-    system: PLAN_SYSTEM,
-    // No site name lives in the preset itself, so the node's own display name
-    // is the sensible default when staff haven't set one explicitly.
-    siteName: override.site?.name ?? node.name ?? 'NSW PSN Site',
-    controlFrequencies: override.site?.controlFrequencies ?? [],
-    tuner: override.tuner ?? {},
-  };
+  const channels = deriveChannels(override, node);
+  const tuners = deriveTuners(override);
 
   const streamTargets: StreamTarget[] = presets.systems
     .map((s): StreamTarget | null => {
@@ -160,7 +210,7 @@ export function buildConfigPayload(node: NodeRow): ConfigPayload {
   // the cached preset.
   const rdioConfig = structuredClone(presets.rdio);
 
-  const payloadNoVersion = { channelPlan, rdioConfig, streamTargets };
+  const payloadNoVersion = { channels, tuners, rdioConfig, streamTargets };
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
 
   return { configVersion, ...payloadNoVersion };
