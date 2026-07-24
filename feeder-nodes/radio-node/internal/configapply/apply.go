@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/keys"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/presets"
@@ -106,6 +107,27 @@ func stageErr(stage, message string, err error) *StageError {
 	return &StageError{Stage: stage, Message: message, Err: err}
 }
 
+// rdioLoginReady logs in to the local rdio admin API, tolerating the brief
+// window right after a cold start where rdio hasn't bound its port yet
+// ("connection refused" on Linux, "actively refused" on Windows). It retries
+// only those dial-time failures; a real error (e.g. a wrong password) returns
+// immediately so it isn't masked by the readiness wait.
+func rdioLoginReady(c *rdioctl.Client, password string) error {
+	const attempts = 30 // ~30s: process spawn + sqlite init on a cold node
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = c.Login(password); err == nil {
+			return nil
+		}
+		m := err.Error()
+		if !strings.Contains(m, "refused") && !strings.Contains(m, "connection reset") {
+			return err
+		}
+		time.Sleep(time.Second)
+	}
+	return err
+}
+
 // Apply runs the full config-apply pipeline for one payload. On any failure it
 // returns a *StageError naming the failed stage.
 func Apply(payload ConfigPayload, d Deps) error {
@@ -126,7 +148,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 	if err := applyRdioKeys(rdioCfg, localKeys); err != nil {
 		return stageErr("rdio", "inject api keys", err)
 	}
-	if err := d.Rdio.Login(d.RdioPassword); err != nil {
+	if err := rdioLoginReady(d.Rdio, d.RdioPassword); err != nil {
 		return stageErr("rdio", "admin login", err)
 	}
 	if err := d.Rdio.PutConfig(rdioCfg); err != nil {

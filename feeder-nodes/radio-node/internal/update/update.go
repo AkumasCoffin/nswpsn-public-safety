@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -307,10 +308,20 @@ func EnsureComponent(name string, spec ComponentSpec, dataDir string) (*Installe
 	url, sha, ok := spec.artifact()
 	ver := strings.TrimSpace(spec.Version)
 
-	// No usable artifact (placeholder manifest) or already the active version:
-	// just resolve what's on disk.
-	if !ok || ver == "" || readCurrentVersion(dataDir, name) == ver {
+	// No usable artifact (placeholder manifest): just resolve what's on disk.
+	if !ok || ver == "" {
 		return resolveInstalled(name, dataDir), nil
+	}
+
+	// Already the active version AND its exec is present → nothing to do. But if
+	// the pointer claims this version while the exec is missing (an interrupted
+	// download, or an older agent that extracted the sdrtrunk zip to the wrong
+	// layout), fall through and reinstall instead of silently staying broken.
+	if readCurrentVersion(dataDir, name) == ver {
+		if inst := resolveInstalled(name, dataDir); inst != nil {
+			return inst, nil
+		}
+		log.Printf("update: %s %s pointer set but exec missing; reinstalling", name, ver)
 	}
 
 	versionDir := filepath.Join(componentDir(dataDir, name), ver)
