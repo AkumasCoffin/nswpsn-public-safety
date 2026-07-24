@@ -306,17 +306,18 @@ func runAgent(ctx context.Context, configPath string) error {
 	return nil
 }
 
-// resolveSDRTrunk builds the sdrtrunk supervisor component. An operator-provided
-// command (cfg.SDRTrunk.Command) always wins. Otherwise, if the component is
-// enabled, it resolves an agent-managed install: the jlink runtime's java
-// launcher plus the SDRTrunk main class. Either way the P3 launch wiring
-// (--headless / --control-port / --app-root + the per-boot control token env) is
-// appended. With no command and no managed install the component keeps an empty
-// command and the supervisor skips it (status "disabled").
+// resolveSDRTrunk builds the sdrtrunk supervisor component. SDR-Trunk is core to
+// a radio feeder node, so it is always enabled — there is no yaml opt-in. An
+// operator-provided command (cfg.SDRTrunk.Command) always wins; otherwise it
+// resolves an agent-managed install (the jlink launcher). Either way the P3
+// launch wiring (--headless / --control-port / --app-root + the per-boot control
+// token env) is appended. With no command and no managed install (e.g. a failed
+// download) the command stays empty and the supervisor skips it gracefully.
 func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlToken string) agentcfg.ComponentCfg {
 	c := cfg.SDRTrunk
+	c.Enabled = true // a radio feeder node always runs SDR-Trunk
 
-	if c.Command == "" && c.Enabled {
+	if c.Command == "" {
 		inst, err := update.EnsureComponent("sdrtrunk", spec, cfg.DataDir)
 		if err != nil {
 			log.Printf("sdrtrunk: managed install failed (%v); leaving component skipped", err)
@@ -340,17 +341,19 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 	return c
 }
 
-// resolveRdio builds the rdio supervisor component. An operator-provided command
-// wins; otherwise, if enabled, it resolves an agent-managed install and launches
-// the binary with its P2 args (--base_dir / --listen 127.0.0.1:17391 /
-// --admin_password <persisted secret>). The admin password is ensured
-// (generated + persisted to data/rdio-admin.secret) so the later config-apply
-// admin login uses the same value. With no command and no managed install the
-// component stays skipped.
+// resolveRdio builds the rdio supervisor component. Like SDR-Trunk, the local
+// rdio-scanner is core to a feeder node and always enabled — no yaml opt-in. An
+// operator-provided command wins; otherwise it resolves an agent-managed install
+// and launches the binary with its P2 args (--base_dir / --listen
+// 127.0.0.1:17391 / --admin_password <persisted secret>). The admin password is
+// ensured (generated + persisted to data/rdio-admin.secret) so the later
+// config-apply admin login uses the same value. With no command and no managed
+// install (e.g. a failed download) the component stays skipped.
 func resolveRdio(cfg *agentcfg.Config, spec update.ComponentSpec) agentcfg.ComponentCfg {
 	c := cfg.Rdio
+	c.Enabled = true // a radio feeder node always runs its local rdio-scanner
 
-	if c.Command == "" && c.Enabled {
+	if c.Command == "" {
 		inst, err := update.EnsureComponent("rdio", spec, cfg.DataDir)
 		if err != nil {
 			log.Printf("rdio: managed install failed (%v); leaving component skipped", err)
