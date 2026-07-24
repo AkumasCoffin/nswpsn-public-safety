@@ -330,6 +330,34 @@ const Schema = z.object({
   // urgent escalation (everything stays 'high').
   RDIO_ALERT_URGENT_KEYWORDS: z.string().optional(),
 
+  // ---------------------------------------------------------------------
+  // Feeder nodes (feeder-nodes/radio-node + the staff "Nodes" tab).
+  // ---------------------------------------------------------------------
+
+  // HMAC secret that mints per-contributor feeder tokens. The token a node
+  // agent authenticates with is HMAC(this, "<user_id>:<version>"), so the
+  // download endpoint can regenerate it without the DB storing any
+  // plaintext. REQUIRED for the feeder feature: when unset, /api/feeder/*
+  // and the node WebSocket return 503 rather than mint guessable tokens.
+  // Generate with `openssl rand -hex 32`; rotating it invalidates EVERY
+  // node's token at once (all agents must re-download), so treat it as
+  // long-lived.
+  FEEDER_TOKEN_SECRET: z.string().optional(),
+
+  // Central rdio-scanner the call relay uploads into. The relay swaps each
+  // node's local key for RDIO_INTERNAL_API_KEY (a single 'node-relay' key
+  // you create in the central rdio admin, scoped to all agency systems) so
+  // there's exactly one key in the central instance and disabling a node in
+  // the panel — not juggling rdio keys — is what cuts its calls. When either
+  // is unset the relay returns 503.
+  RDIO_INTERNAL_URL: z.string().optional(),
+  RDIO_INTERNAL_API_KEY: z.string().optional(),
+
+  // Where the base SDR-Trunk/rdio presets live (feeder-nodes/radio-node/
+  // presets). Optional — defaults to that repo path relative to the backend
+  // cwd (backends/node → ../../feeder-nodes/radio-node/presets).
+  NODE_PRESET_DIR: z.string().default('../../feeder-nodes/radio-node/presets'),
+
 });
 
 const parsed = Schema.safeParse(process.env);

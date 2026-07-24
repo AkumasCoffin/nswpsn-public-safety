@@ -59,6 +59,34 @@ function jwtVerifyOptions(): {
   return opts;
 }
 
+/**
+ * Verify a Supabase JWT outside the Hono middleware chain (e.g. the node
+ * WebSocket's first-message auth, where there's no Context). Returns the
+ * user id + display name on success, or null on any failure / missing
+ * secret. Pins HS256 and enforces iss/aud when SUPABASE_URL is set, exactly
+ * like the middleware.
+ */
+export async function verifySupabaseToken(
+  token: string,
+): Promise<{ userId: string; name: string } | null> {
+  const secret = config.SUPABASE_JWT_SECRET;
+  if (!secret || !token || !JWT_SHAPE.test(token)) return null;
+  try {
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(secret),
+      jwtVerifyOptions(),
+    );
+    if (typeof payload.sub !== 'string' || payload.sub.length === 0) return null;
+    return {
+      userId: payload.sub,
+      name: displayNameFromClaims(payload as Record<string, unknown>),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
   const auth = c.req.header('Authorization');
   if (!auth || !auth.startsWith('Bearer ')) {

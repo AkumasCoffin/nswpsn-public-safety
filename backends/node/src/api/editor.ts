@@ -603,6 +603,7 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
         requests: canViewRequests,
         users: canViewUsers,
         dev: canViewDev,
+        nodes: canViewDev,
       },
       roles: userRoles,
     });

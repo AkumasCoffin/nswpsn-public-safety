@@ -1,0 +1,36 @@
+{
+  "_comment": "Node self-update manifest. Artifacts are hosted on the SITE repo's GitHub Releases. URLs + sha256 below are PLACEHOLDERS — fill them in at the first real release (replace the .../releases/download/<tag>/ path and the empty sha256 hex). The agent checks this on start, every 6h, and on cmd{action:'update'}: it downloads to .pending, sha256-verifies, then swaps the component dir / self-replaces via a detached helper and restarts.",
+  "agent": {
+    "version": "0.1.0",
+    "urls": {
+      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/nodeagent-windows-amd64.exe",
+      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/nodeagent-linux-amd64"
+    },
+    "sha256": {
+      "windows-amd64": "",
+      "linux-amd64": ""
+    }
+  },
+  "sdrtrunk": {
+    "version": "0.6.1",
+    "urls": {
+      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/sdrtrunk-windows-amd64.zip",
+      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/sdrtrunk-linux-amd64.zip"
+    },
+    "sha256": {
+      "windows-amd64": "",
+      "linux-amd64": ""
+    }
+  },
+  "rdio": {
+    "version": "6.6.3",
+    "urls": {
+      "windows-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/rdio-scanner-windows-amd64.zip",
+      "linux-amd64": "https://github.com/AkumasCoffin/nswpsn-node/releases/download/v0.1.0/rdio-scanner-linux-amd64.zip"
+    },
+    "sha256": {
+      "windows-amd64": "",
+      "linux-amd64": ""
+    }
+  }
+}
