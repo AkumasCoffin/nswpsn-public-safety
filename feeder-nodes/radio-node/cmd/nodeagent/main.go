@@ -416,6 +416,7 @@ func (s *sender) send(contentType string, body []byte) queue.SendResult {
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Node-Token", s.token)
 	req.Header.Set("X-Node-Install", s.installID)
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
