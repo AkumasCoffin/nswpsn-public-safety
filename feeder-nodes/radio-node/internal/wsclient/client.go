@@ -484,10 +484,12 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 
 	case "tunerSet":
 		var a struct {
-			TunerID   string   `json:"tunerId"`
-			Frequency *int64   `json:"frequency"`
-			PPM       *float64 `json:"ppm"`
-			Gain      *int     `json:"gain"`
+			TunerID    string   `json:"tunerId"`
+			Frequency  *int64   `json:"frequency"`
+			PPM        *float64 `json:"ppm"`
+			Gain       *int     `json:"gain"`
+			SampleRate *float64 `json:"sampleRate"`
+			AutoPpm    *bool    `json:"autoPpm"`
 		}
 		_ = json.Unmarshal(cmd.Args, &a)
 		if a.TunerID == "" {
@@ -495,6 +497,20 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 			return
 		}
 		var done []string
+		if a.SampleRate != nil {
+			if err := c.sdr.SetSampleRate(a.TunerID, *a.SampleRate); err != nil {
+				c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})
+				return
+			}
+			done = append(done, "sampleRate")
+		}
+		if a.AutoPpm != nil {
+			if err := c.sdr.SetAutoPPM(a.TunerID, *a.AutoPpm); err != nil {
+				c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})
+				return
+			}
+			done = append(done, "autoPpm")
+		}
 		if a.Frequency != nil {
 			if err := c.sdr.SetFrequency(a.TunerID, *a.Frequency); err != nil {
 				c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})
