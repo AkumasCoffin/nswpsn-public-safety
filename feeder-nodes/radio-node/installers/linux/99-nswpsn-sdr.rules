@@ -1,0 +1,30 @@
+# NSW PSN radio feeder node - udev rules for common SDR hardware.
+# Installed to /etc/udev/rules.d/99-nswpsn-sdr.rules by install.sh.
+#
+# Grants the "plugdev" group read/write access to the USB device node so the
+# non-root "nswpsn-node" service user can drive the dongle. After editing:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# MODE 0660 + GROUP plugdev = owner(root) + plugdev members may access; others none.
+
+# --- RTL2832U based RTL-SDR (most common) ---
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# --- Airspy (R2 / Mini) ---
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60a1", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# --- Airspy HF+ ---
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="800c", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# --- HackRF One / Jawbreaker / rad1o ---
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6089", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="604b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="cc15", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# --- SDRplay (RSP1/1A/2/duo/dx) ---
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1df7", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# --- Nooelec / RTL variants sharing the Realtek IDs are covered above (0bda). ---
+
+# --- Great Scott Gadgets / Ettus and other 1d50 devices are matched per-product
+#     above to avoid over-broadly claiming the whole 1d50 vendor space. ---
