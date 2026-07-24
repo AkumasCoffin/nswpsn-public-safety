@@ -1,0 +1,40 @@
+# NSW PSN radio feeder node - systemd service.
+# Installed to /etc/systemd/system/nodeagent.service by install.sh.
+
+[Unit]
+Description=NSW PSN radio feeder node agent
+Documentation=https://nswpsn.forcequit.xyz
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nswpsn-node
+Group=nswpsn-node
+# plugdev gives the agent USB access to the SDR dongle (see 99-nswpsn-sdr.rules).
+SupplementaryGroups=plugdev
+
+ExecStart=/opt/nswpsn-node/nodeagent run --config /etc/nswpsn-node/agent.yaml
+Restart=always
+RestartSec=5
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# The agent's only writable areas: its state dir and its config dir (install_id
+# is written back into agent.yaml on first run).
+ReadWritePaths=/var/lib/nswpsn-node /etc/nswpsn-node
+# Allow reaching the backend + USB device nodes; block exotic socket families.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
