@@ -101,6 +101,7 @@ func FetchManifest(serverURL, token string) (*Manifest, error) {
 		return nil, err
 	}
 	req.Header.Set("X-Node-Token", token)
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	hc := &http.Client{Timeout: fetchTimeout}
 	resp, err := hc.Do(req)
@@ -140,6 +141,7 @@ func downloadVerified(url, sha256hex, destPath string) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", version.UserAgent())
 	hc := &http.Client{Timeout: downloadTimeout}
 	resp, err := hc.Do(req)
 	if err != nil {

@@ -17,3 +17,10 @@ var Version = "0.0.0-dev"
 func String() string {
 	return fmt.Sprintf("radio-node %s (%s/%s, %s)", Version, runtime.GOOS, runtime.GOARCH, runtime.Version())
 }
+
+// UserAgent is the User-Agent the agent sends on every request to the server.
+// A distinct, non-default UA (Go's default "Go-http-client/1.1" trips
+// Cloudflare Bot Fight Mode) so it's identifiable and can be allow-listed.
+func UserAgent() string {
+	return fmt.Sprintf("NSWPSN-NodeAgent/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
+}

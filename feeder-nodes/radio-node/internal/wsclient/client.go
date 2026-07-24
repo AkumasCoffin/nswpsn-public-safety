@@ -154,6 +154,7 @@ func (c *Client) session(ctx context.Context) (connected bool, rejected bool, er
 	hdr := http.Header{
 		"X-Node-Token":   {c.cfg.NodeToken},
 		"X-Node-Install": {c.cfg.InstallID},
+		"User-Agent":     {version.UserAgent()},
 	}
 
 	dialer := websocket.Dialer{
