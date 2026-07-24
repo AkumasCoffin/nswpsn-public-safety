@@ -211,7 +211,8 @@ ProtectKernelLogs=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
-ReadWritePaths=/var/lib/nswpsn-node /etc/nswpsn-node
+# /opt/nswpsn-node writable so the agent can self-update its binary in place.
+ReadWritePaths=/opt/nswpsn-node /var/lib/nswpsn-node /etc/nswpsn-node
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]

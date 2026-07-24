@@ -30,9 +30,10 @@ ProtectKernelLogs=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
-# The agent's only writable areas: its state dir and its config dir (install_id
-# is written back into agent.yaml on first run).
-ReadWritePaths=/var/lib/nswpsn-node /etc/nswpsn-node
+# The agent's writable areas: its install dir (self-update stages + swaps its
+# own binary here), its state dir, and its config dir (install_id is written
+# back into agent.yaml on first run).
+ReadWritePaths=/opt/nswpsn-node /var/lib/nswpsn-node /etc/nswpsn-node
 # Allow reaching the backend + USB device nodes; block exotic socket families.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
