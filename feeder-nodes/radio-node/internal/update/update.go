@@ -241,11 +241,12 @@ func writeCurrentVersion(dataDir, name, ver string) error {
 func execName(name string) string {
 	switch name {
 	case "sdrtrunk":
-		// jlink runtime java launcher.
+		// The jlink app-image launcher script (sets classpath + the required
+		// --enable-preview / incubator-vector / javafx JVM args). NOT bin/java.
 		if runtime.GOOS == "windows" {
-			return "java.exe"
+			return "sdr-trunk.bat"
 		}
-		return "java"
+		return "sdr-trunk"
 	case "rdio":
 		if runtime.GOOS == "windows" {
 			return "rdio-scanner.exe"
@@ -351,6 +352,30 @@ func installArtifact(name, url, sha, versionDir string) error {
 	return downloadVerified(url, sha, dest)
 }
 
+// commonTopDir returns the single shared top-level directory prefix (with
+// trailing slash) if every entry lives under it, else "". Used to flatten an
+// archive that wraps everything in one versioned dir.
+func commonTopDir(files []*zip.File) string {
+	top := ""
+	for _, f := range files {
+		n := strings.TrimPrefix(f.Name, "./")
+		if n == "" {
+			continue
+		}
+		i := strings.IndexByte(n, '/')
+		if i < 0 {
+			return "" // a top-level file exists → no common wrapping dir
+		}
+		seg := n[:i+1]
+		if top == "" {
+			top = seg
+		} else if top != seg {
+			return ""
+		}
+	}
+	return top
+}
+
 // unzip extracts src into destDir, guarding against zip-slip and preserving the
 // executable bit on the jlink bin/ entries.
 func unzip(src, destDir string) error {
@@ -365,8 +390,20 @@ func unzip(src, destDir string) error {
 		return err
 	}
 
+	// jlink app images extract to a single versioned top-level dir (e.g.
+	// "sdr-trunk-linux-x86_64-vX/"). Strip it so bin/, lib/, ... land directly
+	// under destDir and execPathFor(<dir>/bin/sdr-trunk) resolves.
+	strip := commonTopDir(zr.File)
+
 	for _, f := range zr.File {
-		target := filepath.Join(destDir, f.Name) //nolint:gosec // guarded below
+		name := f.Name
+		if strip != "" {
+			name = strings.TrimPrefix(name, strip)
+			if name == "" {
+				continue // the stripped top-level dir entry itself
+			}
+		}
+		target := filepath.Join(destDir, name) //nolint:gosec // guarded below
 		targetAbs, err := filepath.Abs(target)
 		if err != nil {
 			return err
