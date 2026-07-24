@@ -1,0 +1,3 @@
+# Built node-agent binaries served by the backend (NODE_AGENT_DIST_DIR).
+# Cross-compiled at deploy time from radio-node/cmd/nodeagent; not committed.
+dist/
