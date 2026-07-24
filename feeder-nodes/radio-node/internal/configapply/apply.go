@@ -46,13 +46,30 @@ const (
 	localRdioUploadURL = "http://127.0.0.1:17391/api/call-upload"
 )
 
-// ChannelPlan is the SDR-Trunk side of a configPush: which control channel to
-// decode and how to drive the tuner.
+// ChannelPlan is one SDR-Trunk channel from a configPush: the frequency to
+// decode, its decoder type, and SDR-Trunk display/ordering metadata.
 type ChannelPlan struct {
-	System             string         `json:"system"`
-	SiteName           string         `json:"siteName"`
-	ControlFrequencies []int64        `json:"controlFrequencies"`
-	Tuner              map[string]any `json:"tuner"`
+	Name      string `json:"name"`
+	Frequency int64  `json:"frequency"` // Hz (control-channel freq for trunked P25)
+	Decoder   string `json:"decoder"`   // p25p2|p25p1|dmr|nbfm|am
+	System    string `json:"system"`
+	Site      string `json:"site"`
+	AutoStart bool   `json:"autoStart"`
+	Order     int    `json:"order"`
+	SDR       string `json:"sdr"` // device serial to pin to; "" = any tuner
+}
+
+// TunerSettings is per-SDR tuner config, keyed by device serial ("*" = all).
+// Pointers distinguish "unset" from a real zero so we don't clobber a tuner
+// with 0 gain/ppm the operator never set.
+type TunerSettings struct {
+	Serial     string   `json:"serial"`
+	Label      string   `json:"label"`
+	SampleRate float64  `json:"sampleRate"`
+	Gain       *float64 `json:"gain"`
+	PPM        *float64 `json:"ppm"`
+	AutoPpm    bool     `json:"autoPpm"`
+	Type       string   `json:"type"`
 }
 
 // StreamTarget is one agency system the node uploads for. Each gets a stable
@@ -64,10 +81,11 @@ type StreamTarget struct {
 
 // ConfigPayload is the full configPush document from the backend.
 type ConfigPayload struct {
-	ConfigVersion string         `json:"configVersion"`
-	ChannelPlan   ChannelPlan    `json:"channelPlan"`
-	RdioConfig    map[string]any `json:"rdioConfig"`
-	StreamTargets []StreamTarget `json:"streamTargets"`
+	ConfigVersion string          `json:"configVersion"`
+	Channels      []ChannelPlan   `json:"channels"`
+	Tuners        []TunerSettings `json:"tuners"`
+	RdioConfig    map[string]any  `json:"rdioConfig"`
+	StreamTargets []StreamTarget  `json:"streamTargets"`
 }
 
 // Restarter is the slice of the supervisor configapply needs (best-effort
@@ -157,7 +175,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 
 	// ---- stage: playlist ----------------------------------------------------
 	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, payload.ChannelPlan, localKeys)
+	rendered, err := renderPlaylist(tmpl, payload.Channels, localKeys)
 	if err != nil {
 		return stageErr("playlist", "render", err)
 	}
@@ -182,7 +200,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 	// Tuner gain/ppm live in SDR-Trunk's tuner config, not the playlist, so they
 	// are applied via the control API against the live tuners. Best-effort only:
 	// failures here never fail the apply (the tuner may still be spinning up).
-	d.applyTunerParams(payload.ChannelPlan.Tuner)
+	d.applyTuners(payload.Tuners)
 
 	return nil
 }
@@ -322,87 +340,99 @@ func (d Deps) writePlaylist(data []byte) error {
 	return nil
 }
 
-// applyTunerParams pushes gain/ppm from the channel plan to every live tuner via
-// the control API. Best-effort: all failures are swallowed (logged by callers of
-// the control API is not available here, so we stay silent) since the playlist
-// apply already succeeded.
-func (d Deps) applyTunerParams(tuner map[string]any) {
-	if len(tuner) == 0 || d.SDR == nil {
+// applyTuners pushes per-SDR gain/ppm to the live tuners via the control API.
+// Settings are keyed by device serial; a "*" entry applies to every SDR. Live
+// tuners are matched by serial when the control server reports one, else by the
+// tuner id (loose) — precise serial matching + sampleRate/autoPpm land with the
+// SDR-Trunk control-server changes (Phase D). Best-effort: all failures are
+// swallowed since the playlist apply already succeeded.
+func (d Deps) applyTuners(tuners []TunerSettings) {
+	if len(tuners) == 0 || d.SDR == nil {
 		return
 	}
-	gain, hasGain := toInt(tuner["gain"])
-	ppm, hasPPM := toFloat(tuner["ppm"])
-	if !hasGain && !hasPPM {
-		return
-	}
-	tuners, err := d.SDR.Tuners()
+	live, err := d.SDR.Tuners()
 	if err != nil {
 		return
 	}
-	for _, t := range tuners {
-		if hasGain {
-			_ = d.SDR.SetGain(t.ID, gain)
+
+	bySerial := make(map[string]TunerSettings, len(tuners))
+	var wildcard *TunerSettings
+	for i := range tuners {
+		if tuners[i].Serial == "*" {
+			wildcard = &tuners[i]
+		} else if tuners[i].Serial != "" {
+			bySerial[tuners[i].Serial] = tuners[i]
 		}
-		if hasPPM {
-			_ = d.SDR.SetPPM(t.ID, ppm)
+	}
+
+	for _, lt := range live {
+		ts, ok := bySerial[lt.ID]
+		if !ok {
+			if wildcard == nil {
+				continue
+			}
+			ts = *wildcard
 		}
+		if ts.Gain != nil {
+			_ = d.SDR.SetGain(lt.ID, int(*ts.Gain))
+		}
+		if ts.PPM != nil {
+			_ = d.SDR.SetPPM(lt.ID, *ts.PPM)
+		}
+		// sampleRate + autoPpm need new control-server actions (Phase D).
 	}
 }
 
 // --- playlist rendering (targeted string edits; see package doc) -------------
 
 var (
-	reChannelTag = regexp.MustCompile(`(?s)<channel\b[^>]*>`)
-	reSourceCfg  = regexp.MustCompile(`(?s)<source_configuration\b[^>]*?/>`)
-	reStreamTag  = regexp.MustCompile(`(?s)<stream\b[^>]*>`)
-	reEnabled    = regexp.MustCompile(`enabled="[^"]*"`)
-	reSystemAttr = regexp.MustCompile(`system="[^"]*"`)
-	reSiteAttr   = regexp.MustCompile(`site="[^"]*"`)
-	reSystemID   = regexp.MustCompile(`system_id="([^"]*)"`)
-	reApiKey     = regexp.MustCompile(`api_key="[^"]*"`)
-	reHost       = regexp.MustCompile(`host="[^"]*"`)
+	reChannelBlock = regexp.MustCompile(`(?s)<channel\b.*?</channel>`)
+	reChannelTag   = regexp.MustCompile(`(?s)<channel\b[^>]*>`)
+	reSourceCfg    = regexp.MustCompile(`(?s)<source_configuration\b[^>]*?/>`)
+	reStreamTag    = regexp.MustCompile(`(?s)<stream\b[^>]*>`)
+	reEnabled      = regexp.MustCompile(`enabled="[^"]*"`)
+	reSystemAttr   = regexp.MustCompile(`system="[^"]*"`)
+	reSiteAttr     = regexp.MustCompile(`site="[^"]*"`)
+	reNameAttr     = regexp.MustCompile(`name="[^"]*"`)
+	reOrderAttr    = regexp.MustCompile(`order="[^"]*"`)
+	reDecodeType   = regexp.MustCompile(`(<decode_configuration\b[^>]*\btype=")[^"]*(")`)
+	reSystemID     = regexp.MustCompile(`system_id="([^"]*)"`)
+	reApiKey       = regexp.MustCompile(`api_key="[^"]*"`)
+	reHost         = regexp.MustCompile(`host="[^"]*"`)
 )
 
-// renderPlaylist applies the narrow edits described in the package doc to the
-// preset template and returns the node-specific playlist bytes.
-func renderPlaylist(template []byte, plan ChannelPlan, localKeys map[int]string) ([]byte, error) {
+// renderPlaylist clones the preset's single <channel> block once per configured
+// channel (each with its own frequency / decoder / labels / order), then points
+// every <stream>'s api_key + host at the local rdio. With no channels it keeps
+// the template channel but disabled, so SDR-Trunk still loads a valid playlist.
+// It never regenerates XML from scratch — see the package fidelity warning.
+func renderPlaylist(template []byte, channels []ChannelPlan, localKeys map[int]string) ([]byte, error) {
 	out := string(template)
 
-	if !reChannelTag.MatchString(out) {
+	tmplBlock := reChannelBlock.FindString(out)
+	if tmplBlock == "" {
 		return nil, fmt.Errorf("preset has no <channel> element")
 	}
 
-	// 1) Channel opening tag: enable it, and stamp the node's system/site labels.
-	out = reChannelTag.ReplaceAllStringFunc(out, func(tag string) string {
-		tag = reEnabled.ReplaceAllString(tag, `enabled="true"`)
-		if plan.System != "" {
-			tag = reSystemAttr.ReplaceAllString(tag, `system="`+xmlAttr(plan.System)+`"`)
+	var rendered string
+	if len(channels) == 0 {
+		rendered = renderChannelBlock(tmplBlock, ChannelPlan{}, false)
+	} else {
+		var b strings.Builder
+		for i, ch := range channels {
+			if i > 0 {
+				b.WriteString("\n  ")
+			}
+			b.WriteString(renderChannelBlock(tmplBlock, ch, true))
 		}
-		if plan.SiteName != "" {
-			tag = reSiteAttr.ReplaceAllString(tag, `site="`+xmlAttr(plan.SiteName)+`"`)
-		}
-		// The preset's order="N" attribute is SDR-Trunk's auto-start order; its
-		// presence already marks the channel for auto-start, so enabling is
-		// sufficient. (Left untouched to preserve auto-start ordering.)
-		return tag
-	})
-
-	// 2) Source frequency(ies).
-	if len(plan.ControlFrequencies) > 0 {
-		if !reSourceCfg.MatchString(out) {
-			return nil, fmt.Errorf("preset channel has no self-closing <source_configuration>")
-		}
-		replaced := false
-		out = reSourceCfg.ReplaceAllStringFunc(out, func(string) string {
-			replaced = true
-			return renderSource(plan.ControlFrequencies)
-		})
-		if !replaced {
-			return nil, fmt.Errorf("could not substitute <source_configuration>")
-		}
+		rendered = b.String()
 	}
+	// Replace the single template block with the rendered block(s). Use a literal
+	// replacement (not ReplaceAllString) so `$` in the rendered XML isn't treated
+	// as a capture reference.
+	out = reChannelBlock.ReplaceAllStringFunc(out, func(string) string { return rendered })
 
-	// 3) Streams: point api_key + host at the local rdio.
+	// Streams: point api_key + host at the local rdio (global, not per-channel).
 	out = reStreamTag.ReplaceAllStringFunc(out, func(tag string) string {
 		m := reSystemID.FindStringSubmatch(tag)
 		key := ""
@@ -419,24 +449,86 @@ func renderPlaylist(template []byte, plan ChannelPlan, localKeys map[int]string)
 	return []byte(out), nil
 }
 
-// renderSource builds the channel <source_configuration> element. A single
-// control frequency keeps the preset's sourceConfigTuner shape (adding a
-// frequency attribute); multiple frequencies emit sourceConfigTunerMultiple with
-// child <frequency> elements. The multi-frequency element shape is a best-effort
-// match to SDR-Trunk's schema — see the package-level fidelity warning.
-func renderSource(freqs []int64) string {
-	if len(freqs) == 1 {
-		return fmt.Sprintf(`<source_configuration type="sourceConfigTuner" source_type="TUNER" frequency="%d"/>`, freqs[0])
+// renderChannelBlock stamps one channel's fields onto a clone of the preset's
+// <channel> block: enabled flag, name/system/site/order attributes, decoder
+// type, and the source frequency. When enabled is false the block is emitted
+// disabled and the other fields are left as the template's.
+func renderChannelBlock(tmpl string, ch ChannelPlan, enabled bool) string {
+	blk := reChannelTag.ReplaceAllStringFunc(tmpl, func(tag string) string {
+		if enabled {
+			tag = reEnabled.ReplaceAllString(tag, `enabled="true"`)
+		} else {
+			tag = reEnabled.ReplaceAllString(tag, `enabled="false"`)
+			return tag
+		}
+		if ch.Name != "" {
+			tag = setOrAddChannelAttr(tag, reNameAttr, "name", ch.Name)
+		}
+		if ch.System != "" {
+			tag = setOrAddChannelAttr(tag, reSystemAttr, "system", ch.System)
+		}
+		if ch.Site != "" {
+			tag = setOrAddChannelAttr(tag, reSiteAttr, "site", ch.Site)
+		}
+		if ch.Order > 0 {
+			tag = setOrAddChannelAttr(tag, reOrderAttr, "order", strconv.Itoa(ch.Order))
+		}
+		return tag
+	})
+
+	if !enabled {
+		return blk
 	}
-	var b strings.Builder
-	b.WriteString(`<source_configuration type="sourceConfigTunerMultiple" source_type="TUNER">`)
-	for _, f := range freqs {
-		b.WriteString("\n      <frequency>")
-		b.WriteString(strconv.FormatInt(f, 10))
-		b.WriteString("</frequency>")
+
+	// Decoder type. NOTE: only the type attribute is swapped; the preset's other
+	// decode_configuration attributes (modulation, traffic_channel_pool_size) are
+	// kept. Non-P25 decoders may need a different attribute set — this is
+	// best-effort and MUST be validated against real SDR-Trunk (fidelity warning).
+	if dt := decodeConfigType(ch.Decoder); dt != "" {
+		blk = reDecodeType.ReplaceAllString(blk, `${1}`+dt+`${2}`)
 	}
-	b.WriteString("\n    </source_configuration>")
-	return b.String()
+
+	if ch.Frequency > 0 {
+		blk = reSourceCfg.ReplaceAllStringFunc(blk, func(string) string {
+			return renderSource(ch.Frequency)
+		})
+	}
+	return blk
+}
+
+// setOrAddChannelAttr replaces an attribute on the <channel> opening tag, or
+// inserts it right after the element name when the preset omits it.
+func setOrAddChannelAttr(tag string, re *regexp.Regexp, name, val string) string {
+	attr := name + `="` + xmlAttr(val) + `"`
+	if re.MatchString(tag) {
+		return re.ReplaceAllString(tag, attr)
+	}
+	return strings.Replace(tag, "<channel", "<channel "+attr, 1)
+}
+
+// decodeConfigType maps a payload decoder key to SDR-Trunk's
+// decode_configuration @type. Empty = leave the preset's type untouched.
+func decodeConfigType(decoder string) string {
+	switch decoder {
+	case "p25p1":
+		return "decodeConfigP25Phase1"
+	case "p25p2":
+		return "decodeConfigP25Phase2"
+	case "dmr":
+		return "decodeConfigDMR"
+	case "nbfm":
+		return "decodeConfigNBFM"
+	case "am":
+		return "decodeConfigAM"
+	default:
+		return ""
+	}
+}
+
+// renderSource builds the channel's <source_configuration> for a single tuner
+// frequency, preserving the preset's sourceConfigTuner shape.
+func renderSource(freq int64) string {
+	return fmt.Sprintf(`<source_configuration type="sourceConfigTuner" source_type="TUNER" frequency="%d"/>`, freq)
 }
 
 // xmlAttr escapes a string for use inside a double-quoted XML attribute,
