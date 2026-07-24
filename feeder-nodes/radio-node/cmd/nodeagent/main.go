@@ -321,12 +321,12 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 		if err != nil {
 			log.Printf("sdrtrunk: managed install failed (%v); leaving component skipped", err)
 		} else if inst != nil {
-			c.Command = inst.ExecPath // jlink java(.exe)
-			// Prepend the SDRTrunk main class ahead of any operator args. NOTE:
-			// the exact classpath/module flags for the jlink runtime depend on how
-			// the release zip is packaged and MUST be validated against a real
-			// SDRTrunk jlink artifact — see the Phase 4 report.
-			c.Args = append([]string{"io.github.dsheirer.gui.SDRTrunk"}, c.Args...)
+			// inst.ExecPath is the jlink app-image launcher (<dir>/bin/sdr-trunk),
+			// which sets the classpath + required JVM args (--enable-preview,
+			// incubator vector, javafx exports) and forwards CLI args to
+			// SDRTrunk.main(). So we launch it directly — no main class, no
+			// jvmArgs here. Verified against the built runtime image.
+			c.Command = inst.ExecPath
 			log.Printf("sdrtrunk: using managed install v%s (%s)", inst.Version, inst.ExecPath)
 		}
 	}
