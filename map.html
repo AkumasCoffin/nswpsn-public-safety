@@ -1624,8 +1624,19 @@
       font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
       text-transform: uppercase;
       border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      display: flex; align-items: center; cursor: pointer; user-select: none;
     }
+    .unified-list-section-header:hover { background: rgba(30, 41, 59, 0.97); }
     .unified-list-section-header i { margin-right: 5px; }
+    /* Collapse caret sits at the far right and rotates when collapsed. */
+    .unified-list-section-header .list-caret {
+      display: inline-block; /* transforms are ignored on inline elements */
+      margin-left: auto; margin-right: 0; opacity: 0.85;
+      font-size: 15px; line-height: 1; transition: transform 0.15s;
+    }
+    .unified-list-section-header:hover .list-caret { opacity: 1; }
+    .list-section.collapsed .list-caret { transform: rotate(-90deg); }
+    .list-section.collapsed .unified-list-section-rows { display: none; }
     /* Right-side dock: ONE card. The dock itself carries the panel
        chrome (background, border, radius, shadow); the panels inside —
        Map Controls (order 0, injected by map-editor-module.js) and the
@@ -1633,10 +1644,12 @@
        separated by dividers. Hidden entirely until a section is open. */
     #right-dock {
       /* top clears the topright Leaflet zoom control (two 30px
-         buttons + margins) so the dock never overlaps it. */
+         buttons + margins) so the dock never overlaps it. The bottom
+         reserve (180 = 100 top + ~80) keeps a tall dock from covering the
+         API status/refresh pill at bottom-right (bottom:25px). */
       position: absolute; top: 100px; right: 12px; z-index: 900;
       display: none; flex-direction: column;
-      width: 320px; max-height: calc(100% - 120px);
+      width: 320px; max-height: calc(100% - 180px);
       background: rgba(15, 23, 42, 0.94);
       border: 1px solid rgba(125, 211, 252, 0.35);
       border-radius: 10px;
@@ -1650,7 +1663,11 @@
        open cards shrink together and scroll their own bodies. */
     #right-dock .ais-list-panel {
       position: static; width: 100%; max-width: none;
-      max-height: none; flex: 0 1 auto; min-height: 0;
+      /* Don't shrink below content: a collapsed section must always show
+         its header (it was getting squished to a few px by the service-
+         alerts card). Cap the height so a long EXPANDED list still scrolls
+         internally and leaves room for the alerts card below. */
+      max-height: 50vh; flex: 0 0 auto; min-height: 0;
       order: 1;
       background: transparent; border: 0; border-radius: 0;
       box-shadow: none; backdrop-filter: none;
@@ -2471,6 +2488,7 @@
         <label><input type="checkbox" id="chk-ais-st-underway" checked onchange="toggleAisStatus('underway', this.checked)" style="accent-color:#0284c7;"> Underway</label>
         <label><input type="checkbox" id="chk-ais-st-anchored" checked onchange="toggleAisStatus('anchored', this.checked)" style="accent-color:#0284c7;"> Anchored</label>
         <label><input type="checkbox" id="chk-ais-st-other" checked onchange="toggleAisStatus('other', this.checked)" style="accent-color:#0284c7;"> Other</label>
+        <label><input type="checkbox" id="chk-ais-hide-docked" onchange="toggleAisHideDocked(this.checked)" style="accent-color:#0284c7;"> Hide docked (≤0.1 kn)</label>
         <div id="ais-status-line" style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(148,163,184,0.18);font-size:10px;color:#94a3b8;line-height:1.5;">No vessels loaded yet.</div>
       </div>
       <!-- AIS vessel list — kept INSIDE this wrapper so it relocates into the
@@ -2492,13 +2510,13 @@
           <input type="text" id="ais-list-search" placeholder="Search by name, MMSI, IMO, destination…" autocomplete="off" oninput="unifiedListOnSearch(this.value)">
         </div>
         <div class="ais-list-body" id="ais-list-body">
-          <div id="adsb-list-section" style="display:none;">
-            <div class="unified-list-section-header" id="adsb-section-header" style="color:#c084fc;"><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span></div>
-            <div id="adsb-list-rows"></div>
+          <div id="adsb-list-section" class="list-section" style="display:none;">
+            <div class="unified-list-section-header" id="adsb-section-header" style="color:#c084fc;" onclick="toggleListSection('adsb')"><i class="fa-solid fa-plane"></i> Aircraft <span id="adsb-section-count"></span><span class="list-caret">&#9662;</span></div>
+            <div id="adsb-list-rows" class="unified-list-section-rows"></div>
           </div>
-          <div id="ais-list-section" style="display:none;">
-            <div class="unified-list-section-header" id="ais-section-header" style="color:#7dd3fc;"><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span></div>
-            <div id="ais-list-rows"></div>
+          <div id="ais-list-section" class="list-section" style="display:none;">
+            <div class="unified-list-section-header" id="ais-section-header" style="color:#7dd3fc;" onclick="toggleListSection('ais')"><i class="fa-solid fa-ship"></i> Vessels <span id="ais-section-count"></span><span class="list-caret">&#9662;</span></div>
+            <div id="ais-list-rows" class="unified-list-section-rows"></div>
           </div>
         </div>
       </div>
@@ -3353,6 +3371,14 @@
     // Anchored / Other to match MT's "Current Status" toggles.
     let aisTypeFilter = { cargo:true, tanker:true, passenger:true, hsc:true, tug:true, fishing:true, pleasure:true, navaid:true, unspecified:true };
     let aisStatusFilter = { underway:true, anchored:true, other:true };
+    let aisHideDocked = false; // hide vessels stopped at berth (speed ≤ 0.1 kn)
+    // Docked = reports a speed of 0.1 kn or less. MarineTraffic SPEED is in
+    // 1/10 kn, so ≤ 1. NO speed reported → NOT docked (unknown, keep it).
+    function aisIsDocked(v) {
+      if (v == null || v.SPEED == null || v.SPEED === '') return false;
+      const s = parseFloat(v.SPEED);
+      return Number.isFinite(s) && s <= 1;
+    }
     // Subtype filter (GT_SHIPTYPE id → bool). Populated lazily once
     // AIS_SUBTYPES is defined below — we initialise this to {} here
     // and treat undefined entries as "enabled" so the panel works
@@ -5888,24 +5914,27 @@ function initPagerHoursFromStorage() {
     function _incidentPhotosHtml(images, opts) {
       const list = (images || []).filter((i) => i && _isSafeImagePath(i.file));
       if (!list.length) return '';
-      const size = (opts && opts.size) || 96;
+      // Fill the panel width — a single photo spans it, multiples go two
+      // per row with a 4:3 crop — so photos read clearly in the narrow
+      // right-dock instead of tiny squares.
+      const cols = list.length === 1 ? '1fr' : 'repeat(2, 1fr)';
       // No inline onclick/onerror: an HTML attribute is decoded before the
       // JS in it is parsed, so escapeHtml() cannot safely quote a value
       // into a handler. data-* is a plain HTML context where it can, and
       // the listeners below are delegated.
       const tiles = list.map((img) => {
         const orig = escapeHtml(IMAGE_ORIGIN + img.file);
-        const thumb = escapeHtml(cfImageUrl(img.file, 320));
+        const thumb = escapeHtml(cfImageUrl(img.file, 480));
         const by = img.uploaded_by_name ? 'Photo by ' + img.uploaded_by_name : 'Incident photo';
         return '<img src="' + thumb + '" alt="' + escapeHtml(by) + '" title="' + escapeHtml(by) + '"' +
           ' loading="lazy" class="incident-photo"' +
           ' data-file="' + escapeHtml(img.file) + '" data-orig="' + orig + '"' +
-          ' style="width:' + size + 'px; height:' + size + 'px; object-fit:cover; border-radius:6px;' +
+          ' style="width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:8px;' +
           ' border:1px solid rgba(148,163,184,0.3); cursor:zoom-in; display:block;">';
       }).join('');
       return '<div style="margin:0.6rem 0;">' +
-        '<div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-soft); margin-bottom:0.35rem;">Photos</div>' +
-        '<div style="display:flex; flex-wrap:wrap; gap:0.4rem;">' + tiles + '</div></div>';
+        '<div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-soft); margin-bottom:0.4rem;">Photos</div>' +
+        '<div style="display:grid; grid-template-columns:' + cols + '; gap:0.4rem;">' + tiles + '</div></div>';
     }
     document.addEventListener('click', (e) => {
       const t = e.target && e.target.closest && e.target.closest('img.incident-photo');
@@ -6361,9 +6390,11 @@ function initPagerHoursFromStorage() {
       if (_editorHooksUsable()) { return NSWPSNEditorHooks.openUser(incident, pagerDetails); }
       // Ensure we always have an object to work with
       const data = incident || {};
-      const sidebar = document.getElementById('incident-sidebar');
-      const content = document.getElementById('sidebar-content');
-      sidebar.classList.add('open');
+      // Public sessions get the right-dock details card — same "hovering"
+      // chrome as the RFS/pager/vessels panels — not the old full-height
+      // sidebar, so every pin type looks consistent.
+      const content = _openIncidentInfoPanel('fa-user', '#a855f7', 'User incident', data.status || '');
+      if (!content) return;
 
       content.innerHTML = '<p style="color:var(--text-soft); text-align:center; margin-top:2rem;">Loading details and log...</p>';
 
@@ -6421,6 +6452,7 @@ function initPagerHoursFromStorage() {
             : ''}
         </div>
         ${_incidentPhotosHtml(data.images)}
+        <hr style="border:0; border-top:1px solid var(--border-subtle); margin:0 0 1rem 0;">
         <h3 style="font-size:0.85rem; text-transform:uppercase; color:var(--text-soft); letter-spacing:0.1em; margin-bottom:0.5rem;">User Incident Log</h3>
         ${updatesHtml}
       `;
@@ -10213,6 +10245,13 @@ function initPagerHoursFromStorage() {
       _rebuildAis();
       refreshActiveFilterPanel();
     };
+    window.toggleAisHideDockedPill = function () {
+      aisHideDocked = !aisHideDocked;
+      _ffSetCheckbox('chk-ais-hide-docked', aisHideDocked);
+      _rebuildAis();
+      if (document.getElementById('ais-list-panel')?.classList.contains('open')) aisListRender();
+      refreshActiveFilterPanel();
+    };
     // GT_SHIPTYPE subtype pill — toggles the filter and re-renders.
     // Default state for unknown ids is "on", so the first click sets
     // false, the second sets true again.
@@ -10410,7 +10449,7 @@ function initPagerHoursFromStorage() {
           <div class="ff-section-label">Ship type <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;">(▸ to expand subtypes)</span></div>
           <div style="display:flex;flex-direction:column;gap:4px;">${typeRowsHtml}</div>
           <div class="ff-section-label" style="margin-top:8px;">Status</div>
-          <div class="floating-filter-pills">${statusPills}</div>
+          <div class="floating-filter-pills">${statusPills}${_ffPill(aisHideDocked, '<i class="fa-solid fa-anchor"></i> Hide docked', 'toggleAisHideDockedPill()')}</div>
           <div class="ff-section-label" style="margin-top:8px;">Labels</div>
           <div class="floating-filter-pills">${_ffPill(aisLabelSettings.enabled, '<i class="fa-solid fa-tag"></i> Labels', 'toggleAisLabelsPill()')}</div>
           ${labelFieldsHtml}
@@ -10874,6 +10913,7 @@ function initPagerHoursFromStorage() {
         const st = aisStatusBucket(v);
         if (!aisTypeFilter[cat]) return;
         if (!aisStatusFilter[st]) return;
+        if (aisHideDocked && aisIsDocked(v)) return;
         const gt = aisGtSubtype(v);
         // Subtype map only contains entries the user has explicitly
         // toggled OFF. Vessels with GT_SHIPTYPE not in the legend, or
@@ -10976,6 +11016,14 @@ function initPagerHoursFromStorage() {
         : `${total} in view`;
     }
 
+    // Collapse/expand a list section (Aircraft / Vessels) by its header.
+    // The rows stay in the DOM (re-renders just refill them), so the
+    // collapsed state survives data polls and viewport updates.
+    window.toggleListSection = function (which) {
+      const sec = document.getElementById(which + '-list-section');
+      if (sec) sec.classList.toggle('collapsed');
+    };
+
     // Called from the layer toggles: open the panel while either layer
     // is on, close it when both are off, and resync the sections.
     function syncUnifiedListPanel() {
@@ -11036,6 +11084,7 @@ function initPagerHoursFromStorage() {
         const st = aisStatusBucket(v);
         if (!aisTypeFilter[cat]) continue;
         if (!aisStatusFilter[st]) continue;
+        if (aisHideDocked && aisIsDocked(v)) continue;
         // Only filter by viewport when there's no search; otherwise the
         // user might be looking for a vessel that's just off-screen.
         if (!q && !bounds.contains([lat, lon])) continue;
@@ -11250,7 +11299,11 @@ function initPagerHoursFromStorage() {
       if (_aisListMoveDebounce) clearTimeout(_aisListMoveDebounce);
       _aisListMoveDebounce = setTimeout(() => {
         if (document.getElementById('ais-list-panel')?.classList.contains('open')) {
-          aisListRender();
+          // Both lists filter to the current viewport, so re-render each
+          // active one immediately on pan/zoom — otherwise the aircraft
+          // list only caught up on the next data poll (seconds later).
+          if (map.hasLayer(aisLayer)) aisListRender();
+          if (map.hasLayer(adsbLayer)) adsbListRender();
         }
       }, 150);
     });
@@ -11262,6 +11315,11 @@ function initPagerHoursFromStorage() {
     function toggleAisStatus(key, on) {
       aisStatusFilter[key] = !!on;
       _rebuildAis();
+    }
+    function toggleAisHideDocked(on) {
+      aisHideDocked = !!on;
+      _rebuildAis();
+      if (document.getElementById('ais-list-panel')?.classList.contains('open')) aisListRender();
     }
 
     async function loadAisData() {
@@ -11675,6 +11733,38 @@ function initPagerHoursFromStorage() {
       return { latlng: [by2, bx2 / cosLat], distDeg: Math.sqrt(bestD), i: bi, t: bt };
     }
 
+    // Cumulative metres along a cached shape (memoised per shapeId). Lets
+    // us place a vehicle at AnyTrip's `vdap` (distance along path) — an
+    // exact on-shape position that can't land on a parallel track the way
+    // lat/lon snapping does.
+    const _transportShapeCumM = new Map(); // shapeId → Float64Array
+    function _transportShapeCum(shapeId, pts) {
+      let cum = _transportShapeCumM.get(shapeId);
+      if (cum) return cum;
+      cum = new Float64Array(pts.length);
+      for (let i = 1; i < pts.length; i++) {
+        cum[i] = cum[i - 1] + haversineMeters(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+      }
+      _transportShapeCumM.set(shapeId, cum);
+      return cum;
+    }
+    // Point at `dist` metres along the shape → { lat, lon, p } where p is
+    // the fractional point index (so the glide can interpolate as usual).
+    function _transportPointAtDist(pts, cum, dist) {
+      const n = pts.length - 1;
+      if (!(dist > 0)) return { lat: pts[0][0], lon: pts[0][1], p: 0 };
+      if (dist >= cum[n]) return { lat: pts[n][0], lon: pts[n][1], p: n };
+      let lo = 0, hi = n;
+      while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= dist) lo = mid; else hi = mid; }
+      const seg = cum[lo + 1] - cum[lo] || 1;
+      const t = (dist - cum[lo]) / seg;
+      return {
+        lat: pts[lo][0] + (pts[lo + 1][0] - pts[lo][0]) * t,
+        lon: pts[lo][1] + (pts[lo + 1][1] - pts[lo][1]) * t,
+        p: lo + t
+      };
+    }
+
     function _adsbSearchHay(a) {
       return [a.callsign, a.reg, a.hex, a.type, a.squawk]
         .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
@@ -11808,7 +11898,11 @@ function initPagerHoursFromStorage() {
     // through green to violet at cruise (FR24-style), far more readable
     // than stepping through the marker ramp.
     function adsbTrailAltColor(altFt) {
-      const a = Math.max(0, Math.min(40000, altFt == null ? 0 : altFt));
+      // Genuinely-unknown altitude → neutral grey, so it doesn't masquerade
+      // as 0 ft (orange). 0 ft is always the orange end; 40000 ft the violet
+      // end — an absolute altitude→colour scale, same for every aircraft.
+      if (altFt == null) return 'hsl(220, 9%, 52%)';
+      const a = Math.max(0, Math.min(40000, altFt));
       const hue = 25 + (a / 40000) * 245;
       return 'hsl(' + Math.round(hue) + ', 85%, 55%)';
     }
@@ -11830,6 +11924,19 @@ function initPagerHoursFromStorage() {
         latlngs.push([m.lat, m.lng]);
         const alts = pts.map((p) => p[2]);
         alts.push(a ? a.altFt : alts[alts.length - 1]);
+        // Fill missing per-point altitudes so a segment without one isn't
+        // coloured as 0 ft (orange). Many feeds (TIS-B/ADS-R, dropouts)
+        // omit baro alt on some/all points; carry the nearest known value
+        // forward, seeding leading gaps from the first known altitude, else
+        // the live altitude. A truly all-unknown trail stays null → grey.
+        let _seedAlt = null;
+        for (const av of alts) { if (av != null) { _seedAlt = av; break; } }
+        if (_seedAlt == null && a && a.altFt != null) _seedAlt = a.altFt;
+        let _lastAlt = _seedAlt;
+        for (let i = 0; i < alts.length; i++) {
+          if (alts[i] == null) alts[i] = _lastAlt;
+          else _lastAlt = alts[i];
+        }
         seen.add(hex);
         // Per-segment gradient. The focused trail renders every segment;
         // background trails (pill mode) are grouped to ≤24 segments so
@@ -11842,12 +11949,15 @@ function initPagerHoursFromStorage() {
         if (e) for (const s of e.segs) adsbTrailsLayer.removeLayer(s);
         e = { segs: [], sig: sig };
         _adsbTrailLines.set(hex, e);
-        const es = a && a.esTag ? ADSB_ES_STYLE[a.esTag] : null;
+        // Trails always use the altitude gradient — even for special
+        // aircraft (POLAIR/ambulance/firebomber/military). Their esTag
+        // colour stays on the ICON to make them stand out; the trail still
+        // reads as altitude like every other aircraft.
         const weight = focused ? 3 : 2;
         for (let s = 0; s < n; s += step) {
           const end = Math.min(n, s + step);
           const t = end / n; // 0 tail → 1 head
-          const color = es ? es.color : adsbTrailAltColor(alts[end] != null ? alts[end] : alts[s]);
+          const color = adsbTrailAltColor(alts[end] != null ? alts[end] : alts[s]);
           const opacity = focused ? 0.25 + 0.7 * t : 0.12 + 0.38 * t;
           const seg = L.polyline(latlngs.slice(s, end + 1), {
             color: color, opacity: opacity, weight: weight,
@@ -12216,6 +12326,68 @@ function initPagerHoursFromStorage() {
     ];
     const TRANSPORT_MODE_BY_KEY = {};
     TRANSPORT_MODES.forEach((m) => { TRANSPORT_MODE_BY_KEY[m.key] = m; });
+    // The static network (AnyTrip lines.json) tags features by `stroke`
+    // colour, not mode, so map each line colour to its mode to let the
+    // filter pills hide/show whole modes of track. Derived from the
+    // feature `line` ids where present (T3→#F37021, M1→#168388, L3→#781140,
+    // L2→#DD1E25, L4→#BB2043, SW1→#ED2891, T6→#7C3E21) plus the standard
+    // NSW Sydney Trains line colours for the (unlabelled) rest. Regional
+    // strokes come from otherrail.json → nswtrains. Unmapped strokes stay
+    // visible (never hidden) so a new colour can't silently disappear.
+    const TRANSPORT_LINE_STROKE_MODE = {
+      '#F7A700': 'sydneytrains', // T1
+      '#0098CD': 'sydneytrains', // T2
+      '#F37021': 'sydneytrains', // T3 (labelled)
+      '#005AA3': 'sydneytrains', // T4
+      '#C4258F': 'sydneytrains', // T5
+      '#7C3E21': 'sydneytrains', // T6 (labelled)
+      '#6F818E': 'sydneytrains', // T7 (grey)
+      '#00954C': 'sydneytrains', // T8
+      '#D11F2F': 'sydneytrains', // T9
+      '#833034': 'sydneytrains', // suburban (maroon)
+      '#168388': 'metro',        // M1 (labelled)
+      '#781140': 'lightrail',    // L3 (labelled)
+      '#DD1E25': 'lightrail',    // L2 (labelled)
+      '#BB2043': 'lightrail',    // L4 (labelled)
+      '#ED2891': 'lightrail',    // SW1 (labelled)
+      '#4D9C2D': 'lightrail',    // light-rail green variant
+      '#BE1622': 'nswtrains',    // regional (otherrail.json)
+      '#EE343F': 'nswtrains',
+      '#BD0021': 'nswtrains'
+    };
+    function _transportStrokeMode(stroke) {
+      return TRANSPORT_LINE_STROKE_MODE[String(stroke || '').toUpperCase()] || null;
+    }
+    // MapLibre filter for 'lines-colour': hide strokes whose mode is off.
+    // Null → show everything (no disabled modes among mapped strokes).
+    function _transportLineFilterExpr() {
+      const disabled = [];
+      for (const stroke in TRANSPORT_LINE_STROKE_MODE) {
+        if (transportModeFilter[TRANSPORT_LINE_STROKE_MODE[stroke]] === false) disabled.push(stroke);
+      }
+      if (!disabled.length) return null;
+      return ['!', ['in', ['upcase', ['coalesce', ['get', 'stroke'], '']], ['literal', disabled]]];
+    }
+    // Apply the current mode filters to the static network tracks (GL layer
+    // filter + Leaflet-fallback per-line opacity). Called on load and on
+    // every filter-pill toggle.
+    function _applyTransportLineFilter() {
+      const expr = _transportLineFilterExpr();
+      const glMap = _transportGlLayer && _transportGlLayer.getMaplibreMap && _transportGlLayer.getMaplibreMap();
+      if (glMap) {
+        const doIt = () => { try { if (glMap.getLayer('lines-colour')) glMap.setFilter('lines-colour', expr); } catch (e) { /* ignore */ } };
+        if (glMap.getLayer && glMap.getLayer('lines-colour')) doIt();
+        else if (glMap.once) glMap.once('load', doIt);
+      }
+      if (_transportNetworkMode === 'fallback') {
+        const df = _transportNetworkDimmed ? 0.15 : 1;
+        transportLinesLayer.eachLayer((l) => {
+          if (l._tptMode == null || typeof l.setStyle !== 'function') return;
+          const vis = transportModeFilter[l._tptMode] !== false;
+          l.setStyle({ opacity: vis ? (l._tptBaseOpacity * df) : 0 });
+        });
+      }
+    }
     // AnyTrip regions.json occupancyDescription (nsw), verbatim.
     const TRANSPORT_OCCUPANCY = [
       'space available', 'space available', 'limited space available',
@@ -12284,10 +12456,10 @@ function initPagerHoursFromStorage() {
     }
 
     // GL line-offset zoom scaling (mirror of _transportGlOffsetExpr):
-    // geographic — px offset doubles per zoom, anchored ×0.9 at gz12.
+    // geographic — px offset doubles per zoom, anchored 0.2 at gz12.
     function _transportOffsetK() {
-      const gz = Math.min(17, Math.max(4, map.getZoom() - 1));
-      return 0.6 * Math.pow(2, gz - 12);
+      const gz = Math.min(17, Math.max(4, map.getZoom() - 1)); // ground-fixed ×2/zoom
+      return 0.2 * Math.pow(2, gz - 12);
     }
 
     function _transportLaneCandidates(v) {
@@ -12307,8 +12479,19 @@ function initPagerHoursFromStorage() {
       return cands;
     }
 
+    // Lane offset used to displace a marker sideways onto one of the
+    // drawn GL lanes. DISABLED: the network's fan offset is a per-segment
+    // RENDERING gradient (e.g. 8, 7.4, 6.8 … −1.6 along one corridor) and
+    // most lanes carry no route id, so there's no stable "this vehicle's
+    // lane" to snap to — adopting the nearest lane's offset made the
+    // marker skate side-to-side as the offset varied/flipped each tick.
+    // Vehicles now ride their own GTFS shape centreline (stable), and each
+    // active vehicle's shape is drawn as a bright track so it visibly sits
+    // on a line. The static network stays fanned as the corridor basemap.
+    const TRANSPORT_LANE_OFFSET = false;
     const TRANSPORT_LANE_SNAP_MAX_DEG = 0.0010; // ~100 m centreline mismatch
     function _transportLaneSnap(v, lat, lon) {
+      if (!TRANSPORT_LANE_OFFSET) return null;
       if (_transportNetworkMode !== 'gl' || !_transportLanes) return null;
       // Only where the GL network actually draws this vehicle's
       // corridor; elsewhere (auto-tracks, fallback) lines are un-offset
@@ -12523,9 +12706,54 @@ function initPagerHoursFromStorage() {
         const existing = _transportMarkers.get(v.id);
         let dispLat = v.lat, dispLon = v.lon;
         let prog = null;
+        // Speed: AnyTrip sends speed:null for NSW trains, so derive it
+        // from how far the reported position moved between updates. Only
+        // fills in when the feed gives nothing — real feed speeds win.
+        // AnyTrip refreshes a train's position ~every 30s but we poll
+        // ~10s, so most polls repeat the last position. `spd` anchors the
+        // last DISTINCT position + its time (so dt is the true update
+        // interval); the computed value is HELD between updates and only
+        // drops to 0 after a genuine ~90s of no movement (dwelling).
+        if (existing) {
+          const s = existing.spd;
+          const now = Date.now();
+          const moved = !s || Math.abs(s.lat - v.lat) > 1e-7 || Math.abs(s.lon - v.lon) > 1e-7;
+          if (moved && s) {
+            const dt = (now - s.t) / 1000;
+            if (dt >= 3 && dt <= 180) {
+              existing.calcSpeed = Math.round(haversineMeters(s.lat, s.lon, v.lat, v.lon) / dt * 3.6);
+            }
+          }
+          if (moved) existing.spd = { lat: v.lat, lon: v.lon, t: now };
+          else if (s && now - s.t > 90000) existing.calcSpeed = 0; // stopped >90s
+          if (v.speedKmh == null && existing.calcSpeed != null) {
+            v.speedKmh = existing.calcSpeed;
+            v.speedEstimated = true;
+          }
+        }
         if (v.shapeId) {
           const shapePts = _transportShapeCache.get(v.shapeId);
-          if (shapePts) {
+          let _vdapPlaced = false;
+          if (shapePts && v.vdap != null && shapePts.length >= 2) {
+            // Authoritative placement: put the vehicle at the feed's exact
+            // distance along its own shape. No lat/lon snap, so it can't
+            // land on a parallel track; vdap only advances along the trip,
+            // so there's no wrong-limb flip and no ratchet is needed.
+            const cum = _transportShapeCum(v.shapeId, shapePts);
+            const total = cum[cum.length - 1];
+            // Guard garbage vdap — some regional services report absurd
+            // values (millions of km). If it's beyond the shape, ignore it
+            // and fall back to the lat/lon snap below.
+            if (v.vdap >= 0 && v.vdap <= total + 50) {
+              const at = _transportPointAtDist(shapePts, cum, v.vdap);
+              dispLat = at.lat;
+              dispLon = at.lon;
+              prog = { shapeId: v.shapeId, p: at.p, lat: dispLat, lon: dispLon };
+              if (existing) existing.backSince = null;
+              _vdapPlaced = true;
+            }
+          }
+          if (!_vdapPlaced && shapePts) {
             const s = snapToPolylinePts(shapePts, v.lat, v.lon);
             if (s && s.distDeg < SNAP_MAX_DEG) {
               dispLat = s.latlng[0];
@@ -12572,16 +12800,28 @@ function initPagerHoursFromStorage() {
                 existing.backSince = null;
               }
             }
-          } else if (snapFetchBudget > 0) {
+          } else if (!shapePts && snapFetchBudget > 0) {
             snapFetchBudget--;
-            fetchTransportShapePts(v.shapeId); // warms cache; snaps next tick
+            fetchTransportShapePts(v.shapeId); // warms cache; places next tick
           }
         }
         // Second stage: shift onto the RENDERED lane (GL px offset) —
-        // vehicles ride the drawn lines, highlighted or not.
+        // vehicles ride the drawn lines, highlighted or not. Apply the
+        // offset perpendicular to the SHAPE (travel) direction — the same
+        // basis the glide uses — so the marker doesn't jump sideways at
+        // glide boundaries. Falls back to the lane's own segment only when
+        // the shape isn't available here.
         const laneSnap = _transportLaneSnap(v, dispLat, dispLon);
         if (laneSnap) {
-          const ll = _transportApplyLaneOffset(laneSnap);
+          let ll = null;
+          const shapePts = prog ? _transportShapeCache.get(v.shapeId) : null;
+          if (shapePts && shapePts.length >= 2) {
+            const i = Math.min(Math.max(0, Math.floor(prog.p)), shapePts.length - 2);
+            ll = _transportApplyLaneOffset({
+              lat: dispLat, lon: dispLon, a: shapePts[i], b: shapePts[i + 1], offset: laneSnap.offset
+            });
+          }
+          if (!ll) ll = _transportApplyLaneOffset(laneSnap);
           dispLat = ll.lat;
           dispLon = ll.lng;
         }
@@ -12641,7 +12881,7 @@ function initPagerHoursFromStorage() {
             }
           });
           transportLayer.addLayer(marker);
-          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog });
+          _transportMarkers.set(v.id, { marker: marker, iconKey: key, laneSnap: laneSnap, prog: prog, spd: { lat: v.lat, lon: v.lon, t: Date.now() } });
         }
       }
       for (const [id, entry] of _transportMarkers) {
@@ -12760,7 +13000,7 @@ function initPagerHoursFromStorage() {
         row('Route', v.route && v.route.longName),
         row('Destination', v.headsign ? v.headsign + (v.headsignSub ? ' (' + v.headsignSub + ')' : '') : null),
         row('Operator', v.agency),
-        row('Speed', v.speedKmh != null ? Math.round(v.speedKmh) + ' km/h' : null),
+        row('Speed', v.speedKmh != null ? Math.round(v.speedKmh) + ' km/h' + (v.speedEstimated ? ' (est.)' : '') : null),
         row('Occupancy', v.occupancy != null ? TRANSPORT_OCCUPANCY[v.occupancy] : null),
         row('Vehicle', v.model),
         row('Comfort', comfort || null),
@@ -12897,33 +13137,41 @@ function initPagerHoursFromStorage() {
       // z18. The earlier artifacts were mismatched caps: offsets
       // growing past a clamped width gave sawtooth; width growing past
       // clamped offsets gave overlapping slabs.
+      // GROUND-FIXED fan: exponential base-2 between two stops is EXACTLY
+      // o·2^(z−z12), so the gap is anchored to the map like painted
+      // geometry — it shrinks when you zoom out and grows when you zoom in,
+      // reading as part of the map (not a fixed-px overlay). Anchor 0.2 at
+      // gz12, scaling ×2/zoom.
       return ['interpolate', ['exponential', 2], ['zoom'],
-        4, ['*', ['coalesce', ['get', 'offset'], 0], 0.6 / 256],
-        17, ['*', ['coalesce', ['get', 'offset'], 0], 0.6 * 32]
+        4, ['*', ['coalesce', ['get', 'offset'], 0], 0.2 / 256],
+        17, ['*', ['coalesce', ['get', 'offset'], 0], 0.2 * 32]
       ];
     }
 
     function _transportGlStyle(geo) {
       const offsetExpr = _transportGlOffsetExpr();
       const opacityExpr = ['coalesce', ['get', 'opacity'], 1];
+      const layer = {
+        id: 'lines-colour', type: 'line', source: 'lines',
+        layout: { 'line-cap': 'round', 'line-join': 'bevel' },
+        paint: {
+          'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
+          // Geographic width: 0.6px at gz12, exact ×2 per zoom above
+          // gz12 (→ ~19px at gz17); floored at 0.35px below gz9 so the
+          // network stays a visible hairline at overview zooms.
+          'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 0.6, 17, 19.2],
+          'line-offset': offsetExpr,
+          'line-opacity': opacityExpr
+        }
+      };
+      // Honour the mode filters from first paint (e.g. a mode toggled off
+      // before the network finished loading).
+      const filt = _transportLineFilterExpr();
+      if (filt) layer.filter = filt;
       return {
         version: 8,
         sources: { lines: { type: 'geojson', data: geo } },
-        layers: [
-          {
-            id: 'lines-colour', type: 'line', source: 'lines',
-            layout: { 'line-cap': 'round', 'line-join': 'bevel' },
-            paint: {
-              'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-              // Geographic width: 2px at gz12, exact ×2 per zoom above
-              // gz9; floored at 0.35px below gz9 so the network stays
-              // a visible hairline at overview zooms.
-              'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.35, 9, 0.35, 12, 1.4, 17, 44.8],
-              'line-offset': offsetExpr,
-              'line-opacity': opacityExpr
-            }
-          }
-        ]
+        layers: [layer]
       };
     }
 
@@ -12958,6 +13206,7 @@ function initPagerHoursFromStorage() {
           const cl = L.polyline(latlngs, { color: p.stroke || '#64748b', weight: 3 * wf, opacity: opacity * df, lineCap: 'round', lineJoin: 'bevel', interactive: false });
           cl._tptBaseWeight = 3;
           cl._tptBaseOpacity = opacity;
+          cl._tptMode = _transportStrokeMode(p.stroke); // for filter-pill hiding
           colours.push(cl);
           count++;
         }
@@ -13011,6 +13260,7 @@ function initPagerHoursFromStorage() {
           const count = _buildLeafletNetworkFallback(geo);
           console.log('[transport] network lines loaded (fallback, no offsets):', count, 'segments');
         }
+        _applyTransportLineFilter(); // honour any modes toggled off pre-load
       } catch (e) {
         _transportLinesLoaded = false; // allow retry on next enable
         console.warn('[transport] lines failed to load:', e);
@@ -13018,12 +13268,12 @@ function initPagerHoursFromStorage() {
     }
 
     // Line weights scale with the map (mirror of the GL geographic
-    // width curve: 2px at gz12 doubling per zoom, floored at 0.35px
+    // width curve: 0.6px at gz12 doubling per zoom, floored at 0.35px
     // below gz9; factor = width / base-weight 3). Applied to the
     // Leaflet fallback network + auto tracks via _applyTransportWeights.
     function _transportWeightFactor() {
-      const gz = Math.min(17, map.getZoom() - 1);
-      const w = Math.max(0.35, 1.4 * Math.pow(2, gz - 12));
+      const gz = Math.min(17, map.getZoom() - 1); // ground-fixed ×2/zoom
+      const w = Math.max(0.35, 0.6 * Math.pow(2, gz - 12));
       return w / 3;
     }
     let _transportLastWeightFactor = null;
@@ -13055,7 +13305,20 @@ function initPagerHoursFromStorage() {
         const g = _transportGlides.get(id);
         if (g && g.path) continue;
         _transportGlides.delete(id);
-        entry.marker.setLatLng(_transportApplyLaneOffset(entry.laneSnap));
+        // Re-place from the stored centreline (entry.prog) using the shape
+        // basis — same as rebuild/glide — so zoom doesn't pop the marker
+        // to a different sideways direction.
+        let ll = null;
+        const shapePts = entry.prog ? _transportShapeCache.get(entry.prog.shapeId) : null;
+        if (shapePts && shapePts.length >= 2) {
+          const i = Math.min(Math.max(0, Math.floor(entry.prog.p)), shapePts.length - 2);
+          ll = _transportApplyLaneOffset({
+            lat: entry.prog.lat, lon: entry.prog.lon,
+            a: shapePts[i], b: shapePts[i + 1], offset: entry.laneSnap.offset
+          });
+        }
+        if (!ll) ll = _transportApplyLaneOffset(entry.laneSnap);
+        entry.marker.setLatLng(ll);
       }
     }
     map.on('zoomend', _transportReoffsetMarkers);
@@ -13120,7 +13383,7 @@ function initPagerHoursFromStorage() {
                 layout: { 'line-cap': 'round', 'line-join': 'bevel' },
                 paint: {
                   'line-color': ['coalesce', ['get', 'stroke'], '#64748b'],
-                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 1.9, 17, 60.8],
+                  'line-width': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.5, 9, 0.5, 12, 1.0, 17, 32],
                   'line-offset': offsetExpr,
                   'line-opacity': 1
                 }
@@ -13136,7 +13399,11 @@ function initPagerHoursFromStorage() {
       const applyLeaflet = (l) => {
         if (l instanceof L.LayerGroup) { l.eachLayer(applyLeaflet); return; }
         if (l._tptBaseOpacity != null && typeof l.setStyle === 'function') {
-          l.setStyle({ opacity: l._tptBaseOpacity * f });
+          // Respect the mode filter: a line whose mode is toggled off stays
+          // hidden even through a focus-dim (otherwise clicking a train
+          // re-showed filtered-off tracks on WebGL-less clients).
+          const hidden = l._tptMode != null && transportModeFilter[l._tptMode] === false;
+          l.setStyle({ opacity: hidden ? 0 : l._tptBaseOpacity * f });
         }
       };
       transportLinesLayer.eachLayer(applyLeaflet);
@@ -13310,7 +13577,10 @@ function initPagerHoursFromStorage() {
       for (const v of byPrio) {
         if (v.mode === 'other') continue;
         if (!v.shapeId || !transportModeFilter[v.mode]) continue;
-        // Skip shapes the static network already covers.
+        // Skip shapes the static (fanned) network already draws. Drawing
+        // the vehicle's own un-offset GTFS shape on top stacked parallel
+        // routes into overlapping blobs — the fanned network is the only
+        // track drawing for tiled modes.
         if (TRANSPORT_TILED_MODES[v.mode] && _transportInTileBounds(v)) continue;
         if (!want.has(v.shapeId) && want.size < TRANSPORT_AUTO_TRACK_CAP) {
           want.set(v.shapeId, {
@@ -13780,6 +14050,7 @@ function initPagerHoursFromStorage() {
 
     window.toggleTransportModePill = function (key) {
       transportModeFilter[key] = !transportModeFilter[key];
+      _applyTransportLineFilter(); // show/hide this mode's static track lines
       _rebuildTransport();
       refreshActiveFilterPanel();
       // Refire so a newly enabled mode appears immediately (the fetch
@@ -15615,6 +15886,6 @@ function initPagerHoursFromStorage() {
   <script src="agencies.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=20"></script>
+  <script src="map-editor-module.js?v=22"></script>
 </body>
 </html>
