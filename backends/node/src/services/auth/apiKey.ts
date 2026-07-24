@@ -66,6 +66,13 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // X-API-Key header, so it has to be public (the upstream MT photo
   // is itself public-domain anyway).
   '/api/marinetraffic/vessel-image/',
+  // Feeder-node call relay. The node agent authenticates with its own
+  // feeder token (X-Node-Token/X-Node-Install), verified inside the
+  // handler — NOT the site NSWPSN_API_KEY — so it must skip this gate.
+  '/api/node-ingest/',
+  // Node self-update manifest. Same story: the node authenticates with its
+  // feeder token (X-Node-Token), verified inside the handler.
+  '/api/node-updates/',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {

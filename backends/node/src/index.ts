@@ -20,6 +20,8 @@ import { log } from './lib/log.js';
 import { closePool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import { createApp } from './server.js';
+import type { Server } from 'node:http';
+import { attachNodeWebSockets } from './api/node-ws.js';
 import { liveStore } from './store/live.js';
 import { archiveWriter } from './store/archive.js';
 import {
@@ -200,6 +202,11 @@ const server = serve(
     );
   },
 );
+
+// Attach the node-agent + staff WebSocket endpoints to the underlying
+// http.Server. serve() (no http2 option) returns a Node http.Server at
+// runtime; its declared type is the ServerType union, so narrow it here.
+attachNodeWebSockets(server as Server);
 
 // Drain in-flight requests, close DB pool, exit cleanly. PM2 sends
 // SIGINT first (graceful) then SIGKILL after a timeout.
