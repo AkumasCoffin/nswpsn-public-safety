@@ -42,6 +42,29 @@ npm install --no-audit --no-fund
 echo "[deploy] npm run build…"
 npm run build
 
+# Build the node-agent binaries into the webroot downloads dir so volunteers
+# fetch the latest agent (see NODE_DOWNLOADS_BASE). Needs Go >= 1.26 — snap
+# installs it to /snap/bin. Non-fatal: if Go is missing the rest of the deploy
+# still runs (existing binaries just aren't refreshed). The big SDR-Trunk
+# runtime + rdio binary are placed in the same dir once, by hand.
+AGENT_SRC="$REPO_ROOT/feeder-nodes/radio-node"
+DOWNLOADS_DIR="$REPO_ROOT/downloads"
+export PATH="$PATH:/snap/bin"
+if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
+  echo "[deploy] building node-agent binaries ($(go version | awk '{print $3}'))…"
+  mkdir -p "$DOWNLOADS_DIR"
+  (
+    cd "$AGENT_SRC"
+    GOOS=linux   GOARCH=amd64 go build -o "$DOWNLOADS_DIR/nodeagent-linux-amd64"       ./cmd/nodeagent
+    GOOS=windows GOARCH=amd64 go build -o "$DOWNLOADS_DIR/nodeagent-windows-amd64.exe" ./cmd/nodeagent
+    GOOS=linux   GOARCH=arm64 go build -o "$DOWNLOADS_DIR/nodeagent-linux-arm64"       ./cmd/nodeagent
+  )
+  echo "[deploy] node-agent binaries updated in $DOWNLOADS_DIR"
+else
+  echo "[deploy] WARNING: 'go' not found (or agent source missing) — skipping node-agent build."
+  echo "[deploy]          install Go 1.26+ with: sudo snap install go --classic"
+fi
+
 # Apply any pending DB migrations BEFORE the restart — new code often
 # depends on new columns (e.g. incidents.units), and the migration
 # runner is idempotent so this is a no-op when everything is applied.

@@ -73,9 +73,6 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // Node self-update manifest. Same story: the node authenticates with its
   // feeder token (X-Node-Token), verified inside the handler.
   '/api/node-updates/',
-  // Node-agent binary download, hit by the install script (not a browser, so
-  // no JWT). Feeder-token gated inside the handler.
-  '/api/node-agent/',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {
