@@ -20,9 +20,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -341,6 +343,20 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 	return c
 }
 
+// seedRdioAdminPassword runs rdio-scanner's one-shot --admin_password command,
+// which writes the admin password into the base_dir database and exits 0. This
+// must run BEFORE the server is launched (and the server must not get the flag,
+// or it exits on every start). Idempotent: re-seeding just re-sets the same value.
+func seedRdioAdminPassword(bin, baseDir, pw string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "--base_dir", baseDir, "--admin_password", pw).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // resolveRdio builds the rdio supervisor component. Like SDR-Trunk, the local
 // rdio-scanner is core to a feeder node and always enabled — no yaml opt-in. An
 // operator-provided command wins; otherwise it resolves an agent-managed install
@@ -366,11 +382,17 @@ func resolveRdio(cfg *agentcfg.Config, spec update.ComponentSpec) agentcfg.Compo
 				if mkerr := os.MkdirAll(baseDir, 0o755); mkerr != nil {
 					log.Printf("rdio: create base_dir %q: %v", baseDir, mkerr)
 				}
+				// rdio-scanner's --admin_password is a one-shot admin command: it
+				// writes the password into the base_dir DB and EXITS. Seed it once
+				// here, then launch the server WITHOUT the flag — otherwise the
+				// "server" just changes the password, exits 0, and crash-loops.
+				if serr := seedRdioAdminPassword(inst.ExecPath, baseDir, pw); serr != nil {
+					log.Printf("rdio: seed admin password failed (%v); admin login may fail", serr)
+				}
 				c.Command = inst.ExecPath
 				c.Args = append([]string{
 					"--base_dir", baseDir,
 					"--listen", localRdioListen,
-					"--admin_password", pw,
 				}, c.Args...)
 				log.Printf("rdio: using managed install v%s (%s)", inst.Version, inst.ExecPath)
 			}
