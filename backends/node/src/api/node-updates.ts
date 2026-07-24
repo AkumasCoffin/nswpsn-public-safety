@@ -87,7 +87,14 @@ function loadManifest(): Manifest {
     comp.sha256 = comp.sha256 ?? {};
     for (const [platform, url] of Object.entries(comp.urls)) {
       const filename = url.split('/').pop() ?? '';
-      if (filename) comp.sha256[platform] = sha256OfDownload(filename);
+      if (!filename) continue;
+      // Only override with a computed hash when the artifact is actually
+      // hosted locally (present in the downloads dir). For remotely-hosted
+      // artifacts (e.g. an rdio binary served straight off GitHub) there's no
+      // local file, so KEEP the sha256 committed in node-versions.json rather
+      // than wiping it to '' — otherwise the agent would treat it as "skip".
+      const local = sha256OfDownload(filename);
+      if (local) comp.sha256[platform] = local;
     }
   }
   return out;
