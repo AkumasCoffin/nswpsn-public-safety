@@ -30,6 +30,7 @@ import {
   applyTfnswPositions,
   fetchTfnswAlerts,
   tfnswConfigured,
+  tfnswPositionsEnabled,
 } from '../sources/tfnsw.js';
 
 export const transportRouter = new Hono();
@@ -108,6 +109,11 @@ export interface TransportVehicle {
   tripId: string | null;
   /** GTFS shape id — resolves to the route track via /api/transport/shape. */
   shapeId: string | null;
+  /** Vehicle distance along path (metres from the shape start), from
+   *  AnyTrip's lastPosition. Lets the client place the vehicle at its
+   *  exact point ON the shape instead of snapping lat/lon (which lands on
+   *  the wrong parallel track). Null when the feed omits it. */
+  vdap: number | null;
   /** Trip-instance coordinates for /api/transport/trip lookups. */
   startDate: string | null; // YYYYMMDD
   instanceNumber: number | null;
@@ -174,6 +180,7 @@ interface RawVehicleEntry {
       time?: number; // epoch seconds
       bearing?: number;
       speed?: number; // m/s
+      vdap?: number; // vehicle distance along path, metres from shape start
       occupancy?: number[];
       vehicleOccupancy?: number;
       coordinates?: { lat?: number; lon?: number };
@@ -356,6 +363,7 @@ export function normalizeVehicles(raw: RawVehiclesResponse): TransportVehicle[] 
           : null,
       tripId: trip?.rtTripId ?? trip?.id ?? null,
       shapeId: entry.tripInstance?.shapeId ?? trip?.shapeId ?? null,
+      vdap: Number.isFinite(pos?.vdap) ? (pos!.vdap as number) : null,
       startDate: entry.tripInstance?.startDate ?? null,
       instanceNumber:
         typeof entry.tripInstance?.instanceNumber === 'number'
@@ -441,18 +449,21 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
         const url =
           `${ANYTRIP_BASE}/vehicles?feeds=${encodeURIComponent(feedList)}` +
           `&${bboxParams(bbox)}&otrFilter=${OTR_FILTER}&speedFilter=${SPEED_FILTER}`;
-        // AnyTrip (metadata + interpolated fallback positions) and the
-        // official TfNSW GTFS-R positions fetch concurrently; TfNSW is
-        // authoritative for trips it knows, AnyTrip fills the rest.
-        // fetchTfnswPositions returns [] when unconfigured or failing,
-        // so the join degrades to AnyTrip-only.
+        // Positions are AnyTrip-only by default: AnyTrip interpolates its
+        // own (smooth, self-consistent) positions from the same TfNSW
+        // feed, so pure AnyTrip beats layering the raw TfNSW frame on top
+        // (which jumped/mis-tracked trains and hit TfNSW's rate limit).
+        // The TfNSW position join is off unless TFNSW_POSITIONS_DISABLED
+        // is set false; when off we don't even fetch the position feeds.
+        const wantTfnsw = tfnswPositionsEnabled();
         const [raw, tfnsw] = await Promise.all([
           fetchJson<RawVehiclesResponse>(url, { timeoutMs: UPSTREAM_TIMEOUT_MS }),
-          fetchTfnswPositions(feeds),
+          wantTfnsw ? fetchTfnswPositions(feeds) : Promise.resolve([]),
         ]);
         let vehicles = normalizeVehicles(raw);
+        const vehiclesBeforeJoin = vehicles.length;
         let networkCounts: Record<string, number> | undefined;
-        if (tfnsw.length) {
+        if (wantTfnsw && tfnsw.length) {
           const joined = applyTfnswPositions(vehicles, tfnsw, bbox, MAX_VEHICLES);
           vehicles = joined.vehicles;
           networkCounts = {};
@@ -460,7 +471,14 @@ transportRouter.get('/api/transport/vehicles', async (c) => {
             networkCounts[p.mode] = (networkCounts[p.mode] ?? 0) + 1;
           }
           log.debug(
-            { matched: joined.matched, added: joined.added, tfnsw: tfnsw.length },
+            {
+              matched: joined.matched,
+              byTrip: joined.byTrip,
+              byVeh: joined.byVeh,
+              added: joined.added,
+              anytrip: vehiclesBeforeJoin,
+              tfnsw: tfnsw.length,
+            },
             'transport: tfnsw position join',
           );
         }
