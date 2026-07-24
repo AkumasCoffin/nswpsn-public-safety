@@ -115,6 +115,9 @@ fi
 # --- Directories ------------------------------------------------------------
 install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
 install -d -m 0755 "$CONFIG_DIR"
+# The service user owns its install dir so self-update can swap the binary in
+# place (rename over the running exe needs write on the dir, not the file).
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
 
 # --- Preserve an existing install_id ----------------------------------------
 INSTALL_ID=""
