@@ -17,7 +17,7 @@ func TestRenderPlaylistMultiChannel(t *testing.T) {
 		{Name: "Regional CC", Frequency: 419587500, Decoder: "p25p2", System: "NSW PSN", Site: "Site 2", Order: 2},
 	}
 
-	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, keys)
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, keys)
 	if err != nil {
 		t.Fatalf("renderPlaylist: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRenderPlaylistMultiChannel(t *testing.T) {
 // TestRenderPlaylistNoChannels keeps a valid (disabled) channel so SDR-Trunk
 // still loads the playlist when nothing is configured.
 func TestRenderPlaylistNoChannels(t *testing.T) {
-	out, err := renderPlaylist(presets.DefaultPlaylistXML, nil, map[int]string{})
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, nil, nil, map[int]string{})
 	if err != nil {
 		t.Fatalf("renderPlaylist: %v", err)
 	}
@@ -69,5 +69,49 @@ func TestRenderPlaylistNoChannels(t *testing.T) {
 	}
 	if !strings.Contains(blocks[0], `enabled="false"`) {
 		t.Errorf("no-channels playlist should keep the channel disabled: %s", blocks[0])
+	}
+}
+
+// TestRenderPlaylistGlobalAliases verifies the preset's alias region is replaced
+// by the supplied global aliases, and the channels/streams still render.
+func TestRenderPlaylistGlobalAliases(t *testing.T) {
+	aliases := []Alias{
+		{Name: "Fireground 1", List: "catch all PSN", Group: "RFS", Color: "-16776961", IDs: []AliasID{
+			{Type: "talkgroup", Attrs: map[string]string{"value": "1201"}},
+			{Type: "priority", Attrs: map[string]string{"priority": "1"}},
+		}},
+		{Name: "Command Net", List: "catch all PSN", IDs: []AliasID{
+			{Type: "talkgroup", Attrs: map[string]string{"value": "1400"}},
+		}},
+	}
+	channels := []ChannelPlan{{Name: "CC", Frequency: 142658000, Decoder: "p25p1", Order: 1}}
+
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, aliases, map[int]string{})
+	if err != nil {
+		t.Fatalf("renderPlaylist: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		`name="Fireground 1"`,
+		`name="Command Net"`,
+		`<id type="talkgroup" value="1201"/>`,
+		`<id type="priority" priority="1"/>`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rendered aliases missing %q", want)
+		}
+	}
+	// Channel + streams still present.
+	if !strings.Contains(s, `frequency="142658000"`) {
+		t.Errorf("channel frequency lost after alias render")
+	}
+	if !strings.Contains(s, `host="`+localRdioUploadURL+`"`) {
+		t.Errorf("streams lost after alias render")
+	}
+	// The whole preset alias region is replaced — exactly 2 aliases now. Count
+	// closing tags (</alias>) so <alias_list_name> inside the channel isn't
+	// miscounted.
+	if n := strings.Count(s, "</alias>"); n != 2 {
+		t.Errorf("expected exactly 2 aliases after replace, got %d", n)
 	}
 }

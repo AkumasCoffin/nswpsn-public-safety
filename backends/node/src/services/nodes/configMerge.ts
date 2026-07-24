@@ -29,6 +29,7 @@ import {
   type ConfigOverride,
   type DecoderType,
 } from './configSchema.js';
+import { getGlobalConfig, type Alias, type GlobalConfig } from './globalConfig.js';
 
 // ── payload contract ───────────────────────────────────────────────────────
 export interface StreamTarget {
@@ -64,7 +65,11 @@ export interface ConfigPayload {
   configVersion: string;
   channels: ChannelPlan[];
   tuners: TunerSettings[];
-  /** The full rdio-scanner.json document (apiKeys[].key empty). */
+  /** Global SDR-Trunk aliases (synced to all nodes); agent renders them into
+   *  the playlist. */
+  aliases: Alias[];
+  /** The full rdio-scanner.json document (apiKeys[].key empty) with global
+   *  systems/groups/tags merged in. */
   rdioConfig: Record<string, unknown>;
   streamTargets: StreamTarget[];
 }
@@ -186,18 +191,38 @@ function deriveTuners(override: ConfigOverride): TunerSettings[] {
 }
 
 /**
- * Merge the base presets with a node's `config_override` into the full
- * ConfigPayload pushed to the agent. Throws (via loadPresets) if presets
- * are unavailable.
+ * Merge the base presets + the global feeder config + a node's `config_override`
+ * into the full ConfigPayload pushed to the agent. The global config (aliases +
+ * rdio systems/groups/tags) is fetched from the DB and folded in, so editing it
+ * changes every node's configVersion and re-syncs the fleet. Throws (via
+ * loadPresets) if presets are unavailable.
+ *
+ * `global` may be passed in (e.g. when fanning out to many nodes, to fetch it
+ * once); otherwise it's read here.
  */
-export function buildConfigPayload(node: NodeRow): ConfigPayload {
+export async function buildConfigPayload(
+  node: NodeRow,
+  global?: GlobalConfig,
+): Promise<ConfigPayload> {
   const presets = loadPresets();
+  const globalCfg = global ?? (await getGlobalConfig());
   const override = parseOverride(node.config_override);
 
   const channels = deriveChannels(override, node);
   const tuners = deriveTuners(override);
+  const aliases = globalCfg.sdrtrunkAliases;
 
-  const streamTargets: StreamTarget[] = presets.systems
+  // The rdio document: preset as the base (options/apiKeys/downstreams/etc.),
+  // with the fleet-wide systems/groups/tags overlaid from the global config.
+  const rdioConfig = structuredClone(presets.rdio) as Record<string, unknown>;
+  if (globalCfg.rdioSystems.length > 0) rdioConfig['systems'] = globalCfg.rdioSystems;
+  if (globalCfg.rdioGroups.length > 0) rdioConfig['groups'] = globalCfg.rdioGroups;
+  if (globalCfg.rdioTags.length > 0) rdioConfig['tags'] = globalCfg.rdioTags;
+
+  // Stream targets follow the (possibly-edited) rdio systems so the agent knows
+  // which per-agency local keys to generate.
+  const systemsForTargets = (rdioConfig['systems'] as RdioSystem[] | undefined) ?? presets.systems;
+  const streamTargets: StreamTarget[] = systemsForTargets
     .map((s): StreamTarget | null => {
       const systemId = s.id ?? s._id;
       if (typeof systemId !== 'number') return null;
@@ -205,12 +230,7 @@ export function buildConfigPayload(node: NodeRow): ConfigPayload {
     })
     .filter((t): t is StreamTarget => t !== null);
 
-  // The rdio document is served verbatim (apiKeys keys already empty in the
-  // preset — the agent fills them). Structured-clone so a caller can't mutate
-  // the cached preset.
-  const rdioConfig = structuredClone(presets.rdio);
-
-  const payloadNoVersion = { channels, tuners, rdioConfig, streamTargets };
+  const payloadNoVersion = { channels, tuners, aliases, rdioConfig, streamTargets };
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
 
   return { configVersion, ...payloadNoVersion };
