@@ -1,24 +1,20 @@
 /**
- * Volunteer-facing feeder endpoints (radio_contributor only) + the
- * token-gated node-agent binary download.
+ * Volunteer-facing feeder endpoints (radio_contributor only).
  *
- * The backend is the single source of a volunteer's install: it generates
- * ONE self-contained installer per OS with the caller's feeder token baked in
- * (no bootstrap, no second download of an installer), and it serves the agent
- * binary itself. The generated installer downloads the agent from this backend
- * and registers the service. Only the big SDR-Trunk runtime is fetched from a
- * release/CDN later, by the agent, on first run.
+ * The backend generates ONE self-contained installer per OS with the caller's
+ * feeder token baked in (JWT-gated). That installer downloads the agent binary
+ * — and, on first run, the agent downloads its components (SDR-Trunk runtime,
+ * rdio) — from static files served off the site webroot
+ * (NODE_DOWNLOADS_BASE, e.g. https://nswpsn.forcequit.xyz/downloads). The
+ * binaries aren't secret; the token that authorizes a node lives in the
+ * generated agent.yaml, which is what's protected.
  *
  *   GET /api/feeder/me                 (browser, JWT)
  *   GET /api/feeder/download/linux     (browser, JWT) → install-nswpsn-node.sh
  *   GET /api/feeder/download/windows   (browser, JWT) → install-nswpsn-node.ps1
- *   GET /api/node-agent/:platform      (installer, feeder token) → raw binary
  */
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { join, isAbsolute, resolve } from 'node:path';
-import { Readable } from 'node:stream';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
@@ -26,24 +22,19 @@ import { hasRole } from '../services/auth/roles.js';
 import {
   feederTokensConfigured,
   mintFeederToken,
-  resolveFeederToken,
 } from '../services/auth/nodeToken.js';
 import { listNodesForUser } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 
 export const feederRouter = new Hono();
-export const nodeAgentRouter = new Hono();
 
-// The URL the installed node agent connects back to (and downloads its binary
-// from). Prefer the configured public base; fall back to production.
+// The URL the installed node agent connects back to (API/WebSocket).
 const SERVER_URL = config.PUBLIC_BASE_URL ?? 'https://api.forcequit.xyz';
 
-// Supported agent platforms → the binary filename in NODE_AGENT_DIST_DIR.
-const AGENT_BINARIES: Record<string, string> = {
-  'windows-amd64': 'nodeagent-windows-amd64.exe',
-  'linux-amd64': 'nodeagent-linux-amd64',
-  'linux-arm64': 'nodeagent-linux-arm64',
-};
+// Where the agent binary + components are served as static files (site
+// webroot). The install scripts fetch the agent from here; the agent fetches
+// its components (per node-versions.json) from here too.
+const DOWNLOADS_BASE = config.NODE_DOWNLOADS_BASE.replace(/\/$/, '');
 
 /** Safely embed a value inside a bash single-quoted string. */
 function shSingleQuote(v: string): string {
@@ -55,9 +46,6 @@ function psSingleQuote(v: string): string {
   return `'${v.replace(/'/g, `''`)}'`;
 }
 
-// ---------------------------------------------------------------------------
-// feeder (browser, JWT + radio_contributor)
-// ---------------------------------------------------------------------------
 const requireRadioContributor: MiddlewareHandler = async (c, next) => {
   const userId = c.get('userId');
   if (!userId || !(await hasRole(userId, ['radio_contributor']))) {
@@ -68,6 +56,9 @@ const requireRadioContributor: MiddlewareHandler = async (c, next) => {
 
 feederRouter.use('/api/feeder/*', requireSupabaseJwt, requireRadioContributor);
 
+// ---------------------------------------------------------------------------
+// GET /api/feeder/me
+// ---------------------------------------------------------------------------
 feederRouter.get('/api/feeder/me', async (c) => {
   if (!feederTokensConfigured()) {
     return c.json({ error: 'feeder not configured' }, 503);
@@ -95,8 +86,7 @@ feederRouter.get('/api/feeder/me', async (c) => {
 function linuxInstaller(token: string): string {
   const T = shSingleQuote(token);
   const S = shSingleQuote(SERVER_URL);
-  // The agent binary is pulled from THIS backend (token-gated). systemd unit +
-  // udev rules are written inline so the single downloaded file is everything.
+  const D = shSingleQuote(DOWNLOADS_BASE);
   return [
     `#!/usr/bin/env bash`,
     `# NSW PSN radio feeder node installer. Your node token is baked in below.`,
@@ -104,8 +94,9 @@ function linuxInstaller(token: string): string {
     `set -euo pipefail`,
     `NODE_TOKEN=${T}`,
     `SERVER_URL=${S}`,
+    `DOWNLOADS=${D}`,
     ``,
-    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" bash "$0" "$@"; fi`,
+    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
     `case "$(uname -m)" in`,
     `  x86_64) ARCH=amd64;;`,
     `  aarch64|arm64) ARCH=arm64;;`,
@@ -116,7 +107,7 @@ function linuxInstaller(token: string): string {
     `id nswpsn-node >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -G plugdev nswpsn-node || useradd -r -s /usr/sbin/nologin nswpsn-node`,
     ``,
     `echo "Downloading node agent..."`,
-    `curl -fsSL -H "X-Node-Token: \${NODE_TOKEN}" "\${SERVER_URL%/}/api/node-agent/linux-\${ARCH}" -o /opt/nswpsn-node/nodeagent`,
+    `curl -fsSL "\${DOWNLOADS%/}/nodeagent-linux-\${ARCH}" -o /opt/nswpsn-node/nodeagent`,
     `chmod +x /opt/nswpsn-node/nodeagent`,
     ``,
     `# Preserve an existing install_id across re-runs.`,
@@ -173,6 +164,7 @@ function linuxInstaller(token: string): string {
 function windowsInstaller(token: string): string {
   const T = psSingleQuote(token);
   const S = psSingleQuote(SERVER_URL);
+  const D = psSingleQuote(DOWNLOADS_BASE);
   return [
     `# NSW PSN radio feeder node installer. Your node token is baked in below.`,
     `# Right-click this file -> Run with PowerShell (it will elevate).`,
@@ -180,6 +172,7 @@ function windowsInstaller(token: string): string {
     `$ErrorActionPreference = 'Stop'`,
     `$NodeToken = ${T}`,
     `$ServerUrl = (${S}).TrimEnd('/')`,
+    `$Downloads = (${D}).TrimEnd('/')`,
     ``,
     `# Elevate if not admin.`,
     `$id = [Security.Principal.WindowsIdentity]::GetCurrent()`,
@@ -193,7 +186,7 @@ function windowsInstaller(token: string): string {
     `New-Item -ItemType Directory -Force -Path $dir, $data | Out-Null`,
     ``,
     `Write-Host 'Downloading node agent...'`,
-    `Invoke-WebRequest -Uri "$ServerUrl/api/node-agent/windows-amd64" -Headers @{ 'X-Node-Token' = $NodeToken } -OutFile (Join-Path $dir 'nodeagent.exe') -UseBasicParsing`,
+    `Invoke-WebRequest -Uri "$Downloads/nodeagent-windows-amd64.exe" -OutFile (Join-Path $dir 'nodeagent.exe') -UseBasicParsing`,
     ``,
     `# Preserve an existing install_id across re-runs.`,
     `$cfgPath = Join-Path $data 'agent.yaml'`,
@@ -249,40 +242,4 @@ feederRouter.get('/api/feeder/download/windows', async (c) => {
     log.error({ err, userId }, 'Error building windows installer');
     return c.json({ error: 'Failed to build installer' }, 500);
   }
-});
-
-// ---------------------------------------------------------------------------
-// node-agent binary download (hit by the installer script, NOT the browser).
-// Auth is the feeder token (the script has it) — this path is exempt from the
-// public API-key gate. The binary itself isn't secret; the token in the
-// written config is what authorizes the node.
-// ---------------------------------------------------------------------------
-nodeAgentRouter.get('/api/node-agent/:platform', async (c) => {
-  const platform = c.req.param('platform');
-  const filename = AGENT_BINARIES[platform];
-  if (!filename) return c.json({ error: 'unknown platform' }, 404);
-
-  const token =
-    c.req.query('token') ?? c.req.header('X-Node-Token') ?? '';
-  const resolved = await resolveFeederToken(token);
-  if (!resolved.ok) {
-    return c.json({ error: 'unauthorized' }, resolved.reason === 'no_role' ? 403 : 401);
-  }
-
-  const base = isAbsolute(config.NODE_AGENT_DIST_DIR)
-    ? config.NODE_AGENT_DIST_DIR
-    : resolve(process.cwd(), config.NODE_AGENT_DIST_DIR);
-  const path = join(base, filename);
-  if (!existsSync(path)) {
-    log.warn({ platform, path }, 'node-agent binary not present on server');
-    return c.json({ error: 'agent binary not published for this platform yet' }, 404);
-  }
-  const size = statSync(path).size;
-  const stream = Readable.toWeb(createReadStream(path)) as unknown as ReadableStream;
-  return c.body(stream, 200, {
-    'Content-Type': 'application/octet-stream',
-    'Content-Length': String(size),
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Cache-Control': 'no-store',
-  });
 });

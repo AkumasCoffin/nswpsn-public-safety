@@ -358,13 +358,13 @@ const Schema = z.object({
   // cwd (backends/node → ../../feeder-nodes/radio-node/presets).
   NODE_PRESET_DIR: z.string().default('../../feeder-nodes/radio-node/presets'),
 
-  // Directory holding the built node-agent binaries the backend serves to
-  // volunteers (nodeagent-windows-amd64.exe, nodeagent-linux-amd64,
-  // nodeagent-linux-arm64). The self-contained installer the backend
-  // generates downloads the binary from /api/node-agent/<platform>. Populate
-  // this dir at deploy time (cross-compiled binaries; NOT committed to git).
-  // When a binary is absent the download endpoint 404s with a clear message.
-  NODE_AGENT_DIST_DIR: z.string().default('../../feeder-nodes/dist'),
+  // Base URL where the node agent binary + components (SDR-Trunk runtime,
+  // rdio) are served as static files off the site webroot. The generated
+  // installer fetches the agent from `${NODE_DOWNLOADS_BASE}/nodeagent-<os>-<arch>`
+  // and the agent fetches its components (per assets/node-versions.json) from
+  // here too. Deploy builds the agent binaries into the matching webroot dir
+  // (see scripts/deploy.sh); the big SDR-Trunk runtime is placed there once.
+  NODE_DOWNLOADS_BASE: z.string().default('https://nswpsn.forcequit.xyz/downloads'),
 
 });
 

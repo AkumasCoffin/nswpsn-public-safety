@@ -80,3 +80,7 @@ backends/data/.waze-browser-profile/
 # user data — only the hardening .htaccess is tracked.
 uploads/*
 !uploads/.htaccess
+
+# Node-agent binaries + feeder components served at nswpsn.forcequit.xyz/downloads/
+# (built by deploy.sh / placed by hand; never committed)
+/downloads/
