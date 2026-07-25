@@ -516,6 +516,11 @@
       height: 100%;
       display: flex; flex-direction: column;
       animation: drawer-in 0.18s ease-out;
+      /* Render the whole node panel a touch more compact (≈85% zoom feel) so it
+         fits without manual browser zoom. Font-size + spacing reduction only —
+         NOT transform/zoom, which would desync the spectrum canvas backing
+         buffers (sized off clientWidth/Height × devicePixelRatio). */
+      font-size: 87.5%;
     }
     @keyframes drawer-in {
       from { opacity: 0; }
@@ -535,8 +540,8 @@
     .node-drawer-sub { font-size: 0.72rem; color: var(--text-soft); }
     .node-drawer-sub.err { color: var(--danger); }
     .node-drawer-body {
-      flex: 1; overflow-y: auto; padding: 1.1rem 1.4rem 2.5rem;
-      display: flex; flex-direction: column; gap: 1.1rem;
+      flex: 1; overflow-y: auto; padding: 0.85rem 1.05rem 2.2rem;
+      display: flex; flex-direction: column; gap: 0.85rem;
     }
 
     /* SDR-Trunk-style panels: bordered cards with a header strip. */
@@ -550,15 +555,15 @@
     }
     .nd-panel-h {
       display: flex; align-items: center; gap: 0.55rem;
-      padding: 0.62rem 0.9rem;
-      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
       color: var(--text-soft); font-weight: 700;
       background: rgba(0, 0, 0, 0.22);
       border-bottom: 1px solid var(--border-subtle);
     }
     .nd-panel-h > i:first-child { color: var(--accent); }
     .nd-panel-h .nd-h-spacer { flex: 1; }
-    .nd-panel-b { padding: 0.85rem 0.9rem; }
+    .nd-panel-b { padding: 0.65rem 0.75rem; }
     .nd-panel-b.flush { padding: 0; }
     /* Empty-state cards inside flush (table) panels keep some breathing room. */
     .nd-panel-b.flush .nd-empty { margin: 0.85rem; }
@@ -567,7 +572,7 @@
        control surfaces (controls, tuners, unified channels) run full width so
        their tables always have room; lighter panels (now-playing, events) pair
        up in a split that reflows to a single column on narrow screens. */
-    .nd-panels { display: flex; flex-direction: column; gap: 1.1rem; }
+    .nd-panels { display: flex; flex-direction: column; gap: 0.85rem; }
     .nd-span-all { width: 100%; }
     .nd-panels-split {
       display: grid; gap: 1.1rem;
@@ -591,15 +596,15 @@
     .nd-banner.warn { background: rgba(245, 158, 11, 0.12); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
     .nd-banner.err  { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
 
-    .nd-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    .nd-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
     .nd-table th {
       text-align: left; color: var(--text-soft); font-weight: 600;
-      font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em;
-      padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border-subtle);
+      font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.32rem 0.42rem; border-bottom: 1px solid var(--border-subtle);
       white-space: nowrap;
     }
     .nd-table td {
-      padding: 0.5rem 0.5rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      padding: 0.38rem 0.42rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
       color: var(--text-primary); vertical-align: middle;
     }
     .nd-strong { font-weight: 600; color: var(--text-primary); }
@@ -608,11 +613,17 @@
     .nd-input {
       width: 92px; background: rgba(0, 0, 0, 0.3);
       border: 1px solid var(--border-subtle); border-radius: 6px;
-      color: var(--text-primary); padding: 0.3rem 0.4rem;
-      font-family: inherit; font-size: 0.78rem;
+      color: var(--text-primary); padding: 0.26rem 0.36rem;
+      font-family: inherit; font-size: 0.72rem;
     }
     .nd-input:focus { outline: none; border-color: var(--accent-border); }
     .nd-input-sm { width: 64px; }
+    /* Device-aware tuner controls: <select> reuse .nd-input; gain axes stack. */
+    .nd-sel { width: auto; min-width: 62px; padding-right: 0.25rem; }
+    .nd-gain-cell { min-width: 120px; }
+    .nd-gc { display: flex; align-items: center; gap: 0.3rem; margin: 0.1rem 0; }
+    .nd-gc > label { font-size: 0.62rem; color: var(--text-soft); min-width: 52px; text-align: right; }
+    .nd-gc input[type="checkbox"] { margin: 0; }
 
     /* Manual / search-tune control — visually distinct (accent-tinted) from the
        read-only current-frequency display and the channel decode editor. */
@@ -669,10 +680,13 @@
       padding: 0.12rem 0.5rem; border-radius: 999px;
       background: rgba(148, 163, 184, 0.12);
     }
+    /* Keep the spectrum band roomy: it must not be compressed by the denser
+       control stack below it, and the canvases keep a comfortable min height. */
+    .nd-spectrum-band { flex-shrink: 0; }
     .nd-wf-wrap { background: #05070d; overflow: hidden; }
     #nd-trace, #nd-waterfall { display: block; width: 100%; }
-    #nd-trace { height: 120px; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
-    #nd-waterfall { height: 240px; }
+    #nd-trace { height: 120px; min-height: 110px; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
+    #nd-waterfall { height: 240px; min-height: 220px; }
     .nd-axis {
       display: flex; justify-content: space-between; gap: 0.5rem;
       font-size: 0.64rem; color: var(--text-soft);
@@ -3257,8 +3271,151 @@
         : (t.id != null ? String(t.id) : String(t.index != null ? t.index : '')));
     }
 
+    // --- Device-aware tuner profiles -------------------------------------
+    // Each SDR type exposes a DIFFERENT set of settable controls. These lists
+    // come from the SDR-Trunk config reference (docs/sdrtrunk-config-reference.md
+    // "Tuner config (per device)") — they are the doc's per-TYPE defaults, NOT
+    // device-reported capabilities. Exact per-unit sample-rate / gain ranges
+    // would need a capabilities field on the fork's /tuners endpoint.
+    const _ND_SR_RTL = [230400,240000,288000,912000,960000,1200000,1440000,1600000,1800000,1920000,2016000,2048000,2160000,2304000,2400000,2560000,2880000];
+    const _ND_SR_HACKRF = [1750000,2000000,4000000,5000000,8000000,10000000,12500000,16000000,20000000];
+    const _ND_SR_AIRSPY = [2500000,3000000,6000000,10000000];
+    const _ND_SR_SDRPLAY = [2000000,3000000,4000000,5000000,6000000,7000000,8000000,9000000,10000000];
+    // RTL tuner-chip gain tables (dB). SDR-Trunk selects discrete gain steps;
+    // values are rounded to whole units on send (the control server takes ints).
+    const _ND_G_R820T = [0.0,0.9,1.4,2.7,3.7,7.7,8.7,12.5,14.4,15.7,16.6,19.7,20.7,22.9,25.4,28.0,29.7,32.8,33.8,36.4,37.2,38.6,40.2,42.1,43.4,43.9,44.5,48.0,49.6];
+    const _ND_G_E4000 = [-1.0,1.5,4.0,6.5,9.0,11.5,14.0,16.5,19.0,21.5,24.0,29.0,34.0,42.0];
+    const _ND_G_FC0013 = [-9.9,-3.0,7.1,17.9,19.2,20.8,22.9,25.4,28.0,29.7,32.8,33.8,36.4,37.2,38.6,40.2,42.1,43.4,43.9,44.5,48.0,49.6];
+
+    // Build an inclusive numeric range [min..max] step `step`.
+    function _ndRange(min, max, step) {
+      const a = [];
+      for (let v = min; v <= max + 1e-9; v += step) a.push(Math.round(v * 1000) / 1000);
+      return a;
+    }
+
+    // Return the control profile for a tuner, keyed off its reported `type`
+    // (falling back to `tunerClass`). Each profile has:
+    //   sr:      array of settable sample rates (Hz) | null (fixed-rate device)
+    //   srDef:   default sample rate to preselect
+    //   scalar:  true → the single gain control is sent as top-level `gain`
+    //   freeform:true → unknown device; render today's plain number inputs
+    //   gains:   ordered list of gain-control descriptors. Each descriptor:
+    //            { key, label, kind:'select'|'num'|'check', opts?, min,max,step,
+    //              def, unit?, mode?(the gain-mode selector), custom?(only live
+    //              in CUSTOM mode) }. `key` is the gainParams field sent to the
+    //            control server (gain/auto/gainMode/lnaGain/vgaGain/amp/lnaState/
+    //            gainReduction/attenuation/lna).
+    function _ndTunerProfile(t) {
+      const s = ((t && (t.type || t.tunerClass)) || '').toString().toLowerCase();
+      const has = (x) => s.indexOf(x) !== -1;
+      // Airspy + HydraSDR share one gain model (HydraSDR bias_t not wired here).
+      const airspyGains = [
+        { key:'gainMode', label:'Mode', kind:'select', mode:true, def:'LINEARITY',
+          opts:[{v:'LINEARITY',label:'Linearity'},{v:'SENSITIVITY',label:'Sensitivity'},{v:'CUSTOM',label:'Custom'}] },
+        { key:'gain', label:'Gain', kind:'select', opts:_ndRange(1,22,1), def:14 },
+        { key:'lna', label:'LNA', kind:'select', opts:_ndRange(0,14,1), def:0, custom:true },
+        { key:'auto', label:'AGC', kind:'check', custom:true } ];
+      if (has('hf+') || has('hf plus') || has('airspy hf')) return { key:'airspyhf', sr:null, gains:[
+        { key:'attenuation', label:'Atten', unit:'dB', kind:'select', opts:_ndRange(0,48,6), def:0 },
+        { key:'auto', label:'AGC', kind:'check' },
+        { key:'lna', label:'LNA', kind:'check' } ] };
+      if (has('hydra')) return { key:'hydrasdr', sr:_ND_SR_AIRSPY, srDef:10000000, gains:airspyGains };
+      if (has('airspy')) return { key:'airspy', sr:_ND_SR_AIRSPY, srDef:10000000, gains:airspyGains };
+      if (has('hackrf')) return { key:'hackrf', sr:_ND_SR_HACKRF, srDef:10000000, gains:[
+        { key:'lnaGain', label:'LNA', unit:'dB', kind:'select', opts:_ndRange(0,40,8), def:16 },
+        { key:'vgaGain', label:'VGA', unit:'dB', kind:'select', opts:_ndRange(0,62,2), def:20 },
+        { key:'amp', label:'Amp', kind:'check' } ] };
+      if (has('sdrplay') || has('rsp')) return { key:'sdrplay', sr:_ND_SR_SDRPLAY, srDef:2000000, gains:[
+        { key:'lnaState', label:'LNA state', kind:'num', min:0, max:9, step:1, def:0 },
+        { key:'gainReduction', label:'Gain red.', unit:'dB', kind:'num', min:20, max:59, step:1, def:50 },
+        { key:'auto', label:'AGC', kind:'check' } ] };
+      if (has('funcube') || has('fcd')) return { key:'fcd', sr:null, gains:[
+        { key:'lnaGain', label:'LNA gain', unit:'dB', kind:'select', opts:_ndRange(0,30,5), def:20 } ] };
+      // RTL family — chip-specific gain models. Check specific chips before RTL.
+      if (has('e4k') || has('e4000')) return { key:'e4000', sr:_ND_SR_RTL, srDef:2400000, scalar:true, gains:[
+        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_E4000, def:24 } ] };
+      if (has('fc0013')) return { key:'fc0013', sr:_ND_SR_RTL, srDef:2400000, gains:[
+        { key:'gain', label:'LNA', unit:'dB', kind:'select', opts:_ND_G_FC0013, def:19.2 },
+        { key:'auto', label:'AGC', kind:'check' } ] };
+      if (has('820') || has('828') || has('rtl')) return { key:'r820t', sr:_ND_SR_RTL, srDef:2400000, scalar:true, gains:[
+        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_R820T, def:28.0 } ] };
+      return { key:'unknown', freeform:true };
+    }
+
+    // Nearest list entry to `val` (numeric), or null when `val` is unusable.
+    function _ndClosest(list, val) {
+      if (val == null || val === '' || Number.isNaN(Number(val))) return null;
+      const n = Number(val);
+      let best = list[0], bd = Infinity;
+      list.forEach(x => { const d = Math.abs(Number(x) - n); if (d < bd) { bd = d; best = x; } });
+      return best;
+    }
+
+    // <option> list for a gain/sample-rate select. opts entries are either a
+    // plain number or { v, label }.
+    function _ndOptsHtml(opts, sel) {
+      return opts.map(o => {
+        const v = (o && typeof o === 'object') ? o.v : o;
+        const lbl = (o && typeof o === 'object') ? o.label : String(o);
+        return `<option value="${escapeHtml(String(v))}"${String(v) === String(sel) ? ' selected' : ''}>${escapeHtml(lbl)}</option>`;
+      }).join('');
+    }
+
+    // Sample-rate cell for one tuner row (device-aware).
+    function _ndSrCellHtml(i, prof, t) {
+      if (prof.freeform) {
+        const srMs = t.sampleRate != null ? (t.sampleRate / 1e6) : '';
+        return `<input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span>`;
+      }
+      if (!prof.sr) return `<span class="nd-sub" title="This device has a fixed sample rate">fixed rate</span>`;
+      const sel = _ndClosest(prof.sr, t.sampleRate != null ? t.sampleRate : prof.srDef);
+      const opts = prof.sr.map(hz => ({ v: hz, label: (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + ' M' }));
+      return `<select class="nd-input nd-sel" id="nd-sr-${i}">${_ndOptsHtml(opts, sel)}</select>`;
+    }
+
+    // Gain cell for one tuner row: a stack of device-specific controls.
+    function _ndGainCellHtml(i, prof, t) {
+      if (prof.freeform) {
+        const gain = t.gain != null ? t.gain : '';
+        return `<input class="nd-input nd-input-sm" id="nd-g-${i}-gain" type="number" step="1" placeholder="auto" value="${escapeHtml(String(gain))}">`;
+      }
+      const modeCtl = prof.gains.find(g => g.mode);
+      const modeVal = modeCtl ? (modeCtl.def || 'LINEARITY') : null;
+      const curScalar = (prof.scalar && t.gain != null && !Number.isNaN(Number(t.gain))) ? Number(t.gain) : null;
+      return prof.gains.map(g => {
+        const id = `nd-g-${i}-${g.key}`;
+        const dis = (g.custom && modeVal !== 'CUSTOM') ? ' disabled' : '';
+        let ctl;
+        if (g.kind === 'check') {
+          ctl = `<input type="checkbox" id="${id}"${dis}>`;
+        } else if (g.kind === 'num') {
+          ctl = `<input class="nd-input nd-input-sm" id="${id}" type="number" min="${g.min}" max="${g.max}" step="${g.step}" value="${g.def}"${dis}>`;
+        } else {
+          let sel = g.def;
+          if (g.mode) sel = modeVal;
+          else if (prof.scalar && curScalar != null) sel = _ndClosest(g.opts.map(o => (o && typeof o === 'object') ? o.v : o), curScalar);
+          const onCh = g.mode ? ` onchange="_ndGainMode(${i})"` : '';
+          ctl = `<select class="nd-input nd-sel" id="${id}"${onCh}${dis}>${_ndOptsHtml(g.opts, sel)}</select>`;
+        }
+        const unit = g.unit ? `<span class="nd-unit">${g.unit}</span>` : '';
+        return `<div class="nd-gc" data-custom="${g.custom ? 1 : 0}"><label for="${id}">${escapeHtml(g.label)}</label>${ctl}${unit}</div>`;
+      }).join('');
+    }
+
+    // Enable/disable Airspy/HydraSDR CUSTOM-only gain axes when the gain mode
+    // selector changes.
+    function _ndGainMode(i) {
+      const modeEl = document.getElementById(`nd-g-${i}-gainMode`);
+      if (!modeEl) return;
+      const custom = modeEl.value === 'CUSTOM';
+      document.querySelectorAll(`#nd-tuners tr[data-tuner="${i}"] .nd-gc[data-custom="1"] input, #nd-tuners tr[data-tuner="${i}"] .nd-gc[data-custom="1"] select`)
+        .forEach(el => { el.disabled = !custom; });
+    }
+
     // P2 — per-SDR tuner panel. NOTE: frequency is READ-ONLY here; it is
-    // controlled by the channels, never set on the SDR itself.
+    // controlled by the channels, never set on the SDR itself. Each row shows
+    // ONLY the controls that device actually has (see _ndTunerProfile).
     function _ndRenderTuners() {
       const el = document.getElementById('nd-tuners');
       if (!el) return;
@@ -3267,20 +3424,19 @@
         return;
       }
       const rows = _ndTuners.map((t, i) => {
+        const prof = _ndTunerProfile(t);
         const serial = _ndTunerSerial(t);
         const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) + ' MHz' : '—';
         const searchMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) : '';
-        const srMs = t.sampleRate != null ? (t.sampleRate / 1e6) : '';
-        const gain = t.gain != null ? t.gain : '';
         const ppm = t.ppm != null ? t.ppm : '';
         const autoPpm = t.autoPpm === true;
         const measured = t.measuredPpmError != null ? Number(t.measuredPpmError).toFixed(2) : '—';
         const stat = escapeHtml(t.status || (t.available === false ? 'unavailable' : '—'));
-        return `<tr>
+        return `<tr data-tuner="${i}">
           <td><div class="nd-strong">${escapeHtml(t.name || ('Tuner ' + serial))}</div>
               <div class="nd-sub">${escapeHtml(t.type || t.tunerClass || '')}${serial ? ' · ' + escapeHtml(serial) : ''}</div></td>
-          <td><input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span></td>
-          <td><input class="nd-input nd-input-sm" id="nd-gain-${i}" type="number" step="1" placeholder="auto" value="${escapeHtml(String(gain))}"></td>
+          <td>${_ndSrCellHtml(i, prof, t)}</td>
+          <td class="nd-gain-cell">${_ndGainCellHtml(i, prof, t)}</td>
           <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
           <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})"></td>
           <td>${measured}</td>
@@ -3328,29 +3484,54 @@
       if (!t) return;
       const tid = t.id != null ? t.id : t.index;
       const serial = _ndTunerSerial(t);
-      const srEl = document.getElementById('nd-sr-' + i);
-      const gEl = document.getElementById('nd-gain-' + i);
+      const prof = _ndTunerProfile(t);
       const pEl = document.getElementById('nd-ppm-' + i);
       const aEl = document.getElementById('nd-autoppm-' + i);
-      const srMs = srEl && srEl.value !== '' ? parseFloat(srEl.value) : null;
-      const gain = gEl && gEl.value !== '' ? parseFloat(gEl.value) : null;
       const ppm = pEl && pEl.value !== '' ? parseFloat(pEl.value) : null;
       const autoPpm = !!(aEl && aEl.checked);
-
       const args = { tunerId: tid };
-      if (srMs != null && !Number.isNaN(srMs)) args.sampleRate = Math.round(srMs * 1e6);
-      if (gain != null && !Number.isNaN(gain)) args.gain = gain;
+
+      // Sample rate — a MHz free-number for unknown devices, otherwise a Hz
+      // dropdown; omitted entirely for fixed-rate devices (FCD / Airspy HF+).
+      const srEl = document.getElementById('nd-sr-' + i);
+      if (srEl && srEl.value !== '') {
+        const raw = parseFloat(srEl.value);
+        if (!Number.isNaN(raw)) args.sampleRate = prof.freeform ? Math.round(raw * 1e6) : Math.round(raw);
+      }
+
+      // Gain — single scalar `gain` for simple/unknown devices; a device-shaped
+      // `gainParams` object for multi-axis devices. Numeric gain axes are
+      // rounded to whole units (the control server decodes ints).
+      if (prof.freeform || prof.scalar) {
+        const gEl = document.getElementById('nd-g-' + i + '-gain');
+        if (gEl && gEl.value !== '') {
+          const g = parseFloat(gEl.value);
+          if (!Number.isNaN(g)) args.gain = Math.round(g);
+        }
+      } else {
+        const gp = {};
+        prof.gains.forEach(g => {
+          const gEl = document.getElementById('nd-g-' + i + '-' + g.key);
+          if (!gEl) return;
+          if (g.kind === 'check') gp[g.key] = !!gEl.checked;
+          else if (g.mode) gp[g.key] = gEl.value; // gainMode enum string
+          else { const v = parseFloat(gEl.value); if (!Number.isNaN(v)) gp[g.key] = Math.round(v); }
+        });
+        if (Object.keys(gp).length) args.gainParams = gp;
+      }
+
       args.autoPpm = autoPpm;
       if (!autoPpm && ppm != null && !Number.isNaN(ppm)) args.ppm = ppm;
       _ndCmd('tunerSet', args, `Set ${t.name || ('tuner ' + serial)}`);
 
-      // Persist the per-SDR settings into config_override.tuners[] so they
-      // survive a restart. Non-blocking; toast reports the outcome.
+      // Persist the per-SDR settings into config_override.tuners[] (keyed by
+      // serial) so they survive a restart. Non-blocking; toast reports outcome.
       _ndPersistTuner(serial, {
         serial,
         label: t.name || undefined,
         sampleRate: args.sampleRate,
         gain: args.gain,
+        gainParams: args.gainParams,
         ppm: args.ppm,
         autoPpm
       });
