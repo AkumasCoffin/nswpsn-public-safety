@@ -21,6 +21,7 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes } from '../services/auth/roles.js';
 import { resolveFeederToken } from '../services/auth/nodeToken.js';
+import { getAutoUpdate } from '../services/nodes/globalConfig.js';
 
 export const nodeUpdatesRouter = new Hono();
 
@@ -121,7 +122,12 @@ nodeUpdatesRouter.get('/api/node-updates/manifest', async (c) => {
     return c.json({ error: 'unauthorized' }, 401);
   }
   try {
-    return c.json(loadManifest() as object);
+    // Fold the global auto-update switch into the manifest so the agent can
+    // decide whether an AUTOMATIC (startup / 6h) update pass may apply; manual
+    // update commands always apply regardless of this flag. A missing field is
+    // treated as enabled on the agent side.
+    const autoUpdate = await getAutoUpdate();
+    return c.json({ ...loadManifest(), autoUpdate } as object);
   } catch (err) {
     log.error({ err }, 'Error loading node update manifest');
     return c.json({ error: 'manifest unavailable' }, 503);

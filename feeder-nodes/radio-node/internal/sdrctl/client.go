@@ -49,31 +49,63 @@ type Tuner struct {
 	SampleRate       float64 `json:"sampleRate"`
 	PPM              float64 `json:"ppm"`
 	MeasuredPpmError float64 `json:"measuredPpmError"`
-	Error            *string `json:"error"`
+	// Gain is number|string|null depending on the tuner class, so it is decoded
+	// loosely and forwarded verbatim.
+	Gain    any     `json:"gain"`
+	AutoPpm bool    `json:"autoPpm"`
+	Error   *string `json:"error"`
 }
 
-// Channel mirrors one element of GET /channels.
+// Channel mirrors one element of the "channels" array of GET /channels.
 type Channel struct {
-	ID         int     `json:"id"`
-	Name       string  `json:"name"`
-	System     string  `json:"system"`
-	Site       string  `json:"site"`
-	Type       string  `json:"type"`
-	Processing bool    `json:"processing"`
-	State      string  `json:"state"`
-	Frequency  *int64  `json:"frequency"`
-	From       *string `json:"from"`
-	To         *string `json:"to"`
+	ID          int     `json:"id"`
+	Name        string  `json:"name"`
+	System      string  `json:"system"`
+	Site        string  `json:"site"`
+	Type        string  `json:"type"`
+	Processing  bool    `json:"processing"`
+	State       string  `json:"state"`
+	Control     bool    `json:"control"`
+	From        *string `json:"from"`
+	FromAlias   *string `json:"fromAlias"`
+	To          *string `json:"to"`
+	ToAlias     *string `json:"toAlias"`
+	TalkerAlias *string `json:"talkerAlias"`
+	Timeslot    *int    `json:"timeslot"`
+	Frequency   *int64  `json:"frequency"`
+}
+
+// ActiveCall mirrors one element of the "activeCalls" array of GET /channels.
+type ActiveCall struct {
+	State       string  `json:"state"`
+	Control     bool    `json:"control"`
+	ChannelID   int     `json:"channelId"`
+	ChannelName string  `json:"channelName"`
+	From        *string `json:"from"`
+	FromAlias   *string `json:"fromAlias"`
+	To          *string `json:"to"`
+	Talkgroup   *string `json:"talkgroup"`
+	ToAlias     *string `json:"toAlias"`
+	TalkerAlias *string `json:"talkerAlias"`
+	Timeslot    *int    `json:"timeslot"`
+	Frequency   *int64  `json:"frequency"`
 }
 
 // Event mirrors one element of GET /events.
 type Event struct {
 	At         int64   `json:"at"`
+	TimeStart  int64   `json:"timeStart"`
+	TimeEnd    int64   `json:"timeEnd"`
 	Type       string  `json:"type"`
+	TypeLabel  string  `json:"typeLabel"`
 	Protocol   string  `json:"protocol"`
 	From       *string `json:"from"`
+	FromAlias  *string `json:"fromAlias"`
 	To         *string `json:"to"`
+	ToAlias    *string `json:"toAlias"`
 	DurationMs int64   `json:"durationMs"`
+	Timeslot   *int    `json:"timeslot"`
+	Details    *string `json:"details"`
 	Channel    *string `json:"channel"`
 }
 
@@ -183,15 +215,17 @@ func (c *Client) Tuners() ([]Tuner, error) {
 	return r.Tuners, nil
 }
 
-// Channels fetches GET /channels.
-func (c *Client) Channels() ([]Channel, error) {
+// Channels fetches GET /channels, which returns both the configured channels
+// and the currently-active calls: {"channels":[...], "activeCalls":[...]}.
+func (c *Client) Channels() ([]Channel, []ActiveCall, error) {
 	var r struct {
-		Channels []Channel `json:"channels"`
+		Channels    []Channel    `json:"channels"`
+		ActiveCalls []ActiveCall `json:"activeCalls"`
 	}
 	if err := c.get("/channels", &r); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return r.Channels, nil
+	return r.Channels, r.ActiveCalls, nil
 }
 
 // Events fetches GET /events?limit=N (newest last).

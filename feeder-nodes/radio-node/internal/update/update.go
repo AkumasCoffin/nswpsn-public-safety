@@ -59,6 +59,11 @@ type Manifest struct {
 	Agent    ComponentSpec `json:"agent"`
 	SDRTrunk ComponentSpec `json:"sdrtrunk"`
 	Rdio     ComponentSpec `json:"rdio"`
+	// AutoUpdate is the server's global auto-update switch. A pointer so a
+	// missing field (nil) is treated as enabled; false means AUTOMATIC passes
+	// (startup / 6h) must NOT apply updates, though a MANUAL update command
+	// still does.
+	AutoUpdate *bool `json:"autoUpdate"`
 }
 
 // artifact returns the (url, sha256) for the current platform, plus ok=false

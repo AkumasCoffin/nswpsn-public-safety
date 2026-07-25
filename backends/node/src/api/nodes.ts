@@ -36,6 +36,8 @@ import {
   getGlobalConfig,
   saveGlobalConfig,
   GlobalConfigSchema,
+  getAutoUpdate,
+  setAutoUpdate,
 } from '../services/nodes/globalConfig.js';
 import {
   feederTokensConfigured,
@@ -129,6 +131,62 @@ nodesRouter.put('/api/nodes/global-config', requireRole(canManageNodes), async (
   } catch (err) {
     log.error({ err }, 'Error saving global feeder config');
     return c.json({ error: 'Failed to save global config' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Global auto-update switch. Registered BEFORE /:id so the literal path wins
+// over the :id param route.
+//   GET /api/nodes/auto-update  — current state
+//   PUT /api/nodes/auto-update  — set it (nodes read it via the manifest and
+//                                 pause AUTOMATIC self-updates while off)
+//   POST /api/nodes/update-all  — force an update on every online node NOW,
+//                                 regardless of the auto-update flag.
+// ---------------------------------------------------------------------------
+nodesRouter.get('/api/nodes/auto-update', requireRole(canManageNodes), async (c) => {
+  try {
+    return c.json({ enabled: await getAutoUpdate() });
+  } catch (err) {
+    log.error({ err }, 'Error fetching auto-update flag');
+    return c.json({ error: 'Failed to fetch auto-update flag' }, 500);
+  }
+});
+
+const AutoUpdateSchema = z.object({ enabled: z.boolean() });
+
+nodesRouter.put('/api/nodes/auto-update', requireRole(canManageNodes), async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    const parsed = AutoUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
+    }
+    await setAutoUpdate(parsed.data.enabled);
+    return c.json({ enabled: parsed.data.enabled });
+  } catch (err) {
+    log.error({ err }, 'Error setting auto-update flag');
+    return c.json({ error: 'Failed to set auto-update flag' }, 500);
+  }
+});
+
+nodesRouter.post('/api/nodes/update-all', requireRole(canManageNodes), async (c) => {
+  try {
+    const nodes = await listNodes();
+    // Only nodes that are both enabled AND have a live agent connection can be
+    // told to update. Manual updates ALWAYS trigger, ignoring the auto-update
+    // flag (that flag only gates the agent's own automatic passes).
+    const online = nodes.filter((n) => n.enabled && hub.isOnline(n.id));
+    let triggered = 0;
+    await Promise.all(
+      online.map(async (n) => {
+        const r = await hub.sendCmd(n.id, 'update');
+        if (r.ok) triggered += 1;
+      }),
+    );
+    return c.json({ triggered, total: online.length });
+  } catch (err) {
+    log.error({ err }, 'Error triggering update-all');
+    return c.json({ error: 'Failed to trigger update-all' }, 500);
   }
 });
 
