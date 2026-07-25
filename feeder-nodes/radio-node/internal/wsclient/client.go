@@ -67,6 +67,14 @@ type Client struct {
 
 	swapScheduled atomic.Bool // one-shot guard: at most one self-update swap+restart in flight
 
+	// Component versions the RUNNING processes were launched with (snapshot of the
+	// current.txt pointers at startup, i.e. what resolveSDRTrunk/resolveRdio
+	// actually exec'd). A component self-update only downloads + flips the pointer;
+	// the live JVM keeps running the old build until the agent process restarts and
+	// re-resolves the version-pinned path. We compare against these to know when a
+	// download requires a restart to actually take effect.
+	runningComp map[string]string
+
 	verMu          sync.Mutex // guards appliedVersion
 	appliedVersion string     // config version last successfully applied (persisted)
 
@@ -81,6 +89,13 @@ type Client struct {
 func New(cfg *agentcfg.Config, sup *supervise.Supervisor, q depthProvider, controlPort int, controlToken string, rdio *rdioctl.Client, rdioPassword string) *Client {
 	c := &Client{cfg: cfg, sup: sup, q: q, rdio: rdio, rdioPassword: rdioPassword}
 	c.sdr = sdrctl.New(controlPort, controlToken)
+	// Snapshot the versions the running processes were launched with. New() runs
+	// after resolveSDRTrunk/resolveRdio have already exec'd the components, so the
+	// current.txt pointers reflect exactly what is live right now.
+	c.runningComp = map[string]string{
+		"sdrtrunk": update.InstalledVersion("sdrtrunk", cfg.DataDir),
+		"rdio":     update.InstalledVersion("rdio", cfg.DataDir),
+	}
 	c.loadAppliedVersion()
 	// Each spectrum binary frame is relayed verbatim up the node WS.
 	c.spec = sdrctl.NewSpectrumConn(controlPort, controlToken, func(b []byte) {
@@ -219,10 +234,14 @@ func (c *Client) session(ctx context.Context) (connected bool, rejected bool, er
 func (c *Client) sendHello(conn *websocket.Conn) error {
 	hostname, _ := os.Hostname()
 	h := protocol.Hello{
-		ProtocolVersion:      protocol.ProtocolVersion,
-		AgentVersion:         version.Version,
-		SDRTrunkVersion:      update.InstalledVersion("sdrtrunk", c.cfg.DataDir),
-		RdioVersion:          update.InstalledVersion("rdio", c.cfg.DataDir),
+		ProtocolVersion: protocol.ProtocolVersion,
+		AgentVersion:    version.Version,
+		// Report the versions actually RUNNING (snapshot of what was launched), not
+		// the on-disk current.txt pointer — a component download flips the pointer
+		// before the process restarts, so the pointer would falsely advertise the
+		// new version while the old build is still live. runningComp reflects reality.
+		SDRTrunkVersion:      c.runningComp["sdrtrunk"],
+		RdioVersion:          c.runningComp["rdio"],
 		OS:                   runtime.GOOS,
 		Arch:                 runtime.GOARCH,
 		Hostname:             hostname,
@@ -731,6 +750,7 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	}
 
 	var parts []string
+	componentChanged := false // a component was updated on disk but the live process is still the old build
 
 	// Managed components (best-effort; a failure never aborts the check).
 	for _, ce := range []struct {
@@ -749,7 +769,20 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 		case inst == nil:
 			parts = append(parts, ce.name+": not installed")
 		default:
-			parts = append(parts, ce.name+" v"+inst.Version)
+			// EnsureComponent only downloads + flips the current.txt pointer; the
+			// live process keeps running the version it was launched with. If the
+			// installed version now differs from what's RUNNING, a restart is
+			// required to actually run the new build (the supervisor's launch path
+			// is version-pinned at startup, so only re-resolving it via a process
+			// restart picks up the new runtime + reaps the old one via KillStale).
+			if inst.Version != c.runningComp[ce.name] {
+				log.Printf("wsclient: update(%s): %s updated %q -> %q on disk; restart required to run it",
+					reason, ce.name, c.runningComp[ce.name], inst.Version)
+				parts = append(parts, ce.name+" v"+inst.Version+" (restart pending)")
+				componentChanged = true
+			} else {
+				parts = append(parts, ce.name+" v"+inst.Version)
+			}
 		}
 	}
 
@@ -779,6 +812,25 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 			}()
 		} else {
 			log.Printf("wsclient: update(%s): swap already scheduled; skipping duplicate", reason)
+		}
+	}
+
+	// A component was downloaded but the live process is still the old build.
+	// Restart the agent so main() re-resolves the new version-pinned launch path
+	// and KillStale reaps the stale JVM (a plain sup.Restart would relaunch the
+	// OLD captured path). Skip if the agent self-update above already claimed the
+	// restart (it will re-exec and re-resolve everything anyway). Under a service
+	// manager (systemd/kardianos — how real nodes run) os.Exit(0) triggers a
+	// relaunch; the same mechanism rebootAgent uses.
+	if componentChanged {
+		if c.swapScheduled.CompareAndSwap(false, true) {
+			log.Printf("wsclient: update(%s): restarting agent to launch updated component(s)", reason)
+			go func() {
+				time.Sleep(1 * time.Second) // let the cmd-ack / summary flush first
+				os.Exit(0)
+			}()
+		} else {
+			log.Printf("wsclient: update(%s): restart already scheduled (agent self-update); component will run after it", reason)
 		}
 	}
 
