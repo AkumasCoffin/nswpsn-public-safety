@@ -80,3 +80,44 @@ describe('agencies model', () => {
     expect(bc).toBe(label);
   });
 });
+
+import { loadPresets } from '../../../src/services/nodes/configMerge.js';
+import { parseAliasesFromXml } from '../../../src/services/nodes/globalConfig.js';
+
+describe('agencies seed from the real preset', () => {
+  it('produces agencies with the routing unification intact', () => {
+    const presets = loadPresets();
+    const aliases = parseAliasesFromXml(presets.playlistXml);
+    const systems = (presets.rdio as Record<string, unknown>)['systems'] as Record<string, unknown>[];
+    const agencies = buildAgencies(aliases, systems ?? []);
+    expect(agencies.length).toBeGreaterThan(0);
+    for (const a of agencies) {
+      expect(typeof a.systemId).toBe('number');
+      expect(a.name.length).toBeGreaterThan(0);
+    }
+    const outAliases = agenciesToAliases(agencies);
+    expect(outAliases.length).toBeGreaterThan(0);
+    const labels = new Set(agenciesToSystems(agencies).map((s) => s['label']));
+    for (const al of outAliases) {
+      const bc = al.ids.find((i) => i.type === 'broadcastChannel')?.attrs['channel'];
+      expect(labels.has(bc)).toBe(true);
+    }
+  });
+});
+
+import { GlobalConfigSchema } from '../../../src/services/nodes/globalConfig.js';
+
+describe('seeded agencies pass schema validation (rowToConfig round-trip)', () => {
+  it('GlobalConfigSchema accepts the real-preset agencies', () => {
+    const presets = loadPresets();
+    const aliases = parseAliasesFromXml(presets.playlistXml);
+    const systems = (presets.rdio as Record<string, unknown>)['systems'] as Record<string, unknown>[];
+    const agencies = buildAgencies(aliases, systems ?? []);
+    const parsed = GlobalConfigSchema.safeParse({ agencies, rdioGroups: [], rdioTags: [] });
+    if (!parsed.success) {
+      // Print the first few failures so we can see WHICH field breaks.
+      console.error('VALIDATION FAILURES:\n' + JSON.stringify(parsed.error.issues.slice(0, 10), null, 2));
+    }
+    expect(parsed.success).toBe(true);
+  });
+});
