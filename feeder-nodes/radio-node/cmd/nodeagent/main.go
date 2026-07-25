@@ -342,14 +342,18 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 		"--app-root", cfg.SDRTrunkAppRoot)
 	// SDR-Trunk's SettingsManager (SystemProperties -> ~/SDRTrunk) and Java's
 	// user-preferences store (~/.java, where the calibration "done" flag and the
-	// JMBE library path persist) both derive from $HOME. The service user's real
-	// home (/home/nswpsn-node) is not writable under systemd (ProtectHome), so
+	// JMBE library path persist) both derive from the JVM's user.home. The service
+	// user's real home (/home/nswpsn-node) is not writable under systemd, so
 	// settings + prefs fail with AccessDenied / "Could not lock User prefs" and
-	// calibration re-runs + JMBE re-installs every start. Point HOME at the
-	// managed, writable app root so all of that persists.
+	// calibration re-runs + JMBE re-installs every start. Point user.home at the
+	// managed, writable app root. We set BOTH $HOME (which the JVM reads for
+	// user.home on Unix) AND -Duser.home via JDK_JAVA_OPTIONS (honored by the java
+	// launcher) — the latter is authoritative and immune to the systemd "User=
+	// overrides Environment=HOME=" quirk, so this holds regardless of the unit.
 	c.Env = map[string]string{
 		"SDRTRUNK_CONTROL_TOKEN": controlToken,
 		"HOME":                   cfg.SDRTrunkAppRoot,
+		"JDK_JAVA_OPTIONS":       "-Duser.home=" + cfg.SDRTrunkAppRoot,
 	}
 	return c
 }
