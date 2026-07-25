@@ -2,6 +2,7 @@ package configapply
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestRenderPlaylistSwapsDecodeConfig(t *testing.T) {
 		Name: "Metro CC", Frequency: 142658000, Decoder: "p25p2", Order: 1,
 		DecoderConfig: &DecoderConfig{Scramble: &Scramble{Wacn: 12345, System: 291, Nac: 659}},
 	}}
-	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, map[int]string{})
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, nil, map[int]string{})
 	if err != nil {
 		t.Fatalf("renderPlaylist: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestRenderPlaylistMultiChannel(t *testing.T) {
 		{Name: "Regional CC", Frequency: 419587500, Decoder: "p25p2", System: "NSW PSN", Site: "Site 2", Order: 2},
 	}
 
-	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, keys)
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, nil, keys)
 	if err != nil {
 		t.Fatalf("renderPlaylist: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestRenderPlaylistMultiChannel(t *testing.T) {
 // configured (an empty channel set is a valid playlist) — so the UI never shows
 // a non-removable "preset" channel.
 func TestRenderPlaylistNoChannels(t *testing.T) {
-	out, err := renderPlaylist(presets.DefaultPlaylistXML, nil, nil, map[int]string{})
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, nil, nil, nil, map[int]string{})
 	if err != nil {
 		t.Fatalf("renderPlaylist: %v", err)
 	}
@@ -272,7 +273,7 @@ func TestRenderPlaylistGlobalAliases(t *testing.T) {
 	}
 	channels := []ChannelPlan{{Name: "CC", Frequency: 142658000, Decoder: "p25p1", Order: 1}}
 
-	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, aliases, map[int]string{})
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, aliases, nil, map[int]string{})
 	if err != nil {
 		t.Fatalf("renderPlaylist: %v", err)
 	}
@@ -299,5 +300,47 @@ func TestRenderPlaylistGlobalAliases(t *testing.T) {
 	// miscounted.
 	if n := strings.Count(s, "</alias>"); n != 2 {
 		t.Errorf("expected exactly 2 aliases after replace, got %d", n)
+	}
+}
+
+// TestRenderPlaylistGeneratesStreamsPerSystem verifies the streams/keys feature:
+// one <stream> is generated per system target, each carrying that system's id,
+// name, the local key for that system, and the local rdio host — and the result
+// is still well-formed XML with no preset streams left behind.
+func TestRenderPlaylistGeneratesStreamsPerSystem(t *testing.T) {
+	targets := []StreamTarget{
+		{SystemId: 99, Name: "AirBand"},
+		{SystemId: 3, Name: "AS & Co"}, // '&' exercises attribute escaping
+	}
+	keys := map[int]string{99: "key99", 3: "key3"}
+
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, nil, nil, targets, keys)
+	if err != nil {
+		t.Fatalf("renderPlaylist: %v", err)
+	}
+	s := string(out)
+
+	if n := strings.Count(s, "<stream "); n != len(targets) {
+		t.Fatalf("expected %d streams, got %d\n%s", len(targets), n, s)
+	}
+	for _, want := range []string{
+		`system_id="99"`, `api_key="key99"`, `name="AirBand"`,
+		`system_id="3"`, `api_key="key3"`, `name="AS &amp; Co"`,
+		`host="` + localRdioUploadURL + `"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("stream output missing %q", want)
+		}
+	}
+	if strings.Contains(s, `host="http://localhost:3000/api/call-upload"`) {
+		t.Errorf("preset stream host survived generation")
+	}
+	if strings.Contains(s, `api_key=""`) {
+		t.Errorf("a generated stream has an empty api_key")
+	}
+	if err := xml.Unmarshal(out, new(struct {
+		XMLName xml.Name `xml:"playlist"`
+	})); err != nil {
+		t.Fatalf("rendered playlist is not well-formed XML: %v", err)
 	}
 }

@@ -267,7 +267,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 
 	// ---- stage: playlist ----------------------------------------------------
 	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, localKeys)
+	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, payload.StreamTargets, localKeys)
 	if err != nil {
 		return stageErr("playlist", "render", err)
 	}
@@ -557,6 +557,8 @@ var (
 	reChannelTag   = regexp.MustCompile(`(?s)<channel\b[^>]*>`)
 	reSourceCfg    = regexp.MustCompile(`(?s)<source_configuration\b[^>]*?/>`)
 	reStreamTag    = regexp.MustCompile(`(?s)<stream\b[^>]*>`)
+	reStreamBlock  = regexp.MustCompile(`(?s)<stream\b.*</stream>`)  // whole contiguous run of <stream> elements
+	reStreamFirst  = regexp.MustCompile(`(?s)<stream\b.*?</stream>`) // first <stream> element (generation template)
 	reEnabled      = regexp.MustCompile(`enabled="[^"]*"`)
 	reSystemAttr   = regexp.MustCompile(`system="[^"]*"`)
 	reSiteAttr     = regexp.MustCompile(`site="[^"]*"`)
@@ -576,7 +578,7 @@ var (
 // every <stream>'s api_key + host at the local rdio. With no channels it keeps
 // the template channel but disabled, so SDR-Trunk still loads a valid playlist.
 // It never regenerates XML from scratch — see the package fidelity warning.
-func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, localKeys map[int]string) ([]byte, error) {
+func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, targets []StreamTarget, localKeys map[int]string) ([]byte, error) {
 	out := string(template)
 
 	tmplBlock := reChannelBlock.FindString(out)
@@ -616,21 +618,55 @@ func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, lo
 	// XML isn't treated as a capture reference.
 	out = reChannelBlock.ReplaceAllStringFunc(out, func(string) string { return rendered })
 
-	// Streams: point api_key + host at the local rdio (global, not per-channel).
-	out = reStreamTag.ReplaceAllStringFunc(out, func(tag string) string {
-		m := reSystemID.FindStringSubmatch(tag)
-		key := ""
-		if len(m) == 2 {
-			if id, err := strconv.Atoi(strings.TrimSpace(m[1])); err == nil {
-				key = localKeys[id]
-			}
+	// Streams: GENERATE one <stream> per stream target (system), cloning the
+	// preset's first <stream> as the template and replacing the entire preset
+	// stream block. Each stream gets its system_id, name, the local key for that
+	// system (so it matches the rdio apiKey the backend generated for the same
+	// system), and the local rdio host. This is what makes an operator-created
+	// system automatically get its own stream. With no targets, fall back to the
+	// old in-place edit so a degenerate 0-system config still loads.
+	if len(targets) > 0 {
+		if streamTmpl := reStreamFirst.FindString(out); streamTmpl != "" {
+			generated := renderStreams(streamTmpl, targets, localKeys)
+			out = reStreamBlock.ReplaceAllStringFunc(out, func(string) string { return generated })
 		}
-		tag = reApiKey.ReplaceAllString(tag, `api_key="`+xmlAttr(key)+`"`)
-		tag = reHost.ReplaceAllString(tag, `host="`+localRdioUploadURL+`"`)
-		return tag
-	})
+	} else {
+		out = reStreamTag.ReplaceAllStringFunc(out, func(tag string) string {
+			m := reSystemID.FindStringSubmatch(tag)
+			key := ""
+			if len(m) == 2 {
+				if id, err := strconv.Atoi(strings.TrimSpace(m[1])); err == nil {
+					key = localKeys[id]
+				}
+			}
+			tag = reApiKey.ReplaceAllString(tag, `api_key="`+xmlAttr(key)+`"`)
+			tag = reHost.ReplaceAllString(tag, `host="`+localRdioUploadURL+`"`)
+			return tag
+		})
+	}
 
 	return []byte(out), nil
+}
+
+// renderStreams builds one <stream> element per target by cloning tmpl (the
+// preset's first stream) and stamping the per-system fields: system_id, name,
+// the local key for that system (which matches the rdio apiKey the backend
+// generated for the same system), and the local rdio host. Literal replacements
+// so a `$` in a name/key can't be treated as a capture reference.
+func renderStreams(tmpl string, targets []StreamTarget, localKeys map[int]string) string {
+	var b strings.Builder
+	for i, t := range targets {
+		if i > 0 {
+			b.WriteString("\n  ")
+		}
+		s := tmpl
+		s = reSystemID.ReplaceAllLiteralString(s, `system_id="`+strconv.Itoa(t.SystemId)+`"`)
+		s = reApiKey.ReplaceAllLiteralString(s, `api_key="`+xmlAttr(localKeys[t.SystemId])+`"`)
+		s = reHost.ReplaceAllLiteralString(s, `host="`+xmlAttr(localRdioUploadURL)+`"`)
+		s = reNameAttr.ReplaceAllLiteralString(s, `name="`+xmlAttr(t.Name)+`"`)
+		b.WriteString(s)
+	}
+	return b.String()
 }
 
 // renderChannelBlock stamps one channel's fields onto a clone of the preset's

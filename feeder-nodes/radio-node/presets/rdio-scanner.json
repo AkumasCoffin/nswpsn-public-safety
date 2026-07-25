@@ -321,7 +321,7 @@
           "id": 16,
           "talkgroups": "*"
         },
-                {
+        {
           "id": 17,
           "talkgroups": "*"
         }
@@ -9560,7 +9560,7 @@
       "blacklists": "",
       "delay": 0,
       "id": 14,
-      "label": "National Parks and Wildlife Service ",
+      "label": "National Parks and Wildlife Service",
       "led": null,
       "order": 14,
       "talkgroups": [
