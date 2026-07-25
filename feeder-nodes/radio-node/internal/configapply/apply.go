@@ -520,10 +520,13 @@ func (d Deps) restartRunningChannels(want []ChannelPlan) {
 	}
 	// Config auto-start flag by channel name (stable across reloads). A running
 	// channel the operator just DISABLED must be stopped, not bounced.
+	// Key by TRIMMED name: the operator-typed name is stored untrimmed while
+	// SDR-Trunk's getName() may differ by surrounding whitespace, and a mismatch
+	// here would send a disabled channel down the restart (start) path below.
 	autoByName := make(map[string]bool, len(want))
 	for _, ch := range want {
-		if ch.Name != "" {
-			autoByName[ch.Name] = ch.AutoStart
+		if n := strings.TrimSpace(ch.Name); n != "" {
+			autoByName[n] = ch.AutoStart
 		}
 	}
 	// A live playlist reload rebuilds the channel model asynchronously, so an
@@ -555,15 +558,23 @@ func (d Deps) restartRunningChannels(want []ChannelPlan) {
 		if !ch.Processing {
 			continue
 		}
+		auto, known := autoByName[strings.TrimSpace(ch.Name)]
 		// A running channel whose config now disables auto-start is STOPPED, not
 		// bounced — otherwise disabling a channel leaves it decoding.
-		if auto, known := autoByName[ch.Name]; known && !auto {
+		if known && !auto {
 			if err := d.SDR.StopChannel(ch.ID); err != nil {
 				log.Printf("configapply: stop disabled channel %d (%s) failed: %v", ch.ID, ch.Name, err)
 			}
 			continue
 		}
-		// Otherwise restart to apply the new config.
+		// Not a configured channel we can match (unknown/whitespace-mismatch, or a
+		// transient traffic channel): do NOT start it — starting an unmatched
+		// channel is exactly how a disabled channel used to get (re)started here.
+		// Only channels the config marks auto-start=on are bounced to apply config.
+		if !known {
+			continue
+		}
+		// known && auto → restart to apply the new config.
 		if err := d.SDR.StopChannel(ch.ID); err != nil {
 			log.Printf("configapply: stop channel %d (%s) for restart failed: %v", ch.ID, ch.Name, err)
 			continue
@@ -592,8 +603,10 @@ func (d Deps) enforceDisabledChannels(want []ChannelPlan) {
 	}
 	disabled := make(map[string]bool, len(want))
 	for _, ch := range want {
-		if ch.Name != "" && !ch.AutoStart {
-			disabled[ch.Name] = true
+		// TRIMMED name (see restartRunningChannels) so a whitespace mismatch with
+		// SDR-Trunk's getName() can't blind this backstop.
+		if n := strings.TrimSpace(ch.Name); n != "" && !ch.AutoStart {
+			disabled[n] = true
 		}
 	}
 	if len(disabled) == 0 {
@@ -609,7 +622,7 @@ func (d Deps) enforceDisabledChannels(want []ChannelPlan) {
 		}
 		foundRunning := false
 		for _, ch := range channels {
-			if ch.Processing && disabled[ch.Name] {
+			if ch.Processing && disabled[strings.TrimSpace(ch.Name)] {
 				foundRunning = true
 				if err := d.SDR.StopChannel(ch.ID); err != nil {
 					log.Printf("configapply: enforce-stop disabled channel %d (%s) failed: %v", ch.ID, ch.Name, err)
