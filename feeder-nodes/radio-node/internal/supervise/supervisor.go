@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,8 +122,20 @@ func (s *Supervisor) runComponent(ctx context.Context, c *component) {
 			cmd.Dir = c.cfg.WorkDir
 		}
 		if len(c.cfg.Env) > 0 {
-			env := os.Environ()
+			// Merge the component env OVER the inherited environment (override, not
+			// append) so keys like HOME reliably win — a duplicate "HOME=" entry
+			// would otherwise be resolved unpredictably by the OS.
+			merged := map[string]string{}
+			for _, kv := range os.Environ() {
+				if i := strings.IndexByte(kv, '='); i >= 0 {
+					merged[kv[:i]] = kv[i+1:]
+				}
+			}
 			for k, v := range c.cfg.Env {
+				merged[k] = v
+			}
+			env := make([]string, 0, len(merged))
+			for k, v := range merged {
 				env = append(env, k+"="+v)
 			}
 			cmd.Env = env
