@@ -298,8 +298,17 @@ func Apply(payload ConfigPayload, d Deps) error {
 	// the edit actually takes effect. Skipped when we fell back to a process
 	// restart above (that already loads everything fresh from the new playlist).
 	if liveReloaded {
+		log.Printf("configapply: live playlist reload OK; reconciling running channels")
 		d.restartRunningChannels(payload.Channels)
+	} else {
+		log.Printf("configapply: live reload unavailable; requested sdrtrunk restart")
 	}
+
+	// AUTHORITATIVE BACKSTOP: no matter what the running SDR-Trunk build's reload
+	// does (or whether a fallback restart fully took effect), guarantee that a
+	// channel the operator just set to auto-start=off is not left decoding. Runs
+	// on BOTH paths — this is what makes "disable" version-independent.
+	d.enforceDisabledChannels(payload.Channels)
 
 	// Tuner gain/ppm live in SDR-Trunk's tuner config, not the playlist, so they
 	// are applied via the control API against the live tuners. Best-effort only:
@@ -563,6 +572,58 @@ func (d Deps) restartRunningChannels(want []ChannelPlan) {
 		if err := d.SDR.StartChannel(ch.ID); err != nil {
 			log.Printf("configapply: restart channel %d (%s) failed: %v", ch.ID, ch.Name, err)
 		}
+	}
+}
+
+// enforceDisabledChannels guarantees no channel whose config sets AutoStart=false
+// is left processing after an apply. It is the authoritative backstop that makes
+// "disable" independent of the running SDR-Trunk build: regardless of what that
+// build's /playlist/reload does (older builds may not stop an already-running
+// channel), or whether a fallback process restart fully took effect, the agent
+// explicitly stops any disabled channel that is still — or comes back — running.
+//
+// Matched by channel name (the control server reports channel.getName(), which is
+// exactly what the agent writes into the playlist). Bounded watch (~6s): a reload
+// or restart brings channels up asynchronously, so a disabled channel can begin
+// processing a beat after Apply returns; two consecutive clean passes end it early.
+func (d Deps) enforceDisabledChannels(want []ChannelPlan) {
+	if d.SDR == nil {
+		return
+	}
+	disabled := make(map[string]bool, len(want))
+	for _, ch := range want {
+		if ch.Name != "" && !ch.AutoStart {
+			disabled[ch.Name] = true
+		}
+	}
+	if len(disabled) == 0 {
+		return
+	}
+	clean := 0
+	for attempt := 0; attempt < 12 && clean < 2; attempt++ {
+		channels, _, err := d.SDR.Channels()
+		if err != nil {
+			// Control server may be mid-restart; give it a moment and retry.
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		foundRunning := false
+		for _, ch := range channels {
+			if ch.Processing && disabled[ch.Name] {
+				foundRunning = true
+				if err := d.SDR.StopChannel(ch.ID); err != nil {
+					log.Printf("configapply: enforce-stop disabled channel %d (%s) failed: %v", ch.ID, ch.Name, err)
+				} else {
+					log.Printf("configapply: enforce-stopped disabled channel %q (auto-start off)", ch.Name)
+				}
+			}
+		}
+		if foundRunning {
+			clean = 0
+		} else {
+			clean++
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
