@@ -142,41 +142,87 @@ editorRouter.post('/api/editor-requests', async (c) => {
   if (!email || !email.includes('@')) {
     return c.json({ error: 'Valid email is required' }, 400);
   }
-  if (!discordId) {
-    return c.json({ error: 'Discord ID is required' }, 400);
-  }
-  if (!about) {
-    return c.json({ error: 'Please tell us about yourself' }, 400);
-  }
-  if (requestType.length === 0) {
-    return c.json({ error: 'Please select at least one request type' }, 400);
+  // discord_id is no longer required: Discord OAuth signups carry the numeric id
+  // automatically (from the linked identity), and email signups don't collect
+  // one. Stored as '' when absent (column is NOT NULL).
+
+  // A "draft" is created the moment a Discord OAuth signup returns, so the
+  // account always shows in the admin queue even if they never finish the form.
+  // Drafts skip the about/request-type validation (they get filled in later).
+  const isDraft = data['draft'] === true;
+  if (!isDraft) {
+    if (!about) {
+      return c.json({ error: 'Please tell us about yourself' }, 400);
+    }
+    if (requestType.length === 0) {
+      return c.json({ error: 'Please select at least one request type' }, 400);
+    }
   }
 
   try {
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
 
-    const existing = await pool.query<{ id: number }>(
-      "SELECT id FROM editor_requests WHERE email = $1 AND status = 'pending'",
-      [email],
-    );
-    if (existing.rows.length > 0) {
-      return c.json({ error: 'A pending request with this email already exists' }, 409);
-    }
-
     const requestTypeStr = requestType.length > 0 ? requestType.join(',') : null;
     const techExperienceStr = techExperience.length > 0 ? techExperience.join(',') : null;
     const createdAt = Math.floor(Date.now() / 1000);
 
-    // Link the request to an existing account (e.g. Discord OAuth signup).
-    // Taken ONLY from the verified JWT set by optionalSupabaseJwt — never
-    // from the request body, or a submitter could bind someone else's
-    // account and have roles granted to it on approval.
+    // Link the request to an existing account (Discord OAuth signup, or an email
+    // signup's just-created account). ONLY from the verified JWT — never from the
+    // body, or a submitter could bind someone else's account and have roles
+    // granted to it on approval.
     const linkedUserIdRaw = c.get('userId');
     const linkedUserId =
       typeof linkedUserIdRaw === 'string' && linkedUserIdRaw.length > 0
         ? linkedUserIdRaw
         : null;
+
+    // Find this person's existing request — their linked account first, then
+    // email — preferring a pending one. This lets a Discord draft (created on
+    // OAuth return) upgrade to the full request rather than erroring/duplicating.
+    const existing = await pool.query<{ id: number; status: string }>(
+      `SELECT id, status FROM editor_requests
+        WHERE ($1::text IS NOT NULL AND supabase_user_id = $1) OR email = $2
+        ORDER BY (status = 'pending') DESC, created_at DESC
+        LIMIT 1`,
+      [linkedUserId, email],
+    );
+    const existingRow = existing.rows[0];
+
+    // Draft: ensure a pending request exists (so the account is visible to
+    // admins) but never overwrite a real one.
+    if (isDraft) {
+      if (existingRow) {
+        return c.json({ success: true, message: 'request already exists', request_id: existingRow.id }, 200);
+      }
+      const draft = await pool.query<{ id: number }>(
+        `INSERT INTO editor_requests
+          (email, discord_id, about, request_type, status, created_at, supabase_user_id)
+         VALUES ($1, $2, '', NULL, 'pending', $3, $4)
+         RETURNING id`,
+        [email, discordId, createdAt, linkedUserId],
+      );
+      const draftId = draft.rows[0]?.id;
+      log.info({ draftId, email, linkedUserId }, 'Editor request draft created (Discord signup)');
+      return c.json({ success: true, message: 'draft created', request_id: draftId }, 201);
+    }
+
+    // Full submit: update an existing pending request (e.g. upgrade a draft),
+    // otherwise insert a new one.
+    if (existingRow && existingRow.status === 'pending') {
+      await pool.query(
+        `UPDATE editor_requests SET
+           email = $1, discord_id = $2, website = $3, about = $4, request_type = $5,
+           region = $6, background = $7, background_details = $8, has_existing_setup = $9,
+           setup_details = $10, tech_experience = $11, experience_level = $12,
+           supabase_user_id = COALESCE($13, supabase_user_id)
+         WHERE id = $14`,
+        [email, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
+          hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, linkedUserId, existingRow.id],
+      );
+      log.info({ requestId: existingRow.id, email, requestType, linkedUserId }, 'Editor request updated');
+      return c.json({ success: true, message: 'Request submitted successfully', request_id: existingRow.id }, 200);
+    }
 
     const inserted = await pool.query<{ id: number }>(
       `INSERT INTO editor_requests
@@ -190,19 +236,8 @@ editorRouter.post('/api/editor-requests', async (c) => {
         linkedUserId],
     );
     const requestId = inserted.rows[0]?.id;
-
-    log.info(
-      { requestId, email, discordId, requestType, linkedUserId },
-      'New editor request',
-    );
-    return c.json(
-      {
-        success: true,
-        message: 'Request submitted successfully',
-        request_id: requestId,
-      },
-      201,
-    );
+    log.info({ requestId, email, requestType, linkedUserId }, 'New editor request');
+    return c.json({ success: true, message: 'Request submitted successfully', request_id: requestId }, 201);
   } catch (err) {
     log.error({ err }, 'Error submitting editor request');
     return c.json({ error: 'Failed to submit request' }, 500);
@@ -351,7 +386,6 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
                 discord_id: req.discord_id,
                 approved_request_id: requestId,
                 roles,
-                force_password_change: true,
                 // Admin-created accounts never went through the signup
                 // form's username field — default to the email local part
                 // so the account still shows a name on logs/admin.
