@@ -118,12 +118,22 @@ export const TunerSettingsSchema = z
     serial: z.string().min(1).max(80),
     label: z.string().max(120).optional(),
     sampleRate: z.number().positive().optional(),
-    gain: z.number().optional(),
+    gain: z.number().nullable().optional(),
+    // Auto/AGC gain flag. When true the agent asks the device for automatic gain
+    // and ignores the scalar `gain` above.
+    autoGain: z.boolean().optional(),
+    // Per-axis gain values for multi-stage devices (e.g. Airspy/HackRF lna/vga/
+    // mixer) or `{ auto: true }`. Free-form: keys/units are device-specific, so
+    // this is a loose bag the agent forwards to SDR-Trunk verbatim.
+    gainParams: z.record(z.string(), z.unknown()).optional(),
     ppm: z.number().optional(),
     autoPpm: z.boolean().optional(),
     type: z.string().max(40).optional(),
   })
-  .strict();
+  // Not `.strict()`: the tuner UI evolves faster than this schema (new device
+  // axes, capability flags), and a stray unknown key must not 400 the whole
+  // config PATCH. `.passthrough()` keeps extras so nothing is silently dropped.
+  .passthrough();
 export type TunerSettings = z.infer<typeof TunerSettingsSchema>;
 
 export const ConfigOverrideSchema = z
