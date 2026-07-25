@@ -258,6 +258,14 @@ func runAgent(ctx context.Context, configPath string) error {
 	sdrCfg := resolveSDRTrunk(cfg, manifest.SDRTrunk, controlToken)
 	rdioCfg := resolveRdio(cfg, manifest.Rdio)
 
+	// Reap any SDR-Trunk left running by a previous agent (a re-exec self-update
+	// keeps the PID/cgroup, so the old JVM survives and would keep holding the
+	// control port). "io.github.dsheirer" is the SDR-Trunk main class — a precise,
+	// safe signature for its JVM; the launcher path catches the wrapper process.
+	if n := supervise.KillStale([]string{"io.github.dsheirer", sdrCfg.Command}); n > 0 {
+		log.Printf("startup: reaped %d stale sdrtrunk process(es) before launch", n)
+	}
+
 	// Supervisor for external children.
 	sup := supervise.New(cfg.DataDir, map[string]agentcfg.ComponentCfg{
 		"sdrtrunk": sdrCfg,
