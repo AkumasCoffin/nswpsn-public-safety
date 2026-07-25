@@ -77,6 +77,34 @@ function usernameFromMetadata(meta: Record<string, unknown> | undefined): string
 }
 
 /**
+ * Best-effort map of Supabase user id -> display username (email as fallback).
+ * Returns an empty map when Supabase isn't configured or the fetch fails, so
+ * callers (e.g. the Nodes list) degrade gracefully to showing ids.
+ */
+export async function getUsernameMap(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) return map;
+  try {
+    const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return map;
+    const data = (await res.json()) as SupabaseUsersResponse;
+    for (const u of data.users ?? []) {
+      const name = usernameFromMetadata(u.user_metadata) ?? u.email ?? null;
+      if (name && u.id) map.set(u.id, name);
+    }
+  } catch {
+    /* best-effort — leave the map empty */
+  }
+  return map;
+}
+
+/**
  * Discord linkage for the admin panel:
  *   discord_linked — the account has a Discord OAuth identity attached.
  *   discord_id     — the Discord user id (identity provider_id/sub), or

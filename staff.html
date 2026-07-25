@@ -2553,6 +2553,22 @@
         + chip('Calibrated', st.calibrated) + chip('JMBE', st.jmbeInstalled) + `</div>`;
     }
 
+    // Live activity chips: is the node DECODING (SDR-Trunk following the trunk)
+    // and FEEDING (forwarding to central rdio). Reuses the .nd-ready chip styles.
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, st) {
+      const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
+      let dec;
+      if (!online) dec = chip('unknown', 'Offline');
+      else if (!sdrUp) dec = chip('bad', 'SDR-Trunk down');
+      else if (decoding) dec = chip('ok', 'Decoding');
+      else dec = chip('unknown', 'Idle');
+      const uploading = !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
+      let feed;
+      if (!feedEnabled) feed = chip('unknown', 'Feed off');
+      else feed = uploading ? chip('ok', 'Feeding') : chip('unknown', 'Feed on');
+      return `<div class="node-ready-row">${dec}${feed}</div>`;
+    }
+
     function _nodeVer(label, v) {
       return `<span class="node-ver"><span class="k">${escapeHtml(label)}</span>${escapeHtml(v == null ? '—' : v)}</span>`;
     }
@@ -2568,6 +2584,15 @@
       const enabled = node.enabled !== false; // default to enabled unless explicitly false
       const feedEnabled = node.feedEnabled === true; // feed to central rdio; off by default
       const st = node.status || null;
+      const owner = node.ownerUsername ? escapeHtml(node.ownerUsername) : userShort;
+      // Decoding = SDR-Trunk up AND following the trunk (a control lock or a live
+      // call). Feeding = forwarding to central rdio (green once uploads are flowing).
+      const sdrUp = !!(st && st.components && st.components.sdrtrunk === 'running');
+      const decoding = !!(st && (
+        (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
+        (Array.isArray(st.channels) && st.channels.some(c =>
+          c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
+      ));
 
       // Optional status metrics — render a small secondary row when present.
       const statusBits = [];
@@ -2594,8 +2619,9 @@
             ${_nodeVer('rdio', node.rdioVersion)}
           </div>
           ${_ndReadinessHtml(st)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, st)}
           <div class="dev-card-secondary">
-            <span>user <span class="node-mono">${userShort}</span></span>
+            <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
           ${statusRow}

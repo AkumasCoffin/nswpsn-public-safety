@@ -29,6 +29,7 @@ import {
   type NodePatch,
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
+import { getUsernameMap } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
@@ -50,12 +51,13 @@ export const nodesRouter = new Hono();
  * Map a DB NodeRow to a clean camelCase JSON shape, merging the live
  * hub status (online / last status frame / when it arrived) on top.
  */
-function toApi(node: NodeRow) {
+function toApi(node: NodeRow, usernames?: Map<string, string>) {
   const live = hub.liveStatus(node.id);
   return {
     id: node.id,
     kind: node.kind,
     userId: node.user_id,
+    ownerUsername: usernames?.get(node.user_id) ?? null,
     installId: node.install_id,
     name: node.name,
     enabled: node.enabled,
@@ -93,8 +95,8 @@ const PatchSchema = z.object({
 // ---------------------------------------------------------------------------
 nodesRouter.get('/api/nodes', requireRole(canManageNodes), async (c) => {
   try {
-    const nodes = await listNodes();
-    return c.json({ nodes: nodes.map(toApi) });
+    const [nodes, usernames] = await Promise.all([listNodes(), getUsernameMap()]);
+    return c.json({ nodes: nodes.map((n) => toApi(n, usernames)) });
   } catch (err) {
     log.error({ err }, 'Error listing nodes');
     return c.json({ error: 'Failed to list nodes' }, 500);
