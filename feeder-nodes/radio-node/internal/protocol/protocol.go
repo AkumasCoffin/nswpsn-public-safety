@@ -51,6 +51,7 @@ type Hello struct {
 type Status struct {
 	Tuners        []any             `json:"tuners"`
 	Channels      []any             `json:"channels"`
+	ActiveCalls   []any             `json:"activeCalls"`
 	Events        []any             `json:"events"`
 	Components    map[string]string `json:"components"`
 	QueueDepth    int               `json:"queueDepth"`

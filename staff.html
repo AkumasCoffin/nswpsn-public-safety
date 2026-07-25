@@ -2597,6 +2597,7 @@
     let _ndStatus = null;          // last status object we saw (null = none yet)
     let _ndTuners = [];
     let _ndChannels = [];
+    let _ndCalls = [];             // st.activeCalls[] — calls currently up (incl. dynamic P25 traffic channels)
     let _ndEvents = [];
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
     let _ndReqSeq = 0;
@@ -2633,7 +2634,7 @@
       _ndNodeId = nodeId;
       _ndAuthed = false;
       _ndStatus = null;
-      _ndTuners = []; _ndChannels = []; _ndEvents = [];
+      _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = [];
       _ndSpectrumTunerId = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
       _ndPrevChan = {}; _ndCallStart = {};
@@ -2732,11 +2733,13 @@
       _ndStatus = st;
       _ndTuners = Array.isArray(st.tuners) ? st.tuners : [];
       _ndChannels = Array.isArray(st.channels) ? st.channels : [];
+      _ndCalls = Array.isArray(st.activeCalls) ? st.activeCalls : [];
       if (Array.isArray(st.events)) {
         _ndEvents = st.events.slice(-200);
         st.events.forEach(_ndIngestEvent);
       }
       _ndDiffChannels();       // detect control-lock / call start-end transitions -> log
+      _ndDiffCalls();          // track client-side elapsed clocks for active calls
       _ndRenderTuners();
       _ndRenderChannels();
       _ndRenderEvents();
@@ -3027,7 +3030,7 @@
           <td><div class="nd-strong">${escapeHtml(t.name || ('Tuner ' + serial))}</div>
               <div class="nd-sub">${escapeHtml(t.type || t.tunerClass || '')}${serial ? ' · ' + escapeHtml(serial) : ''}</div></td>
           <td><input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span></td>
-          <td><input class="nd-input nd-input-sm" id="nd-gain-${i}" type="number" step="1" value="${escapeHtml(String(gain))}"></td>
+          <td><input class="nd-input nd-input-sm" id="nd-gain-${i}" type="number" step="1" placeholder="auto" value="${escapeHtml(String(gain))}"></td>
           <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
           <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})"></td>
           <td>${measured}</td>
@@ -3151,16 +3154,24 @@
     // across successive status frames.
     function _ndIngestEvent(e) {
       if (!e) return;
-      const key = [e.id, e.at, e.type, e.from, e.to].join('|');
+      // Timestamp: prefer `at` (epoch ms), then `timeStart`.
+      const at = e.at != null ? e.at : (e.timeStart != null ? e.timeStart : Date.now());
+      const key = [e.type, e.timeStart != null ? e.timeStart : at, e.from, e.to, e.channel].join('|');
       if (_ndSeenEv.has(key)) return;
       _ndSeenEv.add(key);
       if (_ndSeenEv.size > 600) { _ndSeenEv.clear(); } // keep the set bounded
-      const ft = (e.from || e.to) ? `${e.from || '—'} → ${e.to || '—'}` : '';
-      const proto = e.protocol ? ' (' + e.protocol + ')' : '';
+      // Prefer human aliases for the from/to line.
+      const from = e.fromAlias || e.from || '';
+      const to = e.toAlias || e.to || '';
+      const ft = (from || to) ? `${from || '—'} → ${to || '—'}` : '';
+      const label = e.typeLabel || e.type || 'event';
+      const proto = e.protocol ? ' · ' + e.protocol : '';
+      const dur = (e.durationMs != null && e.durationMs > 0) ? ' · ' + _ndFmtElapsed(e.durationMs) : '';
+      const chan = e.channel ? ' · ' + e.channel : '';
       _ndLog.push({
         kind: 'event',
-        text: (e.type || 'event') + proto,
-        at: e.at != null ? e.at : Date.now(),
+        text: label + proto + dur + chan,
+        at,
         ft
       });
       if (_ndLog.length > 200) _ndLog.shift();
@@ -3173,32 +3184,53 @@
       _ndChannels.forEach(c => {
         const cid = String(c.id != null ? c.id : (c.name || ''));
         if (!cid) return;
-        const type = String(c.type || '').toUpperCase();
         const state = String(c.state || '').toUpperCase();
-        next[cid] = { type, state };
+        // A channel is the P25 control channel iff `control === true`
+        // (or the reported state is CONTROL) — NOT the config `type`.
+        const isControl = c.control === true || state === 'CONTROL';
+        next[cid] = { state, control: isControl };
         const prev = _ndPrevChan[cid] || {};
         const label = c.name || ('channel ' + cid);
-        // Type transition: control-channel lock is the headline event.
-        if (type && type !== prev.type) {
-          if (type === 'CONTROL') _ndLogPush('control', `${label} locked as CONTROL channel`, Date.now());
-          else if (type === 'TRAFFIC') _ndLogPush('traffic', `${label} → TRAFFIC`, Date.now());
+        // Control-channel lock is the headline transition.
+        if (isControl && !prev.control) {
+          _ndLogPush('control', `${label} locked as CONTROL channel`, Date.now());
+        } else if (!isControl && prev.control) {
+          _ndLogPush('traffic', `${label} released control channel`, Date.now());
         }
-        // Call start / end from the active-state edge.
-        const ACTIVE = (s) => s === 'CALL' || s === 'ACTIVE' || s === 'DATA';
-        const wasActive = ACTIVE(prev.state || '');
-        const isActive = ACTIVE(state);
-        const ft = (c.from || c.to) ? `${c.from || '—'} → ${c.to || '—'}` : '';
+        // Call start / end from the active-state edge (excluding the control channel).
+        const ACTIVE = (s) => s === 'CALL' || s === 'ACTIVE' || s === 'DATA' || s === 'ENCRYPTED';
+        const wasActive = ACTIVE(prev.state || '') && !prev.control;
+        const isActive = ACTIVE(state) && !isControl;
+        const fromLbl = c.fromAlias || c.from || '';
+        const toLbl = c.toAlias || c.to || '';
+        const ft = (fromLbl || toLbl) ? `${fromLbl || '—'} → ${toLbl || '—'}` : '';
         if (isActive && !wasActive) {
-          _ndCallStart[cid] = Date.now();
           _ndLogPush('callstart', `Call start · ${label}`, Date.now(), ft);
         } else if (!isActive && wasActive) {
           _ndLogPush('callend', `Call end · ${label}`, Date.now(), ft);
-          delete _ndCallStart[cid];
         }
       });
-      // Drop call clocks for channels that disappeared.
-      Object.keys(_ndCallStart).forEach(cid => { if (!next[cid]) delete _ndCallStart[cid]; });
       _ndPrevChan = next;
+    }
+
+    // Maintain client-side call clocks keyed by channelId+to for the active
+    // calls (activeCalls has no start timestamp). Records a start on the
+    // idle→active edge and drops clocks when a call is no longer up.
+    function _ndCallKey(c) {
+      const cid = c.channelId != null ? c.channelId
+        : (c.id != null ? c.id : (c.channelName || c.name || ''));
+      const to = c.to != null ? c.to : (c.talkgroup != null ? c.talkgroup : '');
+      return String(cid) + '|' + String(to);
+    }
+    function _ndDiffCalls() {
+      const calls = _ndActiveCalls();
+      const seen = new Set();
+      calls.forEach(c => {
+        const k = _ndCallKey(c);
+        seen.add(k);
+        if (_ndCallStart[k] == null) _ndCallStart[k] = Date.now();
+      });
+      Object.keys(_ndCallStart).forEach(k => { if (!seen.has(k)) delete _ndCallStart[k]; });
     }
 
     function _ndRenderEvents() {
@@ -3220,7 +3252,11 @@
 
     // --- Now playing (P4) ----------------------------------------------
     function _ndActiveCalls() {
-      const ACTIVE = new Set(['CALL', 'ACTIVE', 'DATA']);
+      // Prefer the dedicated activeCalls array (includes dynamically-allocated
+      // P25 traffic channels not present in the channels list). Fall back to
+      // channels in a live state only when activeCalls is absent.
+      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls;
+      const ACTIVE = new Set(['CALL', 'ACTIVE', 'DATA', 'ENCRYPTED']);
       return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && (c.from || c.to || c.frequency != null));
     }
 
@@ -3238,22 +3274,26 @@
         return;
       }
       el.innerHTML = `<div class="nd-np-grid">` + calls.map(c => {
-        const cid = String(c.id != null ? c.id : (c.name || ''));
-        const tg = c.toAlias || c.talkgroupLabel || c.to || c.name || '—';
-        const alias = c.fromAlias || c.alias || '';
-        const from = c.from || '—', to = c.to || '—';
-        const start = _ndCallStart[cid];
+        const key = _ndCallKey(c);
+        // Talkgroup headline: prefer toAlias, then talkgroup, then to.
+        const tg = c.toAlias || c.talkgroup || c.to || '—';
+        // Who's transmitting: prefer fromAlias, then from.
+        const fromLbl = c.fromAlias || c.from || '—';
+        const talker = c.talkerAlias ? ` <span class="nd-alias">(${escapeHtml(String(c.talkerAlias))})</span>` : '';
+        const start = _ndCallStart[key];
         const elapsed = start ? _ndFmtElapsed(Date.now() - start) : '—';
+        const chan = c.channelName || c.name || '';
         const sys = [c.system, c.site].filter(Boolean).join(' · ');
         const freq = c.frequency != null ? (c.frequency / 1e6).toFixed(4) + ' MHz' : '';
+        const sub = [chan, sys, freq].filter(Boolean).join(' · ');
         return `<div class="nd-np-card">
           <span class="nd-np-live"></span>
           <div class="nd-np-main">
-            <div class="nd-np-tg">${escapeHtml(tg)}</div>
-            <div class="nd-np-ft">${escapeHtml(from)} → ${escapeHtml(to)}${alias ? ` <span class="nd-alias">(${escapeHtml(alias)})</span>` : ''}</div>
-            ${(sys || freq) ? `<div class="nd-np-sub">${escapeHtml([sys, freq].filter(Boolean).join(' · '))}</div>` : ''}
+            <div class="nd-np-tg">${escapeHtml(String(tg))}</div>
+            <div class="nd-np-ft">${escapeHtml(String(fromLbl))} → ${escapeHtml(String(tg))}${talker}</div>
+            ${sub ? `<div class="nd-np-sub">${escapeHtml(sub)}</div>` : ''}
           </div>
-          <div class="nd-np-elapsed" data-cid="${escapeHtml(cid)}">${elapsed}</div>
+          <div class="nd-np-elapsed" data-cid="${escapeHtml(key)}">${elapsed}</div>
         </div>`;
       }).join('') + `</div>`;
     }

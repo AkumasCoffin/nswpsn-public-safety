@@ -263,6 +263,7 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	comps := c.sup.Status()
 	tuners := []any{}
 	channels := []any{}
+	activeCalls := []any{}
 	events := []any{}
 
 	if ts, err := c.sdr.Tuners(); err != nil {
@@ -274,9 +275,12 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 		for _, tuner := range ts {
 			tuners = append(tuners, tuner)
 		}
-		if cs, err := c.sdr.Channels(); err == nil {
+		if cs, acs, err := c.sdr.Channels(); err == nil {
 			for _, ch := range cs {
 				channels = append(channels, ch)
+			}
+			for _, ac := range acs {
+				activeCalls = append(activeCalls, ac)
 			}
 		}
 		if evs, err := c.sdr.Events(20); err == nil {
@@ -289,6 +293,7 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	st := protocol.Status{
 		Tuners:        tuners,
 		Channels:      channels,
+		ActiveCalls:   activeCalls,
 		Events:        events,
 		Components:    comps,
 		QueueDepth:    c.q.Depth(),
@@ -643,6 +648,17 @@ func (c *Client) runUpdateCheck(reason string) string {
 	if err != nil {
 		log.Printf("wsclient: update(%s): manifest fetch failed: %v", reason, err)
 		return "update check failed: " + err.Error()
+	}
+
+	// The manual "update" command always applies; the AUTOMATIC triggers
+	// (startup / the 6h periodic ticker) must respect the server's global
+	// auto-update switch. We always FETCH the manifest above (so the flag is
+	// read), but when auto-update is paused we don't APPLY component/agent
+	// updates on an automatic pass.
+	manual := reason == "cmd"
+	if !manual && m.AutoUpdate != nil && !*m.AutoUpdate {
+		log.Printf("wsclient: update(%s): auto-update paused by server; skipping", reason)
+		return "auto-update paused by server; skipping"
 	}
 
 	var parts []string
