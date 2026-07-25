@@ -340,7 +340,17 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 		"--headless",
 		"--control-port", strconv.Itoa(cfg.SDRTrunkControlPort),
 		"--app-root", cfg.SDRTrunkAppRoot)
-	c.Env = map[string]string{"SDRTRUNK_CONTROL_TOKEN": controlToken}
+	// SDR-Trunk's SettingsManager (SystemProperties -> ~/SDRTrunk) and Java's
+	// user-preferences store (~/.java, where the calibration "done" flag and the
+	// JMBE library path persist) both derive from $HOME. The service user's real
+	// home (/home/nswpsn-node) is not writable under systemd (ProtectHome), so
+	// settings + prefs fail with AccessDenied / "Could not lock User prefs" and
+	// calibration re-runs + JMBE re-installs every start. Point HOME at the
+	// managed, writable app root so all of that persists.
+	c.Env = map[string]string{
+		"SDRTRUNK_CONTROL_TOKEN": controlToken,
+		"HOME":                   cfg.SDRTrunkAppRoot,
+	}
 	return c
 }
 
