@@ -54,7 +54,8 @@ type Queue struct {
 	maxBytes int64
 	maxCount int
 
-	mu sync.Mutex // guards on-disk mutations to keep bound enforcement consistent
+	mu       sync.Mutex // guards on-disk mutations to keep bound enforcement consistent
+	lastNano int64      // last filename timestamp used; monotonic guard against clock step-back
 }
 
 // Open initializes a queue rooted at dir. maxBytes<=0 and maxCount<=0 fall back
@@ -93,7 +94,16 @@ func (q *Queue) Enqueue(contentType string, body []byte) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	name := fmt.Sprintf("%020d-%s%s", time.Now().UnixNano(), rand4(), fileExt)
+	// Filenames sort by timestamp for FIFO / drop-oldest. Guard against a wall-clock
+	// step-back (NTP) by clamping strictly forward, so a newer call can never sort
+	// before an older queued one and get mis-dropped or drained out of order.
+	nano := time.Now().UnixNano()
+	if nano <= q.lastNano {
+		nano = q.lastNano + 1
+	}
+	q.lastNano = nano
+
+	name := fmt.Sprintf("%020d-%s%s", nano, rand4(), fileExt)
 	final := filepath.Join(q.dir, name)
 	tmp := final + tmpExt
 
@@ -103,8 +113,26 @@ func (q *Queue) Enqueue(contentType string, body []byte) error {
 	buf.WriteByte('\n')
 	buf.Write(body)
 
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
+	// Write + fsync BEFORE the atomic rename so a hard power loss can't surface a
+	// zero/partial .call file that was already 200-ACKed to rdio (the package's
+	// durability contract).
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
 		return fmt.Errorf("write queue temp: %w", err)
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write queue temp: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("fsync queue temp: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close queue temp: %w", err)
 	}
 	if err := os.Rename(tmp, final); err != nil {
 		_ = os.Remove(tmp)

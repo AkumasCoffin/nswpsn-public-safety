@@ -71,9 +71,28 @@ func (l *Listener) Run(ctx context.Context) error {
 // handleCallUpload reads the raw body + Content-Type, enqueues it, and ALWAYS
 // responds 200 — even if reading failed or the queue had to drop-oldest.
 func (l *Listener) handleCallUpload(w http.ResponseWriter, r *http.Request) {
+	// The rdio downstream is fire-and-forget: it drops the call on ANY non-200 or
+	// closed connection. So this handler must always 200 — including on an
+	// unexpected panic, which net/http would otherwise surface as a dropped
+	// connection with no response written. `ok` is idempotent so we 200 exactly
+	// once regardless of which path (or the recover) reaches it.
+	responded := false
+	ok := func() {
+		if !responded {
+			responded = true
+			writeOK(w)
+		}
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("relay: recovered panic in call-upload handler: %v", rec)
+			ok()
+		}
+	}()
+
 	if r.Method != http.MethodPost {
 		// Be lenient — still 200 so probes succeed.
-		writeOK(w)
+		ok()
 		return
 	}
 	contentType := r.Header.Get("Content-Type")
@@ -83,14 +102,14 @@ func (l *Listener) handleCallUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Still respond 200; just log and drop this one.
 		log.Printf("relay: failed reading call-upload body: %v", err)
-		writeOK(w)
+		ok()
 		return
 	}
 
 	if err := l.q.Enqueue(contentType, body); err != nil {
 		log.Printf("relay: enqueue failed: %v", err)
 	}
-	writeOK(w)
+	ok()
 }
 
 // handleCapabilities tells the rdio downstream probe we exist but advertise no

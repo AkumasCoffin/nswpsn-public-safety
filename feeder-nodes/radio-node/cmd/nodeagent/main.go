@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -448,7 +449,12 @@ func (s *sender) send(contentType string, body []byte) queue.SendResult {
 		log.Printf("sender: POST failed (will retry): %v", err)
 		return queue.SendRetry
 	}
-	defer resp.Body.Close()
+	// Drain before close so the keep-alive connection can be reused instead of
+	// forcing a fresh TCP+TLS handshake per queued call.
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 
 	switch resp.StatusCode {
 	case http.StatusOK:

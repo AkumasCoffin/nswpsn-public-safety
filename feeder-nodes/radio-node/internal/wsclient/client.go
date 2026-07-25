@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -38,6 +39,7 @@ const (
 	backoffInitial         = 1 * time.Second
 	backoffMax             = 30 * time.Second // transient drops recover fast
 	backoffDisabled        = 30 * time.Second // 401/403 (disabled / role removed): retry every ~30s so re-enabling recovers quickly
+	backoffStableReset     = 15 * time.Second // a session must stay up this long before it resets the network backoff
 
 	updateInitialDelay = 30 * time.Second // let the WS settle before the first update check
 	updateInterval     = 6 * time.Hour    // periodic update check cadence
@@ -62,6 +64,8 @@ type Client struct {
 
 	applyMu  sync.Mutex // serializes config applies so two pushes can't race
 	updateMu sync.Mutex // serializes update checks (manifest + component ensure + self-update)
+
+	swapScheduled atomic.Bool // one-shot guard: at most one self-update swap+restart in flight
 
 	verMu          sync.Mutex // guards appliedVersion
 	appliedVersion string     // config version last successfully applied (persisted)
@@ -112,6 +116,7 @@ func (c *Client) Run(ctx context.Context) {
 			return
 		}
 
+		sessStart := time.Now()
 		connected, rejected, err := c.session(ctx)
 		if ctx.Err() != nil {
 			return
@@ -120,9 +125,12 @@ func (c *Client) Run(ctx context.Context) {
 			log.Printf("wsclient: session ended: %v", err)
 		}
 
-		// A healthy session that later dropped resets the network backoff so a
+		// A healthy session that STAYED UP resets the network backoff so a
 		// long-lived connection doesn't inherit a huge delay from earlier flaps.
-		if connected {
+		// Require a minimum stable duration: a server that accepts the handshake
+		// then immediately drops must NOT keep resetting backoff to 1s (that would
+		// be a ~1s reconnect storm), so only a genuinely stable session resets it.
+		if connected && time.Since(sessStart) >= backoffStableReset {
 			backoff = backoffInitial
 		}
 
@@ -594,8 +602,8 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 		// placeholder manifest this reports "no update available".
 		id := env.ID
 		go func() {
-			msg := c.runUpdateCheck("cmd")
-			c.sendReply(id, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: msg})
+			msg, ok := c.runUpdateCheck("cmd")
+			c.sendReply(id, protocol.TypeCmdResult, protocol.CmdResult{OK: ok, Message: msg})
 		}()
 
 	case "pushConfig":
@@ -662,14 +670,16 @@ func (c *Client) updateLoop(ctx context.Context) {
 // PLACEHOLDER-SAFE: with the live placeholder manifest (empty sha256 / stub
 // urls) EnsureComponent installs nothing and StageAgentUpdate returns
 // ErrNothingToDo, so this reports "no update available" and does no downloads.
-func (c *Client) runUpdateCheck(reason string) string {
+func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	c.updateMu.Lock()
 	defer c.updateMu.Unlock()
+
+	hadError := false
 
 	m, err := update.FetchManifest(c.cfg.ServerURL, c.cfg.NodeToken)
 	if err != nil {
 		log.Printf("wsclient: update(%s): manifest fetch failed: %v", reason, err)
-		return "update check failed: " + err.Error()
+		return "update check failed: " + err.Error(), false
 	}
 
 	// The manual "update" command always applies; the AUTOMATIC triggers
@@ -680,7 +690,7 @@ func (c *Client) runUpdateCheck(reason string) string {
 	manual := reason == "cmd"
 	if !manual && m.AutoUpdate != nil && !*m.AutoUpdate {
 		log.Printf("wsclient: update(%s): auto-update paused by server; skipping", reason)
-		return "auto-update paused by server; skipping"
+		return "auto-update paused by server; skipping", true
 	}
 
 	var parts []string
@@ -698,6 +708,7 @@ func (c *Client) runUpdateCheck(reason string) string {
 		case cerr != nil:
 			log.Printf("wsclient: update(%s): %s: %v", reason, ce.name, cerr)
 			parts = append(parts, ce.name+": error")
+			hadError = true
 		case inst == nil:
 			parts = append(parts, ce.name+": not installed")
 		default:
@@ -713,22 +724,30 @@ func (c *Client) runUpdateCheck(reason string) string {
 	case serr != nil:
 		log.Printf("wsclient: update(%s): stage agent: %v", reason, serr)
 		parts = append(parts, "agent: update error")
+		hadError = true
 	default:
 		log.Printf("wsclient: update(%s): staged agent v%s; swapping + restarting", reason, newVer)
 		parts = append(parts, "agent: updating to v"+newVer+", restarting")
 		// Swap on a short delay so any pending cmd ack flushes before this
-		// process re-execs / exits.
-		go func() {
-			time.Sleep(1 * time.Second)
-			if swerr := update.SwapAndRestart(pending); swerr != nil {
-				log.Printf("wsclient: update: swap + restart failed: %v", swerr)
-			}
-		}()
+		// process re-execs / exits. Guard with a one-shot CAS: two updates within
+		// the delay window must not each spawn a SwapAndRestart (the second helper's
+		// move-into-place would spin forever on an already-consumed pending file).
+		if c.swapScheduled.CompareAndSwap(false, true) {
+			go func() {
+				time.Sleep(1 * time.Second)
+				if swerr := update.SwapAndRestart(pending); swerr != nil {
+					log.Printf("wsclient: update: swap + restart failed: %v", swerr)
+					c.swapScheduled.Store(false) // allow a retry if the swap didn't take
+				}
+			}()
+		} else {
+			log.Printf("wsclient: update(%s): swap already scheduled; skipping duplicate", reason)
+		}
 	}
 
 	summary := strings.Join(parts, "; ")
 	log.Printf("wsclient: update(%s): %s", reason, summary)
-	return summary
+	return summary, !hadError
 }
 
 // sendMessage writes a typed, id-less frame to the current connection under the
