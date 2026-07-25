@@ -1482,6 +1482,7 @@
 
   <div class="toasts" id="toasts"></div>
 
+<script src="ui-dialogs.js"></script>
 <script>
 /* =========================================================
    NSW PSN Dashboard (preset-based)
@@ -3311,7 +3312,7 @@ function makeGeofilterMap(preset, initialGeofilter) {
   // ---- Polygon helpers ----
   function commitPolygon() {
     if (polyPoints.length < 3) {
-      alert('Polygon needs at least 3 vertices.');
+      uiAlert('Polygon needs at least 3 vertices.');
       return;
     }
     current = { type: 'polygon', points: polyPoints.map(p => [p.lat, p.lng]) };
@@ -3805,7 +3806,7 @@ function renderFiltersCard(preset) {
       try {
         payload = buildPayload();
       } catch (e) {
-        alert(e.message); return;
+        uiAlert(e.message, {title:'Error'}); return;
       }
       saveBtn.disabled = true;
       try {
