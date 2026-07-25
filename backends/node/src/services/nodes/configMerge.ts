@@ -30,7 +30,13 @@ import {
   type DecoderType,
   type DecoderConfig,
 } from './configSchema.js';
-import { getGlobalConfig, type Alias, type GlobalConfig } from './globalConfig.js';
+import {
+  getGlobalConfig,
+  agenciesToAliases,
+  agenciesToSystems,
+  type Alias,
+  type GlobalConfig,
+} from './globalConfig.js';
 
 // ── payload contract ───────────────────────────────────────────────────────
 export interface StreamTarget {
@@ -216,12 +222,16 @@ export async function buildConfigPayload(
 
   const channels = deriveChannels(override, node);
   const tuners = deriveTuners(override);
-  const aliases = globalCfg.sdrtrunkAliases;
+
+  // Agencies are the single source of truth: derive the SDR-Trunk aliases + the
+  // rdio systems from them (id/label/name/broadcastChannel all unified).
+  const aliases = agenciesToAliases(globalCfg.agencies);
+  const derivedSystems = agenciesToSystems(globalCfg.agencies);
 
   // The rdio document: preset as the base (options/apiKeys/downstreams/etc.),
   // with the fleet-wide systems/groups/tags overlaid from the global config.
   const rdioConfig = structuredClone(presets.rdio) as Record<string, unknown>;
-  if (globalCfg.rdioSystems.length > 0) rdioConfig['systems'] = globalCfg.rdioSystems;
+  if (derivedSystems.length > 0) rdioConfig['systems'] = derivedSystems;
   if (globalCfg.rdioGroups.length > 0) rdioConfig['groups'] = globalCfg.rdioGroups;
   if (globalCfg.rdioTags.length > 0) rdioConfig['tags'] = globalCfg.rdioTags;
 

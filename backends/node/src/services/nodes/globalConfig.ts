@@ -47,10 +47,51 @@ export type Alias = z.infer<typeof AliasSchema>;
 // every field) so the round-trip through the editor never drops data.
 const LooseObj = z.record(z.string(), z.unknown());
 
+/** The single SDR-Trunk alias list every generated alias belongs to. Auto-set —
+ *  there is one playlist, so operators never pick a list. The channel's
+ *  alias_list_name must match this (preset ships it). */
+export const ALIAS_LIST_NAME = 'catch all PSN';
+
+/**
+ * An Agency: the unified entity that owns its SDR-Trunk alias + stream AND its
+ * rdio system + apiKey. Identity is `systemId` + `name`; the name drives the
+ * alias name, the stream name, the alias broadcastChannel, and the rdio system
+ * label (all unified). The SDR-Trunk alias's talkgroup scope + look come from
+ * the alias-* fields; the rdio system's per-talkgroup display + units come from
+ * `talkgroups`/`units`. The alias list is NOT here — it's auto-set to
+ * ALIAS_LIST_NAME.
+ */
+export const AgencySchema = z
+  .object({
+    systemId: z.number().int(),
+    name: z.string().max(200),
+    // --- SDR-Trunk alias appearance/behaviour ---
+    color: z.string().max(40).optional(),
+    iconName: z.string().max(200).optional(),
+    // -1 = do-not-monitor, 1..99 = priority, undefined/100 = normal monitor.
+    priority: z.number().int().optional(),
+    streamTalkgroupAlias: z.union([z.string().max(40), z.number()]).optional(),
+    // The alias's identifier scope — talkgroupRange / talkgroup / radio ids that
+    // decide which calls stream for this agency (the "streaming ranges" section).
+    aliasIds: z.array(AliasIdSchema).max(4096).default([]),
+    // --- rdio system fields (id/label derive from systemId/name) ---
+    led: z.string().max(40).optional(),
+    autoPopulate: z.boolean().optional(),
+    transcribe: z.boolean().optional(),
+    transcriptionPrompt: z.string().optional(),
+    blacklists: z.string().optional(),
+    delay: z.number().optional(),
+    alert: z.string().max(40).optional(),
+    talkgroups: z.array(LooseObj).max(8192).default([]),
+    units: z.array(LooseObj).max(8192).default([]),
+  })
+  // passthrough so any extra rdio system field we don't model round-trips.
+  .passthrough();
+export type Agency = z.infer<typeof AgencySchema>;
+
 export const GlobalConfigSchema = z
   .object({
-    sdrtrunkAliases: z.array(AliasSchema).max(8192).default([]),
-    rdioSystems: z.array(LooseObj).max(4096).default([]),
+    agencies: z.array(AgencySchema).max(4096).default([]),
     rdioGroups: z.array(LooseObj).max(4096).default([]),
     rdioTags: z.array(LooseObj).max(4096).default([]),
   })
@@ -87,12 +128,105 @@ function canonicalize(value: unknown): unknown {
  *  own config version. */
 export function globalConfigVersion(c: GlobalConfigInput): string {
   const canon = canonicalize({
-    sdrtrunkAliases: c.sdrtrunkAliases,
-    rdioSystems: c.rdioSystems,
+    agencies: c.agencies,
     rdioGroups: c.rdioGroups,
     rdioTags: c.rdioTags,
   });
   return createHash('sha256').update(JSON.stringify(canon)).digest('hex');
+}
+
+// ── agency <-> alias/system derivation ───────────────────────────────────────
+// Agencies are the single source of truth. From each agency we DERIVE the
+// SDR-Trunk alias + the rdio system that the rest of the pipeline (configMerge,
+// agent) already consumes — so nothing downstream changed.
+
+type AliasId = z.infer<typeof AliasIdSchema>;
+
+/** Build the SDR-Trunk alias for an agency, or null when the agency has no
+ *  identifier scope (nothing to match → no alias needed). The list is auto-set,
+ *  the broadcastChannel + priority ids are synthesised from the agency. */
+function agencyToAlias(a: Agency): Alias | null {
+  if (!a.aliasIds || a.aliasIds.length === 0) return null;
+  const ids: AliasId[] = [
+    { type: 'priority', attrs: { priority: String(a.priority ?? 100) } },
+    { type: 'broadcastChannel', attrs: { channel: a.name } },
+    ...a.aliasIds,
+  ];
+  return {
+    name: a.name,
+    list: ALIAS_LIST_NAME,
+    group: a.name,
+    color: a.color,
+    iconName: a.iconName,
+    streamTalkgroupAlias: a.streamTalkgroupAlias,
+    ids,
+  };
+}
+
+/** The SDR-Trunk aliases for all agencies (agencies with an identifier scope). */
+export function agenciesToAliases(agencies: Agency[]): Alias[] {
+  return agencies.map(agencyToAlias).filter((a): a is Alias => a !== null);
+}
+
+/** Build the rdio system doc for an agency: id/label from systemId/name, all
+ *  other rdio fields (led/talkgroups/units/…) carried through; alias-only fields
+ *  stripped. */
+function agencyToSystem(a: Agency): Record<string, unknown> {
+  const {
+    systemId,
+    name,
+    color: _color,
+    iconName: _iconName,
+    priority: _priority,
+    streamTalkgroupAlias: _sta,
+    aliasIds: _aliasIds,
+    id: _strayId,
+    _id: _strayUnderId,
+    label: _strayLabel,
+    ...rest
+  } = a as Agency & Record<string, unknown>;
+  return { ...rest, id: systemId, label: name };
+}
+
+/** The rdio systems for all agencies. */
+export function agenciesToSystems(agencies: Agency[]): Record<string, unknown>[] {
+  return agencies.map(agencyToSystem);
+}
+
+/** Build agencies by merging rdio systems with their matching SDR-Trunk alias.
+ *  The link is broadcastChannel == system label (both == the agency name, which
+ *  we unified). Systems with no alias become agencies with no streaming scope. */
+export function buildAgencies(aliases: Alias[], systems: Record<string, unknown>[]): Agency[] {
+  const aliasByChannel = new Map<string, Alias>();
+  for (const al of aliases) {
+    const bc = al.ids.find((id) => id.type === 'broadcastChannel')?.attrs['channel'];
+    if (bc) aliasByChannel.set(bc, al);
+  }
+  return systems.map((s): Agency => {
+    const systemId = Number(s['id'] ?? s['_id']);
+    const name = String(s['label'] ?? `System ${systemId}`);
+    const { id: _id, _id: _underId, label: _label, ...sysRest } = s;
+    const agency: Agency = {
+      systemId,
+      name,
+      ...sysRest,
+      talkgroups: Array.isArray(s['talkgroups']) ? (s['talkgroups'] as Record<string, unknown>[]) : [],
+      units: Array.isArray(s['units']) ? (s['units'] as Record<string, unknown>[]) : [],
+      aliasIds: [],
+    };
+    const alias = aliasByChannel.get(name);
+    if (alias) {
+      agency.color = alias.color;
+      agency.iconName = alias.iconName;
+      agency.streamTalkgroupAlias = alias.streamTalkgroupAlias;
+      const prio = alias.ids.find((id) => id.type === 'priority')?.attrs['priority'];
+      if (prio !== undefined && prio !== '') agency.priority = Number(prio);
+      agency.aliasIds = alias.ids.filter(
+        (id) => id.type !== 'priority' && id.type !== 'broadcastChannel',
+      );
+    }
+    return agency;
+  });
 }
 
 // ── alias XML parsing (seed from default.xml) ────────────────────────────────
@@ -186,9 +320,10 @@ function seedFromPresets(): GlobalConfigInput {
   const rdio = presets.rdio as Record<string, unknown>;
   const asArr = (v: unknown): Record<string, unknown>[] =>
     Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+  const aliases = parseAliasesFromXml(presets.playlistXml);
+  const systems = asArr(rdio['systems']);
   return {
-    sdrtrunkAliases: parseAliasesFromXml(presets.playlistXml),
-    rdioSystems: asArr(rdio['systems']),
+    agencies: buildAgencies(aliases, systems),
     rdioGroups: asArr(rdio['groups']),
     rdioTags: asArr(rdio['tags']),
   };
@@ -197,6 +332,9 @@ function seedFromPresets(): GlobalConfigInput {
 // ── read / write ─────────────────────────────────────────────────────────────
 
 interface Row {
+  agencies: unknown;
+  // Legacy columns — kept only for back-compat reads of rows written before the
+  // agencies model (derived into agencies on read; cleared on the next save).
   sdrtrunk_aliases: unknown;
   rdio_systems: unknown;
   rdio_groups: unknown;
@@ -207,15 +345,27 @@ interface Row {
 }
 
 function rowToConfig(r: Row): GlobalConfig {
+  let agencies: unknown = r.agencies;
+  // Back-compat: a row written before the agencies model has an empty `agencies`
+  // but populated legacy alias/system columns — derive agencies from them so a
+  // pre-reseed config keeps working.
+  if (!Array.isArray(agencies) || agencies.length === 0) {
+    const legacyAliases = AliasSchema.array().safeParse(r.sdrtrunk_aliases ?? []);
+    const legacySystems = Array.isArray(r.rdio_systems)
+      ? (r.rdio_systems as Record<string, unknown>[])
+      : [];
+    if (legacyAliases.success && (legacyAliases.data.length > 0 || legacySystems.length > 0)) {
+      agencies = buildAgencies(legacyAliases.data, legacySystems);
+    }
+  }
   const parsed = GlobalConfigSchema.safeParse({
-    sdrtrunkAliases: r.sdrtrunk_aliases ?? [],
-    rdioSystems: r.rdio_systems ?? [],
+    agencies: agencies ?? [],
     rdioGroups: r.rdio_groups ?? [],
     rdioTags: r.rdio_tags ?? [],
   });
   const content: GlobalConfigInput = parsed.success
     ? parsed.data
-    : { sdrtrunkAliases: [], rdioSystems: [], rdioGroups: [], rdioTags: [] };
+    : { agencies: [], rdioGroups: [], rdioTags: [] };
   return {
     ...content,
     version: r.version || globalConfigVersion(content),
@@ -226,16 +376,10 @@ function rowToConfig(r: Row): GlobalConfig {
 }
 
 const EMPTY: GlobalConfig = {
-  sdrtrunkAliases: [],
-  rdioSystems: [],
+  agencies: [],
   rdioGroups: [],
   rdioTags: [],
-  version: globalConfigVersion({
-    sdrtrunkAliases: [],
-    rdioSystems: [],
-    rdioGroups: [],
-    rdioTags: [],
-  }),
+  version: globalConfigVersion({ agencies: [], rdioGroups: [], rdioTags: [] }),
   updatedAt: null,
   updatedBy: null,
   streamNames: [],
@@ -250,7 +394,7 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
   const pool = await getPool();
   if (!pool) return { ...EMPTY, streamNames: presetStreamNames() };
   const res = await pool.query<Row>(
-    `SELECT sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by
+    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by
        FROM feeder_global_config WHERE id = 1`,
   );
   const row = res.rows[0];
@@ -268,10 +412,7 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
   try {
     const seed = seedFromPresets();
     const saved = await saveGlobalConfig(seed, 'system:seed');
-    log.info(
-      { aliases: seed.sdrtrunkAliases.length, systems: seed.rdioSystems.length },
-      'seeded global feeder config from presets',
-    );
+    log.info({ agencies: seed.agencies.length }, 'seeded global feeder config from presets');
     return saved;
   } catch (err) {
     log.warn({ err }, 'global feeder config seed from presets failed');
@@ -317,20 +458,20 @@ export async function saveGlobalConfig(
   }
   const res = await pool.query<Row>(
     `INSERT INTO feeder_global_config
-       (id, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by)
-     VALUES (1, $1, $2, $3, $4, $5, now(), $6)
+       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by)
+     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, now(), $5)
      ON CONFLICT (id) DO UPDATE SET
-       sdrtrunk_aliases = EXCLUDED.sdrtrunk_aliases,
-       rdio_systems     = EXCLUDED.rdio_systems,
+       agencies         = EXCLUDED.agencies,
+       sdrtrunk_aliases = '[]'::jsonb,
+       rdio_systems     = '[]'::jsonb,
        rdio_groups      = EXCLUDED.rdio_groups,
        rdio_tags        = EXCLUDED.rdio_tags,
        version          = EXCLUDED.version,
        updated_at       = now(),
        updated_by       = EXCLUDED.updated_by
-     RETURNING sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by`,
+     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by`,
     [
-      JSON.stringify(input.sdrtrunkAliases),
-      JSON.stringify(input.rdioSystems),
+      JSON.stringify(input.agencies),
       JSON.stringify(input.rdioGroups),
       JSON.stringify(input.rdioTags),
       version,
