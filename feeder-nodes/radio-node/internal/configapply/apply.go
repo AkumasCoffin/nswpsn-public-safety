@@ -298,7 +298,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 	// the edit actually takes effect. Skipped when we fell back to a process
 	// restart above (that already loads everything fresh from the new playlist).
 	if liveReloaded {
-		d.restartRunningChannels()
+		d.restartRunningChannels(payload.Channels)
 	}
 
 	// Tuner gain/ppm live in SDR-Trunk's tuner config, not the playlist, so they
@@ -505,9 +505,17 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 // their old settings). Best-effort: failures are logged but never fail the apply.
 // A short settle between stop and start lets the decode chain tear down before it
 // is rebuilt, avoiding an "already processing" bounce.
-func (d Deps) restartRunningChannels() {
+func (d Deps) restartRunningChannels(want []ChannelPlan) {
 	if d.SDR == nil {
 		return
+	}
+	// Config auto-start flag by channel name (stable across reloads). A running
+	// channel the operator just DISABLED must be stopped, not bounced.
+	autoByName := make(map[string]bool, len(want))
+	for _, ch := range want {
+		if ch.Name != "" {
+			autoByName[ch.Name] = ch.AutoStart
+		}
 	}
 	// A live playlist reload rebuilds the channel model asynchronously, so an
 	// immediate Channels() can catch a transient moment where the list is empty or
@@ -538,6 +546,15 @@ func (d Deps) restartRunningChannels() {
 		if !ch.Processing {
 			continue
 		}
+		// A running channel whose config now disables auto-start is STOPPED, not
+		// bounced — otherwise disabling a channel leaves it decoding.
+		if auto, known := autoByName[ch.Name]; known && !auto {
+			if err := d.SDR.StopChannel(ch.ID); err != nil {
+				log.Printf("configapply: stop disabled channel %d (%s) failed: %v", ch.ID, ch.Name, err)
+			}
+			continue
+		}
+		// Otherwise restart to apply the new config.
 		if err := d.SDR.StopChannel(ch.ID); err != nil {
 			log.Printf("configapply: stop channel %d (%s) for restart failed: %v", ch.ID, ch.Name, err)
 			continue
