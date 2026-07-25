@@ -2808,6 +2808,11 @@
     }
 
     async function openNodeDrawer(nodeId) {
+      // Close any drawer/socket still open so re-opening (without an explicit
+      // close) can't orphan the previous WebSocket — its onclose guard
+      // (_ndWs === ws) would no longer match, leaving it receiving frames in the
+      // background forever.
+      if (_ndWs) { try { closeNodeDrawer(); } catch (e) { /* ignore */ } }
       // Reset per-drawer state.
       const node = allNodes.find(n => String(n.id) === String(nodeId)) || {};
       _ndNode = node;
@@ -3697,6 +3702,16 @@
         let entry = cfg.tuners.find(x => String(x.serial) === String(serial));
         if (!entry) { entry = { serial }; cfg.tuners.push(entry); }
         Object.keys(patch).forEach(k => { if (patch[k] !== undefined) entry[k] = patch[k]; });
+        // Reconcile the mutually-exclusive gain fields so a value from the previous
+        // mode can't linger and get re-applied on restart. Merging only-defined keys
+        // left, e.g., a stale scalar `gain` beside a new `gainParams:{auto:true}`.
+        if (patch.autoGain === true) {
+          delete entry.gain;                 // auto: params carry {auto:true}, no scalar
+        } else if (patch.gainParams !== undefined) {
+          delete entry.gain;                 // multi-axis manual: params authoritative
+        } else if (patch.gain !== undefined) {
+          delete entry.gainParams;           // scalar manual: drop any stale params bag
+        }
         await _ndCfgPatch(cfg, false);
       } catch (e) {
         showToast('Tuner setting not persisted: ' + e.message, 'error');
@@ -4456,11 +4471,20 @@
         _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio);
     }
 
+    let _ndTunerSelSig = null;
     function _ndRenderTunerSelector() {
       const el = document.getElementById('nd-wf-tuner');
       if (!el) return;
-      if (_ndTuners.length <= 1) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      if (_ndTuners.length <= 1) { el.style.display = 'none'; el.innerHTML = ''; _ndTunerSelSig = null; return; }
       el.style.display = '';
+      // Rebuild the <option>s only when the set/labels/selection actually change.
+      // This runs on every status frame (~1/s); an unconditional innerHTML rebuild
+      // snapped the native dropdown shut each frame while an operator had it open
+      // to switch tuners (same class of bug as the gain dropdown).
+      const sig = _ndTuners.map(t => (t.id != null ? t.id : t.index) + ':' + (t.name || '')).join('|')
+        + '#' + String(_ndSpectrumTunerId);
+      if (sig === _ndTunerSelSig) return;
+      _ndTunerSelSig = sig;
       el.innerHTML = _ndTuners.map(t => {
         const tid = t.id != null ? t.id : t.index;
         const sel = String(tid) === String(_ndSpectrumTunerId) ? 'selected' : '';
