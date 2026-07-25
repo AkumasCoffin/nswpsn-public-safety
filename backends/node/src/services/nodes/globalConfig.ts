@@ -61,6 +61,11 @@ export interface GlobalConfig extends GlobalConfigInput {
   version: string;
   updatedAt: string | null;
   updatedBy: string | null;
+  /** DERIVED, read-only: the stream names defined in the preset playlist
+   *  (`<stream ... name="X">`). An alias's broadcastChannel must match one of
+   *  these exactly to route. Output-only — NOT stored in the DB and NOT part of
+   *  the PUT/save schema. */
+  streamNames: string[];
 }
 
 // ── versioning ───────────────────────────────────────────────────────────────
@@ -145,6 +150,36 @@ export function parseAliasesFromXml(xml: string): Alias[] {
   return aliases;
 }
 
+/** Parse the `name="..."` of every `<stream>` element in an SDR-Trunk playlist
+ *  (default.xml). These are the rdio stream names an alias's broadcastChannel
+ *  must match exactly. Returns unique names in document order. */
+export function parseStreamNamesFromXml(xml: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // Match each `<stream ...>` opening tag ([^>]* stops at the tag's own `>`).
+  const re = /<stream\b([^>]*)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const name = parseAttrs(m[1] ?? '')['name'];
+    if (name != null && name !== '' && !seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+/** DERIVED stream names from the on-disk preset playlist. Best-effort: never
+ *  throws, returns [] if the presets can't be read. */
+function presetStreamNames(): string[] {
+  try {
+    return parseStreamNamesFromXml(loadPresets().playlistXml);
+  } catch (err) {
+    log.warn({ err }, 'failed to derive stream names from presets');
+    return [];
+  }
+}
+
 /** The seed config, derived from the on-disk presets. */
 function seedFromPresets(): GlobalConfigInput {
   const presets = loadPresets();
@@ -186,6 +221,7 @@ function rowToConfig(r: Row): GlobalConfig {
     version: r.version || globalConfigVersion(content),
     updatedAt: r.updated_at,
     updatedBy: r.updated_by,
+    streamNames: presetStreamNames(),
   };
 }
 
@@ -202,6 +238,7 @@ const EMPTY: GlobalConfig = {
   }),
   updatedAt: null,
   updatedBy: null,
+  streamNames: [],
 };
 
 /**
@@ -211,7 +248,7 @@ const EMPTY: GlobalConfig = {
  */
 export async function getGlobalConfig(): Promise<GlobalConfig> {
   const pool = await getPool();
-  if (!pool) return EMPTY;
+  if (!pool) return { ...EMPTY, streamNames: presetStreamNames() };
   const res = await pool.query<Row>(
     `SELECT sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by
        FROM feeder_global_config WHERE id = 1`,
@@ -275,7 +312,7 @@ export async function saveGlobalConfig(
   const pool = await getPool();
   const version = globalConfigVersion(input);
   if (!pool) {
-    return { ...input, version, updatedAt: null, updatedBy };
+    return { ...input, version, updatedAt: null, updatedBy, streamNames: presetStreamNames() };
   }
   const res = await pool.query<Row>(
     `INSERT INTO feeder_global_config
@@ -300,5 +337,5 @@ export async function saveGlobalConfig(
     ],
   );
   const saved = res.rows[0];
-  return saved ? rowToConfig(saved) : { ...input, version, updatedAt: null, updatedBy };
+  return saved ? rowToConfig(saved) : { ...input, version, updatedAt: null, updatedBy, streamNames: presetStreamNames() };
 }
