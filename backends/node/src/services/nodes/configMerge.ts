@@ -236,6 +236,23 @@ export async function buildConfigPayload(
     })
     .filter((t): t is StreamTarget => t !== null);
 
+  // Generate one rdio apiKey per system from the SAME systems list, so a system
+  // the operator creates automatically gets its own upload key (1:1). The `key`
+  // is left EMPTY here — the agent fills each with the unique local key it mints
+  // for that system (keys.EnsureKeys), the same key it injects into the matching
+  // SDR-Trunk stream, so the two sides always agree and no key is ever set by
+  // hand. This replaces the static preset apiKeys.
+  if (streamTargets.length > 0) {
+    rdioConfig['apiKeys'] = streamTargets.map((t, i) => ({
+      _id: i + 1,
+      disabled: false,
+      ident: t.name,
+      key: '',
+      order: i + 1,
+      systems: [{ id: t.systemId, talkgroups: '*' }],
+    }));
+  }
+
   const payloadNoVersion = { channels, tuners, aliases, rdioConfig, streamTargets };
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
 

@@ -925,6 +925,9 @@
     }
     .gc-subtab.active { background: var(--accent-soft); border-color: var(--accent-border); color: #7dd3fc; }
     .gc-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.8rem; flex-wrap: wrap; }
+    .gc-note { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0 0 0.8rem; padding: 0.5rem 0.7rem;
+      border-radius: 6px; background: var(--accent-soft); color: var(--text-soft); font-size: 0.75rem; line-height: 1.35; }
+    .gc-note i { margin-top: 0.15rem; color: #7dd3fc; }
     .gc-card {
       border: 1px solid var(--border-subtle); border-radius: 10px;
       margin-bottom: 0.6rem; background: rgba(0, 0, 0, 0.16); overflow: hidden;
@@ -1748,6 +1751,7 @@
             <button class="gc-badge-btn" onclick="_gcAddSystem()"><i class="fas fa-plus"></i> Add system</button>
             <span class="result-count" id="gc-sys-count"></span>
           </div>
+          <div class="gc-note"><i class="fas fa-circle-info"></i> Each system automatically gets its own rdio API key and SDR-Trunk stream, keyed by its System ID — keys are generated per node and never repeat. Just set the name + System ID; the rest syncs to every node.</div>
           <div class="gc-scroll" id="gc-systems"></div>
         </div>
 
@@ -3971,11 +3975,14 @@
 
     // --- Now playing (P4) ----------------------------------------------
     function _ndActiveCalls() {
+      // Data calls (state DATA) are hidden from Now Playing — they carry no voice
+      // and just take up space.
+      const isData = (c) => String(c.state || '').toUpperCase() === 'DATA';
       // Prefer the dedicated activeCalls array (includes dynamically-allocated
       // P25 traffic channels not present in the channels list). Fall back to
       // channels in a live state only when activeCalls is absent.
-      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls;
-      const ACTIVE = new Set(['CALL', 'ACTIVE', 'DATA', 'ENCRYPTED']);
+      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c));
+      const ACTIVE = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
       return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && (c.from || c.to || c.frequency != null));
     }
 
