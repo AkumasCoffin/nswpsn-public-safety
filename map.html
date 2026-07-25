@@ -1198,7 +1198,13 @@
       #outages-panel,
       #beaches-panel { display: none !important; }
     }
-    .btn-toggle.active#btn-repeaters { border: 1px solid #22c55e; color: #86efac; }
+    /* Active outline for the repeaters/ships/aircraft/transport layers — colours
+       match each button's icon. (The old #btn-repeaters rule was dead: the button
+       id is btn-nswpsn, so these layers had no active outline like the others.) */
+    .btn-toggle.active#btn-nswpsn { border: 1px solid #14b8a6; color: #5eead4; }
+    .btn-toggle.active#btn-ais { border: 1px solid #0284c7; color: #7dd3fc; }
+    .btn-toggle.active#btn-adsb { border: 1px solid #c084fc; color: #d8b4fe; }
+    .btn-toggle.active#btn-transport { border: 1px solid #f18500; color: #fdba74; }
     .btn-toggle.active#btn-towers { border: 1px solid #ec4899; color: #f9a8d4; }
     .btn-toggle.active#btn-weather { border: 1px solid #38bdf8; color: #7dd3fc; }
     .btn-toggle.active.map-type-btn { border: 1px solid #f97316; color: #fdba74; }
