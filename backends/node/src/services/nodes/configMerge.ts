@@ -59,7 +59,9 @@ export interface TunerSettings {
   serial: string;
   label?: string;
   sampleRate?: number;
-  gain?: number;
+  gain?: number | null;
+  autoGain?: boolean;
+  gainParams?: Record<string, unknown>;
   ppm?: number;
   autoPpm?: boolean;
   type?: string;

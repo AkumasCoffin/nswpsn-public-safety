@@ -108,13 +108,15 @@ type DmrTimeslot struct {
 // Pointers distinguish "unset" from a real zero so we don't clobber a tuner
 // with 0 gain/ppm the operator never set.
 type TunerSettings struct {
-	Serial     string   `json:"serial"`
-	Label      string   `json:"label"`
-	SampleRate float64  `json:"sampleRate"`
-	Gain       *float64 `json:"gain"`
-	PPM        *float64 `json:"ppm"`
-	AutoPpm    bool     `json:"autoPpm"`
-	Type       string   `json:"type"`
+	Serial     string         `json:"serial"`
+	Label      string         `json:"label"`
+	SampleRate float64        `json:"sampleRate"`
+	Gain       *float64       `json:"gain"`
+	AutoGain   bool           `json:"autoGain"`
+	GainParams map[string]any `json:"gainParams"`
+	PPM        *float64       `json:"ppm"`
+	AutoPpm    bool           `json:"autoPpm"`
+	Type       string         `json:"type"`
 }
 
 // StreamTarget is one agency system the node uploads for. Each gets a stable
@@ -465,7 +467,14 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 		if ts.SampleRate > 0 {
 			_ = d.SDR.SetSampleRate(lt.ID, ts.SampleRate)
 		}
-		if ts.Gain != nil {
+		// Gain: auto/AGC wins; then an explicit multi-axis params object; then a
+		// plain scalar. Mirrors the panel's Apply order so a restart reproduces
+		// exactly what the operator last set live.
+		if ts.AutoGain {
+			_ = d.SDR.SetGainParams(lt.ID, map[string]any{"auto": true})
+		} else if len(ts.GainParams) > 0 {
+			_ = d.SDR.SetGainParams(lt.ID, ts.GainParams)
+		} else if ts.Gain != nil {
 			_ = d.SDR.SetGain(lt.ID, int(*ts.Gain))
 		}
 		if ts.AutoPpm {
