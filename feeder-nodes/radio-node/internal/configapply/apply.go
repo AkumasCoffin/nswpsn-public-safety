@@ -791,7 +791,13 @@ func renderAlias(a Alias) string {
 	writeXMLAttr(&b, "group", a.Group)
 	writeXMLAttr(&b, "name", a.Name)
 	writeXMLAttr(&b, "iconName", a.IconName)
-	writeXMLAttr(&b, "stream_talkgroup_alias", string(a.StreamTalkgroupAlias))
+	// "Stream As Talkgroup" OVERRIDES the decoded talkgroup in SDR-Trunk's
+	// RdioScanner uploader (getTo() returns this value verbatim). A 0/blank here
+	// would force every matching call to upload as talkgroup 0, which rdio drops
+	// as "Incomplete call data: no talkgroup". Only emit a real, positive value.
+	if sta := strings.TrimSpace(string(a.StreamTalkgroupAlias)); sta != "" && sta != "0" {
+		writeXMLAttr(&b, "stream_talkgroup_alias", sta)
+	}
 	if len(a.IDs) == 0 {
 		b.WriteString("/>")
 		return b.String()
