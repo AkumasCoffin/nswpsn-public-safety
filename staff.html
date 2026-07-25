@@ -1669,7 +1669,7 @@
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()"><i class="fas fa-rotate"></i> Reload</button>
               <span class="nd-spacer"></span>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgPush()" title="Push the currently-saved config to the node now"><i class="fas fa-upload"></i> Push to node</button>
-              <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()"><i class="fas fa-floppy-disk"></i> Save config</button>
+              <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and push it to the node — SDR-Trunk reloads its playlist so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button>
             </div>
           </div>
 
@@ -4376,20 +4376,33 @@
       if (!_ndConfig) { showToast('Config not loaded yet.', 'warn'); return; }
       _ndCfgReadDom();
       try {
-        await _ndCfgPatch(_ndConfig, true);
+        await _ndCfgPatch(_ndConfig, false);
         _ndCfgRender();
         _ndRenderCfgSync();
-      } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
+      } catch (e) { showToast('Save failed: ' + e.message, 'error'); return; }
+      // Saving alone only persists the override; the running SDR-Trunk keeps its
+      // old playlist until the node re-applies. Push straight away so Save = apply
+      // (agent re-renders the playlist and reloads it — see configapply.Apply).
+      // If the node is offline the push 409s; the config is still saved and will
+      // apply on the node's next connect.
+      await _ndCfgPush(true);
     }
 
-    async function _ndCfgPush() {
+    // Push the currently-saved config to the node. The agent re-renders the
+    // SDR-Trunk playlist and reloads it, so the change goes live without a manual
+    // "Reload playlist". `savedContext` tweaks the wording when called from Save.
+    async function _ndCfgPush(savedContext) {
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/push-config`, {
           method: 'POST', headers: { 'Authorization': await authHeader() }
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('Config pushed to node.', 'success');
-      } catch (e) { showToast('Push failed: ' + e.message, 'error'); }
+        showToast(savedContext
+          ? 'Saved & applied — SDR-Trunk reloading playlist.'
+          : 'Config pushed — SDR-Trunk reloading playlist.', 'success');
+      } catch (e) {
+        showToast((savedContext ? 'Saved, but not applied to the node: ' : 'Push failed: ') + e.message, 'warn');
+      }
     }
 
     // Collapse a long (sha256) config version to a 7-char prefix for display;
