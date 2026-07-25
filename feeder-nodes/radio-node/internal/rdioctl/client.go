@@ -30,11 +30,20 @@ const adminSecretFile = "rdio-admin.secret"
 
 const httpTimeout = 15 * time.Second
 
+// putConfigTimeout is the ceiling for PUT /api/admin/config specifically. The full
+// rdio config (all systems/talkgroups) is large and rdio-scanner parses it, writes
+// sqlite, and reloads — which routinely exceeds the 15s general timeout on a modest
+// node and made every config apply fail (dragging the whole apply down with it).
+// http.Client.Timeout is a hard ceiling a per-request context can't extend, so this
+// call needs its own longer-timeout client.
+const putConfigTimeout = 120 * time.Second
+
 // Client talks to one rdio-scanner instance's admin API.
 type Client struct {
 	baseURL string
 	token   string
 	hc      *http.Client
+	hcLong  *http.Client // longer timeout, used only for the large config PUT
 }
 
 // New builds a client for the rdio admin API rooted at baseURL
@@ -43,6 +52,7 @@ func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		hc:      &http.Client{Timeout: httpTimeout},
+		hcLong:  &http.Client{Timeout: putConfigTimeout},
 	}
 }
 
@@ -168,9 +178,12 @@ func (c *Client) PutConfig(cfg map[string]any) error {
 	c.auth(req)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.hc.Do(req)
+	// Use the longer-timeout client: a large config apply in rdio can exceed the
+	// general 15s timeout, which would abort the whole config apply before the
+	// SDR-Trunk playlist is even written.
+	resp, err := c.hcLong.Do(req)
 	if err != nil {
-		return fmt.Errorf("rdio put config: %w", err)
+		return fmt.Errorf("rdio put config (%d bytes): %w", len(body), err)
 	}
 	defer resp.Body.Close()
 
