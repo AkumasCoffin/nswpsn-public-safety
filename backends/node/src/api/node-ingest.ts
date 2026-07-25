@@ -73,8 +73,17 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'node disabled' }, 403);
   }
 
-  // 5. Content-Length guard (manual — see MAX_CALL_BYTES comment).
-  const len = Number(c.req.header('content-length') ?? '0');
+  // 5. Size guard (manual — see MAX_CALL_BYTES comment). Legit uploads (the
+  //    agent's Go sender, which posts a fixed []byte) always carry a
+  //    Content-Length, so REQUIRE it and cap on it. This also closes the
+  //    Transfer-Encoding: chunked bypass: without this, a chunked body has no
+  //    Content-Length, `len` reads as 0, sails past the cap, and parseBody then
+  //    buffers the whole (unbounded) body into RAM.
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
   if (len > MAX_CALL_BYTES) {
     return c.json({ error: 'call too large' }, 413);
   }

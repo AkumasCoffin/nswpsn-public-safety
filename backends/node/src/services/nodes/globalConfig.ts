@@ -254,16 +254,17 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
        FROM feeder_global_config WHERE id = 1`,
   );
   const row = res.rows[0];
-  if (
-    row &&
-    ((Array.isArray(row.sdrtrunk_aliases) && row.sdrtrunk_aliases.length > 0) ||
-      (Array.isArray(row.rdio_systems) && row.rdio_systems.length > 0))
-  ) {
+  // Seed from presets ONLY when the singleton row is absent (a genuine first
+  // run). A row that EXISTS but is empty is a deliberate clear by the owner —
+  // return it as-is rather than re-seeding, so the fleet config can actually be
+  // emptied and a read never silently turns into a write (which also raced /
+  // clobbered a concurrent PUT and reverted deliberate clears).
+  if (row) {
     return rowToConfig(row);
   }
 
-  // Lazy seed from presets. Best-effort: if presets are unavailable, fall back
-  // to whatever the row holds (or EMPTY).
+  // Lazy seed from presets (row absent = first run). Best-effort: if presets are
+  // unavailable, fall back to EMPTY.
   try {
     const seed = seedFromPresets();
     const saved = await saveGlobalConfig(seed, 'system:seed');

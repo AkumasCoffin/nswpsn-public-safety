@@ -18,7 +18,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { log } from '../lib/log.js';
-import { requireRole, canManageNodes } from '../services/auth/roles.js';
+import { requireRole, canManageNodes, isOwner } from '../services/auth/roles.js';
 import {
   listNodes,
   getNode,
@@ -85,7 +85,7 @@ const PatchSchema = z.object({
   // Validated against the same schema configMerge consumes so staff can't
   // persist an override that would later break the config build.
   config_override: ConfigOverrideSchema.optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(4000).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -365,9 +365,9 @@ nodesRouter.post(
 );
 
 // ---------------------------------------------------------------------------
-// DELETE /api/nodes/:id
+// DELETE /api/nodes/:id — owner-only (destructive; matches DELETE /users/:id).
 // ---------------------------------------------------------------------------
-nodesRouter.delete('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
+nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
   const id = c.req.param('id');
   try {
     hub.forceDisconnectAgent(id);

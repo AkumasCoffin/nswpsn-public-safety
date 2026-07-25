@@ -355,10 +355,26 @@ usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
       return c.json({ error: `Failed to delete account (status ${res.status})` }, 502);
     }
 
-    // Remove our own records for the user (roles, feeder token, nodes).
-    await pool.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
-    await pool.query('DELETE FROM feeder_tokens WHERE user_id = $1', [userId]).catch(() => {});
-    await pool.query('DELETE FROM nodes WHERE user_id = $1', [userId]).catch(() => {});
+    // Remove our own records for the user (roles, feeder token, nodes) in a
+    // single transaction so a mid-way failure can't leave a half-cleaned account
+    // (previously the feeder_tokens / nodes deletes swallowed errors, orphaning
+    // rows for a user that no longer exists).
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
+      await client.query('DELETE FROM feeder_tokens WHERE user_id = $1', [userId]);
+      await client.query('DELETE FROM nodes WHERE user_id = $1', [userId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      log.error({ err, userId }, 'Local cleanup failed after Supabase account delete');
+      // The Supabase account is already gone; surface the partial failure so the
+      // operator knows the local rows still need clearing.
+      return c.json({ error: 'Account deleted but local cleanup failed; please retry.' }, 500);
+    } finally {
+      client.release();
+    }
 
     invalidateUserRolesCache(userId);
     log.info({ userId, by: actingUserId }, 'Deleted user account');
