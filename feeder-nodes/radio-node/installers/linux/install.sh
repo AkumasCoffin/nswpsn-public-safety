@@ -76,6 +76,15 @@ if ! printf '%s' "$NODE_TOKEN" | grep -Eq '^npsn_[0-9a-f]{40}$'; then
        sudo bash $0 --token npsn_..."
 fi
 
+# Validate SERVER_URL: it anchors the agent's self-update integrity, so require
+# https (or explicit localhost for dev). Also blocks a hostile value breaking out
+# of the double-quoted YAML scalar it's written into below.
+if ! printf '%s' "$SERVER_URL" | grep -Eq '^https://[A-Za-z0-9._-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$'; then
+  if ! printf '%s' "$SERVER_URL" | grep -Eq '^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$'; then
+    die "SERVER_URL must be an https URL (got: ${SERVER_URL})."
+  fi
+fi
+
 # --- Detect architecture ----------------------------------------------------
 case "$(uname -m)" in
   x86_64|amd64)   ARCH="amd64" ;;
@@ -87,16 +96,43 @@ BIN_URL="${RELEASE_BASE}/nodeagent-linux-${ARCH}"
 # --- Download / update the nodeagent binary ---------------------------------
 install -d -m 0755 "$INSTALL_DIR"
 TMP_BIN="$(mktemp)"
-trap 'rm -f "$TMP_BIN"' EXIT
+TMP_SUM="$(mktemp)"
+trap 'rm -f "$TMP_BIN" "$TMP_SUM"' EXIT
 log "Downloading nodeagent (${ARCH}) from ${BIN_URL} ..."
 if command -v curl >/dev/null 2>&1; then
-  curl -fSL --retry 3 -o "$TMP_BIN" "$BIN_URL" || die "Download failed (curl). Check RELEASE_BASE / network."
+  DL() { curl -fSL --retry 3 -o "$1" "$2"; }
+  DL_OPT() { curl -fsSL --retry 2 -o "$1" "$2" 2>/dev/null; }
 elif command -v wget >/dev/null 2>&1; then
-  wget -q -O "$TMP_BIN" "$BIN_URL" || die "Download failed (wget). Check RELEASE_BASE / network."
+  DL() { wget -q -O "$1" "$2"; }
+  DL_OPT() { wget -q -O "$1" "$2" 2>/dev/null; }
 else
   die "Need curl or wget to download the agent."
 fi
+DL "$TMP_BIN" "$BIN_URL" || die "Download failed. Check RELEASE_BASE / network."
 [ -s "$TMP_BIN" ] || die "Downloaded agent is empty."
+
+# Reject an HTML error/redirect page served in place of the binary: real agents
+# are ELF (magic 7f 45 4c 46).
+if [ "$(head -c 4 "$TMP_BIN" | od -An -tx1 | tr -d ' \n')" != "7f454c46" ]; then
+  die "Downloaded agent is not an ELF binary (an error/redirect page?). Refusing to install."
+fi
+
+# Integrity: verify against a published <bin>.sha256 sidecar when present. TLS
+# alone doesn't bind the artifact to a trusted publisher; a checksum does. Absent
+# sidecar → warn and fall back to TLS-only (so this can't break existing releases).
+if DL_OPT "$TMP_SUM" "${BIN_URL}.sha256" && [ -s "$TMP_SUM" ]; then
+  EXPECT="$(tr 'A-F' 'a-f' < "$TMP_SUM" | grep -Eo '^[0-9a-f]{64}' | head -n1)"
+  ACTUAL="$(sha256sum "$TMP_BIN" | awk '{print $1}')"
+  if [ -z "$EXPECT" ]; then
+    die "Malformed checksum file at ${BIN_URL}.sha256."
+  elif [ "$EXPECT" != "$ACTUAL" ]; then
+    die "Agent checksum mismatch (expected ${EXPECT}, got ${ACTUAL}). Refusing to install."
+  fi
+  log "Verified agent sha256."
+else
+  log "WARNING: no published checksum at ${BIN_URL}.sha256 — installing over TLS only (unverified publisher)."
+fi
+
 install -m 0755 "$TMP_BIN" "${INSTALL_DIR}/nodeagent"
 log "Installed ${INSTALL_DIR}/nodeagent"
 

@@ -75,16 +75,26 @@ if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
       GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-windows-amd64.exe" ./cmd/nodeagent
       GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-linux-arm64"       ./cmd/nodeagent
     )
-    echo "[deploy] node-agent binaries updated in $DOWNLOADS_DIR"
+    # Publish a sha256 sidecar next to each binary so install.sh can verify the
+    # download against the published publisher hash (not just TLS).
+    for b in $EXPECTED_AGENTS; do
+      if [ -f "$DOWNLOADS_DIR/$b" ]; then
+        ( cd "$DOWNLOADS_DIR" && sha256sum "$b" | awk '{print $1}' > "$b.sha256" )
+      fi
+    done
+    echo "[deploy] node-agent binaries + sha256 sidecars updated in $DOWNLOADS_DIR"
   fi
 
   # Remove any stale agent binaries no longer in the built set (e.g. an arch we
-  # stopped shipping) so downloads/ never serves an orphaned old build.
+  # stopped shipping) so downloads/ never serves an orphaned old build. A
+  # `<name>.sha256` sidecar is kept iff its base binary is still expected.
   for f in "$DOWNLOADS_DIR"/nodeagent-*; do
     [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    check="${base%.sha256}"
     case " $EXPECTED_AGENTS " in
-      *" $(basename "$f") "*) ;;
-      *) echo "[deploy] removing stale $(basename "$f")"; rm -f "$f" ;;
+      *" $check "*) ;;
+      *) echo "[deploy] removing stale $base"; rm -f "$f" ;;
     esac
   done
 else
