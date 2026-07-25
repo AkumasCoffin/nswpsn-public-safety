@@ -37,10 +37,38 @@ interface PendingCmd {
 
 const CMD_TIMEOUT_MS = 15_000;
 
+const UPLOAD_WINDOW_MS = 10 * 60 * 1000; // rolling "calls in the last 10 min"
+
 class NodeHub {
   private agents = new Map<string, AgentConn>();
   private staff = new Map<string, Set<StaffConn>>();
   private pending = new Map<string, PendingCmd>();
+  // Per-node timestamps of calls actually forwarded to central rdio (fed by the
+  // relay). In-memory + ephemeral: a rolling live signal, not durable stats
+  // (node_call_stats owns the persisted per-day totals).
+  private uploads = new Map<string, number[]>();
+
+  /** Record one call successfully forwarded for a node (called by the relay). */
+  recordUpload(nodeId: string): void {
+    const now = Date.now();
+    const arr = this.uploads.get(nodeId) ?? [];
+    arr.push(now);
+    // Prune anything outside the window so the array can't grow unbounded.
+    const cutoff = now - UPLOAD_WINDOW_MS;
+    let i = 0;
+    while (i < arr.length && arr[i]! < cutoff) i++;
+    this.uploads.set(nodeId, i > 0 ? arr.slice(i) : arr);
+  }
+
+  /** Count calls forwarded for a node within the last `windowMs` (default 10 min). */
+  uploadsInWindow(nodeId: string, windowMs: number = UPLOAD_WINDOW_MS): number {
+    const arr = this.uploads.get(nodeId);
+    if (!arr || arr.length === 0) return 0;
+    const cutoff = Date.now() - windowMs;
+    let count = 0;
+    for (let i = arr.length - 1; i >= 0 && arr[i]! >= cutoff; i--) count++;
+    return count;
+  }
 
   // ── agents ───────────────────────────────────────────────────────────
   registerAgent(

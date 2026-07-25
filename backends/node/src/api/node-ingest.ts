@@ -23,6 +23,7 @@ import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { resolveFeederToken } from '../services/auth/nodeToken.js';
 import { getNodeByInstall, bumpNodeCallStat } from '../services/nodes/registry.js';
+import { hub } from '../services/nodes/hub.js';
 
 export const nodeIngestRouter = new Hono();
 
@@ -152,6 +153,7 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
 
   // 9. Success → best-effort stats bump + ok. Otherwise surface upstream.
   if (resp.ok) {
+    hub.recordUpload(node.id); // rolling 10-min "calls forwarded" signal
     try {
       await bumpNodeCallStat(node.id, bytes);
     } catch (err) {
