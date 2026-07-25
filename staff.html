@@ -4580,6 +4580,9 @@
           rdioSystems: Array.isArray(cfg.rdioSystems) ? cfg.rdioSystems : [],
           rdioGroups: Array.isArray(cfg.rdioGroups) ? cfg.rdioGroups : [],
           rdioTags: Array.isArray(cfg.rdioTags) ? cfg.rdioTags : [],
+          // DERIVED, read-only: stream names from the preset playlist. Used to
+          // populate the broadcast-channel dropdown; never sent back on save.
+          streamNames: Array.isArray(cfg.streamNames) ? cfg.streamNames : [],
           version: cfg.version, updatedAt: cfg.updatedAt
         };
         _gcRenderMeta();
@@ -4684,19 +4687,11 @@
     }
     // broadcastChannel is stored as an <id> entry {type:'broadcastChannel',
     // attrs:{channel}} but is surfaced in the Streaming panel (not Identifiers).
-    // Channel names must match a playlist stream's name exactly, so the datalist
-    // reuses every channel name already used across ALL aliases in the config.
-    function _gcBroadcastChannelNames() {
-      const set = new Set();
-      (_gcData.sdrtrunkAliases || []).forEach(a => {
-        (Array.isArray(a.ids) ? a.ids : []).forEach(x => {
-          if (x && x.type === 'broadcastChannel' && x.attrs) {
-            const ch = x.attrs.channel;
-            if (ch != null && String(ch).trim() !== '') set.add(String(ch));
-          }
-        });
-      });
-      return Array.from(set).sort();
+    // The channel must match a playlist stream's name EXACTLY to route, so it's
+    // picked from a dropdown of the real stream names (derived server-side from
+    // the preset playlist and delivered as _gcData.streamNames).
+    function _gcStreamNames() {
+      return Array.isArray(_gcData && _gcData.streamNames) ? _gcData.streamNames : [];
     }
     function _gcAddBroadcast(i) {
       const a = _gcData.sdrtrunkAliases[i]; if (!a) return;
@@ -4708,7 +4703,7 @@
       const a = _gcData.sdrtrunkAliases[i]; if (!a || !Array.isArray(a.ids)) return;
       a.ids.splice(idi, 1); _gcRenderAliases();
     }
-    // oninput only — mutate in place, no re-render (keeps input focus while typing).
+    // onchange — mutate in place, no re-render (the <select> already reflects it).
     function _gcBroadcastSet(i, idi, val) {
       const a = _gcData.sdrtrunkAliases[i]; if (!a || !Array.isArray(a.ids)) return;
       const id = a.ids[idi]; if (!id || id.type !== 'broadcastChannel') return;
@@ -4725,8 +4720,7 @@
       if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' alias' : ' aliases');
       const shown = list.map((a, i) => ({ a, i })).filter(({ a }) =>
         !q || String(a.name || '').toLowerCase().includes(q) || String(a.group || '').toLowerCase().includes(q));
-      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`
-        + `<datalist id="gc-bc-names">${_gcBroadcastChannelNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
+      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
       if (!shown.length) { el.innerHTML = datalist + `<div class="gc-empty">No aliases${q ? ' match your search' : ' yet'}.</div>`; return; }
       el.innerHTML = datalist + shown.map(({ a, i }) => {
         const open = _gcOpenAlias.has(i);
@@ -4742,10 +4736,17 @@
         const prioOpts = ['default'].concat(Array.from({ length: 99 }, (_, n) => String(n + 1)))
           .map(v => `<option value="${v}" ${v === pri.value ? 'selected' : ''}>${v === 'default' ? 'Default' : v}</option>`).join('');
         const idEditors = ids.map((id, idi) => (id && GC_ID_HIDDEN[id.type]) ? '' : _gcRenderId(i, idi, id)).join('');
+        const streamNames = _gcStreamNames();
         const bcRows = ids.map((id, idi) => ({ id, idi })).filter(o => o.id && o.id.type === 'broadcastChannel').map(({ id, idi }) => {
           const ch = (id.attrs && id.attrs.channel != null) ? String(id.attrs.channel) : '';
+          const known = streamNames.includes(ch);
+          const opts = [`<option value="" ${ch === '' ? 'selected' : ''}>— select stream —</option>`]
+            .concat(streamNames.map(n => `<option value="${escapeHtml(n)}" ${n === ch ? 'selected' : ''}>${escapeHtml(n)}</option>`));
+          // Preserve a legacy/typo value that isn't a known stream name: keep it
+          // as a selected option (flagged) so saving never silently drops it.
+          if (ch !== '' && !known) opts.push(`<option value="${escapeHtml(ch)}" selected>${escapeHtml(ch)} (not a known stream)</option>`);
           return `<div class="gc-attr-row">
-            <input type="text" list="gc-bc-names" value="${escapeHtml(ch)}" oninput="_gcBroadcastSet(${i},${idi},this.value)" placeholder="stream name">
+            <select onchange="_gcBroadcastSet(${i},${idi},this.value)">${opts.join('')}</select>
             <button class="gc-icon-btn" title="Remove broadcast channel" onclick="_gcRemoveBroadcast(${i},${idi})"><i class="fas fa-xmark"></i></button>
           </div>`;
         }).join('');
