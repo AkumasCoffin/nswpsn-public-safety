@@ -33,6 +33,11 @@ type Status struct {
 	Cores      int     `json:"cores"`
 	MemUsedMB  int     `json:"memUsedMB"`
 	MemMaxMB   int     `json:"memMaxMB"`
+	// Node readiness (0.6.7+): whether CPU calibration has run and the JMBE voice
+	// codec is installed. Pointers so an older control server (absent fields)
+	// reports null rather than a misleading false.
+	Calibrated    *bool `json:"calibrated"`
+	JmbeInstalled *bool `json:"jmbeInstalled"`
 }
 
 // Tuner mirrors one element of GET /tuners.
