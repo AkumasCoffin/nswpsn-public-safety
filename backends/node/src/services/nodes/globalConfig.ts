@@ -34,6 +34,10 @@ export const AliasSchema = z
     list: z.string().max(200).optional(),
     group: z.string().max(200).optional(),
     color: z.string().max(40).optional(),
+    // Named-icon (surfaced as the alias "Icon" dropdown) + "stream as talkgroup"
+    // int. Both round-trip the `<alias>` attributes iconName / stream_talkgroup_alias.
+    iconName: z.string().max(200).optional(),
+    streamTalkgroupAlias: z.union([z.string().max(40), z.number()]).optional(),
     ids: z.array(AliasIdSchema).max(4096).default([]),
   })
   .strict();
@@ -133,6 +137,8 @@ export function parseAliasesFromXml(xml: string): Alias[] {
       list: attrs['list'],
       group: attrs['group'],
       color: attrs['color'],
+      iconName: attrs['iconName'],
+      streamTalkgroupAlias: attrs['stream_talkgroup_alias'],
       ids,
     });
   }
