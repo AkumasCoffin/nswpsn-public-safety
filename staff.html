@@ -2036,6 +2036,7 @@
   <div id="toast-stack"></div>
 
   <script src="config.js"></script>
+  <script src="ui-dialogs.js"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -2673,7 +2674,7 @@
       if (!userPermissions.is_owner) { showToast('Only owners can delete nodes.', 'warn'); return; }
       const node = (allNodes || []).find(n => n.id === id);
       const who = node ? (node.name || id) : id;
-      if (!confirm(`Delete node "${who}"? If its agent reconnects it will reappear. This cannot be undone.`)) return;
+      if (!await uiConfirm(`Delete node "${who}"? If its agent reconnects it will reappear. This cannot be undone.`, { danger: true, okText: 'Delete' })) return;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
           method: 'DELETE', headers: { 'Authorization': await authHeader() },
@@ -2708,7 +2709,7 @@
     // Trigger a manual update on every online node. Manual updates always run,
     // even when auto-update is paused.
     async function updateAllNodes() {
-      if (!confirm('Trigger an update on all online nodes now?')) return;
+      if (!await uiConfirm('Trigger an update on all online nodes now?')) return;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/update-all`, {
           method: 'POST', headers: { 'Authorization': await authHeader() },
@@ -4314,17 +4315,17 @@
     }
 
     // --- Control buttons ---
-    function _ndRestart(name) {
-      if (!confirm(`Restart the "${name}" component on this node?`)) return;
+    async function _ndRestart(name) {
+      if (!await uiConfirm(`Restart the "${name}" component on this node?`)) return;
       _ndCmd('restartComponent', { name }, `Restart ${name}`);
     }
     function _ndReloadPlaylist() { _ndCmd('reloadPlaylist', {}, 'Reload playlist'); }
-    function _ndUpdate() {
-      if (!confirm('Trigger a software update on this node? Services may restart.')) return;
+    async function _ndUpdate() {
+      if (!await uiConfirm('Trigger a software update on this node? Services may restart.')) return;
       _ndCmd('update', {}, 'Trigger update');
     }
-    function _ndReboot() {
-      if (!confirm('Restart the node agent? The node will briefly go offline.')) return;
+    async function _ndReboot() {
+      if (!await uiConfirm('Restart the node agent? The node will briefly go offline.', { danger: true, okText: 'Restart' })) return;
       _ndCmd('rebootAgent', {}, 'Restart agent');
     }
 
@@ -4486,7 +4487,7 @@
     function _gcToggleAlias(i) { if (_gcOpenAlias.has(i)) _gcOpenAlias.delete(i); else _gcOpenAlias.add(i); _gcRenderAliases(); }
     function _gcAliasSet(i, field, val) { const a = _gcData.sdrtrunkAliases[i]; if (a) a[field] = val; }
     function _gcAddAlias() { _gcData.sdrtrunkAliases.push({ name: 'New alias', ids: [] }); _gcOpenAlias.clear(); _gcOpenAlias.add(_gcData.sdrtrunkAliases.length - 1); _gcRenderAliases(); }
-    function _gcRemoveAlias(i) { if (!confirm('Remove this alias?')) return; _gcData.sdrtrunkAliases.splice(i, 1); _gcOpenAlias.clear(); _gcRenderAliases(); }
+    async function _gcRemoveAlias(i) { if (!await uiConfirm('Remove this alias?', { danger: true, okText: 'Remove' })) return; _gcData.sdrtrunkAliases.splice(i, 1); _gcOpenAlias.clear(); _gcRenderAliases(); }
     function _gcIdSet(i, idi, field, val) { const id = _gcData.sdrtrunkAliases[i].ids[idi]; if (id) id[field] = val; }
     function _gcAddId(i) { const a = _gcData.sdrtrunkAliases[i]; if (!Array.isArray(a.ids)) a.ids = []; a.ids.push({ type: '', attrs: {} }); _gcRenderAliases(); }
     function _gcRemoveId(i, idi) { _gcData.sdrtrunkAliases[i].ids.splice(idi, 1); _gcRenderAliases(); }
@@ -4582,7 +4583,7 @@
     function _gcToggleSys(i) { if (_gcOpenSys.has(i)) _gcOpenSys.delete(i); else _gcOpenSys.add(i); _gcRenderSystems(); }
     function _gcSysSet(i, field, val) { const s = _gcData.rdioSystems[i]; if (s) s[field] = val; }
     function _gcAddSystem() { _gcData.rdioSystems.push({ id: '', label: 'New system', talkgroups: [], units: [] }); _gcOpenSys.clear(); _gcOpenSys.add(_gcData.rdioSystems.length - 1); _gcRenderSystems(); }
-    function _gcRemoveSystem(i) { if (!confirm('Remove this system and all its talkgroups/units?')) return; _gcData.rdioSystems.splice(i, 1); _gcOpenSys.clear(); _gcRenderSystems(); }
+    async function _gcRemoveSystem(i) { if (!await uiConfirm('Remove this system and all its talkgroups/units?', { danger: true, okText: 'Remove' })) return; _gcData.rdioSystems.splice(i, 1); _gcOpenSys.clear(); _gcRenderSystems(); }
     function _gcTgSet(i, ti, field, val) { const tg = _gcData.rdioSystems[i].talkgroups[ti]; if (tg) tg[field] = val; }
     function _gcAddTg(i) { const s = _gcData.rdioSystems[i]; if (!Array.isArray(s.talkgroups)) s.talkgroups = []; s.talkgroups.push({ id: '', label: '', name: '', groupId: '', tagId: '' }); _gcRenderSystems(); }
     function _gcRemoveTg(i, ti) { _gcData.rdioSystems[i].talkgroups.splice(ti, 1); _gcRenderSystems(); }
@@ -5074,7 +5075,7 @@
       const user = allUsers.find(u => u.id === userId);
       const who = user ? (user.username || user.email || userId) : userId;
       const ownerWarn = user && (user.roles || []).some(r => r.role === 'owner') ? ' This user is an OWNER.' : '';
-      if (!confirm(`Permanently delete ${who}? This removes their account, roles, feeder token and nodes. Cannot be undone.${ownerWarn}`)) return;
+      if (!await uiConfirm(`Permanently delete ${who}? This removes their account, roles, feeder token and nodes. Cannot be undone.${ownerWarn}`, { danger: true, okText: 'Delete user' })) return;
       try {
         const response = await fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}`, {
           method: 'DELETE',
@@ -5537,7 +5538,7 @@
       const warn = req.status === 'approved'
         ? ` This request is APPROVED — deleting it won't remove their roles (do that in the Users tab).`
         : '';
-      if (!confirm(`Delete the ${req.status} request from ${req.email || 'unknown'}? This cannot be undone.${warn}`)) return;
+      if (!await uiConfirm(`Delete the ${req.status} request from ${req.email || 'unknown'}? This cannot be undone.${warn}`, { danger: true, okText: 'Delete' })) return;
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}`, {
           method: 'DELETE',
