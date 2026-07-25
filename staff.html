@@ -4545,6 +4545,39 @@
       (_gcData.sdrtrunkAliases || []).forEach(a => { if (a && a.iconName) set.add(a.iconName); });
       return Array.from(set).sort();
     }
+    // broadcastChannel is stored as an <id> entry {type:'broadcastChannel',
+    // attrs:{channel}} but is surfaced in the Streaming panel (not Identifiers).
+    // Channel names must match a playlist stream's name exactly, so the datalist
+    // reuses every channel name already used across ALL aliases in the config.
+    function _gcBroadcastChannelNames() {
+      const set = new Set();
+      (_gcData.sdrtrunkAliases || []).forEach(a => {
+        (Array.isArray(a.ids) ? a.ids : []).forEach(x => {
+          if (x && x.type === 'broadcastChannel' && x.attrs) {
+            const ch = x.attrs.channel;
+            if (ch != null && String(ch).trim() !== '') set.add(String(ch));
+          }
+        });
+      });
+      return Array.from(set).sort();
+    }
+    function _gcAddBroadcast(i) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a) return;
+      if (!Array.isArray(a.ids)) a.ids = [];
+      a.ids.push({ type: 'broadcastChannel', attrs: { channel: '' } });
+      _gcRenderAliases();
+    }
+    function _gcRemoveBroadcast(i, idi) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a || !Array.isArray(a.ids)) return;
+      a.ids.splice(idi, 1); _gcRenderAliases();
+    }
+    // oninput only — mutate in place, no re-render (keeps input focus while typing).
+    function _gcBroadcastSet(i, idi, val) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a || !Array.isArray(a.ids)) return;
+      const id = a.ids[idi]; if (!id || id.type !== 'broadcastChannel') return;
+      if (!id.attrs) id.attrs = {};
+      id.attrs.channel = val;
+    }
 
     function _gcRenderAliases() {
       const el = document.getElementById('gc-aliases');
@@ -4555,18 +4588,30 @@
       if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' alias' : ' aliases');
       const shown = list.map((a, i) => ({ a, i })).filter(({ a }) =>
         !q || String(a.name || '').toLowerCase().includes(q) || String(a.group || '').toLowerCase().includes(q));
-      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
+      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`
+        + `<datalist id="gc-bc-names">${_gcBroadcastChannelNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
       if (!shown.length) { el.innerHTML = datalist + `<div class="gc-empty">No aliases${q ? ' match your search' : ' yet'}.</div>`; return; }
       el.innerHTML = datalist + shown.map(({ a, i }) => {
         const open = _gcOpenAlias.has(i);
         const ids = Array.isArray(a.ids) ? a.ids : [];
-        const visIds = ids.filter(x => x && x.type !== 'priority' && x.type !== 'record');
+        // priority / record / broadcastChannel are stored as <id> entries but are
+        // surfaced as dedicated controls, so they never appear in the id count or
+        // the generic Identifiers list.
+        const GC_ID_HIDDEN = { priority: 1, record: 1, broadcastChannel: 1 };
+        const visIds = ids.filter(x => x && !GC_ID_HIDDEN[x.type]);
         const pri = _gcAliasPriority(a);
         const recording = !!_gcFindId(a, 'record');
         const hex = _gcColorHex(a.color);
         const prioOpts = ['default'].concat(Array.from({ length: 99 }, (_, n) => String(n + 1)))
           .map(v => `<option value="${v}" ${v === pri.value ? 'selected' : ''}>${v === 'default' ? 'Default' : v}</option>`).join('');
-        const idEditors = ids.map((id, idi) => (id && (id.type === 'priority' || id.type === 'record')) ? '' : _gcRenderId(i, idi, id)).join('');
+        const idEditors = ids.map((id, idi) => (id && GC_ID_HIDDEN[id.type]) ? '' : _gcRenderId(i, idi, id)).join('');
+        const bcRows = ids.map((id, idi) => ({ id, idi })).filter(o => o.id && o.id.type === 'broadcastChannel').map(({ id, idi }) => {
+          const ch = (id.attrs && id.attrs.channel != null) ? String(id.attrs.channel) : '';
+          return `<div class="gc-attr-row">
+            <input type="text" list="gc-bc-names" value="${escapeHtml(ch)}" oninput="_gcBroadcastSet(${i},${idi},this.value)" placeholder="stream name">
+            <button class="gc-icon-btn" title="Remove broadcast channel" onclick="_gcRemoveBroadcast(${i},${idi})"><i class="fas fa-xmark"></i></button>
+          </div>`;
+        }).join('');
         const body = !open ? '' : `<div class="gc-card-body">
           <div class="gc-inline">
             <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAliasSet(${i},'name',this.value)"></div>
@@ -4574,7 +4619,6 @@
             <div class="nd-fld"><label>Group</label><input type="text" value="${escapeHtml(a.group || '')}" oninput="_gcAliasSet(${i},'group',this.value)"></div>
             <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAliasSet(${i},'iconName',this.value)" placeholder="named icon"></div>
             <div class="nd-fld"><label>Colour</label><input type="color" style="width:52px;padding:0.1rem;" value="${hex}" oninput="_gcAliasColorSet(${i},this.value)"></div>
-            <div class="nd-fld"><label>Stream as TG</label><input type="number" style="max-width:110px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAliasStreamSet(${i},this.value)" placeholder="talkgroup"></div>
           </div>
           <div class="gc-inline" style="align-items:center;">
             <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Listen</label><label class="node-switch"><input type="checkbox" ${pri.listen ? 'checked' : ''} onchange="_gcAliasListenToggle(${i},this.checked)"><span class="track"></span></label></div>
@@ -4584,6 +4628,16 @@
           <div class="nd-section-h" style="margin:0.6rem 0 0.4rem;">Identifiers</div>
           ${idEditors || `<div class="gc-empty" style="padding:0.6rem;">No identifiers.</div>`}
           <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add identifier</button>
+          <div class="nd-section-h" style="margin:0.6rem 0 0.4rem;">Streaming</div>
+          <div class="nd-fld" style="margin-bottom:0.4rem;">
+            <label>Broadcast channels</label>
+            <div style="font-size:0.72rem;color:var(--text-soft);margin-bottom:0.35rem;">Each must match a stream name exactly.</div>
+            ${bcRows || `<div class="gc-empty" style="padding:0.4rem;text-align:left;">No broadcast channels.</div>`}
+            <button class="gc-badge-btn" style="margin-top:0.3rem;" onclick="_gcAddBroadcast(${i})"><i class="fas fa-plus"></i> Add broadcast channel</button>
+          </div>
+          <div class="gc-inline">
+            <div class="nd-fld"><label>Stream as talkgroup</label><input type="number" style="max-width:140px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAliasStreamSet(${i},this.value)" placeholder="talkgroup"></div>
+          </div>
         </div>`;
         return `<div class="gc-card ${open ? 'open' : ''}">
           <div class="gc-card-head">
