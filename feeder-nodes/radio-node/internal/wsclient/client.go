@@ -279,6 +279,13 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	channels := []any{}
 	activeCalls := []any{}
 	events := []any{}
+	var calibrated, jmbeInstalled *bool
+
+	// Node readiness (calibration + JMBE) from the control server /status.
+	if ss, err := c.sdr.Status(); err == nil {
+		calibrated = ss.Calibrated
+		jmbeInstalled = ss.JmbeInstalled
+	}
 
 	if ts, err := c.sdr.Tuners(); err != nil {
 		// Control API unreachable: only reflect it if the process is up.
@@ -315,6 +322,8 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 		MemMB:         int(ms.Alloc / (1024 * 1024)),
 		DiskFreeMB:    0, // best-effort; not computed in Phase 2
 		ConfigVersion: c.appliedVersionPtr(),
+		Calibrated:    calibrated,
+		JmbeInstalled: jmbeInstalled,
 	}
 	return c.writeType(conn, protocol.TypeStatus, st, "")
 }

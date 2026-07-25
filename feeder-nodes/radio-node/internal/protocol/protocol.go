@@ -59,6 +59,10 @@ type Status struct {
 	MemMB         int               `json:"memMB"`
 	DiskFreeMB    int               `json:"diskFreeMB"`
 	ConfigVersion *string           `json:"configVersion"`
+	// Node readiness reported by the SDR-Trunk control server (null on older
+	// builds): CPU calibration done, and the JMBE voice codec installed.
+	Calibrated    *bool `json:"calibrated"`
+	JmbeInstalled *bool `json:"jmbeInstalled"`
 }
 
 // HelloAck is the server's response to Hello.

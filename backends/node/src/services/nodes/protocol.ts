@@ -34,6 +34,11 @@ export interface StatusData {
   memMB?: number;
   diskFreeMB?: number;
   configVersion?: string | null;
+  activeCalls?: unknown[];
+  events?: unknown[];
+  // Node readiness (null on older node builds).
+  calibrated?: boolean | null;
+  jmbeInstalled?: boolean | null;
 }
 
 export interface EventData {
