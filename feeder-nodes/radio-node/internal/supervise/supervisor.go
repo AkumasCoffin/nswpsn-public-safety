@@ -118,6 +118,14 @@ func (s *Supervisor) runComponent(ctx context.Context, c *component) {
 		}
 
 		cmd := exec.CommandContext(ctx, c.cfg.Command, c.cfg.Args...)
+		// Run the child in its own process group and, on ctx-cancel (agent stop),
+		// kill the WHOLE group — not just the launcher — so SDR-Trunk's JVM can't
+		// be orphaned holding its control port.
+		setProcessGroup(cmd)
+		cmd.Cancel = func() error {
+			killProcessGroup(cmd)
+			return nil
+		}
 		if c.cfg.WorkDir != "" {
 			cmd.Dir = c.cfg.WorkDir
 		}
@@ -259,10 +267,11 @@ func (s *Supervisor) Restart(name string) error {
 	cmd := c.cmd
 	s.mu.Unlock()
 
-	// Kill the running process; the supervise loop will observe the exit and
-	// restart via the restartNow signal below.
+	// Kill the running process GROUP (launcher + JVM); the supervise loop will
+	// observe the exit and restart via the restartNow signal below. Group-kill so
+	// SDR-Trunk's JVM doesn't survive and keep holding its control port.
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		killProcessGroup(cmd)
 	}
 	select {
 	case c.restartNow <- struct{}{}:
