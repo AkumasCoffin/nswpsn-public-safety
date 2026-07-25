@@ -3858,7 +3858,9 @@
       const c = _ndChannels[i];
       if (!c) return;
       const cid = c.id;
-      _ndCmd(start ? 'startChannel' : 'stopChannel', { channelId: cid },
+      // Send the name too: channel ids change on every playlist reload, so the
+      // agent resolves the current id by name (stable) with the id as fallback.
+      _ndCmd(start ? 'startChannel' : 'stopChannel', { channelId: cid, channelName: c.name || '' },
         `${start ? 'Start' : 'Stop'} ${c.name || ('channel ' + cid)}`);
     }
 

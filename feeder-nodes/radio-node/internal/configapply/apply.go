@@ -609,7 +609,9 @@ func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, ta
 			if i > 0 {
 				b.WriteString("\n  ")
 			}
-			b.WriteString(renderChannelBlock(tmplBlock, ch, true))
+			// enabled == the channel's auto-start flag: a channel with autoStart
+			// off is written disabled so it doesn't come up on load.
+			b.WriteString(renderChannelBlock(tmplBlock, ch, ch.AutoStart))
 		}
 		rendered = b.String()
 	}
@@ -671,15 +673,15 @@ func renderStreams(tmpl string, targets []StreamTarget, localKeys map[int]string
 
 // renderChannelBlock stamps one channel's fields onto a clone of the preset's
 // <channel> block: enabled flag, name/system/site/order attributes, decoder
-// type, and the source frequency. When enabled is false the block is emitted
-// disabled and the other fields are left as the template's.
+// type, and the source frequency. `enabled` is the auto-start flag ONLY — every
+// other field is rendered regardless, so a disabled channel keeps its full,
+// correct config (and decodes correctly the moment it's (re)started).
 func renderChannelBlock(tmpl string, ch ChannelPlan, enabled bool) string {
 	blk := reChannelTag.ReplaceAllStringFunc(tmpl, func(tag string) string {
 		if enabled {
 			tag = reEnabled.ReplaceAllString(tag, `enabled="true"`)
 		} else {
 			tag = reEnabled.ReplaceAllString(tag, `enabled="false"`)
-			return tag
 		}
 		if ch.Name != "" {
 			tag = setOrAddChannelAttr(tag, reNameAttr, "name", ch.Name)
@@ -695,10 +697,6 @@ func renderChannelBlock(tmpl string, ch ChannelPlan, enabled bool) string {
 		}
 		return tag
 	})
-
-	if !enabled {
-		return blk
-	}
 
 	// Decoder config. Render the FULL <decode_configuration> element for this
 	// decoder (correct @type + attributes + child elements), filling SDR-Trunk
