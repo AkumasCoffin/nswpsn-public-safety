@@ -66,15 +66,52 @@ feederRouter.get('/api/feeder/me', async (c) => {
   const userId = c.get('userId') as string;
   try {
     const { prefix } = await mintFeederToken(userId);
-    const nodes = (await listNodesForUser(userId)).map((n) => ({
-      id: n.id,
-      installId: n.install_id,
-      name: n.name,
-      enabled: n.enabled,
-      online: hub.isOnline(n.id),
-      lastSeenAt: n.last_seen_at,
-      agentVersion: n.agent_version,
-    }));
+    const nodes = (await listNodesForUser(userId)).map((n) => {
+      const online = hub.isOnline(n.id);
+      const live = hub.liveStatus(n.id);
+      const st = live.status;
+      // SDR-Trunk up = it reported a version among components (or any channel/tuner).
+      const sdrUp = !!(
+        st &&
+        (st.components?.['sdrtrunk'] ||
+          (Array.isArray(st.channels) && st.channels.length > 0) ||
+          (Array.isArray(st.tuners) && st.tuners.length > 0))
+      );
+      // Decoding = SDR-Trunk up AND a channel is processing / locked on a call
+      // (mirrors the staff panel's activity logic).
+      const decoding =
+        online &&
+        sdrUp &&
+        Array.isArray(st?.channels) &&
+        st!.channels.some((c) => {
+          const ch = c as { processing?: boolean; state?: string };
+          return (
+            ch.processing === true ||
+            ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(ch.state ?? '').toUpperCase())
+          );
+        });
+      const callsLast10m = hub.uploadsInWindow(n.id);
+      return {
+        id: n.id,
+        installId: n.install_id,
+        name: n.name,
+        enabled: n.enabled,
+        feedEnabled: n.feed_enabled,
+        online,
+        lastSeenAt: n.last_seen_at,
+        agentVersion: n.agent_version,
+        sdrtrunkVersion: n.sdrtrunk_version,
+        rdioVersion: n.rdio_version,
+        // Live activity (null-ish when offline / no status yet).
+        sdrUp,
+        decoding: !!decoding,
+        uploading: callsLast10m > 0,
+        callsLast10m,
+        queueDepth: typeof st?.queueDepth === 'number' ? st.queueDepth : null,
+        calibrated: st?.calibrated ?? null,
+        jmbeInstalled: st?.jmbeInstalled ?? null,
+      };
+    });
     return c.json({ role: true, tokenPrefix: prefix, nodes });
   } catch (err) {
     log.error({ err, userId }, 'Error building feeder me');

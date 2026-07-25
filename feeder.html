@@ -291,17 +291,28 @@
     /* Node list rows. */
     .node-list { display: flex; flex-direction: column; gap: 0.6rem; }
     .node-row {
-      display: flex; align-items: center; gap: 0.85rem;
+      display: flex; align-items: flex-start; gap: 0.85rem;
       background: var(--bg-card);
       border: 1px solid var(--border-subtle);
       border-radius: 10px;
       padding: 0.85rem 1rem;
     }
-    .node-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-soft); opacity: 0.5; flex-shrink: 0; }
+    .node-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-soft); opacity: 0.5; flex-shrink: 0; margin-top: 0.35rem; }
     .node-dot.online { background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.55); opacity: 1; }
     .node-meta { flex: 1; min-width: 0; }
     .node-name { font-weight: 600; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .node-sub { color: var(--text-soft); font-size: 0.78rem; margin-top: 0.15rem; }
+    .node-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
+    .node-chip {
+      font-size: 0.7rem; font-weight: 600; padding: 0.14rem 0.55rem; border-radius: 999px;
+      border: 1px solid var(--border-subtle); color: var(--text-soft);
+      background: rgba(255, 255, 255, 0.03); white-space: nowrap;
+    }
+    .node-chip.ok { color: #86efac; border-color: rgba(34, 197, 94, 0.45); background: rgba(34, 197, 94, 0.13); }
+    .node-chip.warn { color: #fcd34d; border-color: rgba(234, 179, 8, 0.45); background: rgba(234, 179, 8, 0.13); }
+    .node-chip.off { opacity: 0.6; }
+    .node-stat { font-size: 0.78rem; color: var(--text-soft); margin-top: 0.45rem; }
+    .node-stat b { color: var(--text-primary); font-weight: 700; }
     .node-ver {
       font-size: 0.72rem; color: #7dd3fc;
       background: var(--accent-soft);
@@ -594,15 +605,51 @@
     function _nodeRow(node) {
       const online = !!node.online;
       const name = node.name || 'Unnamed node';
-      const lastSeen = fmtLastSeen(node.lastSeen != null ? node.lastSeen : node.last_seen);
+      // The API returns lastSeenAt; keep the older names as fallbacks.
+      const lastSeen = fmtLastSeen(
+        node.lastSeenAt != null ? node.lastSeenAt
+          : (node.lastSeen != null ? node.lastSeen : node.last_seen));
       const agent = node.agentVersion || node.agent_version;
       const agentHtml = agent ? `<span class="node-ver">agent ${escapeHtml(agent)}</span>` : '';
+
+      const chip = (cls, label) => `<span class="node-chip ${cls}">${escapeHtml(label)}</span>`;
+      let chips;
+      if (!online) {
+        chips = chip('off', 'Offline');
+      } else {
+        let out = '';
+        // Decoding: is SDR-Trunk up and following a control channel / call?
+        if (!node.sdrUp) out += chip('warn', 'SDR-Trunk down');
+        else if (node.decoding) out += chip('ok', 'Decoding');
+        else out += chip('', 'Idle');
+        // Uploading: is it forwarding calls to the network?
+        if (node.feedEnabled === false) out += chip('off', 'Feed off');
+        else if (node.uploading) out += chip('ok', 'Uploading');
+        else out += chip('', 'Feed on');
+        // Readiness warnings (only surface when known + not ready).
+        if (node.calibrated === false) out += chip('warn', 'Not calibrated');
+        if (node.jmbeInstalled === false) out += chip('warn', 'No JMBE audio');
+        chips = out;
+      }
+
+      let statHtml = '';
+      if (online) {
+        const calls = Number(node.callsLast10m || 0);
+        const parts = [`<b>${calls}</b> call${calls === 1 ? '' : 's'} uploaded · last 10 min`];
+        if (typeof node.queueDepth === 'number' && node.queueDepth > 0) {
+          parts.push(`<b>${node.queueDepth}</b> queued`);
+        }
+        statHtml = `<div class="node-stat">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
+      }
+
       return `
         <div class="node-row">
           <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
           <div class="node-meta">
             <div class="node-name">${escapeHtml(name)}</div>
             <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}</div>
+            <div class="node-chips">${chips}</div>
+            ${statHtml}
           </div>
           ${agentHtml}
         </div>`;
