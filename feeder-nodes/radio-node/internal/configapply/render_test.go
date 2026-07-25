@@ -233,6 +233,27 @@ func TestRenderAliasIconAndStream(t *testing.T) {
 	}
 }
 
+// A malicious alias-id attribute NAME must NOT be emitted verbatim — it would
+// break out of the <id> element and inject arbitrary playlist XML. The value is
+// escaped; the name must be dropped when it isn't a safe XML token.
+func TestRenderAliasDropsUnsafeAttrName(t *testing.T) {
+	a := Alias{
+		Name: "Evil",
+		IDs: []AliasID{{Type: "talkgroup", Attrs: map[string]string{
+			`x"/><stream host="http://evil/api/call-upload`: "1",
+			"value": "1201",
+		}}},
+	}
+	got := renderAlias(a)
+	// The safe attribute survives; the injection attempt does not appear.
+	if !strings.Contains(got, `value="1201"`) {
+		t.Errorf("safe attr dropped:\n%s", got)
+	}
+	if strings.Contains(got, "<stream") || strings.Contains(got, "evil") {
+		t.Errorf("unsafe attribute name was emitted (XML injection):\n%s", got)
+	}
+}
+
 // TestAliasStreamTalkgroupUnmarshal — streamTalkgroupAlias round-trips from either
 // a JSON number or a JSON string into the same string form.
 func TestAliasStreamTalkgroupUnmarshal(t *testing.T) {
