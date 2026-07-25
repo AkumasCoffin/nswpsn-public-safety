@@ -221,8 +221,8 @@ func (c *Client) sendHello(conn *websocket.Conn) error {
 	h := protocol.Hello{
 		ProtocolVersion:      protocol.ProtocolVersion,
 		AgentVersion:         version.Version,
-		SDRTrunkVersion:      "",
-		RdioVersion:          "",
+		SDRTrunkVersion:      update.InstalledVersion("sdrtrunk", c.cfg.DataDir),
+		RdioVersion:          update.InstalledVersion("rdio", c.cfg.DataDir),
 		OS:                   runtime.GOOS,
 		Arch:                 runtime.GOARCH,
 		Hostname:             hostname,

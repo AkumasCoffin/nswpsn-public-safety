@@ -283,6 +283,16 @@ func isZipArtifact(name string) bool { return name == "sdrtrunk" }
 // resolveInstalled returns the currently-active install for name, or nil if
 // nothing is installed or the pointed-at exec is missing. It never touches the
 // network, so it works offline / with a placeholder manifest.
+// InstalledVersion returns the currently-installed version of a managed
+// component (from its current.txt pointer), or "" if none is installed. Used to
+// report the sdrtrunk/rdio versions the node is actually running.
+func InstalledVersion(name, dataDir string) string {
+	if inst := resolveInstalled(name, dataDir); inst != nil {
+		return inst.Version
+	}
+	return ""
+}
+
 func resolveInstalled(name, dataDir string) *Installed {
 	ver := readCurrentVersion(dataDir, name)
 	if ver == "" {
