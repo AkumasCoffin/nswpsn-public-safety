@@ -51,10 +51,14 @@ function jwtVerifyOptions(): {
 } {
   const opts: { algorithms: string[]; issuer?: string; audience?: string } = {
     algorithms: ['HS256'],
+    // Supabase always mints access tokens with aud `authenticated`; pin it
+    // unconditionally so a token minted for another audience (but signed with the
+    // same HS256 secret) can't be replayed as a user session even when
+    // SUPABASE_URL is unset. Issuer still needs the URL to be derivable.
+    audience: 'authenticated',
   };
   if (config.SUPABASE_URL) {
     opts.issuer = `${config.SUPABASE_URL.replace(/\/$/, '')}/auth/v1`;
-    opts.audience = 'authenticated';
   }
   return opts;
 }

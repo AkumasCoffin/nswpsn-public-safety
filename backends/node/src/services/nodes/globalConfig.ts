@@ -16,13 +16,25 @@ import { loadPresets } from './configMerge.js';
 
 // ── shapes ─────────────────────────────────────────────────────────────────
 
+/** An XML attribute name is emitted verbatim into the SDR-Trunk playlist by the
+ *  agent and interpolated into staff-panel event handlers, so it MUST be a safe
+ *  XML NCName-ish token — never arbitrary text. Constraining it here (the single
+ *  choke point all alias ids flow through) closes both the playlist-XML injection
+ *  in the agent and the handler-arg XSS in the editor at the source. */
+const AttrNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z_][A-Za-z0-9_.:-]*$/, 'invalid attribute name');
+
 /** One `<id>` inside an SDR-Trunk alias, e.g. a talkgroup or priority. `type`
  *  is the SDR-Trunk id type; `attrs` preserves every other attribute verbatim
- *  so the agent can re-emit the element faithfully. */
+ *  so the agent can re-emit the element faithfully. Keys are constrained to safe
+ *  XML attribute names; values are length-capped (they're XML-escaped downstream). */
 export const AliasIdSchema = z
   .object({
     type: z.string().max(60),
-    attrs: z.record(z.string(), z.string()).default({}),
+    attrs: z.record(AttrNameSchema, z.string().max(512)).default({}),
   })
   .strict();
 
@@ -81,8 +93,10 @@ export const AgencySchema = z
     led: z.string().max(40).nullish(),
     autoPopulate: z.boolean().nullish(),
     transcribe: z.boolean().nullish(),
-    transcriptionPrompt: z.string().nullish(),
-    blacklists: z.string().nullish(),
+    // Length-capped free text — this whole config is hashed and fanned out to
+    // every node, so bound the fields that would otherwise be unbounded.
+    transcriptionPrompt: z.string().max(4000).nullish(),
+    blacklists: z.string().max(8000).nullish(),
     delay: z.number().nullish(),
     alert: z.string().max(40).nullish(),
     talkgroups: z.array(LooseObj).max(8192).default([]),
@@ -348,6 +362,32 @@ interface Row {
   updated_by: string | null;
 }
 
+// Element-wise parse: keep every item that validates on its own, drop the rest.
+// Used to recover a mostly-valid config instead of collapsing the whole document
+// to empty when a single element is malformed.
+function keepValid<T>(schema: z.ZodType<T>, arr: unknown): T[] {
+  if (!Array.isArray(arr)) return [];
+  const out: T[] = [];
+  for (const el of arr) {
+    const r = schema.safeParse(el);
+    if (r.success) out.push(r.data);
+  }
+  return out;
+}
+
+function salvageConfig(
+  agencies: unknown,
+  rdioGroups: unknown,
+  rdioTags: unknown,
+): GlobalConfigInput {
+  return {
+    agencies: keepValid(AgencySchema, agencies),
+    // rdioGroups/rdioTags are the loose element type used in GlobalConfigSchema.
+    rdioGroups: keepValid(LooseObj, rdioGroups),
+    rdioTags: keepValid(LooseObj, rdioTags),
+  };
+}
+
 function rowToConfig(r: Row): GlobalConfig {
   let agencies: unknown = r.agencies;
   // Back-compat: a row written before the agencies model has an empty `agencies`
@@ -367,9 +407,20 @@ function rowToConfig(r: Row): GlobalConfig {
     rdioGroups: r.rdio_groups ?? [],
     rdioTags: r.rdio_tags ?? [],
   });
-  const content: GlobalConfigInput = parsed.success
-    ? parsed.data
-    : { agencies: [], rdioGroups: [], rdioTags: [] };
+  let content: GlobalConfigInput;
+  if (parsed.success) {
+    content = parsed.data;
+  } else {
+    // Fail SOFT, not empty: the whole config is all-or-nothing under the schema,
+    // so one malformed agency would otherwise wipe (and then re-persist + fan out)
+    // every agency/group/tag fleet-wide. Instead salvage the valid elements and
+    // drop only the offenders, logging what was rejected so it's visible.
+    content = salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []);
+    log.error(
+      { issues: parsed.error.issues.slice(0, 20), kept: content.agencies.length },
+      'global config failed schema on read; salvaged valid elements (dropped offenders)',
+    );
+  }
   return {
     ...content,
     version: r.version || globalConfigVersion(content),

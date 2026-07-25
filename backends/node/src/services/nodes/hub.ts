@@ -123,6 +123,10 @@ class NodeHub {
     if (!subs) return;
     for (const s of subs) {
       if (s.ws.readyState === s.ws.OPEN) {
+        // Backpressure: a fast agent flooding spectrum frames into a slow staff
+        // socket would otherwise grow this process's send buffer without bound.
+        // Spectrum frames are disposable, so drop rather than buffer.
+        if (wsOverBuffered(s.ws)) continue;
         try {
           s.ws.send(buf, { binary: true });
         } catch {
@@ -226,6 +230,7 @@ class NodeHub {
     const msg = envelope(t, data);
     for (const s of subs) {
       if (s.ws.readyState === s.ws.OPEN) {
+        if (wsOverBuffered(s.ws)) continue;
         try {
           s.ws.send(msg);
         } catch {
@@ -234,6 +239,13 @@ class NodeHub {
       }
     }
   }
+}
+
+/** Skip sending when a socket's outbound buffer is already backed up, so a slow
+ *  or stalled staff client can't force unbounded memory growth in this process. */
+const MAX_WS_BUFFER_BYTES = 4 * 1024 * 1024;
+function wsOverBuffered(ws: { bufferedAmount?: number }): boolean {
+  return (ws.bufferedAmount ?? 0) > MAX_WS_BUFFER_BYTES;
 }
 
 export const hub = new NodeHub();

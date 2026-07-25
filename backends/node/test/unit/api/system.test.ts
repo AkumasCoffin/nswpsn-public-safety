@@ -23,6 +23,7 @@ async function ownerHeaders(): Promise<Record<string, string>> {
   const jwt = await new SignJWT({})
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject('owner-1')
+    .setAudience('authenticated') // real Supabase access tokens carry this aud
     .sign(new TextEncoder().encode('test-jwt-secret-0123456789'));
   return { Authorization: `Bearer ${jwt}` };
 }

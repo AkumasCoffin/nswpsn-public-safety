@@ -63,6 +63,24 @@ export type AgentCommandAction =
   | 'tunerSet'
   | 'pushConfig';
 
+/** Runtime allowlist of commands staff may forward to an agent. Even though the
+ *  cmd path is owner|dev-gated, validating the action here (rather than relaying
+ *  any arbitrary string) is defense-in-depth against a compromised staff token or
+ *  a future lower-privilege caller. */
+export const AGENT_COMMAND_ACTIONS: ReadonlySet<AgentCommandAction> = new Set([
+  'restartComponent',
+  'rebootAgent',
+  'update',
+  'startChannel',
+  'stopChannel',
+  'tunerSet',
+  'pushConfig',
+]);
+
+export function isAgentCommandAction(a: unknown): a is AgentCommandAction {
+  return typeof a === 'string' && AGENT_COMMAND_ACTIONS.has(a as AgentCommandAction);
+}
+
 export function parseEnvelope(raw: string): Envelope | null {
   try {
     const obj = JSON.parse(raw) as unknown;

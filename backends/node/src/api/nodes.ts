@@ -29,6 +29,7 @@ import {
   type NodePatch,
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
+import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
@@ -261,6 +262,9 @@ nodesRouter.post('/api/nodes/:id/cmd', requireRole(canManageNodes), async (c) =>
     const action = body.action;
     if (typeof action !== 'string' || !action) {
       return c.json({ error: 'action is required' }, 400);
+    }
+    if (!isAgentCommandAction(action)) {
+      return c.json({ error: 'unknown action' }, 400);
     }
     if (!hub.isOnline(id)) {
       return c.json({ error: 'node offline' }, 409);
