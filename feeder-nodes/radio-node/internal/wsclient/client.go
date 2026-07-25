@@ -584,14 +584,38 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 
 	case "startChannel", "stopChannel":
 		var a struct {
-			ChannelID int `json:"channelId"`
+			ChannelID   int    `json:"channelId"`
+			ChannelName string `json:"channelName"`
 		}
 		_ = json.Unmarshal(cmd.Args, &a)
+
+		// SDR-Trunk reassigns channel ids on every playlist reload, so an id the UI
+		// cached before a Save & sync is stale ("channel not found"). Resolve the
+		// CURRENT id against the live channel list — by name first (stable across
+		// reloads), then the given id — before starting/stopping.
+		id := a.ChannelID
+		if chans, _, cerr := c.sdr.Channels(); cerr == nil {
+			byName, byID := -1, -1
+			for _, ch := range chans {
+				if a.ChannelName != "" && ch.Name == a.ChannelName {
+					byName = ch.ID
+				}
+				if ch.ID == a.ChannelID {
+					byID = ch.ID
+				}
+			}
+			if byName >= 0 {
+				id = byName
+			} else if byID >= 0 {
+				id = byID
+			}
+		}
+
 		var err error
 		if cmd.Action == "startChannel" {
-			err = c.sdr.StartChannel(a.ChannelID)
+			err = c.sdr.StartChannel(id)
 		} else {
-			err = c.sdr.StopChannel(a.ChannelID)
+			err = c.sdr.StopChannel(id)
 		}
 		if err != nil {
 			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})

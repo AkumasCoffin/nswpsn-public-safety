@@ -147,8 +147,8 @@ func TestRenderPlaylistSwapsDecodeConfig(t *testing.T) {
 func TestRenderPlaylistMultiChannel(t *testing.T) {
 	keys := map[int]string{1: "key-one", 2: "key-two"}
 	channels := []ChannelPlan{
-		{Name: "Metro CC", Frequency: 142658000, Decoder: "p25p1", System: "NSW PSN", Site: "Site 1", Order: 1},
-		{Name: "Regional CC", Frequency: 419587500, Decoder: "p25p2", System: "NSW PSN", Site: "Site 2", Order: 2},
+		{Name: "Metro CC", Frequency: 142658000, Decoder: "p25p1", System: "NSW PSN", Site: "Site 1", Order: 1, AutoStart: true},
+		{Name: "Regional CC", Frequency: 419587500, Decoder: "p25p2", System: "NSW PSN", Site: "Site 2", Order: 2, AutoStart: true},
 	}
 
 	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, nil, keys)
@@ -342,5 +342,32 @@ func TestRenderPlaylistGeneratesStreamsPerSystem(t *testing.T) {
 		XMLName xml.Name `xml:"playlist"`
 	})); err != nil {
 		t.Fatalf("rendered playlist is not well-formed XML: %v", err)
+	}
+}
+
+// TestRenderPlaylistDisabledChannelKeepsConfig verifies a channel with
+// AutoStart=false renders enabled="false" but STILL carries its full config
+// (name/frequency/decoder) so it decodes correctly when (re)started.
+func TestRenderPlaylistDisabledChannelKeepsConfig(t *testing.T) {
+	channels := []ChannelPlan{
+		{Name: "Off CC", Frequency: 142658000, Decoder: "p25p2", System: "NSW PSN", Site: "S1", Order: 1, AutoStart: false},
+	}
+	out, err := renderPlaylist(presets.DefaultPlaylistXML, channels, nil, nil, map[int]string{})
+	if err != nil {
+		t.Fatalf("renderPlaylist: %v", err)
+	}
+	s := string(out)
+	blk := reChannelBlock.FindString(s)
+	if blk == "" {
+		t.Fatalf("no channel block rendered")
+	}
+	if !strings.Contains(blk, `enabled="false"`) {
+		t.Errorf("disabled channel should be enabled=false:\n%s", blk)
+	}
+	// Config must still be present even though it's disabled.
+	for _, want := range []string{`name="Off CC"`, `frequency="142658000"`, "decodeConfigP25Phase2"} {
+		if !strings.Contains(blk, want) {
+			t.Errorf("disabled channel missing %q:\n%s", want, blk)
+		}
 	}
 }
