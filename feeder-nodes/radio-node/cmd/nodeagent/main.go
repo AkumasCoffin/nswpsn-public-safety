@@ -260,9 +260,10 @@ func runAgent(ctx context.Context, configPath string) error {
 
 	// Reap any SDR-Trunk left running by a previous agent (a re-exec self-update
 	// keeps the PID/cgroup, so the old JVM survives and would keep holding the
-	// control port). "io.github.dsheirer" is the SDR-Trunk main class — a precise,
-	// safe signature for its JVM; the launcher path catches the wrapper process.
-	if n := supervise.KillStale([]string{"io.github.dsheirer", sdrCfg.Command}); n > 0 {
+	// control port). Match ONLY the precise SDR-Trunk main class — NOT the
+	// operator-configured command (which could be a generic term like "java" and
+	// would then SIGKILL unrelated processes/other users' JVMs).
+	if n := supervise.KillStale([]string{"io.github.dsheirer"}); n > 0 {
 		log.Printf("startup: reaped %d stale sdrtrunk process(es) before launch", n)
 	}
 
@@ -370,6 +371,16 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 // which writes the admin password into the base_dir database and exits 0. This
 // must run BEFORE the server is launched (and the server must not get the flag,
 // or it exits on every start). Idempotent: re-seeding just re-sets the same value.
+//
+// SECURITY NOTE: the password is passed as an argv element, so it is briefly
+// visible via /proc/<pid>/cmdline to co-located local users during this one-shot
+// run. rdio-scanner's OFFLINE seeding path only accepts the value as the
+// --admin_password flag (its RDIO_ADMIN_PASSWORD env var feeds only the
+// online `admin-password` subcommand, which needs an already-running,
+// authenticated server and so can't seed pre-launch). Fully removing the argv
+// exposure therefore requires an rdio-scanner change, which is deliberately kept
+// out of scope (the rdio fork is built unmodified). The window is a single
+// sub-second process on a single-user volunteer host; accepted risk.
 func seedRdioAdminPassword(bin, baseDir, pw string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

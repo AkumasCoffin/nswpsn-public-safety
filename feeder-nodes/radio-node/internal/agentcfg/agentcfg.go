@@ -4,6 +4,9 @@ package agentcfg
 import (
 	"crypto/rand"
 	"fmt"
+	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +97,55 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.validateSecurity(); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
+}
+
+// validateSecurity enforces transport-security invariants. server_url is the
+// self-update integrity anchor: artifact sha256s come from a manifest fetched
+// over it, so a plaintext channel lets a network MITM rewrite the manifest AND
+// its sha256 together and serve a matching malicious binary → fleet-wide RCE.
+// Require https except for a loopback dev server. The local relay is
+// unauthenticated by design (rdio downstreams can't auth), so it must bind
+// loopback — a non-loopback bind is warned about loudly.
+func (c *Config) validateSecurity() error {
+	if s := strings.TrimSpace(c.ServerURL); s != "" {
+		u, err := url.Parse(s)
+		if err != nil {
+			return fmt.Errorf("invalid server_url %q: %w", s, err)
+		}
+		if u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
+			return fmt.Errorf(
+				"server_url must be https (got %q) — refusing to run the self-updater over an unauthenticated channel",
+				s,
+			)
+		}
+	}
+	if a := strings.TrimSpace(c.RelayAddr); a != "" {
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			host = a
+		}
+		if !isLoopbackHost(host) {
+			log.Printf("WARNING: relay_addr %q is not loopback; the local relay is unauthenticated — any host that can reach it can inject calls under this node's identity", a)
+		}
+	}
+	return nil
+}
+
+// isLoopbackHost reports whether h is localhost or a loopback IP.
+func isLoopbackHost(h string) bool {
+	h = strings.TrimSpace(h)
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // applyDefaults fills empty fields with defaults and derives ws_url. It reports
@@ -172,7 +223,9 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	// 0o600: this file holds node_token (a bearer credential). World-readable
+	// perms would let any other local user read it and impersonate the node.
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

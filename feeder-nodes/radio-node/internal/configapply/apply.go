@@ -735,7 +735,9 @@ func renderChannelBlock(tmpl string, ch ChannelPlan, enabled bool) string {
 func setOrAddChannelAttr(tag string, re *regexp.Regexp, name, val string) string {
 	attr := name + `="` + xmlAttr(val) + `"`
 	if re.MatchString(tag) {
-		return re.ReplaceAllString(tag, attr)
+		// Literal: a `$` in a channel name/system/site label must not be treated
+		// as a capture reference (matches the stream/decoder render paths).
+		return re.ReplaceAllLiteralString(tag, attr)
 	}
 	return strings.Replace(tag, "<channel", "<channel "+attr, 1)
 }
@@ -891,9 +893,22 @@ func renderAlias(a Alias) string {
 	return b.String()
 }
 
-// writeXMLAttr appends ` name="escaped-value"` when value is non-empty.
+// safeXMLName matches a conservative XML attribute name (NCName-ish). Anything
+// else is rejected rather than written — the attribute *value* is escaped, but
+// the *name* is emitted verbatim, so an unconstrained name (e.g. a config attr
+// key like `x"/><stream ...`) could otherwise break out of the element and
+// inject arbitrary playlist XML. The backend also constrains these keys; this is
+// the belt-and-suspenders check at the point of emission.
+var safeXMLName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.:-]*$`)
+
+// writeXMLAttr appends ` name="escaped-value"` when value is non-empty and the
+// attribute name is a safe XML token; an unsafe name is skipped (and logged).
 func writeXMLAttr(b *strings.Builder, name, val string) {
 	if val == "" {
+		return
+	}
+	if !safeXMLName.MatchString(name) {
+		log.Printf("configapply: dropping unsafe XML attribute name %q", name)
 		return
 	}
 	b.WriteString(" ")

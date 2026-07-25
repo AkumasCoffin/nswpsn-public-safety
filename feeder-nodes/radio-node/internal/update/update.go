@@ -445,11 +445,18 @@ func unzip(src, destDir string) error {
 			}
 			continue
 		}
+		// Reject symlink entries: a symlink pointing outside destDir followed by a
+		// later entry written "through" it would escape the zip-slip guard above.
+		if f.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("zip entry is a symlink (refused): %q", f.Name)
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
 
-		mode := f.Mode()
+		// Mask to permission bits only — never honor setuid/setgid/sticky from an
+		// archive (relevant if the agent ever runs as root).
+		mode := f.Mode().Perm()
 		if mode == 0 {
 			mode = 0o644
 		}
