@@ -233,12 +233,29 @@ begin
   StringChangeEx(Result, '\', '/', True);
 end;
 
+{ Lock down a path so only SYSTEM (the service account) + Administrators can read
+  it. C:\ProgramData grants BUILTIN\Users read by default and children inherit it,
+  which would leave node_token / keys.json / rdio-admin.secret readable by any
+  local user. /inheritance:r strips the inherited Users ACE; the (OI)(CI) grants
+  apply to files the agent creates later too. SIDs are locale-independent:
+  S-1-5-18 = LocalSystem, S-1-5-32-544 = Administrators. }
+procedure HardenAcl(Path: string);
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\icacls.exe'),
+       '"' + Path + '" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure WriteAgentYaml();
 var
   Cfg: TStringList;
   Token, Server, InstallID, DataDir: string;
 begin
   ForceDirectories(ProgDataDir());
+  { Harden BEFORE writing secrets so the file is never briefly world-readable. }
+  HardenAcl(ProgDataDir());
 
   Token     := ResolveToken();
   Server    := ResolveServer();
@@ -272,6 +289,8 @@ begin
   finally
     Cfg.Free;
   end;
+  { Re-apply to the file explicitly (it was just created under the dir). }
+  HardenAcl(ConfigPath());
 end;
 
 { ---- service registration ----------------------------------------------- }
