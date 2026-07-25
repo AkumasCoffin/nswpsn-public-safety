@@ -598,12 +598,16 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "playlist reloaded"})
 
 	case "update":
-		// Run the check off the read loop; reply with the outcome. With today's
-		// placeholder manifest this reports "no update available".
-		id := env.ID
+		// ACK IMMEDIATELY, then run the update in the background. A real update
+		// downloads ~90MB of components and then self-updates + re-execs (which
+		// drops this WS) — that far exceeds the staff command timeout, so waiting
+		// to reply made the UI report "update failed" even though it succeeded.
+		// Confirm "started" now; the outcome is visible via the node's reported
+		// versions (and the agent log).
+		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "update started"})
 		go func() {
 			msg, ok := c.runUpdateCheck("cmd")
-			c.sendReply(id, protocol.TypeCmdResult, protocol.CmdResult{OK: ok, Message: msg})
+			log.Printf("wsclient: manual update finished: ok=%v — %s", ok, msg)
 		}()
 
 	case "pushConfig":
