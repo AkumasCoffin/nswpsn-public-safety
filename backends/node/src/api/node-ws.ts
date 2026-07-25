@@ -21,6 +21,7 @@ import {
   upsertNodeOnHello,
   touchNodeSeen,
   updateNode,
+  getNodeByInstall,
   type HelloMeta,
 } from '../services/nodes/registry.js';
 import {
@@ -36,6 +37,7 @@ const AGENT_PATH = '/api/node-ws/agent';
 const STAFF_PATH = '/api/node-ws/staff';
 const MAX_PAYLOAD = 1 * 1024 * 1024; // 1MB — status/spectrum frames are far smaller
 const HEARTBEAT_MS = 30_000; // Cloudflare Tunnel kills idle WS ~100s
+const AUTH_REVALIDATE_MS = 60_000; // re-check role + enabled on connected agents
 const STAFF_AUTH_GRACE_MS = 5_000;
 
 interface Alive extends WebSocket {
@@ -97,6 +99,31 @@ export function attachNodeWebSockets(server: Server): void {
     }
   }, HEARTBEAT_MS);
   interval.unref?.();
+
+  // Periodic auth revalidation. Role (radio_contributor) + node.enabled are
+  // checked at upgrade, but a role revocation or a disable on an ALREADY-connected
+  // agent otherwise wouldn't take effect until the socket happened to drop. Sweep
+  // connected agents and force-disconnect any that no longer pass; reconnect is
+  // then rejected at the upgrade check.
+  const authSweep = setInterval(() => {
+    void (async () => {
+      for (const a of hub.agentList()) {
+        try {
+          if (!(await hasRole(a.userId, ['radio_contributor']))) {
+            hub.forceDisconnectAgent(a.nodeId, 'role revoked');
+            continue;
+          }
+          const node = await getNodeByInstall(a.userId, a.installId);
+          if (!node || !node.enabled) {
+            hub.forceDisconnectAgent(a.nodeId, 'node disabled');
+          }
+        } catch (err) {
+          log.warn({ err, nodeId: a.nodeId }, 'agent auth revalidation failed (transient)');
+        }
+      }
+    })();
+  }, AUTH_REVALIDATE_MS);
+  authSweep.unref?.();
 
   log.info('node WebSocket endpoints attached (agent + staff)');
 }

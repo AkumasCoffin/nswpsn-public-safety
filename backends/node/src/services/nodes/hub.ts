@@ -84,6 +84,15 @@ class NodeHub {
     return this.agents.has(nodeId);
   }
 
+  /** Snapshot of connected agents, for periodic auth (role/enabled) revalidation. */
+  agentList(): Array<{ nodeId: string; userId: string; installId: string }> {
+    return Array.from(this.agents.values()).map((a) => ({
+      nodeId: a.nodeId,
+      userId: a.userId,
+      installId: a.installId,
+    }));
+  }
+
   liveStatus(nodeId: string): {
     online: boolean;
     status: StatusData | null;
@@ -192,6 +201,12 @@ class NodeHub {
     if (!set) {
       set = new Set();
       this.staff.set(nodeId, set);
+    }
+    // Drop any prior entry for this socket first, so a re-subscribe (reconnect or
+    // UI re-entry) can't leave two StaffConn entries that double-deliver every
+    // status/event/spectrum frame to the same viewer.
+    for (const s of set) {
+      if (s.ws === ws) set.delete(s);
     }
     set.add({ ws, userId });
   }

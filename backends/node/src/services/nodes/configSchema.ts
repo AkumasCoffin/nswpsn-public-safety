@@ -124,8 +124,16 @@ export const TunerSettingsSchema = z
     autoGain: z.boolean().optional(),
     // Per-axis gain values for multi-stage devices (e.g. Airspy/HackRF lna/vga/
     // mixer) or `{ auto: true }`. Free-form: keys/units are device-specific, so
-    // this is a loose bag the agent forwards to SDR-Trunk verbatim.
-    gainParams: z.record(z.string(), z.unknown()).optional(),
+    // this is a loose bag the agent forwards to SDR-Trunk verbatim — but bounded
+    // (keys + serialized size) so a PATCH can't stuff an unbounded blob into the
+    // stored/pushed/hashed config.
+    gainParams: z
+      .record(z.string(), z.unknown())
+      .refine(
+        (v) => Object.keys(v).length <= 24 && JSON.stringify(v).length <= 2000,
+        'gainParams too large',
+      )
+      .optional(),
     ppm: z.number().optional(),
     autoPpm: z.boolean().optional(),
     type: z.string().max(40).optional(),
