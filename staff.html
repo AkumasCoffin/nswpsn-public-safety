@@ -2107,6 +2107,24 @@
         .replace(/'/g, '&#39;');
     }
 
+    // Escape a value for use as a single-quoted JS string literal that is itself
+    // embedded inside an inline HTML event handler (onclick="fn('...')"). HTML
+    // entity-encoding is NOT safe there: the browser HTML-decodes the attribute
+    // before compiling the handler, so escapeHtml's &#39; becomes ' again and
+    // breaks out of the JS string. Encoding every non-alphanumeric as \xHH / \uHHHH
+    // survives both the HTML-attribute parse and the JS-string parse (no quotes,
+    // ampersands, or angle brackets are ever emitted). Prefer passing indices and
+    // looking data up, but this makes any inline handler arg injection-proof.
+    function jsArg(value) {
+      if (value == null) return '';
+      return String(value).replace(/[^a-zA-Z0-9]/g, (ch) => {
+        const c = ch.charCodeAt(0);
+        return c < 256
+          ? '\\x' + c.toString(16).padStart(2, '0')
+          : '\\u' + c.toString(16).padStart(4, '0');
+      });
+    }
+
     // Render a timestamp that may be either Unix seconds (numbers from the
     // editor-requests API) or an ISO string (from the users API). Null/garbage
     // renders as a dash instead of a bogus 1970 date.
@@ -2650,29 +2668,29 @@
           </div>
           ${statusRow}
           <div class="node-enable-row">
-            <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${escapeHtml(String(id))}')">
+            <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${jsArg(id)}')">
               <i class="fas fa-gauge-high"></i> Details
             </button>
             <span class="lbl" style="text-align: right;">Node ${enabled ? 'on' : 'off'}</span>
             <label class="node-switch" title="Node running (decode + spectrum). Off cuts it off entirely.">
               <input type="checkbox" ${enabled ? 'checked' : ''}
-                     onchange="toggleNode('${escapeHtml(String(id))}', this.checked, this)">
+                     onchange="toggleNode('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
             </label>
           </div>
           <div class="node-enable-row">
             <div style="display:flex; gap:0.4rem;">
-              <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${escapeHtml(String(id))}')" title="Update this node now">
+              <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
                 <i class="fas fa-download"></i>
               </button>
               ${userPermissions.is_owner
-                ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${escapeHtml(String(id))}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
                 : ''}
             </div>
             <span class="lbl" style="text-align: right;">Feed → rdio ${feedEnabled ? 'on' : 'off'}</span>
             <label class="node-switch" title="Forward decoded calls to the central rdio. Off lets you verify config + reception before feeding the live system.">
               <input type="checkbox" ${feedEnabled ? 'checked' : ''}
-                     onchange="toggleNodeFeed('${escapeHtml(String(id))}', this.checked, this)">
+                     onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
             </label>
           </div>
@@ -4923,9 +4941,9 @@
       const extraKeys = Object.keys(attrs).filter(k => !usedKeys.includes(k));
       const extraRows = extraKeys.map(k => `
         <div class="gc-attr-row">
-          <input type="text" style="max-width:140px;" value="${escapeHtml(k)}" onchange="_gcAttrRename(${i},${idi},'${escapeHtml(k)}',this.value)" placeholder="key">
-          <input type="text" value="${escapeHtml(String(attrs[k] == null ? '' : attrs[k]))}" oninput="_gcAttrVal(${i},${idi},'${escapeHtml(k)}',this.value)" placeholder="value">
-          <button class="gc-icon-btn" onclick="_gcRemoveAttr(${i},${idi},'${escapeHtml(k)}')"><i class="fas fa-xmark"></i></button>
+          <input type="text" style="max-width:140px;" value="${escapeHtml(k)}" onchange="_gcAttrRename(${i},${idi},'${jsArg(k)}',this.value)" placeholder="key">
+          <input type="text" value="${escapeHtml(String(attrs[k] == null ? '' : attrs[k]))}" oninput="_gcAttrVal(${i},${idi},'${jsArg(k)}',this.value)" placeholder="value">
+          <button class="gc-icon-btn" onclick="_gcRemoveAttr(${i},${idi},'${jsArg(k)}')"><i class="fas fa-xmark"></i></button>
         </div>`).join('');
       return `<div class="nd-cfg-row" style="margin-bottom:0.5rem;">
         <div class="gc-attr-row">
@@ -5521,7 +5539,7 @@
                 <i class="fas fa-user-edit"></i>
               </button>
               ${userPermissions.is_owner
-                ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${escapeHtml(user.id)}')" title="Delete user (owner only)"><i class="fas fa-trash"></i></button>`
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${jsArg(user.id)}')" title="Delete user (owner only)"><i class="fas fa-trash"></i></button>`
                 : ''}
             </td>
           </tr>
