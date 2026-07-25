@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -32,6 +33,7 @@ import (
 	"github.com/kardianos/service"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/configapply"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/relay"
@@ -267,6 +269,12 @@ func runAgent(ctx context.Context, configPath string) error {
 		log.Printf("startup: reaped %d stale sdrtrunk process(es) before launch", n)
 	}
 
+	// Write an authoritative playlist from the last-applied config BEFORE launching
+	// SDR-Trunk, so it boots from the current config (not a stale last-session /
+	// clobbered file) and never auto-starts a channel the operator disabled. No-op
+	// on first ever boot (no persisted config yet → SDR-Trunk uses the preset).
+	writeBootPlaylist(cfg)
+
 	// Supervisor for external children.
 	sup := supervise.New(cfg.DataDir, map[string]agentcfg.ComponentCfg{
 		"sdrtrunk": sdrCfg,
@@ -316,6 +324,36 @@ func runAgent(ctx context.Context, configPath string) error {
 	time.Sleep(300 * time.Millisecond)
 	log.Printf("stopped")
 	return nil
+}
+
+// writeBootPlaylist renders the SDR-Trunk playlist from the last-applied config
+// payload (persisted by the WS client on each successful playlist apply) and writes
+// it to disk BEFORE SDR-Trunk launches. This guarantees SDR-Trunk boots from the
+// agent's current config rather than a stale/clobbered last-session file — closing
+// the window where it would auto-start a just-disabled channel on every reboot.
+func writeBootPlaylist(cfg *agentcfg.Config) {
+	raw, err := os.ReadFile(cfg.AppliedConfigPath())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("startup: read last-applied config failed: %v", err)
+		}
+		return // first boot / nothing applied yet — SDR-Trunk uses the preset
+	}
+	var payload configapply.ConfigPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		log.Printf("startup: last-applied config unreadable (%v); skipping pre-launch playlist", err)
+		return
+	}
+	deps := configapply.Deps{
+		DataDir:         cfg.DataDir,
+		PresetsDir:      cfg.PresetsDir,
+		SDRTrunkAppRoot: cfg.SDRTrunkAppRoot,
+	}
+	if err := configapply.WritePlaylistOnly(payload, deps); err != nil {
+		log.Printf("startup: pre-launch playlist write failed: %v", err)
+		return
+	}
+	log.Printf("startup: wrote authoritative playlist from last-applied config before sdrtrunk launch")
 }
 
 // resolveSDRTrunk builds the sdrtrunk supervisor component. SDR-Trunk is core to

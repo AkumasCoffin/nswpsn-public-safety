@@ -23,6 +23,7 @@ package configapply
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -238,10 +239,17 @@ func rdioLoginReady(c *rdioctl.Client, password string) error {
 	return err
 }
 
-// Apply runs the full config-apply pipeline for one payload. On any failure it
-// returns a *StageError naming the failed stage.
+// Apply runs the config-apply pipeline for one payload. The SDR-Trunk playlist and
+// the rdio-scanner config are applied INDEPENDENTLY, and the playlist is applied
+// FIRST: the playlist governs channel auto-start, so it MUST be written to disk
+// even if the rdio config PUT fails (e.g. the local rdio admin API times out on a
+// large config). Otherwise a flaky rdio would abort the whole apply before the
+// playlist is written, leaving a stale playlist on disk that re-auto-starts a
+// disabled channel on every SDR-Trunk boot (the confirmed root cause of that bug).
+// Returns a combined error carrying each failed stage's *StageError, but only after
+// BOTH stages were attempted.
 func Apply(payload ConfigPayload, d Deps) error {
-	// ---- stage: keys --------------------------------------------------------
+	// ---- stage: keys (hard requirement — both playlist streams and rdio need them)
 	// Seed from the stream targets, then widen to every system id referenced by
 	// the rdio apiKeys and the playlist streams so nothing ends up keyless.
 	sysIDs := systemIDsFrom(payload)
@@ -250,22 +258,76 @@ func Apply(payload ConfigPayload, d Deps) error {
 		return stageErr("keys", "ensure local api keys", err)
 	}
 
-	// ---- stage: rdio --------------------------------------------------------
-	rdioCfg, err := d.resolveRdioConfig(payload)
-	if err != nil {
-		return stageErr("rdio", "load rdio config", err)
-	}
-	if err := applyRdioKeys(rdioCfg, localKeys); err != nil {
-		return stageErr("rdio", "inject api keys", err)
-	}
-	if err := rdioLoginReady(d.Rdio, d.RdioPassword); err != nil {
-		return stageErr("rdio", "admin login", err)
-	}
-	if err := d.Rdio.PutConfig(rdioCfg); err != nil {
-		return stageErr("rdio", "put config", err)
+	var errs []error
+
+	// SDR-Trunk playlist FIRST — this must land on disk regardless of the rdio
+	// outcome below so a disabled channel never re-auto-starts from a stale file.
+	if perr := d.applyPlaylist(payload, localKeys); perr != nil {
+		errs = append(errs, perr)
 	}
 
-	// ---- stage: playlist ----------------------------------------------------
+	// rdio config is independent: a PutConfig timeout here must NOT prevent the
+	// playlist write above.
+	if rerr := d.applyRdio(payload, localKeys); rerr != nil {
+		errs = append(errs, rerr)
+	}
+
+	return errors.Join(errs...)
+}
+
+// WritePlaylistOnly renders the playlist from a payload and writes it to disk
+// WITHOUT touching a running SDR-Trunk or rdio. Called at agent startup to write an
+// authoritative playlist BEFORE SDR-Trunk is launched, so SDR-Trunk always boots
+// from the agent's current config (never a stale last-session file) and can't
+// auto-start a channel the operator disabled. Needs only DataDir/PresetsDir/
+// SDRTrunkAppRoot on Deps.
+func WritePlaylistOnly(payload ConfigPayload, d Deps) error {
+	sysIDs := systemIDsFrom(payload)
+	localKeys, err := keys.EnsureKeys(d.DataDir, sysIDs)
+	if err != nil {
+		return stageErr("keys", "ensure local api keys", err)
+	}
+	tmpl := d.loadPlaylistTemplate()
+	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, payload.StreamTargets, localKeys)
+	if err != nil {
+		return stageErr("playlist", "render", err)
+	}
+	if err := d.writePlaylist(rendered); err != nil {
+		return stageErr("playlist", "write", err)
+	}
+	return nil
+}
+
+// HasStage reports whether err (possibly an errors.Join of several) carries a
+// *StageError for the named stage. Lets the caller tell "the playlist stage
+// succeeded but rdio failed" apart from a playlist failure.
+func HasStage(err error, stage string) bool {
+	for _, e := range flatten(err) {
+		var se *StageError
+		if errors.As(e, &se) && se.Stage == stage {
+			return true
+		}
+	}
+	return false
+}
+
+func flatten(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		var out []error
+		for _, e := range j.Unwrap() {
+			out = append(out, flatten(e)...)
+		}
+		return out
+	}
+	return []error{err}
+}
+
+// applyPlaylist renders + writes the SDR-Trunk playlist, then reloads/reconciles a
+// running SDR-Trunk and applies tuner settings. Independent of the rdio stage.
+func (d Deps) applyPlaylist(payload ConfigPayload, localKeys map[int]string) error {
 	tmpl := d.loadPlaylistTemplate()
 	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, payload.StreamTargets, localKeys)
 	if err != nil {
@@ -275,7 +337,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 		return stageErr("playlist", "write", err)
 	}
 
-	// ---- stage: reload ------------------------------------------------------
+	// ---- reload ----
 	liveReloaded := false
 	if err := d.SDR.ReloadPlaylist(); err != nil {
 		// Live reload failed. The new playlist file is already on disk, so a
@@ -315,6 +377,25 @@ func Apply(payload ConfigPayload, d Deps) error {
 	// failures here never fail the apply (the tuner may still be spinning up).
 	d.applyTuners(payload.Tuners)
 
+	return nil
+}
+
+// applyRdio pushes the rdio-scanner config (systems/talkgroups + injected local api
+// keys + the downstream to the agent relay). Independent of the playlist stage.
+func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
+	rdioCfg, err := d.resolveRdioConfig(payload)
+	if err != nil {
+		return stageErr("rdio", "load rdio config", err)
+	}
+	if err := applyRdioKeys(rdioCfg, localKeys); err != nil {
+		return stageErr("rdio", "inject api keys", err)
+	}
+	if err := rdioLoginReady(d.Rdio, d.RdioPassword); err != nil {
+		return stageErr("rdio", "admin login", err)
+	}
+	if err := d.Rdio.PutConfig(rdioCfg); err != nil {
+		return stageErr("rdio", "put config", err)
+	}
 	return nil
 }
 

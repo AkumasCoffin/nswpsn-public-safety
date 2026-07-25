@@ -473,10 +473,21 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 			RdioPassword:    c.rdioPassword,
 		}
 
-		if err := configapply.Apply(payload, deps); err != nil {
-			stage, msg := "apply", err.Error()
+		applyErr := configapply.Apply(payload, deps)
+
+		// Persist the payload for the startup pre-launch playlist render whenever the
+		// PLAYLIST stage succeeded — even if rdio failed — so SDR-Trunk always boots
+		// from the current config regardless of a flaky local rdio.
+		if !configapply.HasStage(applyErr, "playlist") && !configapply.HasStage(applyErr, "reload") {
+			if perr := c.persistAppliedPayload(env.Data); perr != nil {
+				log.Printf("wsclient: persist applied config payload failed: %v", perr)
+			}
+		}
+
+		if applyErr != nil {
+			stage, msg := "apply", applyErr.Error()
 			var se *configapply.StageError
-			if errors.As(err, &se) {
+			if errors.As(applyErr, &se) {
 				stage = se.Stage
 				msg = se.Message
 				if se.Err != nil {
@@ -895,6 +906,19 @@ func (c *Client) persistAppliedVersion(v string) error {
 	path := c.cfg.AppliedConfigVersionPath()
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(v), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// persistAppliedPayload atomically writes the full config payload so the agent can
+// re-render the playlist at startup (before launching SDR-Trunk). Persisted
+// whenever the PLAYLIST stage succeeded — even if the rdio stage failed — so the
+// pre-launch playlist stays current regardless of a flaky local rdio.
+func (c *Client) persistAppliedPayload(raw []byte) error {
+	path := c.cfg.AppliedConfigPath()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

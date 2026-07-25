@@ -216,6 +216,14 @@ func (c *Config) AppliedConfigVersionPath() string {
 	return filepath.Join(c.DataDir, "applied-config-version")
 }
 
+// AppliedConfigPath is the file holding the full last-applied config payload
+// (JSON). The agent re-renders the SDR-Trunk playlist from it at startup — BEFORE
+// launching SDR-Trunk — so SDR-Trunk always boots from the current config instead
+// of a stale last-session playlist.
+func (c *Config) AppliedConfigPath() string {
+	return filepath.Join(c.DataDir, "applied-config.json")
+}
+
 // Save round-trips the config back to YAML at path.
 func (c *Config) Save(path string) error {
 	b, err := yaml.Marshal(c)
