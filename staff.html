@@ -2779,7 +2779,7 @@
       tr: null, trCtx: null, trW: 0, trH: 0,   // FFT trace canvas + device-pixel buffer size
       dpr: 1,
       lastCenter: null, lastSr: null, lastBins: null,
-      agcLo: -100, agcHi: -20,                 // slow-AGC dB window for the trace pane
+      agcLo: -100, agcHi: -20, agcInit: false, // slow-AGC dB window (agcInit: snap on first frame)
       ro: null                                 // ResizeObserver (re-fits buffers on layout change)
     };
 
@@ -2819,7 +2819,7 @@
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
       _ndPrevChan = {}; _ndCallStart = {};
       _ndWf.lastCenter = null; _ndWf.lastSr = null; _ndWf.lastBins = null;
-      _ndWf.agcLo = -100; _ndWf.agcHi = -20;
+      _ndWf.agcLo = -100; _ndWf.agcHi = -20; _ndWf.agcInit = false;
       _ndSetView('live');
       _ndStartNpTicker();
 
@@ -3010,7 +3010,7 @@
       // Fresh waterfall history + auto-range window on (re)init (per-tuner).
       _ndWf.wfW = 0; _ndWf.wfH = 0;
       _ndWf.lastBins = null;
-      _ndWf.agcLo = -100; _ndWf.agcHi = -20;
+      _ndWf.agcLo = -100; _ndWf.agcHi = -20; _ndWf.agcInit = false;
       _ndResizeCanvases();
       // Re-fit the internal buffers whenever the column width (or DPR) changes.
       if (!_ndWf.ro && 'ResizeObserver' in window) {
@@ -3164,9 +3164,16 @@
       // still shows blue instead of collapsing the window onto one colour.
       const floorTgt = floor - 6;
       const ceilTgt = Math.max(ceil + 4, floorTgt + 24);
-      const ease = 0.12;                         // slow AGC attack/decay
-      _ndWf.agcLo += (floorTgt - _ndWf.agcLo) * ease;
-      _ndWf.agcHi += (ceilTgt - _ndWf.agcHi) * ease;
+      // First real frame: SNAP the window straight to the data range (otherwise
+      // the -100/-20 init is far from the actual dB values and the first ~2s of
+      // waterfall paints all-red while the AGC ramps in). After that, ease.
+      if (!_ndWf.agcInit) {
+        _ndWf.agcLo = floorTgt; _ndWf.agcHi = ceilTgt; _ndWf.agcInit = true;
+      } else {
+        const ease = 0.12;                       // slow AGC attack/decay
+        _ndWf.agcLo += (floorTgt - _ndWf.agcLo) * ease;
+        _ndWf.agcHi += (ceilTgt - _ndWf.agcHi) * ease;
+      }
     }
 
     function _ndDrawSpectrum(centerFreqHz, sampleRate, bins) {
