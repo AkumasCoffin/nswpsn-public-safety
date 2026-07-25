@@ -138,21 +138,22 @@ export async function mintFeederToken(
     'SELECT token_version FROM feeder_tokens WHERE user_id = $1',
     [userId],
   );
-  let version = existing.rows[0]?.token_version;
-  if (version === undefined) {
-    version = 1;
-    const token = computeToken(userId, version);
-    // ON CONFLICT handles a race where two requests mint at once — the row
-    // is identical either way (deterministic token), so DO NOTHING is safe.
-    await pool.query(
-      `INSERT INTO feeder_tokens (user_id, token_hash, token_prefix, token_version)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (user_id) DO NOTHING`,
-      [userId, sha256hex(token), lookupPrefix(token), version],
-    );
-    return { token, prefix: logPrefix(token) };
-  }
+  const version = existing.rows[0]?.token_version ?? 1;
   const token = computeToken(userId, version);
+  // Always UPSERT the current hash/prefix — not just on first insert. The token
+  // is derived from FEEDER_TOKEN_SECRET, so after that secret is rotated the
+  // stored hash is stale; re-persisting here means the documented "re-download to
+  // recover" path actually restores the node (otherwise mint returned a
+  // new-secret token while the stored hash stayed old-secret → permanent 401).
+  // Deterministic per (user, version), so this is idempotent and race-safe.
+  await pool.query(
+    `INSERT INTO feeder_tokens (user_id, token_hash, token_prefix, token_version)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id) DO UPDATE
+       SET token_hash = EXCLUDED.token_hash,
+           token_prefix = EXCLUDED.token_prefix`,
+    [userId, sha256hex(token), lookupPrefix(token), version],
+  );
   return { token, prefix: logPrefix(token) };
 }
 

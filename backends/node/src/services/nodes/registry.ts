@@ -39,6 +39,30 @@ const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, c
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
   last_seen_at, notes, created_at`;
 
+/** Max distinct installs (nodes) one contributor may register. `install_id` is
+ *  an attacker-chosen header, so without a cap a single token could create
+ *  unbounded rows. A real volunteer runs a handful of machines. */
+export const MAX_NODES_PER_USER = 25;
+
+/** Count a user's existing node rows (for the per-user cap check). */
+export async function countNodesForUser(userId: string): Promise<number> {
+  const pool = await getPool();
+  if (!pool) return 0;
+  const res = await pool.query<{ n: string }>(
+    'SELECT COUNT(*)::text AS n FROM nodes WHERE user_id = $1',
+    [userId],
+  );
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+// Clamp an agent-supplied metadata string so a hostile hello can't store an
+// oversized blob (the frame cap is 1 MB; DB columns don't need all of it).
+function clampMeta(s: string | undefined | null, max: number): string | null {
+  if (s == null) return null;
+  const t = String(s).slice(0, max);
+  return t.length ? t : null;
+}
+
 /**
  * Create-or-update a node from an agent's hello. Keyed by (user_id,
  * install_id): the first hello inserts, later ones refresh versions + seen
@@ -52,9 +76,8 @@ export async function upsertNodeOnHello(
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
-  const defaultName =
-    (meta.hostname && meta.hostname.trim()) ||
-    `radio-${installId.slice(0, 8)}`;
+  const hostname = clampMeta(meta.hostname, 120);
+  const defaultName = hostname || `radio-${installId.slice(0, 8)}`;
   const res = await pool.query<NodeRow>(
     `INSERT INTO nodes
        (user_id, install_id, kind, name, agent_version, sdrtrunk_version,
@@ -72,11 +95,11 @@ export async function upsertNodeOnHello(
       userId,
       installId,
       defaultName,
-      meta.agentVersion ?? null,
-      meta.sdrtrunkVersion ?? null,
-      meta.rdioVersion ?? null,
-      meta.os ?? null,
-      meta.arch ?? null,
+      clampMeta(meta.agentVersion, 40),
+      clampMeta(meta.sdrtrunkVersion, 40),
+      clampMeta(meta.rdioVersion, 40),
+      clampMeta(meta.os, 40),
+      clampMeta(meta.arch, 20),
     ],
   );
   return res.rows[0] ?? null;

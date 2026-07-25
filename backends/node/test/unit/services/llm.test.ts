@@ -693,6 +693,7 @@ describe('/api/summaries/trigger', () => {
     const jwt = await new SignJWT({})
       .setProtectedHeader({ alg: 'HS256' })
       .setSubject('owner-1')
+      .setAudience('authenticated') // real Supabase access tokens carry this aud
       .sign(new TextEncoder().encode('test-jwt-secret-0123456789'));
     const { createApp } = await import('../../../src/server.js');
     const app = createApp();

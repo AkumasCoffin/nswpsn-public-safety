@@ -22,12 +22,15 @@ import {
   touchNodeSeen,
   updateNode,
   getNodeByInstall,
+  countNodesForUser,
+  MAX_NODES_PER_USER,
   type HelloMeta,
 } from '../services/nodes/registry.js';
 import {
   parseEnvelope,
   envelope,
   PROTOCOL_VERSION,
+  isAgentCommandAction,
   type HelloData,
   type StatusData,
 } from '../services/nodes/protocol.js';
@@ -152,6 +155,14 @@ async function handleAgentUpgrade(
     rejectUpgrade(socket, 400, 'Missing Install Id');
     return;
   }
+  // install_id is an attacker-chosen header that keys a DB row; require the
+  // agent's generated shape (lowercase hex/UUID-ish, bounded) so it can't be
+  // used to spray arbitrary/oversized keys.
+  if (!/^[A-Za-z0-9._-]{8,64}$/.test(installId)) {
+    log.warn({ tokenPrefix, tokenLen }, 'agent WS reject: malformed install id');
+    rejectUpgrade(socket, 400, 'Invalid Install Id');
+    return;
+  }
   const resolved = await resolveFeederToken(token);
   if (!resolved.ok) {
     log.warn(
@@ -159,6 +170,17 @@ async function handleAgentUpgrade(
       'agent WS reject: token resolve failed',
     );
     rejectUpgrade(socket, resolved.reason === 'no_role' ? 403 : 401, 'Unauthorized');
+    return;
+  }
+  // Per-user node cap: only new installs count against it (refreshing an
+  // existing node is always allowed). Bounds authenticated row-creation.
+  const existing = await getNodeByInstall(resolved.userId, installId);
+  if (!existing && (await countNodesForUser(resolved.userId)) >= MAX_NODES_PER_USER) {
+    log.warn(
+      { tokenPrefix, installId, userId: resolved.userId },
+      'agent WS reject: per-user node cap reached',
+    );
+    rejectUpgrade(socket, 429, 'Too Many Nodes');
     return;
   }
   // Create/refresh the node row now so we have its id (auto-link on start).
@@ -357,6 +379,11 @@ async function handleStaffMessage(
     case 'cmd': {
       const d = (data ?? {}) as { nodeId?: string; action?: string; args?: unknown; id?: string };
       if (!d.nodeId || !d.action) return;
+      if (!isAgentCommandAction(d.action)) {
+        log.warn({ nodeId: d.nodeId, action: d.action, by: state.userId }, 'staff cmd rejected: unknown action');
+        ws.send(envelope('cmdResult', { nodeId: d.nodeId, reqId: d.id, ok: false, error: 'unknown action' }));
+        return;
+      }
       log.info({ nodeId: d.nodeId, action: d.action, by: state.userId }, 'staff node command');
       const result = await hub.sendCmd(d.nodeId, d.action, d.args);
       ws.send(envelope('cmdResult', { nodeId: d.nodeId, reqId: d.id, ...result }));

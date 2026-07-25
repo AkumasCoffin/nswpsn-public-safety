@@ -121,3 +121,19 @@ describe('seeded agencies pass schema validation (rowToConfig round-trip)', () =
     expect(parsed.success).toBe(true);
   });
 });
+
+import { AliasIdSchema } from '../../../src/services/nodes/globalConfig.js';
+
+describe('alias-id attribute-name hardening', () => {
+  it('accepts safe XML attribute names', () => {
+    const r = AliasIdSchema.safeParse({ type: 'talkgroup', attrs: { value: '1201', protocol: 'APCO25' } });
+    expect(r.success).toBe(true);
+  });
+  it('rejects an attribute key that would break out of the XML element', () => {
+    const r = AliasIdSchema.safeParse({
+      type: 'talkgroup',
+      attrs: { 'x"/><stream host="http://evil': '1' },
+    });
+    expect(r.success).toBe(false);
+  });
+});
