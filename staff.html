@@ -506,23 +506,20 @@
       -webkit-backdrop-filter: blur(5px);
       z-index: 1100;
       display: none;
-      justify-content: flex-end;
     }
-    .node-drawer.open { display: flex; }
+    .node-drawer.open { display: block; }
     .node-drawer-panel {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
         var(--bg-card-2);
-      border-left: 1px solid rgba(148, 163, 184, 0.22);
-      width: min(680px, 100%);
+      width: 100%;
       height: 100%;
       display: flex; flex-direction: column;
-      box-shadow: -25px 0 60px -12px rgba(0, 0, 0, 0.8);
-      animation: drawer-in 0.2s ease-out;
+      animation: drawer-in 0.18s ease-out;
     }
     @keyframes drawer-in {
-      from { transform: translateX(36px); opacity: 0.3; }
-      to   { transform: none; opacity: 1; }
+      from { opacity: 0; }
+      to   { opacity: 1; }
     }
     .node-drawer-head {
       display: flex; align-items: center; gap: 0.7rem;
@@ -537,7 +534,10 @@
     }
     .node-drawer-sub { font-size: 0.72rem; color: var(--text-soft); }
     .node-drawer-sub.err { color: var(--danger); }
-    .node-drawer-body { flex: 1; overflow-y: auto; padding: 1.2rem 1.4rem 2.5rem; }
+    .node-drawer-body {
+      flex: 1; overflow-y: auto; padding: 1.2rem 1.6rem 2.5rem;
+      column-width: 400px; column-gap: 1.6rem;
+    }
 
     .nd-section { margin-bottom: 1.5rem; }
     .nd-section-h {
@@ -550,6 +550,7 @@
     .nd-banner {
       padding: 0.7rem 0.9rem; border-radius: 8px; font-size: 0.8rem;
       margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;
+      column-span: all;
     }
     .nd-banner.warn { background: rgba(245, 158, 11, 0.12); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
     .nd-banner.err  { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
@@ -600,8 +601,8 @@
     .nd-wf-status { font-size: 0.7rem; color: var(--text-soft); margin-left: auto; }
     .nd-wf-wrap { background: #05070d; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
     #nd-trace, #nd-waterfall { display: block; width: 100%; }
-    #nd-trace { height: 70px; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
-    #nd-waterfall { height: 200px; image-rendering: pixelated; }
+    #nd-trace { height: 90px; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
+    #nd-waterfall { height: 220px; }
     .nd-axis {
       display: flex; justify-content: space-between; gap: 0.5rem;
       font-size: 0.62rem; color: var(--text-soft);
@@ -642,8 +643,10 @@
       border-radius: 999px; background: rgba(56, 189, 248, 0.18); color: #7dd3fc;
       font-size: 0.62rem; font-weight: 700; vertical-align: middle;
     }
-    .nd-view { display: none; }
-    .nd-view.active { display: block; }
+    /* Full-screen drawer: all four views are shown at once, packed into the
+       masonry columns of .node-drawer-body (tabs are hidden). */
+    .nd-tabs { display: none; }
+    .nd-view { display: block; break-inside: avoid; margin-bottom: 1.4rem; }
 
     /* --- Spectrum hover overlay (P6c) --- */
     .nd-wf-wrap { position: relative; }
@@ -2602,7 +2605,14 @@
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
     let _ndReqSeq = 0;
     const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
-    const _ndWf = { canvas: null, ctx: null, w: 512, h: 200, lastCenter: null, lastSr: null };
+    const _ndWf = {
+      wf: null, wfCtx: null, wfW: 0, wfH: 0,   // waterfall canvas + device-pixel buffer size
+      tr: null, trCtx: null, trW: 0, trH: 0,   // FFT trace canvas + device-pixel buffer size
+      dpr: 1,
+      lastCenter: null, lastSr: null, lastBins: null,
+      agcLo: -100, agcHi: -20,                 // slow-AGC dB window for the trace pane
+      ro: null                                 // ResizeObserver (re-fits buffers on layout change)
+    };
 
     // --- New drawer sub-view / editor / log state (P1/P2/P4/P5) ---
     let _ndNode = null;            // the node object from the list (for versions etc.)
@@ -2638,7 +2648,8 @@
       _ndSpectrumTunerId = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
       _ndPrevChan = {}; _ndCallStart = {};
-      _ndWf.lastCenter = null; _ndWf.lastSr = null;
+      _ndWf.lastCenter = null; _ndWf.lastSr = null; _ndWf.lastBins = null;
+      _ndWf.agcLo = -100; _ndWf.agcHi = -20;
       _ndSetView('live');
       _ndStartNpTicker();
 
@@ -2772,7 +2783,9 @@
     function _ndStartSpectrum(tunerId) {
       if (tunerId == null || !_ndWs || !_ndAuthed) return;
       _ndSpectrumTunerId = tunerId;
-      _ndWsSend({ t: 'spectrumStart', data: { nodeId: _ndNodeId, tunerId, fps: 10, bins: 512 } });
+      // Request a high-resolution stream. The control server sends binCount
+      // per frame, so the renderer handles whatever it actually gets.
+      _ndWsSend({ t: 'spectrumStart', data: { nodeId: _ndNodeId, tunerId, fps: 16, bins: 1024 } });
       const s = document.getElementById('nd-wf-status');
       if (s) s.textContent = 'streaming · tuner ' + tunerId;
     }
@@ -2810,17 +2823,61 @@
     }
 
     function _ndInitWaterfall() {
-      const c = document.getElementById('nd-waterfall');
-      if (!c) return;
-      _ndWf.canvas = c;
-      _ndWf.ctx = c.getContext('2d');
-      _ndWf.w = c.width;   // fixed internal resolution (512); CSS scales width
-      _ndWf.h = c.height;  // 200
-      _ndWf.ctx.fillStyle = '#05070d';
-      _ndWf.ctx.fillRect(0, 0, c.width, c.height);
+      const wf = document.getElementById('nd-waterfall');
       const tr = document.getElementById('nd-trace');
-      if (tr) { const tc = tr.getContext('2d'); tc.fillStyle = '#070b14'; tc.fillRect(0, 0, tr.width, tr.height); }
+      if (!wf || !tr) return;
+      _ndWf.wf = wf; _ndWf.wfCtx = wf.getContext('2d');
+      _ndWf.tr = tr; _ndWf.trCtx = tr.getContext('2d');
+      // Fresh waterfall history on (re)init.
+      _ndWf.wfW = 0; _ndWf.wfH = 0;
+      _ndWf.lastBins = null;
+      _ndResizeCanvases();
+      // Re-fit the internal buffers whenever the column width (or DPR) changes.
+      if (!_ndWf.ro && 'ResizeObserver' in window) {
+        _ndWf.ro = new ResizeObserver(() => _ndResizeCanvases());
+        _ndWf.ro.observe(wf);
+        _ndWf.ro.observe(tr);
+      }
       _ndBindWfHover();
+    }
+
+    function _ndCloneCanvas(src) {
+      const c = document.createElement('canvas');
+      c.width = src.width; c.height = src.height;
+      c.getContext('2d').drawImage(src, 0, 0);
+      return c;
+    }
+
+    // Size each canvas' backing buffer to its CSS box * devicePixelRatio so the
+    // spectrum renders at real screen resolution (crisp, not upscaled from a
+    // fixed 512px buffer). Called on init and whenever the layout/DPR changes.
+    function _ndResizeCanvases() {
+      const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+      _ndWf.dpr = dpr;
+      const wf = _ndWf.wf, tr = _ndWf.tr;
+      if (wf && wf.clientWidth) {
+        const w = Math.max(1, Math.round(wf.clientWidth * dpr));
+        const h = Math.max(1, Math.round(wf.clientHeight * dpr));
+        if (w !== _ndWf.wfW || h !== _ndWf.wfH) {
+          // Preserve existing waterfall history by blitting the old buffer.
+          const old = (_ndWf.wfW && _ndWf.wfH) ? _ndCloneCanvas(wf) : null;
+          _ndWf.wfW = w; _ndWf.wfH = h;
+          wf.width = w; wf.height = h;
+          _ndWf.wfCtx.imageSmoothingEnabled = true;
+          _ndWf.wfCtx.fillStyle = '#05070d';
+          _ndWf.wfCtx.fillRect(0, 0, w, h);
+          if (old) _ndWf.wfCtx.drawImage(old, 0, 0, w, h);
+        }
+      }
+      if (tr && tr.clientWidth) {
+        const w = Math.max(1, Math.round(tr.clientWidth * dpr));
+        const h = Math.max(1, Math.round(tr.clientHeight * dpr));
+        _ndWf.trW = w; _ndWf.trH = h;
+        tr.width = w; tr.height = h;
+        _ndWf.trCtx.imageSmoothingEnabled = true;
+        if (_ndWf.lastBins) _ndDrawTrace(_ndWf.lastBins);
+        else { _ndWf.trCtx.fillStyle = '#070b14'; _ndWf.trCtx.fillRect(0, 0, w, h); }
+      }
     }
 
     // Frequency-under-cursor tooltip + vertical cursor line (P6c).
@@ -2860,103 +2917,145 @@
     //   weak = BLUE -> cyan -> green -> yellow -> strong = RED.
     // Stops are evenly spaced over the noise-floor window [lo, hi].
     const _ND_CMAP = [
-      [8, 12, 60],     // deep blue (noise floor)
-      [0, 120, 220],   // blue
-      [0, 200, 200],   // cyan
-      [40, 200, 60],   // green
-      [235, 220, 40],  // yellow
-      [235, 60, 30]    // red (strong)
+      [4, 6, 24],       // near-black blue (noise floor)
+      [8, 18, 84],      // deep blue
+      [12, 44, 170],    // blue
+      [0, 108, 220],    // bright blue
+      [0, 170, 210],    // cyan
+      [10, 200, 140],   // teal-green
+      [90, 210, 60],    // green
+      [200, 220, 40],   // yellow-green
+      [245, 190, 20],   // amber
+      [245, 110, 25],   // orange
+      [235, 50, 30],    // red (strong)
+      [255, 180, 170]   // white-hot peak
     ];
     function _ndDbRgb(db) {
-      const lo = -100, hi = -20;
+      const lo = -105, hi = -15;
       let n = (db - lo) / (hi - lo);
       n = n < 0 ? 0 : n > 1 ? 1 : n;
       const segs = _ND_CMAP.length - 1;
       const f = n * segs;
-      let i = Math.floor(f);
+      let i = f | 0;
       if (i >= segs) i = segs - 1;
       const t = f - i;
       const a = _ND_CMAP[i], b = _ND_CMAP[i + 1];
       return [
-        Math.round(a[0] + (b[0] - a[0]) * t),
-        Math.round(a[1] + (b[1] - a[1]) * t),
-        Math.round(a[2] + (b[2] - a[2]) * t)
+        (a[0] + (b[0] - a[0]) * t) | 0,
+        (a[1] + (b[1] - a[1]) * t) | 0,
+        (a[2] + (b[2] - a[2]) * t) | 0
       ];
     }
 
     function _ndDrawSpectrum(centerFreqHz, sampleRate, bins) {
       _ndWf.lastCenter = centerFreqHz;
       _ndWf.lastSr = sampleRate;
-      const ctx = _ndWf.ctx;
+      _ndWf.lastBins = bins;
+      const ctx = _ndWf.wfCtx;
       if (!ctx) return;
-      const W = _ndWf.w, H = _ndWf.h;
-      // Scroll everything down 1px, then paint the new row at the top.
+      const W = _ndWf.wfW, H = _ndWf.wfH;
+      if (!W || !H) return;
+      const n = bins.length;
+      // Scroll the waterfall down one device row, then paint the new row on top.
+      // (Exact pixel copy — no smoothing blur accumulates in the history.)
       const prev = ctx.getImageData(0, 0, W, H - 1);
       ctx.putImageData(prev, 0, 1);
       const row = ctx.createImageData(W, 1);
-      const n = bins.length;
+      const data = row.data;
+      // Interpolate bins across the full device width (smooth gradient rather
+      // than one fat rect per bin when there are fewer bins than pixels).
+      const span = n > 1 ? (n - 1) : 1;
       for (let x = 0; x < W; x++) {
-        const bi = n === W ? x : Math.floor(x * n / W);
-        const rgb = _ndDbRgb(bins[bi]);
+        const bp = W > 1 ? (x / (W - 1)) * span : 0;
+        const i0 = bp | 0;
+        const i1 = i0 + 1 < n ? i0 + 1 : i0;
+        const db = bins[i0] + (bins[i1] - bins[i0]) * (bp - i0);
+        const rgb = _ndDbRgb(db);
         const p = x * 4;
-        row.data[p] = rgb[0]; row.data[p + 1] = rgb[1]; row.data[p + 2] = rgb[2]; row.data[p + 3] = 255;
+        data[p] = rgb[0]; data[p + 1] = rgb[1]; data[p + 2] = rgb[2]; data[p + 3] = 255;
       }
       ctx.putImageData(row, 0, 0);
       _ndDrawTrace(bins);
       _ndUpdateAxis(centerFreqHz, sampleRate);
     }
 
-    // Live FFT trace of the current frame, anchored in its own fixed band
-    // with a dB baseline/grid so it reads as a distinct pane (P6b).
+    // Live FFT trace of the current frame: filled, anti-aliased spectrum line
+    // with a faint dB grid + baseline, auto-scaling the dB window to the data
+    // (slow AGC) so signals use the full height — SDR-Trunk-style (P6b).
     function _ndDrawTrace(bins) {
-      const c = document.getElementById('nd-trace');
-      if (!c) return;
-      const ctx = c.getContext('2d');
-      const W = c.width, H = c.height;
-      const lo = -110, hi = -10, n = bins.length;
-      const pad = 2;                     // top/bottom inset so the peak/floor don't clip
+      const ctx = _ndWf.trCtx;
+      if (!ctx) return;
+      const W = _ndWf.trW, H = _ndWf.trH, dpr = _ndWf.dpr || 1;
+      if (!W || !H) return;
+      const n = bins.length;
+
+      // Slow AGC: ease the display window toward the frame's floor/peak.
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i < n; i++) { const v = bins[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+      if (!isFinite(mn)) { mn = -100; mx = -20; }
+      const floorTgt = mn - 4;                        // headroom below the noise floor
+      const peakTgt = Math.max(mx + 6, mn + 20);      // and above the peak (min span)
+      const ease = 0.12;
+      _ndWf.agcLo += (floorTgt - _ndWf.agcLo) * ease;
+      _ndWf.agcHi += (peakTgt - _ndWf.agcHi) * ease;
+      const lo = _ndWf.agcLo, hi = _ndWf.agcHi, rng = (hi - lo) || 1;
+      const pad = Math.round(3 * dpr);
       const plotH = H - pad * 2;
       const yFor = db => {
-        let v = (db - lo) / (hi - lo);
+        let v = (db - lo) / rng;
         v = v < 0 ? 0 : v > 1 ? 1 : v;
         return pad + (1 - v) * plotH;
       };
-      // Distinct pane background.
+
+      // Pane background.
       ctx.fillStyle = '#070b14';
       ctx.fillRect(0, 0, W, H);
-      // Horizontal dB gridlines + labels at fixed levels.
-      ctx.font = '8px ui-monospace, Menlo, monospace';
+
+      // Horizontal dB grid at nice 20 dB steps inside the current window.
+      ctx.font = (9 * dpr) + 'px ui-monospace, Menlo, monospace';
       ctx.textBaseline = 'middle';
-      [-20, -50, -80].forEach(db => {
+      ctx.lineWidth = Math.max(1, dpr | 0);
+      const step = 20;
+      for (let db = Math.ceil(hi / step) * step; db > lo; db -= step) {
         const y = yFor(db);
-        ctx.strokeStyle = 'rgba(148,163,184,0.14)';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(148,163,184,0.12)';
         ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
-        ctx.fillStyle = 'rgba(148,163,184,0.55)';
-        ctx.fillText(db + ' dB', 2, y);
-      });
-      // Baseline / axis at the bottom of the trace pane.
-      ctx.strokeStyle = 'rgba(148,163,184,0.4)';
+        ctx.fillStyle = 'rgba(148,163,184,0.5)';
+        ctx.fillText(Math.round(db) + ' dB', 3 * dpr, y);
+      }
+      // Baseline anchored at the bottom of the pane.
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
       ctx.beginPath(); ctx.moveTo(0, H - 0.5); ctx.lineTo(W, H - 0.5); ctx.stroke();
-      // Filled area under the curve, then the line on top.
+
+      // Interpolated dB at a device-x column.
+      const span = n > 1 ? (n - 1) : 1;
+      const dbAt = x => {
+        const bp = W > 1 ? (x / (W - 1)) * span : 0;
+        const i0 = bp | 0, i1 = i0 + 1 < n ? i0 + 1 : i0;
+        return bins[i0] + (bins[i1] - bins[i0]) * (bp - i0);
+      };
+
+      // Filled area under the curve (subtle vertical gradient).
       ctx.beginPath();
       ctx.moveTo(0, H);
-      for (let x = 0; x < W; x++) {
-        const bi = n === W ? x : Math.floor(x * n / W);
-        ctx.lineTo(x, yFor(bins[bi]));
-      }
+      for (let x = 0; x < W; x++) ctx.lineTo(x, yFor(dbAt(x)));
       ctx.lineTo(W - 1, H);
       ctx.closePath();
-      ctx.fillStyle = 'rgba(56,189,248,0.14)';
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, 'rgba(56,189,248,0.32)');
+      grad.addColorStop(1, 'rgba(56,189,248,0.02)');
+      ctx.fillStyle = grad;
       ctx.fill();
+
+      // Anti-aliased spectrum line on top.
       ctx.beginPath();
       for (let x = 0; x < W; x++) {
-        const bi = n === W ? x : Math.floor(x * n / W);
-        const y = yFor(bins[bi]);
+        const y = yFor(dbAt(x));
         if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#7dd3fc';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1, 1.25 * dpr);
       ctx.stroke();
     }
 
@@ -3480,8 +3579,17 @@
       } catch (e) { showToast('Push failed: ' + e.message, 'error'); }
     }
 
+    // Collapse a long (sha256) config version to a 7-char prefix for display;
+    // leave short/human versions untouched.
+    function _ndCfgShort(v) {
+      const s = String(v);
+      return /^[0-9a-f]{16,}$/i.test(s) ? s.slice(0, 7) : s;
+    }
+
     // "Config out of sync" hint: the node's stored config version vs the
-    // version the running agent reports as applied.
+    // version the running agent reports as applied. Renders a compact badge
+    // only — the full sha256 version never appears inline; a short prefix is
+    // exposed in the hover title for debugging.
     function _ndRenderCfgSync() {
       const el = document.getElementById('nd-cfg-sync');
       if (!el) return;
@@ -3489,13 +3597,17 @@
       const applied = _ndStatus
         ? (_ndStatus.appliedConfigVersion != null ? _ndStatus.appliedConfigVersion : _ndStatus.configVersion)
         : null;
-      if (local == null || applied == null) { el.className = 'nd-sync-hint'; el.textContent = ''; return; }
+      if (local == null || applied == null) {
+        el.className = 'nd-sync-hint'; el.textContent = ''; el.removeAttribute('title'); return;
+      }
       if (String(local) !== String(applied)) {
         el.className = 'nd-sync-hint out';
-        el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> Out of sync — push config (node v${escapeHtml(String(applied))} · config v${escapeHtml(String(local))})`;
+        el.title = `node applied v${_ndCfgShort(applied)} · saved config v${_ndCfgShort(local)}`;
+        el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> Out of sync`;
       } else {
         el.className = 'nd-sync-hint ok';
-        el.innerHTML = `<i class="fas fa-check"></i> In sync (v${escapeHtml(String(local))})`;
+        el.title = `config v${_ndCfgShort(local)}`;
+        el.innerHTML = `<i class="fas fa-check"></i> In sync`;
       }
     }
 
