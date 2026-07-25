@@ -36,8 +36,8 @@ const (
 	readDeadline           = 90 * time.Second
 	writeWait              = 10 * time.Second
 	backoffInitial         = 1 * time.Second
-	backoffMax             = 30 * time.Second   // transient drops recover fast
-	backoffDisabled        = 30 * time.Second   // 401/403 (disabled / role removed): retry every ~30s so re-enabling recovers quickly
+	backoffMax             = 30 * time.Second // transient drops recover fast
+	backoffDisabled        = 30 * time.Second // 401/403 (disabled / role removed): retry every ~30s so re-enabling recovers quickly
 
 	updateInitialDelay = 30 * time.Second // let the WS settle before the first update check
 	updateInterval     = 6 * time.Hour    // periodic update check cadence
@@ -495,12 +495,13 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 
 	case "tunerSet":
 		var a struct {
-			TunerID    string   `json:"tunerId"`
-			Frequency  *int64   `json:"frequency"`
-			PPM        *float64 `json:"ppm"`
-			Gain       *int     `json:"gain"`
-			SampleRate *float64 `json:"sampleRate"`
-			AutoPpm    *bool    `json:"autoPpm"`
+			TunerID    string          `json:"tunerId"`
+			Frequency  *int64          `json:"frequency"`
+			PPM        *float64        `json:"ppm"`
+			Gain       *int            `json:"gain"`
+			GainParams json.RawMessage `json:"gainParams"`
+			SampleRate *float64        `json:"sampleRate"`
+			AutoPpm    *bool           `json:"autoPpm"`
 		}
 		_ = json.Unmarshal(cmd.Args, &a)
 		if a.TunerID == "" {
@@ -536,7 +537,22 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 			}
 			done = append(done, "ppm")
 		}
-		if a.Gain != nil {
+		// Gain: a device-shaped gainParams object takes precedence (multi-axis
+		// devices); otherwise the scalar gain path is used (back-compat).
+		if len(a.GainParams) > 0 {
+			var gp map[string]any
+			if err := json.Unmarshal(a.GainParams, &gp); err != nil {
+				c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "bad gainParams: " + err.Error()})
+				return
+			}
+			if len(gp) > 0 {
+				if err := c.sdr.SetGainParams(a.TunerID, gp); err != nil {
+					c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})
+					return
+				}
+				done = append(done, "gain")
+			}
+		} else if a.Gain != nil {
 			if err := c.sdr.SetGain(a.TunerID, *a.Gain); err != nil {
 				c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})
 				return

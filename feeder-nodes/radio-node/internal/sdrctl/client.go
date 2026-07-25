@@ -249,9 +249,18 @@ func (c *Client) SetPPM(id string, ppm float64) error {
 	return c.post("/tuners/"+url.PathEscape(id)+"/ppm", map[string]any{"ppm": ppm})
 }
 
-// SetGain POSTs /tuners/{id}/gain.
+// SetGain POSTs /tuners/{id}/gain with a single scalar gain value.
 func (c *Client) SetGain(id string, gain int) error {
 	return c.post("/tuners/"+url.PathEscape(id)+"/gain", map[string]any{"gain": gain})
+}
+
+// SetGainParams POSTs a device-specific gain object to /tuners/{id}/gain. The
+// control server accepts a superset body ({gain, auto, gainMode, lnaGain,
+// vgaGain, amp, lnaState, gainReduction, attenuation, lna}) and each device
+// reads only the keys that apply to it, so the caller forwards whatever axes
+// the tuner type exposes.
+func (c *Client) SetGainParams(id string, params map[string]any) error {
+	return c.post("/tuners/"+url.PathEscape(id)+"/gain", params)
 }
 
 // SetSampleRate POSTs /tuners/{id}/samplerate. Supported by the control server
