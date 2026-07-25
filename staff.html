@@ -2767,6 +2767,7 @@
     let _ndAuthed = false;
     let _ndStatus = null;          // last status object we saw (null = none yet)
     let _ndTuners = [];
+    let _ndTunersSig = null;        // signature of the current tuner SET (serial+type list); full-rebuild only when this changes
     let _ndChannels = [];
     let _ndCalls = [];             // st.activeCalls[] — calls currently up (incl. dynamic P25 traffic channels)
     let _ndEvents = [];
@@ -2813,6 +2814,7 @@
       _ndAuthed = false;
       _ndStatus = null;
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = [];
+      _ndTunersSig = null;
       _ndSpectrumTunerId = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
       _ndPrevChan = {}; _ndCallStart = {};
@@ -2919,7 +2921,16 @@
       }
       _ndDiffChannels();       // detect control-lock / call start-end transitions -> log
       _ndDiffCalls();          // track client-side elapsed clocks for active calls
-      _ndRenderTuners();
+      // Tuner table: only FULL-rebuild when the set of SDRs changes (new/removed
+      // device). On every other status frame just refresh the read-only cells so
+      // open gain dropdowns / in-progress edits are never clobbered. (Mirrors the
+      // channel table, where status frames only rewrite the live "State" cell.)
+      const sig = _ndTunersSignature();
+      if (sig !== _ndTunersSig || !document.querySelector('#nd-tuners table')) {
+        _ndRenderTuners();     // sets _ndTunersSig
+      } else {
+        _ndUpdateTunersLive(); // live-only overlay; leaves editable controls intact
+      }
       _ndRenderChannels();
       _ndRenderEvents();
       _ndRenderNowPlaying();
@@ -3504,6 +3515,7 @@
       if (!el) return;
       if (!_ndTuners.length) {
         el.innerHTML = _ndEmpty('No tuners reported', _ndStatus ? 'SDR-Trunk may be down or node offline' : 'waiting for node status…');
+        _ndTunersSig = _ndTunersSignature();
         return;
       }
       const rows = _ndTuners.map((t, i) => {
@@ -3522,9 +3534,9 @@
           <td class="nd-gain-cell">${_ndGainCellHtml(i, prof, t)}</td>
           <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
           <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})"></td>
-          <td>${measured}</td>
-          <td><span class="nd-sub" title="Center frequency the channels are driving — read-only">${freqMhz}</span></td>
-          <td>${stat}</td>
+          <td id="nd-meas-${i}">${measured}</td>
+          <td><span class="nd-sub" id="nd-freq-${i}" title="Center frequency the channels are driving — read-only">${freqMhz}</span></td>
+          <td id="nd-tstat-${i}">${stat}</td>
           <td><button class="btn btn-secondary btn-sm" onclick="_ndApplyTuner(${i})">Apply</button></td>
           <td class="nd-tune-cell">
             <div class="nd-tune-wrap">
@@ -3538,6 +3550,39 @@
         <th>SDR</th><th>Sample rate</th><th>Gain</th><th>PPM</th><th>Auto-PPM</th><th>Meas. err</th><th>Frequency</th><th>Status</th><th></th>
         <th>Search tune <span class="nd-sub" style="font-weight:400; text-transform:none; letter-spacing:0;">(MHz — moves spectrum to hunt; channels still control decode)</span></th>
       </tr></thead><tbody>${rows}</tbody></table>`;
+      _ndTunersSig = _ndTunersSignature();
+    }
+
+    // Signature of the current tuner SET: serial + device type per row, in order.
+    // A change here means an SDR was added / removed / re-typed and the editable
+    // per-device controls (which depend on the device profile) must be rebuilt.
+    // A pure value change (frequency / gain readback / status) does NOT change it,
+    // so ~1/sec status frames don't trigger a full rebuild.
+    function _ndTunersSignature() {
+      return _ndTuners
+        .map(t => _ndTunerSerial(t) + ':' + ((t.type || t.tunerClass || '')).toString().toLowerCase())
+        .join('|');
+    }
+
+    // Light live-overlay for the tuner table (analogue of _ndRenderChannels for
+    // channels): on a status frame, refresh ONLY the read-only cells —
+    // Frequency, Meas. err, Status — via textContent. Every editable
+    // <input>/<select> (gain, auto-gain, sample-rate, PPM, auto-PPM, search-tune,
+    // Apply) is left completely untouched, so focus, open dropdowns and
+    // in-progress unapplied edits survive. Never rebuilds table HTML.
+    function _ndUpdateTunersLive() {
+      if (!_ndTuners.length) return;
+      _ndTuners.forEach((t, i) => {
+        const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) + ' MHz' : '—';
+        const measured = t.measuredPpmError != null ? Number(t.measuredPpmError).toFixed(2) : '—';
+        const stat = t.status || (t.available === false ? 'unavailable' : '—');
+        const fEl = document.getElementById('nd-freq-' + i);
+        if (fEl) fEl.textContent = freqMhz;
+        const mEl = document.getElementById('nd-meas-' + i);
+        if (mEl) mEl.textContent = measured;
+        const sEl = document.getElementById('nd-tstat-' + i);
+        if (sEl) sEl.textContent = stat;
+      });
     }
 
     // Manual / search tune: sweep this SDR's CENTER frequency to hunt for
