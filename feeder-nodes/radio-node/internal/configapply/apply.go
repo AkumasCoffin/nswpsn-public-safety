@@ -509,10 +509,30 @@ func (d Deps) restartRunningChannels() {
 	if d.SDR == nil {
 		return
 	}
-	channels, _, err := d.SDR.Channels()
-	if err != nil {
-		log.Printf("configapply: list channels for restart failed: %v", err)
-		return
+	// A live playlist reload rebuilds the channel model asynchronously, so an
+	// immediate Channels() can catch a transient moment where the list is empty or
+	// channels momentarily report Processing=false — which would make us bounce
+	// nothing and leave them on the old config. Retry briefly until we see at least
+	// one processing channel (or give up after a short window).
+	var channels []sdrctl.Channel
+	for attempt := 0; attempt < 6; attempt++ {
+		var err error
+		channels, _, err = d.SDR.Channels()
+		if err != nil {
+			log.Printf("configapply: list channels for restart failed: %v", err)
+			return
+		}
+		anyProcessing := false
+		for _, ch := range channels {
+			if ch.Processing {
+				anyProcessing = true
+				break
+			}
+		}
+		if anyProcessing {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 	for _, ch := range channels {
 		if !ch.Processing {
