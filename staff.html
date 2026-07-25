@@ -600,7 +600,7 @@
     .nd-wf-status { font-size: 0.7rem; color: var(--text-soft); margin-left: auto; }
     .nd-wf-wrap { background: #05070d; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
     #nd-trace, #nd-waterfall { display: block; width: 100%; }
-    #nd-trace { height: 60px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); }
+    #nd-trace { height: 70px; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
     #nd-waterfall { height: 200px; image-rendering: pixelated; }
     .nd-axis {
       display: flex; justify-content: space-between; gap: 0.5rem;
@@ -620,6 +620,178 @@
     .nd-ev-type { font-weight: 600; color: var(--accent); flex-shrink: 0; }
     .nd-ev-ft { color: var(--text-primary); margin-left: auto; text-align: right; }
     .nd-table-scroll { overflow-x: auto; }
+
+    /* --- Drawer sub-view tabs (P4/P5/P1) --- */
+    .nd-tabs {
+      display: flex; gap: 0.35rem; flex-wrap: wrap;
+      margin-bottom: 1.2rem;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 0.1rem;
+    }
+    .nd-tab {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-soft); font-family: inherit; font-weight: 600;
+      font-size: 0.78rem; padding: 0.5rem 0.8rem;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .nd-tab:hover { color: var(--text-primary); }
+    .nd-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .nd-tab .nd-tab-count {
+      display: inline-block; margin-left: 0.35rem; padding: 0.02rem 0.4rem;
+      border-radius: 999px; background: rgba(56, 189, 248, 0.18); color: #7dd3fc;
+      font-size: 0.62rem; font-weight: 700; vertical-align: middle;
+    }
+    .nd-view { display: none; }
+    .nd-view.active { display: block; }
+
+    /* --- Spectrum hover overlay (P6c) --- */
+    .nd-wf-wrap { position: relative; }
+    .nd-wf-cursor {
+      position: absolute; top: 0; bottom: 0; width: 1px;
+      background: rgba(255, 255, 255, 0.65); pointer-events: none;
+      display: none; z-index: 2;
+    }
+    .nd-wf-tip {
+      position: absolute; top: 4px; transform: translateX(-50%);
+      background: rgba(3, 7, 18, 0.9); border: 1px solid var(--accent-border);
+      color: #bae6fd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.66rem; padding: 0.12rem 0.4rem; border-radius: 5px;
+      pointer-events: none; white-space: nowrap; display: none; z-index: 3;
+    }
+
+    /* --- Now playing cards (P4) --- */
+    .nd-np-grid { display: flex; flex-direction: column; gap: 0.55rem; }
+    .nd-np-card {
+      display: flex; align-items: center; gap: 0.8rem;
+      padding: 0.7rem 0.9rem; border-radius: 9px;
+      background: rgba(34, 197, 94, 0.07);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .nd-np-live {
+      width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+      background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
+      animation: nd-pulse 1.1s ease-in-out infinite;
+    }
+    @keyframes nd-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .nd-np-main { flex: 1; min-width: 0; }
+    .nd-np-tg { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
+    .nd-np-ft { font-size: 0.74rem; color: var(--text-soft); margin-top: 0.15rem; }
+    .nd-np-ft .nd-alias { color: #7dd3fc; }
+    .nd-np-elapsed {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem; color: #4ade80; flex-shrink: 0;
+    }
+    .nd-np-sub { font-size: 0.66rem; color: var(--text-soft); margin-top: 0.1rem; }
+
+    /* --- Live events log (P5) --- */
+    .nd-log-row { border-left: 2px solid transparent; }
+    .nd-log-row.control  { border-left-color: var(--warning); background: rgba(245, 158, 11, 0.06); }
+    .nd-log-row.traffic  { border-left-color: var(--accent); }
+    .nd-log-row.callstart{ border-left-color: var(--success); }
+    .nd-log-row.callend  { border-left-color: rgba(148, 163, 184, 0.5); }
+    .nd-log-row .nd-ev-type.control  { color: var(--warning); }
+    .nd-log-row .nd-ev-type.callstart{ color: #4ade80; }
+
+    /* --- Channel / tuner config editor (P1/P2) --- */
+    .nd-cfg-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.9rem; align-items: center; }
+    .nd-cfg-actions .nd-spacer { flex: 1; }
+    .nd-sync-hint {
+      font-size: 0.68rem; font-weight: 600; padding: 0.15rem 0.55rem; border-radius: 999px;
+      display: none; align-items: center; gap: 0.3rem;
+    }
+    .nd-sync-hint.out { display: inline-flex; background: rgba(245, 158, 11, 0.14); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .nd-sync-hint.ok  { display: inline-flex; background: rgba(34, 197, 94, 0.12); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+    .nd-cfg-row {
+      border: 1px solid var(--border-subtle); border-radius: 9px;
+      padding: 0.7rem 0.8rem; margin-bottom: 0.6rem; background: rgba(0, 0, 0, 0.18);
+    }
+    .nd-cfg-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0.55rem 0.7rem; align-items: end;
+    }
+    .nd-fld { display: flex; flex-direction: column; gap: 0.2rem; }
+    .nd-fld > label {
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-soft); font-weight: 600;
+    }
+    .nd-fld input[type="text"], .nd-fld input[type="number"], .nd-fld select {
+      width: 100%; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 6px;
+      color: var(--text-primary); padding: 0.32rem 0.45rem;
+      font-family: inherit; font-size: 0.78rem;
+    }
+    .nd-fld input:focus, .nd-fld select:focus { outline: none; border-color: var(--accent-border); }
+    .nd-chk { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; color: var(--text-primary); }
+    .nd-cfg-rowhead { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.55rem; }
+    .nd-cfg-rowhead .nd-strong { flex: 1; }
+    .nd-input-wide { width: 100%; }
+
+    /* --- Global settings modal (P3) --- */
+    .modal-content.wide { max-width: 940px; }
+    .gc-tabs { display: flex; gap: 0.35rem; border-bottom: 1px solid var(--border-subtle); margin: 0.5rem 0 1rem; }
+    .gc-tab {
+      background: none; border: none; cursor: pointer; color: var(--text-soft);
+      font-family: inherit; font-weight: 600; font-size: 0.82rem;
+      padding: 0.5rem 0.9rem; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .gc-tab:hover { color: var(--text-primary); }
+    .gc-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .gc-panel { display: none; }
+    .gc-panel.active { display: block; }
+    .gc-scroll { max-height: 58vh; overflow-y: auto; padding-right: 0.3rem; }
+    .gc-subtabs { display: flex; gap: 0.3rem; margin-bottom: 0.8rem; }
+    .gc-subtab {
+      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle);
+      border-radius: 999px; color: var(--text-soft); cursor: pointer;
+      font-family: inherit; font-size: 0.76rem; font-weight: 600; padding: 0.3rem 0.85rem;
+    }
+    .gc-subtab.active { background: var(--accent-soft); border-color: var(--accent-border); color: #7dd3fc; }
+    .gc-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.8rem; flex-wrap: wrap; }
+    .gc-card {
+      border: 1px solid var(--border-subtle); border-radius: 10px;
+      margin-bottom: 0.6rem; background: rgba(0, 0, 0, 0.16); overflow: hidden;
+    }
+    .gc-card-head {
+      display: flex; align-items: center; gap: 0.55rem; cursor: pointer;
+      padding: 0.6rem 0.8rem; user-select: none;
+    }
+    .gc-card-head:hover { background: rgba(255, 255, 255, 0.03); }
+    .gc-card-head .gc-caret { transition: transform 0.15s ease; color: var(--text-soft); font-size: 0.7rem; }
+    .gc-card.open .gc-card-head .gc-caret { transform: rotate(90deg); }
+    .gc-card-title { flex: 1; font-weight: 600; color: var(--text-primary); font-size: 0.85rem; }
+    .gc-card-meta { font-size: 0.68rem; color: var(--text-soft); }
+    .gc-card-body { display: none; padding: 0.2rem 0.8rem 0.8rem; }
+    .gc-card.open .gc-card-body { display: block; }
+    .gc-inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 0.6rem; }
+    .gc-color-swatch { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border-subtle); flex-shrink: 0; }
+    .gc-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+    .gc-table th {
+      text-align: left; color: var(--text-soft); font-weight: 600; font-size: 0.62rem;
+      text-transform: uppercase; letter-spacing: 0.05em; padding: 0.35rem 0.4rem;
+      border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
+    }
+    .gc-table td { padding: 0.3rem 0.4rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08); vertical-align: middle; }
+    .gc-table input, .gc-table select {
+      width: 100%; min-width: 60px; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 5px;
+      color: var(--text-primary); padding: 0.25rem 0.35rem; font-family: inherit; font-size: 0.75rem;
+    }
+    .gc-table input:focus, .gc-table select:focus { outline: none; border-color: var(--accent-border); }
+    .gc-icon-btn {
+      background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #f87171; border-radius: 6px; cursor: pointer; padding: 0.25rem 0.5rem;
+      font-size: 0.72rem; line-height: 1;
+    }
+    .gc-icon-btn:hover { background: rgba(239, 68, 68, 0.24); }
+    .gc-empty { font-size: 0.78rem; color: var(--text-soft); padding: 1.2rem; text-align: center; }
+    .gc-attr-row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.35rem; }
+    .gc-badge-btn {
+      background: rgba(56, 189, 248, 0.1); border: 1px solid var(--accent-border);
+      color: #7dd3fc; border-radius: 6px; cursor: pointer; padding: 0.28rem 0.7rem;
+      font-family: inherit; font-size: 0.74rem; font-weight: 600;
+    }
+    .gc-badge-btn:hover { background: rgba(56, 189, 248, 0.2); }
 
     /* === Filter / toolbar row ========================================= */
     .filter-bar {
@@ -1230,9 +1402,18 @@
 
       <!-- Nodes Tab -->
       <div id="nodes-tab" class="tab-content">
-        <div class="dev-section-h" style="margin-top: 0;">
+        <div class="dev-section-h" style="margin-top: 0; flex-wrap: wrap; gap: 0.5rem;">
           Feeder Nodes
-          <button class="btn btn-secondary btn-sm" onclick="loadNodes()" style="margin-left: auto;">
+          <label id="auto-update-wrap" style="margin-left:auto; display:inline-flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--text-soft); font-weight:400; cursor:pointer;" title="Pause automatic node self-updates while you push changes. Manual updates (the Update buttons) still work.">
+            <input type="checkbox" id="auto-update-toggle" onchange="toggleAutoUpdate(this.checked)"> Auto-update
+          </label>
+          <button class="btn btn-secondary btn-sm" onclick="updateAllNodes()" title="Update all online nodes now">
+            <i class="fas fa-download"></i> Update all
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="openGlobalConfig()">
+            <i class="fas fa-globe"></i> Global settings
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="loadNodes()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
         </div>
@@ -1259,48 +1440,157 @@
       <div class="node-drawer-body">
         <div class="nd-banner" id="nd-banner" style="display: none;"></div>
 
-        <div class="nd-section">
-          <div class="nd-section-h"><i class="fas fa-sliders"></i> Controls</div>
-          <div class="nd-controls">
-            <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
-            <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
-            <button class="btn btn-secondary btn-sm" onclick="_ndReloadPlaylist()"><i class="fas fa-list"></i> Reload playlist</button>
-            <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
-            <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
+        <div class="nd-tabs" id="nd-tabs">
+          <button class="nd-tab active" data-view="live" onclick="_ndSetView('live')"><i class="fas fa-gauge-high"></i> Live</button>
+          <button class="nd-tab" data-view="nowplaying" onclick="_ndSetView('nowplaying')"><i class="fas fa-tower-broadcast"></i> Now playing<span class="nd-tab-count" id="nd-np-count" style="display:none;"></span></button>
+          <button class="nd-tab" data-view="events" onclick="_ndSetView('events')"><i class="fas fa-clock-rotate-left"></i> Events</button>
+          <button class="nd-tab" data-view="config" onclick="_ndSetView('config')"><i class="fas fa-pen-to-square"></i> Channel editor</button>
+        </div>
+
+        <!-- LIVE VIEW -->
+        <div class="nd-view active" id="nd-view-live">
+          <div class="nd-section">
+            <div class="nd-section-h"><i class="fas fa-sliders"></i> Controls</div>
+            <div class="nd-controls">
+              <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndReloadPlaylist()"><i class="fas fa-list"></i> Reload playlist</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
+              <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
+            </div>
+          </div>
+
+          <div class="nd-section">
+            <div class="nd-section-h"><i class="fas fa-wave-square"></i> Spectrum</div>
+            <div class="nd-wf-toolbar">
+              <select id="nd-wf-tuner" style="display: none;" onchange="_ndSwitchSpectrum(this.value)"></select>
+              <span class="nd-wf-status" id="nd-wf-status">idle</span>
+            </div>
+            <div class="nd-wf-wrap" id="nd-wf-wrap">
+              <canvas id="nd-trace" width="512" height="70"></canvas>
+              <canvas id="nd-waterfall" width="512" height="200"></canvas>
+              <div class="nd-wf-cursor" id="nd-wf-cursor"></div>
+              <div class="nd-wf-tip" id="nd-wf-tip"></div>
+            </div>
+            <div class="nd-axis">
+              <span id="nd-axis-l">—</span>
+              <span id="nd-axis-m">—</span>
+              <span id="nd-axis-r">—</span>
+            </div>
+          </div>
+
+          <div class="nd-section">
+            <div class="nd-section-h"><i class="fas fa-satellite-dish"></i> Tuners</div>
+            <div class="nd-table-scroll" id="nd-tuners"></div>
+          </div>
+
+          <div class="nd-section">
+            <div class="nd-section-h"><i class="fas fa-broadcast-tower"></i> Channels</div>
+            <div class="nd-table-scroll" id="nd-channels"></div>
           </div>
         </div>
 
-        <div class="nd-section">
-          <div class="nd-section-h"><i class="fas fa-wave-square"></i> Spectrum</div>
-          <div class="nd-wf-toolbar">
-            <select id="nd-wf-tuner" style="display: none;" onchange="_ndSwitchSpectrum(this.value)"></select>
-            <span class="nd-wf-status" id="nd-wf-status">idle</span>
-          </div>
-          <div class="nd-wf-wrap">
-            <canvas id="nd-trace" width="512" height="60"></canvas>
-            <canvas id="nd-waterfall" width="512" height="200"></canvas>
-          </div>
-          <div class="nd-axis">
-            <span id="nd-axis-l">—</span>
-            <span id="nd-axis-m">—</span>
-            <span id="nd-axis-r">—</span>
+        <!-- NOW PLAYING VIEW -->
+        <div class="nd-view" id="nd-view-nowplaying">
+          <div class="nd-section">
+            <div class="nd-section-h"><i class="fas fa-tower-broadcast"></i> Active calls</div>
+            <div id="nd-nowplaying"></div>
           </div>
         </div>
 
-        <div class="nd-section">
-          <div class="nd-section-h"><i class="fas fa-satellite-dish"></i> Tuners</div>
-          <div class="nd-table-scroll" id="nd-tuners"></div>
+        <!-- EVENTS VIEW -->
+        <div class="nd-view" id="nd-view-events">
+          <div class="nd-section">
+            <div class="nd-section-h"><i class="fas fa-clock-rotate-left"></i> Live event log <span class="nd-sub" style="margin-left:auto;">newest first · live only</span></div>
+            <div class="nd-events" id="nd-events"></div>
+          </div>
         </div>
 
-        <div class="nd-section">
-          <div class="nd-section-h"><i class="fas fa-broadcast-tower"></i> Channels</div>
-          <div class="nd-table-scroll" id="nd-channels"></div>
+        <!-- CHANNEL EDITOR / CONFIG VIEW -->
+        <div class="nd-view" id="nd-view-config">
+          <div class="nd-section">
+            <div class="nd-section-h">
+              <i class="fas fa-pen-to-square"></i> Channel configuration
+              <span class="nd-sync-hint" id="nd-cfg-sync"></span>
+            </div>
+            <div id="nd-cfg-channels"></div>
+            <div class="nd-cfg-actions">
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()"><i class="fas fa-rotate"></i> Reload</button>
+              <span class="nd-spacer"></span>
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgPush()" title="Push the currently-saved config to the node now"><i class="fas fa-upload"></i> Push to node</button>
+              <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()"><i class="fas fa-floppy-disk"></i> Save config</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global node settings modal (P3) -->
+  <div id="global-config-modal" class="modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h2><i class="fas fa-globe" style="color: var(--accent);"></i> Global node settings</h2>
+        <button class="modal-close" onclick="closeGlobalConfig()">&times;</button>
+      </div>
+      <div id="gc-meta" class="dev-card-secondary" style="margin-bottom: 0.4rem;"></div>
+      <div class="gc-tabs">
+        <button class="gc-tab active" data-gc="sdrtrunk" onclick="_gcSetTab('sdrtrunk')">SDR-Trunk (aliases)</button>
+        <button class="gc-tab" data-gc="rdio" onclick="_gcSetTab('rdio')">rdio</button>
+      </div>
+
+      <!-- SDR-Trunk aliases panel -->
+      <div class="gc-panel active" id="gc-panel-sdrtrunk">
+        <div class="gc-toolbar">
+          <div class="search-box" style="min-width: 220px;">
+            <i class="fas fa-search"></i>
+            <input type="text" id="gc-alias-search" placeholder="Search aliases…" oninput="_gcRenderAliases()">
+          </div>
+          <button class="gc-badge-btn" onclick="_gcAddAlias()"><i class="fas fa-plus"></i> Add alias</button>
+          <span class="result-count" id="gc-alias-count"></span>
+        </div>
+        <div class="gc-scroll" id="gc-aliases"></div>
+      </div>
+
+      <!-- rdio panel -->
+      <div class="gc-panel" id="gc-panel-rdio">
+        <div class="gc-subtabs">
+          <button class="gc-subtab active" data-rd="systems" onclick="_gcSetRdioTab('systems')">Systems</button>
+          <button class="gc-subtab" data-rd="groups" onclick="_gcSetRdioTab('groups')">Groups</button>
+          <button class="gc-subtab" data-rd="tags" onclick="_gcSetRdioTab('tags')">Tags</button>
         </div>
 
-        <div class="nd-section">
-          <div class="nd-section-h"><i class="fas fa-clock-rotate-left"></i> Recent events</div>
-          <div class="nd-events" id="nd-events"></div>
+        <div class="gc-panel active" id="gc-rd-systems">
+          <div class="gc-toolbar">
+            <div class="search-box" style="min-width: 220px;">
+              <i class="fas fa-search"></i>
+              <input type="text" id="gc-sys-search" placeholder="Search systems / talkgroups…" oninput="_gcRenderSystems()">
+            </div>
+            <button class="gc-badge-btn" onclick="_gcAddSystem()"><i class="fas fa-plus"></i> Add system</button>
+            <span class="result-count" id="gc-sys-count"></span>
+          </div>
+          <div class="gc-scroll" id="gc-systems"></div>
         </div>
+
+        <div class="gc-panel" id="gc-rd-groups">
+          <div class="gc-toolbar">
+            <button class="gc-badge-btn" onclick="_gcAddGroup()"><i class="fas fa-plus"></i> Add group</button>
+          </div>
+          <div class="gc-scroll" id="gc-groups"></div>
+        </div>
+
+        <div class="gc-panel" id="gc-rd-tags">
+          <div class="gc-toolbar">
+            <button class="gc-badge-btn" onclick="_gcAddTag()"><i class="fas fa-plus"></i> Add tag</button>
+          </div>
+          <div class="gc-scroll" id="gc-tags"></div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
+        <button class="btn btn-secondary" onclick="closeGlobalConfig()" style="flex: 1;">Cancel</button>
+        <button class="btn btn-primary" onclick="_gcSave()" style="flex: 1;" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
       </div>
     </div>
   </div>
@@ -2068,6 +2358,7 @@
         const data = await res.json();
         allNodes = data.nodes || [];
         renderNodes();
+        loadAutoUpdateState();
       } catch (e) {
         console.error('Error loading nodes:', e);
         if (grid) grid.innerHTML = `
@@ -2091,6 +2382,7 @@
       const installId = node.installId || node.install_id || '';
       const installShort = installId ? escapeHtml(String(installId).slice(0, 8)) + '…' : '—';
       const enabled = node.enabled !== false; // default to enabled unless explicitly false
+      const feedEnabled = node.feedEnabled === true; // feed to central rdio; off by default
       const st = node.status || null;
 
       // Optional status metrics — render a small secondary row when present.
@@ -2126,10 +2418,26 @@
             <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${escapeHtml(String(id))}')">
               <i class="fas fa-gauge-high"></i> Details
             </button>
-            <span class="lbl" style="text-align: right;">${enabled ? 'Enabled' : 'Disabled'}</span>
-            <label class="node-switch" title="Enable / disable this node">
+            <span class="lbl" style="text-align: right;">Node ${enabled ? 'on' : 'off'}</span>
+            <label class="node-switch" title="Node running (decode + spectrum). Off cuts it off entirely.">
               <input type="checkbox" ${enabled ? 'checked' : ''}
                      onchange="toggleNode('${escapeHtml(String(id))}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="node-enable-row">
+            <div style="display:flex; gap:0.4rem;">
+              <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${escapeHtml(String(id))}')" title="Update this node now">
+                <i class="fas fa-download"></i>
+              </button>
+              ${userPermissions.is_owner
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${escapeHtml(String(id))}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
+                : ''}
+            </div>
+            <span class="lbl" style="text-align: right;">Feed → rdio ${feedEnabled ? 'on' : 'off'}</span>
+            <label class="node-switch" title="Forward decoded calls to the central rdio. Off lets you verify config + reception before feeding the live system.">
+              <input type="checkbox" ${feedEnabled ? 'checked' : ''}
+                     onchange="toggleNodeFeed('${escapeHtml(String(id))}', this.checked, this)">
               <span class="track"></span>
             </label>
           </div>
@@ -2172,6 +2480,112 @@
       }
     }
 
+    // Toggle whether decoded calls are forwarded to the central rdio. Separate
+    // from the node being on — off lets the operator verify config + reception
+    // before feeding the live system.
+    async function toggleNodeFeed(id, newValue, inputEl) {
+      if (inputEl) inputEl.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ feed_enabled: newValue })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(newValue ? 'Feed to central rdio ENABLED.' : 'Feed disabled (node keeps decoding).', 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Failed to update feed: ${e.message}`, 'error');
+        if (inputEl) { inputEl.checked = !newValue; inputEl.disabled = false; }
+      }
+    }
+
+    // Owner-only: permanently delete a node. If its agent reconnects while the
+    // contributor still holds the role, it reappears.
+    async function deleteNode(id) {
+      if (!userPermissions.is_owner) { showToast('Only owners can delete nodes.', 'warn'); return; }
+      const node = (allNodes || []).find(n => n.id === id);
+      const who = node ? (node.name || id) : id;
+      if (!confirm(`Delete node "${who}"? If its agent reconnects it will reappear. This cannot be undone.`)) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
+          method: 'DELETE', headers: { 'Authorization': await authHeader() },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Node deleted.', 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Failed to delete node: ${e.message}`, 'error');
+      }
+    }
+
+    // Trigger an immediate (manual) update on one node. Manual updates always
+    // run, even when auto-update is paused.
+    async function updateNodeNow(id) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/cmd`, {
+          method: 'POST',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'update' })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        showToast('Update triggered on node.', 'success');
+      } catch (e) {
+        showToast(`Update failed: ${e.message}`, 'error');
+      }
+    }
+
+    // Trigger a manual update on every online node. Manual updates always run,
+    // even when auto-update is paused.
+    async function updateAllNodes() {
+      if (!confirm('Trigger an update on all online nodes now?')) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/update-all`, {
+          method: 'POST', headers: { 'Authorization': await authHeader() },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast(`Update triggered on ${data.triggered ?? 0} of ${data.total ?? 0} nodes.`, 'success');
+      } catch (e) {
+        showToast(`Update all failed: ${e.message}`, 'error');
+      }
+    }
+
+    // Reflect the current global auto-update state in the toggle.
+    async function loadAutoUpdateState() {
+      const el = document.getElementById('auto-update-toggle');
+      if (!el) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/auto-update`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        el.checked = data.enabled !== false;
+      } catch (e) { /* leave as-is */ }
+    }
+
+    // Global toggle: pause/resume automatic node self-updates. Manual updates
+    // (Update / Update all) still trigger regardless.
+    async function toggleAutoUpdate(enabled) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/auto-update`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(enabled ? 'Auto-update enabled for all nodes.' : 'Auto-update paused (manual updates still work).', 'success');
+      } catch (e) {
+        showToast(`Failed to change auto-update: ${e.message}`, 'error');
+        const el = document.getElementById('auto-update-toggle');
+        if (el) el.checked = !enabled;
+      }
+    }
+
     // === Node detail drawer (P3) ======================================
     // One staff WebSocket per open drawer. On open we auth, subscribe to the
     // node, render its tuners/channels/events from nodeStatus frames, and
@@ -2187,7 +2601,18 @@
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
     let _ndReqSeq = 0;
     const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
-    const _ndWf = { canvas: null, ctx: null, w: 512, h: 200 };
+    const _ndWf = { canvas: null, ctx: null, w: 512, h: 200, lastCenter: null, lastSr: null };
+
+    // --- New drawer sub-view / editor / log state (P1/P2/P4/P5) ---
+    let _ndNode = null;            // the node object from the list (for versions etc.)
+    let _ndView = 'live';          // active drawer sub-view
+    let _ndConfig = null;          // fetched configOverride ({channels, tuners, ...})
+    let _ndCfgLoading = false;
+    let _ndLog = [];               // combined live event log (newest pushed to end)
+    const _ndSeenEv = new Set();   // dedupe keys for ingested backend events
+    let _ndPrevChan = {};          // channelId -> {type, state} snapshot for transition diff
+    let _ndCallStart = {};         // channelId -> epoch ms when the current call started
+    let _ndNpTimer = null;         // 1s ticker for "now playing" elapsed clocks
 
     // API_BASE_URL is an http(s) URL (config.js: https://api.forcequit.xyz).
     // Swapping the leading "http" for "ws" turns https->wss and http->ws.
@@ -2204,11 +2629,17 @@
     async function openNodeDrawer(nodeId) {
       // Reset per-drawer state.
       const node = allNodes.find(n => String(n.id) === String(nodeId)) || {};
+      _ndNode = node;
       _ndNodeId = nodeId;
       _ndAuthed = false;
       _ndStatus = null;
       _ndTuners = []; _ndChannels = []; _ndEvents = [];
       _ndSpectrumTunerId = null;
+      _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
+      _ndPrevChan = {}; _ndCallStart = {};
+      _ndWf.lastCenter = null; _ndWf.lastSr = null;
+      _ndSetView('live');
+      _ndStartNpTicker();
 
       const drawer = document.getElementById('node-drawer');
       drawer.classList.add('open');
@@ -2218,6 +2649,7 @@
       _ndSetConn('connecting', node.online);
       _ndInitWaterfall();
       _ndRenderAll();
+      _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
 
       // Supabase access token — same source as authHeader().
       let token = null;
@@ -2285,6 +2717,7 @@
         if (d.event) {
           _ndEvents.push(d.event);
           if (_ndEvents.length > 200) _ndEvents.shift();
+          _ndIngestEvent(d.event);
           _ndRenderEvents();
         }
       } else if (t === 'cmdResult') {
@@ -2299,10 +2732,16 @@
       _ndStatus = st;
       _ndTuners = Array.isArray(st.tuners) ? st.tuners : [];
       _ndChannels = Array.isArray(st.channels) ? st.channels : [];
-      if (Array.isArray(st.events)) _ndEvents = st.events.slice(-200);
+      if (Array.isArray(st.events)) {
+        _ndEvents = st.events.slice(-200);
+        st.events.forEach(_ndIngestEvent);
+      }
+      _ndDiffChannels();       // detect control-lock / call start-end transitions -> log
       _ndRenderTuners();
       _ndRenderChannels();
       _ndRenderEvents();
+      _ndRenderNowPlaying();
+      _ndRenderCfgSync();
       _ndRenderTunerSelector();
       // Auto-start the waterfall on the first tuner once tuners are known.
       if (_ndSpectrumTunerId == null && _ndTuners.length) {
@@ -2377,21 +2816,74 @@
       _ndWf.ctx.fillStyle = '#05070d';
       _ndWf.ctx.fillRect(0, 0, c.width, c.height);
       const tr = document.getElementById('nd-trace');
-      if (tr) { const tc = tr.getContext('2d'); tc.fillStyle = '#05070d'; tc.fillRect(0, 0, tr.width, tr.height); }
+      if (tr) { const tc = tr.getContext('2d'); tc.fillStyle = '#070b14'; tc.fillRect(0, 0, tr.width, tr.height); }
+      _ndBindWfHover();
     }
 
-    // dB (int8) -> jet-ish colour across a sensible noise-floor window.
+    // Frequency-under-cursor tooltip + vertical cursor line (P6c).
+    let _ndWfHoverBound = false;
+    function _ndBindWfHover() {
+      if (_ndWfHoverBound) return;
+      const wrap = document.getElementById('nd-wf-wrap');
+      if (!wrap) return;
+      _ndWfHoverBound = true;
+      const cursor = document.getElementById('nd-wf-cursor');
+      const tip = document.getElementById('nd-wf-tip');
+      wrap.addEventListener('mousemove', (e) => {
+        const rect = wrap.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        if (x < 0) x = 0; if (x > rect.width) x = rect.width;
+        if (cursor) { cursor.style.display = 'block'; cursor.style.left = x + 'px'; }
+        if (tip && _ndWf.lastCenter != null && _ndWf.lastSr != null) {
+          const frac = rect.width ? x / rect.width : 0;
+          const hz = _ndWf.lastCenter - _ndWf.lastSr / 2 + frac * _ndWf.lastSr;
+          tip.textContent = (hz / 1e6).toFixed(4) + ' MHz';
+          tip.style.display = 'block';
+          // Keep the tooltip inside the pane.
+          let tx = x;
+          const half = tip.offsetWidth / 2;
+          if (tx < half + 2) tx = half + 2;
+          if (tx > rect.width - half - 2) tx = rect.width - half - 2;
+          tip.style.left = tx + 'px';
+        }
+      });
+      wrap.addEventListener('mouseleave', () => {
+        if (cursor) cursor.style.display = 'none';
+        if (tip) tip.style.display = 'none';
+      });
+    }
+
+    // dB (int8) -> colour across a fixed 5-stop gradient (P6a):
+    //   weak = BLUE -> cyan -> green -> yellow -> strong = RED.
+    // Stops are evenly spaced over the noise-floor window [lo, hi].
+    const _ND_CMAP = [
+      [8, 12, 60],     // deep blue (noise floor)
+      [0, 120, 220],   // blue
+      [0, 200, 200],   // cyan
+      [40, 200, 60],   // green
+      [235, 220, 40],  // yellow
+      [235, 60, 30]    // red (strong)
+    ];
     function _ndDbRgb(db) {
       const lo = -100, hi = -20;
       let n = (db - lo) / (hi - lo);
       n = n < 0 ? 0 : n > 1 ? 1 : n;
-      const r = Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * n - 3), 0), 1));
-      const g = Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * n - 2), 0), 1));
-      const b = Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * n - 1), 0), 1));
-      return [r, g, b];
+      const segs = _ND_CMAP.length - 1;
+      const f = n * segs;
+      let i = Math.floor(f);
+      if (i >= segs) i = segs - 1;
+      const t = f - i;
+      const a = _ND_CMAP[i], b = _ND_CMAP[i + 1];
+      return [
+        Math.round(a[0] + (b[0] - a[0]) * t),
+        Math.round(a[1] + (b[1] - a[1]) * t),
+        Math.round(a[2] + (b[2] - a[2]) * t)
+      ];
     }
 
     function _ndDrawSpectrum(centerFreqHz, sampleRate, bins) {
+      _ndWf.lastCenter = centerFreqHz;
+      _ndWf.lastSr = sampleRate;
       const ctx = _ndWf.ctx;
       if (!ctx) return;
       const W = _ndWf.w, H = _ndWf.h;
@@ -2411,21 +2903,53 @@
       _ndUpdateAxis(centerFreqHz, sampleRate);
     }
 
-    // Live line trace of the current frame above the waterfall.
+    // Live FFT trace of the current frame, anchored in its own fixed band
+    // with a dB baseline/grid so it reads as a distinct pane (P6b).
     function _ndDrawTrace(bins) {
       const c = document.getElementById('nd-trace');
       if (!c) return;
       const ctx = c.getContext('2d');
       const W = c.width, H = c.height;
-      ctx.fillStyle = '#05070d';
-      ctx.fillRect(0, 0, W, H);
       const lo = -110, hi = -10, n = bins.length;
+      const pad = 2;                     // top/bottom inset so the peak/floor don't clip
+      const plotH = H - pad * 2;
+      const yFor = db => {
+        let v = (db - lo) / (hi - lo);
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        return pad + (1 - v) * plotH;
+      };
+      // Distinct pane background.
+      ctx.fillStyle = '#070b14';
+      ctx.fillRect(0, 0, W, H);
+      // Horizontal dB gridlines + labels at fixed levels.
+      ctx.font = '8px ui-monospace, Menlo, monospace';
+      ctx.textBaseline = 'middle';
+      [-20, -50, -80].forEach(db => {
+        const y = yFor(db);
+        ctx.strokeStyle = 'rgba(148,163,184,0.14)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
+        ctx.fillStyle = 'rgba(148,163,184,0.55)';
+        ctx.fillText(db + ' dB', 2, y);
+      });
+      // Baseline / axis at the bottom of the trace pane.
+      ctx.strokeStyle = 'rgba(148,163,184,0.4)';
+      ctx.beginPath(); ctx.moveTo(0, H - 0.5); ctx.lineTo(W, H - 0.5); ctx.stroke();
+      // Filled area under the curve, then the line on top.
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      for (let x = 0; x < W; x++) {
+        const bi = n === W ? x : Math.floor(x * n / W);
+        ctx.lineTo(x, yFor(bins[bi]));
+      }
+      ctx.lineTo(W - 1, H);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(56,189,248,0.14)';
+      ctx.fill();
       ctx.beginPath();
       for (let x = 0; x < W; x++) {
         const bi = n === W ? x : Math.floor(x * n / W);
-        let v = (bins[bi] - lo) / (hi - lo);
-        v = v < 0 ? 0 : v > 1 ? 1 : v;
-        const y = H - v * H;
+        const y = yFor(bins[bi]);
         if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.strokeStyle = '#38bdf8';
@@ -2450,7 +2974,23 @@
       _ndRenderTuners();
       _ndRenderChannels();
       _ndRenderEvents();
+      _ndRenderNowPlaying();
       _ndRenderTunerSelector();
+      _ndCfgRender();
+      _ndRenderCfgSync();
+    }
+
+    // --- Drawer sub-view switching (P4/P5/P1) ---
+    function _ndSetView(name) {
+      _ndView = name;
+      document.querySelectorAll('#nd-tabs .nd-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === name);
+      });
+      document.querySelectorAll('#node-drawer .nd-view').forEach(v => {
+        v.classList.toggle('active', v.id === 'nd-view-' + name);
+      });
+      if (name === 'config' && !_ndConfig && !_ndCfgLoading) _ndCfgFetch();
+      if (name === 'nowplaying') _ndRenderNowPlaying();
     }
 
     function _ndEmpty(title, sub) {
@@ -2458,6 +2998,15 @@
         (sub ? ` — ${escapeHtml(sub)}` : '') + `</div>`;
     }
 
+    // Per-SDR serial for a live tuner object (used to match config_override.tuners).
+    function _ndTunerSerial(t) {
+      return t.serial != null ? String(t.serial)
+        : (t.deviceSerial != null ? String(t.deviceSerial)
+        : (t.id != null ? String(t.id) : String(t.index != null ? t.index : '')));
+    }
+
+    // P2 — per-SDR tuner panel. NOTE: frequency is READ-ONLY here; it is
+    // controlled by the channels, never set on the SDR itself.
     function _ndRenderTuners() {
       const el = document.getElementById('nd-tuners');
       if (!el) return;
@@ -2466,49 +3015,85 @@
         return;
       }
       const rows = _ndTuners.map((t, i) => {
-        const tid = t.id != null ? t.id : t.index;
-        const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) : '';
-        const sr = t.sampleRate != null ? (t.sampleRate / 1e6).toFixed(3) + ' MS/s' : '—';
+        const serial = _ndTunerSerial(t);
+        const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) + ' MHz' : '—';
+        const srMs = t.sampleRate != null ? (t.sampleRate / 1e6) : '';
+        const gain = t.gain != null ? t.gain : '';
         const ppm = t.ppm != null ? t.ppm : '';
+        const autoPpm = t.autoPpm === true;
         const measured = t.measuredPpmError != null ? Number(t.measuredPpmError).toFixed(2) : '—';
         const stat = escapeHtml(t.status || (t.available === false ? 'unavailable' : '—'));
         return `<tr>
-          <td><div class="nd-strong">${escapeHtml(t.name || ('Tuner ' + tid))}</div>
-              <div class="nd-sub">${escapeHtml(t.type || t.tunerClass || '')}</div></td>
-          <td><input class="nd-input" id="nd-freq-${i}" type="number" step="0.0001" value="${escapeHtml(String(freqMhz))}"><span class="nd-unit">MHz</span></td>
-          <td>${sr}</td>
-          <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}"></td>
+          <td><div class="nd-strong">${escapeHtml(t.name || ('Tuner ' + serial))}</div>
+              <div class="nd-sub">${escapeHtml(t.type || t.tunerClass || '')}${serial ? ' · ' + escapeHtml(serial) : ''}</div></td>
+          <td><input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span></td>
+          <td><input class="nd-input nd-input-sm" id="nd-gain-${i}" type="number" step="1" value="${escapeHtml(String(gain))}"></td>
+          <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
+          <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})"></td>
           <td>${measured}</td>
+          <td><span class="nd-sub" title="Controlled by channels, not settable">${freqMhz}</span></td>
           <td>${stat}</td>
           <td><button class="btn btn-secondary btn-sm" onclick="_ndApplyTuner(${i})">Apply</button></td>
         </tr>`;
       }).join('');
       el.innerHTML = `<table class="nd-table"><thead><tr>
-        <th>Tuner</th><th>Frequency</th><th>Sample rate</th><th>PPM</th><th>Meas. err</th><th>Status</th><th></th>
+        <th>SDR</th><th>Sample rate</th><th>Gain</th><th>PPM</th><th>Auto-PPM</th><th>Meas. err</th><th>Frequency</th><th>Status</th><th></th>
       </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function _ndToggleAutoPpm(i) {
+      const auto = document.getElementById('nd-autoppm-' + i);
+      const ppm = document.getElementById('nd-ppm-' + i);
+      if (ppm && auto) ppm.disabled = auto.checked;
     }
 
     function _ndApplyTuner(i) {
       const t = _ndTuners[i];
       if (!t) return;
       const tid = t.id != null ? t.id : t.index;
-      const fEl = document.getElementById('nd-freq-' + i);
+      const serial = _ndTunerSerial(t);
+      const srEl = document.getElementById('nd-sr-' + i);
+      const gEl = document.getElementById('nd-gain-' + i);
       const pEl = document.getElementById('nd-ppm-' + i);
-      const fMhz = fEl && fEl.value !== '' ? parseFloat(fEl.value) : null;
+      const aEl = document.getElementById('nd-autoppm-' + i);
+      const srMs = srEl && srEl.value !== '' ? parseFloat(srEl.value) : null;
+      const gain = gEl && gEl.value !== '' ? parseFloat(gEl.value) : null;
       const ppm = pEl && pEl.value !== '' ? parseFloat(pEl.value) : null;
-      const origMhz = t.frequency != null ? t.frequency / 1e6 : null;
-      const origPpm = t.ppm != null ? Number(t.ppm) : null;
-      let sent = false;
-      if (fMhz != null && !Number.isNaN(fMhz) && (origMhz == null || Math.abs(fMhz - origMhz) > 1e-9)) {
-        _ndCmd('tunerSet', { tunerId: tid, frequency: Math.round(fMhz * 1e6) }, `Set ${t.name || 'tuner'} → ${fMhz} MHz`);
-        sent = true;
+      const autoPpm = !!(aEl && aEl.checked);
+
+      const args = { tunerId: tid };
+      if (srMs != null && !Number.isNaN(srMs)) args.sampleRate = Math.round(srMs * 1e6);
+      if (gain != null && !Number.isNaN(gain)) args.gain = gain;
+      args.autoPpm = autoPpm;
+      if (!autoPpm && ppm != null && !Number.isNaN(ppm)) args.ppm = ppm;
+      _ndCmd('tunerSet', args, `Set ${t.name || ('tuner ' + serial)}`);
+
+      // Persist the per-SDR settings into config_override.tuners[] so they
+      // survive a restart. Non-blocking; toast reports the outcome.
+      _ndPersistTuner(serial, {
+        serial,
+        label: t.name || undefined,
+        sampleRate: args.sampleRate,
+        gain: args.gain,
+        ppm: args.ppm,
+        autoPpm
+      });
+      showToast('Applying tuner change…', 'success', 1500);
+    }
+
+    async function _ndPersistTuner(serial, patch) {
+      if (!serial) return;
+      try {
+        if (!_ndConfig) await _ndCfgFetch();
+        const cfg = _ndConfig || (_ndConfig = {});
+        if (!Array.isArray(cfg.tuners)) cfg.tuners = [];
+        let entry = cfg.tuners.find(x => String(x.serial) === String(serial));
+        if (!entry) { entry = { serial }; cfg.tuners.push(entry); }
+        Object.keys(patch).forEach(k => { if (patch[k] !== undefined) entry[k] = patch[k]; });
+        await _ndCfgPatch(cfg, false);
+      } catch (e) {
+        showToast('Tuner setting not persisted: ' + e.message, 'error');
       }
-      if (ppm != null && !Number.isNaN(ppm) && (origPpm == null || Math.abs(ppm - origPpm) > 1e-9)) {
-        _ndCmd('tunerSet', { tunerId: tid, ppm }, `Set ${t.name || 'tuner'} ppm → ${ppm}`);
-        sent = true;
-      }
-      if (sent) showToast('Applying tuner change…', 'success', 1500);
-      else showToast('No changes to apply.', 'warn');
     }
 
     function _ndRenderChannels() {
@@ -2551,22 +3136,327 @@
         `${start ? 'Start' : 'Stop'} ${c.name || ('channel ' + cid)}`);
     }
 
+    // --- Live event log (P5) -------------------------------------------
+    // The Events tab is a rolling, live-only log fed by three sources:
+    //   1) WS `event` frames and status.events (deduped) — call/decode events
+    //   2) channel type transitions (control-channel lock vs traffic/idle)
+    //   3) call start/end derived from channel state changes
+    function _ndLogPush(kind, text, at, ft) {
+      _ndLog.push({ kind, text, at: at != null ? at : Date.now(), ft: ft || '' });
+      if (_ndLog.length > 200) _ndLog.shift();
+      _ndRenderEvents();
+    }
+
+    // Turn a backend event object into a log line, deduping repeats seen
+    // across successive status frames.
+    function _ndIngestEvent(e) {
+      if (!e) return;
+      const key = [e.id, e.at, e.type, e.from, e.to].join('|');
+      if (_ndSeenEv.has(key)) return;
+      _ndSeenEv.add(key);
+      if (_ndSeenEv.size > 600) { _ndSeenEv.clear(); } // keep the set bounded
+      const ft = (e.from || e.to) ? `${e.from || '—'} → ${e.to || '—'}` : '';
+      const proto = e.protocol ? ' (' + e.protocol + ')' : '';
+      _ndLog.push({
+        kind: 'event',
+        text: (e.type || 'event') + proto,
+        at: e.at != null ? e.at : Date.now(),
+        ft
+      });
+      if (_ndLog.length > 200) _ndLog.shift();
+    }
+
+    // Compare the latest channels against the previous snapshot and log
+    // meaningful transitions (control-channel lock, call start/end).
+    function _ndDiffChannels() {
+      const next = {};
+      _ndChannels.forEach(c => {
+        const cid = String(c.id != null ? c.id : (c.name || ''));
+        if (!cid) return;
+        const type = String(c.type || '').toUpperCase();
+        const state = String(c.state || '').toUpperCase();
+        next[cid] = { type, state };
+        const prev = _ndPrevChan[cid] || {};
+        const label = c.name || ('channel ' + cid);
+        // Type transition: control-channel lock is the headline event.
+        if (type && type !== prev.type) {
+          if (type === 'CONTROL') _ndLogPush('control', `${label} locked as CONTROL channel`, Date.now());
+          else if (type === 'TRAFFIC') _ndLogPush('traffic', `${label} → TRAFFIC`, Date.now());
+        }
+        // Call start / end from the active-state edge.
+        const ACTIVE = (s) => s === 'CALL' || s === 'ACTIVE' || s === 'DATA';
+        const wasActive = ACTIVE(prev.state || '');
+        const isActive = ACTIVE(state);
+        const ft = (c.from || c.to) ? `${c.from || '—'} → ${c.to || '—'}` : '';
+        if (isActive && !wasActive) {
+          _ndCallStart[cid] = Date.now();
+          _ndLogPush('callstart', `Call start · ${label}`, Date.now(), ft);
+        } else if (!isActive && wasActive) {
+          _ndLogPush('callend', `Call end · ${label}`, Date.now(), ft);
+          delete _ndCallStart[cid];
+        }
+      });
+      // Drop call clocks for channels that disappeared.
+      Object.keys(_ndCallStart).forEach(cid => { if (!next[cid]) delete _ndCallStart[cid]; });
+      _ndPrevChan = next;
+    }
+
     function _ndRenderEvents() {
       const el = document.getElementById('nd-events');
       if (!el) return;
-      if (!_ndEvents.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No events yet.</div>`; return; }
-      el.innerHTML = _ndEvents.slice(-60).reverse().map(e => {
+      if (!_ndLog.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No events yet — live activity will appear here.</div>`; return; }
+      el.innerHTML = _ndLog.slice().reverse().map(e => {
         const at = e.at != null ? new Date(e.at) : null;
         const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
-        const ft = (e.from || e.to) ? `${escapeHtml(e.from || '—')} → ${escapeHtml(e.to || '—')}` : '';
-        const type = escapeHtml(e.type || 'event');
-        const proto = e.protocol ? ` <span class="nd-sub">${escapeHtml(e.protocol)}</span>` : '';
-        return `<div class="nd-event-row">
+        const cls = e.kind && e.kind !== 'event' ? ' ' + e.kind : '';
+        const typeCls = (e.kind === 'control' || e.kind === 'callstart') ? ' ' + e.kind : '';
+        return `<div class="nd-event-row nd-log-row${cls}">
           <span class="nd-ev-time">${escapeHtml(time)}</span>
-          <span class="nd-ev-type">${type}${proto}</span>
-          <span class="nd-ev-ft">${ft}</span>
+          <span class="nd-ev-type${typeCls}">${escapeHtml(e.text)}</span>
+          <span class="nd-ev-ft">${escapeHtml(e.ft || '')}</span>
         </div>`;
       }).join('');
+    }
+
+    // --- Now playing (P4) ----------------------------------------------
+    function _ndActiveCalls() {
+      const ACTIVE = new Set(['CALL', 'ACTIVE', 'DATA']);
+      return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && (c.from || c.to || c.frequency != null));
+    }
+
+    function _ndRenderNowPlaying() {
+      const el = document.getElementById('nd-nowplaying');
+      const countEl = document.getElementById('nd-np-count');
+      if (!el) return;
+      const calls = _ndActiveCalls();
+      if (countEl) {
+        if (calls.length) { countEl.style.display = ''; countEl.textContent = String(calls.length); }
+        else countEl.style.display = 'none';
+      }
+      if (!calls.length) {
+        el.innerHTML = _ndEmpty('No active calls', _ndStatus ? 'Channels are idle or on control only' : 'waiting for node status…');
+        return;
+      }
+      el.innerHTML = `<div class="nd-np-grid">` + calls.map(c => {
+        const cid = String(c.id != null ? c.id : (c.name || ''));
+        const tg = c.toAlias || c.talkgroupLabel || c.to || c.name || '—';
+        const alias = c.fromAlias || c.alias || '';
+        const from = c.from || '—', to = c.to || '—';
+        const start = _ndCallStart[cid];
+        const elapsed = start ? _ndFmtElapsed(Date.now() - start) : '—';
+        const sys = [c.system, c.site].filter(Boolean).join(' · ');
+        const freq = c.frequency != null ? (c.frequency / 1e6).toFixed(4) + ' MHz' : '';
+        return `<div class="nd-np-card">
+          <span class="nd-np-live"></span>
+          <div class="nd-np-main">
+            <div class="nd-np-tg">${escapeHtml(tg)}</div>
+            <div class="nd-np-ft">${escapeHtml(from)} → ${escapeHtml(to)}${alias ? ` <span class="nd-alias">(${escapeHtml(alias)})</span>` : ''}</div>
+            ${(sys || freq) ? `<div class="nd-np-sub">${escapeHtml([sys, freq].filter(Boolean).join(' · '))}</div>` : ''}
+          </div>
+          <div class="nd-np-elapsed" data-cid="${escapeHtml(cid)}">${elapsed}</div>
+        </div>`;
+      }).join('') + `</div>`;
+    }
+
+    function _ndFmtElapsed(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(s / 60);
+      return (m > 0 ? m + ':' : '0:') + String(s % 60).padStart(2, '0');
+    }
+
+    // Tick the elapsed clocks in-place once a second (no full re-render).
+    function _ndStartNpTicker() {
+      _ndStopNpTicker();
+      _ndNpTimer = setInterval(() => {
+        if (_ndView !== 'nowplaying') return;
+        document.querySelectorAll('#nd-nowplaying .nd-np-elapsed').forEach(node => {
+          const cid = node.getAttribute('data-cid');
+          const start = _ndCallStart[cid];
+          if (start) node.textContent = _ndFmtElapsed(Date.now() - start);
+        });
+      }, 1000);
+    }
+    function _ndStopNpTicker() { if (_ndNpTimer) { clearInterval(_ndNpTimer); _ndNpTimer = null; } }
+
+    // === Per-node channel editor (P1) ==================================
+    const _ND_DECODERS = ['p25p2', 'p25p1', 'dmr', 'nbfm', 'am'];
+
+    // Available SDR serials for the per-channel "sdr" picker — merged from the
+    // live tuners and any serials already referenced in the saved config.
+    function _ndCfgSerials() {
+      const set = new Set();
+      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s) set.add(s); });
+      if (_ndConfig && Array.isArray(_ndConfig.tuners)) {
+        _ndConfig.tuners.forEach(t => { if (t && t.serial != null) set.add(String(t.serial)); });
+      }
+      if (_ndConfig && Array.isArray(_ndConfig.channels)) {
+        _ndConfig.channels.forEach(c => { if (c && c.sdr) set.add(String(c.sdr)); });
+      }
+      return Array.from(set);
+    }
+
+    async function _ndCfgFetch() {
+      _ndCfgLoading = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const node = data.node || data;
+        _ndConfig = node.configOverride || node.config_override || {};
+        if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+        if (!Array.isArray(_ndConfig.tuners)) _ndConfig.tuners = [];
+        if (node.configVersion != null && _ndNode) _ndNode.configVersion = node.configVersion;
+      } catch (e) {
+        const el = document.getElementById('nd-cfg-channels');
+        if (el) el.innerHTML = _ndEmpty('Could not load config', e.message);
+        _ndCfgLoading = false;
+        return;
+      }
+      _ndCfgLoading = false;
+      _ndCfgRender();
+      _ndRenderCfgSync();
+    }
+
+    function _ndCfgReload() { _ndConfig = null; _ndCfgFetch(); }
+
+    // Read the current editor inputs back into _ndConfig.channels, preserving
+    // any unknown fields already on each channel object.
+    function _ndCfgReadDom() {
+      if (!_ndConfig || !Array.isArray(_ndConfig.channels)) return;
+      _ndConfig.channels = _ndConfig.channels.map((orig, i) => {
+        const g = id => document.getElementById('nd-ch-' + i + '-' + id);
+        const c = Object.assign({}, orig);
+        const name = g('name'); if (name) c.name = name.value;
+        const freq = g('freq');
+        if (freq) c.frequency = freq.value !== '' ? Math.round(parseFloat(freq.value) * 1e6) : null;
+        const dec = g('dec'); if (dec) c.decoder = dec.value;
+        const sys = g('sys'); if (sys) c.system = sys.value;
+        const site = g('site'); if (site) c.site = site.value;
+        const auto = g('auto'); if (auto) c.autoStart = auto.checked;
+        const order = g('order'); if (order) c.order = order.value !== '' ? parseInt(order.value, 10) : null;
+        const sdr = g('sdr'); if (sdr) { if (sdr.value) c.sdr = sdr.value; else delete c.sdr; }
+        return c;
+      });
+    }
+
+    function _ndCfgRender() {
+      const el = document.getElementById('nd-cfg-channels');
+      if (!el) return;
+      if (!_ndConfig) {
+        el.innerHTML = _ndEmpty('Loading config…', 'fetching current channels');
+        return;
+      }
+      const chans = _ndConfig.channels || [];
+      if (!chans.length) {
+        el.innerHTML = _ndEmpty('No channels configured', 'Use “Add channel” to create one');
+        return;
+      }
+      const serials = _ndCfgSerials();
+      el.innerHTML = chans.map((c, i) => {
+        const freqMhz = c.frequency != null ? (c.frequency / 1e6) : '';
+        const decoder = c.decoder || 'p25p2';
+        const decOpts = _ND_DECODERS.map(d => `<option value="${d}" ${d === decoder ? 'selected' : ''}>${d}</option>`).join('');
+        const sdrCur = c.sdr != null ? String(c.sdr) : '';
+        const sdrOpts = [`<option value="" ${sdrCur === '' ? 'selected' : ''}>Auto</option>`]
+          .concat(serials.map(s => `<option value="${escapeHtml(s)}" ${String(s) === sdrCur ? 'selected' : ''}>${escapeHtml(s)}</option>`)).join('');
+        return `<div class="nd-cfg-row">
+          <div class="nd-cfg-rowhead">
+            <span class="nd-strong">${escapeHtml(c.name || ('Channel ' + (i + 1)))}</span>
+            <button class="gc-icon-btn" title="Remove channel" onclick="_ndCfgRemoveChannel(${i})"><i class="fas fa-trash"></i></button>
+          </div>
+          <div class="nd-cfg-grid">
+            <div class="nd-fld" style="grid-column: span 2;"><label>Name</label><input type="text" id="nd-ch-${i}-name" value="${escapeHtml(c.name || '')}"></div>
+            <div class="nd-fld"><label>Frequency (MHz)</label><input type="number" step="0.000001" id="nd-ch-${i}-freq" value="${escapeHtml(String(freqMhz))}"></div>
+            <div class="nd-fld"><label>Decoder</label><select id="nd-ch-${i}-dec">${decOpts}</select></div>
+            <div class="nd-fld"><label>SDR</label><select id="nd-ch-${i}-sdr">${sdrOpts}</select></div>
+            <div class="nd-fld"><label>System</label><input type="text" id="nd-ch-${i}-sys" value="${escapeHtml(c.system || '')}"></div>
+            <div class="nd-fld"><label>Site</label><input type="text" id="nd-ch-${i}-site" value="${escapeHtml(c.site || '')}"></div>
+            <div class="nd-fld"><label>Order</label><input type="number" step="1" id="nd-ch-${i}-order" value="${escapeHtml(c.order != null ? String(c.order) : '')}"></div>
+            <div class="nd-fld"><label>Auto-start</label><label class="nd-chk"><input type="checkbox" id="nd-ch-${i}-auto" ${c.autoStart !== false ? 'checked' : ''}> enabled</label></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function _ndCfgAddChannel() {
+      if (!_ndConfig) { showToast('Config still loading…', 'warn'); return; }
+      _ndCfgReadDom();
+      if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+      _ndConfig.channels.push({
+        name: '', frequency: null, decoder: 'p25p2',
+        system: '', site: '', autoStart: true,
+        order: _ndConfig.channels.length, sdr: ''
+      });
+      _ndCfgRender();
+    }
+
+    function _ndCfgRemoveChannel(i) {
+      if (!_ndConfig || !Array.isArray(_ndConfig.channels)) return;
+      _ndCfgReadDom();
+      _ndConfig.channels.splice(i, 1);
+      _ndCfgRender();
+    }
+
+    // PATCH the full merged config_override back to the node.
+    async function _ndCfgPatch(cfg, notify) {
+      const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config_override: cfg })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      try {
+        const data = await res.json();
+        const node = data.node || data;
+        if (node && (node.configOverride || node.config_override)) {
+          _ndConfig = node.configOverride || node.config_override;
+          if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+          if (!Array.isArray(_ndConfig.tuners)) _ndConfig.tuners = [];
+        }
+        if (node && node.configVersion != null && _ndNode) _ndNode.configVersion = node.configVersion;
+      } catch (e) { /* body may be empty */ }
+      if (notify) showToast('Config saved.', 'success');
+    }
+
+    async function _ndCfgSave() {
+      if (!_ndConfig) { showToast('Config not loaded yet.', 'warn'); return; }
+      _ndCfgReadDom();
+      try {
+        await _ndCfgPatch(_ndConfig, true);
+        _ndCfgRender();
+        _ndRenderCfgSync();
+      } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
+    }
+
+    async function _ndCfgPush() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/push-config`, {
+          method: 'POST', headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Config pushed to node.', 'success');
+      } catch (e) { showToast('Push failed: ' + e.message, 'error'); }
+    }
+
+    // "Config out of sync" hint: the node's stored config version vs the
+    // version the running agent reports as applied.
+    function _ndRenderCfgSync() {
+      const el = document.getElementById('nd-cfg-sync');
+      if (!el) return;
+      const local = _ndNode ? _ndNode.configVersion : null;
+      const applied = _ndStatus
+        ? (_ndStatus.appliedConfigVersion != null ? _ndStatus.appliedConfigVersion : _ndStatus.configVersion)
+        : null;
+      if (local == null || applied == null) { el.className = 'nd-sync-hint'; el.textContent = ''; return; }
+      if (String(local) !== String(applied)) {
+        el.className = 'nd-sync-hint out';
+        el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> Out of sync — push config (node v${escapeHtml(String(applied))} · config v${escapeHtml(String(local))})`;
+      } else {
+        el.className = 'nd-sync-hint ok';
+        el.innerHTML = `<i class="fas fa-check"></i> In sync (v${escapeHtml(String(local))})`;
+      }
     }
 
     function _ndRenderTunerSelector() {
@@ -2635,7 +3525,314 @@
       _ndSpectrumTunerId = null;
       if (_ndWs) { try { _ndWs.onclose = null; _ndWs.close(); } catch (e) {} _ndWs = null; }
       _ndAuthed = false;
+      _ndStopNpTicker();
       drawer.classList.remove('open');
+    }
+
+    // === Global node settings (P3) =====================================
+    // One shared config fanned out to every node: SDR-Trunk aliases and the
+    // rdio systems / talkgroups / units / groups / tags. Loaded once into
+    // _gcData and edited in place (unknown fields are preserved), then PUT
+    // back to /api/nodes/global-config which fans it out to all nodes.
+    let _gcData = null;
+    let _gcTab = 'sdrtrunk';
+    let _gcRdioTab = 'systems';
+    const _gcOpenAlias = new Set();
+    const _gcOpenSys = new Set();
+
+    async function openGlobalConfig() {
+      const modal = document.getElementById('global-config-modal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      _gcTab = 'sdrtrunk'; _gcRdioTab = 'systems';
+      _gcOpenAlias.clear(); _gcOpenSys.clear();
+      _gcSetTab('sdrtrunk'); _gcSetRdioTab('systems');
+      document.getElementById('gc-aliases').innerHTML = `<div class="gc-empty"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
+      await _gcLoad();
+    }
+
+    function closeGlobalConfig() {
+      const modal = document.getElementById('global-config-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function _gcSetTab(name) {
+      _gcTab = name;
+      document.querySelectorAll('.gc-tabs .gc-tab').forEach(b => b.classList.toggle('active', b.dataset.gc === name));
+      document.getElementById('gc-panel-sdrtrunk').classList.toggle('active', name === 'sdrtrunk');
+      document.getElementById('gc-panel-rdio').classList.toggle('active', name === 'rdio');
+    }
+
+    function _gcSetRdioTab(name) {
+      _gcRdioTab = name;
+      document.querySelectorAll('.gc-subtabs .gc-subtab').forEach(b => b.classList.toggle('active', b.dataset.rd === name));
+      document.getElementById('gc-rd-systems').classList.toggle('active', name === 'systems');
+      document.getElementById('gc-rd-groups').classList.toggle('active', name === 'groups');
+      document.getElementById('gc-rd-tags').classList.toggle('active', name === 'tags');
+    }
+
+    async function _gcLoad() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/global-config`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const cfg = data.config || data || {};
+        _gcData = {
+          sdrtrunkAliases: Array.isArray(cfg.sdrtrunkAliases) ? cfg.sdrtrunkAliases : [],
+          rdioSystems: Array.isArray(cfg.rdioSystems) ? cfg.rdioSystems : [],
+          rdioGroups: Array.isArray(cfg.rdioGroups) ? cfg.rdioGroups : [],
+          rdioTags: Array.isArray(cfg.rdioTags) ? cfg.rdioTags : [],
+          version: cfg.version, updatedAt: cfg.updatedAt
+        };
+        _gcRenderMeta();
+        _gcRenderAll();
+      } catch (e) {
+        document.getElementById('gc-aliases').innerHTML = `<div class="gc-empty">Failed to load global config: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function _gcRenderMeta() {
+      const el = document.getElementById('gc-meta');
+      if (!el || !_gcData) return;
+      const bits = [];
+      if (_gcData.version != null) bits.push(`<span>version <strong>${escapeHtml(String(_gcData.version))}</strong></span>`);
+      if (_gcData.updatedAt) bits.push(`<span>updated ${escapeHtml(fmtDate(_gcData.updatedAt, { time: true }))}</span>`);
+      el.innerHTML = bits.join('');
+    }
+
+    function _gcRenderAll() {
+      _gcRenderAliases();
+      _gcRenderSystems();
+      _gcRenderGroups();
+      _gcRenderTags();
+    }
+
+    // --- SDR-Trunk aliases ---
+    function _gcRenderAliases() {
+      const el = document.getElementById('gc-aliases');
+      if (!el || !_gcData) return;
+      const q = (document.getElementById('gc-alias-search').value || '').toLowerCase();
+      const list = _gcData.sdrtrunkAliases;
+      const cnt = document.getElementById('gc-alias-count');
+      if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' alias' : ' aliases');
+      const shown = list.map((a, i) => ({ a, i })).filter(({ a }) =>
+        !q || String(a.name || '').toLowerCase().includes(q) || String(a.group || '').toLowerCase().includes(q));
+      if (!shown.length) { el.innerHTML = `<div class="gc-empty">No aliases${q ? ' match your search' : ' yet'}.</div>`; return; }
+      el.innerHTML = shown.map(({ a, i }) => {
+        const open = _gcOpenAlias.has(i);
+        const ids = Array.isArray(a.ids) ? a.ids : [];
+        const body = !open ? '' : `<div class="gc-card-body">
+          <div class="gc-inline">
+            <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAliasSet(${i},'name',this.value)"></div>
+            <div class="nd-fld"><label>List</label><input type="text" value="${escapeHtml(a.list || '')}" oninput="_gcAliasSet(${i},'list',this.value)"></div>
+            <div class="nd-fld"><label>Group</label><input type="text" value="${escapeHtml(a.group || '')}" oninput="_gcAliasSet(${i},'group',this.value)"></div>
+            <div class="nd-fld"><label>Color</label><input type="text" style="width:110px;" value="${escapeHtml(a.color || '')}" oninput="_gcAliasSet(${i},'color',this.value);var s=document.getElementById('gc-alias-sw-${i}');if(s)s.style.background=this.value"></div>
+            <span class="gc-color-swatch" id="gc-alias-sw-${i}" style="background:${escapeHtml(a.color || 'transparent')};"></span>
+          </div>
+          <div class="nd-section-h" style="margin:0.6rem 0 0.4rem;">Identifiers</div>
+          ${ids.map((id, idi) => _gcRenderId(i, idi, id)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No identifiers.</div>`}
+          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add identifier</button>
+        </div>`;
+        return `<div class="gc-card ${open ? 'open' : ''}">
+          <div class="gc-card-head">
+            <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleAlias(${i})"></i>
+            <span class="gc-card-title" onclick="_gcToggleAlias(${i})">${escapeHtml(a.name || '(unnamed alias)')}</span>
+            <span class="gc-card-meta">${ids.length} id${ids.length === 1 ? '' : 's'}${a.group ? ' · ' + escapeHtml(a.group) : ''}</span>
+            <button class="gc-icon-btn" title="Remove alias" onclick="_gcRemoveAlias(${i})"><i class="fas fa-trash"></i></button>
+          </div>
+          ${body}
+        </div>`;
+      }).join('');
+    }
+
+    function _gcRenderId(i, idi, id) {
+      const attrs = (id && id.attrs && typeof id.attrs === 'object') ? id.attrs : {};
+      const attrRows = Object.keys(attrs).map(k => `
+        <div class="gc-attr-row">
+          <input type="text" style="max-width:140px;" value="${escapeHtml(k)}" onchange="_gcAttrRename(${i},${idi},'${escapeHtml(k)}',this.value)" placeholder="key">
+          <input type="text" value="${escapeHtml(String(attrs[k] == null ? '' : attrs[k]))}" oninput="_gcAttrVal(${i},${idi},'${escapeHtml(k)}',this.value)" placeholder="value">
+          <button class="gc-icon-btn" onclick="_gcRemoveAttr(${i},${idi},'${escapeHtml(k)}')"><i class="fas fa-xmark"></i></button>
+        </div>`).join('');
+      return `<div class="nd-cfg-row" style="margin-bottom:0.5rem;">
+        <div class="gc-attr-row">
+          <div class="nd-fld" style="flex:0 0 160px;"><label>Type</label><input type="text" value="${escapeHtml(id.type || '')}" oninput="_gcIdSet(${i},${idi},'type',this.value)" placeholder="e.g. talkgroup, radioID"></div>
+          <button class="gc-icon-btn" style="align-self:flex-end;" title="Remove identifier" onclick="_gcRemoveId(${i},${idi})"><i class="fas fa-trash"></i></button>
+        </div>
+        ${attrRows}
+        <button class="gc-badge-btn" style="margin-top:0.2rem;" onclick="_gcAddAttr(${i},${idi})"><i class="fas fa-plus"></i> Add attribute</button>
+      </div>`;
+    }
+
+    function _gcToggleAlias(i) { if (_gcOpenAlias.has(i)) _gcOpenAlias.delete(i); else _gcOpenAlias.add(i); _gcRenderAliases(); }
+    function _gcAliasSet(i, field, val) { const a = _gcData.sdrtrunkAliases[i]; if (a) a[field] = val; }
+    function _gcAddAlias() { _gcData.sdrtrunkAliases.push({ name: 'New alias', ids: [] }); _gcOpenAlias.clear(); _gcOpenAlias.add(_gcData.sdrtrunkAliases.length - 1); _gcRenderAliases(); }
+    function _gcRemoveAlias(i) { if (!confirm('Remove this alias?')) return; _gcData.sdrtrunkAliases.splice(i, 1); _gcOpenAlias.clear(); _gcRenderAliases(); }
+    function _gcIdSet(i, idi, field, val) { const id = _gcData.sdrtrunkAliases[i].ids[idi]; if (id) id[field] = val; }
+    function _gcAddId(i) { const a = _gcData.sdrtrunkAliases[i]; if (!Array.isArray(a.ids)) a.ids = []; a.ids.push({ type: '', attrs: {} }); _gcRenderAliases(); }
+    function _gcRemoveId(i, idi) { _gcData.sdrtrunkAliases[i].ids.splice(idi, 1); _gcRenderAliases(); }
+    function _gcAttrVal(i, idi, key, val) { const id = _gcData.sdrtrunkAliases[i].ids[idi]; if (id) { if (!id.attrs) id.attrs = {}; id.attrs[key] = val; } }
+    function _gcAttrRename(i, idi, oldKey, newKey) {
+      const id = _gcData.sdrtrunkAliases[i].ids[idi];
+      if (!id || !id.attrs || newKey === oldKey) return;
+      const rebuilt = {};
+      Object.keys(id.attrs).forEach(k => { rebuilt[k === oldKey ? newKey : k] = id.attrs[k]; });
+      id.attrs = rebuilt; _gcRenderAliases();
+    }
+    function _gcAddAttr(i, idi) {
+      const id = _gcData.sdrtrunkAliases[i].ids[idi];
+      if (!id.attrs) id.attrs = {};
+      let k = 'key', n = 1; while (Object.prototype.hasOwnProperty.call(id.attrs, k)) k = 'key' + (++n);
+      id.attrs[k] = ''; _gcRenderAliases();
+    }
+    function _gcRemoveAttr(i, idi, key) { const id = _gcData.sdrtrunkAliases[i].ids[idi]; if (id && id.attrs) delete id.attrs[key]; _gcRenderAliases(); }
+
+    // --- rdio: option lists for group/tag pickers ---
+    function _gcOptions(list, cur) {
+      const c = cur == null ? '' : String(cur);
+      let opts = `<option value="" ${c === '' ? 'selected' : ''}>—</option>`;
+      let found = false;
+      opts += (list || []).map(o => {
+        const v = String(o._id != null ? o._id : '');
+        if (v === c) found = true;
+        return `<option value="${escapeHtml(v)}" ${v === c ? 'selected' : ''}>${escapeHtml(o.label || v)}</option>`;
+      }).join('');
+      if (!found && c !== '') opts += `<option value="${escapeHtml(c)}" selected>${escapeHtml(c)} (unknown)</option>`;
+      return opts;
+    }
+
+    // --- rdio systems ---
+    function _gcRenderSystems() {
+      const el = document.getElementById('gc-systems');
+      if (!el || !_gcData) return;
+      const q = (document.getElementById('gc-sys-search').value || '').toLowerCase();
+      const list = _gcData.rdioSystems;
+      const cnt = document.getElementById('gc-sys-count');
+      if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' system' : ' systems');
+      const matchTg = (tg) => String(tg.label || '').toLowerCase().includes(q) || String(tg.name || '').toLowerCase().includes(q) || String(tg.id || '').toLowerCase().includes(q);
+      const shown = list.map((s, i) => ({ s, i })).filter(({ s }) =>
+        !q || String(s.label || '').toLowerCase().includes(q) || String(s.id || '').toLowerCase().includes(q)
+        || (Array.isArray(s.talkgroups) && s.talkgroups.some(matchTg)));
+      if (!shown.length) { el.innerHTML = `<div class="gc-empty">No systems${q ? ' match your search' : ' yet'}.</div>`; return; }
+      el.innerHTML = shown.map(({ s, i }) => {
+        const open = _gcOpenSys.has(i);
+        const tgs = Array.isArray(s.talkgroups) ? s.talkgroups : [];
+        const units = Array.isArray(s.units) ? s.units : [];
+        const body = !open ? '' : `<div class="gc-card-body">
+          <div class="gc-inline">
+            <div class="nd-fld"><label>System ID</label><input type="text" value="${escapeHtml(String(s.id == null ? '' : s.id))}" oninput="_gcSysSet(${i},'id',this.value)"></div>
+            <div class="nd-fld"><label>Label</label><input type="text" value="${escapeHtml(s.label || '')}" oninput="_gcSysSet(${i},'label',this.value)"></div>
+          </div>
+          <div class="nd-section-h" style="margin:0.7rem 0 0.4rem;">Talkgroups (${tgs.length})</div>
+          <div class="nd-table-scroll">
+          <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th>Name</th><th>Group</th><th>Tag</th><th></th></tr></thead><tbody>
+          ${tgs.map((tg, ti) => (q && !matchTg(tg)) ? '' : `<tr>
+            <td><input type="text" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></td>
+            <td><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></td>
+            <td><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></td>
+            <td><select onchange="_gcTgSet(${i},${ti},'groupId',this.value)">${_gcOptions(_gcData.rdioGroups, tg.groupId)}</select></td>
+            <td><select onchange="_gcTgSet(${i},${ti},'tagId',this.value)">${_gcOptions(_gcData.rdioTags, tg.tagId)}</select></td>
+            <td><button class="gc-icon-btn" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button></td>
+          </tr>`).join('')}
+          </tbody></table></div>
+          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>
+          <div class="nd-section-h" style="margin:0.9rem 0 0.4rem;">Units (${units.length})</div>
+          <div class="nd-table-scroll">
+          <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th>Order</th><th></th></tr></thead><tbody>
+          ${units.map((u, ui) => `<tr>
+            <td><input type="text" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
+            <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
+            <td><input type="number" style="max-width:80px;" value="${escapeHtml(u.order != null ? String(u.order) : '')}" oninput="_gcUnitSet(${i},${ui},'order',this.value)"></td>
+            <td><button class="gc-icon-btn" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
+          </tr>`).join('')}
+          </tbody></table></div>
+          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>
+        </div>`;
+        return `<div class="gc-card ${open ? 'open' : ''}">
+          <div class="gc-card-head">
+            <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleSys(${i})"></i>
+            <span class="gc-card-title" onclick="_gcToggleSys(${i})">${escapeHtml(s.label || ('System ' + (s.id != null ? s.id : i)))}</span>
+            <span class="gc-card-meta">${tgs.length} TG · ${units.length} units${s.id != null ? ' · id ' + escapeHtml(String(s.id)) : ''}</span>
+            <button class="gc-icon-btn" title="Remove system" onclick="_gcRemoveSystem(${i})"><i class="fas fa-trash"></i></button>
+          </div>
+          ${body}
+        </div>`;
+      }).join('');
+    }
+
+    function _gcToggleSys(i) { if (_gcOpenSys.has(i)) _gcOpenSys.delete(i); else _gcOpenSys.add(i); _gcRenderSystems(); }
+    function _gcSysSet(i, field, val) { const s = _gcData.rdioSystems[i]; if (s) s[field] = val; }
+    function _gcAddSystem() { _gcData.rdioSystems.push({ id: '', label: 'New system', talkgroups: [], units: [] }); _gcOpenSys.clear(); _gcOpenSys.add(_gcData.rdioSystems.length - 1); _gcRenderSystems(); }
+    function _gcRemoveSystem(i) { if (!confirm('Remove this system and all its talkgroups/units?')) return; _gcData.rdioSystems.splice(i, 1); _gcOpenSys.clear(); _gcRenderSystems(); }
+    function _gcTgSet(i, ti, field, val) { const tg = _gcData.rdioSystems[i].talkgroups[ti]; if (tg) tg[field] = val; }
+    function _gcAddTg(i) { const s = _gcData.rdioSystems[i]; if (!Array.isArray(s.talkgroups)) s.talkgroups = []; s.talkgroups.push({ id: '', label: '', name: '', groupId: '', tagId: '' }); _gcRenderSystems(); }
+    function _gcRemoveTg(i, ti) { _gcData.rdioSystems[i].talkgroups.splice(ti, 1); _gcRenderSystems(); }
+    function _gcUnitSet(i, ui, field, val) { const u = _gcData.rdioSystems[i].units[ui]; if (u) u[field] = val; }
+    function _gcAddUnit(i) { const s = _gcData.rdioSystems[i]; if (!Array.isArray(s.units)) s.units = []; s.units.push({ id: '', label: '', order: s.units.length }); _gcRenderSystems(); }
+    function _gcRemoveUnit(i, ui) { _gcData.rdioSystems[i].units.splice(ui, 1); _gcRenderSystems(); }
+
+    // --- rdio groups / tags (shared {_id, label} shape) ---
+    function _gcRenderKv(containerId, list, prefix) {
+      const el = document.getElementById(containerId);
+      if (!el || !_gcData) return;
+      if (!list.length) { el.innerHTML = `<div class="gc-empty">None yet.</div>`; return; }
+      el.innerHTML = `<table class="gc-table"><thead><tr><th style="width:40%;">_id</th><th>Label</th><th></th></tr></thead><tbody>` +
+        list.map((o, i) => `<tr>
+          <td><input type="text" value="${escapeHtml(String(o._id == null ? '' : o._id))}" oninput="${prefix}Set(${i},'_id',this.value)"></td>
+          <td><input type="text" value="${escapeHtml(o.label || '')}" oninput="${prefix}Set(${i},'label',this.value)"></td>
+          <td><button class="gc-icon-btn" onclick="${prefix}Remove(${i})"><i class="fas fa-trash"></i></button></td>
+        </tr>`).join('') + `</tbody></table>`;
+    }
+    function _gcRenderGroups() { _gcRenderKv('gc-groups', _gcData.rdioGroups, '_gcGroup'); }
+    function _gcRenderTags() { _gcRenderKv('gc-tags', _gcData.rdioTags, '_gcTag'); }
+    function _gcGroupSet(i, f, v) { const o = _gcData.rdioGroups[i]; if (o) o[f] = v; }
+    function _gcGroupRemove(i) { _gcData.rdioGroups.splice(i, 1); _gcRenderGroups(); }
+    function _gcAddGroup() { _gcData.rdioGroups.push({ _id: '', label: '' }); _gcRenderGroups(); }
+    function _gcTagSet(i, f, v) { const o = _gcData.rdioTags[i]; if (o) o[f] = v; }
+    function _gcTagRemove(i) { _gcData.rdioTags.splice(i, 1); _gcRenderTags(); }
+    function _gcAddTag() { _gcData.rdioTags.push({ _id: '', label: '' }); _gcRenderTags(); }
+
+    async function _gcSave() {
+      if (!_gcData) return;
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      // Normalise unit "order" numbers written as strings by the inputs.
+      _gcData.rdioSystems.forEach(s => (s.units || []).forEach(u => {
+        if (u.order !== '' && u.order != null && !Number.isNaN(Number(u.order))) u.order = Number(u.order);
+      }));
+      const btn = document.getElementById('gc-save-btn');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/global-config`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sdrtrunkAliases: _gcData.sdrtrunkAliases,
+            rdioSystems: _gcData.rdioSystems,
+            rdioGroups: _gcData.rdioGroups,
+            rdioTags: _gcData.rdioTags
+          })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data && data.config) {
+          const cfg = data.config;
+          if (Array.isArray(cfg.sdrtrunkAliases)) _gcData.sdrtrunkAliases = cfg.sdrtrunkAliases;
+          if (Array.isArray(cfg.rdioSystems)) _gcData.rdioSystems = cfg.rdioSystems;
+          if (Array.isArray(cfg.rdioGroups)) _gcData.rdioGroups = cfg.rdioGroups;
+          if (Array.isArray(cfg.rdioTags)) _gcData.rdioTags = cfg.rdioTags;
+          _gcData.version = cfg.version; _gcData.updatedAt = cfg.updatedAt;
+          _gcRenderMeta();
+        }
+        const fan = data && data.fanout;
+        const n = fan ? (fan.pushed != null ? fan.pushed : 0) : null;
+        const total = fan && fan.total != null ? fan.total : null;
+        showToast(n != null ? `Saved · synced to ${n}${total != null ? '/' + total : ''} node${n === 1 ? '' : 's'}.` : 'Global config saved.', 'success');
+      } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
 
     async function doAdminLogin() {
@@ -3024,6 +4221,9 @@
               <button class="btn btn-secondary btn-sm" data-user-id="${escapeHtml(user.id)}" title="Edit roles">
                 <i class="fas fa-user-edit"></i>
               </button>
+              ${userPermissions.is_owner
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${escapeHtml(user.id)}')" title="Delete user (owner only)"><i class="fas fa-trash"></i></button>`
+                : ''}
             </td>
           </tr>
         `;
@@ -3049,6 +4249,30 @@
       `;
     }
     
+    // Owner-only: permanently delete a user account (Supabase user + roles +
+    // feeder token + nodes). The backend re-checks owner and blocks self-delete.
+    async function deleteUser(userId) {
+      if (!userPermissions.is_owner) { showToast('Only owners can delete users.', 'warn'); return; }
+      const user = allUsers.find(u => u.id === userId);
+      const who = user ? (user.username || user.email || userId) : userId;
+      const ownerWarn = user && (user.roles || []).some(r => r.role === 'owner') ? ' This user is an OWNER.' : '';
+      if (!confirm(`Permanently delete ${who}? This removes their account, roles, feeder token and nodes. Cannot be undone.${ownerWarn}`)) return;
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': await authHeader() },
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.error || 'Failed to delete user');
+        }
+        showToast('User deleted.', 'success');
+        await loadUsers();
+      } catch (error) {
+        showToast(`Delete failed: ${error.message}`, 'error');
+      }
+    }
+
     function editUserRoles(userId) {
       const user = allUsers.find(u => u.id === userId);
       if (!user) return;
@@ -3199,6 +4423,11 @@
         };
         const regionHtml = regionLabels[req.region] || escapeHtml(req.region) || '—';
         
+        // Owners can delete ANY request (any status) to clear it out — including
+        // incomplete Discord "draft" signups. The backend re-checks owner.
+        const delBtn = userPermissions.is_owner
+          ? `<button class="btn btn-danger btn-sm" onclick="deleteRequest(${req.id})" title="Delete request (owner only)"><i class="fas fa-trash"></i></button>`
+          : '';
         let actionsHtml = '';
         if (req.status === 'pending') {
           actionsHtml = `
@@ -3212,14 +4441,10 @@
               <button class="btn btn-secondary btn-sm" onclick="viewDetails(${req.id})" title="View full details">
                 <i class="fas fa-eye"></i>
               </button>
+              ${delBtn}
             </div>
           `;
         } else {
-          // Owners can delete rejected requests to clear them out. The
-          // button is owner-only here; the backend re-checks owner + status.
-          const delBtn = (req.status === 'rejected' && userPermissions.is_owner)
-            ? `<button class="btn btn-danger btn-sm" onclick="deleteRequest(${req.id})" title="Delete rejected request (owner only)"><i class="fas fa-trash"></i></button>`
-            : '';
           actionsHtml = `
             <div class="action-buttons">
               <button class="btn btn-secondary btn-sm" onclick="viewDetails(${req.id})" title="View details">
@@ -3484,15 +4709,17 @@
       currentApproval = null;
     }
 
-    // Owner-only: permanently delete a REJECTED request. The backend
-    // re-checks the owner role and the rejected status, so a non-owner
-    // hand-crafting the call still gets a 403/400.
+    // Owner-only: permanently delete a request of ANY status. The backend
+    // re-checks the owner role. Deleting an approved request does NOT revoke the
+    // roles it granted (manage those in the Users tab).
     async function deleteRequest(requestId) {
       const req = allRequests.find(r => r.id === requestId);
       if (!req) return;
       if (!userPermissions.is_owner) { showToast('Only owners can delete requests.', 'warn'); return; }
-      if (req.status !== 'rejected') { showToast('Only rejected requests can be deleted.', 'warn'); return; }
-      if (!confirm(`Delete this rejected request from ${req.email || 'unknown'}? This cannot be undone.`)) return;
+      const warn = req.status === 'approved'
+        ? ` This request is APPROVED — deleting it won't remove their roles (do that in the Users tab).`
+        : '';
+      if (!confirm(`Delete the ${req.status} request from ${req.email || 'unknown'}? This cannot be undone.${warn}`)) return;
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}`, {
           method: 'DELETE',
@@ -3502,7 +4729,7 @@
           const error = await response.json().catch(() => ({}));
           throw new Error(error.error || 'Failed to delete request');
         }
-        showToast('Rejected request deleted.', 'success');
+        showToast('Request deleted.', 'success');
         await loadRequests();
       } catch (error) {
         showToast(`Delete failed: ${error.message}`, 'error');
@@ -3747,6 +4974,12 @@
       }
     });
 
+    document.getElementById('global-config-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('global-config-modal')) {
+        closeGlobalConfig();
+      }
+    });
+
     // Delegated handler for per-user "edit roles" buttons (id passed via data attr).
     document.getElementById('users-container').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-user-id]');
@@ -3762,6 +4995,7 @@
         closeEditRolesModal();
         closeRejectModal();
         closeNodeDrawer();
+        closeGlobalConfig();
       }
     });
     
