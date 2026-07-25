@@ -66,22 +66,25 @@ export const AgencySchema = z
     systemId: z.number().int(),
     name: z.string().max(200),
     // --- SDR-Trunk alias appearance/behaviour ---
-    color: z.string().max(40).optional(),
-    iconName: z.string().max(200).optional(),
+    // rdio serialises unset fields as null (e.g. led: null), so every modelled
+    // optional field must accept null (`.nullish()` = value | null | undefined) —
+    // otherwise ONE null field drops the WHOLE agencies array on read.
+    color: z.string().max(40).nullish(),
+    iconName: z.string().max(200).nullish(),
     // -1 = do-not-monitor, 1..99 = priority, undefined/100 = normal monitor.
-    priority: z.number().int().optional(),
-    streamTalkgroupAlias: z.union([z.string().max(40), z.number()]).optional(),
+    priority: z.number().int().nullish(),
+    streamTalkgroupAlias: z.union([z.string().max(40), z.number()]).nullish(),
     // The alias's identifier scope — talkgroupRange / talkgroup / radio ids that
     // decide which calls stream for this agency (the "streaming ranges" section).
     aliasIds: z.array(AliasIdSchema).max(4096).default([]),
     // --- rdio system fields (id/label derive from systemId/name) ---
-    led: z.string().max(40).optional(),
-    autoPopulate: z.boolean().optional(),
-    transcribe: z.boolean().optional(),
-    transcriptionPrompt: z.string().optional(),
-    blacklists: z.string().optional(),
-    delay: z.number().optional(),
-    alert: z.string().max(40).optional(),
+    led: z.string().max(40).nullish(),
+    autoPopulate: z.boolean().nullish(),
+    transcribe: z.boolean().nullish(),
+    transcriptionPrompt: z.string().nullish(),
+    blacklists: z.string().nullish(),
+    delay: z.number().nullish(),
+    alert: z.string().max(40).nullish(),
     talkgroups: z.array(LooseObj).max(8192).default([]),
     units: z.array(LooseObj).max(8192).default([]),
   })
@@ -156,9 +159,10 @@ function agencyToAlias(a: Agency): Alias | null {
     name: a.name,
     list: ALIAS_LIST_NAME,
     group: a.name,
-    color: a.color,
-    iconName: a.iconName,
-    streamTalkgroupAlias: a.streamTalkgroupAlias,
+    // rdio-derived fields can be null; the Alias shape wants string | undefined.
+    color: a.color ?? undefined,
+    iconName: a.iconName ?? undefined,
+    streamTalkgroupAlias: a.streamTalkgroupAlias ?? undefined,
     ids,
   };
 }
