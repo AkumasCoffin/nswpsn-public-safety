@@ -1644,7 +1644,6 @@
               <div class="nd-controls">
                 <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
                 <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
-                <button class="btn btn-secondary btn-sm" onclick="_ndReloadPlaylist()"><i class="fas fa-list"></i> Reload playlist</button>
                 <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
                 <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
@@ -1667,10 +1666,9 @@
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
             <div class="nd-cfg-actions">
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
-              <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()"><i class="fas fa-rotate"></i> Reload</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
               <span class="nd-spacer"></span>
-              <button class="btn btn-secondary btn-sm" onclick="_ndCfgPush()" title="Push the currently-saved config to the node now"><i class="fas fa-upload"></i> Push to node</button>
-              <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and push it to the node — SDR-Trunk reloads its playlist so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button>
+              <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
             </div>
           </div>
 
@@ -4406,20 +4404,18 @@
       await _ndCfgPush(true);
     }
 
-    // Push the currently-saved config to the node. The agent re-renders the
-    // SDR-Trunk playlist and reloads it, so the change goes live without a manual
-    // "Reload playlist". `savedContext` tweaks the wording when called from Save.
+    // Sync the currently-saved config to the node: the agent re-renders the
+    // SDR-Trunk playlist, reloads it, and restarts channels so the change goes
+    // live. Called by "Save & sync" after the config is persisted.
     async function _ndCfgPush(savedContext) {
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/push-config`, {
           method: 'POST', headers: { 'Authorization': await authHeader() }
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(savedContext
-          ? 'Saved & applied — SDR-Trunk reloading playlist.'
-          : 'Config pushed — SDR-Trunk reloading playlist.', 'success');
+        showToast('Saved & synced — the node is applying the new config.', 'success');
       } catch (e) {
-        showToast((savedContext ? 'Saved, but not applied to the node: ' : 'Push failed: ') + e.message, 'warn');
+        showToast('Saved, but not synced to the node (offline?): ' + e.message, 'warn');
       }
     }
 
