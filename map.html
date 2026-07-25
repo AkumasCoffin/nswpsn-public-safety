@@ -15884,8 +15884,11 @@ function initPagerHoursFromStorage() {
   </script>
   <script src="analytics.js"></script>
   <script src="agencies.js"></script>
+  <!-- Shared themed dialogs (uiAlert/uiConfirm/uiPrompt) — must load before the
+       editor module, which uses them in place of native alert/confirm. -->
+  <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=22"></script>
+  <script src="map-editor-module.js?v=23"></script>
 </body>
 </html>

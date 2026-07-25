@@ -453,7 +453,7 @@
           // Suppress the alert for auth-forced reads (e.g. suggestion review);
           // the caller handles the rejection quietly.
           if (isMutating) {
-            alert('You need to be logged in as an editor to make changes. Please log in and try again.');
+            uiAlert('You need to be logged in as an editor to make changes. Please log in and try again.', {title:'Sign in required'});
           }
           return Promise.reject(new Error('apiFetch blocked: no editor session'));
         }
@@ -735,7 +735,7 @@
       if (!selectedId || !currentIncident) return;
       const changes = collectSuggestionChanges(currentIncident);
       if (Object.keys(changes).length === 0) {
-        alert('No changes to suggest — edit a field first.');
+        uiAlert('No changes to suggest — edit a field first.');
         return;
       }
       const body = { kind: 'edit', changes };
@@ -748,9 +748,9 @@
         });
         if (res.ok) {
           clearSuggestMove();
-          alert('Suggestion submitted — the owner will review it.');
+          uiAlert('Suggestion submitted — the owner will review it.');
         } else {
-          alert('Failed to submit suggestion.');
+          uiAlert('Failed to submit suggestion.', {title:'Error'});
         }
       } catch (e) {
         console.warn('Suggestion submit failed:', e);
@@ -761,7 +761,7 @@
       if (!selectedId) return;
       const msg = document.getElementById('sugg-note').value.trim();
       if (!msg) {
-        alert('Type a note first.');
+        uiAlert('Type a note first.');
         return;
       }
       const body = { kind: 'note', message: msg };
@@ -774,9 +774,9 @@
         });
         if (res.ok) {
           document.getElementById('sugg-note').value = '';
-          alert('Note submitted — the owner will review it.');
+          uiAlert('Note submitted — the owner will review it.');
         } else {
-          alert('Failed to submit note.');
+          uiAlert('Failed to submit note.', {title:'Error'});
         }
       } catch (e) {
         console.warn('Note submit failed:', e);
@@ -874,7 +874,7 @@
     async function approveSuggestion(incidentId, sid) {
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}/suggestions/${sid}/approve`, { method: 'POST' });
-        if (!res.ok) { alert('Failed to approve suggestion.'); return; }
+        if (!res.ok) { uiAlert('Failed to approve suggestion.', {title:'Error'}); return; }
         // Re-fetch the incident so the editor + review panel reflect the applied change.
         await refreshSelectedIncident(incidentId);
       } catch (e) {
@@ -885,7 +885,7 @@
     async function rejectSuggestion(incidentId, sid) {
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/incidents/${incidentId}/suggestions/${sid}/reject`, { method: 'POST' });
-        if (!res.ok) { alert('Failed to reject suggestion.'); return; }
+        if (!res.ok) { uiAlert('Failed to reject suggestion.', {title:'Error'}); return; }
         loadIncidentSuggestions(incidentId);
       } catch (e) {
         console.warn('Reject failed:', e);
@@ -1147,7 +1147,7 @@
         body: JSON.stringify({ message: newText })
       });
       const error = res.ok ? null : { message: 'Failed to save log' };
-      if (error) alert(error.message);
+      if (error) uiAlert(error.message, {title:'Error'});
       else {
         // Hide grammar results when saving
         const resultsDiv = document.getElementById(`log-grammar-results-${id}`);
@@ -1180,7 +1180,7 @@
         : (logItem ? logItem.dataset.originalMessage || '' : '');
       
       if (!text.trim()) {
-        alert('No text to check.');
+        uiAlert('No text to check.');
         return;
       }
       
@@ -1224,7 +1224,7 @@
       if (!textarea) return;
       const text = textarea.value;
       if (!text.trim()) {
-        alert('Please enter some text to check.');
+        uiAlert('Please enter some text to check.');
         return;
       }
       await checkGrammar(id, text);
@@ -1235,7 +1235,7 @@
       if (!textarea) return;
       const text = textarea.value;
       if (!text.trim()) {
-        alert('Please enter some text to check.');
+        uiAlert('Please enter some text to check.');
         return;
       }
       
@@ -1667,7 +1667,7 @@
           : document.getElementById(`log-grammar-results-${id}`));
       
       if (!resultsDiv || !resultsDiv.dataset.originalText || !resultsDiv.dataset.allMatches) {
-        alert('No fixes available to apply.');
+        uiAlert('No fixes available to apply.');
         return;
       }
       
@@ -1680,7 +1680,7 @@
       });
       
       if (checkedIndices.length === 0) {
-        alert('Please select at least one fix to apply.');
+        uiAlert('Please select at least one fix to apply.');
         return;
       }
       
@@ -1753,7 +1753,7 @@
       if (!input) return;
       const text = input.value;
       if (!text.trim()) {
-        alert('Please enter a title to check.');
+        uiAlert('Please enter a title to check.');
         return;
       }
       
@@ -1793,19 +1793,19 @@
       const textarea = document.getElementById('edit-desc');
       if (!textarea) {
         console.error('Description textarea not found');
-        alert('Description field not found.');
+        uiAlert('Description field not found.', {title:'Error'});
         return;
       }
       const text = textarea.value;
       if (!text.trim()) {
-        alert('Please enter a description to check.');
+        uiAlert('Please enter a description to check.');
         return;
       }
       
       const resultsDiv = document.getElementById('description-grammar-results');
       if (!resultsDiv) {
         console.error('Description grammar results div not found');
-        alert('Grammar results container not found. Please refresh the page.');
+        uiAlert('Grammar results container not found. Please refresh the page.', {title:'Error'});
         return;
       }
       
@@ -1852,7 +1852,7 @@
       if (_unitsStub && _unitsStub.id === selectedId) {
         const ok = await ensureStubIncident(_unitsStub);
         if (!ok) {
-          alert('Error creating stub for log.');
+          uiAlert('Error creating stub for log.', {title:'Error'});
           return;
         }
       }
@@ -1865,7 +1865,7 @@
       const error = logRes.ok ? null : { message: 'Failed to save log' };
       
       if (error) {
-        alert(`Error saving log: ${error.message}`); 
+        uiAlert(`Error saving log: ${error.message}`, {title:'Error'});
       } else {
         document.getElementById('new-update-msg').value = ''; 
         loadIncidentLogs(selectedId); 
