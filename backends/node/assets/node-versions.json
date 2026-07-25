@@ -14,14 +14,14 @@
     }
   },
   "sdrtrunk": {
-    "version": "0.6.5",
+    "version": "0.6.6",
     "urls": {
       "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
       "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
     },
     "sha256": {
-      "windows-amd64": "f26142ea3946a6bf3ce1aacb06b5d2f3d58d87757019861e999c955950e08879",
-      "linux-amd64": "87e8966868deef9db5d49aeb03b39eb01f31e9583ad42a6e2400a1a7b9b0a9e1"
+      "windows-amd64": "d65126f17e5832364178f05418e2c8e667f09783c1e4222ce1b2e7d866b653fc",
+      "linux-amd64": "129e401eb9a55f1ffebbb6489d0af54c3574716dabbcffdf767186f3de3ed29b"
     }
   },
   "rdio": {
