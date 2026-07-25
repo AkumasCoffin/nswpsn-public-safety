@@ -235,6 +235,32 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
   }
 }
 
+/**
+ * Global auto-update switch. True (default) = nodes self-update automatically;
+ * false = automatic checks are paused (manual updates still work). Stored on the
+ * feeder_global_config singleton, independent of the radio config.
+ */
+export async function getAutoUpdate(): Promise<boolean> {
+  const pool = await getPool();
+  if (!pool) return true;
+  const res = await pool.query<{ auto_update: boolean }>(
+    'SELECT auto_update FROM feeder_global_config WHERE id = 1',
+  );
+  return res.rows[0]?.auto_update ?? true;
+}
+
+/** Set the global auto-update switch, upserting the singleton row without
+ *  touching the radio config columns. */
+export async function setAutoUpdate(enabled: boolean): Promise<void> {
+  const pool = await getPool();
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO feeder_global_config (id, auto_update) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET auto_update = EXCLUDED.auto_update`,
+    [enabled],
+  );
+}
+
 /** Upsert the singleton config with a freshly-computed version. */
 export async function saveGlobalConfig(
   input: GlobalConfigInput,

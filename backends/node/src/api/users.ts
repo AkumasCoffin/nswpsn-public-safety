@@ -36,6 +36,7 @@ import {
   requireRole,
   canManageUsers,
   canAssignPrivilegedRoles,
+  isOwner,
 } from '../services/auth/roles.js';
 
 export const usersRouter = new Hono();
@@ -315,6 +316,56 @@ usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canManageUsers)
   } catch (err) {
     log.error({ err, userId, role }, 'Error removing user role');
     return c.json({ error: 'Failed to remove role' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/users/:userId — OWNER-only. Deletes the account entirely: the
+// Supabase auth user plus their role rows, feeder tokens, and nodes. An owner
+// cannot delete their own account (guards against self-lockout).
+// ---------------------------------------------------------------------------
+usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
+  const userId = c.req.param('userId');
+  const actingUserId = c.get('userId') as string;
+  if (!userId) return c.json({ error: 'user id required' }, 400);
+  if (userId === actingUserId) {
+    return c.json({ error: "You can't delete your own account." }, 400);
+  }
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    // The Supabase auth user is the source of truth for the account.
+    if (!(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY)) {
+      return c.json({ error: 'Supabase not configured' }, 503);
+    }
+    const url = `${config.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    // 404 = already gone; treat as success so we still clean up our own rows.
+    if (![200, 204, 404].includes(res.status)) {
+      const errText = await res.text().catch(() => '');
+      log.error({ userId, status: res.status, errText }, 'Failed to delete Supabase user');
+      return c.json({ error: `Failed to delete account (status ${res.status})` }, 502);
+    }
+
+    // Remove our own records for the user (roles, feeder token, nodes).
+    await pool.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM feeder_tokens WHERE user_id = $1', [userId]).catch(() => {});
+    await pool.query('DELETE FROM nodes WHERE user_id = $1', [userId]).catch(() => {});
+
+    invalidateUserRolesCache(userId);
+    log.info({ userId, by: actingUserId }, 'Deleted user account');
+    return c.json({ success: true, user_id: userId });
+  } catch (err) {
+    log.error({ err, userId }, 'Error deleting user');
+    return c.json({ error: 'Failed to delete user' }, 500);
   }
 });
 

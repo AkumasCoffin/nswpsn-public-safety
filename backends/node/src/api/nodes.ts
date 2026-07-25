@@ -57,6 +57,7 @@ function toApi(node: NodeRow) {
     installId: node.install_id,
     name: node.name,
     enabled: node.enabled,
+    feedEnabled: node.feed_enabled,
     configOverride: node.config_override,
     configVersion: node.config_version,
     agentVersion: node.agent_version,
@@ -76,6 +77,9 @@ function toApi(node: NodeRow) {
 const PatchSchema = z.object({
   name: z.string().max(120).optional(),
   enabled: z.boolean().optional(),
+  // Whether decoded calls are forwarded to the central rdio. Off by default so
+  // an operator can verify config + reception before feeding the live system.
+  feed_enabled: z.boolean().optional(),
   // Validated against the same schema configMerge consumes so staff can't
   // persist an override that would later break the config build.
   config_override: ConfigOverrideSchema.optional(),

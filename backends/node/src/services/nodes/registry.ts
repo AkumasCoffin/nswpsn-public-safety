@@ -13,6 +13,7 @@ export interface NodeRow {
   install_id: string;
   name: string;
   enabled: boolean;
+  feed_enabled: boolean;
   config_override: Record<string, unknown>;
   config_version: string | null;
   agent_version: string | null;
@@ -34,7 +35,7 @@ export interface HelloMeta {
   hostname?: string | null;
 }
 
-const NODE_COLS = `id, kind, user_id, install_id, name, enabled, config_override,
+const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
   last_seen_at, notes, created_at`;
 
@@ -126,6 +127,7 @@ export async function listNodesForUser(userId: string): Promise<NodeRow[]> {
 export interface NodePatch {
   name?: string;
   enabled?: boolean;
+  feed_enabled?: boolean;
   config_override?: Record<string, unknown>;
   config_version?: string | null;
   notes?: string;
@@ -142,6 +144,7 @@ export async function updateNode(
   let i = 1;
   if (patch.name !== undefined) { sets.push(`name = $${i++}`); vals.push(patch.name); }
   if (patch.enabled !== undefined) { sets.push(`enabled = $${i++}`); vals.push(patch.enabled); }
+  if (patch.feed_enabled !== undefined) { sets.push(`feed_enabled = $${i++}`); vals.push(patch.feed_enabled); }
   if (patch.config_override !== undefined) {
     sets.push(`config_override = $${i++}`);
     vals.push(JSON.stringify(patch.config_override));

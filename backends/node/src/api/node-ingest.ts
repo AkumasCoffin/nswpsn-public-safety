@@ -87,6 +87,25 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
+  // 6b. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
+  //     its feed to the central rdio is a separate switch that starts OFF. When
+  //     the feed is off, accept + COUNT the call (so reception shows in the
+  //     node's per-node stats) but do NOT forward it, and ack so the agent's
+  //     queue drains instead of retrying.
+  if (!node.feed_enabled) {
+    let bytes = 0;
+    const audio = form['audio'];
+    const af = Array.isArray(audio) ? audio.find((x) => x instanceof File) : audio;
+    if (af instanceof File) bytes = af.size;
+    try {
+      await bumpNodeCallStat(node.id, bytes);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed (feed off)');
+    }
+    log.info(`node relay: feed off, not forwarded node=${node.id.slice(0, 8)} bytes=${bytes}`);
+    return c.json({ ok: true, fed: false });
+  }
+
   // 7. Rebuild a FormData, copying every field/file EXCEPT `key`, which we
   //    replace with the server-held internal key. Repeated keys arrive as
   //    arrays (all: true) — append each. Files keep their filename + we grab
