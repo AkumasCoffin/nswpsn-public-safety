@@ -1602,6 +1602,7 @@
         <div class="node-drawer-title">
           <div class="node-drawer-name" id="nd-name">Node</div>
           <div class="node-drawer-sub" id="nd-conn">connecting…</div>
+          <div class="node-versions" id="nd-versions" style="margin:0.3rem 0 0;"></div>
         </div>
         <button class="modal-close" onclick="closeNodeDrawer()" title="Close">&times;</button>
       </div>
@@ -2826,6 +2827,7 @@
       const drawer = document.getElementById('node-drawer');
       drawer.classList.add('open');
       document.getElementById('nd-name').textContent = node.name || 'Node';
+      _ndRenderVersions();
       const dot = document.getElementById('nd-dot');
       if (dot) dot.classList.toggle('online', !!node.online);
       _ndSetConn('connecting', node.online);
@@ -2935,6 +2937,7 @@
       _ndRenderEvents();
       _ndRenderNowPlaying();
       _ndRenderCfgSync();
+      _ndRenderVersions();     // reflect a just-completed component update live
       _ndRenderTunerSelector();
       // Auto-start the waterfall on the first tuner once tuners are known.
       if (_ndSpectrumTunerId == null && _ndTuners.length) {
@@ -4435,6 +4438,22 @@
         el.title = `config v${_ndCfgShort(local)}`;
         el.innerHTML = `<i class="fas fa-check"></i> In sync`;
       }
+    }
+
+    // Version chips in the drawer header. Prefers the live status frame (what the
+    // agent is running right now — reflects a just-completed component update)
+    // and falls back to the node-list snapshot (last hello). This is the quick
+    // "what is this node actually on?" readout, e.g. to confirm sdrtrunk 0.6.3.
+    function _ndRenderVersions() {
+      const el = document.getElementById('nd-versions');
+      if (!el) return;
+      const s = _ndStatus || {};
+      const n = _ndNode || {};
+      const agent = s.agentVersion || n.agentVersion;
+      const sdrtrunk = s.sdrtrunkVersion || n.sdrtrunkVersion;
+      const rdio = s.rdioVersion || n.rdioVersion;
+      el.innerHTML =
+        _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio);
     }
 
     function _ndRenderTunerSelector() {
