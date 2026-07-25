@@ -24,6 +24,7 @@ package configapply
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -275,6 +276,7 @@ func Apply(payload ConfigPayload, d Deps) error {
 	}
 
 	// ---- stage: reload ------------------------------------------------------
+	liveReloaded := false
 	if err := d.SDR.ReloadPlaylist(); err != nil {
 		// Live reload failed. The new playlist file is already on disk, so a
 		// process restart will pick it up on boot — request one best-effort.
@@ -286,6 +288,17 @@ func Apply(payload ConfigPayload, d Deps) error {
 		} else {
 			return stageErr("reload", "playlist reload failed and no supervisor to restart sdrtrunk", err)
 		}
+	} else {
+		liveReloaded = true
+	}
+
+	// A live playlist reload swaps the playlist model but does NOT re-apply the
+	// new config to channels that were already running — they keep decoding with
+	// their previous settings until bounced. So restart every started channel so
+	// the edit actually takes effect. Skipped when we fell back to a process
+	// restart above (that already loads everything fresh from the new playlist).
+	if liveReloaded {
+		d.restartRunningChannels()
 	}
 
 	// Tuner gain/ppm live in SDR-Trunk's tuner config, not the playlist, so they
@@ -482,6 +495,36 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 		} else if ts.PPM != nil {
 			// Manual PPM only when auto-ppm is off (auto would override it).
 			_ = d.SDR.SetPPM(lt.ID, *ts.PPM)
+		}
+	}
+}
+
+// restartRunningChannels bounces (stop → start) every channel SDR-Trunk currently
+// reports as processing, so a freshly-reloaded playlist's config takes effect on
+// channels that were already running (a live reload leaves running channels on
+// their old settings). Best-effort: failures are logged but never fail the apply.
+// A short settle between stop and start lets the decode chain tear down before it
+// is rebuilt, avoiding an "already processing" bounce.
+func (d Deps) restartRunningChannels() {
+	if d.SDR == nil {
+		return
+	}
+	channels, _, err := d.SDR.Channels()
+	if err != nil {
+		log.Printf("configapply: list channels for restart failed: %v", err)
+		return
+	}
+	for _, ch := range channels {
+		if !ch.Processing {
+			continue
+		}
+		if err := d.SDR.StopChannel(ch.ID); err != nil {
+			log.Printf("configapply: stop channel %d (%s) for restart failed: %v", ch.ID, ch.Name, err)
+			continue
+		}
+		time.Sleep(250 * time.Millisecond)
+		if err := d.SDR.StartChannel(ch.ID); err != nil {
+			log.Printf("configapply: restart channel %d (%s) failed: %v", ch.ID, ch.Name, err)
 		}
 	}
 }
