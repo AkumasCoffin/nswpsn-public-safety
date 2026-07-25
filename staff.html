@@ -624,6 +624,7 @@
     .nd-gc { display: flex; align-items: center; gap: 0.3rem; margin: 0.1rem 0; }
     .nd-gc > label { font-size: 0.62rem; color: var(--text-soft); min-width: 52px; text-align: right; }
     .nd-gc input[type="checkbox"] { margin: 0; }
+    .nd-gc input:disabled, .nd-gc select:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* Manual / search-tune control — visually distinct (accent-tinted) from the
        read-only current-frequency display and the channel decode editor. */
@@ -2995,9 +2996,10 @@
       if (!wf || !tr) return;
       _ndWf.wf = wf; _ndWf.wfCtx = wf.getContext('2d');
       _ndWf.tr = tr; _ndWf.trCtx = tr.getContext('2d');
-      // Fresh waterfall history on (re)init.
+      // Fresh waterfall history + auto-range window on (re)init (per-tuner).
       _ndWf.wfW = 0; _ndWf.wfH = 0;
       _ndWf.lastBins = null;
+      _ndWf.agcLo = -100; _ndWf.agcHi = -20;
       _ndResizeCanvases();
       // Re-fit the internal buffers whenever the column width (or DPR) changes.
       if (!_ndWf.ro && 'ResizeObserver' in window) {
@@ -3097,9 +3099,11 @@
       [235, 50, 30],    // red (strong)
       [255, 180, 170]   // white-hot peak
     ];
-    function _ndDbRgb(db) {
-      const lo = -105, hi = -15;
-      let n = (db - lo) / (hi - lo);
+    function _ndDbRgb(db, lo, hi) {
+      if (lo == null) lo = -105;
+      if (hi == null) hi = -15;
+      const rng = (hi - lo) || 1;
+      let n = (db - lo) / rng;
       n = n < 0 ? 0 : n > 1 ? 1 : n;
       const segs = _ND_CMAP.length - 1;
       const f = n * segs;
@@ -3114,10 +3118,53 @@
       ];
     }
 
+    // Auto-range the dB→colour / dB→height mapping like SDR-Trunk. Derive a
+    // robust floor (low percentile) and ceiling (high percentile) from THIS
+    // frame's int8 dB bins — ignoring extreme outliers — then ease a running
+    // window (slow AGC attack/decay) toward them. The floor maps to the cold
+    // (blue) end of _ND_CMAP and the ceiling to the hot (red) end, so a flat
+    // noise floor renders blue/dark and only real signals climb into
+    // yellow→red. Shared by the waterfall AND the trace so both panes agree.
+    function _ndUpdateAutoRange(bins) {
+      const n = bins.length;
+      if (!n) return;
+      const hist = _ndWf._hist || (_ndWf._hist = new Uint16Array(256));
+      hist.fill(0);
+      let mn = 127, mx = -128;
+      for (let i = 0; i < n; i++) {
+        const v = bins[i];
+        hist[v + 128]++;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      // 5th percentile → floor (drops dead/outlier-low bins); 98th → ceiling
+      // (stops a lone hot carrier from dominating the whole scale).
+      const loN = 0.05 * n, hiN = 0.98 * n;
+      let floor = mn, ceil = mx, acc = 0, gotFloor = false;
+      for (let b = 0; b < 256; b++) {
+        const c = hist[b];
+        if (!c) continue;
+        acc += c;
+        if (!gotFloor && acc >= loN) { floor = b - 128; gotFloor = true; }
+        if (acc >= hiN) { ceil = b - 128; break; }
+      }
+      // Push the floor a little below the noise so it lands in the blue/dark
+      // end, and hold a minimum dynamic span so a flat (signal-less) input
+      // still shows blue instead of collapsing the window onto one colour.
+      const floorTgt = floor - 6;
+      const ceilTgt = Math.max(ceil + 4, floorTgt + 24);
+      const ease = 0.12;                         // slow AGC attack/decay
+      _ndWf.agcLo += (floorTgt - _ndWf.agcLo) * ease;
+      _ndWf.agcHi += (ceilTgt - _ndWf.agcHi) * ease;
+    }
+
     function _ndDrawSpectrum(centerFreqHz, sampleRate, bins) {
       _ndWf.lastCenter = centerFreqHz;
       _ndWf.lastSr = sampleRate;
       _ndWf.lastBins = bins;
+      // Advance the shared auto-range window ONCE per incoming frame, then both
+      // the waterfall (below) and the trace (called at the end) map through it.
+      _ndUpdateAutoRange(bins);
       const ctx = _ndWf.wfCtx;
       if (!ctx) return;
       const W = _ndWf.wfW, H = _ndWf.wfH;
@@ -3137,7 +3184,7 @@
         const i0 = bp | 0;
         const i1 = i0 + 1 < n ? i0 + 1 : i0;
         const db = bins[i0] + (bins[i1] - bins[i0]) * (bp - i0);
-        const rgb = _ndDbRgb(db);
+        const rgb = _ndDbRgb(db, _ndWf.agcLo, _ndWf.agcHi);
         const p = x * 4;
         data[p] = rgb[0]; data[p + 1] = rgb[1]; data[p + 2] = rgb[2]; data[p + 3] = 255;
       }
@@ -3156,15 +3203,10 @@
       if (!W || !H) return;
       const n = bins.length;
 
-      // Slow AGC: ease the display window toward the frame's floor/peak.
-      let mn = Infinity, mx = -Infinity;
-      for (let i = 0; i < n; i++) { const v = bins[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
-      if (!isFinite(mn)) { mn = -100; mx = -20; }
-      const floorTgt = mn - 4;                        // headroom below the noise floor
-      const peakTgt = Math.max(mx + 6, mn + 20);      // and above the peak (min span)
-      const ease = 0.12;
-      _ndWf.agcLo += (floorTgt - _ndWf.agcLo) * ease;
-      _ndWf.agcHi += (peakTgt - _ndWf.agcHi) * ease;
+      // Reuse the shared auto-range window advanced once per frame by
+      // _ndUpdateAutoRange (the waterfall path), so the trace and waterfall
+      // always agree. On a standalone redraw (e.g. resize) we simply reuse the
+      // last window rather than advancing the AGC again.
       const lo = _ndWf.agcLo, hi = _ndWf.agcHi, rng = (hi - lo) || 1;
       const pad = Math.round(3 * dpr);
       const plotH = H - pad * 2;
@@ -3321,7 +3363,7 @@
         { key:'auto', label:'AGC', kind:'check', custom:true } ];
       if (has('hf+') || has('hf plus') || has('airspy hf')) return { key:'airspyhf', sr:null, gains:[
         { key:'attenuation', label:'Atten', unit:'dB', kind:'select', opts:_ndRange(0,48,6), def:0 },
-        { key:'auto', label:'AGC', kind:'check' },
+        { key:'auto', label:'AGC', kind:'check', agc:true, overrides:['attenuation'] },
         { key:'lna', label:'LNA', kind:'check' } ] };
       if (has('hydra')) return { key:'hydrasdr', sr:_ND_SR_AIRSPY, srDef:10000000, gains:airspyGains };
       if (has('airspy')) return { key:'airspy', sr:_ND_SR_AIRSPY, srDef:10000000, gains:airspyGains };
@@ -3332,17 +3374,19 @@
       if (has('sdrplay') || has('rsp')) return { key:'sdrplay', sr:_ND_SR_SDRPLAY, srDef:2000000, gains:[
         { key:'lnaState', label:'LNA state', kind:'num', min:0, max:9, step:1, def:0 },
         { key:'gainReduction', label:'Gain red.', unit:'dB', kind:'num', min:20, max:59, step:1, def:50 },
-        { key:'auto', label:'AGC', kind:'check' } ] };
+        { key:'auto', label:'AGC', kind:'check', agc:true, overrides:['lnaState','gainReduction'] } ] };
       if (has('funcube') || has('fcd')) return { key:'fcd', sr:null, gains:[
         { key:'lnaGain', label:'LNA gain', unit:'dB', kind:'select', opts:_ndRange(0,30,5), def:20 } ] };
       // RTL family — chip-specific gain models. Check specific chips before RTL.
       if (has('e4k') || has('e4000')) return { key:'e4000', sr:_ND_SR_RTL, srDef:2400000, scalar:true, gains:[
-        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_E4000, def:24 } ] };
+        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_E4000, def:24 },
+        { key:'auto', label:'Auto', kind:'check', agc:true, overrides:['gain'] } ] };
       if (has('fc0013')) return { key:'fc0013', sr:_ND_SR_RTL, srDef:2400000, gains:[
         { key:'gain', label:'LNA', unit:'dB', kind:'select', opts:_ND_G_FC0013, def:19.2 },
-        { key:'auto', label:'AGC', kind:'check' } ] };
+        { key:'auto', label:'AGC', kind:'check', agc:true, overrides:['gain'] } ] };
       if (has('820') || has('828') || has('rtl')) return { key:'r820t', sr:_ND_SR_RTL, srDef:2400000, scalar:true, gains:[
-        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_R820T, def:28.0 } ] };
+        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_R820T, def:28.0 },
+        { key:'auto', label:'Auto', kind:'check', agc:true, overrides:['gain'] } ] };
       return { key:'unknown', freeform:true };
     }
 
@@ -3377,6 +3421,23 @@
       return `<select class="nd-input nd-sel" id="nd-sr-${i}">${_ndOptsHtml(opts, sel)}</select>`;
     }
 
+    // Initial state for a device's Auto/AGC gain toggle. Persisted config wins
+    // (survives restart); otherwise reflect whatever the live tuner reports —
+    // an autoGain/agc flag, gainParams.auto/agcMode, or a null gain (which the
+    // fork uses to mean "hardware auto").
+    function _ndTunerAutoState(t, prof) {
+      const serial = _ndTunerSerial(t);
+      if (_ndConfig && Array.isArray(_ndConfig.tuners)) {
+        const e = _ndConfig.tuners.find(x => String(x.serial) === String(serial));
+        if (e && typeof e.autoGain === 'boolean') return e.autoGain;
+      }
+      if (!t) return false;
+      if (t.autoGain === true || t.agc === true) return true;
+      if (t.gainParams && (t.gainParams.auto === true || t.gainParams.agcMode)) return true;
+      if (prof && prof.scalar && t.gain === null) return true;
+      return false;
+    }
+
     // Gain cell for one tuner row: a stack of device-specific controls.
     function _ndGainCellHtml(i, prof, t) {
       if (prof.freeform) {
@@ -3386,12 +3447,20 @@
       const modeCtl = prof.gains.find(g => g.mode);
       const modeVal = modeCtl ? (modeCtl.def || 'LINEARITY') : null;
       const curScalar = (prof.scalar && t.gain != null && !Number.isNaN(Number(t.gain))) ? Number(t.gain) : null;
+      // Auto-gain (AGC): which control governs it, which manual axes it greys
+      // out, and whether it starts on (live/persisted state).
+      const agcCtl = prof.gains.find(g => g.agc);
+      const govKeys = (agcCtl && agcCtl.overrides) ? agcCtl.overrides : [];
+      const autoOn = agcCtl ? _ndTunerAutoState(t, prof) : false;
       return prof.gains.map(g => {
         const id = `nd-g-${i}-${g.key}`;
-        const dis = (g.custom && modeVal !== 'CUSTOM') ? ' disabled' : '';
+        const gov = govKeys.indexOf(g.key) !== -1;   // greyed while Auto is on
+        const dis = ((g.custom && modeVal !== 'CUSTOM') || (gov && autoOn)) ? ' disabled' : '';
         let ctl;
         if (g.kind === 'check') {
-          ctl = `<input type="checkbox" id="${id}"${dis}>`;
+          const chk = (g.agc && autoOn) ? ' checked' : '';
+          const onCh = g.agc ? ` onchange="_ndAutoGain(${i})"` : '';
+          ctl = `<input type="checkbox" id="${id}"${dis}${chk}${onCh}>`;
         } else if (g.kind === 'num') {
           ctl = `<input class="nd-input nd-input-sm" id="${id}" type="number" min="${g.min}" max="${g.max}" step="${g.step}" value="${g.def}"${dis}>`;
         } else {
@@ -3402,7 +3471,7 @@
           ctl = `<select class="nd-input nd-sel" id="${id}"${onCh}${dis}>${_ndOptsHtml(g.opts, sel)}</select>`;
         }
         const unit = g.unit ? `<span class="nd-unit">${g.unit}</span>` : '';
-        return `<div class="nd-gc" data-custom="${g.custom ? 1 : 0}"><label for="${id}">${escapeHtml(g.label)}</label>${ctl}${unit}</div>`;
+        return `<div class="nd-gc" data-custom="${g.custom ? 1 : 0}"${gov ? ' data-agcgov="1"' : ''}><label for="${id}">${escapeHtml(g.label)}</label>${ctl}${unit}</div>`;
       }).join('');
     }
 
@@ -3414,6 +3483,17 @@
       const custom = modeEl.value === 'CUSTOM';
       document.querySelectorAll(`#nd-tuners tr[data-tuner="${i}"] .nd-gc[data-custom="1"] input, #nd-tuners tr[data-tuner="${i}"] .nd-gc[data-custom="1"] select`)
         .forEach(el => { el.disabled = !custom; });
+    }
+
+    // Auto-gain (AGC) toggle: grey out the manual gain axis/axes this device's
+    // Auto control governs while it's on. On Apply, _ndApplyTuner sends the auto
+    // flag instead of the manual gain (see below).
+    function _ndAutoGain(i) {
+      const auto = document.getElementById(`nd-g-${i}-auto`);
+      if (!auto) return;
+      const on = auto.checked;
+      document.querySelectorAll(`#nd-tuners tr[data-tuner="${i}"] .nd-gc[data-agcgov="1"] input, #nd-tuners tr[data-tuner="${i}"] .nd-gc[data-agcgov="1"] select`)
+        .forEach(el => { el.disabled = on; });
     }
 
     // P2 — per-SDR tuner panel. NOTE: frequency is READ-ONLY here; it is
@@ -3502,14 +3582,25 @@
         if (!Number.isNaN(raw)) args.sampleRate = prof.freeform ? Math.round(raw * 1e6) : Math.round(raw);
       }
 
+      // Auto-gain (AGC): if this device has an Auto toggle and it's on, send the
+      // auto flag in gainParams and skip the manual gain value entirely.
+      const autoEl = document.getElementById('nd-g-' + i + '-auto');
+      const autoOn = !!(autoEl && autoEl.checked);
+
       // Gain — single scalar `gain` for simple/unknown devices; a device-shaped
       // `gainParams` object for multi-axis devices. Numeric gain axes are
       // rounded to whole units (the control server decodes ints).
       if (prof.freeform || prof.scalar) {
-        const gEl = document.getElementById('nd-g-' + i + '-gain');
-        if (gEl && gEl.value !== '') {
-          const g = parseFloat(gEl.value);
-          if (!Number.isNaN(g)) args.gain = Math.round(g);
+        if (autoOn) {
+          // Scalar devices (RTL R820T/E4K…) send the master gain as a top-level
+          // scalar for manual; for auto we send gainParams:{auto:true} instead.
+          args.gainParams = { auto: true };
+        } else {
+          const gEl = document.getElementById('nd-g-' + i + '-gain');
+          if (gEl && gEl.value !== '') {
+            const g = parseFloat(gEl.value);
+            if (!Number.isNaN(g)) args.gain = Math.round(g);
+          }
         }
       } else {
         const gp = {};
@@ -3536,7 +3627,8 @@
         gain: args.gain,
         gainParams: args.gainParams,
         ppm: args.ppm,
-        autoPpm
+        autoPpm,
+        autoGain: autoOn
       });
       showToast('Applying tuner change…', 'success', 1500);
     }
