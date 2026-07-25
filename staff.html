@@ -880,13 +880,15 @@
       font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em;
       color: var(--text-soft); font-weight: 600;
     }
-    .nd-fld input[type="text"], .nd-fld input[type="number"], .nd-fld select {
+    .nd-fld input[type="text"], .nd-fld input[type="number"], .nd-fld select, .nd-fld textarea {
       width: 100%; background: rgba(0, 0, 0, 0.3);
       border: 1px solid var(--border-subtle); border-radius: 6px;
       color: var(--text-primary); padding: 0.32rem 0.45rem;
       font-family: inherit; font-size: 0.78rem;
     }
-    .nd-fld input:focus, .nd-fld select:focus { outline: none; border-color: var(--accent-border); }
+    .nd-fld textarea { resize: vertical; min-height: 2.2rem; }
+    .nd-fld input[type="color"] { padding: 0.1rem; height: 1.9rem; cursor: pointer; }
+    .nd-fld input:focus, .nd-fld select:focus, .nd-fld textarea:focus { outline: none; border-color: var(--accent-border); }
     .nd-chk { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; color: var(--text-primary); }
     .nd-cfg-rowhead { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.55rem; }
     .nd-cfg-rowhead .nd-strong { flex: 1; }
@@ -4358,6 +4360,44 @@
     let _gcRdioTab = 'systems';
     const _gcOpenAlias = new Set();
     const _gcOpenSys = new Set();
+    const _gcOpenTg = new Set(); // keys "sysIdx:tgIdx"
+
+    // --- SDR-Trunk alias identifier types (proper sub-editors for the common
+    // ones; anything else falls back to the generic key/value attr rows). Field
+    // `k` is the XML attribute name; `t` is the control type. ---
+    const GC_TG_PROTOCOLS = ['AM', 'APCO25', 'DMR', 'FLEETSYNC', 'LTR', 'LTR_NET', 'MDC1200', 'MPT1327', 'NBFM', 'PASSPORT'];
+    const GC_RADIO_PROTOCOLS = ['APCO25', 'DMR', 'PASSPORT'];
+    const GC_ID_TYPES = {
+      talkgroup: { label: 'Talkgroup', fields: [
+        { k: 'value', t: 'number', label: 'Value' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_TG_PROTOCOLS } ] },
+      talkgroupRange: { label: 'Talkgroup range', fields: [
+        { k: 'min', t: 'number', label: 'Min' },
+        { k: 'max', t: 'number', label: 'Max' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_TG_PROTOCOLS } ] },
+      radio: { label: 'Radio ID', fields: [
+        { k: 'value', t: 'number', label: 'Value' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_RADIO_PROTOCOLS } ] },
+      radioRange: { label: 'Radio ID range', fields: [
+        { k: 'min', t: 'number', label: 'Min' },
+        { k: 'max', t: 'number', label: 'Max' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_RADIO_PROTOCOLS } ] },
+      p25FullyQualifiedTalkgroup: { label: 'P25 fully-qualified talkgroup', fields: [
+        { k: 'wacn', t: 'number', label: 'WACN' },
+        { k: 'system', t: 'number', label: 'System' },
+        { k: 'value', t: 'number', label: 'Value' } ] },
+      p25FullyQualifiedRadio: { label: 'P25 fully-qualified radio', fields: [
+        { k: 'wacn', t: 'number', label: 'WACN' },
+        { k: 'system', t: 'number', label: 'System' },
+        { k: 'value', t: 'number', label: 'Value' } ] },
+      dcs: { label: 'DCS', fields: [ { k: 'code', t: 'text', label: 'Code' } ] },
+      esn: { label: 'ESN', fields: [ { k: 'esn', t: 'text', label: 'ESN (* wildcard)' } ] },
+      statusID: { label: 'Status ID', fields: [ { k: 'status', t: 'number', label: 'Status (0–255)' } ] },
+      unitStatusID: { label: 'Unit status ID', fields: [ { k: 'status', t: 'number', label: 'Status (0–255)' } ] },
+    };
+    // rdio LED = named-colour dropdown (NOT a colour picker). Alerts = None + 1..9.
+    const GC_LED_COLORS = ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white', 'yellow'];
+    const GC_ALERTS = ['alert1', 'alert2', 'alert3', 'alert4', 'alert5', 'alert6', 'alert7', 'alert8', 'alert9'];
 
     async function openGlobalConfig() {
       const modal = document.getElementById('global-config-modal');
@@ -4429,6 +4469,83 @@
     }
 
     // --- SDR-Trunk aliases ---
+    // Colour is an ARGB int (SDR-Trunk stores e.g. -65536); the editor shows a
+    // real colour picker over the RGB channels while preserving the alpha byte.
+    function _gcColorHex(color) {
+      if (color == null || color === '') return '#000000';
+      const s = String(color).trim();
+      if (s[0] === '#') {
+        let h = s.slice(1);
+        if (h.length === 8) h = h.slice(2);            // strip AA from #AARRGGBB
+        if (h.length === 3) h = h.split('').map(c => c + c).join('');
+        return (h.length === 6 && /^[0-9a-fA-F]{6}$/.test(h)) ? '#' + h.toLowerCase() : '#000000';
+      }
+      const n = Number(s);
+      if (!Number.isFinite(n)) return '#000000';
+      return '#' + ((n >>> 0) & 0xFFFFFF).toString(16).padStart(6, '0');
+    }
+    function _gcColorAlpha(color) {
+      if (color == null || color === '') return 0xFF;
+      const s = String(color).trim();
+      if (s[0] === '#') { const h = s.slice(1); return h.length === 8 ? parseInt(h.slice(0, 2), 16) : 0xFF; }
+      const n = Number(s);
+      if (!Number.isFinite(n)) return 0xFF;
+      return ((n >>> 0) >>> 24) & 0xFF;
+    }
+    function _gcAliasColorSet(i, hex) {
+      const a = _gcData.sdrtrunkAliases[i];
+      if (!a) return;
+      const alpha = _gcColorAlpha(a.color);
+      const rgb = parseInt(hex.slice(1), 16) & 0xFFFFFF;
+      a.color = String(((alpha << 24) | rgb) | 0);      // ARGB as signed 32-bit int
+    }
+
+    // priority / record are stored as <id> entries but surfaced as top controls.
+    function _gcFindId(a, type) { return (Array.isArray(a.ids) ? a.ids : []).find(x => x && x.type === type) || null; }
+    function _gcAliasPriority(a) {
+      const p = _gcFindId(a, 'priority');
+      if (!p) return { listen: true, value: 'default' };
+      const v = Number(p.attrs && p.attrs.priority);
+      if (v === -1) return { listen: false, value: 'default' };
+      if (v === 100 || !Number.isFinite(v)) return { listen: true, value: 'default' };
+      return { listen: true, value: String(v) };
+    }
+    function _gcSetPriorityId(a, priorityVal) {
+      if (!Array.isArray(a.ids)) a.ids = [];
+      if (priorityVal == null) { a.ids = a.ids.filter(x => !(x && x.type === 'priority')); return; }
+      let p = a.ids.find(x => x && x.type === 'priority');
+      if (!p) { p = { type: 'priority', attrs: {} }; a.ids.push(p); }
+      if (!p.attrs) p.attrs = {};
+      p.attrs.priority = String(priorityVal);
+    }
+    function _gcAliasListenToggle(i, on) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a) return;
+      if (!on) { _gcSetPriorityId(a, -1); }
+      else { const cur = _gcAliasPriority(a); _gcSetPriorityId(a, cur.value === 'default' ? null : cur.value); }
+      _gcRenderAliases();
+    }
+    function _gcAliasPrioritySet(i, val) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a) return;
+      _gcSetPriorityId(a, val === 'default' ? null : val);
+    }
+    function _gcAliasRecordToggle(i, on) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a) return;
+      if (!Array.isArray(a.ids)) a.ids = [];
+      if (on) { if (!_gcFindId(a, 'record')) a.ids.push({ type: 'record', attrs: {} }); }
+      else { a.ids = a.ids.filter(x => !(x && x.type === 'record')); }
+      _gcRenderAliases();
+    }
+    function _gcAliasStreamSet(i, val) {
+      const a = _gcData.sdrtrunkAliases[i]; if (!a) return;
+      const t = String(val).trim();
+      if (t === '') delete a.streamTalkgroupAlias; else a.streamTalkgroupAlias = t;
+    }
+    function _gcIconNames() {
+      const set = new Set();
+      (_gcData.sdrtrunkAliases || []).forEach(a => { if (a && a.iconName) set.add(a.iconName); });
+      return Array.from(set).sort();
+    }
+
     function _gcRenderAliases() {
       const el = document.getElementById('gc-aliases');
       if (!el || !_gcData) return;
@@ -4438,27 +4555,42 @@
       if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' alias' : ' aliases');
       const shown = list.map((a, i) => ({ a, i })).filter(({ a }) =>
         !q || String(a.name || '').toLowerCase().includes(q) || String(a.group || '').toLowerCase().includes(q));
-      if (!shown.length) { el.innerHTML = `<div class="gc-empty">No aliases${q ? ' match your search' : ' yet'}.</div>`; return; }
-      el.innerHTML = shown.map(({ a, i }) => {
+      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
+      if (!shown.length) { el.innerHTML = datalist + `<div class="gc-empty">No aliases${q ? ' match your search' : ' yet'}.</div>`; return; }
+      el.innerHTML = datalist + shown.map(({ a, i }) => {
         const open = _gcOpenAlias.has(i);
         const ids = Array.isArray(a.ids) ? a.ids : [];
+        const visIds = ids.filter(x => x && x.type !== 'priority' && x.type !== 'record');
+        const pri = _gcAliasPriority(a);
+        const recording = !!_gcFindId(a, 'record');
+        const hex = _gcColorHex(a.color);
+        const prioOpts = ['default'].concat(Array.from({ length: 99 }, (_, n) => String(n + 1)))
+          .map(v => `<option value="${v}" ${v === pri.value ? 'selected' : ''}>${v === 'default' ? 'Default' : v}</option>`).join('');
+        const idEditors = ids.map((id, idi) => (id && (id.type === 'priority' || id.type === 'record')) ? '' : _gcRenderId(i, idi, id)).join('');
         const body = !open ? '' : `<div class="gc-card-body">
           <div class="gc-inline">
             <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAliasSet(${i},'name',this.value)"></div>
             <div class="nd-fld"><label>List</label><input type="text" value="${escapeHtml(a.list || '')}" oninput="_gcAliasSet(${i},'list',this.value)"></div>
             <div class="nd-fld"><label>Group</label><input type="text" value="${escapeHtml(a.group || '')}" oninput="_gcAliasSet(${i},'group',this.value)"></div>
-            <div class="nd-fld"><label>Color</label><input type="text" style="width:110px;" value="${escapeHtml(a.color || '')}" oninput="_gcAliasSet(${i},'color',this.value);var s=document.getElementById('gc-alias-sw-${i}');if(s)s.style.background=this.value"></div>
-            <span class="gc-color-swatch" id="gc-alias-sw-${i}" style="background:${escapeHtml(a.color || 'transparent')};"></span>
+            <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAliasSet(${i},'iconName',this.value)" placeholder="named icon"></div>
+            <div class="nd-fld"><label>Colour</label><input type="color" style="width:52px;padding:0.1rem;" value="${hex}" oninput="_gcAliasColorSet(${i},this.value)"></div>
+            <div class="nd-fld"><label>Stream as TG</label><input type="number" style="max-width:110px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAliasStreamSet(${i},this.value)" placeholder="talkgroup"></div>
+          </div>
+          <div class="gc-inline" style="align-items:center;">
+            <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Listen</label><label class="node-switch"><input type="checkbox" ${pri.listen ? 'checked' : ''} onchange="_gcAliasListenToggle(${i},this.checked)"><span class="track"></span></label></div>
+            <div class="nd-fld"><label>Priority</label><select ${pri.listen ? '' : 'disabled'} onchange="_gcAliasPrioritySet(${i},this.value)">${prioOpts}</select></div>
+            <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Record</label><label class="node-switch"><input type="checkbox" ${recording ? 'checked' : ''} onchange="_gcAliasRecordToggle(${i},this.checked)"><span class="track"></span></label></div>
           </div>
           <div class="nd-section-h" style="margin:0.6rem 0 0.4rem;">Identifiers</div>
-          ${ids.map((id, idi) => _gcRenderId(i, idi, id)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No identifiers.</div>`}
+          ${idEditors || `<div class="gc-empty" style="padding:0.6rem;">No identifiers.</div>`}
           <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add identifier</button>
         </div>`;
         return `<div class="gc-card ${open ? 'open' : ''}">
           <div class="gc-card-head">
             <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleAlias(${i})"></i>
+            <span class="gc-color-swatch" style="background:${hex};${a.color ? '' : 'opacity:0.25;'}"></span>
             <span class="gc-card-title" onclick="_gcToggleAlias(${i})">${escapeHtml(a.name || '(unnamed alias)')}</span>
-            <span class="gc-card-meta">${ids.length} id${ids.length === 1 ? '' : 's'}${a.group ? ' · ' + escapeHtml(a.group) : ''}</span>
+            <span class="gc-card-meta">${visIds.length} id${visIds.length === 1 ? '' : 's'}${a.group ? ' · ' + escapeHtml(a.group) : ''}</span>
             <button class="gc-icon-btn" title="Remove alias" onclick="_gcRemoveAlias(${i})"><i class="fas fa-trash"></i></button>
           </div>
           ${body}
@@ -4466,9 +4598,33 @@
       }).join('');
     }
 
+    // One identifier: proper fields for the common types, generic key/value rows
+    // for the rest (and for any extra attributes on a typed id).
     function _gcRenderId(i, idi, id) {
       const attrs = (id && id.attrs && typeof id.attrs === 'object') ? id.attrs : {};
-      const attrRows = Object.keys(attrs).map(k => `
+      const type = (id && id.type) || '';
+      const spec = GC_ID_TYPES[type];
+      const typeKeys = Object.keys(GC_ID_TYPES);
+      let typeOpts = (type ? '' : `<option value="" selected>— pick type —</option>`) +
+        typeKeys.map(k => `<option value="${k}" ${k === type ? 'selected' : ''}>${escapeHtml(GC_ID_TYPES[k].label)}</option>`).join('');
+      if (type && !typeKeys.includes(type)) typeOpts += `<option value="${escapeHtml(type)}" selected>${escapeHtml(type)}</option>`;
+
+      const usedKeys = [];
+      let fieldsHtml = '';
+      if (spec) {
+        fieldsHtml = `<div class="gc-inline" style="margin:0.3rem 0;">` + spec.fields.map(f => {
+          usedKeys.push(f.k);
+          const val = attrs[f.k] == null ? '' : String(attrs[f.k]);
+          if (f.t === 'select') {
+            const opts = `<option value="">—</option>` + f.opts.map(o => `<option value="${escapeHtml(o)}" ${o === val ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('') +
+              ((val && !f.opts.includes(val)) ? `<option value="${escapeHtml(val)}" selected>${escapeHtml(val)}</option>` : '');
+            return `<div class="nd-fld"><label>${escapeHtml(f.label)}</label><select onchange="_gcIdAttr(${i},${idi},'${f.k}',this.value)">${opts}</select></div>`;
+          }
+          return `<div class="nd-fld"><label>${escapeHtml(f.label)}</label><input type="${f.t}" value="${escapeHtml(val)}" oninput="_gcIdAttr(${i},${idi},'${f.k}',this.value)"></div>`;
+        }).join('') + `</div>`;
+      }
+      const extraKeys = Object.keys(attrs).filter(k => !usedKeys.includes(k));
+      const extraRows = extraKeys.map(k => `
         <div class="gc-attr-row">
           <input type="text" style="max-width:140px;" value="${escapeHtml(k)}" onchange="_gcAttrRename(${i},${idi},'${escapeHtml(k)}',this.value)" placeholder="key">
           <input type="text" value="${escapeHtml(String(attrs[k] == null ? '' : attrs[k]))}" oninput="_gcAttrVal(${i},${idi},'${escapeHtml(k)}',this.value)" placeholder="value">
@@ -4476,10 +4632,11 @@
         </div>`).join('');
       return `<div class="nd-cfg-row" style="margin-bottom:0.5rem;">
         <div class="gc-attr-row">
-          <div class="nd-fld" style="flex:0 0 160px;"><label>Type</label><input type="text" value="${escapeHtml(id.type || '')}" oninput="_gcIdSet(${i},${idi},'type',this.value)" placeholder="e.g. talkgroup, radioID"></div>
+          <div class="nd-fld" style="flex:0 0 220px;"><label>Type</label><select onchange="_gcIdTypeSet(${i},${idi},this.value)">${typeOpts}</select></div>
           <button class="gc-icon-btn" style="align-self:flex-end;" title="Remove identifier" onclick="_gcRemoveId(${i},${idi})"><i class="fas fa-trash"></i></button>
         </div>
-        ${attrRows}
+        ${fieldsHtml}
+        ${extraRows}
         <button class="gc-badge-btn" style="margin-top:0.2rem;" onclick="_gcAddAttr(${i},${idi})"><i class="fas fa-plus"></i> Add attribute</button>
       </div>`;
     }
@@ -4488,9 +4645,20 @@
     function _gcAliasSet(i, field, val) { const a = _gcData.sdrtrunkAliases[i]; if (a) a[field] = val; }
     function _gcAddAlias() { _gcData.sdrtrunkAliases.push({ name: 'New alias', ids: [] }); _gcOpenAlias.clear(); _gcOpenAlias.add(_gcData.sdrtrunkAliases.length - 1); _gcRenderAliases(); }
     async function _gcRemoveAlias(i) { if (!await uiConfirm('Remove this alias?', { danger: true, okText: 'Remove' })) return; _gcData.sdrtrunkAliases.splice(i, 1); _gcOpenAlias.clear(); _gcRenderAliases(); }
-    function _gcIdSet(i, idi, field, val) { const id = _gcData.sdrtrunkAliases[i].ids[idi]; if (id) id[field] = val; }
-    function _gcAddId(i) { const a = _gcData.sdrtrunkAliases[i]; if (!Array.isArray(a.ids)) a.ids = []; a.ids.push({ type: '', attrs: {} }); _gcRenderAliases(); }
+    function _gcAddId(i) { const a = _gcData.sdrtrunkAliases[i]; if (!Array.isArray(a.ids)) a.ids = []; a.ids.push({ type: 'talkgroup', attrs: {} }); _gcRenderAliases(); }
     function _gcRemoveId(i, idi) { _gcData.sdrtrunkAliases[i].ids.splice(idi, 1); _gcRenderAliases(); }
+    function _gcIdTypeSet(i, idi, type) {
+      const id = _gcData.sdrtrunkAliases[i].ids[idi];
+      if (!id) return;
+      id.type = type; id.attrs = {};   // fields differ per type — reset attrs
+      _gcRenderAliases();
+    }
+    function _gcIdAttr(i, idi, key, val) {
+      const id = _gcData.sdrtrunkAliases[i].ids[idi];
+      if (!id) return;
+      if (!id.attrs) id.attrs = {};
+      if (val === '') delete id.attrs[key]; else id.attrs[key] = val;
+    }
     function _gcAttrVal(i, idi, key, val) { const id = _gcData.sdrtrunkAliases[i].ids[idi]; if (id) { if (!id.attrs) id.attrs = {}; id.attrs[key] = val; } }
     function _gcAttrRename(i, idi, oldKey, newKey) {
       const id = _gcData.sdrtrunkAliases[i].ids[idi];
@@ -4521,6 +4689,32 @@
       return opts;
     }
 
+    // --- rdio led / alert selects (rdio never uses a colour picker — led is a
+    // named-colour dropdown; alert is None + alert1..9). Empty = default, which we
+    // drop from the object so it stays in its default state. ---
+    function _gcLedSelect(value, onchange) {
+      const cur = value == null ? '' : String(value);
+      const known = GC_LED_COLORS.includes(cur);
+      return `<select onchange="${onchange}">` +
+        `<option value="" ${cur === '' ? 'selected' : ''}>Default</option>` +
+        GC_LED_COLORS.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('') +
+        ((cur && !known) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '') +
+        `</select>`;
+    }
+    function _gcAlertSelect(value, onchange) {
+      const cur = value == null ? '' : String(value);
+      const known = GC_ALERTS.includes(cur);
+      return `<select onchange="${onchange}">` +
+        `<option value="" ${cur === '' ? 'selected' : ''}>None</option>` +
+        GC_ALERTS.map(a => `<option value="${a}" ${a === cur ? 'selected' : ''}>${a}</option>`).join('') +
+        ((cur && !known) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '') +
+        `</select>`;
+    }
+    // Assign a field, dropping it entirely when cleared (led/alert default state).
+    function _gcAssignField(obj, field, val, deleteEmpty) {
+      if (deleteEmpty && (val === '' || val == null)) delete obj[field]; else obj[field] = val;
+    }
+
     // --- rdio systems ---
     function _gcRenderSystems() {
       const el = document.getElementById('gc-systems');
@@ -4529,48 +4723,52 @@
       const list = _gcData.rdioSystems;
       const cnt = document.getElementById('gc-sys-count');
       if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' system' : ' systems');
-      const matchTg = (tg) => String(tg.label || '').toLowerCase().includes(q) || String(tg.name || '').toLowerCase().includes(q) || String(tg.id || '').toLowerCase().includes(q);
+      const matchTg = (tg) => String(tg.label || '').toLowerCase().includes(q) || String(tg.name || '').toLowerCase().includes(q) || String(tg.id == null ? '' : tg.id).toLowerCase().includes(q);
       const shown = list.map((s, i) => ({ s, i })).filter(({ s }) =>
-        !q || String(s.label || '').toLowerCase().includes(q) || String(s.id || '').toLowerCase().includes(q)
+        !q || String(s.label || '').toLowerCase().includes(q) || String(s.id == null ? '' : s.id).toLowerCase().includes(q)
         || (Array.isArray(s.talkgroups) && s.talkgroups.some(matchTg)));
       if (!shown.length) { el.innerHTML = `<div class="gc-empty">No systems${q ? ' match your search' : ' yet'}.</div>`; return; }
       el.innerHTML = shown.map(({ s, i }) => {
         const open = _gcOpenSys.has(i);
         const tgs = Array.isArray(s.talkgroups) ? s.talkgroups : [];
         const units = Array.isArray(s.units) ? s.units : [];
+        const transcribeOn = s.transcribe !== false; // default true
+        const shownTgs = tgs.map((tg, ti) => ({ tg, ti })).filter(({ tg }) => !q || matchTg(tg));
         const body = !open ? '' : `<div class="gc-card-body">
           <div class="gc-inline">
-            <div class="nd-fld"><label>System ID</label><input type="text" value="${escapeHtml(String(s.id == null ? '' : s.id))}" oninput="_gcSysSet(${i},'id',this.value)"></div>
+            <div class="nd-fld"><label>System ID</label><input type="number" style="max-width:90px;" value="${escapeHtml(String(s.id == null ? '' : s.id))}" oninput="_gcSysSet(${i},'id',this.value)"></div>
             <div class="nd-fld"><label>Label</label><input type="text" value="${escapeHtml(s.label || '')}" oninput="_gcSysSet(${i},'label',this.value)"></div>
+            <div class="nd-fld"><label>LED</label>${_gcLedSelect(s.led, `_gcSysSet(${i},'led',this.value,true)`)}</div>
+            <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(s.delay != null ? String(s.delay) : '')}" oninput="_gcSysSet(${i},'delay',this.value)"></div>
+            <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(s.alert, `_gcSysSet(${i},'alert',this.value,true)`)}</div>
+          </div>
+          <div class="gc-inline" style="align-items:center;">
+            <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Auto-populate</label><label class="node-switch"><input type="checkbox" ${s.autoPopulate ? 'checked' : ''} onchange="_gcSysSet(${i},'autoPopulate',this.checked)"><span class="track"></span></label></div>
+            <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcSysSet(${i},'transcribe',this.checked)"><span class="track"></span></label></div>
+          </div>
+          <div class="gc-inline">
+            <div class="nd-fld" style="flex:1;min-width:220px;"><label>Transcription prompt</label><textarea rows="2" oninput="_gcSysSet(${i},'transcriptionPrompt',this.value)">${escapeHtml(s.transcriptionPrompt || '')}</textarea></div>
+            <div class="nd-fld" style="flex:1;min-width:220px;"><label>Blacklists (comma-separated ids)</label><textarea rows="2" oninput="_gcSysSet(${i},'blacklists',this.value)">${escapeHtml(s.blacklists == null ? '' : String(s.blacklists))}</textarea></div>
           </div>
           <div class="nd-section-h" style="margin:0.7rem 0 0.4rem;">Talkgroups (${tgs.length})</div>
-          <div class="nd-table-scroll">
-          <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th>Name</th><th>Group</th><th>Tag</th><th></th></tr></thead><tbody>
-          ${tgs.map((tg, ti) => (q && !matchTg(tg)) ? '' : `<tr>
-            <td><input type="text" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></td>
-            <td><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></td>
-            <td><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></td>
-            <td><select onchange="_gcTgSet(${i},${ti},'groupId',this.value)">${_gcOptions(_gcData.rdioGroups, tg.groupId)}</select></td>
-            <td><select onchange="_gcTgSet(${i},${ti},'tagId',this.value)">${_gcOptions(_gcData.rdioTags, tg.tagId)}</select></td>
-            <td><button class="gc-icon-btn" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button></td>
-          </tr>`).join('')}
-          </tbody></table></div>
+          ${shownTgs.map(({ tg, ti }) => _gcRenderTg(i, ti, tg)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No talkgroups${q ? ' match your search' : ''}.</div>`}
           <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>
           <div class="nd-section-h" style="margin:0.9rem 0 0.4rem;">Units (${units.length})</div>
           <div class="nd-table-scroll">
-          <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th>Order</th><th></th></tr></thead><tbody>
+          <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th></th></tr></thead><tbody>
           ${units.map((u, ui) => `<tr>
-            <td><input type="text" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
+            <td><input type="number" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
             <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
-            <td><input type="number" style="max-width:80px;" value="${escapeHtml(u.order != null ? String(u.order) : '')}" oninput="_gcUnitSet(${i},${ui},'order',this.value)"></td>
             <td><button class="gc-icon-btn" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
           </tr>`).join('')}
           </tbody></table></div>
           <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>
         </div>`;
+        const ledDot = s.led ? `<span class="gc-color-swatch" style="width:12px;height:12px;background:${escapeHtml(String(s.led))};"></span>` : '';
         return `<div class="gc-card ${open ? 'open' : ''}">
           <div class="gc-card-head">
             <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleSys(${i})"></i>
+            ${ledDot}
             <span class="gc-card-title" onclick="_gcToggleSys(${i})">${escapeHtml(s.label || ('System ' + (s.id != null ? s.id : i)))}</span>
             <span class="gc-card-meta">${tgs.length} TG · ${units.length} units${s.id != null ? ' · id ' + escapeHtml(String(s.id)) : ''}</span>
             <button class="gc-icon-btn" title="Remove system" onclick="_gcRemoveSystem(${i})"><i class="fas fa-trash"></i></button>
@@ -4580,45 +4778,100 @@
       }).join('');
     }
 
+    // One talkgroup, as a collapsible sub-panel (systems can hold 80+).
+    function _gcRenderTg(i, ti, tg) {
+      const key = i + ':' + ti;
+      const open = _gcOpenTg.has(key);
+      const transcribeOn = tg.transcribe !== false; // default true
+      const grpLabel = (_gcData.rdioGroups.find(g => String(g._id) === String(tg.groupId)) || {}).label;
+      const tagLabel = (_gcData.rdioTags.find(t => String(t._id) === String(tg.tagId)) || {}).label;
+      const meta = [grpLabel, tagLabel].filter(Boolean).map(escapeHtml).join(' · ');
+      const body = !open ? '' : `<div class="gc-card-body" style="padding-top:0.4rem;">
+        <div class="gc-inline">
+          <div class="nd-fld"><label>ID</label><input type="number" style="max-width:100px;" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></div>
+          <div class="nd-fld"><label>Label</label><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></div>
+          <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></div>
+        </div>
+        <div class="gc-inline">
+          <div class="nd-fld"><label>Group</label><select onchange="_gcTgSet(${i},${ti},'groupId',this.value)">${_gcOptions(_gcData.rdioGroups, tg.groupId)}</select></div>
+          <div class="nd-fld"><label>Tag</label><select onchange="_gcTgSet(${i},${ti},'tagId',this.value)">${_gcOptions(_gcData.rdioTags, tg.tagId)}</select></div>
+          <div class="nd-fld"><label>LED</label>${_gcLedSelect(tg.led, `_gcTgSet(${i},${ti},'led',this.value,true)`)}</div>
+          <div class="nd-fld"><label>Frequency (Hz)</label><input type="number" style="max-width:130px;" value="${escapeHtml(tg.frequency != null ? String(tg.frequency) : '')}" oninput="_gcTgSet(${i},${ti},'frequency',this.value)"></div>
+          <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(tg.delay != null ? String(tg.delay) : '')}" oninput="_gcTgSet(${i},${ti},'delay',this.value)"></div>
+          <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(tg.alert, `_gcTgSet(${i},${ti},'alert',this.value,true)`)}</div>
+          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcTgSet(${i},${ti},'transcribe',this.checked)"><span class="track"></span></label></div>
+        </div>
+      </div>`;
+      const ledDot = tg.led ? `<span class="gc-color-swatch" style="width:11px;height:11px;background:${escapeHtml(String(tg.led))};"></span>` : '';
+      return `<div class="gc-card ${open ? 'open' : ''}" style="margin-bottom:0.3rem;">
+        <div class="gc-card-head" style="padding:0.4rem 0.6rem;">
+          <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleTg(${i},${ti})"></i>
+          ${ledDot}
+          <span class="gc-card-title" style="font-size:0.8rem;" onclick="_gcToggleTg(${i},${ti})">${escapeHtml(String(tg.id == null ? '?' : tg.id))} · ${escapeHtml(tg.label || tg.name || '(unnamed)')}</span>
+          <span class="gc-card-meta">${meta}</span>
+          <button class="gc-icon-btn" title="Remove talkgroup" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button>
+        </div>
+        ${body}
+      </div>`;
+    }
+
     function _gcToggleSys(i) { if (_gcOpenSys.has(i)) _gcOpenSys.delete(i); else _gcOpenSys.add(i); _gcRenderSystems(); }
-    function _gcSysSet(i, field, val) { const s = _gcData.rdioSystems[i]; if (s) s[field] = val; }
+    function _gcToggleTg(i, ti) { const k = i + ':' + ti; if (_gcOpenTg.has(k)) _gcOpenTg.delete(k); else _gcOpenTg.add(k); _gcRenderSystems(); }
+    function _gcSysSet(i, field, val, delEmpty) { const s = _gcData.rdioSystems[i]; if (s) _gcAssignField(s, field, val, delEmpty); }
     function _gcAddSystem() { _gcData.rdioSystems.push({ id: '', label: 'New system', talkgroups: [], units: [] }); _gcOpenSys.clear(); _gcOpenSys.add(_gcData.rdioSystems.length - 1); _gcRenderSystems(); }
-    async function _gcRemoveSystem(i) { if (!await uiConfirm('Remove this system and all its talkgroups/units?', { danger: true, okText: 'Remove' })) return; _gcData.rdioSystems.splice(i, 1); _gcOpenSys.clear(); _gcRenderSystems(); }
-    function _gcTgSet(i, ti, field, val) { const tg = _gcData.rdioSystems[i].talkgroups[ti]; if (tg) tg[field] = val; }
-    function _gcAddTg(i) { const s = _gcData.rdioSystems[i]; if (!Array.isArray(s.talkgroups)) s.talkgroups = []; s.talkgroups.push({ id: '', label: '', name: '', groupId: '', tagId: '' }); _gcRenderSystems(); }
-    function _gcRemoveTg(i, ti) { _gcData.rdioSystems[i].talkgroups.splice(ti, 1); _gcRenderSystems(); }
+    async function _gcRemoveSystem(i) { if (!await uiConfirm('Remove this system and all its talkgroups/units?', { danger: true, okText: 'Remove' })) return; _gcData.rdioSystems.splice(i, 1); _gcOpenSys.clear(); _gcOpenTg.clear(); _gcRenderSystems(); }
+    function _gcTgSet(i, ti, field, val, delEmpty) { const tg = _gcData.rdioSystems[i].talkgroups[ti]; if (tg) _gcAssignField(tg, field, val, delEmpty); }
+    function _gcAddTg(i) { const s = _gcData.rdioSystems[i]; if (!Array.isArray(s.talkgroups)) s.talkgroups = []; s.talkgroups.push({ id: '', label: '', name: '', groupId: '', tagId: '' }); _gcOpenTg.add(i + ':' + (s.talkgroups.length - 1)); _gcRenderSystems(); }
+    function _gcRemoveTg(i, ti) { _gcData.rdioSystems[i].talkgroups.splice(ti, 1); _gcOpenTg.clear(); _gcRenderSystems(); }
     function _gcUnitSet(i, ui, field, val) { const u = _gcData.rdioSystems[i].units[ui]; if (u) u[field] = val; }
     function _gcAddUnit(i) { const s = _gcData.rdioSystems[i]; if (!Array.isArray(s.units)) s.units = []; s.units.push({ id: '', label: '', order: s.units.length }); _gcRenderSystems(); }
     function _gcRemoveUnit(i, ui) { _gcData.rdioSystems[i].units.splice(ui, 1); _gcRenderSystems(); }
 
-    // --- rdio groups / tags (shared {_id, label} shape) ---
+    // --- rdio groups / tags (flat global {_id, label} lists) ---
+    // Label-only rows; _id is auto-assigned (max+1) and shown read-only so the
+    // talkgroup group/tag dropdowns can reference it.
+    function _gcNextId(list) {
+      let max = 0;
+      (list || []).forEach(o => { const n = Number(o && o._id); if (Number.isFinite(n) && n > max) max = n; });
+      return max + 1;
+    }
     function _gcRenderKv(containerId, list, prefix) {
       const el = document.getElementById(containerId);
       if (!el || !_gcData) return;
       if (!list.length) { el.innerHTML = `<div class="gc-empty">None yet.</div>`; return; }
-      el.innerHTML = `<table class="gc-table"><thead><tr><th style="width:40%;">_id</th><th>Label</th><th></th></tr></thead><tbody>` +
+      el.innerHTML = `<table class="gc-table"><thead><tr><th style="width:56px;">_id</th><th>Label</th><th></th></tr></thead><tbody>` +
         list.map((o, i) => `<tr>
-          <td><input type="text" value="${escapeHtml(String(o._id == null ? '' : o._id))}" oninput="${prefix}Set(${i},'_id',this.value)"></td>
+          <td style="color:var(--text-soft);">${escapeHtml(String(o._id == null ? '' : o._id))}</td>
           <td><input type="text" value="${escapeHtml(o.label || '')}" oninput="${prefix}Set(${i},'label',this.value)"></td>
           <td><button class="gc-icon-btn" onclick="${prefix}Remove(${i})"><i class="fas fa-trash"></i></button></td>
         </tr>`).join('') + `</tbody></table>`;
     }
     function _gcRenderGroups() { _gcRenderKv('gc-groups', _gcData.rdioGroups, '_gcGroup'); }
     function _gcRenderTags() { _gcRenderKv('gc-tags', _gcData.rdioTags, '_gcTag'); }
-    function _gcGroupSet(i, f, v) { const o = _gcData.rdioGroups[i]; if (o) o[f] = v; }
-    function _gcGroupRemove(i) { _gcData.rdioGroups.splice(i, 1); _gcRenderGroups(); }
-    function _gcAddGroup() { _gcData.rdioGroups.push({ _id: '', label: '' }); _gcRenderGroups(); }
-    function _gcTagSet(i, f, v) { const o = _gcData.rdioTags[i]; if (o) o[f] = v; }
-    function _gcTagRemove(i) { _gcData.rdioTags.splice(i, 1); _gcRenderTags(); }
-    function _gcAddTag() { _gcData.rdioTags.push({ _id: '', label: '' }); _gcRenderTags(); }
+    // Label edits re-render the (hidden) systems container so the tg dropdowns
+    // reflect the new labels live, without disturbing focus on this input.
+    function _gcGroupSet(i, f, v) { const o = _gcData.rdioGroups[i]; if (o) { o[f] = v; _gcRenderSystems(); } }
+    function _gcGroupRemove(i) { _gcData.rdioGroups.splice(i, 1); _gcRenderGroups(); _gcRenderSystems(); }
+    function _gcAddGroup() { _gcData.rdioGroups.push({ _id: _gcNextId(_gcData.rdioGroups), label: '' }); _gcRenderGroups(); _gcRenderSystems(); }
+    function _gcTagSet(i, f, v) { const o = _gcData.rdioTags[i]; if (o) { o[f] = v; _gcRenderSystems(); } }
+    function _gcTagRemove(i) { _gcData.rdioTags.splice(i, 1); _gcRenderTags(); _gcRenderSystems(); }
+    function _gcAddTag() { _gcData.rdioTags.push({ _id: _gcNextId(_gcData.rdioTags), label: '' }); _gcRenderTags(); _gcRenderSystems(); }
 
     async function _gcSave() {
       if (!_gcData) return;
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-      // Normalise unit "order" numbers written as strings by the inputs.
-      _gcData.rdioSystems.forEach(s => (s.units || []).forEach(u => {
-        if (u.order !== '' && u.order != null && !Number.isNaN(Number(u.order))) u.order = Number(u.order);
-      }));
+      // Text inputs yield strings; coerce rdio's numeric fields back to numbers so
+      // the config matches rdio-scanner's expected types. Non-numeric values pass
+      // through untouched, and any unlisted field is preserved as-is.
+      const num = v => (v !== '' && v != null && !Number.isNaN(Number(v))) ? Number(v) : v;
+      const coerce = (o, keys) => keys.forEach(k => { if (k in o) o[k] = num(o[k]); });
+      _gcData.rdioSystems.forEach(s => {
+        coerce(s, ['id', 'delay']);
+        (s.talkgroups || []).forEach(tg => coerce(tg, ['id', 'frequency', 'delay', 'groupId', 'tagId']));
+        (s.units || []).forEach(u => coerce(u, ['id', 'order']));
+      });
+      _gcData.rdioGroups.forEach(g => coerce(g, ['_id']));
+      _gcData.rdioTags.forEach(t => coerce(t, ['_id']));
       const btn = document.getElementById('gc-save-btn');
       if (btn) btn.disabled = true;
       try {

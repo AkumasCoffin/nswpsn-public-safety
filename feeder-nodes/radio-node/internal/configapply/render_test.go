@@ -1,6 +1,7 @@
 package configapply
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -203,6 +204,57 @@ func TestRenderPlaylistNoChannels(t *testing.T) {
 	// The rest of the playlist (streams, aliases) must still be intact.
 	if !strings.Contains(s, "<stream") || !strings.Contains(s, "</playlist>") {
 		t.Errorf("no-channels playlist lost its streams/root")
+	}
+}
+
+// TestRenderAliasIconAndStream — iconName + stream_talkgroup_alias are emitted as
+// alias attributes alongside the id children.
+func TestRenderAliasIconAndStream(t *testing.T) {
+	a := Alias{
+		Name: "Fireground 1", List: "PSN", IconName: "Fire",
+		StreamTalkgroupAlias: "1201",
+		IDs:                  []AliasID{{Type: "talkgroup", Attrs: map[string]string{"value": "1201"}}},
+	}
+	got := renderAlias(a)
+	for _, want := range []string{
+		`iconName="Fire"`,
+		`stream_talkgroup_alias="1201"`,
+		`<id type="talkgroup" value="1201"/>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("renderAlias missing %q in:\n%s", want, got)
+		}
+	}
+	// Absent icon/stream must not emit empty attributes.
+	bare := renderAlias(Alias{Name: "Bare"})
+	if strings.Contains(bare, "iconName=") || strings.Contains(bare, "stream_talkgroup_alias=") {
+		t.Errorf("bare alias emitted empty icon/stream attrs:\n%s", bare)
+	}
+}
+
+// TestAliasStreamTalkgroupUnmarshal — streamTalkgroupAlias round-trips from either
+// a JSON number or a JSON string into the same string form.
+func TestAliasStreamTalkgroupUnmarshal(t *testing.T) {
+	var n Alias
+	if err := json.Unmarshal([]byte(`{"name":"x","streamTalkgroupAlias":1400}`), &n); err != nil {
+		t.Fatalf("unmarshal number: %v", err)
+	}
+	if n.StreamTalkgroupAlias != "1400" {
+		t.Errorf("number form: want 1400, got %q", n.StreamTalkgroupAlias)
+	}
+	var s Alias
+	if err := json.Unmarshal([]byte(`{"name":"x","streamTalkgroupAlias":"1401"}`), &s); err != nil {
+		t.Fatalf("unmarshal string: %v", err)
+	}
+	if s.StreamTalkgroupAlias != "1401" {
+		t.Errorf("string form: want 1401, got %q", s.StreamTalkgroupAlias)
+	}
+	var z Alias
+	if err := json.Unmarshal([]byte(`{"name":"x"}`), &z); err != nil {
+		t.Fatalf("unmarshal absent: %v", err)
+	}
+	if z.StreamTalkgroupAlias != "" {
+		t.Errorf("absent form: want empty, got %q", z.StreamTalkgroupAlias)
 	}
 }
 

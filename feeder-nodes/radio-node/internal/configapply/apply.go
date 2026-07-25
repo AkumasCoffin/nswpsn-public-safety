@@ -133,11 +133,38 @@ type AliasID struct {
 
 // Alias is a global SDR-Trunk alias, rendered into the playlist's <alias> region.
 type Alias struct {
-	Name  string    `json:"name"`
-	List  string    `json:"list"`
-	Group string    `json:"group"`
-	Color string    `json:"color"`
-	IDs   []AliasID `json:"ids"`
+	Name string `json:"name"`
+	List string `json:"list"`
+	// Group is the alias-list group. Color is an ARGB int (stored as its string
+	// form). IconName is the named-icon; StreamTalkgroupAlias is the "stream as
+	// talkgroup" int — both re-emit as the iconName / stream_talkgroup_alias attrs.
+	Group                string    `json:"group"`
+	Color                string    `json:"color"`
+	IconName             string    `json:"iconName"`
+	StreamTalkgroupAlias flexStr   `json:"streamTalkgroupAlias"`
+	IDs                  []AliasID `json:"ids"`
+}
+
+// flexStr unmarshals a JSON string OR number into its string form, so an alias
+// field that can arrive as either (streamTalkgroupAlias) round-trips cleanly.
+type flexStr string
+
+func (f *flexStr) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*f = ""
+		return nil
+	}
+	if s[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return err
+		}
+		*f = flexStr(str)
+		return nil
+	}
+	*f = flexStr(s) // numeric literal — keep verbatim
+	return nil
 }
 
 // ConfigPayload is the full configPush document from the backend.
@@ -711,6 +738,8 @@ func renderAlias(a Alias) string {
 	writeXMLAttr(&b, "list", a.List)
 	writeXMLAttr(&b, "group", a.Group)
 	writeXMLAttr(&b, "name", a.Name)
+	writeXMLAttr(&b, "iconName", a.IconName)
+	writeXMLAttr(&b, "stream_talkgroup_alias", string(a.StreamTalkgroupAlias))
 	if len(a.IDs) == 0 {
 		b.WriteString("/>")
 		return b.String()
