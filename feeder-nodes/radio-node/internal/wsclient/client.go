@@ -36,8 +36,8 @@ const (
 	readDeadline           = 90 * time.Second
 	writeWait              = 10 * time.Second
 	backoffInitial         = 1 * time.Second
-	backoffMax             = 60 * time.Second
-	backoffDisabled        = 120 * time.Second // slower cadence when handshake rejected
+	backoffMax             = 30 * time.Second   // transient drops recover fast
+	backoffDisabled        = 30 * time.Second   // 401/403 (disabled / role removed): retry every ~30s so re-enabling recovers quickly
 
 	updateInitialDelay = 30 * time.Second // let the WS settle before the first update check
 	updateInterval     = 6 * time.Hour    // periodic update check cadence
@@ -163,8 +163,14 @@ func (c *Client) session(ctx context.Context) (connected bool, rejected bool, er
 	conn, resp, dialErr := dialer.DialContext(ctx, url, hdr)
 	if dialErr != nil {
 		if resp != nil {
-			log.Printf("wsclient: dial %s rejected: status=%d", url, resp.StatusCode)
-			return false, true, dialErr
+			// Only a genuine auth rejection (401 bad token / 403 disabled or
+			// role removed) is a persistent condition worth the slow backoff.
+			// 5xx/502 etc. are transient (a backend restart / deploy behind
+			// Cloudflare) — treat those like a network drop so the node
+			// reconnects promptly instead of sitting out the slow cadence.
+			rejected := resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+			log.Printf("wsclient: dial %s failed: status=%d (rejected=%t)", url, resp.StatusCode, rejected)
+			return false, rejected, dialErr
 		}
 		return false, false, dialErr
 	}
