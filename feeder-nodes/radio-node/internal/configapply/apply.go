@@ -57,6 +57,51 @@ type ChannelPlan struct {
 	AutoStart bool   `json:"autoStart"`
 	Order     int    `json:"order"`
 	SDR       string `json:"sdr"` // device serial to pin to; "" = any tuner
+	// DecoderConfig carries decoder-specific settings; nil = all defaults. The
+	// renderer emits the matching <decode_configuration> and fills SDR-Trunk
+	// defaults for any unset field.
+	DecoderConfig *DecoderConfig `json:"decoderConfig"`
+}
+
+// DecoderConfig is a loose superset of every decoder's settings (see the
+// SDR-Trunk config reference "decoderConfig JSON contract"). Which fields apply
+// is decided by ChannelPlan.Decoder at render time. Pointers distinguish "unset
+// → use SDR-Trunk default" from a real zero/false value.
+type DecoderConfig struct {
+	// p25p1
+	Modulation string `json:"modulation"` // "C4FM" | "CQPSK"
+	// shared: p25p1 / p25p2 / dmr
+	IgnoreDataCalls *bool `json:"ignoreDataCalls"`
+	TrafficPoolSize *int  `json:"trafficPoolSize"`
+	// p25p2
+	AutoDetectScramble *bool     `json:"autoDetectScramble"`
+	Scramble           *Scramble `json:"scramble"`
+	// dmr
+	IgnoreCrc               *bool         `json:"ignoreCrc"`
+	UseCompressedTalkgroups *bool         `json:"useCompressedTalkgroups"`
+	Timeslots               []DmrTimeslot `json:"timeslots"`
+	// nbfm / am
+	Bandwidth   string `json:"bandwidth"`
+	Talkgroup   *int   `json:"talkgroup"`
+	AudioFilter *bool  `json:"audioFilter"` // nbfm
+	// am
+	Squelch   *int  `json:"squelch"` // dB, may be negative
+	AutoTrack *bool `json:"autoTrack"`
+}
+
+// Scramble is a P25 Phase-2 manual scramble (descrambler) parameter set.
+type Scramble struct {
+	Wacn   int `json:"wacn"`
+	System int `json:"system"`
+	Nac    int `json:"nac"`
+}
+
+// DmrTimeslot maps a DMR logical slot: Lcn carries the LCN (rendered as the
+// `lsn` attr), Downlink/Uplink are Hz.
+type DmrTimeslot struct {
+	Lcn      int   `json:"lcn"`
+	Downlink int64 `json:"downlink"`
+	Uplink   int64 `json:"uplink"`
 }
 
 // TunerSettings is per-SDR tuner config, keyed by device serial ("*" = all).
@@ -418,7 +463,10 @@ var (
 	reSiteAttr     = regexp.MustCompile(`site="[^"]*"`)
 	reNameAttr     = regexp.MustCompile(`name="[^"]*"`)
 	reOrderAttr    = regexp.MustCompile(`order="[^"]*"`)
-	reDecodeType   = regexp.MustCompile(`(<decode_configuration\b[^>]*\btype=")[^"]*(")`)
+	// Matches the whole <decode_configuration> element — self-closing (`.../>`)
+	// OR with children (`...>…</decode_configuration>`) — so it can be swapped
+	// wholesale for the per-decoder rendering.
+	reDecodeConfig = regexp.MustCompile(`(?s)<decode_configuration\b[^>]*?(?:/>|>.*?</decode_configuration>)`)
 	reSystemID     = regexp.MustCompile(`system_id="([^"]*)"`)
 	reApiKey       = regexp.MustCompile(`api_key="[^"]*"`)
 	reHost         = regexp.MustCompile(`host="[^"]*"`)
@@ -449,10 +497,12 @@ func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, lo
 		out = reAliasRegion.ReplaceAllStringFunc(out, func(string) string { return rendered })
 	}
 
+	// With no configured channels, emit NO <channel> element at all — an empty
+	// channel set is a valid SDR-Trunk playlist, and this avoids surfacing a
+	// non-removable "preset" channel in the UI. The template block is still the
+	// clone source when channels ARE present.
 	var rendered string
-	if len(channels) == 0 {
-		rendered = renderChannelBlock(tmplBlock, ChannelPlan{}, false)
-	} else {
+	if len(channels) > 0 {
 		var b strings.Builder
 		for i, ch := range channels {
 			if i > 0 {
@@ -462,9 +512,9 @@ func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, lo
 		}
 		rendered = b.String()
 	}
-	// Replace the single template block with the rendered block(s). Use a literal
-	// replacement (not ReplaceAllString) so `$` in the rendered XML isn't treated
-	// as a capture reference.
+	// Replace the single template block with the rendered block(s) (or "" to drop
+	// it). Use a literal replacement (not ReplaceAllString) so `$` in the rendered
+	// XML isn't treated as a capture reference.
 	out = reChannelBlock.ReplaceAllStringFunc(out, func(string) string { return rendered })
 
 	// Streams: point api_key + host at the local rdio (global, not per-channel).
@@ -515,12 +565,11 @@ func renderChannelBlock(tmpl string, ch ChannelPlan, enabled bool) string {
 		return blk
 	}
 
-	// Decoder type. NOTE: only the type attribute is swapped; the preset's other
-	// decode_configuration attributes (modulation, traffic_channel_pool_size) are
-	// kept. Non-P25 decoders may need a different attribute set — this is
-	// best-effort and MUST be validated against real SDR-Trunk (fidelity warning).
-	if dt := decodeConfigType(ch.Decoder); dt != "" {
-		blk = reDecodeType.ReplaceAllString(blk, `${1}`+dt+`${2}`)
+	// Decoder config. Render the FULL <decode_configuration> element for this
+	// decoder (correct @type + attributes + child elements), filling SDR-Trunk
+	// defaults for any unset field, and swap the preset's element wholesale.
+	if dc := renderDecodeConfig(ch.Decoder, ch.DecoderConfig); dc != "" {
+		blk = reDecodeConfig.ReplaceAllStringFunc(blk, func(string) string { return dc })
 	}
 
 	if ch.Frequency > 0 {
@@ -541,23 +590,98 @@ func setOrAddChannelAttr(tag string, re *regexp.Regexp, name, val string) string
 	return strings.Replace(tag, "<channel", "<channel "+attr, 1)
 }
 
-// decodeConfigType maps a payload decoder key to SDR-Trunk's
-// decode_configuration @type. Empty = leave the preset's type untouched.
-func decodeConfigType(decoder string) string {
+// renderDecodeConfig builds the full <decode_configuration> element for a
+// decoder from its (optional) DecoderConfig, filling SDR-Trunk defaults (per the
+// config reference) for any unset field. Returns "" for an unknown decoder so
+// the preset's element is left untouched.
+func renderDecodeConfig(decoder string, cfg *DecoderConfig) string {
+	if cfg == nil {
+		cfg = &DecoderConfig{}
+	}
 	switch decoder {
 	case "p25p1":
-		return "decodeConfigP25Phase1"
+		mod := cfg.Modulation
+		if mod == "" {
+			mod = "C4FM"
+		}
+		return fmt.Sprintf(
+			`<decode_configuration type="decodeConfigP25Phase1" modulation="%s" ignore_data_calls="%s" traffic_channel_pool_size="%d"/>`,
+			xmlAttr(mod), boolOr(cfg.IgnoreDataCalls, false), intOr(cfg.TrafficPoolSize, 20))
+
 	case "p25p2":
-		return "decodeConfigP25Phase2"
+		// auto-detect defaults to true when no manual scramble is supplied.
+		auto := cfg.Scramble == nil
+		if cfg.AutoDetectScramble != nil {
+			auto = *cfg.AutoDetectScramble
+		}
+		head := fmt.Sprintf(
+			`<decode_configuration type="decodeConfigP25Phase2" auto_detect_scramble_parameters="%s" ignore_data_calls="%s" traffic_channel_pool_size="%d"`,
+			strconv.FormatBool(auto), boolOr(cfg.IgnoreDataCalls, false), intOr(cfg.TrafficPoolSize, 20))
+		if cfg.Scramble != nil {
+			return head + ">" +
+				fmt.Sprintf("\n    <scramble_parameters wacn=\"%d\" system=\"%d\" nac=\"%d\"/>",
+					cfg.Scramble.Wacn, cfg.Scramble.System, cfg.Scramble.Nac) +
+				"\n  </decode_configuration>"
+		}
+		return head + "/>"
+
 	case "dmr":
-		return "decodeConfigDMR"
+		head := fmt.Sprintf(
+			`<decode_configuration type="decodeConfigDMR" ignore_crc="%s" use_compressed_talkgroups="%s" ignore_data_calls="%s" traffic_channel_pool_size="%d"`,
+			boolOr(cfg.IgnoreCrc, false), boolOr(cfg.UseCompressedTalkgroups, false),
+			boolOr(cfg.IgnoreDataCalls, true), intOr(cfg.TrafficPoolSize, 20))
+		if len(cfg.Timeslots) == 0 {
+			return head + "/>"
+		}
+		var b strings.Builder
+		b.WriteString(head)
+		b.WriteString(">")
+		for _, ts := range cfg.Timeslots {
+			b.WriteString(fmt.Sprintf("\n    <timeslot lsn=\"%d\" downlink=\"%d\" uplink=\"%d\"/>",
+				ts.Lcn, ts.Downlink, ts.Uplink))
+		}
+		b.WriteString("\n  </decode_configuration>")
+		return b.String()
+
 	case "nbfm":
-		return "decodeConfigNBFM"
+		bw := cfg.Bandwidth
+		if bw == "" {
+			bw = "BW_12_5"
+		}
+		// The 4 squelch* fields are not user-facing; emit the doc defaults.
+		return fmt.Sprintf(
+			`<decode_configuration type="decodeConfigNBFM" bandwidth="%s" talkgroup="%d" audioFilter="%s" squelchNoiseOpenThreshold="0.1" squelchNoiseCloseThreshold="0.19" squelchHysteresisOpenThreshold="4" squelchHysteresisCloseThreshold="6"/>`,
+			xmlAttr(bw), intOr(cfg.Talkgroup, 1), boolOr(cfg.AudioFilter, true))
+
 	case "am":
-		return "decodeConfigAM"
+		bw := cfg.Bandwidth
+		if bw == "" {
+			bw = "BW_15_0"
+		}
+		return fmt.Sprintf(
+			`<decode_configuration type="decodeConfigAM" bandwidth="%s" talkgroup="%d" autoTrack="%s" squelch="%d"/>`,
+			xmlAttr(bw), intOr(cfg.Talkgroup, 1), boolOr(cfg.AutoTrack, true), intOr(cfg.Squelch, -78))
+
 	default:
 		return ""
 	}
+}
+
+// boolOr formats *p as an XML bool, using def when p is nil (unset).
+func boolOr(p *bool, def bool) string {
+	v := def
+	if p != nil {
+		v = *p
+	}
+	return strconv.FormatBool(v)
+}
+
+// intOr returns *p, or def when p is nil (unset).
+func intOr(p *int, def int) int {
+	if p != nil {
+		return *p
+	}
+	return def
 }
 
 // renderSource builds the channel's <source_configuration> for a single tuner

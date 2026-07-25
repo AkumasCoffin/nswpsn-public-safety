@@ -811,6 +811,29 @@
     .nd-ch-actions { display: flex; gap: 0.3rem; justify-content: flex-end; }
     .nd-ch-livecol { display: flex; align-items: center; gap: 0.4rem; }
     .nd-ch-livebtn { padding: 0.22rem 0.5rem; line-height: 1; }
+    /* Per-decoder settings sub-row (expand/collapse under a channel). */
+    .nd-ch-detail-row > td {
+      background: rgba(56, 189, 248, 0.035);
+      border-top: 1px dashed var(--border-subtle);
+      padding: 0.55rem 0.85rem;
+    }
+    .nd-ch-detail-inner { display: flex; flex-wrap: wrap; gap: 0.55rem 1rem; align-items: flex-end; }
+    .nd-dc-f { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.68rem; color: var(--text-soft); }
+    .nd-dc-f > span { white-space: nowrap; }
+    .nd-dc-f input[type="number"], .nd-dc-f input[type="text"], .nd-dc-f select { min-width: 88px; }
+    .nd-dc-bool { flex-direction: row; align-items: center; gap: 0.32rem; padding-bottom: 0.25rem; }
+    .nd-dc-bool input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+    .nd-dc-group {
+      display: flex; flex-wrap: wrap; gap: 0.5rem 0.7rem; align-items: flex-end;
+      padding: 0.35rem 0.5rem; border: 1px solid var(--border-subtle); border-radius: 6px;
+    }
+    .nd-dc-group-h { flex-basis: 100%; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-soft); }
+    .nd-dc-ts { flex-basis: 100%; }
+    .nd-dc-ts-h { font-size: 0.66rem; color: var(--text-soft); margin-bottom: 0.3rem; }
+    .nd-dc-ts-table { border-collapse: collapse; }
+    .nd-dc-ts-table td { padding: 0.12rem 0.25rem; border: 0; }
+    .nd-dc-ts-empty { font-size: 0.66rem; color: var(--text-soft); font-style: italic; padding: 0.15rem 0.25rem; }
+    .nd-ch-gear-open { color: var(--accent); }
     .nd-ch-unmatched-h {
       padding: 0.5rem 0.9rem; font-size: 0.62rem; text-transform: uppercase;
       letter-spacing: 0.05em; color: var(--text-soft); font-weight: 700;
@@ -3427,14 +3450,22 @@
       _ndRenderUnmatchedLive(matched);
     }
 
-    // Any live channel not matched to a saved-config row is surfaced read-only
-    // below the editable table (rare — e.g. dynamically-allocated traffic
-    // channels or a channel present on the node but not yet saved locally).
+    // Surface ONLY genuinely-active live calls that aren't matched to a saved
+    // config row (e.g. dynamically-allocated traffic channels mid-call). Idle /
+    // control / stale channels are NOT shown — they would otherwise appear as
+    // un-removable rows the user can't delete. This is read-only + transient.
     function _ndRenderUnmatchedLive(matchedSet) {
       const host = document.getElementById('nd-ch-unmatched');
       if (!host) return;
       const extra = [];
-      _ndChannels.forEach((c, idx) => { if (!matchedSet.has(idx)) extra.push({ chan: c, index: idx }); });
+      _ndChannels.forEach((c, idx) => {
+        if (matchedSet.has(idx)) return;
+        const st = String(c.state || '').toUpperCase();
+        const isControl = c.control === true || st === 'CONTROL';
+        // Only genuinely-active (in-progress call) unmatched channels.
+        if (!_ND_LIVE_ACTIVE.has(st) || isControl) return;
+        extra.push({ chan: c, index: idx });
+      });
       if (!extra.length) { host.innerHTML = ''; return; }
       const rows = extra.map(m => {
         const c = m.chan;
@@ -3447,7 +3478,7 @@
           <td class="nd-ch-live-cell">${_ndLiveStateHtml(m)}</td>
         </tr>`;
       }).join('');
-      host.innerHTML = `<div class="nd-ch-unmatched-h"><i class="fas fa-circle-info"></i> Live channels not in saved config</div>
+      host.innerHTML = `<div class="nd-ch-unmatched-h"><i class="fas fa-circle-info"></i> Active calls not in saved config</div>
         <table class="nd-ch-table"><tbody>${rows}</tbody></table>`;
     }
 
@@ -3698,8 +3729,231 @@
         const auto = g('auto'); if (auto) c.autoStart = auto.checked;
         const order = g('order'); if (order) c.order = order.value !== '' ? parseInt(order.value, 10) : null;
         const sdr = g('sdr'); if (sdr) { if (sdr.value) c.sdr = sdr.value; else delete c.sdr; }
+        // Decoder-specific settings (from the expandable sub-row). Read against
+        // the currently selected decoder; drop it when empty so the agent uses
+        // SDR-Trunk defaults.
+        const dc = _ndReadDecoderConfig(i, c.decoder || 'p25p2');
+        if (dc && Object.keys(dc).length > 0) c.decoderConfig = dc;
+        else delete c.decoderConfig;
         return c;
       });
+    }
+
+    // Per-decoder default values (mirrors the SDR-Trunk config reference). Used
+    // to seed the sub-row inputs so a fresh channel already shows sane defaults.
+    const _ND_DEC_DEFAULTS = {
+      p25p1: { modulation: 'C4FM', ignoreDataCalls: false, trafficPoolSize: 20 },
+      p25p2: { autoDetectScramble: true, ignoreDataCalls: false, trafficPoolSize: 20 },
+      dmr:   { ignoreDataCalls: true, ignoreCrc: false, useCompressedTalkgroups: false, trafficPoolSize: 20 },
+      nbfm:  { bandwidth: 'BW_12_5', talkgroup: 1, audioFilter: true },
+      am:    { bandwidth: 'BW_15_0', talkgroup: 1, squelch: -78, autoTrack: true },
+    };
+    const _ND_BW_NBFM = ['BW_7_5', 'BW_12_5', 'BW_25_0'];
+    const _ND_BW_AM = ['BW_3_0', 'BW_5_0', 'BW_8_33', 'BW_15_0', 'BW_25_0'];
+
+    // Build the decoder-specific inputs for channel i. dc is the current
+    // decoderConfig (may be partial); missing fields fall back to the decoder
+    // default so the UI always shows a concrete value.
+    function _ndDecoderFieldsHtml(i, decoder, dc) {
+      dc = dc || {};
+      const def = _ND_DEC_DEFAULTS[decoder] || {};
+      const val = k => (dc[k] !== undefined ? dc[k] : def[k]);
+      const pid = id => `nd-ch-${i}-dc-${id}`;
+      const numF = (id, label, v, opts) => {
+        opts = opts || {};
+        const a = [];
+        if (opts.min != null) a.push(`min="${opts.min}"`);
+        if (opts.max != null) a.push(`max="${opts.max}"`);
+        a.push(`step="${opts.step || 1}"`);
+        const vv = (v != null && v !== '') ? escapeHtml(String(v)) : '';
+        return `<label class="nd-dc-f"><span>${label}</span><input type="number" id="${pid(id)}" ${a.join(' ')} value="${vv}"></label>`;
+      };
+      const boolF = (id, label, v) => `<label class="nd-dc-f nd-dc-bool"><input type="checkbox" id="${pid(id)}" ${v ? 'checked' : ''}><span>${label}</span></label>`;
+      const selF = (id, label, v, options) => {
+        const o = options.map(x => `<option value="${x}" ${x === v ? 'selected' : ''}>${x}</option>`).join('');
+        return `<label class="nd-dc-f"><span>${label}</span><select id="${pid(id)}">${o}</select></label>`;
+      };
+      switch (decoder) {
+        case 'p25p1':
+          return selF('modulation', 'Modulation', val('modulation'), ['C4FM', 'CQPSK'])
+            + boolF('ignoreDataCalls', 'Ignore data calls', val('ignoreDataCalls'))
+            + numF('trafficPoolSize', 'Traffic pool', val('trafficPoolSize'), { min: 0, max: 50 });
+        case 'p25p2': {
+          const sc = dc.scramble || {};
+          return boolF('autoDetectScramble', 'Auto-detect scramble', val('autoDetectScramble'))
+            + boolF('ignoreDataCalls', 'Ignore data calls', val('ignoreDataCalls'))
+            + numF('trafficPoolSize', 'Traffic pool', val('trafficPoolSize'), { min: 0, max: 50 })
+            + `<div class="nd-dc-group"><span class="nd-dc-group-h">Manual scramble (leave blank to auto-detect)</span>`
+            + numF('scramble-wacn', 'WACN', sc.wacn)
+            + numF('scramble-system', 'System', sc.system)
+            + numF('scramble-nac', 'NAC', sc.nac)
+            + `</div>`;
+        }
+        case 'dmr':
+          return boolF('ignoreDataCalls', 'Ignore data calls', val('ignoreDataCalls'))
+            + boolF('ignoreCrc', 'Ignore CRC', val('ignoreCrc'))
+            + boolF('useCompressedTalkgroups', 'Compressed TGs (Hytera)', val('useCompressedTalkgroups'))
+            + numF('trafficPoolSize', 'Traffic pool', val('trafficPoolSize'), { min: 0, max: 50 })
+            + _ndDmrTimeslotsHtml(i, dc.timeslots);
+        case 'nbfm':
+          return selF('bandwidth', 'Bandwidth', val('bandwidth'), _ND_BW_NBFM)
+            + numF('talkgroup', 'Talkgroup', val('talkgroup'), { min: 1, max: 65535 })
+            + boolF('audioFilter', 'Audio filter', val('audioFilter'));
+        case 'am':
+          return selF('bandwidth', 'Bandwidth', val('bandwidth'), _ND_BW_AM)
+            + numF('talkgroup', 'Talkgroup', val('talkgroup'), { min: 1, max: 65535 })
+            + numF('squelch', 'Squelch (dB)', val('squelch'))
+            + boolF('autoTrack', 'Auto-track', val('autoTrack'));
+        default:
+          return `<span class="nd-dc-ts-empty">No settings for this decoder.</span>`;
+      }
+    }
+
+    // DMR logical-slot table: LCN → downlink / uplink (MHz in the UI, Hz stored).
+    function _ndDmrTimeslotsHtml(i, timeslots) {
+      timeslots = Array.isArray(timeslots) ? timeslots : [];
+      const rows = timeslots.map((ts, j) => {
+        ts = ts || {};
+        const dl = ts.downlink != null ? ts.downlink / 1e6 : '';
+        const ul = ts.uplink != null ? ts.uplink / 1e6 : '';
+        return `<tr id="nd-ch-${i}-ts-${j}">
+          <td><input type="number" id="nd-ch-${i}-ts-${j}-lcn" placeholder="LCN" value="${ts.lcn != null ? escapeHtml(String(ts.lcn)) : ''}" style="width:70px"></td>
+          <td><input type="number" step="0.000001" id="nd-ch-${i}-ts-${j}-dl" placeholder="Downlink MHz" value="${dl !== '' ? escapeHtml(String(dl)) : ''}" style="width:120px"></td>
+          <td><input type="number" step="0.000001" id="nd-ch-${i}-ts-${j}-ul" placeholder="Uplink MHz" value="${ul !== '' ? escapeHtml(String(ul)) : ''}" style="width:120px"></td>
+          <td><button class="gc-icon-btn" title="Remove timeslot" onclick="_ndDmrRemoveTs(${i}, ${j})"><i class="fas fa-times"></i></button></td>
+        </tr>`;
+      }).join('');
+      const body = rows || `<tr><td colspan="4" class="nd-dc-ts-empty">No timeslots — DMR will auto-track.</td></tr>`;
+      return `<div class="nd-dc-ts">
+        <div class="nd-dc-ts-h">Timeslots (LCN → downlink / uplink MHz)</div>
+        <table class="nd-dc-ts-table" id="nd-ch-${i}-ts-table"><tbody>${body}</tbody></table>
+        <button class="btn btn-sm" onclick="_ndDmrAddTs(${i})"><i class="fas fa-plus"></i> Add timeslot</button>
+      </div>`;
+    }
+
+    // Re-render just one channel's detail body (used on decoder change + DMR
+    // timeslot add/remove).
+    function _ndRenderDetailBody(i, decoder, dc) {
+      const body = document.getElementById(`nd-ch-detail-body-${i}`);
+      if (body) body.innerHTML = _ndDecoderFieldsHtml(i, decoder, dc || {});
+    }
+
+    // Toggle a channel's decoder-settings sub-row.
+    function _ndCfgToggleDetail(i) {
+      const row = document.getElementById(`nd-ch-detail-${i}`);
+      const btn = document.getElementById(`nd-ch-${i}-gear`);
+      if (!row) return;
+      const open = row.style.display === 'none' || row.style.display === '';
+      row.style.display = open ? 'table-row' : 'none';
+      if (btn) btn.classList.toggle('nd-ch-gear-open', open);
+    }
+
+    // Decoder select changed: re-render the sub-row for the new decoder, carrying
+    // over any overlapping field values the operator had entered.
+    function _ndCfgDecoderChanged(i) {
+      const decEl = document.getElementById(`nd-ch-${i}-dec`);
+      if (!decEl) return;
+      _ndRenderDetailBody(i, decEl.value, _ndReadDecoderConfigLoose(i));
+    }
+
+    // Loose read of the currently-rendered dc inputs into a flat bag (for
+    // carrying overlapping values across a decoder change). Nested scramble/
+    // timeslots are intentionally not carried (they're decoder-specific).
+    function _ndReadDecoderConfigLoose(i) {
+      const bag = {};
+      document.querySelectorAll(`[id^="nd-ch-${i}-dc-"]`).forEach(el => {
+        const key = el.id.slice(`nd-ch-${i}-dc-`.length);
+        if (key.indexOf('scramble-') === 0) return;
+        if (el.type === 'checkbox') bag[key] = el.checked;
+        else if (el.value !== '') {
+          const n = Number(el.value);
+          bag[key] = (el.type === 'number' && !isNaN(n)) ? n : el.value;
+        }
+      });
+      return bag;
+    }
+
+    function _ndDmrAddTs(i) {
+      const dc = _ndReadDecoderConfig(i, 'dmr');
+      if (!Array.isArray(dc.timeslots)) dc.timeslots = [];
+      dc.timeslots.push({});
+      _ndRenderDetailBody(i, 'dmr', dc);
+    }
+
+    function _ndDmrRemoveTs(i, j) {
+      const dc = _ndReadDecoderConfig(i, 'dmr');
+      if (Array.isArray(dc.timeslots)) dc.timeslots.splice(j, 1);
+      _ndRenderDetailBody(i, 'dmr', dc);
+    }
+
+    // Read DMR timeslot rows back into [{lcn,downlink,uplink}] (Hz).
+    function _ndReadDmrTimeslots(i) {
+      const table = document.getElementById(`nd-ch-${i}-ts-table`);
+      if (!table) return [];
+      const out = [];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const lcnEl = tr.querySelector('input[id$="-lcn"]');
+        const dlEl = tr.querySelector('input[id$="-dl"]');
+        const ulEl = tr.querySelector('input[id$="-ul"]');
+        const ts = {};
+        if (lcnEl && lcnEl.value !== '') { const n = parseInt(lcnEl.value, 10); if (!isNaN(n)) ts.lcn = n; }
+        if (dlEl && dlEl.value !== '') { const n = Math.round(parseFloat(dlEl.value) * 1e6); if (!isNaN(n)) ts.downlink = n; }
+        if (ulEl && ulEl.value !== '') { const n = Math.round(parseFloat(ulEl.value) * 1e6); if (!isNaN(n)) ts.uplink = n; }
+        if (Object.keys(ts).length) out.push(ts);
+      });
+      return out;
+    }
+
+    // Read the decoder-specific inputs for channel i into a decoderConfig object,
+    // including only fields relevant to `decoder` (matching the JSON contract).
+    function _ndReadDecoderConfig(i, decoder) {
+      const g = id => document.getElementById(`nd-ch-${i}-dc-${id}`);
+      const numV = el => { if (!el || el.value === '') return undefined; const n = parseInt(el.value, 10); return isNaN(n) ? undefined : n; };
+      const dc = {};
+      const setNum = (k, el) => { const v = numV(el); if (v !== undefined) dc[k] = v; };
+      const setBool = (k, el) => { if (el) dc[k] = el.checked; };
+      const setStr = (k, el) => { if (el && el.value) dc[k] = el.value; };
+      switch (decoder) {
+        case 'p25p1':
+          setStr('modulation', g('modulation'));
+          setBool('ignoreDataCalls', g('ignoreDataCalls'));
+          setNum('trafficPoolSize', g('trafficPoolSize'));
+          break;
+        case 'p25p2': {
+          setBool('autoDetectScramble', g('autoDetectScramble'));
+          setBool('ignoreDataCalls', g('ignoreDataCalls'));
+          setNum('trafficPoolSize', g('trafficPoolSize'));
+          const w = numV(g('scramble-wacn')), sy = numV(g('scramble-system')), na = numV(g('scramble-nac'));
+          if (w !== undefined || sy !== undefined || na !== undefined) {
+            dc.scramble = {};
+            if (w !== undefined) dc.scramble.wacn = w;
+            if (sy !== undefined) dc.scramble.system = sy;
+            if (na !== undefined) dc.scramble.nac = na;
+          }
+          break;
+        }
+        case 'dmr': {
+          setBool('ignoreDataCalls', g('ignoreDataCalls'));
+          setBool('ignoreCrc', g('ignoreCrc'));
+          setBool('useCompressedTalkgroups', g('useCompressedTalkgroups'));
+          setNum('trafficPoolSize', g('trafficPoolSize'));
+          const ts = _ndReadDmrTimeslots(i);
+          if (ts.length) dc.timeslots = ts;
+          break;
+        }
+        case 'nbfm':
+          setStr('bandwidth', g('bandwidth'));
+          setNum('talkgroup', g('talkgroup'));
+          setBool('audioFilter', g('audioFilter'));
+          break;
+        case 'am':
+          setStr('bandwidth', g('bandwidth'));
+          setNum('talkgroup', g('talkgroup'));
+          setNum('squelch', g('squelch'));
+          setBool('autoTrack', g('autoTrack'));
+          break;
+      }
+      return dc;
     }
 
     function _ndCfgRender() {
@@ -3724,17 +3978,19 @@
         const sdrCur = c.sdr != null ? String(c.sdr) : '';
         const sdrOpts = [`<option value="" ${sdrCur === '' ? 'selected' : ''}>Auto</option>`]
           .concat(serials.map(s => `<option value="${escapeHtml(s)}" ${String(s) === sdrCur ? 'selected' : ''}>${escapeHtml(s)}</option>`)).join('');
+        const detailBody = _ndDecoderFieldsHtml(i, decoder, c.decoderConfig || {});
         return `<tr id="nd-ch-row-${i}">
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
           <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-sys" placeholder="System" value="${escapeHtml(c.system || '')}"></td>
           <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-site" placeholder="Site" value="${escapeHtml(c.site || '')}"></td>
-          <td><select id="nd-ch-${i}-dec" title="Decoder / protocol">${decOpts}</select></td>
+          <td><select id="nd-ch-${i}-dec" title="Decoder / protocol" onchange="_ndCfgDecoderChanged(${i})">${decOpts}</select></td>
           <td class="nd-ch-w-freq"><input type="number" step="0.000001" id="nd-ch-${i}-freq" placeholder="MHz" value="${escapeHtml(String(freqMhz))}"></td>
           <td><select id="nd-ch-${i}-sdr" title="Pin this channel to a specific SDR (or Auto)">${sdrOpts}</select></td>
           <td class="nd-ch-live-cell" id="nd-ch-${i}-live"><span class="nd-state offline">—</span></td>
-          <td><div class="nd-ch-actions"><button class="gc-icon-btn" title="Delete channel" onclick="_ndCfgRemoveChannel(${i})"><i class="fas fa-trash"></i></button></div></td>
-        </tr>`;
+          <td><div class="nd-ch-actions"><button class="gc-icon-btn" id="nd-ch-${i}-gear" title="Decoder settings" onclick="_ndCfgToggleDetail(${i})"><i class="fas fa-sliders-h"></i></button><button class="gc-icon-btn" title="Delete channel" onclick="_ndCfgRemoveChannel(${i})"><i class="fas fa-trash"></i></button></div></td>
+        </tr>
+        <tr id="nd-ch-detail-${i}" class="nd-ch-detail-row" style="display:none"><td colspan="9"><div class="nd-ch-detail-inner" id="nd-ch-detail-body-${i}">${detailBody}</div></td></tr>`;
       }).join('');
       el.innerHTML = `<table class="nd-ch-table">
         <thead><tr>
@@ -3753,7 +4009,9 @@
       _ndConfig.channels.push({
         name: '', frequency: null, decoder: 'p25p2',
         system: '', site: '', autoStart: true,
-        order: _ndConfig.channels.length, sdr: ''
+        order: _ndConfig.channels.length, sdr: '',
+        // p25p2 (NSW PSN) defaults: empty carries the auto-detect-scramble default.
+        decoderConfig: {}
       });
       _ndCfgRender();
     }

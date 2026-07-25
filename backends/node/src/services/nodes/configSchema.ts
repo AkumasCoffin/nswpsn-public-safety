@@ -20,6 +20,68 @@ export const DECODER_TYPES = ['p25p2', 'p25p1', 'dmr', 'nbfm', 'am'] as const;
 export type DecoderType = (typeof DECODER_TYPES)[number];
 
 /**
+ * Decoder-specific channel settings (see the SDR-Trunk config reference's
+ * "decoderConfig JSON contract"). Discriminated at render time by the channel's
+ * `decoder`; this is a loose superset of every decoder's fields so a channel can
+ * carry whichever ones its decoder uses. ALL fields are optional — the agent's
+ * renderer fills SDR-Trunk defaults for anything omitted. Per-decoder use:
+ *   - p25p1: modulation, ignoreDataCalls, trafficPoolSize
+ *   - p25p2: ignoreDataCalls, trafficPoolSize, autoDetectScramble, scramble{wacn,system,nac}
+ *   - dmr:   ignoreDataCalls, ignoreCrc, useCompressedTalkgroups, trafficPoolSize, timeslots[{lcn,downlink,uplink}]
+ *   - nbfm:  bandwidth, talkgroup, audioFilter
+ *   - am:    bandwidth, talkgroup, squelch, autoTrack
+ */
+export const BANDWIDTH_VALUES = [
+  'BW_3_0',
+  'BW_5_0',
+  'BW_7_5',
+  'BW_8_33',
+  'BW_12_5',
+  'BW_15_0',
+  'BW_25_0',
+] as const;
+
+export const DmrTimeslotSchema = z
+  .object({
+    lcn: z.number().int().min(0).optional(),
+    downlink: z.number().int().min(0).optional(), // Hz
+    uplink: z.number().int().min(0).optional(), // Hz
+  })
+  .strict();
+
+export const DecoderConfigSchema = z
+  .object({
+    // p25p1
+    modulation: z.enum(['C4FM', 'CQPSK']).optional(),
+    // shared: p25p1 / p25p2 / dmr
+    ignoreDataCalls: z.boolean().optional(),
+    trafficPoolSize: z.number().int().min(0).max(50).optional(),
+    // p25p2
+    autoDetectScramble: z.boolean().optional(),
+    scramble: z
+      .object({
+        wacn: z.number().int().min(0).optional(),
+        system: z.number().int().min(0).optional(),
+        nac: z.number().int().min(0).optional(),
+      })
+      .strict()
+      .optional(),
+    // dmr
+    ignoreCrc: z.boolean().optional(),
+    useCompressedTalkgroups: z.boolean().optional(),
+    timeslots: z.array(DmrTimeslotSchema).max(32).optional(),
+    // nbfm / am
+    bandwidth: z.enum(BANDWIDTH_VALUES).optional(),
+    talkgroup: z.number().int().min(1).max(65535).optional(),
+    audioFilter: z.boolean().optional(), // nbfm
+    // am
+    squelch: z.number().int().optional(), // dB, may be negative
+    autoTrack: z.boolean().optional(),
+  })
+  .strict();
+export type DecoderConfig = z.infer<typeof DecoderConfigSchema>;
+
+/**
  * One SDR-Trunk channel on a node. For a trunked P25 system `frequency` is the
  * control-channel frequency and SDR-Trunk follows the trunk; for conventional
  * modes it's the channel frequency. `system`/`site` are free-text labels shown
@@ -38,6 +100,9 @@ export const ChannelSchema = z
     // Optional SDR pin: the device serial this channel must use. Absent = let
     // SDR-Trunk pick any available tuner (sourceConfigTuner).
     sdr: z.string().max(80).optional(),
+    // Decoder-specific settings; the agent renders the matching
+    // <decode_configuration> from these (SDR-Trunk defaults fill omitted fields).
+    decoderConfig: DecoderConfigSchema.optional(),
   })
   .strict();
 export type Channel = z.infer<typeof ChannelSchema>;

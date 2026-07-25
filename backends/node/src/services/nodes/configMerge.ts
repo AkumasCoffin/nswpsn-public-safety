@@ -28,6 +28,7 @@ import {
   ConfigOverrideSchema,
   type ConfigOverride,
   type DecoderType,
+  type DecoderConfig,
 } from './configSchema.js';
 import { getGlobalConfig, type Alias, type GlobalConfig } from './globalConfig.js';
 
@@ -48,6 +49,9 @@ export interface ChannelPlan {
   order?: number;
   /** Device serial to pin to; omitted = any available SDR. */
   sdr?: string;
+  /** Decoder-specific settings; the agent fills SDR-Trunk defaults for omitted
+   *  fields when rendering this channel's <decode_configuration>. */
+  decoderConfig?: DecoderConfig;
 }
 
 /** Per-SDR tuner settings, keyed by serial ("*" = apply to all SDRs). */
