@@ -945,6 +945,30 @@
     .gc-card.open .gc-card-body { display: block; }
     .gc-inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 0.6rem; }
     .gc-color-swatch { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border-subtle); flex-shrink: 0; }
+    /* Titled sub-sections inside an agency card. Each carries a source badge so
+       it's obvious which system that part configures (Global / SDR-Trunk / rdio). */
+    .gc-sect {
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      padding: 0.7rem 0.75rem 0.75rem; margin-bottom: 0.7rem;
+      background: rgba(255, 255, 255, 0.015);
+    }
+    .gc-sect:last-child { margin-bottom: 0; }
+    .gc-sect-sdr { border-color: rgba(168, 85, 247, 0.28); }
+    .gc-sect-rdio { border-color: rgba(45, 212, 191, 0.24); }
+    .gc-sect-h {
+      font-size: 0.74rem; font-weight: 600; color: var(--text-primary);
+      margin-bottom: 0.65rem; display: flex; align-items: center; gap: 0.5rem;
+    }
+    .gc-src-badge {
+      font-size: 0.57rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; padding: 0.12rem 0.42rem; border-radius: 4px;
+      border: 1px solid transparent; white-space: nowrap;
+    }
+    .gc-src-global { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.32); }
+    .gc-src-sdr { background: rgba(168, 85, 247, 0.16); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.42); }
+    .gc-src-rdio { background: rgba(45, 212, 191, 0.14); color: #5eead4; border-color: rgba(45, 212, 191, 0.4); }
+    .gc-sect-count { font-size: 0.62rem; color: var(--text-soft); font-weight: 600; }
+    .gc-hint { font-size: 0.72rem; color: var(--text-soft); margin-bottom: 0.55rem; }
     .gc-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
     .gc-table th {
       text-align: left; color: var(--text-soft); font-weight: 600; font-size: 0.62rem;
@@ -4644,6 +4668,9 @@
     };
     // rdio LED = named-colour dropdown (NOT a colour picker). Alerts = None + 1..9.
     const GC_LED_COLORS = ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white', 'yellow'];
+    // Swatch hues for the LED preset names (used for the agency colour dot).
+    const GC_LED_HEX = { blue: '#2563eb', cyan: '#06b6d4', green: '#22c55e', magenta: '#d946ef', orange: '#f97316', red: '#ef4444', white: '#e5e7eb', yellow: '#eab308' };
+    function _gcLedHex(led) { return GC_LED_HEX[String(led || '').toLowerCase()] || null; }
     const GC_ALERTS = ['alert1', 'alert2', 'alert3', 'alert4', 'alert5', 'alert6', 'alert7', 'alert8', 'alert9'];
 
     async function openGlobalConfig() {
@@ -4739,14 +4766,18 @@
       return ((n >>> 0) >>> 24) & 0xFF;
     }
     // --- Agencies (each unifies an SDR-Trunk alias + an rdio system) ---
-    // Colour is an ARGB int (_gcColorHex/_gcColorAlpha above); the picker edits the
-    // RGB channels while preserving the alpha byte.
-    function _gcAgencyColorSet(i, hex) {
+    // One colour per agency, chosen from rdio's LED presets. We store the named
+    // colour on `led` (rdio system) AND derive the SDR-Trunk alias colour (ARGB
+    // int) so both systems render the same colour. Empty clears both.
+    function _gcAgencyLedSet(i, val) {
       const a = _gcData.agencies[i];
       if (!a) return;
-      const alpha = _gcColorAlpha(a.color);
-      const rgb = parseInt(hex.slice(1), 16) & 0xFFFFFF;
-      a.color = String(((alpha << 24) | rgb) | 0);      // ARGB as signed 32-bit int
+      const v = String(val || '').trim();
+      if (v === '') { delete a.led; delete a.color; _gcRenderAgencies(); return; }
+      a.led = v;
+      const hex = _gcLedHex(v);
+      if (hex) { const rgb = parseInt(hex.slice(1), 16) & 0xFFFFFF; a.color = String(((0xFF << 24) | rgb) | 0); }
+      _gcRenderAgencies();
     }
     // priority: undefined/100 = normal monitor, -1 = do-not-monitor, 1..99 = priority.
     function _gcAgencyPriorityVal(a) {
@@ -4791,7 +4822,7 @@
         const tgs = Array.isArray(a.talkgroups) ? a.talkgroups : [];
         const units = Array.isArray(a.units) ? a.units : [];
         const transcribeOn = a.transcribe !== false; // default true
-        const hex = _gcColorHex(a.color);
+        const swHex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
         const priVal = _gcAgencyPriorityVal(a);
         const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Monitor (default)</option>`,
           `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
@@ -4799,51 +4830,57 @@
         const idEditors = aliasIds.map((id, idi) => _gcRenderId(i, idi, id)).join('');
         const shownTgs = tgs.map((tg, ti) => ({ tg, ti })).filter(({ tg }) => !q || matchTg(tg));
         const body = !open ? '' : `<div class="gc-card-body">
-          <div class="nd-section-h" style="margin:0 0 0.4rem;">Identity &amp; alias</div>
-          <div class="gc-inline">
-            <div class="nd-fld"><label>System ID</label><input type="number" style="max-width:110px;" value="${escapeHtml(String(a.systemId == null ? '' : a.systemId))}" oninput="_gcAgencySet(${i},'systemId',this.value)"></div>
-            <div class="nd-fld" style="flex:1;min-width:200px;"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAgencySet(${i},'name',this.value)"></div>
-            <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAgencySet(${i},'iconName',this.value)" placeholder="named icon"></div>
-            <div class="nd-fld"><label>Colour</label><input type="color" style="width:52px;padding:0.1rem;" value="${hex}" oninput="_gcAgencyColorSet(${i},this.value)"></div>
-            <div class="nd-fld"><label>Priority</label><select onchange="_gcAgencyPrioritySet(${i},this.value)">${prioOpts}</select></div>
-          </div>
-          <div class="nd-section-h" style="margin:0.7rem 0 0.4rem;">Streaming ranges</div>
-          <div style="font-size:0.72rem;color:var(--text-soft);margin-bottom:0.35rem;">Talkgroup / radio ids streamed for this agency. Priority &amp; broadcast channel are set automatically.</div>
-          ${idEditors || `<div class="gc-empty" style="padding:0.6rem;">No streaming ranges.</div>`}
-          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add range</button>
-          <div class="gc-inline" style="margin-top:0.6rem;">
-            <div class="nd-fld"><label>Stream as talkgroup</label><input type="number" style="max-width:140px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAgencyStreamSet(${i},this.value)" placeholder="talkgroup"></div>
-          </div>
-          <div class="nd-section-h" style="margin:0.8rem 0 0.4rem;">rdio system</div>
-          <div class="gc-inline">
-            <div class="nd-fld"><label>LED</label>${_gcLedSelect(a.led, `_gcAgencySet(${i},'led',this.value,true)`)}</div>
-            <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(a.delay != null ? String(a.delay) : '')}" oninput="_gcAgencySet(${i},'delay',this.value)"></div>
-            <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(a.alert, `_gcAgencySet(${i},'alert',this.value,true)`)}</div>
-          </div>
-          <div class="gc-inline" style="align-items:center;">
-            <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Auto-populate</label><label class="node-switch"><input type="checkbox" ${a.autoPopulate ? 'checked' : ''} onchange="_gcAgencySet(${i},'autoPopulate',this.checked)"><span class="track"></span></label></div>
-            <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcAgencySet(${i},'transcribe',this.checked)"><span class="track"></span></label></div>
-          </div>
-          <div class="gc-inline">
-            <div class="nd-fld" style="flex:1;min-width:220px;"><label>Transcription prompt</label><textarea rows="2" oninput="_gcAgencySet(${i},'transcriptionPrompt',this.value)">${escapeHtml(a.transcriptionPrompt || '')}</textarea></div>
-            <div class="nd-fld" style="flex:1;min-width:220px;"><label>Blacklists (comma-separated ids)</label><textarea rows="2" oninput="_gcAgencySet(${i},'blacklists',this.value)">${escapeHtml(a.blacklists == null ? '' : String(a.blacklists))}</textarea></div>
-          </div>
-          <div class="nd-section-h" style="margin:0.8rem 0 0.4rem;">Talkgroups (${tgs.length})</div>
-          ${shownTgs.map(({ tg, ti }) => _gcRenderTg(i, ti, tg)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No talkgroups${q ? ' match your search' : ''}.</div>`}
-          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>
-          <div class="nd-section-h" style="margin:0.9rem 0 0.4rem;">Units (${units.length})</div>
-          <div class="nd-table-scroll">
-          <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th></th></tr></thead><tbody>
-          ${units.map((u, ui) => `<tr>
-            <td><input type="number" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
-            <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
-            <td><button class="gc-icon-btn" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
-          </tr>`).join('')}
-          </tbody></table></div>
-          <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>
+          <section class="gc-sect gc-sect-global">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-global">Global</span> Agency</div>
+            <div class="gc-inline">
+              <div class="nd-fld"><label>System ID</label><input type="number" style="max-width:110px;" value="${escapeHtml(String(a.systemId == null ? '' : a.systemId))}" oninput="_gcAgencySet(${i},'systemId',this.value)"></div>
+              <div class="nd-fld" style="flex:1;min-width:200px;"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAgencySet(${i},'name',this.value)"></div>
+              <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAgencySet(${i},'iconName',this.value)" placeholder="named icon"></div>
+              <div class="nd-fld"><label>Colour</label>${_gcLedSelect(a.led, `_gcAgencyLedSet(${i},this.value)`)}</div>
+              <div class="nd-fld"><label>Priority</label><select onchange="_gcAgencyPrioritySet(${i},this.value)">${prioOpts}</select></div>
+            </div>
+            <div class="gc-inline" style="align-items:center;">
+              <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(a.delay != null ? String(a.delay) : '')}" oninput="_gcAgencySet(${i},'delay',this.value)"></div>
+              <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(a.alert, `_gcAgencySet(${i},'alert',this.value,true)`)}</div>
+              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Auto-populate</label><label class="node-switch"><input type="checkbox" ${a.autoPopulate ? 'checked' : ''} onchange="_gcAgencySet(${i},'autoPopulate',this.checked)"><span class="track"></span></label></div>
+              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcAgencySet(${i},'transcribe',this.checked)"><span class="track"></span></label></div>
+            </div>
+            <div class="gc-inline">
+              <div class="nd-fld" style="flex:1;min-width:220px;"><label>Transcription prompt</label><textarea rows="2" oninput="_gcAgencySet(${i},'transcriptionPrompt',this.value)">${escapeHtml(a.transcriptionPrompt || '')}</textarea></div>
+              <div class="nd-fld" style="flex:1;min-width:220px;"><label>Blacklists (comma-separated ids)</label><textarea rows="2" oninput="_gcAgencySet(${i},'blacklists',this.value)">${escapeHtml(a.blacklists == null ? '' : String(a.blacklists))}</textarea></div>
+            </div>
+          </section>
+
+          <section class="gc-sect gc-sect-sdr">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Alias &amp; streaming ranges</div>
+            <div class="gc-hint">Talkgroup / radio ids streamed for this agency. Priority &amp; broadcast channel are set automatically from the fields above.</div>
+            ${idEditors || `<div class="gc-empty" style="padding:0.6rem;">No streaming ranges.</div>`}
+            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add range</button>
+            <div class="gc-inline" style="margin-top:0.6rem;">
+              <div class="nd-fld"><label>Stream as talkgroup</label><input type="number" style="max-width:140px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAgencyStreamSet(${i},this.value)" placeholder="talkgroup"></div>
+            </div>
+          </section>
+
+          <section class="gc-sect gc-sect-rdio">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-rdio">rdio</span> Talkgroups <span class="gc-sect-count">${tgs.length}</span></div>
+            ${shownTgs.map(({ tg, ti }) => _gcRenderTg(i, ti, tg)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No talkgroups${q ? ' match your search' : ''}.</div>`}
+            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>
+          </section>
+
+          <section class="gc-sect gc-sect-rdio">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-rdio">rdio</span> Units <span class="gc-sect-count">${units.length}</span></div>
+            <div class="nd-table-scroll">
+            <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th></th></tr></thead><tbody>
+            ${units.map((u, ui) => `<tr>
+              <td><input type="number" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
+              <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
+              <td><button class="gc-icon-btn" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
+            </tr>`).join('')}
+            </tbody></table></div>
+            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>
+          </section>
         </div>`;
-        const ledDot = a.led ? `<span class="gc-color-swatch" style="width:12px;height:12px;background:${escapeHtml(String(a.led))};"></span>`
-          : `<span class="gc-color-swatch" style="background:${hex};${a.color ? '' : 'opacity:0.25;'}"></span>`;
+        const ledDot = `<span class="gc-color-swatch" style="width:12px;height:12px;background:${swHex || 'transparent'};${swHex ? '' : 'opacity:0.3;border-style:dashed;'}"></span>`;
         const priBadge = priVal === '-1' ? ' · muted' : (priVal !== 'default' ? ' · pri ' + priVal : '');
         return `<div class="gc-card ${open ? 'open' : ''}">
           <div class="gc-card-head">
@@ -4994,18 +5031,15 @@
         <div class="gc-inline">
           <div class="nd-fld"><label>Group</label><select onchange="_gcTgSet(${i},${ti},'groupId',this.value)">${_gcOptions(_gcData.rdioGroups, tg.groupId)}</select></div>
           <div class="nd-fld"><label>Tag</label><select onchange="_gcTgSet(${i},${ti},'tagId',this.value)">${_gcOptions(_gcData.rdioTags, tg.tagId)}</select></div>
-          <div class="nd-fld"><label>LED</label>${_gcLedSelect(tg.led, `_gcTgSet(${i},${ti},'led',this.value,true)`)}</div>
           <div class="nd-fld"><label>Frequency (Hz)</label><input type="number" style="max-width:130px;" value="${escapeHtml(tg.frequency != null ? String(tg.frequency) : '')}" oninput="_gcTgSet(${i},${ti},'frequency',this.value)"></div>
           <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(tg.delay != null ? String(tg.delay) : '')}" oninput="_gcTgSet(${i},${ti},'delay',this.value)"></div>
           <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(tg.alert, `_gcTgSet(${i},${ti},'alert',this.value,true)`)}</div>
           <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcTgSet(${i},${ti},'transcribe',this.checked)"><span class="track"></span></label></div>
         </div>
       </div>`;
-      const ledDot = tg.led ? `<span class="gc-color-swatch" style="width:11px;height:11px;background:${escapeHtml(String(tg.led))};"></span>` : '';
       return `<div class="gc-card ${open ? 'open' : ''}" style="margin-bottom:0.3rem;">
         <div class="gc-card-head" style="padding:0.4rem 0.6rem;">
           <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleTg(${i},${ti})"></i>
-          ${ledDot}
           <span class="gc-card-title" style="font-size:0.8rem;" onclick="_gcToggleTg(${i},${ti})">${escapeHtml(String(tg.id == null ? '?' : tg.id))} · ${escapeHtml(tg.label || tg.name || '(unnamed)')}</span>
           <span class="gc-card-meta">${meta}</span>
           <button class="gc-icon-btn" title="Remove talkgroup" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button>
