@@ -36,6 +36,13 @@ var defaultPagerProtocols = []string{"POCSAG512", "POCSAG1200", "POCSAG2400"}
 // nearest supported value per dongle.
 const defaultGain = "49.6"
 
+// maxPlausiblePPM bounds an accepted rtl_test -p reading. RTL crystal error is
+// realistically within this; a larger value means the measurement is unreliable
+// (common in a VM, where rtl_test -p compares against a jittery host clock) — we
+// discard it and use ppm=0 so a garbage reading can't detune the receiver out of
+// the channel. 0 is close enough for wide NBFM POCSAG anyway.
+const maxPlausiblePPM = 100
+
 // readerManager owns the pager reader components. It detects the attached SDRs
 // once, then (re)computes the reader set from a frequency plan whenever a config
 // is applied: it writes each reader.sh (pinned to a dongle by serial), and runs
@@ -115,6 +122,10 @@ func measurePPMs(devs []pagersdr.Device) {
 		ppm, err := pagersdr.MeasurePPM(devs[i].Index, pagersdr.PPMMeasureDur)
 		if err != nil {
 			log.Printf("readers: ppm measure failed for SDR index=%d (%v); using ppm=0", devs[i].Index, err)
+			continue
+		}
+		if ppm < -maxPlausiblePPM || ppm > maxPlausiblePPM {
+			log.Printf("readers: SDR index=%d measured ppm=%d is implausible (>%d, unreliable clock); using ppm=0", devs[i].Index, ppm, maxPlausiblePPM)
 			continue
 		}
 		devs[i].PPM = ppm
