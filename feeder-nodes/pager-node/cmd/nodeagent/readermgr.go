@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -62,6 +63,7 @@ type readerManager struct {
 	readersDir string
 	relayURL   string
 
+	rescanMu  sync.Mutex // single-flights Rescan (SDR detection can't run twice at once)
 	mu        sync.Mutex
 	devices   []pagersdr.Device
 	sup       *supervise.Supervisor
@@ -110,6 +112,21 @@ func detectDevices() []pagersdr.Device {
 	return devs
 }
 
+// validFrequencies drops entries whose MHz is NaN/Inf or outside the RTL-SDR
+// tunable range, so a bad/hostile pushed frequency can't produce a broken or
+// injectable rtl_fm -f arg.
+func validFrequencies(freqs []wsclient.PagerFrequency) []wsclient.PagerFrequency {
+	out := make([]wsclient.PagerFrequency, 0, len(freqs))
+	for _, f := range freqs {
+		if math.IsNaN(f.MHz) || math.IsInf(f.MHz, 0) || f.MHz < 24 || f.MHz > 1766 {
+			log.Printf("readers: dropping out-of-range frequency %v MHz (label %q)", f.MHz, f.Label)
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 // measurePPMs fills each device's PPM via rtl_test -p. Done SEQUENTIALLY (not in
 // parallel): two rtl_test processes opening dongles at the same instant can race
 // on USB and one fails to claim its device. A failure leaves ppm=0.
@@ -142,7 +159,9 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 	defer m.mu.Unlock()
 	m.lastCfg = cfg // remembered so Rescan can replay it after re-detecting SDRs
 
-	freqs := cfg.Frequencies
+	// Drop any out-of-range/garbage frequencies from the push before they reach
+	// rtl_fm, falling back to the defaults if nothing valid remains.
+	freqs := validFrequencies(cfg.Frequencies)
 	if len(freqs) == 0 {
 		freqs = defaultPagerFrequencies
 	}
@@ -202,6 +221,15 @@ func (m *readerManager) rebuild(comps map[string]agentcfg.ComponentCfg) {
 // staff "Recheck SDRs" button, e.g. to pick up a dongle that wasn't enumerated at
 // startup (USB still settling after a re-exec).
 func (m *readerManager) Rescan() error {
+	// Single-flight: concurrent rescans (staff double-click, or one overlapping a
+	// config push) would run two rtl_test enumerations against the same dongles at
+	// once and collide on USB. Skip if one is already running.
+	if !m.rescanMu.TryLock() {
+		log.Printf("readers: rescan already in progress; ignoring duplicate request")
+		return nil
+	}
+	defer m.rescanMu.Unlock()
+
 	// Stop current readers first so rtl_test can open the dongles for detection.
 	m.mu.Lock()
 	if m.supCancel != nil {

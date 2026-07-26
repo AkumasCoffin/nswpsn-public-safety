@@ -523,6 +523,7 @@ feederRouter.delete('/api/feeder/nodes/:id', async (c) => {
   if (!node) return c.json({ error: 'not your node' }, 404);
   try {
     hub.forceDisconnectAgent(node.id);
+    hub.clearNode(node.id);
     await deleteNode(node.id);
     _clearNodeTokenCache();
     return c.json({ ok: true });

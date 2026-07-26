@@ -10,8 +10,10 @@ package reader
 import (
 	_ "embed"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -45,7 +47,13 @@ type tmplData struct {
 // http://127.0.0.1:17390/pager).
 func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gain string, protocols []string, relayURL string) (path string, err error) {
 	data := tmplData{
-		Serial:    deviceSerial,
+		// The script is executed with bash, so every interpolated value is a
+		// potential shell-injection sink. Serial comes from device output and is
+		// single-quoted in the template, but sanitise it to a safe charset anyway
+		// (defense-in-depth against a crafted dongle EEPROM serial). Freq/PPM are
+		// numeric-formatted; Gain is a constant; Label is sanitised by the caller;
+		// ProtoArgs is allowlisted below.
+		Serial:    sanitizeToken(deviceSerial),
 		FreqMHz:   strconv.FormatFloat(freqMHz, 'f', -1, 64),
 		PPM:       strconv.Itoa(ppm),
 		Gain:      gain,
@@ -75,7 +83,13 @@ func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gai
 }
 
 // protoArgs builds the multimon-ng demodulator flags from a protocol list,
-// falling back to all three POCSAG bauds when the list is empty.
+// falling back to all three POCSAG bauds when the list is empty. Each protocol
+// is interpolated UNQUOTED into the bash reader script (it must expand to
+// multiple `-a X` args), so every entry MUST be allowlisted to an alnum token —
+// otherwise a protocol string pushed via the backend config (e.g.
+// "$(reboot)") would be a command-injection / RCE vector.
+var protoRe = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+
 func protoArgs(protocols []string) string {
 	ps := protocols
 	if len(ps) == 0 {
@@ -84,10 +98,30 @@ func protoArgs(protocols []string) string {
 	parts := make([]string, 0, len(ps)*2)
 	for _, p := range ps {
 		p = strings.TrimSpace(p)
-		if p == "" {
+		if !protoRe.MatchString(p) {
+			log.Printf("reader: ignoring invalid protocol %q (must be alphanumeric)", p)
 			continue
 		}
 		parts = append(parts, "-a", p)
 	}
+	if len(parts) == 0 {
+		// Every entry was rejected — fall back to the safe defaults rather than
+		// emit a multimon-ng invocation with no demodulators.
+		for _, p := range defaultProtocols {
+			parts = append(parts, "-a", p)
+		}
+	}
 	return strings.Join(parts, " ")
+}
+
+// sanitizeToken strips a value to a shell-safe alnum token for interpolation
+// into the reader script (used for the dongle serial).
+func sanitizeToken(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

@@ -170,7 +170,9 @@ func tail(s string, n int) string {
 // USB replug/reset may be needed for the new serials to take effect, then
 // re-detects and returns the updated list.
 func EnsureDistinctSerials(devs []Device) ([]Device, error) {
-	if len(devs) == 0 {
+	// A single dongle is addressed by index and can never collide — never rewrite
+	// its EEPROM (a blank serial on a lone device is fine).
+	if len(devs) < 2 {
 		return devs, nil
 	}
 	if !hasCollision(devs) {

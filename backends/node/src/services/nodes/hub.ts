@@ -73,6 +73,13 @@ class NodeHub {
     this.broadcastToStaff(nodeId, 'pagerMessage', { nodeId, message: msg });
   }
 
+  /** Drop all ephemeral per-node state (upload window + pager message buffer).
+   *  Call when a node is deleted so nothing lingers for a gone node. */
+  clearNode(nodeId: string): void {
+    this.uploads.delete(nodeId);
+    this.recentPager.delete(nodeId);
+  }
+
   /** Record one call successfully forwarded for a node (called by the relay). */
   recordUpload(nodeId: string): void {
     const now = Date.now();

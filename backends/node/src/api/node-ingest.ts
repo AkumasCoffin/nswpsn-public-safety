@@ -191,6 +191,25 @@ const BLOCKED_CAPCODES = new Set(
     .filter(Boolean),
 );
 
+// Per-node rate limit: at most PAGER_RATE_MAX messages per PAGER_RATE_WINDOW_MS.
+// Real paging is a few/min; this bounds a compromised node's flood into Pagermon
+// + the DB. In-memory rolling window (ephemeral, like hub uploads).
+const PAGER_RATE_MAX = 120;
+const PAGER_RATE_WINDOW_MS = 60_000;
+const pagerRate = new Map<string, number[]>();
+function pagerRateOk(nodeId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - PAGER_RATE_WINDOW_MS;
+  const arr = (pagerRate.get(nodeId) ?? []).filter((t) => t >= cutoff);
+  if (arr.length >= PAGER_RATE_MAX) {
+    pagerRate.set(nodeId, arr);
+    return false;
+  }
+  arr.push(now);
+  pagerRate.set(nodeId, arr);
+  return true;
+}
+
 const PagerMsgSchema = z.object({
   // POCSAG capcode / address (digits). Kept as a string — Pagermon treats it as text.
   address: z.string().min(1).max(32),
@@ -230,12 +249,19 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   if (r.installId && r.installId !== installId) {
     return c.json({ error: 'install mismatch' }, 401);
   }
-  // A radio token relaying to the pager route (or vice-versa) is a
-  // misconfiguration — warn but don't hard-fail; the message still forwards.
+  // Only pager-kind nodes may use this route — a radio node has no reason to,
+  // and its agent never posts here. Hard-reject rather than warn.
   if (r.kind !== 'pager') {
-    log.warn(`pager relay: node kind=${r.kind} not 'pager' node=${r.nodeId.slice(0, 8)}`);
+    return c.json({ error: 'not a pager node' }, 403);
   }
   const node = { id: r.nodeId, feed_enabled: r.feedEnabled };
+
+  // 3b. Per-node rate limit — a compromised node with feed on could otherwise
+  //     flood central Pagermon + the DB. Generous vs. real paging (a few/min);
+  //     excess is ack'd + dropped so the agent's queue still drains.
+  if (!pagerRateOk(node.id)) {
+    return c.json({ ok: true, dropped: 'rate limit' });
+  }
 
   // 4. Size guard — require Content-Length and cap it (same rationale as the
   //    radio route: closes the chunked-body bypass).
