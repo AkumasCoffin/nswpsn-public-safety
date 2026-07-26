@@ -76,9 +76,11 @@
     ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.4); }
 
     .container {
-      max-width: 1200px;
+      /* Fill wide screens (admin dashboard) instead of a narrow centred column;
+         a high cap keeps text lines sane on ultra-wide displays. */
+      max-width: min(2200px, 100%);
       margin: 0 auto;
-      padding: 1.5rem 2rem 3rem;
+      padding: 1.5rem clamp(1rem, 3vw, 3rem) 3rem;
     }
 
     /* === Header — sticky glassy topbar ================================ */
