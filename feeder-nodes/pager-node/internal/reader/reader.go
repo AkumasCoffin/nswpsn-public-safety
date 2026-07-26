@@ -29,6 +29,7 @@ var defaultProtocols = []string{"POCSAG512", "POCSAG1200", "POCSAG2400"}
 type tmplData struct {
 	Serial    string // dongle USB serial for rtl_fm -d
 	FreqMHz   string // frequency in MHz, formatted without trailing zeros
+	PPM       string // sample-clock correction for rtl_fm -p (measured at startup)
 	ProtoArgs string // "-a POCSAG512 -a POCSAG1200 ..." for multimon-ng
 	RelayURL  string // loopback relay endpoint the decoded lines POST to
 	Label     string // human/source label (also the X-Pager-Source header)
@@ -36,13 +37,15 @@ type tmplData struct {
 
 // Write renders the reader script for one frequency to <dir>/reader-<label>.sh
 // (0755) and returns its path. deviceSerial pins the reader to a specific dongle;
+// ppm is that dongle's measured sample-clock correction (rtl_fm -p, 0 = none);
 // protocols selects the multimon-ng POCSAG demodulators (defaulting to all three
 // bauds when empty); relayURL is the loopback endpoint decoded lines are POSTed
 // to (e.g. http://127.0.0.1:17390/pager).
-func Write(dir, label string, freqMHz float64, deviceSerial string, protocols []string, relayURL string) (path string, err error) {
+func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, protocols []string, relayURL string) (path string, err error) {
 	data := tmplData{
 		Serial:    deviceSerial,
 		FreqMHz:   strconv.FormatFloat(freqMHz, 'f', -1, 64),
+		PPM:       strconv.Itoa(ppm),
 		ProtoArgs: protoArgs(protocols),
 		RelayURL:  relayURL,
 		Label:     label,

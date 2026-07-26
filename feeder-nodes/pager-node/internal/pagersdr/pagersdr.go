@@ -25,6 +25,7 @@ import (
 type Device struct {
 	Index  int    // librtlsdr device index (as reported by rtl_test)
 	Serial string // USB serial ("SN:" from rtl_test); may be blank on unprogrammed clones
+	PPM    int    // measured sample-clock error (rtl_test -p); 0 if unmeasured
 }
 
 const (
@@ -33,7 +34,14 @@ const (
 
 	detectTimeout = 30 * time.Second
 	eepromTimeout = 30 * time.Second
+
+	// PPMMeasureDur is how long rtl_test -p runs per dongle at startup. It reports
+	// a cumulative estimate about every 10s, so this gives a few readings to settle.
+	PPMMeasureDur = 30 * time.Second
 )
+
+// cumPpmRe captures the integer from rtl_test's "cumulative PPM: <n>" lines.
+var cumPpmRe = regexp.MustCompile(`cumulative PPM:\s*(-?\d+)`)
 
 // deviceLineRe matches a device-list entry such as
 // "  0:  Realtek, RTL2838UHIDIR, SN: 00000001", capturing the index and the
@@ -104,6 +112,42 @@ func extractSerial(desc string) string {
 		return ""
 	}
 	return strings.TrimSpace(desc[i+len("SN:"):])
+}
+
+// MeasurePPM estimates a dongle's sample-clock error in ppm by running
+// `rtl_test -p` on it for `dur`. rtl_test measures the RTL's actual vs nominal
+// sample rate against the host clock (no RF signal or antenna needed) and prints
+// a cumulative estimate roughly every 10s; we let it run for `dur`, kill it, and
+// take the last cumulative reading. The device MUST be free (no reader running).
+// Returns 0 + error if no reading was produced (tool missing, device busy, or
+// `dur` too short for even one report — the caller falls back to ppm=0).
+func MeasurePPM(index int, dur time.Duration) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dur)
+	defer cancel()
+	// rtl_test -p runs until interrupted; the context timeout kills it after dur,
+	// which makes CombinedOutput return an error — we ignore it and parse whatever
+	// cumulative readings were emitted before the kill.
+	out, _ := exec.CommandContext(ctx, rtlTestBin, "-d", strconv.Itoa(index), "-p").CombinedOutput()
+	text := string(out)
+	ms := cumPpmRe.FindAllStringSubmatch(text, -1)
+	if len(ms) == 0 {
+		return 0, fmt.Errorf("%s -p produced no cumulative PPM reading for device %d: %s",
+			rtlTestBin, index, strings.TrimSpace(tail(text, 200)))
+	}
+	last := ms[len(ms)-1][1]
+	ppm, err := strconv.Atoi(last)
+	if err != nil {
+		return 0, fmt.Errorf("parse ppm %q: %w", last, err)
+	}
+	return ppm, nil
+}
+
+// tail returns up to the last n bytes of s, for compact error context.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // EnsureDistinctSerials guarantees every dongle has a unique, non-blank serial.

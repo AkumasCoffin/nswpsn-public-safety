@@ -84,10 +84,36 @@ func detectDevices() []pagersdr.Device {
 	if err != nil {
 		log.Printf("readers: ensuring distinct SDR serials failed (%v); proceeding with detected serials", err)
 	}
+	// Measure each dongle's sample-clock error (ppm) BEFORE any reader claims the
+	// device, so rtl_fm can correct for it. Done fresh every startup.
+	measurePPMs(devs)
 	for _, d := range devs {
-		log.Printf("readers: SDR index=%d serial=%q", d.Index, d.Serial)
+		log.Printf("readers: SDR index=%d serial=%q ppm=%d", d.Index, d.Serial, d.PPM)
 	}
 	return devs
+}
+
+// measurePPMs fills each device's PPM via rtl_test -p, concurrently (each dongle
+// is a distinct index, so the tests don't contend). A failure leaves ppm=0.
+func measurePPMs(devs []pagersdr.Device) {
+	if len(devs) == 0 {
+		return
+	}
+	log.Printf("readers: measuring SDR ppm (rtl_test -p, ~%s per dongle)…", pagersdr.PPMMeasureDur)
+	var wg sync.WaitGroup
+	for i := range devs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ppm, err := pagersdr.MeasurePPM(devs[i].Index, pagersdr.PPMMeasureDur)
+			if err != nil {
+				log.Printf("readers: ppm measure failed for SDR index=%d (%v); using ppm=0", devs[i].Index, err)
+				return
+			}
+			devs[i].PPM = ppm
+		}(i)
+	}
+	wg.Wait()
 }
 
 // Apply (re)computes the reader set from cfg and (re)starts the supervisor.
@@ -122,11 +148,11 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 	for i := 0; i < n; i++ {
 		label := sanitizeLabel(freqs[i].Label, i)
 		dev := m.devices[i]
-		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, protocols, m.relayURL)
+		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, dev.PPM, protocols, m.relayURL)
 		if err != nil {
 			return fmt.Errorf("write reader script for %s: %w", label, err)
 		}
-		log.Printf("readers: %s -> %.4f MHz on SDR serial %q (%s)", label, freqs[i].MHz, dev.Serial, scriptPath)
+		log.Printf("readers: %s -> %.4f MHz on SDR serial %q ppm=%d (%s)", label, freqs[i].MHz, dev.Serial, dev.PPM, scriptPath)
 		comps["reader:"+label] = agentcfg.ComponentCfg{
 			Enabled: cfg.CaptureEnabled,
 			Command: "bash",
