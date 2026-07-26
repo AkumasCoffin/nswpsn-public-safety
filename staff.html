@@ -325,6 +325,12 @@
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 1rem;
     }
+    /* Feeder node cards a bit larger than the generic device cards. */
+    #nodes-grid {
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1.1rem;
+    }
+    #nodes-grid .dev-card { padding: 1.3rem 1.35rem 1.1rem; }
 
     /* Card itself — icon + name + dot up top, big primary metric in the
        middle, secondary key/value row at the bottom. */
@@ -538,6 +544,14 @@
       display: none;
     }
     .node-drawer.open { display: block; }
+    /* Kind-aware panels: show radio-only vs pager-only sections by node kind. */
+    #node-drawer[data-kind="pager"] .nd-radio-only { display: none !important; }
+    #node-drawer:not([data-kind="pager"]) .nd-pager-only { display: none !important; }
+    .nd-readers-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .nd-readers-table th, .nd-readers-table td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-subtle, #334155); }
+    .nd-readers-table th { color: var(--text-soft, #94a3b8); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .nd-readers-table .r-run { color: #4ade80; }
+    .nd-readers-table .r-stop { color: #fca5a5; }
     .node-drawer-panel {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
@@ -1674,7 +1688,7 @@
         <div class="nd-tabs" id="nd-tabs"></div>
 
         <!-- FULL-WIDTH SPECTRUM BAND (spans the top of the drawer) -->
-        <div class="nd-panel nd-spectrum-band">
+        <div class="nd-panel nd-spectrum-band nd-radio-only">
           <div class="nd-panel-h">
             <i class="fas fa-wave-square"></i> Spectrum
             <div class="nd-wf-toolbar">
@@ -1702,22 +1716,29 @@
             <div class="nd-panel-h"><i class="fas fa-sliders"></i> Controls</div>
             <div class="nd-panel-b">
               <div class="nd-controls">
-                <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
-                <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+                <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
+                <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+                <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRestartReaders()"><i class="fas fa-rotate"></i> Restart readers</button>
                 <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
                 <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
             </div>
           </div>
 
+          <!-- Readers (pager) -->
+          <div class="nd-panel nd-span-all nd-pager-only">
+            <div class="nd-panel-h"><i class="fas fa-tower-broadcast"></i> Readers</div>
+            <div class="nd-panel-b" id="nd-readers"></div>
+          </div>
+
           <!-- Tuners -->
-          <div class="nd-panel nd-span-all">
+          <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h"><i class="fas fa-satellite-dish"></i> Tuners</div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-tuners"></div></div>
           </div>
 
           <!-- Channels (unified config + live manager) -->
-          <div class="nd-panel nd-span-all">
+          <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h">
               <i class="fas fa-broadcast-tower"></i> Channels
               <span class="nd-h-spacer"></span>
@@ -1734,7 +1755,7 @@
 
           <!-- Now playing + live event log pair up side-by-side (stack narrow) -->
           <div class="nd-panels-split">
-            <div class="nd-panel">
+            <div class="nd-panel nd-radio-only">
               <div class="nd-panel-h">
                 <i class="fas fa-tower-broadcast"></i> Now playing
                 <span class="nd-tab-count" id="nd-np-count" style="display:none;"></span>
@@ -3042,6 +3063,7 @@
 
       const drawer = document.getElementById('node-drawer');
       drawer.classList.add('open');
+      drawer.dataset.kind = node.kind || 'radio'; // toggles radio-only vs pager-only panels
       document.getElementById('nd-name').textContent = node.name || 'Node';
       _ndRenderVersions();
       const dot = document.getElementById('nd-dot');
@@ -3524,8 +3546,61 @@
       _ndRenderEvents();
       _ndRenderNowPlaying();
       _ndRenderTunerSelector();
+      _ndRenderReaders();
       _ndCfgRender();
       _ndRenderCfgSync();
+    }
+
+    // Pager drawer: render the per-frequency reader status from the live status
+    // frame's components (keys "reader:<label>") + a messages/10min line. No-op
+    // for radio nodes (the panel is CSS-hidden).
+    function _ndRenderReaders() {
+      const el = document.getElementById('nd-readers');
+      if (!el) return;
+      if ((_ndNode && _ndNode.kind) !== 'pager') return;
+      const st = _ndStatus || (_ndNode && _ndNode.status) || {};
+      const comps = (st && st.components) || {};
+      const readers = Object.keys(comps)
+        .filter(k => k.indexOf('reader') === 0)
+        .map(k => ({ label: k.replace(/^reader:?/, '') || k, state: String(comps[k]) }));
+      const online = !!(_ndNode && _ndNode.online);
+      const msgs = Number((_ndNode && _ndNode.messagesLast10m) || 0);
+      const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
+
+      let rows;
+      if (!online) {
+        rows = `<tr><td colspan="3" style="color:var(--text-soft);">Node offline</td></tr>`;
+      } else if (readers.length === 0) {
+        rows = `<tr><td colspan="3" style="color:var(--text-soft);">No readers reported yet</td></tr>`;
+      } else {
+        rows = readers.map(r => {
+          const running = /run/i.test(r.state);
+          return `<tr>
+            <td>${escapeHtml(r.label)}</td>
+            <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}</td>
+            <td style="text-align:right;"><button class="btn btn-secondary btn-sm" onclick="_ndRestart('reader:${escapeHtml(r.label)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button></td>
+          </tr>`;
+        }).join('');
+      }
+
+      el.innerHTML = `
+        <table class="nd-readers-table">
+          <thead><tr><th>Frequency</th><th>Decoder</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="dev-card-secondary" style="margin-top:0.6rem;">
+          <span>messages <strong>${msgs}</strong> · last 10 min</span>
+          ${qd != null ? `<span>queue <strong>${qd}</strong></span>` : ''}
+        </div>`;
+    }
+
+    // Restart every reader on a pager node (one restartComponent per reader).
+    function _ndRestartReaders() {
+      const st = _ndStatus || (_ndNode && _ndNode.status) || {};
+      const comps = (st && st.components) || {};
+      const readers = Object.keys(comps).filter(k => k.indexOf('reader') === 0);
+      if (readers.length === 0) { showToast('No readers to restart.', 'warn'); return; }
+      readers.forEach(name => _ndRestart(name));
     }
 
     // --- Drawer sub-view switching (P4/P5/P1) ---
@@ -4685,6 +4760,11 @@
       // last-cached status.
       const rst = (_ndStatus && (_ndStatus.calibrated != null || _ndStatus.jmbeInstalled != null))
         ? _ndStatus : (n.status || null);
+      // Pager nodes have no SDR-Trunk/rdio — show only the agent version.
+      if ((n.kind || 'radio') === 'pager') {
+        el.innerHTML = _nodeVer('agent', agent);
+        return;
+      }
       el.innerHTML =
         _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
         + _ndReadinessHtml(rst);
