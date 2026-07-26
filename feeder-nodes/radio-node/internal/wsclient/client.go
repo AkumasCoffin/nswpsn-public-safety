@@ -246,6 +246,7 @@ func (c *Client) sendHello(conn *websocket.Conn) error {
 		Arch:                 runtime.GOARCH,
 		Hostname:             hostname,
 		AppliedConfigVersion: c.getAppliedVersion(),
+		Kind:                 c.cfg.Kind,
 	}
 	return c.writeType(conn, protocol.TypeHello, h, "")
 }

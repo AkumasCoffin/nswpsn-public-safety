@@ -179,6 +179,34 @@ type ConfigPayload struct {
 	Aliases       []Alias         `json:"aliases"`
 	RdioConfig    map[string]any  `json:"rdioConfig"`
 	StreamTargets []StreamTarget  `json:"streamTargets"`
+	// Node on/off (capture) + feed on/off. POINTERS so a nil (an older payload,
+	// e.g. a persisted applied-config.json from before these fields existed,
+	// re-rendered at startup) means "true" — a plain bool's zero value would
+	// falsely disable capture/feed.
+	CaptureEnabled *bool `json:"captureEnabled"`
+	FeedEnabled    *bool `json:"feedEnabled"`
+}
+
+// captureOn reports whether capture (decoding) is enabled. nil = on.
+func (p ConfigPayload) captureOn() bool { return p.CaptureEnabled == nil || *p.CaptureEnabled }
+
+// feedOn reports whether feeding (rdio downstream upload) is enabled. nil = on.
+func (p ConfigPayload) feedOn() bool { return p.FeedEnabled == nil || *p.FeedEnabled }
+
+// effectiveChannels returns the channels to render/reconcile. When capture is OFF
+// (Node off), every channel is forced auto-start=false so the playlist renders
+// enabled="false" and the reconcile stops them all — SDR-Trunk stays up but
+// decodes nothing, and the agent stays connected.
+func (p ConfigPayload) effectiveChannels() []ChannelPlan {
+	if p.captureOn() {
+		return p.Channels
+	}
+	out := make([]ChannelPlan, len(p.Channels))
+	for i, ch := range p.Channels {
+		ch.AutoStart = false
+		out[i] = ch
+	}
+	return out
 }
 
 // Restarter is the slice of the supervisor configapply needs (best-effort
@@ -288,7 +316,7 @@ func WritePlaylistOnly(payload ConfigPayload, d Deps) error {
 		return stageErr("keys", "ensure local api keys", err)
 	}
 	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, payload.StreamTargets, localKeys)
+	rendered, err := renderPlaylist(tmpl, payload.effectiveChannels(), payload.Aliases, payload.StreamTargets, localKeys)
 	if err != nil {
 		return stageErr("playlist", "render", err)
 	}
@@ -328,8 +356,11 @@ func flatten(err error) []error {
 // applyPlaylist renders + writes the SDR-Trunk playlist, then reloads/reconciles a
 // running SDR-Trunk and applies tuner settings. Independent of the rdio stage.
 func (d Deps) applyPlaylist(payload ConfigPayload, localKeys map[int]string) error {
+	// Effective channels honour Node on/off: capture-off forces every channel
+	// auto-start=false so it renders disabled AND the reconcile stops them all.
+	chans := payload.effectiveChannels()
 	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, payload.Channels, payload.Aliases, payload.StreamTargets, localKeys)
+	rendered, err := renderPlaylist(tmpl, chans, payload.Aliases, payload.StreamTargets, localKeys)
 	if err != nil {
 		return stageErr("playlist", "render", err)
 	}
@@ -360,17 +391,17 @@ func (d Deps) applyPlaylist(payload ConfigPayload, localKeys map[int]string) err
 	// the edit actually takes effect. Skipped when we fell back to a process
 	// restart above (that already loads everything fresh from the new playlist).
 	if liveReloaded {
-		log.Printf("configapply: live playlist reload OK; reconciling running channels")
-		d.restartRunningChannels(payload.Channels)
+		log.Printf("configapply: live playlist reload OK (capture=%v); reconciling running channels", payload.captureOn())
+		d.restartRunningChannels(chans)
 	} else {
 		log.Printf("configapply: live reload unavailable; requested sdrtrunk restart")
 	}
 
 	// AUTHORITATIVE BACKSTOP: no matter what the running SDR-Trunk build's reload
 	// does (or whether a fallback restart fully took effect), guarantee that a
-	// channel the operator just set to auto-start=off is not left decoding. Runs
-	// on BOTH paths — this is what makes "disable" version-independent.
-	d.enforceDisabledChannels(payload.Channels)
+	// channel the config marks auto-start=off (incl. ALL channels when capture is
+	// off) is not left decoding. Runs on BOTH paths.
+	d.enforceDisabledChannels(chans)
 
 	// Tuner gain/ppm live in SDR-Trunk's tuner config, not the playlist, so they
 	// are applied via the control API against the live tuners. Best-effort only:
@@ -387,7 +418,7 @@ func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
 	if err != nil {
 		return stageErr("rdio", "load rdio config", err)
 	}
-	if err := applyRdioKeys(rdioCfg, localKeys); err != nil {
+	if err := applyRdioKeys(rdioCfg, localKeys, payload.feedOn()); err != nil {
 		return stageErr("rdio", "inject api keys", err)
 	}
 	if err := rdioLoginReady(d.Rdio, d.RdioPassword); err != nil {
@@ -441,7 +472,7 @@ func (d Deps) resolveRdioConfig(payload ConfigPayload) (map[string]any, error) {
 
 // applyRdioKeys sets each apiKeys[i].key to the local key for its system id and
 // replaces downstreams with a single entry pointing at the agent relay.
-func applyRdioKeys(cfg map[string]any, localKeys map[int]string) error {
+func applyRdioKeys(cfg map[string]any, localKeys map[int]string, feed bool) error {
 	aks, ok := cfg["apiKeys"].([]any)
 	if !ok {
 		return fmt.Errorf("rdio config has no apiKeys array")
@@ -461,11 +492,13 @@ func applyRdioKeys(cfg map[string]any, localKeys map[int]string) error {
 	// Single downstream -> the agent's relay listener. Shape mirrors the preset
 	// downstream object (rdio-scanner.json): _id / apiKey / disabled / order /
 	// systems / url. "systems":"*" is rdio's wildcard for "all systems".
+	// Feed off → downstream disabled: rdio keeps running + keeps its config but
+	// stops uploading to the agent relay.
 	cfg["downstreams"] = []any{
 		map[string]any{
 			"_id":      1,
 			"apiKey":   anyLocalKey(localKeys),
-			"disabled": false,
+			"disabled": !feed,
 			"order":    nil,
 			"systems":  "*",
 			"url":      relayDownstreamURL,
