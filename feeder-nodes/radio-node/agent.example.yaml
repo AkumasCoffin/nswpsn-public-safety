@@ -1,0 +1,61 @@
+# radio-node agent configuration (example)
+#
+# Copy this file to "agent.yaml" (next to the nodeagent executable, or point at
+# it with --config <path>) and fill in your values. Fields left empty fall back
+# to the documented defaults; install_id and ws_url are auto-filled on first run.
+
+# Backend relay + REST base URL (https). Buffered calls are POSTed to
+# ${server_url}/api/node-ingest/call-upload.
+server_url: "https://api.forcequit.xyz"
+
+# Control WebSocket base URL (wss). If empty, it is derived from server_url
+# (http->ws, https->wss) and written back on first run.
+ws_url: "wss://api.forcequit.xyz"
+
+# The feeder token issued to this node (starts with "npsn_").
+node_token: "npsn_replace_me"
+
+# Stable per-install identifier. Leave empty on first run — a UUIDv4 is
+# generated and persisted back into this file automatically.
+install_id: ""
+
+# Base directory for the disk queue, child-process logs, and agent state.
+# Created if missing. Subdirs: <data_dir>/queue and <data_dir>/logs.
+data_dir: "./data"
+
+# Address the localhost call-upload listener binds to. MUST be a loopback
+# address — the local rdio-scanner's downstream points here.
+relay_addr: "127.0.0.1:17390"
+
+# REST port of the SDR-Trunk headless control server the agent launches
+# sdrtrunk with. The spectrum WebSocket listens on this port + 1. The agent
+# appends "--headless --control-port <port>" to the sdrtrunk args and injects a
+# random per-boot SDRTRUNK_CONTROL_TOKEN into its environment. Default 17392.
+sdrtrunk_control_port: 17392
+
+# Directory holding the base presets (default.xml playlist template +
+# rdio-scanner.json) the agent reads when applying a pushed config. Default
+# "./presets". If this directory is missing, the agent falls back to presets
+# embedded in the binary, so config apply still works.
+presets_dir: "./presets"
+
+# SDR-Trunk application root. The agent launches sdrtrunk with
+# "--app-root <this>" AND writes the rendered playlist to
+# <this>/playlist/default.xml — the two MUST agree. Default <data_dir>/sdrtrunk.
+sdrtrunk_app_root: ""
+
+# External SDR-Trunk process. Set enabled:false or leave command empty to skip
+# (useful for relay-only testing with no SDR-Trunk installed).
+sdrtrunk:
+  enabled: false
+  command: ""          # e.g. "java" or an absolute path to the launcher
+  args: []             # e.g. ["-jar", "sdr-trunk.jar"]
+  work_dir: ""         # working directory for the process (optional)
+
+# Local rdio-scanner process. Configure its downstream to POST calls to
+# http://<relay_addr>/api/call-upload. Set enabled:false / empty command to skip.
+rdio:
+  enabled: false
+  command: ""          # e.g. absolute path to the rdio-scanner binary
+  args: []
+  work_dir: ""

@@ -1,0 +1,164 @@
+<playlist version="4">
+  <alias color="-65536" list="catch all PSN" group="Fire &amp; Rescue" name="Fire &amp; Rescue">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Fire and Rescue"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10101" max="10199"/>
+    <id type="talkgroupRange" protocol="APCO25" min="20101" max="20151"/>
+  </alias>
+  <alias color="-16744320" list="catch all PSN" group="Marine Rescue" name="Marine Rescue">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Marine Rescue"/>
+    <id type="talkgroupRange" protocol="APCO25" min="12526" max="12545"/>
+  </alias>
+  <alias color="-16776961" list="catch all PSN" group="NSW Ambulance" name="NSW Ambulance">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Ambulance Service"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10301" max="10365"/>
+    <id type="talkgroupRange" protocol="APCO25" min="20301" max="20337"/>
+    <id type="talkgroupRange" protocol="APCO25" min="30301" max="30370"/>
+  </alias>
+  <alias color="-23808" list="catch all PSN" group="Rural Fire Service" name="Rural Fire Service">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Rural Fire Service"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10030" max="10099"/>
+    <id type="talkgroupRange" protocol="APCO25" min="20000" max="20080"/>
+    <id type="talkgroupRange" protocol="APCO25" min="30000" max="30092"/>
+  </alias>
+  <alias color="-3355597" list="catch all PSN" group="SES" name="State Emergency Service">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="State Emergency Service"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10223" max="10264"/>
+    <id type="talkgroupRange" protocol="APCO25" min="20201" max="20270"/>
+    <id type="talkgroupRange" protocol="APCO25" min="30210" max="30231"/>
+  </alias>
+  <alias color="-8388480" list="catch all PSN" group="NSW PF (ENC)" name="NSW PF (ENC)">
+    <id type="priority" priority="-1"/>
+    <id type="talkgroupRange" protocol="APCO25" min="12001" max="12275"/>
+  </alias>
+  <alias color="0" list="catch all PSN" group="DPI" name="Department of Primary Industries">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Department of Primary Industries"/>
+    <id type="talkgroupRange" protocol="APCO25" min="11581" max="11669"/>
+  </alias>
+  <alias color="-16711936" list="catch all PSN" group="TFNSW Ferries" name="TFNSW - Ferries">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="TFNSW - Ferries"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10901" max="10930"/>
+  </alias>
+  <alias color="-16711936" list="catch all PSN" group="TFNSW Maritime" name="TFNSW Maritime">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="TFNSW - Maritime"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10951" max="10965"/>
+  </alias>
+  <alias color="-16711936" list="catch all PSN" group="TFNSW Rail" name="TFNSW - Rail">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="TFNSW - Rail"/>
+    <id type="talkgroupRange" protocol="APCO25" min="11102" max="11199"/>
+    <id type="talkgroupRange" protocol="APCO25" min="11200" max="11299"/>
+    <id type="talkgroupRange" protocol="APCO25" min="11300" max="11375"/>
+  </alias>
+  <alias color="-16711936" list="catch all PSN" group="TFNSW Roads" name="TFNSW - Roads">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="TFNSW - Roads"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10701" max="10732"/>
+  </alias>
+  <alias color="0" list="catch all PSN" name="Endeavour Energy">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Endeavour Energy"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10601" max="10653"/>
+  </alias>
+  <alias color="0" list="catch all PSN" group="Airband" name="TWR YSNW">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="AirBand"/>
+    <id type="talkgroup" protocol="AM" value="5"/>
+  </alias>
+  <alias color="-16711681" list="catch all PSN" group="Water NSW" name="Water NSW">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Water NSW"/>
+    <id type="talkgroupRange" protocol="APCO25" min="11421" max="11430"/>
+  </alias>
+  <alias color="-65281" list="catch all PSN" group="GLG" name="Government Liaison Groups">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Government Liaison Groups"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10000" max="10029"/>
+  </alias>
+  <alias color="0" list="catch all PSN" group="NPWS" name="National Parks and Wildlife Service">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="National Parks and Wildlife Service"/>
+    <id type="talkgroupRange" protocol="APCO25" min="20450" max="20459"/>
+    <id type="talkgroupRange" protocol="APCO25" min="21031" max="21069"/>
+  </alias>
+  <alias color="0" list="catch all PSN" group="Aus Grid" name="Aus Grid">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="AusGrid Power"/>
+    <id type="talkgroupRange" protocol="APCO25" min="10501" max="10570"/>
+  </alias>
+  <alias color="0" list="catch all PSN" group="Sutherland Council" name="Sutherland Council">
+    <id type="priority" priority="-1"/>
+    <id type="broadcastChannel" channel="Sutherland Council"/>
+    <id type="talkgroupRange" protocol="APCO25" min="11071" max="11082"/>
+  </alias>
+  <channel system="NSW PSN" enabled="false" site="Site 1: 142658" order="2">
+    <alias_list_name>catch all PSN</alias_list_name>
+    <aux_decode_configuration/>
+    <decode_configuration type="decodeConfigP25Phase1" modulation="C4FM" ignore_data_calls="true" traffic_channel_pool_size="50"/>
+    <event_log_configuration/>
+    <record_configuration/>
+    <source_configuration type="sourceConfigTuner" source_type="TUNER"/>
+  </channel>
+  <channel_map name="New Channel Map"/>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns1="http://www.w3.org/2001/XMLSchema-instance" wstxns1:type="RDIOSCANNER_CALL" system_id="99" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="AirBand">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns2="http://www.w3.org/2001/XMLSchema-instance" wstxns2:type="RDIOSCANNER_CALL" system_id="3" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Ambulance Service">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns3="http://www.w3.org/2001/XMLSchema-instance" wstxns3:type="RDIOSCANNER_CALL" system_id="12" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="AusGrid Power">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns4="http://www.w3.org/2001/XMLSchema-instance" wstxns4:type="RDIOSCANNER_CALL" system_id="15" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Department of Primary Industries">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns5="http://www.w3.org/2001/XMLSchema-instance" wstxns5:type="RDIOSCANNER_CALL" system_id="13" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Endeavour Energy">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns6="http://www.w3.org/2001/XMLSchema-instance" wstxns6:type="RDIOSCANNER_CALL" system_id="2" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Fire and Rescue">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns7="http://www.w3.org/2001/XMLSchema-instance" wstxns7:type="RDIOSCANNER_CALL" system_id="5" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Government Liaison Groups">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns8="http://www.w3.org/2001/XMLSchema-instance" wstxns8:type="RDIOSCANNER_CALL" system_id="17" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Marine Rescue">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns9="http://www.w3.org/2001/XMLSchema-instance" wstxns9:type="RDIOSCANNER_CALL" system_id="14" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="National Parks and Wildlife Service">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns10="http://www.w3.org/2001/XMLSchema-instance" wstxns10:type="RDIOSCANNER_CALL" system_id="100" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Other">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns11="http://www.w3.org/2001/XMLSchema-instance" wstxns11:type="RDIOSCANNER_CALL" system_id="1" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Rural Fire Service">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns12="http://www.w3.org/2001/XMLSchema-instance" wstxns12:type="RDIOSCANNER_CALL" system_id="4" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="State Emergency Service">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns13="http://www.w3.org/2001/XMLSchema-instance" wstxns13:type="RDIOSCANNER_CALL" system_id="10" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Sutherland Council">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns14="http://www.w3.org/2001/XMLSchema-instance" wstxns14:type="RDIOSCANNER_CALL" system_id="6" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="TFNSW - Ferries">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns15="http://www.w3.org/2001/XMLSchema-instance" wstxns15:type="RDIOSCANNER_CALL" system_id="9" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="TFNSW - Maritime">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns16="http://www.w3.org/2001/XMLSchema-instance" wstxns16:type="RDIOSCANNER_CALL" system_id="8" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="TFNSW - Rail">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns17="http://www.w3.org/2001/XMLSchema-instance" wstxns17:type="RDIOSCANNER_CALL" system_id="7" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="TFNSW - Roads">
+    <format>MP3</format>
+  </stream>
+  <stream type="RdioScannerConfiguration" xmlns:wstxns18="http://www.w3.org/2001/XMLSchema-instance" wstxns18:type="RDIOSCANNER_CALL" system_id="11" api_key="" host="http://localhost:3000/api/call-upload" delay="0" enabled="true" port="80" maximum_recording_age="600000" name="Water NSW">
+    <format>MP3</format>
+  </stream>
+</playlist>

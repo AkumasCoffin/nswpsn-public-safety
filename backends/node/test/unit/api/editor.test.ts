@@ -71,8 +71,9 @@ describe('POST /api/editor-requests (public submit)', () => {
     expect(await res.json()).toEqual({ error: 'Valid email is required' });
   });
 
-  it('409 when a pending request already exists for the email', async () => {
-    resultQueue = [{ rows: [{ id: 7 }] }];
+  it('updates (upserts) an existing pending request instead of erroring', async () => {
+    // existing-row check returns a pending request → the handler UPDATEs it.
+    resultQueue = [{ rows: [{ id: 7, status: 'pending' }] }, { rows: [] }];
     const app = makeApp();
     const res = await app.request('/api/editor-requests', {
       method: 'POST',
@@ -84,7 +85,34 @@ describe('POST /api/editor-requests (public submit)', () => {
         request_type: ['editor'],
       }),
     });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+    expect((await res.json()).request_id).toBe(7);
+    expect(calls[1]?.sql).toContain('UPDATE editor_requests');
+  });
+
+  it('draft creates a pending placeholder when the account has no request', async () => {
+    resultQueue = [{ rows: [] }, { rows: [{ id: 99 }] }];
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', discord_id: 'd', draft: true }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).request_id).toBe(99);
+    expect(calls[1]?.sql).toContain('INSERT INTO editor_requests');
+  });
+
+  it('draft is a no-op (200) when a request already exists', async () => {
+    resultQueue = [{ rows: [{ id: 7, status: 'pending' }] }];
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', draft: true }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).request_id).toBe(7);
   });
 
   it('201 with request_id and stores comma-joined arrays', async () => {
@@ -338,7 +366,8 @@ describe('POST /api/editor-requests/:id/approve', () => {
       expect(typeof body['temp_password']).toBe('string');
       expect((body['temp_password'] as string).startsWith('Changeme-')).toBe(true);
 
-      // Supabase admin endpoint was called with email + force_password_change.
+      // Supabase admin endpoint was called with email; the dead
+      // force_password_change flag is no longer sent (no first-login-change flow).
       expect(fetchSpy).toHaveBeenCalledOnce();
       const [url, init] = fetchSpy.mock.calls[0]!;
       expect(String(url)).toBe('https://test.supabase.co/auth/v1/admin/users');
@@ -346,7 +375,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
       expect(sentBody.email).toBe('a@b.com');
       expect(sentBody.email_confirm).toBe(true);
       expect(sentBody.user_metadata.discord_id).toBe('d99');
-      expect(sentBody.user_metadata.force_password_change).toBe(true);
+      expect(sentBody.user_metadata.force_password_change).toBeUndefined();
 
       // Two role INSERTs landed against the new Supabase user id.
       expect(calls[1]?.sql).toContain('INSERT INTO user_roles');
@@ -515,7 +544,7 @@ describe('GET /api/check-admin/:userId', () => {
     expect(body['is_owner']).toBe(true);
     expect(body['can_manage_users']).toBe(true);
     expect(body['can_assign_privileged_roles']).toBe(true);
-    expect(body['tabs']).toEqual({ requests: true, users: true, dev: true });
+    expect(body['tabs']).toEqual({ requests: true, users: true, dev: true, nodes: true });
   });
 
   it('team_member sees requests + users but NOT dev', async () => {
@@ -524,7 +553,7 @@ describe('GET /api/check-admin/:userId', () => {
     const res = await app.request('/api/check-admin/u-tm');
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['can_assign_privileged_roles']).toBe(false);
-    expect(body['tabs']).toEqual({ requests: true, users: true, dev: false });
+    expect(body['tabs']).toEqual({ requests: true, users: true, dev: false, nodes: false });
   });
 
   it('dev sees only the Dev tab', async () => {
@@ -532,7 +561,7 @@ describe('GET /api/check-admin/:userId', () => {
     const app = makeApp();
     const res = await app.request('/api/check-admin/u-dev');
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body['tabs']).toEqual({ requests: false, users: false, dev: true });
+    expect(body['tabs']).toEqual({ requests: false, users: false, dev: true, nodes: true });
   });
 
   it('grants first-time owner when no owners exist anywhere', async () => {

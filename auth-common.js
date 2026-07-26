@@ -523,7 +523,16 @@ async function checkAuthState() {
           <i class="fas fa-users-cog"></i> Staff
         </a>`;
       }
-      
+
+      // Radio Feeder chip - for radio contributors (links to their node
+      // download + status page). Same shape/placement as the Staff chip,
+      // distinct sky accent so the two are easy to tell apart.
+      if (Array.isArray(roleData.roles) && roleData.roles.includes('radio_contributor')) {
+        buttons += `<a href="feeder.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.3); border-radius:6px; color:#38bdf8; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
+          <i class="fas fa-satellite-dish"></i> Feeder
+        </a>`;
+      }
+
       if (buttonsDiv) buttonsDiv.innerHTML = buttons;
     } else {
       // Role check failed after retries - show warning in sidebar

@@ -454,7 +454,7 @@
             </div>
           </div>
           
-          <div class="form-group">
+          <div class="form-group" id="email-group">
             <label class="form-label">
               Email Address <span class="required">*</span>
             </label>
@@ -474,7 +474,10 @@
               <label class="form-label">
                 Create a Password <span class="required">*</span>
               </label>
-              <input type="password" id="signup-password" class="form-input" placeholder="At least 8 characters" autocomplete="new-password" minlength="8">
+              <input type="password" id="signup-password" class="form-input" placeholder="Choose a strong password" autocomplete="new-password" minlength="10" oninput="updatePasswordHint()">
+              <p id="pw-hint" style="color:#64748b; font-size:0.75rem; margin-top:0.4rem;">
+                At least 10 characters, with upper &amp; lowercase letters and a number.
+              </p>
             </div>
             <div class="form-group">
               <label class="form-label">
@@ -487,13 +490,6 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">
-              Discord ID <span class="required">*</span>
-            </label>
-            <input type="text" id="discord" class="form-input" placeholder="username or 123456789012345678" required>
-          </div>
-          
           <!-- Region -->
           <div class="form-group">
             <label class="form-label">
@@ -606,12 +602,39 @@
       }[c]));
     }
 
+    // Strong-password rule for email signups. Users set their own password at
+    // signup (no admin-issued temp passwords), so require a genuinely strong one.
+    // Returns a problem message, or '' when acceptable.
+    function passwordProblem(pw) {
+      pw = pw || '';
+      if (pw.length < 10) return 'Password must be at least 10 characters.';
+      if (!/[a-z]/.test(pw)) return 'Password needs a lowercase letter.';
+      if (!/[A-Z]/.test(pw)) return 'Password needs an uppercase letter.';
+      if (!/[0-9]/.test(pw)) return 'Password needs a number.';
+      return '';
+    }
+
+    // Live hint under the password field: green tick when strong, else the next
+    // requirement to satisfy.
+    function updatePasswordHint() {
+      const el = document.getElementById('pw-hint');
+      if (!el) return;
+      const pw = document.getElementById('signup-password').value;
+      if (!pw) { el.textContent = 'At least 10 characters, with upper & lowercase letters and a number.'; el.style.color = '#64748b'; return; }
+      const problem = passwordProblem(pw);
+      if (problem) { el.textContent = problem; el.style.color = '#f97316'; }
+      else { el.textContent = '✓ Strong password'; el.style.color = '#22c55e'; }
+    }
+
     // Step-1 chooser → email path: reveal the form with the account
     // fields (username + password) visible.
     function chooseEmailSignup() {
       document.getElementById('signup-method-chooser').style.display = 'none';
       document.getElementById('signup-form').style.display = 'block';
       document.getElementById('password-group').style.display = 'block';
+      // Email signups type their own email — make sure the field is shown.
+      const eg = document.getElementById('email-group');
+      if (eg) eg.style.display = 'block';
       document.getElementById('choose-method-back').style.display = 'inline-flex';
       document.getElementById('email').focus();
     }
@@ -643,6 +666,27 @@
     // signup button for a "linked" notice and prefill email + Discord ID
     // from the Discord identity.
     let _usernameBackfilled = false;
+    // Numeric Discord user ID captured from the OAuth identity (Discord signups
+    // only). Sent with the request instead of a typed-in field.
+    let _discordId = '';
+    // Fire the "draft request" once per page load so a Discord signup shows up
+    // in the admin queue even if they never finish the form.
+    let _draftEnsured = false;
+
+    // Create a placeholder pending request for a Discord signup so admins always
+    // see the account. Idempotent server-side; best-effort (never blocks the UI).
+    async function ensureDraftRequest(session, email) {
+      const token = session && session.access_token;
+      if (!token || !email) return;
+      try {
+        await fetch(`${API_BASE_URL}/api/editor-requests`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ draft: true, email, discord_id: _discordId || '' }),
+        });
+      } catch (e) { /* best-effort */ }
+    }
+
     async function applySession(session) {
       if (!session) return;
       const user = session.user || {};
@@ -667,25 +711,29 @@
         }
       }
 
-      // Discord signup: the login IS this Discord account, and approval
-      // grants roles to it — so the request MUST carry that account's
-      // email. A typed-in/edited email wouldn't match the account, which
-      // is why the email looked like it "changed" after approval. Lock the
-      // field to the account email so the request and the account agree.
+      // Discord signup: the login IS this Discord account and approval grants
+      // roles to it, so the request uses the account's OWN email — there's no
+      // email to type. Stash it on the hidden input the submit reads, and hide
+      // the email field entirely.
       const emailInput = document.getElementById('email');
-      if (emailInput && user.email) {
-        emailInput.value = user.email;
-        emailInput.readOnly = true;
-        emailInput.title = 'Using your Discord account email';
-        emailInput.style.opacity = '0.85';
-        emailInput.style.cursor = 'not-allowed';
-      }
+      if (emailInput && user.email) emailInput.value = user.email;
+      const emailGroup = document.getElementById('email-group');
+      if (emailGroup) emailGroup.style.display = 'none';
 
-      const discordInput = document.getElementById('discord');
-      if (discordInput && !discordInput.value) {
-        // Prefer the numeric Discord user ID; fall back to the username.
-        discordInput.value = idData.provider_id || idData.sub || meta.provider_id
-          || meta.user_name || meta.name || meta.full_name || '';
+      // Capture the numeric Discord user ID from the OAuth identity to send with
+      // the request (the Discord ID field was removed — it was only for the old
+      // manual-linking flow). Robust fallback across where Supabase stashes it.
+      _discordId = String(
+        idData.provider_id || idData.sub
+        || meta.provider_id || meta.sub
+        || '',
+      );
+
+      // Record the signup in the admin queue immediately (Discord signups only —
+      // they have a Discord identity; email signups submit the full form anyway).
+      if (discordIdentity && !_draftEnsured) {
+        _draftEnsured = true;
+        ensureDraftRequest(session, user.email);
       }
 
       const nameEl = document.getElementById('discord-linked-name');
@@ -783,7 +831,6 @@
       
       const requestTypes = Array.from(document.querySelectorAll('input[name="request-type"]:checked')).map(cb => cb.value);
       const email = document.getElementById('email').value.trim();
-      const discord = document.getElementById('discord').value.trim();
       const region = document.getElementById('region').value;
       const background = document.getElementById('background').value;
       const backgroundDetails = document.getElementById('background-details').value.trim();
@@ -832,7 +879,7 @@
         return;
       }
       
-      if (!email || !discord || !about) {
+      if (!email || !about) {
         messageEl.textContent = 'Please fill in all required fields.';
         messageEl.className = 'message error';
         return;
@@ -869,8 +916,9 @@
         }
         const pw = document.getElementById('signup-password').value;
         const pw2 = document.getElementById('signup-password-confirm').value;
-        if (!pw || pw.length < 8) {
-          messageEl.textContent = 'Please create a password of at least 8 characters.';
+        const pwProblem = passwordProblem(pw);
+        if (pwProblem) {
+          messageEl.textContent = pwProblem;
           messageEl.className = 'message error';
           return;
         }
@@ -934,9 +982,9 @@
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ 
-            email, 
-            discord_id: discord, 
+          body: JSON.stringify({
+            email,
+            discord_id: _discordId || '',
             website: website || null,
             about,
             request_type: requestTypes,
