@@ -21,8 +21,8 @@ import { Hono } from 'hono';
 import type { BodyData } from 'hono/utils/body';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
-import { resolveFeederToken } from '../services/auth/nodeToken.js';
-import { getNodeByInstall, bumpNodeCallStat } from '../services/nodes/registry.js';
+import { resolveNodeToken } from '../services/auth/nodeToken.js';
+import { bumpNodeCallStat } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 
 export const nodeIngestRouter = new Hono();
@@ -52,27 +52,21 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'missing node credentials' }, 401);
   }
 
-  // 3. Resolve the feeder token → owning user (still holding the role).
-  const r = await resolveFeederToken(token);
+  // 3. Resolve the per-node token → the node it belongs to (role gated).
+  const r = await resolveNodeToken(token);
   if (!r.ok) {
     if (r.reason === 'no_role') {
       return c.json({ error: 'contributor role removed' }, 403);
     }
-    if (r.reason === 'unconfigured') {
-      return c.json({ error: 'relay not configured' }, 503);
-    }
     return c.json({ error: 'unauthorized' }, 401);
   }
-
-  // 4. Node must exist under this user and be enabled. The agent treats
-  //    401/403/404 as "drop this call, don't retry".
-  const node = await getNodeByInstall(r.userId, installId);
-  if (!node) {
-    return c.json({ error: 'unknown node' }, 404);
+  // TOFU: the token is bound to one machine; a different install is rejected.
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
   }
-  if (!node.enabled) {
-    return c.json({ error: 'node disabled' }, 403);
-  }
+  const node = { id: r.nodeId, feed_enabled: r.feedEnabled };
+  // NOTE: `enabled` (capture on/off) is NOT gated here — with capture off the
+  // agent isn't decoding so no calls arrive; feed_enabled is the upload control.
 
   // 5. Size guard (manual — see MAX_CALL_BYTES comment). Legit uploads (the
   //    agent's Go sender, which posts a fixed []byte) always carry a

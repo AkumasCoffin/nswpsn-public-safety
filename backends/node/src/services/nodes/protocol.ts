@@ -23,6 +23,8 @@ export interface HelloData {
   arch?: string;
   hostname?: string;
   appliedConfigVersion?: string | null;
+  // Node type the agent believes it is (radio/pager/adsb); compared to node.kind.
+  kind?: string;
 }
 
 export interface StatusData {

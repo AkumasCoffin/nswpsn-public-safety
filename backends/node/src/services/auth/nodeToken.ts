@@ -1,47 +1,31 @@
 /**
- * Feeder-node credentials.
+ * Per-node feeder credentials.
  *
- * Provisioning is role-driven (see 034_feeder_nodes.sql). Every user with
- * the `radio_contributor` role gets ONE long-lived token, minted lazily the
- * first time they hit feeder.html / a download endpoint.
+ * Each node has its OWN token, minted when the node is created in the panel and
+ * baked into that node's installer. The token is a random
+ *     npsn_<40 hex>            (160 bits; format unchanged so the installer
+ *                               parsers keep working)
+ * of which only the sha256 (token_hash) + a lookup prefix (token_prefix) are
+ * stored, on the node row itself. The plaintext is returned ONCE at create /
+ * rotate time and is never re-derivable — re-downloading an installer requires a
+ * rotate. Deleting a node hard-revokes its token (no auto-link recreates it);
+ * rotating replaces the hash. This is the per-node revocation the old per-user
+ * HMAC token could not give.
  *
- * The token is NOT stored. It is
- *     npsn_<first 40 hex of HMAC-SHA256(FEEDER_TOKEN_SECRET, "userId:version")>
- * so /api/feeder/download can regenerate it on demand, while feeder_tokens
- * holds only its sha256 (for a constant-time auth compare that needs no
- * secret on the hot path) and a prefix (for O(1) lookup + logging). Rotation
- * bumps `token_version` → the HMAC input changes → a brand-new token/hash/
- * prefix, instantly killing the old one.
- *
- * Validity is additionally gated at resolve time on the user STILL holding
- * `radio_contributor` (via the cached hasRole), so removing the role
- * unlinks their nodes with no extra bookkeeping.
+ * Validity is additionally gated at resolve time on the owner STILL holding
+ * `radio_contributor`, so losing the role stops all of that user's nodes.
  */
-import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
-import { config } from '../../config.js';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getPool } from '../../db/pool.js';
 import { hasRole } from './roles.js';
 
 const TOKEN_PREFIX = 'npsn_';
-// Hex chars of HMAC kept after the 'npsn_' prefix. 40 hex = 160 bits.
-const TOKEN_HEX_LEN = 40;
+// Random hex after the 'npsn_' prefix. 40 hex = 160 bits (20 random bytes).
+const TOKEN_BYTES = 20;
 // Chars used as the DB lookup key: 'npsn_' + 16 hex = 64 bits, collision-safe.
 const LOOKUP_PREFIX_LEN = TOKEN_PREFIX.length + 16;
-// Chars shown in logs — enough to tell contributors apart, not the whole key.
+// Chars shown in logs — enough to tell nodes apart, not the whole key.
 const LOG_PREFIX_LEN = TOKEN_PREFIX.length + 7;
-
-export function feederTokensConfigured(): boolean {
-  return !!config.FEEDER_TOKEN_SECRET;
-}
-
-function computeToken(userId: string, version: number): string {
-  const secret = config.FEEDER_TOKEN_SECRET;
-  if (!secret) throw new Error('FEEDER_TOKEN_SECRET not configured');
-  const mac = createHmac('sha256', secret)
-    .update(`${userId}:${version}`)
-    .digest('hex');
-  return TOKEN_PREFIX + mac.slice(0, TOKEN_HEX_LEN);
-}
 
 function sha256hex(s: string): string {
   return createHash('sha256').update(s).digest('hex');
@@ -63,125 +47,107 @@ function safeEqualHex(a: string, b: string): boolean {
   return timingSafeEqual(aBuf, bBuf);
 }
 
+/**
+ * Mint a fresh random per-node token. Returns the plaintext (to hand to the
+ * operator / bake into the installer, ONCE) plus the hash + prefix to store on
+ * the node row. Nothing here is derivable from the token later.
+ */
+export function mintNodeToken(): { token: string; tokenHash: string; tokenPrefix: string } {
+  const token = TOKEN_PREFIX + randomBytes(TOKEN_BYTES).toString('hex');
+  return { token, tokenHash: sha256hex(token), tokenPrefix: lookupPrefix(token) };
+}
+
 // Short-lived cache so a burst of call uploads from one node doesn't hit the
-// DB per request. Keyed by lookup-prefix. Cleared wholesale on rotation.
+// DB per request. Keyed by lookup-prefix. Cleared wholesale on rotate/delete.
 interface CacheEntry {
   ts: number;
+  nodeId: string;
   userId: string;
+  kind: string;
+  enabled: boolean;
+  feedEnabled: boolean;
+  installId: string | null;
   tokenHash: string;
 }
 const RESOLVE_CACHE_TTL_MS = 15_000;
 const resolveCache = new Map<string, CacheEntry>();
 
-export function _clearFeederTokenCache(): void {
+export function _clearNodeTokenCache(): void {
   resolveCache.clear();
 }
 
 export type ResolveResult =
-  | { ok: true; userId: string }
-  | { ok: false; reason: 'unconfigured' | 'bad_token' | 'no_role' };
+  | {
+      ok: true;
+      nodeId: string;
+      userId: string;
+      kind: string;
+      enabled: boolean;
+      feedEnabled: boolean;
+      installId: string | null;
+    }
+  | { ok: false; reason: 'bad_token' | 'no_role' };
 
 /**
- * Verify a presented feeder token and confirm the owner still holds
- * radio_contributor. Returns the owning user id, or a reason for rejection.
- * Does NOT require FEEDER_TOKEN_SECRET (compares against the stored hash).
+ * Verify a presented per-node token → the node it belongs to, gated on the
+ * owner still holding radio_contributor. Compares against the stored hash
+ * (constant-time); no secret needed on the hot path.
  */
-export async function resolveFeederToken(token: string): Promise<ResolveResult> {
+export async function resolveNodeToken(token: string): Promise<ResolveResult> {
   if (!token || !token.startsWith(TOKEN_PREFIX)) {
     return { ok: false, reason: 'bad_token' };
   }
   const prefix = lookupPrefix(token);
   const suppliedHash = sha256hex(token);
 
-  let userId: string | null = null;
+  let entry: CacheEntry | null = null;
   const cached = resolveCache.get(prefix);
   if (cached && Date.now() - cached.ts < RESOLVE_CACHE_TTL_MS) {
-    if (safeEqualHex(suppliedHash, cached.tokenHash)) userId = cached.userId;
+    if (safeEqualHex(suppliedHash, cached.tokenHash)) entry = cached;
   } else {
     const pool = await getPool();
     if (!pool) return { ok: false, reason: 'bad_token' };
-    const res = await pool.query<{ user_id: string; token_hash: string }>(
-      'SELECT user_id, token_hash FROM feeder_tokens WHERE token_prefix = $1',
+    const res = await pool.query<{
+      id: string;
+      user_id: string;
+      kind: string;
+      enabled: boolean;
+      feed_enabled: boolean;
+      install_id: string | null;
+      token_hash: string | null;
+    }>(
+      `SELECT id, user_id, kind, enabled, feed_enabled, install_id, token_hash
+         FROM nodes WHERE token_prefix = $1`,
       [prefix],
     );
     const row = res.rows[0];
-    if (row) {
-      resolveCache.set(prefix, {
+    if (row && row.token_hash) {
+      const e: CacheEntry = {
         ts: Date.now(),
+        nodeId: row.id,
         userId: row.user_id,
+        kind: row.kind,
+        enabled: row.enabled,
+        feedEnabled: row.feed_enabled,
+        installId: row.install_id,
         tokenHash: row.token_hash,
-      });
-      if (safeEqualHex(suppliedHash, row.token_hash)) userId = row.user_id;
+      };
+      resolveCache.set(prefix, e);
+      if (safeEqualHex(suppliedHash, row.token_hash)) entry = e;
     }
   }
 
-  if (!userId) return { ok: false, reason: 'bad_token' };
-  if (!(await hasRole(userId, ['radio_contributor']))) {
+  if (!entry) return { ok: false, reason: 'bad_token' };
+  if (!(await hasRole(entry.userId, ['radio_contributor']))) {
     return { ok: false, reason: 'no_role' };
   }
-  return { ok: true, userId };
-}
-
-/**
- * Idempotently ensure a feeder token exists for a contributor and return the
- * plaintext (regenerated from the stored version). Callers MUST have already
- * verified the caller owns this userId / is staff. Throws if the secret is
- * unset — callers should gate on feederTokensConfigured() and 503 first.
- */
-export async function mintFeederToken(
-  userId: string,
-): Promise<{ token: string; prefix: string }> {
-  const pool = await getPool();
-  if (!pool) throw new Error('DATABASE_URL not configured');
-
-  const existing = await pool.query<{ token_version: number }>(
-    'SELECT token_version FROM feeder_tokens WHERE user_id = $1',
-    [userId],
-  );
-  const version = existing.rows[0]?.token_version ?? 1;
-  const token = computeToken(userId, version);
-  // Always UPSERT the current hash/prefix — not just on first insert. The token
-  // is derived from FEEDER_TOKEN_SECRET, so after that secret is rotated the
-  // stored hash is stale; re-persisting here means the documented "re-download to
-  // recover" path actually restores the node (otherwise mint returned a
-  // new-secret token while the stored hash stayed old-secret → permanent 401).
-  // Deterministic per (user, version), so this is idempotent and race-safe.
-  await pool.query(
-    `INSERT INTO feeder_tokens (user_id, token_hash, token_prefix, token_version)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (user_id) DO UPDATE
-       SET token_hash = EXCLUDED.token_hash,
-           token_prefix = EXCLUDED.token_prefix`,
-    [userId, sha256hex(token), lookupPrefix(token), version],
-  );
-  return { token, prefix: logPrefix(token) };
-}
-
-/**
- * Rotate a contributor's token: bump the version, recompute, persist the new
- * hash/prefix, and return the new plaintext. The old token stops resolving
- * immediately (its prefix is no longer in the table).
- */
-export async function rotateFeederToken(userId: string): Promise<{ token: string }> {
-  const pool = await getPool();
-  if (!pool) throw new Error('DATABASE_URL not configured');
-
-  const cur = await pool.query<{ token_version: number }>(
-    'SELECT token_version FROM feeder_tokens WHERE user_id = $1',
-    [userId],
-  );
-  const version = (cur.rows[0]?.token_version ?? 0) + 1;
-  const token = computeToken(userId, version);
-  await pool.query(
-    `INSERT INTO feeder_tokens (user_id, token_hash, token_prefix, token_version, rotated_at)
-     VALUES ($1, $2, $3, $4, now())
-     ON CONFLICT (user_id) DO UPDATE
-       SET token_hash = EXCLUDED.token_hash,
-           token_prefix = EXCLUDED.token_prefix,
-           token_version = EXCLUDED.token_version,
-           rotated_at = now()`,
-    [userId, sha256hex(token), lookupPrefix(token), version],
-  );
-  resolveCache.clear();
-  return { token };
+  return {
+    ok: true,
+    nodeId: entry.nodeId,
+    userId: entry.userId,
+    kind: entry.kind,
+    enabled: entry.enabled,
+    feedEnabled: entry.feedEnabled,
+    installId: entry.installId,
+  };
 }

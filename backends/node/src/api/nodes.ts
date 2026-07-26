@@ -22,6 +22,11 @@ import { requireRole, canManageNodes, isOwner } from '../services/auth/roles.js'
 import {
   listNodes,
   getNode,
+  createNode,
+  rotateNodeToken,
+  countNodesForUser,
+  MAX_NODES_PER_USER,
+  isNodeKind,
   updateNode,
   deleteNode,
   getNodeStats,
@@ -41,10 +46,7 @@ import {
   getAutoUpdate,
   setAutoUpdate,
 } from '../services/nodes/globalConfig.js';
-import {
-  feederTokensConfigured,
-  rotateFeederToken,
-} from '../services/auth/nodeToken.js';
+import { mintNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 
 export const nodesRouter = new Hono();
 
@@ -73,6 +75,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     lastSeenAt: node.last_seen_at,
     notes: node.notes,
     createdAt: node.created_at,
+    tokenPrefix: node.token_prefix,
     online: live.online,
     status: live.status,
     lastStatusAt: live.lastStatusAt,
@@ -227,15 +230,15 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
     };
     const updated = await updateNode(id, patch);
     if (!updated) return c.json({ error: 'node not found' }, 404);
-    // Disabling a node force-drops any live agent connection so it can't
-    // keep feeding while marked disabled.
-    if (patch.enabled === false) {
-      hub.forceDisconnectAgent(id, 'node disabled');
-    }
-    // Config changed → push the freshly-merged payload to the live agent so
-    // it applies without waiting for the next hello. Best-effort: offline /
-    // preset-unavailable just means the agent picks it up at next hello.
-    if (patch.config_override !== undefined && hub.isOnline(id)) {
+    // enabled (capture on/off), feed_enabled (upload on/off), and config_override
+    // all reach the live agent via a config push — NOT by dropping the socket.
+    // The agent stays connected; enabled=false stops capture, feed=false disables
+    // the rdio downstream. Best-effort: offline just means it applies at next hello.
+    const pushRelevant =
+      patch.enabled !== undefined ||
+      patch.feed_enabled !== undefined ||
+      patch.config_override !== undefined;
+    if (pushRelevant && hub.isOnline(id)) {
       try {
         await pushConfigToNode(id);
       } catch (err) {
@@ -348,30 +351,59 @@ nodesRouter.get('/api/nodes/:id/stats', requireRole(canManageNodes), async (c) =
 });
 
 // ---------------------------------------------------------------------------
-// POST /api/nodes/users/:userId/rotate-feeder-token
-// Rotates a contributor's feeder token. The new plaintext is NOT returned
-// to staff — only the owner reveals their own token via /api/feeder/me.
+// POST /api/nodes — staff-create a node for a user (name + kind). Mints the
+// node's own token, returned ONCE (bake it into the installer now).
 // ---------------------------------------------------------------------------
-nodesRouter.post(
-  '/api/nodes/users/:userId/rotate-feeder-token',
-  requireRole(canManageNodes),
-  async (c) => {
-    if (!feederTokensConfigured()) {
-      return c.json({ error: 'feeder tokens not configured' }, 503);
+const CreateSchema = z.object({
+  userId: z.string().min(1),
+  name: z.string().min(1).max(120),
+  kind: z.string().refine(isNodeKind, 'invalid node kind'),
+});
+nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
+  try {
+    const parsed = CreateSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
-    const userId = c.req.param('userId');
-    try {
-      await rotateFeederToken(userId);
-      return c.json({ ok: true });
-    } catch (err) {
-      log.error({ err, userId }, 'Error rotating feeder token');
-      return c.json({ error: 'Failed to rotate feeder token' }, 500);
+    const { userId, name, kind } = parsed.data;
+    if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
+      return c.json({ error: 'node limit reached for this user' }, 429);
     }
-  },
-);
+    const { token, tokenHash, tokenPrefix } = mintNodeToken();
+    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix);
+    if (!node) return c.json({ error: 'registry unavailable' }, 503);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ node: toApi(node), token });
+  } catch (err) {
+    log.error({ err }, 'Error creating node');
+    return c.json({ error: 'Failed to create node' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/nodes/:id/rotate-token — new per-node token, returned ONCE.
+// Invalidates the old token, drops the live agent, and resets TOFU binding so
+// a re-provisioned machine can re-bind.
+// ---------------------------------------------------------------------------
+nodesRouter.post('/api/nodes/:id/rotate-token', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const { token, tokenHash, tokenPrefix } = mintNodeToken();
+    const ok = await rotateNodeToken(id, tokenHash, tokenPrefix);
+    if (!ok) return c.json({ error: 'node not found' }, 404);
+    _clearNodeTokenCache();
+    hub.forceDisconnectAgent(id, 'token rotated');
+    c.header('Cache-Control', 'no-store');
+    return c.json({ token });
+  } catch (err) {
+    log.error({ err, id }, 'Error rotating node token');
+    return c.json({ error: 'Failed to rotate token' }, 500);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // DELETE /api/nodes/:id — owner-only (destructive; matches DELETE /users/:id).
+// Hard-revokes the node's token (no auto-link recreates it).
 // ---------------------------------------------------------------------------
 nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
   const id = c.req.param('id');
@@ -379,6 +411,7 @@ nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
     hub.forceDisconnectAgent(id);
     const ok = await deleteNode(id);
     if (!ok) return c.json({ error: 'node not found' }, 404);
+    _clearNodeTokenCache();
     return c.json({ ok: true });
   } catch (err) {
     log.error({ err, id }, 'Error deleting node');
