@@ -58,7 +58,10 @@ export async function pushConfigToAllNodes(): Promise<{ pushed: number; total: n
   const [nodes, global] = await Promise.all([listNodes(), getGlobalConfig()]);
   let pushed = 0;
   for (const node of nodes) {
-    if (!node.enabled || !hub.isOnline(node.id)) continue;
+    // Disabled nodes stay connected now (enabled = capture, not connection), so
+    // they still receive config — the payload's captureEnabled tells them to stay
+    // stopped. Only skip offline nodes.
+    if (!hub.isOnline(node.id)) continue;
     const r = await pushConfigForNode(node, global);
     if (r.sent) pushed += 1;
   }

@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes } from '../services/auth/roles.js';
-import { resolveFeederToken } from '../services/auth/nodeToken.js';
+import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { getAutoUpdate } from '../services/nodes/globalConfig.js';
 
 export const nodeUpdatesRouter = new Hono();
@@ -115,10 +115,9 @@ function loadManifest(): Manifest {
 nodeUpdatesRouter.get('/api/node-updates/manifest', async (c) => {
   const token = c.req.header('X-Node-Token');
   if (!token) return c.json({ error: 'missing node token' }, 401);
-  const r = await resolveFeederToken(token);
+  const r = await resolveNodeToken(token);
   if (!r.ok) {
     if (r.reason === 'no_role') return c.json({ error: 'contributor role removed' }, 403);
-    if (r.reason === 'unconfigured') return c.json({ error: 'feeder not configured' }, 503);
     return c.json({ error: 'unauthorized' }, 401);
   }
   try {

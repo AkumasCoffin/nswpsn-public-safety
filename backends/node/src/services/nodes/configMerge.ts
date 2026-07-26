@@ -84,6 +84,12 @@ export interface ConfigPayload {
    *  systems/groups/tags merged in. */
   rdioConfig: Record<string, unknown>;
   streamTargets: StreamTarget[];
+  /** Node on/off: when false the agent stops ALL capture (radio: every SDR-Trunk
+   *  channel), staying connected. */
+  captureEnabled: boolean;
+  /** Feed on/off: when false the agent disables the rdio downstream so rdio keeps
+   *  running but stops uploading. */
+  feedEnabled: boolean;
 }
 
 // The "system" label reported in the channel plan — the radio network these
@@ -263,7 +269,18 @@ export async function buildConfigPayload(
     }));
   }
 
-  const payloadNoVersion = { channels, tuners, aliases, rdioConfig, streamTargets };
+  // captureEnabled/feedEnabled are per-node and part of the hashed payload, so a
+  // Node-on/off or Feed-on/off toggle changes configVersion and the agent
+  // re-applies (stops/starts capture; enables/disables the rdio downstream).
+  const payloadNoVersion = {
+    channels,
+    tuners,
+    aliases,
+    rdioConfig,
+    streamTargets,
+    captureEnabled: node.enabled,
+    feedEnabled: node.feed_enabled,
+  };
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
 
   return { configVersion, ...payloadNoVersion };

@@ -13,17 +13,16 @@ import type { Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { log } from '../lib/log.js';
-import { resolveFeederToken } from '../services/auth/nodeToken.js';
+import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { verifySupabaseToken } from '../services/auth/supabaseJwt.js';
 import { hasRole } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
 import {
-  upsertNodeOnHello,
+  refreshNodeOnHello,
+  bindInstallId,
   touchNodeSeen,
   updateNode,
-  getNodeByInstall,
-  countNodesForUser,
-  MAX_NODES_PER_USER,
+  getNode,
   type HelloMeta,
 } from '../services/nodes/registry.js';
 import {
@@ -116,9 +115,11 @@ export function attachNodeWebSockets(server: Server): void {
             hub.forceDisconnectAgent(a.nodeId, 'role revoked');
             continue;
           }
-          const node = await getNodeByInstall(a.userId, a.installId);
-          if (!node || !node.enabled) {
-            hub.forceDisconnectAgent(a.nodeId, 'node disabled');
+          // A DELETED node (hard revoke) must be cut off; a DISABLED node stays
+          // connected (enabled now controls capture via config, not the socket).
+          const node = await getNode(a.nodeId);
+          if (!node) {
+            hub.forceDisconnectAgent(a.nodeId, 'node deleted');
           }
         } catch (err) {
           log.warn({ err, nodeId: a.nodeId }, 'agent auth revalidation failed (transient)');
@@ -163,7 +164,8 @@ async function handleAgentUpgrade(
     rejectUpgrade(socket, 400, 'Invalid Install Id');
     return;
   }
-  const resolved = await resolveFeederToken(token);
+  // Per-node token → the pre-created node it belongs to (no auto-create).
+  const resolved = await resolveNodeToken(token);
   if (!resolved.ok) {
     log.warn(
       { tokenPrefix, tokenLen, installId, reason: resolved.reason },
@@ -172,37 +174,24 @@ async function handleAgentUpgrade(
     rejectUpgrade(socket, resolved.reason === 'no_role' ? 403 : 401, 'Unauthorized');
     return;
   }
-  // Per-user node cap: only new installs count against it (refreshing an
-  // existing node is always allowed). Bounds authenticated row-creation.
-  const existing = await getNodeByInstall(resolved.userId, installId);
-  if (!existing && (await countNodesForUser(resolved.userId)) >= MAX_NODES_PER_USER) {
+  // TOFU: bind this machine to the node on first connect; reject a DIFFERENT
+  // machine presenting the same node token (a copied credential).
+  const bind = await bindInstallId(resolved.nodeId, installId);
+  if (bind === 'mismatch') {
     log.warn(
-      { tokenPrefix, installId, userId: resolved.userId },
-      'agent WS reject: per-user node cap reached',
+      { tokenPrefix, installId, nodeId: resolved.nodeId },
+      'agent WS reject: install id does not match the node this token is bound to',
     );
-    rejectUpgrade(socket, 429, 'Too Many Nodes');
+    rejectUpgrade(socket, 401, 'Install Mismatch');
     return;
   }
-  // Create/refresh the node row now so we have its id (auto-link on start).
-  const node = await upsertNodeOnHello(resolved.userId, installId, {});
-  if (!node) {
-    log.warn({ tokenPrefix, installId, userId: resolved.userId }, 'agent WS reject: registry unavailable');
-    rejectUpgrade(socket, 503, 'Registry Unavailable');
-    return;
-  }
-  if (!node.enabled) {
-    log.warn(
-      { tokenPrefix, installId, userId: resolved.userId, nodeId: node.id },
-      'agent WS reject: node disabled',
-    );
-    rejectUpgrade(socket, 403, 'Node Disabled');
-    return;
-  }
+  // enabled is NOT a connection gate anymore — a disabled node stays connected
+  // and simply stops capturing (driven via the pushed config).
   log.info(
-    { tokenPrefix, installId, userId: resolved.userId, nodeId: node.id },
+    { tokenPrefix, installId, userId: resolved.userId, nodeId: resolved.nodeId, kind: resolved.kind, bind },
     'agent WS accepted',
   );
-  const ctx: AgentCtx = { userId: resolved.userId, installId, nodeId: node.id };
+  const ctx: AgentCtx = { userId: resolved.userId, installId, nodeId: resolved.nodeId };
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, ctx);
   });
@@ -245,7 +234,12 @@ async function handleAgentMessage(
         arch: h.arch ?? null,
         hostname: h.hostname ?? null,
       };
-      const node = await upsertNodeOnHello(ctx.userId, ctx.installId, meta);
+      const node = await refreshNodeOnHello(ctx.nodeId, meta);
+      // The agent declares its kind; warn (don't reject) on a mismatch with the
+      // type the node was created as, so a wrong-agent install is visible.
+      if (node && h.kind && h.kind !== node.kind) {
+        log.warn({ nodeId: ctx.nodeId, nodeKind: node.kind, agentKind: h.kind }, 'hello: node kind mismatch');
+      }
       ws.send(
         envelope('helloAck', {
           ok: true,

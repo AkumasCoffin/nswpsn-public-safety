@@ -17,13 +17,21 @@ import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
+import { z } from 'zod';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { hasRole } from '../services/auth/roles.js';
+import { mintNodeToken, resolveNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 import {
-  feederTokensConfigured,
-  mintFeederToken,
-} from '../services/auth/nodeToken.js';
-import { listNodesForUser } from '../services/nodes/registry.js';
+  listNodesForUser,
+  createNode,
+  getNode,
+  rotateNodeToken,
+  deleteNode,
+  countNodesForUser,
+  MAX_NODES_PER_USER,
+  isNodeKind,
+  type NodeRow,
+} from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 
 export const feederRouter = new Hono();
@@ -56,84 +64,113 @@ const requireRadioContributor: MiddlewareHandler = async (c, next) => {
 
 feederRouter.use('/api/feeder/*', requireSupabaseJwt, requireRadioContributor);
 
+/** The volunteer-facing view of one of their nodes (name/type/key-prefix +
+ *  live activity). No secrets — only the token PREFIX, never the token/hash. */
+function feederNodeView(n: NodeRow) {
+  const online = hub.isOnline(n.id);
+  const live = hub.liveStatus(n.id);
+  const st = live.status;
+  const sdrUp = !!(
+    st &&
+    (st.components?.['sdrtrunk'] ||
+      (Array.isArray(st.channels) && st.channels.length > 0) ||
+      (Array.isArray(st.tuners) && st.tuners.length > 0))
+  );
+  const decoding =
+    online &&
+    sdrUp &&
+    Array.isArray(st?.channels) &&
+    st!.channels.some((c) => {
+      const ch = c as { processing?: boolean; state?: string };
+      return (
+        ch.processing === true ||
+        ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(ch.state ?? '').toUpperCase())
+      );
+    });
+  const callsLast10m = hub.uploadsInWindow(n.id);
+  return {
+    id: n.id,
+    kind: n.kind,
+    installId: n.install_id,
+    name: n.name,
+    enabled: n.enabled,
+    feedEnabled: n.feed_enabled,
+    tokenPrefix: n.token_prefix,
+    online,
+    lastSeenAt: n.last_seen_at,
+    agentVersion: n.agent_version,
+    sdrtrunkVersion: n.sdrtrunk_version,
+    rdioVersion: n.rdio_version,
+    sdrUp,
+    decoding: !!decoding,
+    uploading: callsLast10m > 0,
+    callsLast10m,
+    queueDepth: typeof st?.queueDepth === 'number' ? st.queueDepth : null,
+    calibrated: st?.calibrated ?? null,
+    jmbeInstalled: st?.jmbeInstalled ?? null,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// GET /api/feeder/me
+// GET /api/feeder/me — the caller's nodes (no token minting).
 // ---------------------------------------------------------------------------
 feederRouter.get('/api/feeder/me', async (c) => {
-  if (!feederTokensConfigured()) {
-    return c.json({ error: 'feeder not configured' }, 503);
-  }
   const userId = c.get('userId') as string;
   try {
-    const { prefix } = await mintFeederToken(userId);
-    const nodes = (await listNodesForUser(userId)).map((n) => {
-      const online = hub.isOnline(n.id);
-      const live = hub.liveStatus(n.id);
-      const st = live.status;
-      // SDR-Trunk up = it reported a version among components (or any channel/tuner).
-      const sdrUp = !!(
-        st &&
-        (st.components?.['sdrtrunk'] ||
-          (Array.isArray(st.channels) && st.channels.length > 0) ||
-          (Array.isArray(st.tuners) && st.tuners.length > 0))
-      );
-      // Decoding = SDR-Trunk up AND a channel is processing / locked on a call
-      // (mirrors the staff panel's activity logic).
-      const decoding =
-        online &&
-        sdrUp &&
-        Array.isArray(st?.channels) &&
-        st!.channels.some((c) => {
-          const ch = c as { processing?: boolean; state?: string };
-          return (
-            ch.processing === true ||
-            ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(ch.state ?? '').toUpperCase())
-          );
-        });
-      const callsLast10m = hub.uploadsInWindow(n.id);
-      return {
-        id: n.id,
-        installId: n.install_id,
-        name: n.name,
-        enabled: n.enabled,
-        feedEnabled: n.feed_enabled,
-        online,
-        lastSeenAt: n.last_seen_at,
-        agentVersion: n.agent_version,
-        sdrtrunkVersion: n.sdrtrunk_version,
-        rdioVersion: n.rdio_version,
-        // Live activity (null-ish when offline / no status yet).
-        sdrUp,
-        decoding: !!decoding,
-        uploading: callsLast10m > 0,
-        callsLast10m,
-        queueDepth: typeof st?.queueDepth === 'number' ? st.queueDepth : null,
-        calibrated: st?.calibrated ?? null,
-        jmbeInstalled: st?.jmbeInstalled ?? null,
-      };
-    });
-    return c.json({ role: true, tokenPrefix: prefix, nodes });
+    const nodes = (await listNodesForUser(userId)).map(feederNodeView);
+    return c.json({ role: true, nodes });
   } catch (err) {
     log.error({ err, userId }, 'Error building feeder me');
     return c.json({ error: 'Failed to load feeder info' }, 500);
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/feeder/nodes — the contributor creates their own node (name + type).
+// Mints the node's own token, returned ONCE (bake into the installer now).
+// ---------------------------------------------------------------------------
+const CreateNodeSchema = z.object({
+  name: z.string().min(1).max(120),
+  kind: z.string().refine(isNodeKind, 'invalid node kind'),
+});
+feederRouter.post('/api/feeder/nodes', async (c) => {
+  const userId = c.get('userId') as string;
+  try {
+    const parsed = CreateNodeSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
+    }
+    if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
+      return c.json({ error: 'node limit reached' }, 429);
+    }
+    const { token, tokenHash, tokenPrefix } = mintNodeToken();
+    const node = await createNode(userId, parsed.data.name, parsed.data.kind, tokenHash, tokenPrefix);
+    if (!node) return c.json({ error: 'registry unavailable' }, 503);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ node: feederNodeView(node), token });
+  } catch (err) {
+    log.error({ err, userId }, 'Error creating feeder node');
+    return c.json({ error: 'Failed to create node' }, 500);
+  }
+});
+
 // ---- Linux: one self-contained installer, token baked in --------------------
-function linuxInstaller(token: string): string {
+function linuxInstaller(token: string, kind: string): string {
   const T = shSingleQuote(token);
   const S = shSingleQuote(SERVER_URL);
   const D = shSingleQuote(DOWNLOADS_BASE);
+  const K = shSingleQuote(kind);
   return [
     `#!/usr/bin/env bash`,
-    `# NSW PSN radio feeder node installer. Your node token is baked in below.`,
+    `# NSW PSN feeder node installer. Your node token is baked in below.`,
     `# Run:  sudo bash install-nswpsn-node.sh    (re-run any time to update)`,
     `set -euo pipefail`,
     `NODE_TOKEN=${T}`,
     `SERVER_URL=${S}`,
     `DOWNLOADS=${D}`,
+    `NODE_KIND=${K}`,
     ``,
-    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" bash "$0" "$@"; fi`,
+    `if [ "$(id -u)" -ne 0 ]; then exec sudo -E NODE_TOKEN="$NODE_TOKEN" SERVER_URL="$SERVER_URL" DOWNLOADS="$DOWNLOADS" NODE_KIND="$NODE_KIND" bash "$0" "$@"; fi`,
     `case "$(uname -m)" in`,
     `  x86_64) ARCH=amd64;;`,
     `  aarch64|arm64) ARCH=arm64;;`,
@@ -176,6 +213,7 @@ function linuxInstaller(token: string): string {
     `server_url: "\${SERVER_URL}"`,
     `node_token: "\${NODE_TOKEN}"`,
     `install_id: "\${INSTALL_ID}"`,
+    `kind: "\${NODE_KIND}"`,
     `data_dir: "/var/lib/nswpsn-node"`,
     `# SDR-Trunk + rdio are core to a feeder node and always run — the agent`,
     `# downloads + launches them from the release manifest on first run. No opt-in.`,
@@ -226,10 +264,11 @@ function linuxInstaller(token: string): string {
 }
 
 // ---- Windows: one self-contained PowerShell installer, token baked in -------
-function windowsInstaller(token: string): string {
+function windowsInstaller(token: string, kind: string): string {
   const T = psSingleQuote(token);
   const S = psSingleQuote(SERVER_URL);
   const D = psSingleQuote(DOWNLOADS_BASE);
+  const K = psSingleQuote(kind);
   return [
     `# NSW PSN radio feeder node installer. Your node token is baked in below.`,
     `# Right-click this file -> Run with PowerShell (it will elevate).`,
@@ -238,6 +277,7 @@ function windowsInstaller(token: string): string {
     `$NodeToken = ${T}`,
     `$ServerUrl = (${S}).TrimEnd('/')`,
     `$Downloads = (${D}).TrimEnd('/')`,
+    `$NodeKind = ${K}`,
     ``,
     `# Elevate if not admin.`,
     `$id = [Security.Principal.WindowsIdentity]::GetCurrent()`,
@@ -265,6 +305,7 @@ function windowsInstaller(token: string): string {
     `server_url: "$ServerUrl"`,
     `node_token: "$NodeToken"`,
     `install_id: "$installId"`,
+    `kind: "$NodeKind"`,
     `data_dir: "$dataFwd/data"`,
     `"@`,
     `Set-Content -Path $cfgPath -Value $yaml -Encoding UTF8`,
@@ -275,36 +316,89 @@ function windowsInstaller(token: string): string {
   ].join('\r\n');
 }
 
-feederRouter.get('/api/feeder/download/linux', async (c) => {
-  if (!feederTokensConfigured()) return c.json({ error: 'feeder not configured' }, 503);
+/** Confirm a node belongs to the calling contributor. Returns the node or null. */
+async function ownedNode(c: import('hono').Context): Promise<NodeRow | null> {
   const userId = c.get('userId') as string;
+  const id = c.req.param('id');
+  if (!id) return null;
+  const node = await getNode(id);
+  return node && node.user_id === userId ? node : null;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/feeder/nodes/:id/rotate-token — the owner re-issues their node's
+// token (e.g. to re-download the installer, since the plaintext isn't stored).
+// Returns the new token ONCE; the old one stops working.
+// ---------------------------------------------------------------------------
+feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
   try {
-    const { token } = await mintFeederToken(userId);
-    return c.body(linuxInstaller(token), 200, {
-      'Content-Type': 'text/x-shellscript',
-      'Content-Disposition': 'attachment; filename="install-nswpsn-node.sh"',
-      // Per-user token inside — never let a CDN/proxy cache and cross-serve it.
-      'Cache-Control': 'no-store',
-    });
+    const { token, tokenHash, tokenPrefix } = mintNodeToken();
+    await rotateNodeToken(node.id, tokenHash, tokenPrefix);
+    _clearNodeTokenCache();
+    hub.forceDisconnectAgent(node.id, 'token rotated');
+    c.header('Cache-Control', 'no-store');
+    return c.json({ token });
   } catch (err) {
-    log.error({ err, userId }, 'Error building linux installer');
+    log.error({ err, id: node.id }, 'Error rotating feeder node token');
+    return c.json({ error: 'Failed to rotate token' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/feeder/nodes/:id — the owner removes (hard-revokes) their node.
+// ---------------------------------------------------------------------------
+feederRouter.delete('/api/feeder/nodes/:id', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  try {
+    hub.forceDisconnectAgent(node.id);
+    await deleteNode(node.id);
+    _clearNodeTokenCache();
+    return c.json({ ok: true });
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error deleting feeder node');
+    return c.json({ error: 'Failed to delete node' }, 500);
+  }
+});
+
+// Installer download is POST with the node token in the BODY (never a URL/query,
+// so it can't leak via logs/referrer). The token is not re-derivable, so the
+// caller passes the plaintext it got at create/rotate time. We resolve it to the
+// node (which also confirms ownership + role) and bake token + kind in.
+const DownloadSchema = z.object({ token: z.string().min(1) });
+
+async function serveInstaller(c: import('hono').Context, os: 'linux' | 'windows') {
+  const userId = c.get('userId') as string;
+  const parsed = DownloadSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: 'token required' }, 400);
+  const token = parsed.data.token;
+  const resolved = await resolveNodeToken(token);
+  if (!resolved.ok) return c.json({ error: 'invalid node token' }, 401);
+  if (resolved.userId !== userId) return c.json({ error: 'not your node' }, 403);
+  const body = os === 'linux' ? linuxInstaller(token, resolved.kind) : windowsInstaller(token, resolved.kind);
+  return c.body(body, 200, {
+    'Content-Type': os === 'linux' ? 'text/x-shellscript' : 'text/plain; charset=utf-8',
+    'Content-Disposition': `attachment; filename="install-nswpsn-node.${os === 'linux' ? 'sh' : 'ps1'}"`,
+    'Cache-Control': 'no-store',
+  });
+}
+
+feederRouter.post('/api/feeder/download/linux', async (c) => {
+  try {
+    return await serveInstaller(c, 'linux');
+  } catch (err) {
+    log.error({ err }, 'Error building linux installer');
     return c.json({ error: 'Failed to build installer' }, 500);
   }
 });
 
-feederRouter.get('/api/feeder/download/windows', async (c) => {
-  if (!feederTokensConfigured()) return c.json({ error: 'feeder not configured' }, 503);
-  const userId = c.get('userId') as string;
+feederRouter.post('/api/feeder/download/windows', async (c) => {
   try {
-    const { token } = await mintFeederToken(userId);
-    return c.body(windowsInstaller(token), 200, {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Disposition': 'attachment; filename="install-nswpsn-node.ps1"',
-      // Per-user token inside — never let a CDN/proxy cache and cross-serve it.
-      'Cache-Control': 'no-store',
-    });
+    return await serveInstaller(c, 'windows');
   } catch (err) {
-    log.error({ err, userId }, 'Error building windows installer');
+    log.error({ err }, 'Error building windows installer');
     return c.json({ error: 'Failed to build installer' }, 500);
   }
 });

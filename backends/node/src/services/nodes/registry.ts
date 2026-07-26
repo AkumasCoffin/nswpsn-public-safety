@@ -6,11 +6,20 @@
  */
 import { getPool } from '../../db/pool.js';
 
+/** Feeder node types. Only 'radio' has a working agent today; 'pager'/'adsb'
+ *  are provisionable now so their future agents slot in. */
+export const NODE_KINDS = ['radio', 'pager', 'adsb'] as const;
+export type NodeKind = (typeof NODE_KINDS)[number];
+export function isNodeKind(v: unknown): v is NodeKind {
+  return typeof v === 'string' && (NODE_KINDS as readonly string[]).includes(v);
+}
+
 export interface NodeRow {
   id: string;
   kind: string;
   user_id: string;
-  install_id: string;
+  // NULL until the node's agent first connects (TOFU-bound then).
+  install_id: string | null;
   name: string;
   enabled: boolean;
   feed_enabled: boolean;
@@ -24,6 +33,9 @@ export interface NodeRow {
   last_seen_at: string | null;
   notes: string | null;
   created_at: string;
+  // Lookup prefix of this node's token (for UI display / logs). The hash is
+  // never selected into API paths.
+  token_prefix: string | null;
 }
 
 export interface HelloMeta {
@@ -37,7 +49,7 @@ export interface HelloMeta {
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at`;
+  last_seen_at, notes, created_at, token_prefix`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -64,37 +76,92 @@ function clampMeta(s: string | undefined | null, max: number): string | null {
 }
 
 /**
- * Create-or-update a node from an agent's hello. Keyed by (user_id,
- * install_id): the first hello inserts, later ones refresh versions + seen
- * time. This is the "auto-link on start" step. A brand-new row gets a
- * default name derived from the hostname (editable later by staff).
+ * Create a pre-created node (name + type) with its own token. `install_id` is
+ * NULL until the node's agent first connects and binds it (TOFU). Returns the
+ * new row.
  */
-export async function upsertNodeOnHello(
+export async function createNode(
   userId: string,
-  installId: string,
-  meta: HelloMeta,
+  name: string,
+  kind: string,
+  tokenHash: string,
+  tokenPrefix: string,
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
-  const hostname = clampMeta(meta.hostname, 120);
-  const defaultName = hostname || `radio-${installId.slice(0, 8)}`;
+  const cleanName = clampMeta(name, 120) || `${kind}-node`;
   const res = await pool.query<NodeRow>(
-    `INSERT INTO nodes
-       (user_id, install_id, kind, name, agent_version, sdrtrunk_version,
-        rdio_version, os, arch, last_seen_at)
-     VALUES ($1, $2, 'radio', $3, $4, $5, $6, $7, $8, now())
-     ON CONFLICT (user_id, install_id) DO UPDATE
-       SET agent_version    = COALESCE(EXCLUDED.agent_version, nodes.agent_version),
-           sdrtrunk_version = COALESCE(EXCLUDED.sdrtrunk_version, nodes.sdrtrunk_version),
-           rdio_version     = COALESCE(EXCLUDED.rdio_version, nodes.rdio_version),
-           os               = COALESCE(EXCLUDED.os, nodes.os),
-           arch             = COALESCE(EXCLUDED.arch, nodes.arch),
-           last_seen_at     = now()
+    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING ${NODE_COLS}`,
+    [userId, kind, cleanName, tokenHash, tokenPrefix],
+  );
+  return res.rows[0] ?? null;
+}
+
+export type BindResult = 'bound' | 'match' | 'mismatch';
+
+/**
+ * TOFU-bind a machine to a node on first connect. If the node has no install_id
+ * yet, set it and return 'bound'; if it already equals installId, 'match'; if a
+ * DIFFERENT machine already bound this node's token, 'mismatch' (reject — a
+ * copied token). Rotation resets the binding (see rotateNodeToken).
+ */
+export async function bindInstallId(nodeId: string, installId: string): Promise<BindResult> {
+  const pool = await getPool();
+  if (!pool) return 'mismatch';
+  // Atomic claim: only sets install_id when it's currently NULL.
+  const claim = await pool.query(
+    `UPDATE nodes SET install_id = $2 WHERE id = $1 AND install_id IS NULL`,
+    [nodeId, installId],
+  );
+  if ((claim.rowCount ?? 0) > 0) return 'bound';
+  const cur = await pool.query<{ install_id: string | null }>(
+    `SELECT install_id FROM nodes WHERE id = $1`,
+    [nodeId],
+  );
+  return cur.rows[0]?.install_id === installId ? 'match' : 'mismatch';
+}
+
+/**
+ * Rotate a node's token: store the new hash/prefix and CLEAR the TOFU binding
+ * (install_id → NULL) so a re-provisioned/replaced machine can bind afresh.
+ */
+export async function rotateNodeToken(
+  nodeId: string,
+  tokenHash: string,
+  tokenPrefix: string,
+): Promise<boolean> {
+  const pool = await getPool();
+  if (!pool) return false;
+  const res = await pool.query(
+    `UPDATE nodes
+       SET token_hash = $2, token_prefix = $3, token_rotated_at = now(), install_id = NULL
+     WHERE id = $1`,
+    [nodeId, tokenHash, tokenPrefix],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Refresh an EXISTING node's versions/os/arch/seen-time from a hello. No
+ * auto-create — the node is pre-created and resolved by its token.
+ */
+export async function refreshNodeOnHello(nodeId: string, meta: HelloMeta): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes SET
+       agent_version    = COALESCE($2, agent_version),
+       sdrtrunk_version = COALESCE($3, sdrtrunk_version),
+       rdio_version     = COALESCE($4, rdio_version),
+       os               = COALESCE($5, os),
+       arch             = COALESCE($6, arch),
+       last_seen_at     = now()
+     WHERE id = $1
      RETURNING ${NODE_COLS}`,
     [
-      userId,
-      installId,
-      defaultName,
+      nodeId,
       clampMeta(meta.agentVersion, 40),
       clampMeta(meta.sdrtrunkVersion, 40),
       clampMeta(meta.rdioVersion, 40),
