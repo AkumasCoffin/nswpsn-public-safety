@@ -2821,8 +2821,8 @@
 
     // View a node's PRIVACY-FUZZED location on a small read-only map (owner +
     // team members only — this is the staff panel). The stored point is
-    // randomised to ~1km by the operator's browser, so this is approximate: a
-    // 1km circle marks the uncertainty, and the exact antenna is never known.
+    // randomised to ~5km by the operator's browser, so this is approximate: a
+    // 5km circle marks the uncertainty, and the exact antenna is never known.
     let _locViewMap = null;
     function viewNodeLocation(id) {
       const node = allNodes.find(n => String(n.id) === String(id));
@@ -2840,14 +2840,14 @@
             <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
           </div>
           <div id="loc-view-map"></div>
-          <div class="loc-view-note">Approximate — randomised to ~1&nbsp;km for privacy. The circle marks the uncertainty; the exact location is not stored.</div>
+          <div class="loc-view-note">Approximate — randomised to ~5&nbsp;km for privacy. The circle marks the uncertainty; the exact location is not stored.</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
       const c = [node.lat, node.lon];
-      const map = L.map('loc-view-map', { attributionControl: false }).setView(c, 13);
+      const map = L.map('loc-view-map', { attributionControl: false }).setView(c, 11);
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
-      L.circle(c, { radius: 1000, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.1 }).addTo(map);
+      L.circle(c, { radius: 5000, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.1 }).addTo(map);
       _locViewMap = map;
       setTimeout(() => map.invalidateSize(), 80);
     }
