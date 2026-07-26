@@ -841,9 +841,9 @@
       overlay.innerHTML = `
         <div class="modal loc-modal">
           <h3><i class="fas fa-location-dot"></i> Node location ${_loc.thenInstall ? '<span class="req">required</span>' : ''}</h3>
-          <p>Drag the pin (or click the map) so <b>your antenna sits at the centre</b> of the
-             <b>5&nbsp;km circle</b>. On save the stored point is <b>randomised anywhere inside the
-             circle</b> — your exact location is never sent or shown, so it stays private even from us.
+          <p>Drop the pin on your <b>real antenna location</b> (the centre of the <b>5&nbsp;km ring</b>).
+             When you save, your browser scrambles the stored point to a <b>random spot inside that ring</b>
+             — your exact location never leaves your device, so it stays private even from us.
              ${_loc.create ? 'Your node is created when you save this location.' : (_loc.thenInstall ? 'Set your location to continue to the installer.' : '')}</p>
           <div id="loc-map"></div>
           <div class="modal-actions">
