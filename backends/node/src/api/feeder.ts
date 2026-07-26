@@ -137,6 +137,11 @@ feederRouter.get('/api/feeder/me', async (c) => {
 const CreateNodeSchema = z.object({
   // Nodes are always auto-named {kind}-{user}-{uuid}.
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
+  // Location is REQUIRED at creation (already fuzzed client-side). Creating the
+  // row and its location together means a node is NEVER persisted without a
+  // location — a reload mid-create leaves nothing behind instead of an orphan.
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
 });
 feederRouter.post('/api/feeder/nodes', async (c) => {
   const userId = c.get('userId') as string;
@@ -152,8 +157,9 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
+    const located = await setNodeLocation(node.id, parsed.data.lat, parsed.data.lon);
     c.header('Cache-Control', 'no-store');
-    return c.json({ node: feederNodeView(node), token });
+    return c.json({ node: feederNodeView(located || node), token });
   } catch (err) {
     log.error({ err, userId }, 'Error creating feeder node');
     return c.json({ error: 'Failed to create node' }, 500);
