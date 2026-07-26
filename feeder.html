@@ -28,6 +28,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     /* Tokens mirror staff.html so the page looks native to the admin/site. */
     :root {
@@ -349,6 +351,10 @@
     .token-box code { flex: 1; word-break: break-all; color: #86efac; font-size: 0.82rem; }
     .modal-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
     .modal-actions .dl-btn { width: auto; margin: 0; }
+    .loc-modal { max-width: 620px; }
+    #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
+    #loc-map, #loc-map * { box-sizing: initial; } /* Leaflet needs its own box model */
+    .leaflet-container { background: #0b1220; }
     .node-ver {
       font-size: 0.72rem; color: #7dd3fc;
       background: var(--accent-soft);
@@ -561,10 +567,14 @@
     // ones minted this session in memory so a fresh install can be downloaded
     // right after create/rotate. Lost on reload → re-download rotates for a new key.
     const _nodeTokens = {};
+    let _feederNodes = [];
     const _kindLabel = { radio: 'Radio', pager: 'Pager', adsb: 'ADS-B' };
+    const LOC_RADIUS_M = 1000; // the 1km circle radius = the fuzz radius
+    const _loc = { map: null, marker: null };
 
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
+      _feederNodes = nodes;
       const nodesHtml = nodes.length
         ? `<div class="node-list">${nodes.map(_nodeRow).join('')}</div>`
         : `<div class="empty-state">
@@ -636,7 +646,9 @@
         statHtml = `<div class="node-stat">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
       }
 
+      const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const keyStr = node.tokenPrefix ? ` · key <code>${escapeHtml(node.tokenPrefix)}…</code>` : '';
+      const locStr = located ? ' · <i class="fas fa-location-dot"></i> located' : '';
       const dl = isRadio
         ? `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>
            <button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`
@@ -644,6 +656,7 @@
       const actions = `
         <div class="node-actions">
           ${dl}
+          <button class="mini-btn" title="${located ? 'Edit' : 'Set'} location" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${located ? 'Location' : 'Set location'}</button>
           <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
           <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i></button>
         </div>`;
@@ -653,7 +666,7 @@
           <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
           <div class="node-meta">
             <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
-            <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}${keyStr}</div>
+            <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}${keyStr}${locStr}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
             ${actions}
@@ -759,6 +772,99 @@
       });
     }
 
+    // Uniform-random point within `radiusM` metres of (lat,lon). r = R*sqrt(U)
+    // makes it uniform over AREA (not clustered at the centre). Runs in the
+    // browser so the real point is never sent — only the fuzzed result is.
+    function fuzzInCircle(lat, lon, radiusM) {
+      const r = radiusM * Math.sqrt(Math.random());
+      const t = 2 * Math.PI * Math.random();
+      const dLat = (r * Math.cos(t)) / 111320;
+      const dLon = (r * Math.sin(t)) / (111320 * Math.cos(lat * Math.PI / 180));
+      return { lat: lat + dLat, lon: lon + dLon };
+    }
+
+    // Map picker: drop a pin so the 1km circle covers the antenna; on save the
+    // point is randomised anywhere in that circle before it leaves the browser.
+    function openLocationPicker(nodeId) {
+      const node = (_feederNodes || []).find(n => n.id === nodeId);
+      const existing = node && typeof node.lat === 'number' ? [node.lat, node.lon] : null;
+      const overlay = document.createElement('div');
+      overlay.id = 'loc-modal';
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal loc-modal">
+          <h3><i class="fas fa-location-dot"></i> Node location</h3>
+          <p>Drag the pin (or click the map) so the <b>1&nbsp;km circle</b> covers your antenna.
+             On save the stored point is <b>randomised anywhere inside the circle</b> — your exact
+             location is never sent or shown, so it stays private even from us.</p>
+          <div id="loc-map"></div>
+          <div class="modal-actions">
+            <button class="dl-btn" onclick="saveLocation('${nodeId}',this)"><i class="fas fa-check"></i> Save location</button>
+            ${existing ? `<button class="mini-btn danger" onclick="clearLocation('${nodeId}',this)">Clear</button>` : ''}
+            <button class="mini-btn" onclick="closeLocationPicker()">Cancel</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const center = existing || [-33.8688, 151.2093];
+      const map = L.map('loc-map').setView(center, existing ? 13 : 10);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        { maxZoom: 19, attribution: '© OpenStreetMap © CARTO' }).addTo(map);
+      const marker = L.marker(center, { draggable: true }).addTo(map);
+      const circle = L.circle(center, { radius: LOC_RADIUS_M, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.08 }).addTo(map);
+      const sync = () => circle.setLatLng(marker.getLatLng());
+      marker.on('drag', sync); marker.on('dragend', sync);
+      map.on('click', (e) => { marker.setLatLng(e.latlng); sync(); });
+      _loc.map = map; _loc.marker = marker;
+      if (!existing && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const c = [pos.coords.latitude, pos.coords.longitude];
+          map.setView(c, 13); marker.setLatLng(c); circle.setLatLng(c);
+        }, () => {}, { timeout: 8000 });
+      }
+      setTimeout(() => map.invalidateSize(), 80);
+    }
+
+    function closeLocationPicker() {
+      if (_loc.map) { _loc.map.remove(); _loc.map = null; _loc.marker = null; }
+      const m = document.getElementById('loc-modal'); if (m) m.remove();
+    }
+
+    async function putLocation(nodeId, body) {
+      const jwt = await getToken();
+      const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/location`, {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
+
+    async function saveLocation(nodeId, btn) {
+      if (!_loc.marker) return;
+      const c = _loc.marker.getLatLng();
+      const f = fuzzInCircle(c.lat, c.lng, LOC_RADIUS_M);
+      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+      try {
+        await putLocation(nodeId, { lat: f.lat, lon: f.lon });
+        showToast('Location saved (randomised for privacy).', 'success');
+        closeLocationPicker();
+        await refreshNodes();
+      } catch (e) {
+        showToast('Could not save location.', 'error');
+        btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Save location';
+      }
+    }
+
+    async function clearLocation(nodeId, btn) {
+      btn.disabled = true;
+      try {
+        await putLocation(nodeId, { lat: null, lon: null });
+        showToast('Location cleared.', 'success');
+        closeLocationPicker();
+        await refreshNodes();
+      } catch (e) { showToast('Could not clear location.', 'error'); btn.disabled = false; }
+    }
+
     // Download a node's installer (POST, token in body). Uses the session token if
     // known; otherwise rotates to mint a fresh one first.
     async function downloadInstaller(platform, nodeId, btn) {
@@ -850,11 +956,12 @@
         const region = document.getElementById('nodes-region');
         if (!region) return;
         const nodes = data.nodes || [];
+        _feederNodes = nodes;
         region.innerHTML = nodes.length
           ? `<div class="node-list">${nodes.map(_nodeRow).join('')}</div>`
           : `<div class="empty-state">
                <i class="fas fa-satellite-dish"></i>
-               <p>No node connected yet — download and run the installer to get started.</p>
+               <p>No nodes yet — add one above to get its installer.</p>
              </div>`;
       } catch (e) { /* keep last render on transient errors */ }
     }

@@ -27,6 +27,7 @@ import {
   getNode,
   rotateNodeToken,
   deleteNode,
+  setNodeLocation,
   countNodesForUser,
   MAX_NODES_PER_USER,
   isNodeKind,
@@ -98,6 +99,8 @@ function feederNodeView(n: NodeRow) {
     enabled: n.enabled,
     feedEnabled: n.feed_enabled,
     tokenPrefix: n.token_prefix,
+    lat: n.lat,
+    lon: n.lon,
     online,
     lastSeenAt: n.last_seen_at,
     agentVersion: n.agent_version,
@@ -132,8 +135,7 @@ feederRouter.get('/api/feeder/me', async (c) => {
 // Mints the node's own token, returned ONCE (bake into the installer now).
 // ---------------------------------------------------------------------------
 const CreateNodeSchema = z.object({
-  // Optional — nodes are auto-named {kind}-{user}-{uuid} when no name is given.
-  name: z.string().max(120).optional(),
+  // Nodes are always auto-named {kind}-{user}-{uuid}.
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
 });
 feederRouter.post('/api/feeder/nodes', async (c) => {
@@ -146,7 +148,7 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached' }, 429);
     }
-    const name = parsed.data.name?.trim() || autoNodeName(parsed.data.kind, await getUsername(userId));
+    const name = autoNodeName(parsed.data.kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
@@ -347,6 +349,29 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error rotating feeder node token');
     return c.json({ error: 'Failed to rotate token' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/feeder/nodes/:id/location — set the node's FUZZED location.
+// The browser has already randomised the point within ~1km of the real antenna,
+// so what arrives here is deliberately imprecise. Pass null lat/lon to clear.
+// ---------------------------------------------------------------------------
+const LocationSchema = z.object({
+  lat: z.number().min(-90).max(90).nullable(),
+  lon: z.number().min(-180).max(180).nullable(),
+});
+feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  const parsed = LocationSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: 'invalid location' }, 400);
+  try {
+    const updated = await setNodeLocation(node.id, parsed.data.lat, parsed.data.lon);
+    return c.json({ node: updated ? feederNodeView(updated) : null });
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error setting node location');
+    return c.json({ error: 'Failed to set location' }, 500);
   }
 });
 

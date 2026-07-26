@@ -77,6 +77,8 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     notes: node.notes,
     createdAt: node.created_at,
     tokenPrefix: node.token_prefix,
+    lat: node.lat,
+    lon: node.lon,
     online: live.online,
     status: live.status,
     lastStatusAt: live.lastStatusAt,
@@ -84,7 +86,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
 }
 
 const PatchSchema = z.object({
-  name: z.string().max(120).optional(),
+  // Node names are always auto-generated ({kind}-{user}-{uuid}); no rename.
   enabled: z.boolean().optional(),
   // Whether decoded calls are forwarded to the central rdio. Off by default so
   // an operator can verify config + reception before feeding the live system.
@@ -357,8 +359,6 @@ nodesRouter.get('/api/nodes/:id/stats', requireRole(canManageNodes), async (c) =
 // ---------------------------------------------------------------------------
 const CreateSchema = z.object({
   userId: z.string().min(1),
-  // Optional — auto-named {kind}-{user}-{uuid} when omitted.
-  name: z.string().max(120).optional(),
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
 });
 nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
@@ -371,7 +371,7 @@ nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached for this user' }, 429);
     }
-    const name = parsed.data.name?.trim() || autoNodeName(kind, await getUsername(userId));
+    const name = autoNodeName(kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const node = await createNode(userId, name, kind, tokenHash, tokenPrefix);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);

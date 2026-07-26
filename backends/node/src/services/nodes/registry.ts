@@ -50,6 +50,10 @@ export interface NodeRow {
   // Lookup prefix of this node's token (for UI display / logs). The hash is
   // never selected into API paths.
   token_prefix: string | null;
+  // PRIVACY-FUZZED location (randomised within ~1km of the real antenna,
+  // client-side) — imprecise by design; never an exact position. Null = unset.
+  lat: number | null;
+  lon: number | null;
 }
 
 export interface HelloMeta {
@@ -63,7 +67,7 @@ export interface HelloMeta {
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at, token_prefix`;
+  last_seen_at, notes, created_at, token_prefix, lat, lon`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -263,6 +267,24 @@ export async function updateNode(
   const res = await pool.query<NodeRow>(
     `UPDATE nodes SET ${sets.join(', ')} WHERE id = $${i} RETURNING ${NODE_COLS}`,
     vals,
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Set (or clear, with nulls) a node's fuzzed location. The caller has already
+ * randomised the point client-side; this just stores the imprecise result.
+ */
+export async function setNodeLocation(
+  id: string,
+  lat: number | null,
+  lon: number | null,
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes SET lat = $2, lon = $3 WHERE id = $1 RETURNING ${NODE_COLS}`,
+    [id, lat, lon],
   );
   return res.rows[0] ?? null;
 }
