@@ -19,10 +19,12 @@
  */
 import { Hono } from 'hono';
 import type { BodyData } from 'hono/utils/body';
+import { z } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { bumpNodeCallStat } from '../services/nodes/registry.js';
+import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 
 export const nodeIngestRouter = new Hono();
@@ -164,6 +166,151 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
   );
   return c.json({ error: 'upstream rejected', status: resp.status }, 502);
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/node-ingest/pager-upload
+//
+// A PAGER feeder node decodes POCSAG locally (rtl_fm | multimon-ng) and relays
+// each decoded message here. We forward it into the ONE central Pagermon with
+// the server-held apikey (see globalConfig.getPagerIngest / config.PAGERMON_
+// INGEST_*), so the Pagermon key stays server-side and the node's feed toggle
+// cuts the feed — the SAME relay model as call-upload. Body is JSON (messages
+// are tiny), NOT multipart.
+// ---------------------------------------------------------------------------
+
+// A pager message is small — a few hundred bytes. Cap hard well below that so a
+// hostile/buggy node can't stream a giant body into RAM.
+const MAX_PAGER_BYTES = 64 * 1024;
+
+const PagerMsgSchema = z.object({
+  // POCSAG capcode / address (digits). Kept as a string — Pagermon treats it as text.
+  address: z.string().min(1).max(32),
+  // Decoder function bits 0-3 (optional).
+  function: z.union([z.number().int().min(0).max(3), z.string().max(2)]).optional(),
+  // The decoded message text.
+  message: z.string().max(4000).default(''),
+  // ISO-8601 timestamp from the agent; we default to now() if absent/garbage.
+  timestamp: z.string().max(40).optional(),
+  // A short label of the source reader (e.g. "NSWRFS" / "FRNSW").
+  source: z.string().max(64).default('pager'),
+  // The frequency in MHz the message was heard on (optional, informational).
+  freqMhz: z.number().optional(),
+});
+
+nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
+  // 1. Forward target must be configured (DB row first, then env).
+  const ingest = await getPagerIngest();
+  if (!ingest.url || !ingest.apiKey) {
+    return c.json({ error: 'pagermon ingest not configured' }, 503);
+  }
+
+  // 2-3. Node credentials + per-node token resolve (role gated), TOFU install
+  //      match — identical to call-upload.
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') {
+      return c.json({ error: 'contributor role removed' }, 403);
+    }
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  // A radio token relaying to the pager route (or vice-versa) is a
+  // misconfiguration — warn but don't hard-fail; the message still forwards.
+  if (r.kind !== 'pager') {
+    log.warn(`pager relay: node kind=${r.kind} not 'pager' node=${r.nodeId.slice(0, 8)}`);
+  }
+  const node = { id: r.nodeId, feed_enabled: r.feedEnabled };
+
+  // 4. Size guard — require Content-Length and cap it (same rationale as the
+  //    radio route: closes the chunked-body bypass).
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > MAX_PAGER_BYTES) {
+    return c.json({ error: 'message too large' }, 413);
+  }
+
+  // 5. Parse + validate the JSON message.
+  let parsed: z.infer<typeof PagerMsgSchema>;
+  try {
+    parsed = PagerMsgSchema.parse(await c.req.json());
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+
+  // 6. Feed gate — accept + COUNT but don't forward when the feed is off (so
+  //    reception still shows in the node's stats), ack so the queue drains.
+  if (!node.feed_enabled) {
+    try {
+      await bumpNodeCallStat(node.id, 0);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed (feed off)');
+    }
+    return c.json({ ok: true, fed: false });
+  }
+
+  // 7. Forward to central Pagermon. Its ingest API is POST /api/messages with
+  //    address/message/datetime/source. We send the apikey both as the
+  //    Authorization header (Pagermon 1.x) and an `apikey` field (older) for
+  //    compatibility.
+  const datetime = normalisePagerDatetime(parsed.timestamp);
+  const body = new URLSearchParams({
+    address: parsed.address,
+    message: parsed.message,
+    datetime,
+    source: parsed.source,
+    apikey: ingest.apiKey,
+  });
+  const target = `${ingest.url.replace(/\/$/, '')}/api/messages`;
+  let resp: Response;
+  try {
+    resp = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: ingest.apiKey,
+      },
+      body,
+    });
+  } catch (err) {
+    log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: fetch failed');
+    return c.json({ error: 'relay failed' }, 502);
+  }
+
+  if (resp.ok) {
+    hub.recordUpload(node.id);
+    try {
+      await bumpNodeCallStat(node.id, 0);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed');
+    }
+    log.info(`pager relay ok node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source}`);
+    return c.json({ ok: true });
+  }
+
+  const snippet = (await resp.text().catch(() => '')).slice(0, 200);
+  log.warn(`pager relay: upstream ${resp.status} node=${node.id.slice(0, 8)} ${snippet}`);
+  return c.json({ error: 'upstream rejected', status: resp.status }, 502);
+});
+
+/** Coerce the agent-supplied timestamp into an ISO string Pagermon accepts,
+ *  falling back to now() when it's absent or unparseable. */
+function normalisePagerDatetime(ts: string | undefined): string {
+  if (ts) {
+    const d = new Date(ts);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/node-ingest/capabilities

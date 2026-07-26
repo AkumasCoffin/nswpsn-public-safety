@@ -602,6 +602,12 @@
     const _nodeTokens = {};
     let _feederNodes = [];
     const _kindLabel = { radio: 'Radio', pager: 'Pager', adsb: 'ADS-B' };
+    // Kinds with a real agent + installer today, and the platforms each supports.
+    const _kindAgent = {
+      radio: { platforms: ['windows', 'linux'] },
+      pager: { platforms: ['linux'] }, // rtl_fm | multimon-ng is a Linux stack
+    };
+    const hasAgent = (kind) => !!_kindAgent[kind];
     const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null };
 
     function renderRadioCard(data) {
@@ -628,7 +634,7 @@
           <div class="add-node">
             <select id="new-node-kind" aria-label="Node type">
               <option value="radio">Radio (SDR-Trunk)</option>
-              <option value="pager">Pager — coming soon</option>
+              <option value="pager">Pager (Pagermon)</option>
               <option value="adsb">ADS-B / aircraft — coming soon</option>
             </select>
             <button class="dl-btn" onclick="addNode(this)"><i class="fas fa-plus"></i> Add node</button>
@@ -646,15 +652,26 @@
       const lastSeen = fmtLastSeen(node.lastSeenAt);
       const kind = node.kind || 'radio';
       const isRadio = kind === 'radio';
+      const isPager = kind === 'pager';
+      const agentCfg = _kindAgent[kind];
       const agent = node.agentVersion;
       const agentHtml = agent ? `<span class="node-ver">agent ${escapeHtml(agent)}</span>` : '';
 
       const chip = (cls, label) => `<span class="node-chip ${cls}">${escapeHtml(label)}</span>`;
       let chips;
-      if (!isRadio) {
+      if (!agentCfg) {
         chips = chip('', 'agent coming soon');
       } else if (!online) {
         chips = chip('off', 'Offline');
+      } else if (isPager) {
+        let out = '';
+        if (!node.sdrUp) out += chip('warn', 'No readers');
+        else if (node.decoding) out += chip('ok', 'Decoding POCSAG');
+        else out += chip('', 'Idle');
+        if (node.feedEnabled === false) out += chip('off', 'Feed off');
+        else if (node.uploading) out += chip('ok', 'Uploading to Pagermon');
+        else out += chip('', 'Feed on');
+        chips = out;
       } else {
         let out = '';
         if (!node.sdrUp) out += chip('warn', 'SDR-Trunk down');
@@ -669,9 +686,16 @@
       }
 
       let statHtml = '';
-      if (online && isRadio) {
-        const calls = Number(node.callsLast10m || 0);
-        const parts = [`<b>${calls}</b> call${calls === 1 ? '' : 's'} uploaded · last 10 min`];
+      if (online && agentCfg) {
+        const parts = [];
+        if (isPager) {
+          const msgs = Number(node.messagesLast10m ?? node.callsLast10m ?? 0);
+          parts.push(`<b>${msgs}</b> message${msgs === 1 ? '' : 's'} · last 10 min`);
+          if (typeof node.readersUp === 'number') parts.push(`<b>${node.readersUp}</b> reader${node.readersUp === 1 ? '' : 's'} running`);
+        } else {
+          const calls = Number(node.callsLast10m || 0);
+          parts.push(`<b>${calls}</b> call${calls === 1 ? '' : 's'} uploaded · last 10 min`);
+        }
         if (typeof node.queueDepth === 'number' && node.queueDepth > 0) {
           parts.push(`<b>${node.queueDepth}</b> queued`);
         }
@@ -681,10 +705,11 @@
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const keyStr = node.tokenPrefix ? ` · key <code>${escapeHtml(node.tokenPrefix)}…</code>` : '';
       const locStr = located ? ' · <i class="fas fa-location-dot"></i> located' : '';
-      const dl = isRadio
-        ? `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>
-           <button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`
-        : '';
+      const _dlBtn = {
+        windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>`,
+        linux: `<button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`,
+      };
+      const dl = agentCfg ? agentCfg.platforms.map((p) => _dlBtn[p]).join('\n           ') : '';
       const actions = `
         <div class="node-actions">
           ${dl}
@@ -793,18 +818,25 @@
     function showInstallModal(node) {
       const existing = document.getElementById('token-modal');
       if (existing) existing.remove();
-      const isRadio = (node.kind || 'radio') === 'radio';
+      const kind = node.kind || 'radio';
+      const agentCfg = _kindAgent[kind];
+      const _label = { windows: 'Windows installer', linux: 'Linux installer' };
+      const _icon = { windows: 'fa-windows', linux: 'fa-linux' };
+      const dlBtns = agentCfg
+        ? agentCfg.platforms.map((p) => `<button class="dl-btn" onclick="downloadInstaller('${p}','${node.id}',this)"><i class="fab ${_icon[p]}"></i> ${_label[p]}</button>`).join('\n            ')
+        : `<span class="node-chip">agent coming soon for this type</span>`;
+      const hint = kind === 'pager'
+        ? `<p>Run it on your Linux box (Raspberry Pi or PC) with your RTL-SDR dongle(s) plugged in — it installs rtl-sdr + multimon-ng, auto-detects your SDRs and starts decoding. Your node's key is baked in, nothing to copy.</p>`
+        : `<p>Download the installer and run it — your node's key is already baked in, nothing to copy.</p>`;
       const el = document.createElement('div');
       el.id = 'token-modal';
       el.className = 'modal-overlay';
       el.innerHTML = `
         <div class="modal">
           <h3><i class="fas fa-circle-check"></i> ${escapeHtml(node.name || 'Node')} ready</h3>
-          <p>Download the installer and run it — your node's key is already baked in, nothing to copy.</p>
+          ${hint}
           <div class="modal-actions">
-            ${isRadio ? `<button class="dl-btn" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i> Windows installer</button>
-            <button class="dl-btn" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i> Linux installer</button>`
-              : `<span class="node-chip">agent coming soon for this type</span>`}
+            ${dlBtns}
             <button class="mini-btn" onclick="document.getElementById('token-modal').remove()">Close</button>
           </div>
         </div>`;

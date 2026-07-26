@@ -48,8 +48,11 @@ npm run build
 # still runs (existing binaries just aren't refreshed). The big SDR-Trunk
 # runtime + rdio binary are placed in the same dir once, by hand.
 AGENT_SRC="$REPO_ROOT/feeder-nodes/radio-node"
+PAGER_SRC="$REPO_ROOT/feeder-nodes/pager-node"
 DOWNLOADS_DIR="$REPO_ROOT/downloads"
 EXPECTED_AGENTS="nodeagent-linux-amd64 nodeagent-windows-amd64.exe nodeagent-linux-arm64"
+# Pager agent: Linux only (rtl_fm | multimon-ng stack), amd64 + arm64 (Pi).
+PAGER_AGENTS="nodeagent-pager-linux-amd64 nodeagent-pager-linux-arm64"
 export PATH="$PATH:/snap/bin"
 if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
   mkdir -p "$DOWNLOADS_DIR"
@@ -85,6 +88,32 @@ if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
     echo "[deploy] node-agent binaries + sha256 sidecars updated in $DOWNLOADS_DIR"
   fi
 
+  # ---- Pager node agent (separate module + binary, Linux amd64/arm64) --------
+  if [ -d "$PAGER_SRC" ]; then
+    PAGER_VERSION="$(node -e 'process.stdout.write(String((require(process.argv[1])["pager-agent"]||{}).version||"0.0.0"))' "$NODE_DIR/assets/node-versions.json" 2>/dev/null || echo 0.0.0)"
+    PAGER_BUILT=""
+    if [ -x "$DOWNLOADS_DIR/nodeagent-pager-linux-amd64" ]; then
+      PAGER_BUILT="$("$DOWNLOADS_DIR/nodeagent-pager-linux-amd64" version 2>/dev/null | sed -nE 's/^pager-node ([^ ]+).*/\1/p')"
+    fi
+    if [ -n "$PAGER_VERSION" ] && [ "$PAGER_BUILT" = "$PAGER_VERSION" ]; then
+      echo "[deploy] pager-agent v$PAGER_VERSION already built — skipping rebuild."
+    else
+      PLDFLAGS="-s -w -X github.com/AkumasCoffin/nswpsn-node/pager-node/internal/version.Version=$PAGER_VERSION"
+      echo "[deploy] building pager-agent v$PAGER_VERSION (was '${PAGER_BUILT:-none}')…"
+      (
+        cd "$PAGER_SRC"
+        GOOS=linux GOARCH=amd64 go build -ldflags "$PLDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-pager-linux-amd64" ./cmd/nodeagent
+        GOOS=linux GOARCH=arm64 go build -ldflags "$PLDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-pager-linux-arm64" ./cmd/nodeagent
+      )
+      for b in $PAGER_AGENTS; do
+        if [ -f "$DOWNLOADS_DIR/$b" ]; then
+          ( cd "$DOWNLOADS_DIR" && sha256sum "$b" | awk '{print $1}' > "$b.sha256" )
+        fi
+      done
+      echo "[deploy] pager-agent binaries + sha256 sidecars updated in $DOWNLOADS_DIR"
+    fi
+  fi
+
   # Remove any stale agent binaries no longer in the built set (e.g. an arch we
   # stopped shipping) so downloads/ never serves an orphaned old build. A
   # `<name>.sha256` sidecar is kept iff its base binary is still expected.
@@ -92,7 +121,7 @@ if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
     [ -e "$f" ] || continue
     base="$(basename "$f")"
     check="${base%.sha256}"
-    case " $EXPECTED_AGENTS " in
+    case " $EXPECTED_AGENTS $PAGER_AGENTS " in
       *" $check "*) ;;
       *) echo "[deploy] removing stale $base"; rm -f "$f" ;;
     esac

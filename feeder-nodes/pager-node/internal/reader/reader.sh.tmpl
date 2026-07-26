@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+rtl_fm -d '{{.Serial}}' -f {{.FreqMHz}}M -M fm -s 22050 -g 42 - \
+ | multimon-ng {{.ProtoArgs}} -f alpha -t raw - \
+ | while IFS= read -r line; do
+     curl -s --max-time 5 '{{.RelayURL}}' \
+       --data-binary "$line" \
+       -H 'X-Pager-Source: {{.Label}}' \
+       -H "X-Pager-Freq: {{.FreqMHz}}" >/dev/null || true
+   done
