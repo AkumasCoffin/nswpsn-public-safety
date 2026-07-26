@@ -601,7 +601,7 @@
     // right after create/rotate. Lost on reload → re-download rotates for a new key.
     const _nodeTokens = {};
     let _feederNodes = [];
-    const _kindLabel = { radio: 'Radio', pager: 'Pager', adsb: 'ADS-B' };
+    const _kindLabel = { radio: 'PSN', pager: 'Pager', adsb: 'ADSB' };
     // Kinds with a real agent + installer today, and the platforms each supports.
     const _kindAgent = {
       radio: { platforms: ['windows', 'linux'] },
@@ -633,9 +633,9 @@
 
           <div class="add-node">
             <select id="new-node-kind" aria-label="Node type">
-              <option value="radio">Radio (SDR-Trunk)</option>
-              <option value="pager">Pager (Pagermon)</option>
-              <option value="adsb">ADS-B / aircraft — coming soon</option>
+              <option value="radio">PSN</option>
+              <option value="pager">Pager</option>
+              <option value="adsb">ADSB — coming soon</option>
             </select>
             <button class="dl-btn" onclick="addNode(this)"><i class="fas fa-plus"></i> Add node</button>
           </div>
@@ -669,12 +669,12 @@
         else if (node.decoding) out += chip('ok', 'Decoding POCSAG');
         else out += chip('', 'Idle');
         if (node.feedEnabled === false) out += chip('off', 'Feed off');
-        else if (node.uploading) out += chip('ok', 'Uploading to Pagermon');
+        else if (node.uploading) out += chip('ok', 'Uploading');
         else out += chip('', 'Feed on');
         chips = out;
       } else {
         let out = '';
-        if (!node.sdrUp) out += chip('warn', 'SDR-Trunk down');
+        if (!node.sdrUp) out += chip('warn', 'Receiver down');
         else if (node.decoding) out += chip('ok', 'Decoding');
         else out += chip('', 'Idle');
         if (node.feedEnabled === false) out += chip('off', 'Feed off');
@@ -973,9 +973,10 @@
         const blob = await res.blob();
 
         // Prefer the server-provided filename (Content-Disposition), else a
-        // sensible per-platform default. The header is only readable if the
-        // backend exposes it via Access-Control-Expose-Headers.
-        let filename = platform === 'windows' ? 'install-nswpsn-node.ps1' : 'install-nswpsn-node.sh';
+        // sensible per-platform default that still names the node kind so a
+        // radio vs pager installer is identifiable.
+        const kind = (n && n.kind) || 'radio';
+        let filename = `install-nswpsn-${kind}-node.${platform === 'windows' ? 'ps1' : 'sh'}`;
         const cd = res.headers.get('Content-Disposition') || '';
         const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
         if (m && m[1]) { try { filename = decodeURIComponent(m[1].trim()); } catch (e) { filename = m[1].trim(); } }
