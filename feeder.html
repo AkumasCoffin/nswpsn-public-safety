@@ -354,9 +354,11 @@
     .modal-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
     .modal-actions .dl-btn { width: auto; margin: 0; }
     /* Per-platform download + its run instructions in the install modal. */
-    .dl-list { display: flex; flex-direction: column; gap: 0.8rem; margin: 0.6rem 0 0.9rem; }
-    .dl-block { display: flex; flex-direction: column; gap: 0.35rem; }
-    .dl-block .dl-btn { width: auto; align-self: flex-start; margin: 0; }
+    .dl-list { display: flex; flex-direction: column; gap: 0.7rem; margin: 0.6rem 0 0.9rem; }
+    .dl-block { display: flex; flex-direction: column; gap: 0.3rem; }
+    /* Compact download buttons in the list (the base .dl-btn is a big CTA). */
+    .dl-block .dl-btn { flex: 0 0 auto; width: auto; align-self: flex-start; margin: 0; padding: 0.45rem 0.85rem; font-size: 0.84rem; border-radius: 8px; gap: 0.5rem; }
+    .dl-block .dl-btn i { font-size: 0.95rem; }
     .dl-run { font-size: 0.8rem; color: var(--text-soft); line-height: 1.5; }
     .dl-run code { background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); border-radius: 5px; padding: 0.1rem 0.4rem; font-size: 0.76rem; color: var(--text-primary); user-select: all; }
     .dl-btn.danger { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.45); color: #fca5a5; }
