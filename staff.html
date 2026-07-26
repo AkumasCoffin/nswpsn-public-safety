@@ -322,6 +322,19 @@
       height: 1px;
       background: linear-gradient(90deg, var(--border-subtle), transparent);
     }
+    /* Data-source sub-groups (Traffic, Power, Weather, …) inside the section. */
+    .dev-subgroup { margin-bottom: 1.5rem; }
+    .dev-subgroup:last-child { margin-bottom: 0; }
+    .dev-subgroup-h {
+      display: flex; align-items: center; gap: 0.6rem;
+      font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+      font-weight: 600; color: var(--text-soft); margin: 0 0 0.7rem;
+    }
+    .dev-subgroup-h .count {
+      font-size: 0.66rem; letter-spacing: 0.04em; color: var(--text-soft);
+      background: rgba(148,163,184,0.12); border: 1px solid var(--border-subtle);
+      border-radius: 999px; padding: 0.02rem 0.45rem; font-weight: 600;
+    }
 
     /* Card grid — wider cards, more breathing room. */
     .dev-card-grid {
@@ -1649,7 +1662,7 @@
         <div class="dev-card-grid" id="dev-internals-grid"></div>
 
         <h3 class="dev-section-h">Data Sources</h3>
-        <div class="dev-card-grid" id="dev-sources-grid"></div>
+        <div id="dev-sources-grid"></div>
       </div>
 
       <!-- Nodes Tab -->
@@ -2584,27 +2597,38 @@
       // registers them. weather_radar is RainViewer tile metadata, not
       // an incident feed — its freshness is uninteresting for ops.
       const HIDDEN_SOURCES = new Set(['weather_radar']);
-      const order = [
-        'rfs_incidents', 'bom_warnings', 'pager',
-        'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
-        'traffic_fire', 'traffic_majorevent', 'traffic_cameras',
-        'beachwatch', 'beachsafe',
-        'weather_current',
-        'aviation_cameras',
-        'endeavour_current', 'endeavour_planned', 'endeavour_maintenance',
-        'ausgrid', 'ausgrid_stats',
-        'essential_current', 'essential_future',
+      // Data sources grouped by upstream provider/category, in display order.
+      // A source not in any group falls into "Other" (so new backend sources
+      // still render without a UI change).
+      const _sourceGroups = [
+        { label: 'Traffic — LiveTraffic', names: ['traffic_incidents', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent', 'traffic_cameras'] },
+        { label: 'Fire & emergency', names: ['rfs_incidents', 'firms_hotspots', 'pager'] },
+        { label: 'Power outages', names: ['endeavour_current', 'endeavour_planned', 'endeavour_maintenance', 'ausgrid', 'ausgrid_stats', 'essential_current', 'essential_future'] },
+        { label: 'Weather', names: ['bom_warnings', 'weather_current'] },
+        { label: 'Beach', names: ['beachwatch', 'beachsafe'] },
+        { label: 'Aviation', names: ['aviation_cameras', 'adsb_aircraft'] },
+        { label: 'Community', names: ['user_incidents'] },
       ];
-      // Stable known sources first, then any unknown ones the backend
-      // gained without a UI update — appended in alphabetical order so
-      // the grid still renders new sources without code changes.
-      const known = new Set(order);
-      const extras = Object.keys(sources).filter(n => !known.has(n) && !HIDDEN_SOURCES.has(n)).sort();
+      const _grid = (names) => `<div class="dev-card-grid">${names.map(n => _sourceCard(n, sources[n])).join('')}</div>`;
       const srcGrid = document.getElementById('dev-sources-grid');
-      if (srcGrid) srcGrid.innerHTML = [...order, ...extras]
-        .filter(name => sources[name] && !HIDDEN_SOURCES.has(name))
-        .map(name => _sourceCard(name, sources[name]))
-        .join('');
+      if (srcGrid) {
+        const grouped = new Set();
+        let html = '';
+        for (const g of _sourceGroups) {
+          const present = g.names.filter(n => sources[n] && !HIDDEN_SOURCES.has(n));
+          if (!present.length) continue;
+          present.forEach(n => grouped.add(n));
+          html += `<div class="dev-subgroup"><div class="dev-subgroup-h">${escapeHtml(g.label)} <span class="count">${present.length}</span></div>${_grid(present)}</div>`;
+        }
+        // Any present source not placed in a group → "Other" (alphabetical).
+        const others = Object.keys(sources)
+          .filter(n => sources[n] && !grouped.has(n) && !HIDDEN_SOURCES.has(n))
+          .sort();
+        if (others.length) {
+          html += `<div class="dev-subgroup"><div class="dev-subgroup-h">Other <span class="count">${others.length}</span></div>${_grid(others)}</div>`;
+        }
+        srcGrid.innerHTML = html || `<div class="nd-empty" style="border:none;background:none;">No data sources reported.</div>`;
+      }
     }
     
     // === Nodes tab — feeder node management ============================
