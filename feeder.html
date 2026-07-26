@@ -602,8 +602,7 @@
     const _nodeTokens = {};
     let _feederNodes = [];
     const _kindLabel = { radio: 'Radio', pager: 'Pager', adsb: 'ADS-B' };
-    const LOC_RADIUS_M = 5000; // the 5km circle radius = the max fuzz distance
-    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, create: false, createKind: null };
+    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null };
 
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
@@ -708,28 +707,32 @@
         </div>`;
     }
 
-    // Start creating a node (type only — auto-named server-side). We do NOT
-    // create it yet: the location picker collects a location first, then the
-    // node is created WITH that location in one request (see saveLocation), so
-    // a reload mid-create never leaves a locationless orphan.
-    function addNode() {
+    // Create a node (type only — auto-named server-side), then OFFER to set its
+    // antenna location. Location is OPTIONAL (used for coverage + channel
+    // tuning), so the picker can be skipped straight to the installer.
+    async function addNode(btn) {
       const kind = document.getElementById('new-node-kind').value;
-      openLocationPicker(null, { create: true, kind });
-    }
-
-    // Create the node together with its (already-fuzzed) location.
-    async function createNodeWithLocation(kind, lat, lon) {
-      const jwt = await getToken();
-      if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); throw new Error('login'); }
-      const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind, lat, lon }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      _nodeTokens[data.node.id] = data.token;
-      return data.node;
+      const original = btn ? btn.innerHTML : '';
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding…'; }
+      try {
+        const jwt = await getToken();
+        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        _nodeTokens[data.node.id] = data.token;
+        await refreshNodes();
+        // Ask for the antenna location (optional) — Skip continues to the installer.
+        openLocationPicker(data.node.id, { thenInstall: true, node: data.node });
+      } catch (e) {
+        showToast(`Could not add node: ${e.message}`, 'error');
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = original; }
+      }
     }
 
     // Rotate a node's token (owner-scoped). Returns the new plaintext or null.
@@ -808,47 +811,30 @@
       document.body.appendChild(el);
     }
 
-    // Uniform-random point within `radiusM` metres of (lat,lon). r = R*sqrt(U)
-    // makes it uniform over AREA (not clustered at the centre). Runs in the
-    // browser so the real point is never sent — only the fuzzed result is.
-    function fuzzInCircle(lat, lon, radiusM) {
-      const r = radiusM * Math.sqrt(Math.random());
-      const t = 2 * Math.PI * Math.random();
-      const dLat = (r * Math.cos(t)) / 111320;
-      const dLon = (r * Math.sin(t)) / (111320 * Math.cos(lat * Math.PI / 180));
-      return { lat: lat + dLat, lon: lon + dLon };
-    }
-
-    // Map picker: drop a pin so the 5km circle covers the antenna; on save the
-    // point is randomised anywhere in that circle before it leaves the browser.
+    // Map picker: drop a pin on the EXACT antenna location. Used to calculate
+    // coverage and improve channel tuning. Location is OPTIONAL — the picker can
+    // be skipped (thenInstall continues to the installer).
     function openLocationPicker(nodeId, opts) {
-      closeLocationPicker(); // never stack two pickers (auto-resume + explicit)
-      _loc.create = !!(opts && opts.create);
-      _loc.createKind = (opts && opts.kind) || null;
+      closeLocationPicker(); // never stack two pickers
       _loc.nodeId = nodeId || null;
-      // create + the download gate both require a location before proceeding.
-      _loc.thenInstall = _loc.create || !!(opts && opts.thenInstall);
+      _loc.thenInstall = !!(opts && opts.thenInstall);
       _loc.node = (opts && opts.node) || (_feederNodes || []).find(n => n.id === nodeId) || (nodeId ? { id: nodeId } : null);
       const node = (_feederNodes || []).find(n => n.id === nodeId);
       const existing = node && typeof node.lat === 'number' ? [node.lat, node.lon] : null;
-      // Cancel is safe when nothing is created yet (create mode) or when just
-      // editing an already-located node; it's withheld only for a real node
-      // that still lacks a location (must set one).
-      const canCancel = _loc.create || !_loc.thenInstall;
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
       overlay.className = 'modal-overlay';
       overlay.innerHTML = `
         <div class="modal loc-modal">
-          <h3><i class="fas fa-location-dot"></i> Node location ${_loc.thenInstall ? '<span class="req">required</span>' : ''}</h3>
-          <p>Drop the pin on your <b>real antenna location</b> (the centre of the <b>5&nbsp;km ring</b>).
-             When you save, your browser scrambles the stored point to a <b>random spot inside that ring</b>
-             — your exact location never leaves your device, so it stays private even from us.
-             ${_loc.create ? 'Your node is created when you save this location.' : (_loc.thenInstall ? 'Set your location to continue to the installer.' : '')}</p>
+          <h3><i class="fas fa-location-dot"></i> Antenna location</h3>
+          <p>Drop the pin on your <b>exact antenna location</b> (drag it, or click the map).
+             It's used to <b>calculate coverage</b> and for <b>more exact channel tuning</b>.
+             Optional — you can set it later, and your node still works without it.</p>
           <div id="loc-map"></div>
           <div class="modal-actions">
-            <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> ${_loc.create ? 'Create node' : 'Save location'}</button>
-            ${canCancel ? `<button class="mini-btn" onclick="closeLocationPicker()">Cancel</button>` : ''}
+            <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> Save location</button>
+            ${existing ? `<button class="mini-btn danger" onclick="clearLocation(this)">Clear</button>` : ''}
+            <button class="mini-btn" onclick="skipLocation()">${_loc.thenInstall ? 'Skip for now' : 'Cancel'}</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
@@ -857,15 +843,21 @@
         { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
         { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
-      const map = L.map('loc-map', { layers: [dark] }).setView(center, existing ? 11 : 10);
+      const map = L.map('loc-map', { layers: [dark] }).setView(center, existing ? 14 : 10);
       L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
       const marker = L.marker(center, { draggable: true }).addTo(map);
-      const circle = L.circle(center, { radius: LOC_RADIUS_M, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.08 }).addTo(map);
-      const sync = () => circle.setLatLng(marker.getLatLng());
-      marker.on('drag', sync); marker.on('dragend', sync);
-      map.on('click', (e) => { marker.setLatLng(e.latlng); sync(); });
+      map.on('click', (e) => { marker.setLatLng(e.latlng); });
       _loc.map = map; _loc.marker = marker;
       setTimeout(() => map.invalidateSize(), 80);
+    }
+
+    // Skip/cancel the picker; in the create flow continue to the installer.
+    function skipLocation() {
+      const thenInstall = _loc.thenInstall;
+      const node = _loc.node;
+      const nodeId = _loc.nodeId;
+      closeLocationPicker();
+      if (thenInstall) showInstallModal(node || { id: nodeId });
     }
 
     function closeLocationPicker() {
@@ -885,46 +877,39 @@
 
     async function saveLocation(btn) {
       if (!_loc.marker) return;
-      const c = _loc.marker.getLatLng();
-      const f = fuzzInCircle(c.lat, c.lng, LOC_RADIUS_M);
-      const create = _loc.create;
-      const kind = _loc.createKind;
+      const c = _loc.marker.getLatLng();       // exact antenna position
       const nodeId = _loc.nodeId;
       const thenInstall = _loc.thenInstall;
       const node = _loc.node;
-      const label = create ? 'Create node' : 'Save location';
-      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + (create ? 'Creating…' : 'Saving…');
+      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
       try {
-        if (create) {
-          // Node doesn't exist yet — create it WITH the fuzzed location.
-          const created = await createNodeWithLocation(kind, f.lat, f.lon);
-          showToast('Node created (location randomised for privacy).', 'success');
-          closeLocationPicker();
-          await refreshNodes();
-          showInstallModal(created);
-        } else {
-          await putLocation(nodeId, { lat: f.lat, lon: f.lon });
-          showToast('Location saved (randomised for privacy).', 'success');
-          closeLocationPicker();
-          await refreshNodes();
-          if (thenInstall) showInstallModal(node || { id: nodeId });
-        }
+        await putLocation(nodeId, { lat: c.lat, lon: c.lng });
+        showToast('Antenna location saved.', 'success');
+        closeLocationPicker();
+        await refreshNodes();
+        if (thenInstall) showInstallModal(node || { id: nodeId });
       } catch (e) {
-        showToast(create ? 'Could not create node.' : 'Could not save location.', 'error');
-        btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> ' + label;
+        showToast('Could not save location.', 'error');
+        btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Save location';
       }
+    }
+
+    async function clearLocation(btn) {
+      const nodeId = _loc.nodeId;
+      btn.disabled = true;
+      try {
+        await putLocation(nodeId, { lat: null, lon: null });
+        showToast('Location cleared.', 'success');
+        closeLocationPicker();
+        await refreshNodes();
+      } catch (e) { showToast('Could not clear location.', 'error'); btn.disabled = false; }
     }
 
     // Download a node's installer (POST, token in body). Uses the session token if
     // known; otherwise rotates to mint a fresh one first.
     async function downloadInstaller(platform, nodeId, btn) {
-      // Location is required before download — send them to the picker if unset.
+      // Location is optional — no gate here. (n used for the never-connected check below.)
       const n = (_feederNodes || []).find(x => x.id === nodeId);
-      if (!n || typeof n.lat !== 'number') {
-        showToast('Set your node location first.', 'warn');
-        openLocationPicker(nodeId, { thenInstall: true, node: n });
-        return;
-      }
       const original = btn ? btn.innerHTML : '';
       if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…'; }
       try {
@@ -936,7 +921,7 @@
           // so after a reload we must issue a fresh one. If the node has never
           // connected there's no working installer to break — do it silently.
           // Only warn once a machine has actually bound/run this node.
-          const everConnected = !!(n.installId || n.lastSeenAt);
+          const everConnected = !!(n && (n.installId || n.lastSeenAt));
           if (everConnected && !await confirmDialog({
             title: 'Issue a new key?',
             message: 'This issues a NEW key for the node. The current installer stops working and the node must be re-installed with the new one.',
@@ -1029,19 +1014,7 @@
                <i class="fas fa-satellite-dish"></i>
                <p>No nodes yet — add one above to get its installer.</p>
              </div>`;
-        maybeResumeLocationPicker();
       } catch (e) { /* keep last render on transient errors */ }
-    }
-
-    // Location is required, but the node row is created server-side before the
-    // picker opens — so a page reload mid-create would leave a node with no
-    // location and no modal. Re-open the required picker for the first node
-    // that still lacks one (unless a picker/install modal is already up).
-    function maybeResumeLocationPicker() {
-      if (document.getElementById('loc-modal')) return;   // picker already open
-      if (document.getElementById('token-modal')) return; // finishing an install
-      const n = (_feederNodes || []).find(x => typeof x.lat !== 'number');
-      if (n) openLocationPicker(n.id, { thenInstall: true, node: n });
     }
 
     // Pause polling when the tab is hidden; resume on return.

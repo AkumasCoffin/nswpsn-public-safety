@@ -2701,7 +2701,7 @@
           </div>
           <div class="node-enable-row">
             <div style="display:flex; gap:0.4rem;">
-              <button class="btn btn-secondary btn-sm ${(typeof node.lat === 'number') ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${(typeof node.lat === 'number') ? 'View approximate location (privacy-fuzzed)' : 'No location set'}">
+              <button class="btn btn-secondary btn-sm ${(typeof node.lat === 'number') ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${(typeof node.lat === 'number') ? 'View antenna location' : 'No location set'}">
                 <i class="fas fa-location-dot"></i>
               </button>
               <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
@@ -2819,10 +2819,8 @@
       }
     }
 
-    // View a node's PRIVACY-FUZZED location on a small read-only map (owner +
-    // team members only — this is the staff panel). The stored point is
-    // randomised to ~5km by the operator's browser, so this is approximate: a
-    // 5km circle marks the uncertainty, and the exact antenna is never known.
+    // View a node's EXACT antenna location on a small read-only map (owner +
+    // team members only — never public). Used for coverage + channel tuning.
     let _locViewMap = null;
     function viewNodeLocation(id) {
       const node = allNodes.find(n => String(n.id) === String(id));
@@ -2840,18 +2838,15 @@
             <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
           </div>
           <div id="loc-view-map"></div>
-          <div class="loc-view-note">Privacy pin — randomised on the operator's device to a random spot within ~5&nbsp;km of the real antenna, so the exact location is never sent or stored. The ring shows that ~5&nbsp;km uncertainty.</div>
+          <div class="loc-view-note">Exact antenna location, set by the operator — used for coverage calculation and channel tuning. Staff/owner only, never public.</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
       const c = [node.lat, node.lon];
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
-      const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 12);
+      const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 15);
       L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
-      // Faint ring = the ~5km privacy uncertainty; the real antenna sits somewhere
-      // within it. The pin is the already-randomised point (never the true spot).
-      L.circle(c, { radius: 5000, color: '#38bdf8', weight: 1, opacity: 0.5, fillColor: '#38bdf8', fillOpacity: 0.06 }).addTo(map);
       L.marker(c).addTo(map);
       _locViewMap = map;
       setTimeout(() => map.invalidateSize(), 80);
