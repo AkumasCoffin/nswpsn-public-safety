@@ -233,7 +233,7 @@ export async function listNodesForUser(userId: string): Promise<NodeRow[]> {
 }
 
 export interface NodePatch {
-  name?: string;
+  // No `name` — node names are always auto-generated and never renamable.
   enabled?: boolean;
   feed_enabled?: boolean;
   config_override?: Record<string, unknown>;
@@ -250,7 +250,6 @@ export async function updateNode(
   const sets: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
-  if (patch.name !== undefined) { sets.push(`name = $${i++}`); vals.push(patch.name); }
   if (patch.enabled !== undefined) { sets.push(`enabled = $${i++}`); vals.push(patch.enabled); }
   if (patch.feed_enabled !== undefined) { sets.push(`feed_enabled = $${i++}`); vals.push(patch.feed_enabled); }
   if (patch.config_override !== undefined) {
