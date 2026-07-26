@@ -578,6 +578,12 @@
     .nd-readers-table th { color: var(--text-soft, #94a3b8); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
     .nd-readers-table .r-run { color: #4ade80; }
     .nd-readers-table .r-stop { color: #fca5a5; }
+    .nd-pager-filtered { opacity: 0.55; }
+    .nd-pager-filt-badge {
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+      color: #fca5a5; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 4px; padding: 0.02rem 0.34rem; vertical-align: middle;
+    }
     .node-drawer-panel {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
@@ -4341,9 +4347,15 @@
         el.innerHTML = _ndPagerMsgs.slice().reverse().map(m => {
           const at = m.at != null ? new Date(m.at) : null;
           const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
-          return `<div class="nd-event-row nd-log-row">
+          // Filtered (blocked-capcode) messages are buffered but not forwarded —
+          // show them dimmed with a badge so staff can see what's being dropped.
+          const filt = m.filtered ? ' nd-pager-filtered' : '';
+          const badge = m.filtered
+            ? `<span class="nd-pager-filt-badge" title="Not forwarded to Pagermon (${escapeHtml(m.filtered)})">filtered</span> `
+            : '';
+          return `<div class="nd-event-row nd-log-row${filt}">
             <span class="nd-ev-time">${escapeHtml(time)}</span>
-            <span class="nd-ev-type"><span class="node-mono">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>
+            <span class="nd-ev-type">${badge}<span class="node-mono">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>
             <span class="nd-ev-ft">${escapeHtml(m.source || '')}</span>
           </div>`;
         }).join('');

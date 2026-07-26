@@ -288,22 +288,26 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   // blocklist, feed-off, or forwarded. Grep the backend log for "pager rx".
   log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
 
-  // 5a. Drop blocked capcodes (non-message data transmitters) entirely — no
-  //     buffer, no forward. Ack so the agent's queue still drains.
-  if (BLOCKED_CAPCODES.has(parsed.address)) {
-    log.info(`pager relay: BLOCKED capcode ${parsed.address} (dropped) node=${node.id.slice(0, 8)}`);
-    return c.json({ ok: true, dropped: 'blocked capcode' });
-  }
-
-  // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
-  //     reception is visible even when the feed is off.
-  hub.recordPagerMessage(node.id, {
+  const view = {
     address: parsed.address,
     message: parsed.message,
     source: parsed.source,
     freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
     at: Date.now(),
-  });
+  };
+
+  // 5a. Blocked capcodes (non-message data transmitters) are NOT forwarded to
+  //     Pagermon, but we STILL buffer them tagged as filtered so staff can see
+  //     what's being dropped in the drawer (useful when debugging a node).
+  if (BLOCKED_CAPCODES.has(parsed.address)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'blocked capcode' });
+    log.info(`pager relay: BLOCKED capcode ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: 'blocked capcode' });
+  }
+
+  // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
+  //     reception is visible even when the feed is off.
+  hub.recordPagerMessage(node.id, view);
 
   // 6. Feed gate — accept + COUNT but don't forward when the feed is off (so
   //    reception still shows in the node's stats), ack so the queue drains.

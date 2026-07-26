@@ -50,6 +50,10 @@ export interface PagerMessageView {
   source: string; // reader label the page was heard on (e.g. NSWRFS / FRNSW)
   freqMhz: number | null;
   at: number; // epoch ms received
+  /** Set when the message was FILTERED (not forwarded to Pagermon) — the reason,
+   *  e.g. "blocked capcode". Shown dimmed in the drawer so staff can see what's
+   *  being dropped. Absent for normal forwarded pages. */
+  filtered?: string;
 }
 
 class NodeHub {
