@@ -24,6 +24,8 @@
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -393,6 +395,20 @@
       color: #7dd3fc; background: rgba(56,189,248,0.14); border: 1px solid rgba(56,189,248,0.35);
       padding: 0.05rem 0.35rem; border-radius: 4px; vertical-align: middle;
     }
+    .btn.has-loc { color: #7dd3fc; border-color: rgba(56,189,248,0.4); }
+    .loc-view-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000;
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .loc-view-box {
+      background: var(--bg-card, #111827); border: 1px solid var(--border-subtle, #334155);
+      border-radius: 12px; padding: 1rem; width: 100%; max-width: 560px;
+    }
+    .loc-view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.7rem; }
+    #loc-view-map { height: 320px; border-radius: 8px; border: 1px solid var(--border-subtle, #334155); }
+    #loc-view-map, #loc-view-map * { box-sizing: initial; }
+    .loc-view-note { font-size: 0.75rem; color: var(--text-soft, #94a3b8); margin-top: 0.6rem; }
+    .leaflet-container { background: #0b1220; }
 
     /* Primary metric — the one number that matters most for this card. */
     .dev-card-primary {
@@ -2685,6 +2701,9 @@
           </div>
           <div class="node-enable-row">
             <div style="display:flex; gap:0.4rem;">
+              <button class="btn btn-secondary btn-sm ${(typeof node.lat === 'number') ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${(typeof node.lat === 'number') ? 'View approximate location (privacy-fuzzed)' : 'No location set'}">
+                <i class="fas fa-location-dot"></i>
+              </button>
               <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
                 <i class="fas fa-download"></i>
               </button>
@@ -2798,6 +2817,43 @@
       } catch (e) {
         showToast(`Failed to rotate key: ${e.message}`, 'error');
       }
+    }
+
+    // View a node's PRIVACY-FUZZED location on a small read-only map (owner +
+    // team members only — this is the staff panel). The stored point is
+    // randomised to ~1km by the operator's browser, so this is approximate: a
+    // 1km circle marks the uncertainty, and the exact antenna is never known.
+    let _locViewMap = null;
+    function viewNodeLocation(id) {
+      const node = allNodes.find(n => String(n.id) === String(id));
+      if (!node || typeof node.lat !== 'number' || typeof node.lon !== 'number') {
+        showToast('No location set for this node.', 'warn');
+        return;
+      }
+      const overlay = document.createElement('div');
+      overlay.id = 'loc-view-modal';
+      overlay.className = 'loc-view-overlay';
+      overlay.innerHTML = `
+        <div class="loc-view-box">
+          <div class="loc-view-head">
+            <b><i class="fas fa-location-dot"></i> ${escapeHtml(node.name || 'Node')}</b>
+            <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
+          </div>
+          <div id="loc-view-map"></div>
+          <div class="loc-view-note">Approximate — randomised to ~1&nbsp;km for privacy. The circle marks the uncertainty; the exact location is not stored.</div>
+        </div>`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
+      document.body.appendChild(overlay);
+      const c = [node.lat, node.lon];
+      const map = L.map('loc-view-map', { attributionControl: false }).setView(c, 13);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+      L.circle(c, { radius: 1000, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.1 }).addTo(map);
+      _locViewMap = map;
+      setTimeout(() => map.invalidateSize(), 80);
+    }
+    function closeNodeLocation() {
+      if (_locViewMap) { _locViewMap.remove(); _locViewMap = null; }
+      const m = document.getElementById('loc-view-modal'); if (m) m.remove();
     }
 
     // Trigger an immediate (manual) update on one node. Manual updates always
