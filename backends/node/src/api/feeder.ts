@@ -135,13 +135,9 @@ feederRouter.get('/api/feeder/me', async (c) => {
 // Mints the node's own token, returned ONCE (bake into the installer now).
 // ---------------------------------------------------------------------------
 const CreateNodeSchema = z.object({
-  // Nodes are always auto-named {kind}-{user}-{uuid}.
+  // Nodes are always auto-named {kind}-{user}-{uuid}. Location is optional and
+  // set separately via PUT .../location (used for coverage + channel tuning).
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
-  // Location is REQUIRED at creation (already fuzzed client-side). Creating the
-  // row and its location together means a node is NEVER persisted without a
-  // location — a reload mid-create leaves nothing behind instead of an orphan.
-  lat: z.number().min(-90).max(90),
-  lon: z.number().min(-180).max(180),
 });
 feederRouter.post('/api/feeder/nodes', async (c) => {
   const userId = c.get('userId') as string;
@@ -157,9 +153,8 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
-    const located = await setNodeLocation(node.id, parsed.data.lat, parsed.data.lon);
     c.header('Cache-Control', 'no-store');
-    return c.json({ node: feederNodeView(located || node), token });
+    return c.json({ node: feederNodeView(node), token });
   } catch (err) {
     log.error({ err, userId }, 'Error creating feeder node');
     return c.json({ error: 'Failed to create node' }, 500);
@@ -359,9 +354,9 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/feeder/nodes/:id/location — set the node's FUZZED location.
-// The browser has already randomised the point within ~1km of the real antenna,
-// so what arrives here is deliberately imprecise. Pass null lat/lon to clear.
+// PUT /api/feeder/nodes/:id/location — set the node's EXACT antenna location
+// (used for coverage calculation + more exact channel tuning). Optional; pass
+// null lat/lon to clear.
 // ---------------------------------------------------------------------------
 const LocationSchema = z.object({
   lat: z.number().min(-90).max(90).nullable(),

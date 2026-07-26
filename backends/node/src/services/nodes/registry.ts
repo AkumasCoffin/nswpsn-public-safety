@@ -50,8 +50,8 @@ export interface NodeRow {
   // Lookup prefix of this node's token (for UI display / logs). The hash is
   // never selected into API paths.
   token_prefix: string | null;
-  // PRIVACY-FUZZED location (randomised within ~1km of the real antenna,
-  // client-side) — imprecise by design; never an exact position. Null = unset.
+  // Exact antenna location (used for coverage calculation + channel tuning).
+  // Optional; null = unset. Visible to the operator + staff only, never public.
   lat: number | null;
   lon: number | null;
 }
@@ -271,8 +271,8 @@ export async function updateNode(
 }
 
 /**
- * Set (or clear, with nulls) a node's fuzzed location. The caller has already
- * randomised the point client-side; this just stores the imprecise result.
+ * Set (or clear, with nulls) a node's exact antenna location — used for
+ * coverage calculation and channel tuning. Optional; staff/owner-visible only.
  */
 export async function setNodeLocation(
   id: string,
