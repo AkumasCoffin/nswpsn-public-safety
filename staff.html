@@ -4345,7 +4345,11 @@
       if (!el) return;
       // Pager nodes: the "event log" shows decoded pages (newest first).
       if (((_ndNode && _ndNode.kind) || 'radio') === 'pager') {
-        if (!_ndPagerMsgs.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No pages yet — decoded messages will appear here.</div>`; return; }
+        // Surface how many are filtered (blocked, not forwarded) in the header.
+        const filteredN = _ndPagerMsgs.filter(m => m.filtered).length;
+        const subEl = document.getElementById('nd-events-sub');
+        if (subEl) subEl.textContent = filteredN ? `newest first · ${filteredN} filtered (shown dimmed)` : 'newest first';
+        if (!_ndPagerMsgs.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No pages yet — decoded messages (incl. filtered) will appear here.</div>`; return; }
         el.innerHTML = _ndPagerMsgs.slice().reverse().map(m => {
           const at = m.at != null ? new Date(m.at) : null;
           const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
