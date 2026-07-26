@@ -313,6 +313,41 @@
     .node-chip.off { opacity: 0.6; }
     .node-stat { font-size: 0.78rem; color: var(--text-soft); margin-top: 0.45rem; }
     .node-stat b { color: var(--text-primary); font-weight: 700; }
+    /* Add-node form */
+    .add-node { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.25rem 0 0.5rem; }
+    .add-node input, .add-node select {
+      flex: 1; min-width: 160px; background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      color: var(--text-primary); padding: 0.55rem 0.7rem; font-family: inherit; font-size: 0.85rem;
+    }
+    .add-node .dl-btn { width: auto; margin: 0; white-space: nowrap; }
+    /* Per-node bits */
+    .node-kind {
+      font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #7dd3fc; background: rgba(56,189,248,0.14); border: 1px solid rgba(56,189,248,0.35);
+      padding: 0.05rem 0.4rem; border-radius: 5px; vertical-align: middle; margin-left: 0.35rem;
+    }
+    .node-sub code { color: var(--text-primary); }
+    .node-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+    .mini-btn {
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border-subtle); border-radius: 7px;
+      color: var(--text-soft); padding: 0.32rem 0.55rem; font-size: 0.78rem; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .mini-btn:hover { color: var(--text-primary); border-color: var(--accent-border, #38bdf8); }
+    .mini-btn.danger:hover { color: #fca5a5; border-color: rgba(239,68,68,0.5); }
+    /* One-time token modal */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+      align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+    .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px;
+      padding: 1.4rem; max-width: 520px; width: 100%; }
+    .modal h3 { margin: 0 0 0.6rem; }
+    .modal p { color: var(--text-soft); font-size: 0.85rem; margin: 0 0 0.8rem; }
+    .token-box { display: flex; align-items: center; gap: 0.5rem; background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.6rem 0.7rem; margin-bottom: 1rem; }
+    .token-box code { flex: 1; word-break: break-all; color: #86efac; font-size: 0.82rem; }
+    .modal-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .modal-actions .dl-btn { width: auto; margin: 0; }
     .node-ver {
       font-size: 0.72rem; color: #7dd3fc;
       background: var(--accent-soft);
@@ -521,83 +556,43 @@
         </div>`;
     }
 
+    // Plaintext node tokens are shown ONCE and never stored server-side; keep the
+    // ones minted this session in memory so a fresh install can be downloaded
+    // right after create/rotate. Lost on reload → re-download rotates for a new key.
+    const _nodeTokens = {};
+    const _kindLabel = { radio: 'Radio', pager: 'Pager', adsb: 'ADS-B' };
+
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
-      const tokenPrefix = data.tokenPrefix || '';
-
       const nodesHtml = nodes.length
         ? `<div class="node-list">${nodes.map(_nodeRow).join('')}</div>`
         : `<div class="empty-state">
              <i class="fas fa-satellite-dish"></i>
-             <p>No node connected yet — download and run the installer to get started.</p>
+             <p>No nodes yet — add one below to get its installer.</p>
            </div>`;
-
-      const tokenHtml = tokenPrefix
-        ? `<div class="token-line"><i class="fas fa-key"></i> Node key: <code>${escapeHtml(tokenPrefix)}…</code></div>`
-        : '';
 
       document.getElementById('feeder-cards').innerHTML = `
         <div class="card">
           <div class="card-head">
-            <div class="icon"><i class="fas fa-radio"></i></div>
-            <h2>Radio Feeder</h2>
+            <div class="icon"><i class="fas fa-satellite-dish"></i></div>
+            <h2>Your feeder nodes</h2>
           </div>
           <p class="card-sub">
-            Your personal installer sets up a feeder node that streams NSW PSN scanner audio to the network.
-            It's pre-configured with your key — download it, run it, done. Pick your platform below.
+            Each node has its own key. Add a node, download its installer (key baked in), and run it.
+            Deleting or re-issuing a node's key cuts off just that one node — nothing else.
           </p>
 
-          <div class="plat-grid">
-            <div class="plat">
-              <div class="plat-head">
-                <i class="fab fa-windows"></i>
-                <h3>Windows</h3>
-                <span class="plat-tag">Windows 10 / 11</span>
-              </div>
-              <button class="dl-btn" id="dl-windows" onclick="downloadInstaller('windows', this)">
-                <i class="fas fa-download"></i> Download for Windows
-              </button>
-              <ol>
-                <li>Click <b>Download for Windows</b> — it saves a small setup file with your key baked in.</li>
-                <li>Right-click the downloaded file and choose <b>Run with PowerShell</b>, then approve the admin prompt.</li>
-                <li>That's it — your node registers itself and starts running in the background.</li>
-              </ol>
-              <div class="note">
-                <i class="fas fa-circle-info"></i>
-                Using an <strong>RTL-SDR</strong> dongle? Install its WinUSB driver once with
-                <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener">Zadig</a>.
-              </div>
-            </div>
-
-            <div class="plat">
-              <div class="plat-head">
-                <i class="fab fa-linux"></i>
-                <h3>Linux</h3>
-                <span class="plat-tag">amd64 / arm64</span>
-              </div>
-              <button class="dl-btn" id="dl-linux" onclick="downloadInstaller('linux', this)">
-                <i class="fas fa-download"></i> Download for Linux
-              </button>
-              <ol>
-                <li>Click <b>Download for Linux</b> — it saves a shell script with your key inlined.</li>
-                <li>Run it from a terminal (in the download folder):
-                  <div class="cmd">
-                    <code id="linux-cmd">sudo bash install-nswpsn-node.sh</code>
-                    <button type="button" title="Copy" onclick="copyCmd(this)"><i class="far fa-copy"></i></button>
-                  </div>
-                </li>
-                <li>Done — it installs a systemd service that starts on boot.</li>
-              </ol>
-              <div class="note">
-                <i class="fas fa-circle-info"></i>
-                udev rules for common SDRs are installed automatically — no driver swap needed.
-              </div>
-            </div>
+          <div class="add-node">
+            <input id="new-node-name" type="text" placeholder="Node name (e.g. Home Scanner)" maxlength="120">
+            <select id="new-node-kind" aria-label="Node type">
+              <option value="radio">Radio (SDR-Trunk)</option>
+              <option value="pager">Pager — coming soon</option>
+              <option value="adsb">ADS-B / aircraft — coming soon</option>
+            </select>
+            <button class="dl-btn" onclick="addNode(this)"><i class="fas fa-plus"></i> Add node</button>
           </div>
 
-          ${tokenHtml}
-
-          <div class="section-h">Your nodes</div>
+          <div class="section-h">Nodes</div>
           <div id="nodes-region">${nodesHtml}</div>
         </div>`;
     }
@@ -605,35 +600,33 @@
     function _nodeRow(node) {
       const online = !!node.online;
       const name = node.name || 'Unnamed node';
-      // The API returns lastSeenAt; keep the older names as fallbacks.
-      const lastSeen = fmtLastSeen(
-        node.lastSeenAt != null ? node.lastSeenAt
-          : (node.lastSeen != null ? node.lastSeen : node.last_seen));
-      const agent = node.agentVersion || node.agent_version;
+      const lastSeen = fmtLastSeen(node.lastSeenAt);
+      const kind = node.kind || 'radio';
+      const isRadio = kind === 'radio';
+      const agent = node.agentVersion;
       const agentHtml = agent ? `<span class="node-ver">agent ${escapeHtml(agent)}</span>` : '';
 
       const chip = (cls, label) => `<span class="node-chip ${cls}">${escapeHtml(label)}</span>`;
       let chips;
-      if (!online) {
+      if (!isRadio) {
+        chips = chip('', 'agent coming soon');
+      } else if (!online) {
         chips = chip('off', 'Offline');
       } else {
         let out = '';
-        // Decoding: is SDR-Trunk up and following a control channel / call?
         if (!node.sdrUp) out += chip('warn', 'SDR-Trunk down');
         else if (node.decoding) out += chip('ok', 'Decoding');
         else out += chip('', 'Idle');
-        // Uploading: is it forwarding calls to the network?
         if (node.feedEnabled === false) out += chip('off', 'Feed off');
         else if (node.uploading) out += chip('ok', 'Uploading');
         else out += chip('', 'Feed on');
-        // Readiness warnings (only surface when known + not ready).
         if (node.calibrated === false) out += chip('warn', 'Not calibrated');
         if (node.jmbeInstalled === false) out += chip('warn', 'No JMBE audio');
         chips = out;
       }
 
       let statHtml = '';
-      if (online) {
+      if (online && isRadio) {
         const calls = Number(node.callsLast10m || 0);
         const parts = [`<b>${calls}</b> call${calls === 1 ? '' : 's'} uploaded · last 10 min`];
         if (typeof node.queueDepth === 'number' && node.queueDepth > 0) {
@@ -642,30 +635,153 @@
         statHtml = `<div class="node-stat">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
       }
 
+      const keyStr = node.tokenPrefix ? ` · key <code>${escapeHtml(node.tokenPrefix)}…</code>` : '';
+      const dl = isRadio
+        ? `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>
+           <button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`
+        : '';
+      const actions = `
+        <div class="node-actions">
+          ${dl}
+          <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
+          <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i></button>
+        </div>`;
+
       return `
         <div class="node-row">
           <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
           <div class="node-meta">
-            <div class="node-name">${escapeHtml(name)}</div>
-            <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}</div>
+            <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
+            <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}${keyStr}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
+            ${actions}
           </div>
           ${agentHtml}
         </div>`;
     }
 
-    // Authenticated installer download: the endpoint needs the JWT header,
-    // so a plain <a href> won't work — fetch as a blob and save it client-side.
-    async function downloadInstaller(platform, btn) {
+    // Create a node (name + type) → mint its token → reveal once + refresh.
+    async function addNode(btn) {
+      const nameEl = document.getElementById('new-node-name');
+      const kindEl = document.getElementById('new-node-kind');
+      const name = (nameEl.value || '').trim();
+      const kind = kindEl.value;
+      if (!name) { showToast('Give the node a name first.', 'warn'); nameEl.focus(); return; }
+      const original = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding…';
+      try {
+        const jwt = await getToken();
+        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, kind }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        _nodeTokens[data.node.id] = data.token;
+        nameEl.value = '';
+        showTokenModal(data.node, data.token);
+        await refreshNodes();
+      } catch (e) {
+        showToast(`Could not add node: ${e.message}`, 'error');
+      } finally {
+        btn.disabled = false; btn.innerHTML = original;
+      }
+    }
+
+    // Rotate a node's token (owner-scoped). Returns the new plaintext or null.
+    async function rotateNodeToken(nodeId) {
+      const jwt = await getToken();
+      if (!jwt) return null;
+      const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/rotate-token`, {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + jwt },
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => ({}));
+      if (data.token) _nodeTokens[nodeId] = data.token;
+      return data.token || null;
+    }
+
+    async function rotateNode(nodeId, btn) {
+      if (!confirm('Re-issue this node’s key? The old installer/key stops working and the node must be re-installed with the new one.')) return;
+      const original = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+      try {
+        const token = await rotateNodeToken(nodeId);
+        if (!token) throw new Error('rotate failed');
+        showTokenModal({ id: nodeId, name: 'this node' }, token);
+        await refreshNodes();
+      } catch (e) {
+        showToast('Could not re-issue key.', 'error');
+      } finally { btn.disabled = false; btn.innerHTML = original; }
+    }
+
+    async function deleteFeederNode(nodeId, btn) {
+      if (!confirm('Delete this node? It will be cut off and cannot reconnect.')) return;
+      btn.disabled = true;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}`, {
+          method: 'DELETE', headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        delete _nodeTokens[nodeId];
+        showToast('Node deleted.', 'success');
+        await refreshNodes();
+      } catch (e) {
+        showToast('Could not delete node.', 'error');
+        btn.disabled = false;
+      }
+    }
+
+    // One-time key reveal with copy + install hint.
+    function showTokenModal(node, token) {
+      const existing = document.getElementById('token-modal');
+      if (existing) existing.remove();
+      const el = document.createElement('div');
+      el.id = 'token-modal';
+      el.className = 'modal-overlay';
+      el.innerHTML = `
+        <div class="modal">
+          <h3><i class="fas fa-key"></i> Node key for ${escapeHtml(node.name || 'node')}</h3>
+          <p>This is shown <b>once</b>. It's baked into the installer you download now — you don't need to copy it, but keep it safe if you do.</p>
+          <div class="token-box"><code id="token-value">${escapeHtml(token)}</code>
+            <button class="mini-btn" onclick="copyToken(this)"><i class="far fa-copy"></i></button></div>
+          <div class="modal-actions">
+            <button class="dl-btn" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i> Windows installer</button>
+            <button class="dl-btn" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i> Linux installer</button>
+            <button class="mini-btn" onclick="document.getElementById('token-modal').remove()">Close</button>
+          </div>
+        </div>`;
+      document.body.appendChild(el);
+    }
+    function copyToken(btn) {
+      const t = document.getElementById('token-value');
+      if (t && navigator.clipboard) navigator.clipboard.writeText(t.textContent).then(() => {
+        const p = btn.innerHTML; btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => btn.innerHTML = p, 1200);
+      });
+    }
+
+    // Download a node's installer (POST, token in body). Uses the session token if
+    // known; otherwise rotates to mint a fresh one first.
+    async function downloadInstaller(platform, nodeId, btn) {
       const original = btn ? btn.innerHTML : '';
       if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…'; }
       try {
-        const token = await getToken();
-        if (!token) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
-
+        const jwt = await getToken();
+        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+        let token = _nodeTokens[nodeId];
+        if (!token) {
+          if (!confirm('The installer needs a fresh key (the old one isn’t shown again). Re-issue this node’s key now?')) return;
+          token = await rotateNodeToken(nodeId);
+          if (!token) throw new Error('could not get a node key');
+          await refreshNodes();
+        }
         const res = await fetch(`${API_BASE_URL}/api/feeder/download/${platform}`, {
-          headers: { 'Authorization': 'Bearer ' + token }
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 

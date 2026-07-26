@@ -388,6 +388,11 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .node-kind-badge {
+      font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #7dd3fc; background: rgba(56,189,248,0.14); border: 1px solid rgba(56,189,248,0.35);
+      padding: 0.05rem 0.35rem; border-radius: 4px; vertical-align: middle;
+    }
 
     /* Primary metric — the one number that matters most for this card. */
     .dev-card-primary {
@@ -2653,7 +2658,7 @@
         <div class="dev-card">
           <div class="dev-card-head" style="padding-right: 0;">
             <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
-            <div class="dev-card-name">${escapeHtml(name)}</div>
+            <div class="dev-card-name">${escapeHtml(name)} <span class="node-kind-badge">${escapeHtml(node.kind || 'radio')}</span></div>
           </div>
           <div class="node-versions">
             ${_nodeVer('agent', node.agentVersion)}
@@ -2672,7 +2677,7 @@
               <i class="fas fa-gauge-high"></i> Details
             </button>
             <span class="lbl" style="text-align: right;">Node ${enabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="Node running (decode + spectrum). Off cuts it off entirely.">
+            <label class="node-switch" title="Capture on/off. Off stops decoding (all channels) but the agent stays connected and re-enables live. To cut a node off entirely, delete or rotate its key.">
               <input type="checkbox" ${enabled ? 'checked' : ''}
                      onchange="toggleNode('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
@@ -2683,12 +2688,15 @@
               <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
                 <i class="fas fa-download"></i>
               </button>
+              <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)">
+                <i class="fas fa-key"></i>
+              </button>
               ${userPermissions.is_owner
                 ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
                 : ''}
             </div>
             <span class="lbl" style="text-align: right;">Feed → rdio ${feedEnabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="Forward decoded calls to the central rdio. Off lets you verify config + reception before feeding the live system.">
+            <label class="node-switch" title="Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading) — verify reception before feeding the live system.">
               <input type="checkbox" ${feedEnabled ? 'checked' : ''}
                      onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
@@ -2759,7 +2767,7 @@
       if (!userPermissions.is_owner) { showToast('Only owners can delete nodes.', 'warn'); return; }
       const node = (allNodes || []).find(n => n.id === id);
       const who = node ? (node.name || id) : id;
-      if (!await uiConfirm(`Delete node "${who}"? If its agent reconnects it will reappear. This cannot be undone.`, { danger: true, okText: 'Delete' })) return;
+      if (!await uiConfirm(`Delete node "${who}"? Its key is revoked and it cannot reconnect. This cannot be undone.`, { danger: true, okText: 'Delete' })) return;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
           method: 'DELETE', headers: { 'Authorization': await authHeader() },
@@ -2769,6 +2777,26 @@
         await loadNodes();
       } catch (e) {
         showToast(`Failed to delete node: ${e.message}`, 'error');
+      }
+    }
+
+    // Re-issue a node's per-node token. The old key stops working immediately; the
+    // node must be re-installed with the new one. Reveals the new token once.
+    async function rotateNodeToken(id) {
+      const node = (allNodes || []).find(n => n.id === id);
+      const who = node ? (node.name || id) : id;
+      if (!await uiConfirm(`Re-issue the key for "${who}"? The old key/installer stops working and the node must be re-installed with the new key.`, { danger: true, okText: 'Re-issue' })) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/rotate-token`, {
+          method: 'POST', headers: { 'Authorization': await authHeader() },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        // Reveal once — staff hand this to the operator to re-install.
+        await uiConfirm(`New key for "${who}" (shown once — copy it now):\n\n${data.token}`, { okText: 'Copied' });
+        await loadNodes();
+      } catch (e) {
+        showToast(`Failed to rotate key: ${e.message}`, 'error');
       }
     }
 

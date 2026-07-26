@@ -271,6 +271,7 @@ begin
     Cfg.Add('ws_url: ""');
     Cfg.Add('node_token: "' + Token + '"');
     Cfg.Add('install_id: "' + InstallID + '"');
+    Cfg.Add('kind: "radio"');
     Cfg.Add('data_dir: "' + DataDir + '"');
     Cfg.Add('relay_addr: "127.0.0.1:17390"');
     Cfg.Add('sdrtrunk_control_port: 17392');

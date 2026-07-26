@@ -173,6 +173,7 @@ server_url: "${SERVER_URL}"
 ws_url: ""
 node_token: "${NODE_TOKEN}"
 install_id: "${INSTALL_ID}"
+kind: "${NODE_KIND:-radio}"
 data_dir: "${DATA_DIR}"
 relay_addr: "127.0.0.1:17390"
 sdrtrunk_control_port: 17392
