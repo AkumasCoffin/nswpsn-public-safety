@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-rtl_fm -d '{{.Serial}}' -f {{.FreqMHz}}M -M fm -s 22050 -g 42 - \
+# Auto gain: no -g flag => rtl_fm uses the tuner's automatic gain (hardware AGC).
+# No -p (ppm): rtl_fm has no auto-ppm; RTL crystal error at 148 MHz is negligible
+# for wide NBFM POCSAG. (rtl_test -p can estimate a static ppm if ever needed.)
+rtl_fm -d '{{.Serial}}' -f {{.FreqMHz}}M -M fm -s 22050 - \
  | multimon-ng {{.ProtoArgs}} -f alpha -t raw - \
  | while IFS= read -r line; do
      curl -s --max-time 5 '{{.RelayURL}}' \
