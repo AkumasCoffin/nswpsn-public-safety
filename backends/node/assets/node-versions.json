@@ -1,0 +1,38 @@
+{
+  "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry — the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
+  "agent": {
+    "version": "0.1.23",
+    "urls": {
+      "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
+      "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
+      "linux-arm64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-arm64"
+    },
+    "sha256": {
+      "windows-amd64": "",
+      "linux-amd64": "",
+      "linux-arm64": ""
+    }
+  },
+  "sdrtrunk": {
+    "version": "0.6.10",
+    "urls": {
+      "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
+      "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
+    },
+    "sha256": {
+      "windows-amd64": "66301a3425cf67441b32b58296fc085152cc3784aaeef3843c6bebe5c5f76816",
+      "linux-amd64": "85ac03b2e715c2a60862b3dc253b56b06d50157761cab4a14ecd65f5673b6224"
+    }
+  },
+  "rdio": {
+    "version": "6.13.1",
+    "urls": {
+      "windows-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.13.1/rdio-scanner-windows-amd64-v6.13.1.exe",
+      "linux-amd64": "https://github.com/AkumasCoffin/rdio-scanner/releases/download/v6.13.1/rdio-scanner-linux-amd64-v6.13.1"
+    },
+    "sha256": {
+      "windows-amd64": "a71eb7bff5fa6a3b113a48122a9cb4c2173af8d00f43875930530c3c5f7d1f98",
+      "linux-amd64": "a166df42b6d559ca1550c1d1d1058a1a68595b0794c68dfd32637406d2ee5f59"
+    }
+  }
+}

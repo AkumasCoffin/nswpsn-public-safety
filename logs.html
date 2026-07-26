@@ -783,6 +783,7 @@
   </style>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
+  <script src="ui-dialogs.js"></script>
 </head>
 <body>
   <!-- Mobile Header -->
@@ -2416,7 +2417,7 @@
             currentPage = previousPage;
             nextCursor = previousCursor;
             lastShownPage = previousShownPage;
-            alert('That page is too far in for offset paging. Try Next/Prev or narrow the date range.');
+            uiAlert('That page is too far in for offset paging. Try Next/Prev or narrow the date range.');
             return;
           }
         }
@@ -3642,16 +3643,16 @@
       const url = `${window.location.origin}${window.location.pathname}?${params}`;
       
       navigator.clipboard.writeText(url).then(() => {
-        alert('Search URL copied to clipboard!');
+        uiAlert('Search URL copied to clipboard!');
       }).catch(() => {
-        prompt('Copy this URL:', url);
+        uiPrompt('Copy this URL:', {defaultValue: url});
       });
     }
     
     function exportJSON() {
       if (typeof umami !== 'undefined') umami.track('logs-export-json');
       if (currentPageResults.length === 0) {
-        alert('No results to export');
+        uiAlert('No results to export');
         return;
       }
       

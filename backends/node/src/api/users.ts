@@ -36,6 +36,7 @@ import {
   requireRole,
   canManageUsers,
   canAssignPrivilegedRoles,
+  isOwner,
 } from '../services/auth/roles.js';
 
 export const usersRouter = new Hono();
@@ -73,6 +74,57 @@ function usernameFromMetadata(meta: Record<string, unknown> | undefined): string
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return null;
+}
+
+/**
+ * Best-effort single-user display name (username, else email local-part).
+ * Returns null when Supabase isn't configured / the user isn't found, so callers
+ * can fall back (e.g. to a slice of the user id).
+ */
+export async function getUsername(userId: string): Promise<string | null> {
+  if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const u = (await res.json()) as SupabaseUser;
+    return usernameFromMetadata(u.user_metadata) ?? u.email?.split('@')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort map of Supabase user id -> display username (email as fallback).
+ * Returns an empty map when Supabase isn't configured or the fetch fails, so
+ * callers (e.g. the Nodes list) degrade gracefully to showing ids.
+ */
+export async function getUsernameMap(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) return map;
+  try {
+    const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return map;
+    const data = (await res.json()) as SupabaseUsersResponse;
+    for (const u of data.users ?? []) {
+      const name = usernameFromMetadata(u.user_metadata) ?? u.email ?? null;
+      if (name && u.id) map.set(u.id, name);
+    }
+  } catch {
+    /* best-effort — leave the map empty */
+  }
+  return map;
 }
 
 /**
@@ -315,6 +367,72 @@ usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canManageUsers)
   } catch (err) {
     log.error({ err, userId, role }, 'Error removing user role');
     return c.json({ error: 'Failed to remove role' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/users/:userId — OWNER-only. Deletes the account entirely: the
+// Supabase auth user plus their role rows, feeder tokens, and nodes. An owner
+// cannot delete their own account (guards against self-lockout).
+// ---------------------------------------------------------------------------
+usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
+  const userId = c.req.param('userId');
+  const actingUserId = c.get('userId') as string;
+  if (!userId) return c.json({ error: 'user id required' }, 400);
+  if (userId === actingUserId) {
+    return c.json({ error: "You can't delete your own account." }, 400);
+  }
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    // The Supabase auth user is the source of truth for the account.
+    if (!(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY)) {
+      return c.json({ error: 'Supabase not configured' }, 503);
+    }
+    const url = `${config.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    // 404 = already gone; treat as success so we still clean up our own rows.
+    if (![200, 204, 404].includes(res.status)) {
+      const errText = await res.text().catch(() => '');
+      log.error({ userId, status: res.status, errText }, 'Failed to delete Supabase user');
+      return c.json({ error: `Failed to delete account (status ${res.status})` }, 502);
+    }
+
+    // Remove our own records for the user (roles, feeder token, nodes) in a
+    // single transaction so a mid-way failure can't leave a half-cleaned account
+    // (previously the feeder_tokens / nodes deletes swallowed errors, orphaning
+    // rows for a user that no longer exists).
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
+      await client.query('DELETE FROM feeder_tokens WHERE user_id = $1', [userId]);
+      await client.query('DELETE FROM nodes WHERE user_id = $1', [userId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      log.error({ err, userId }, 'Local cleanup failed after Supabase account delete');
+      // The Supabase account is already gone; surface the partial failure so the
+      // operator knows the local rows still need clearing.
+      return c.json({ error: 'Account deleted but local cleanup failed; please retry.' }, 500);
+    } finally {
+      client.release();
+    }
+
+    invalidateUserRolesCache(userId);
+    log.info({ userId, by: actingUserId }, 'Deleted user account');
+    return c.json({ success: true, user_id: userId });
+  } catch (err) {
+    log.error({ err, userId }, 'Error deleting user');
+    return c.json({ error: 'Failed to delete user' }, 500);
   }
 });
 

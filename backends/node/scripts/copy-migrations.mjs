@@ -24,3 +24,19 @@ await fs.cp(src, dest, { recursive: true, force: true });
 
 const files = (await fs.readdir(dest)).filter((f) => f.endsWith('.sql'));
 console.log(`copied ${files.length} migration file(s) to ${path.relative(root, dest)}`);
+
+// Static assets (e.g. node-versions.json self-update manifest) live outside
+// src/ and tsc doesn't emit them; copy assets/ → dist/assets/ so runtime
+// reads from import.meta.url resolve in production. api/node-updates.ts also
+// falls back to the source assets/ dir, which is what dev (tsx) uses.
+const assetsSrc = path.join(root, 'assets');
+const assetsDest = path.join(root, 'dist', 'assets');
+try {
+  await fs.access(assetsSrc);
+  await fs.mkdir(assetsDest, { recursive: true });
+  await fs.cp(assetsSrc, assetsDest, { recursive: true, force: true });
+  const assetFiles = await fs.readdir(assetsDest);
+  console.log(`copied ${assetFiles.length} asset file(s) to ${path.relative(root, assetsDest)}`);
+} catch {
+  console.log('no assets/ dir to copy (skipping)');
+}

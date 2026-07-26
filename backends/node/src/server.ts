@@ -53,6 +53,11 @@ import { statusRouter } from './api/status.js';
 import { w3wRouter } from './api/w3w.js';
 import { transportRouter } from './api/transport.js';
 import { systemRouter } from './api/system.js';
+// Feeder nodes
+import { nodesRouter } from './api/nodes.js';
+import { nodeUpdatesRouter } from './api/node-updates.js';
+import { feederRouter } from './api/feeder.js';
+import { nodeIngestRouter } from './api/node-ingest.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { log } from './lib/log.js';
@@ -259,6 +264,11 @@ export function createApp() {
       },
       credentials: true,
       allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key', 'Accept'],
+      // feeder.html fetches the installer as a blob and reads its filename
+      // (which carries the node token for Windows) from Content-Disposition;
+      // that header is only visible to cross-origin JS when explicitly
+      // exposed. Frontend is on nswpsn.forcequit.xyz, API on api.forcequit.xyz.
+      exposeHeaders: ['Content-Disposition'],
       maxAge: 600,
     }),
   );
@@ -326,6 +336,13 @@ export function createApp() {
   app.route('/', transportRouter);
   // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
   app.route('/', systemRouter);
+  // Feeder nodes. node-updates FIRST so its exact `/api/nodes/versions`
+  // matches before nodesRouter's `/api/nodes/:id` treats "versions" as an id.
+  app.route('/', nodeUpdatesRouter);
+  app.route('/', nodesRouter);
+  app.route('/', feederRouter);
+  // Feeder node call relay
+  app.route('/', nodeIngestRouter);
 
   // Root route — endpoint catalogue. Mirrors python's `/` response at
   // external_api_proxy.py:11431 so any monitoring / smoke-test relying

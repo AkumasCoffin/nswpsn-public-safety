@@ -42,6 +42,66 @@ npm install --no-audit --no-fund
 echo "[deploy] npm run build…"
 npm run build
 
+# Build the node-agent binaries into the webroot downloads dir so volunteers
+# fetch the latest agent (see NODE_DOWNLOADS_BASE). Needs Go >= 1.26 — snap
+# installs it to /snap/bin. Non-fatal: if Go is missing the rest of the deploy
+# still runs (existing binaries just aren't refreshed). The big SDR-Trunk
+# runtime + rdio binary are placed in the same dir once, by hand.
+AGENT_SRC="$REPO_ROOT/feeder-nodes/radio-node"
+DOWNLOADS_DIR="$REPO_ROOT/downloads"
+EXPECTED_AGENTS="nodeagent-linux-amd64 nodeagent-windows-amd64.exe nodeagent-linux-arm64"
+export PATH="$PATH:/snap/bin"
+if command -v go >/dev/null 2>&1 && [ -d "$AGENT_SRC" ]; then
+  mkdir -p "$DOWNLOADS_DIR"
+  # The built agent's version is stamped (below) to match the manifest's
+  # agent.version, so self-update compares EQUAL and doesn't loop. To push a
+  # new agent to running nodes: bump `agent.version` in node-versions.json.
+  AGENT_VERSION="$(node -e 'process.stdout.write(String(require(process.argv[1]).agent.version||"0.0.0"))' "$NODE_DIR/assets/node-versions.json" 2>/dev/null || echo 0.0.0)"
+
+  # Skip the rebuild if the already-published binary is already this version —
+  # only the native linux-amd64 build can be run here to read its version.
+  BUILT_VERSION=""
+  if [ -x "$DOWNLOADS_DIR/nodeagent-linux-amd64" ]; then
+    BUILT_VERSION="$("$DOWNLOADS_DIR/nodeagent-linux-amd64" version 2>/dev/null | sed -nE 's/^radio-node ([^ ]+).*/\1/p')"
+  fi
+  if [ -n "$AGENT_VERSION" ] && [ "$BUILT_VERSION" = "$AGENT_VERSION" ]; then
+    echo "[deploy] node-agent v$AGENT_VERSION already built — skipping rebuild."
+  else
+    LDFLAGS="-s -w -X github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version.Version=$AGENT_VERSION"
+    echo "[deploy] building node-agent v$AGENT_VERSION (was '${BUILT_VERSION:-none}'; $(go version | awk '{print $3}'))…"
+    (
+      cd "$AGENT_SRC"
+      GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-linux-amd64"       ./cmd/nodeagent
+      GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-windows-amd64.exe" ./cmd/nodeagent
+      GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o "$DOWNLOADS_DIR/nodeagent-linux-arm64"       ./cmd/nodeagent
+    )
+    # Publish a sha256 sidecar next to each binary so install.sh can verify the
+    # download against the published publisher hash (not just TLS).
+    for b in $EXPECTED_AGENTS; do
+      if [ -f "$DOWNLOADS_DIR/$b" ]; then
+        ( cd "$DOWNLOADS_DIR" && sha256sum "$b" | awk '{print $1}' > "$b.sha256" )
+      fi
+    done
+    echo "[deploy] node-agent binaries + sha256 sidecars updated in $DOWNLOADS_DIR"
+  fi
+
+  # Remove any stale agent binaries no longer in the built set (e.g. an arch we
+  # stopped shipping) so downloads/ never serves an orphaned old build. A
+  # `<name>.sha256` sidecar is kept iff its base binary is still expected.
+  for f in "$DOWNLOADS_DIR"/nodeagent-*; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    check="${base%.sha256}"
+    case " $EXPECTED_AGENTS " in
+      *" $check "*) ;;
+      *) echo "[deploy] removing stale $base"; rm -f "$f" ;;
+    esac
+  done
+else
+  echo "[deploy] WARNING: 'go' not found (or agent source missing) — skipping node-agent build."
+  echo "[deploy]          install Go 1.26+ with: sudo snap install go --classic"
+fi
+
 # Apply any pending DB migrations BEFORE the restart — new code often
 # depends on new columns (e.g. incidents.units), and the migration
 # runner is idempotent so this is a no-op when everything is applied.

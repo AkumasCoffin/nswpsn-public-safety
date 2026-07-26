@@ -24,6 +24,8 @@
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -388,6 +390,25 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .node-kind-badge {
+      font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #7dd3fc; background: rgba(56,189,248,0.14); border: 1px solid rgba(56,189,248,0.35);
+      padding: 0.05rem 0.35rem; border-radius: 4px; vertical-align: middle;
+    }
+    .btn.has-loc { color: #7dd3fc; border-color: rgba(56,189,248,0.4); }
+    .loc-view-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000;
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .loc-view-box {
+      background: var(--bg-card, #111827); border: 1px solid var(--border-subtle, #334155);
+      border-radius: 12px; padding: 1rem; width: 100%; max-width: 560px;
+    }
+    .loc-view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.7rem; }
+    #loc-view-map { height: 320px; border-radius: 8px; border: 1px solid var(--border-subtle, #334155); }
+    #loc-view-map, #loc-view-map * { box-sizing: initial; }
+    .loc-view-note { font-size: 0.75rem; color: var(--text-soft, #94a3b8); margin-top: 0.6rem; }
+    .leaflet-container { background: #0b1220; }
 
     /* Primary metric — the one number that matters most for this card. */
     .dev-card-primary {
@@ -448,6 +469,554 @@
     }
     .dev-status-pill.degraded { background: var(--warning); box-shadow: 0 0 6px rgba(234, 179, 8, 0.55); }
     .dev-status-pill.down     { background: var(--danger);  box-shadow: 0 0 6px rgba(239, 68, 68, 0.55); }
+
+    /* === Nodes tab — feeder node cards =============================== */
+    /* Small inline online dot for a node card head. */
+    .node-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--text-soft); opacity: 0.5;
+      flex-shrink: 0;
+    }
+    .node-dot.online { background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.55); opacity: 1; }
+    /* Small monospace pill for install id / user id. */
+    .node-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      color: var(--text-soft);
+      background: rgba(0, 0, 0, 0.28);
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    /* Version badge row on a node card. */
+    .node-versions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.35rem 0 0.6rem; }
+    .node-ver {
+      display: inline-flex; align-items: baseline; gap: 0.3rem;
+      padding: 0.16rem 0.45rem; border-radius: 5px;
+      background: var(--accent-soft); color: #7dd3fc;
+      font-size: 0.7rem; white-space: nowrap;
+    }
+    .node-ver .k { color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.62rem; }
+    .node-ready-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0 0 0.6rem; }
+    .nd-ready {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      padding: 0.16rem 0.45rem; border-radius: 5px;
+      font-size: 0.68rem; white-space: nowrap; font-weight: 600;
+    }
+    .nd-ready.ok { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .nd-ready.bad { background: rgba(239,68,68,0.15); color: #f87171; }
+    .nd-ready.unknown { background: var(--accent-soft); color: var(--text-soft); }
+    /* iOS-ish enabled toggle switch (mirrors dashboard's .swx). */
+    .node-switch { position: relative; display: inline-block; width: 34px; height: 18px; flex-shrink: 0; }
+    .node-switch input { opacity: 0; width: 0; height: 0; }
+    .node-switch .track {
+      position: absolute; cursor: pointer; inset: 0;
+      background: rgba(148, 163, 184, 0.3); border-radius: 999px; transition: 0.15s;
+    }
+    .node-switch .track::before {
+      content: ''; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px;
+      background: #fff; border-radius: 50%; transition: 0.15s;
+    }
+    .node-switch input:checked + .track { background: var(--success); }
+    .node-switch input:checked + .track::before { transform: translateX(16px); }
+    .node-switch input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
+    .node-enable-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 0.65rem; margin-top: 0.2rem;
+      font-size: 0.75rem; color: var(--text-soft);
+    }
+    .node-enable-row .lbl { flex: 1; }
+
+    /* === Node detail drawer (P3) ====================================== */
+    .node-drawer {
+      position: fixed; inset: 0;
+      background: rgba(3, 7, 18, 0.72);
+      backdrop-filter: blur(5px);
+      -webkit-backdrop-filter: blur(5px);
+      z-index: 1100;
+      display: none;
+    }
+    .node-drawer.open { display: block; }
+    .node-drawer-panel {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
+        var(--bg-card-2);
+      width: 100%;
+      height: 100%;
+      display: flex; flex-direction: column;
+      animation: drawer-in 0.18s ease-out;
+      /* Render the whole node panel a touch more compact (≈85% zoom feel) so it
+         fits without manual browser zoom. Font-size + spacing reduction only —
+         NOT transform/zoom, which would desync the spectrum canvas backing
+         buffers (sized off clientWidth/Height × devicePixelRatio). */
+      font-size: 87.5%;
+    }
+    @keyframes drawer-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .node-drawer-head {
+      display: flex; align-items: center; gap: 0.7rem;
+      padding: 1.1rem 1.4rem;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+    }
+    .node-drawer-title { flex: 1; min-width: 0; }
+    .node-drawer-name {
+      font-weight: 700; font-size: 1.05rem; color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .node-drawer-sub { font-size: 0.72rem; color: var(--text-soft); }
+    .node-drawer-sub.err { color: var(--danger); }
+    .node-drawer-body {
+      flex: 1; overflow-y: auto; padding: 0.85rem 1.05rem 2.2rem;
+      display: flex; flex-direction: column; gap: 0.85rem;
+    }
+
+    /* SDR-Trunk-style panels: bordered cards with a header strip. */
+    .nd-panel {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 42%),
+        var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 11px;
+      overflow: hidden;
+    }
+    .nd-panel-h {
+      display: flex; align-items: center; gap: 0.55rem;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-soft); font-weight: 700;
+      background: rgba(0, 0, 0, 0.22);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .nd-panel-h > i:first-child { color: var(--accent); }
+    .nd-panel-h .nd-h-spacer { flex: 1; }
+    .nd-panel-b { padding: 0.65rem 0.75rem; }
+    .nd-panel-b.flush { padding: 0; }
+    /* Empty-state cards inside flush (table) panels keep some breathing room. */
+    .nd-panel-b.flush .nd-empty { margin: 0.85rem; }
+
+    /* The panel stack that sits UNDER the full-width spectrum band. The wide
+       control surfaces (controls, tuners, unified channels) run full width so
+       their tables always have room; lighter panels (now-playing, events) pair
+       up in a split that reflows to a single column on narrow screens. */
+    .nd-panels { display: flex; flex-direction: column; gap: 0.85rem; }
+    .nd-span-all { width: 100%; }
+    .nd-panels-split {
+      display: grid; gap: 1.1rem;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      align-items: start;
+    }
+
+    .nd-section { margin-bottom: 1.5rem; }
+    .nd-section-h {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-soft); font-weight: 600; margin-bottom: 0.65rem;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .nd-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+    .nd-banner {
+      padding: 0.7rem 0.9rem; border-radius: 8px; font-size: 0.8rem;
+      margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;
+      column-span: all;
+    }
+    .nd-banner.warn { background: rgba(245, 158, 11, 0.12); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .nd-banner.err  { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+    .nd-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+    .nd-table th {
+      text-align: left; color: var(--text-soft); font-weight: 600;
+      font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.32rem 0.42rem; border-bottom: 1px solid var(--border-subtle);
+      white-space: nowrap;
+    }
+    .nd-table td {
+      padding: 0.38rem 0.42rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      color: var(--text-primary); vertical-align: middle;
+    }
+    .nd-strong { font-weight: 600; color: var(--text-primary); }
+    .nd-sub { font-size: 0.68rem; color: var(--text-soft); }
+    .nd-unit { font-size: 0.66rem; color: var(--text-soft); margin-left: 0.25rem; }
+    .nd-input {
+      width: 92px; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 6px;
+      color: var(--text-primary); padding: 0.26rem 0.36rem;
+      font-family: inherit; font-size: 0.72rem;
+    }
+    .nd-input:focus { outline: none; border-color: var(--accent-border); }
+    .nd-input-sm { width: 64px; }
+    /* Device-aware tuner controls: <select> reuse .nd-input; gain axes stack. */
+    .nd-sel { width: auto; min-width: 62px; padding-right: 0.25rem; }
+    .nd-gain-cell { min-width: 120px; }
+    .nd-gc { display: flex; align-items: center; gap: 0.3rem; margin: 0.1rem 0; }
+    .nd-gc > label { font-size: 0.62rem; color: var(--text-soft); min-width: 52px; text-align: right; }
+    .nd-gc input[type="checkbox"] { margin: 0; }
+    .nd-gc input:disabled, .nd-gc select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Manual / search-tune control — visually distinct (accent-tinted) from the
+       read-only current-frequency display and the channel decode editor. */
+    .nd-tune-cell {
+      border-left: 1px dashed var(--accent-border);
+      background: rgba(56, 189, 248, 0.05);
+    }
+    .nd-tune-wrap { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+    .nd-tune-wrap .nd-input-sm { width: 78px; }
+    .nd-tune-btn { flex-shrink: 0; }
+
+    .nd-state {
+      display: inline-flex; align-items: center; gap: 0.32rem;
+      padding: 0.16rem 0.55rem; border-radius: 999px;
+      font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+      white-space: nowrap; line-height: 1.3;
+    }
+    .nd-state::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: currentColor; flex-shrink: 0;
+    }
+    .nd-state.active,
+    .nd-state.call   { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+    .nd-state.muted,
+    .nd-state.idle   { background: rgba(148, 163, 184, 0.12); color: var(--text-soft); }
+    .nd-state.idle::before { animation: none; opacity: 0.7; }
+    .nd-state.control{ background: rgba(56, 189, 248, 0.16); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.3); }
+    .nd-state.enc    { background: rgba(245, 158, 11, 0.16); color: #fbbf24; }
+    .nd-state.error  { background: rgba(239, 68, 68, 0.16); color: #f87171; }
+    .nd-state.offline{ background: rgba(148, 163, 184, 0.08); color: var(--text-soft); opacity: 0.7; }
+    .nd-state.call::before,
+    .nd-state.control::before { animation: nd-pulse 1.1s ease-in-out infinite; }
+
+    .nd-empty {
+      font-size: 0.78rem; color: var(--text-soft);
+      padding: 0.8rem 0.9rem; background: rgba(0, 0, 0, 0.2);
+      border: 1px dashed var(--border-subtle); border-radius: 8px;
+    }
+    .nd-empty i { margin-right: 0.4rem; opacity: 0.6; }
+
+    /* --- Full-width spectrum band (top of the drawer) --- */
+    .nd-spectrum-band { padding: 0; }
+    .nd-spectrum-band .nd-panel-h { padding-right: 0.9rem; }
+    .nd-wf-toolbar { display: flex; align-items: center; gap: 0.6rem; margin-left: auto; }
+    .nd-wf-toolbar select {
+      background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-subtle);
+      border-radius: 6px; color: var(--text-primary); padding: 0.25rem 0.5rem;
+      font-family: inherit; font-size: 0.76rem;
+    }
+    .nd-wf-status {
+      font-size: 0.66rem; color: var(--text-soft); font-weight: 600;
+      text-transform: none; letter-spacing: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 0.12rem 0.5rem; border-radius: 999px;
+      background: rgba(148, 163, 184, 0.12);
+    }
+    /* Keep the spectrum band roomy: it must not be compressed by the denser
+       control stack below it, and the canvases keep a comfortable min height. */
+    .nd-spectrum-band { flex-shrink: 0; }
+    .nd-wf-wrap { background: #05070d; overflow: hidden; }
+    #nd-trace, #nd-waterfall { display: block; width: 100%; }
+    #nd-trace { height: 120px; min-height: 110px; border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
+    #nd-waterfall { height: 240px; min-height: 220px; }
+    .nd-axis {
+      display: flex; justify-content: space-between; gap: 0.5rem;
+      font-size: 0.64rem; color: var(--text-soft);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 0.4rem 0.9rem 0.55rem;
+      background: rgba(0, 0, 0, 0.22);
+    }
+
+    .nd-events { max-height: 220px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 8px; }
+    .nd-event-row {
+      display: flex; gap: 0.7rem; align-items: baseline;
+      padding: 0.35rem 0.6rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      font-size: 0.74rem;
+    }
+    .nd-event-row:last-child { border-bottom: none; }
+    .nd-ev-time { color: var(--text-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.68rem; flex-shrink: 0; }
+    .nd-ev-type { font-weight: 600; color: var(--accent); flex-shrink: 0; }
+    .nd-ev-ft { color: var(--text-primary); margin-left: auto; text-align: right; }
+    .nd-table-scroll { overflow-x: auto; }
+
+    /* --- Drawer sub-view tabs (P4/P5/P1) --- */
+    .nd-tabs {
+      display: flex; gap: 0.35rem; flex-wrap: wrap;
+      margin-bottom: 1.2rem;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 0.1rem;
+    }
+    .nd-tab {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-soft); font-family: inherit; font-weight: 600;
+      font-size: 0.78rem; padding: 0.5rem 0.8rem;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .nd-tab:hover { color: var(--text-primary); }
+    .nd-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .nd-tab .nd-tab-count {
+      display: inline-block; margin-left: 0.35rem; padding: 0.02rem 0.4rem;
+      border-radius: 999px; background: rgba(56, 189, 248, 0.18); color: #7dd3fc;
+      font-size: 0.62rem; font-weight: 700; vertical-align: middle;
+    }
+    /* Full-screen drawer: the tab bar is retired — every panel is shown at
+       once (spectrum band on top, the rest in the reflowing panel grid). */
+    .nd-tabs { display: none; }
+    .nd-view { display: contents; }
+
+    /* --- Spectrum hover overlay (P6c) --- */
+    .nd-wf-wrap { position: relative; }
+    .nd-wf-cursor {
+      position: absolute; top: 0; bottom: 0; width: 1px;
+      background: rgba(255, 255, 255, 0.65); pointer-events: none;
+      display: none; z-index: 2;
+    }
+    .nd-wf-tip {
+      position: absolute; top: 4px; transform: translateX(-50%);
+      background: rgba(3, 7, 18, 0.9); border: 1px solid var(--accent-border);
+      color: #bae6fd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.66rem; padding: 0.12rem 0.4rem; border-radius: 5px;
+      pointer-events: none; white-space: nowrap; display: none; z-index: 3;
+    }
+
+    /* --- Now playing cards (P4) --- */
+    .nd-np-grid { display: flex; flex-direction: column; gap: 0.55rem; }
+    .nd-np-card {
+      display: flex; align-items: center; gap: 0.8rem;
+      padding: 0.7rem 0.9rem; border-radius: 9px;
+      background: rgba(34, 197, 94, 0.07);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .nd-np-live {
+      width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+      background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
+      animation: nd-pulse 1.1s ease-in-out infinite;
+    }
+    @keyframes nd-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .nd-np-main { flex: 1; min-width: 0; }
+    .nd-np-tg { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
+    .nd-np-ft { font-size: 0.74rem; color: var(--text-soft); margin-top: 0.15rem; }
+    .nd-np-ft .nd-alias { color: #7dd3fc; }
+    .nd-np-elapsed {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem; color: #4ade80; flex-shrink: 0;
+    }
+    .nd-np-sub { font-size: 0.66rem; color: var(--text-soft); margin-top: 0.1rem; }
+
+    /* --- Live events log (P5) --- */
+    .nd-log-row { border-left: 2px solid transparent; }
+    .nd-log-row.control  { border-left-color: var(--warning); background: rgba(245, 158, 11, 0.06); }
+    .nd-log-row.traffic  { border-left-color: var(--accent); }
+    .nd-log-row.callstart{ border-left-color: var(--success); }
+    .nd-log-row.callend  { border-left-color: rgba(148, 163, 184, 0.5); }
+    .nd-log-row .nd-ev-type.control  { color: var(--warning); }
+    .nd-log-row .nd-ev-type.callstart{ color: #4ade80; }
+
+    /* --- Channel / tuner config editor (P1/P2) --- */
+    .nd-cfg-actions {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      padding: 0.7rem 0.9rem; border-top: 1px solid var(--border-subtle);
+      background: rgba(0, 0, 0, 0.18);
+    }
+    .nd-cfg-actions .nd-spacer { flex: 1; }
+
+    /* --- Unified SDR-Trunk-style channel manager --- */
+    .nd-ch-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+    .nd-ch-table th {
+      text-align: left; color: var(--text-soft); font-weight: 700;
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 0.5rem 0.55rem; border-bottom: 1px solid var(--border-subtle);
+      white-space: nowrap; background: rgba(0, 0, 0, 0.15); position: sticky; top: 0;
+    }
+    .nd-ch-table td {
+      padding: 0.4rem 0.55rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      vertical-align: middle;
+    }
+    .nd-ch-table tbody tr:hover { background: rgba(56, 189, 248, 0.04); }
+    .nd-ch-table tr.nd-ch-live-lit { background: rgba(34, 197, 94, 0.05); }
+    .nd-ch-table tr.nd-ch-live-ctrl { background: rgba(56, 189, 248, 0.05); }
+    .nd-ch-table input[type="text"], .nd-ch-table input[type="number"], .nd-ch-table select {
+      width: 100%; min-width: 68px; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 6px;
+      color: var(--text-primary); padding: 0.3rem 0.4rem;
+      font-family: inherit; font-size: 0.76rem;
+    }
+    .nd-ch-table input:focus, .nd-ch-table select:focus { outline: none; border-color: var(--accent-border); }
+    .nd-ch-w-name  input { min-width: 120px; }
+    .nd-ch-w-freq  input { min-width: 96px; }
+    .nd-ch-w-sys   input { min-width: 96px; }
+    .nd-ch-live-cell { min-width: 150px; }
+    .nd-ch-live-ft { font-size: 0.66rem; color: var(--text-soft); margin-top: 0.2rem; white-space: nowrap; }
+    .nd-ch-live-ft .nd-alias { color: #7dd3fc; }
+    .nd-ch-en {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 100%;
+    }
+    .nd-ch-en input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+    .nd-ch-actions { display: flex; gap: 0.3rem; justify-content: flex-end; }
+    .nd-ch-livecol { display: flex; align-items: center; gap: 0.4rem; }
+    .nd-ch-livebtn { padding: 0.22rem 0.5rem; line-height: 1; }
+    /* Per-decoder settings sub-row (expand/collapse under a channel). */
+    .nd-ch-detail-row > td {
+      background: rgba(56, 189, 248, 0.035);
+      border-top: 1px dashed var(--border-subtle);
+      padding: 0.55rem 0.85rem;
+    }
+    .nd-ch-detail-inner { display: flex; flex-wrap: wrap; gap: 0.55rem 1rem; align-items: flex-end; }
+    .nd-dc-f { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.68rem; color: var(--text-soft); }
+    .nd-dc-f > span { white-space: nowrap; }
+    .nd-dc-f input[type="number"], .nd-dc-f input[type="text"], .nd-dc-f select { min-width: 88px; }
+    .nd-dc-bool { flex-direction: row; align-items: center; gap: 0.32rem; padding-bottom: 0.25rem; }
+    .nd-dc-bool input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+    .nd-dc-group {
+      display: flex; flex-wrap: wrap; gap: 0.5rem 0.7rem; align-items: flex-end;
+      padding: 0.35rem 0.5rem; border: 1px solid var(--border-subtle); border-radius: 6px;
+    }
+    .nd-dc-group-h { flex-basis: 100%; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-soft); }
+    .nd-dc-ts { flex-basis: 100%; }
+    .nd-dc-ts-h { font-size: 0.66rem; color: var(--text-soft); margin-bottom: 0.3rem; }
+    .nd-dc-ts-table { border-collapse: collapse; }
+    .nd-dc-ts-table td { padding: 0.12rem 0.25rem; border: 0; }
+    .nd-dc-ts-empty { font-size: 0.66rem; color: var(--text-soft); font-style: italic; padding: 0.15rem 0.25rem; }
+    .nd-ch-gear-open { color: var(--accent); }
+    .nd-ch-unmatched-h {
+      padding: 0.5rem 0.9rem; font-size: 0.62rem; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--text-soft); font-weight: 700;
+      background: rgba(0, 0, 0, 0.15); border-top: 1px solid var(--border-subtle);
+    }
+
+    /* Narrow screens: single-column panel grid; spectrum stays full-width. */
+    @media (max-width: 720px) {
+      .node-drawer-body { padding: 0.9rem 0.8rem 2.5rem; }
+      .nd-panels { grid-template-columns: 1fr; }
+      #nd-trace { height: 90px; }
+      #nd-waterfall { height: 190px; }
+    }
+    .nd-sync-hint {
+      font-size: 0.68rem; font-weight: 600; padding: 0.15rem 0.55rem; border-radius: 999px;
+      display: none; align-items: center; gap: 0.3rem;
+    }
+    .nd-sync-hint.out { display: inline-flex; background: rgba(245, 158, 11, 0.14); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .nd-sync-hint.ok  { display: inline-flex; background: rgba(34, 197, 94, 0.12); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+    .nd-cfg-row {
+      border: 1px solid var(--border-subtle); border-radius: 9px;
+      padding: 0.7rem 0.8rem; margin-bottom: 0.6rem; background: rgba(0, 0, 0, 0.18);
+    }
+    .nd-cfg-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0.55rem 0.7rem; align-items: end;
+    }
+    .nd-fld { display: flex; flex-direction: column; gap: 0.2rem; }
+    .nd-fld > label {
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-soft); font-weight: 600;
+    }
+    .nd-fld input[type="text"], .nd-fld input[type="number"], .nd-fld select, .nd-fld textarea {
+      width: 100%; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 6px;
+      color: var(--text-primary); padding: 0.32rem 0.45rem;
+      font-family: inherit; font-size: 0.78rem;
+    }
+    .nd-fld textarea { resize: vertical; min-height: 2.2rem; }
+    .nd-fld input[type="color"] { padding: 0.1rem; height: 1.9rem; cursor: pointer; }
+    .nd-fld input:focus, .nd-fld select:focus, .nd-fld textarea:focus { outline: none; border-color: var(--accent-border); }
+    .nd-chk { display: flex; align-items: center; gap: 0.4rem; font-size: 0.74rem; color: var(--text-primary); }
+    .nd-cfg-rowhead { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.55rem; }
+    .nd-cfg-rowhead .nd-strong { flex: 1; }
+    .nd-input-wide { width: 100%; }
+
+    /* --- Global settings modal (P3) --- */
+    .modal-content.wide { max-width: 940px; }
+    .gc-tabs { display: flex; gap: 0.35rem; border-bottom: 1px solid var(--border-subtle); margin: 0.5rem 0 1rem; }
+    .gc-tab {
+      background: none; border: none; cursor: pointer; color: var(--text-soft);
+      font-family: inherit; font-weight: 600; font-size: 0.82rem;
+      padding: 0.5rem 0.9rem; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .gc-tab:hover { color: var(--text-primary); }
+    .gc-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .gc-panel { display: none; }
+    .gc-panel.active { display: block; }
+    .gc-scroll { max-height: 58vh; overflow-y: auto; padding-right: 0.3rem; }
+    .gc-subtabs { display: flex; gap: 0.3rem; margin-bottom: 0.8rem; }
+    .gc-subtab {
+      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-subtle);
+      border-radius: 999px; color: var(--text-soft); cursor: pointer;
+      font-family: inherit; font-size: 0.76rem; font-weight: 600; padding: 0.3rem 0.85rem;
+    }
+    .gc-subtab.active { background: var(--accent-soft); border-color: var(--accent-border); color: #7dd3fc; }
+    .gc-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.8rem; flex-wrap: wrap; }
+    .gc-note { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0 0 0.8rem; padding: 0.5rem 0.7rem;
+      border-radius: 6px; background: var(--accent-soft); color: var(--text-soft); font-size: 0.75rem; line-height: 1.35; }
+    .gc-note i { margin-top: 0.15rem; color: #7dd3fc; }
+    .gc-card {
+      border: 1px solid var(--border-subtle); border-radius: 10px;
+      margin-bottom: 0.6rem; background: rgba(0, 0, 0, 0.16); overflow: hidden;
+    }
+    .gc-card-head {
+      display: flex; align-items: center; gap: 0.55rem; cursor: pointer;
+      padding: 0.6rem 0.8rem; user-select: none;
+    }
+    .gc-card-head:hover { background: rgba(255, 255, 255, 0.03); }
+    .gc-card-head .gc-caret { transition: transform 0.15s ease; color: var(--text-soft); font-size: 0.7rem; }
+    .gc-card.open .gc-card-head .gc-caret { transform: rotate(90deg); }
+    .gc-card-title { flex: 1; font-weight: 600; color: var(--text-primary); font-size: 0.85rem; }
+    .gc-card-meta { font-size: 0.68rem; color: var(--text-soft); }
+    .gc-card-body { display: none; padding: 0.2rem 0.8rem 0.8rem; }
+    .gc-card.open .gc-card-body { display: block; }
+    .gc-inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 0.6rem; }
+    .gc-color-swatch { width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border-subtle); flex-shrink: 0; }
+    /* Titled sub-sections inside an agency card. Each carries a source badge so
+       it's obvious which system that part configures (Global / SDR-Trunk / rdio). */
+    .gc-sect {
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+      padding: 0.7rem 0.75rem 0.75rem; margin-bottom: 0.7rem;
+      background: rgba(255, 255, 255, 0.015);
+    }
+    .gc-sect:last-child { margin-bottom: 0; }
+    .gc-sect-sdr { border-color: rgba(168, 85, 247, 0.28); }
+    .gc-sect-rdio { border-color: rgba(45, 212, 191, 0.24); }
+    .gc-sect-h {
+      font-size: 0.74rem; font-weight: 600; color: var(--text-primary);
+      margin-bottom: 0.65rem; display: flex; align-items: center; gap: 0.5rem;
+    }
+    .gc-src-badge {
+      font-size: 0.57rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; padding: 0.12rem 0.42rem; border-radius: 4px;
+      border: 1px solid transparent; white-space: nowrap;
+    }
+    .gc-src-global { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.32); }
+    .gc-src-sdr { background: rgba(168, 85, 247, 0.16); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.42); }
+    .gc-src-rdio { background: rgba(45, 212, 191, 0.14); color: #5eead4; border-color: rgba(45, 212, 191, 0.4); }
+    .gc-sect-count { font-size: 0.62rem; color: var(--text-soft); font-weight: 600; }
+    .gc-hint { font-size: 0.72rem; color: var(--text-soft); margin-bottom: 0.55rem; }
+    .gc-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+    .gc-table th {
+      text-align: left; color: var(--text-soft); font-weight: 600; font-size: 0.62rem;
+      text-transform: uppercase; letter-spacing: 0.05em; padding: 0.35rem 0.4rem;
+      border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
+    }
+    .gc-table td { padding: 0.3rem 0.4rem; border-bottom: 1px solid rgba(148, 163, 184, 0.08); vertical-align: middle; }
+    .gc-table input, .gc-table select {
+      width: 100%; min-width: 60px; background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-subtle); border-radius: 5px;
+      color: var(--text-primary); padding: 0.25rem 0.35rem; font-family: inherit; font-size: 0.75rem;
+    }
+    .gc-table input:focus, .gc-table select:focus { outline: none; border-color: var(--accent-border); }
+    .gc-icon-btn {
+      background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #f87171; border-radius: 6px; cursor: pointer; padding: 0.25rem 0.5rem;
+      font-size: 0.72rem; line-height: 1;
+    }
+    .gc-icon-btn:hover { background: rgba(239, 68, 68, 0.24); }
+    .gc-empty { font-size: 0.78rem; color: var(--text-soft); padding: 1.2rem; text-align: center; }
+    .gc-attr-row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.35rem; }
+    .gc-badge-btn {
+      background: rgba(56, 189, 248, 0.1); border: 1px solid var(--accent-border);
+      color: #7dd3fc; border-radius: 6px; cursor: pointer; padding: 0.28rem 0.7rem;
+      font-family: inherit; font-size: 0.74rem; font-weight: 600;
+    }
+    .gc-badge-btn:hover { background: rgba(56, 189, 248, 0.2); }
 
     /* === Filter / toolbar row ========================================= */
     .filter-bar {
@@ -949,6 +1518,9 @@
           <i class="fas fa-server"></i> Dev
           <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
         </button>
+        <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
+          <i class="fas fa-satellite-dish"></i> Nodes
+        </button>
       </div>
 
       <!-- Requests Tab -->
@@ -1051,6 +1623,188 @@
 
         <h3 class="dev-section-h">Data Sources</h3>
         <div class="dev-card-grid" id="dev-sources-grid"></div>
+      </div>
+
+      <!-- Nodes Tab -->
+      <div id="nodes-tab" class="tab-content">
+        <div class="dev-section-h" style="margin-top: 0; flex-wrap: wrap; gap: 0.5rem;">
+          Feeder Nodes
+          <label id="auto-update-wrap" style="margin-left:auto; display:inline-flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--text-soft); font-weight:400; cursor:pointer;" title="Pause automatic node self-updates while you push changes. Manual updates (the Update buttons) still work.">
+            <input type="checkbox" id="auto-update-toggle" onchange="toggleAutoUpdate(this.checked)"> Auto-update
+          </label>
+          <button class="btn btn-secondary btn-sm" onclick="updateAllNodes()" title="Update all online nodes now">
+            <i class="fas fa-download"></i> Update all
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="openGlobalConfig()">
+            <i class="fas fa-globe"></i> Global settings
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="loadNodes()">
+            <i class="fas fa-sync-alt"></i> Refresh
+          </button>
+        </div>
+        <div class="dev-card-grid" id="nodes-grid">
+          <div class="loading" style="grid-column: 1 / -1;">
+            <i class="fas fa-spinner"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Node Detail Drawer (P3) -->
+  <div id="node-drawer" class="node-drawer" onclick="if(event.target===this) closeNodeDrawer()">
+    <div class="node-drawer-panel">
+      <div class="node-drawer-head">
+        <span class="node-dot" id="nd-dot" title="Node state"></span>
+        <div class="node-drawer-title">
+          <div class="node-drawer-name" id="nd-name">Node</div>
+          <div class="node-drawer-sub" id="nd-conn">connecting…</div>
+          <div class="node-versions" id="nd-versions" style="margin:0.3rem 0 0;"></div>
+        </div>
+        <button class="modal-close" onclick="closeNodeDrawer()" title="Close">&times;</button>
+      </div>
+      <div class="node-drawer-body">
+        <div class="nd-banner" id="nd-banner" style="display: none;"></div>
+
+        <!-- Retired tab bar: every panel now shows at once. Kept hidden so
+             _ndSetView()'s querySelector is harmless. -->
+        <div class="nd-tabs" id="nd-tabs"></div>
+
+        <!-- FULL-WIDTH SPECTRUM BAND (spans the top of the drawer) -->
+        <div class="nd-panel nd-spectrum-band">
+          <div class="nd-panel-h">
+            <i class="fas fa-wave-square"></i> Spectrum
+            <div class="nd-wf-toolbar">
+              <select id="nd-wf-tuner" style="display: none;" onchange="_ndSwitchSpectrum(this.value)"></select>
+              <span class="nd-wf-status" id="nd-wf-status">idle</span>
+            </div>
+          </div>
+          <div class="nd-wf-wrap" id="nd-wf-wrap">
+            <canvas id="nd-trace" width="512" height="70"></canvas>
+            <canvas id="nd-waterfall" width="512" height="200"></canvas>
+            <div class="nd-wf-cursor" id="nd-wf-cursor"></div>
+            <div class="nd-wf-tip" id="nd-wf-tip"></div>
+          </div>
+          <div class="nd-axis">
+            <span id="nd-axis-l">—</span>
+            <span id="nd-axis-m">—</span>
+            <span id="nd-axis-r">—</span>
+          </div>
+        </div>
+
+        <!-- Everything else flows below the spectrum in a reflowing grid. -->
+        <div class="nd-panels">
+          <!-- Controls -->
+          <div class="nd-panel nd-span-all">
+            <div class="nd-panel-h"><i class="fas fa-sliders"></i> Controls</div>
+            <div class="nd-panel-b">
+              <div class="nd-controls">
+                <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
+                <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+                <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
+                <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tuners -->
+          <div class="nd-panel nd-span-all">
+            <div class="nd-panel-h"><i class="fas fa-satellite-dish"></i> Tuners</div>
+            <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-tuners"></div></div>
+          </div>
+
+          <!-- Channels (unified config + live manager) -->
+          <div class="nd-panel nd-span-all">
+            <div class="nd-panel-h">
+              <i class="fas fa-broadcast-tower"></i> Channels
+              <span class="nd-h-spacer"></span>
+              <span class="nd-sync-hint" id="nd-cfg-sync"></span>
+            </div>
+            <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
+            <div class="nd-cfg-actions">
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
+              <span class="nd-spacer"></span>
+              <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
+            </div>
+          </div>
+
+          <!-- Now playing + live event log pair up side-by-side (stack narrow) -->
+          <div class="nd-panels-split">
+            <div class="nd-panel">
+              <div class="nd-panel-h">
+                <i class="fas fa-tower-broadcast"></i> Now playing
+                <span class="nd-tab-count" id="nd-np-count" style="display:none;"></span>
+              </div>
+              <div class="nd-panel-b" id="nd-nowplaying"></div>
+            </div>
+
+            <div class="nd-panel">
+              <div class="nd-panel-h">
+                <i class="fas fa-clock-rotate-left"></i> Live event log
+                <span class="nd-h-spacer"></span>
+                <span class="nd-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · live only</span>
+              </div>
+              <div class="nd-panel-b"><div class="nd-events" id="nd-events"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global node settings modal (P3) -->
+  <div id="global-config-modal" class="modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h2><i class="fas fa-globe" style="color: var(--accent);"></i> Global node settings</h2>
+        <button class="modal-close" onclick="closeGlobalConfig()">&times;</button>
+      </div>
+      <div id="gc-meta" class="dev-card-secondary" style="margin-bottom: 0.4rem;"></div>
+      <div class="gc-tabs">
+        <button class="gc-tab active" data-gc="agencies" onclick="_gcSetTab('agencies')">Agencies</button>
+        <button class="gc-tab" data-gc="grouptags" onclick="_gcSetTab('grouptags')">Groups &amp; Tags</button>
+      </div>
+
+      <!-- Agencies panel -->
+      <div class="gc-panel active" id="gc-panel-agencies">
+        <div class="gc-toolbar">
+          <div class="search-box" style="min-width: 220px;">
+            <i class="fas fa-search"></i>
+            <input type="text" id="gc-agency-search" placeholder="Search agencies / talkgroups…" oninput="_gcRenderAgencies()">
+          </div>
+          <button class="gc-badge-btn" onclick="_gcAddAgency()"><i class="fas fa-plus"></i> Add agency</button>
+          <span class="result-count" id="gc-agency-count"></span>
+        </div>
+        <div class="gc-note"><i class="fas fa-circle-info"></i> Each agency automatically becomes an SDR-Trunk alias + stream and an rdio system + API key — keyed by its System ID. Keys are generated per node and never repeat; the alias list is auto-set (one playlist). Set the name + System ID and its talkgroups/units.</div>
+        <div class="gc-scroll" id="gc-agencies"></div>
+      </div>
+
+      <!-- Groups & Tags panel -->
+      <div class="gc-panel" id="gc-panel-grouptags">
+        <div class="gc-subtabs">
+          <button class="gc-subtab active" data-rd="groups" onclick="_gcSetRdioTab('groups')">Groups</button>
+          <button class="gc-subtab" data-rd="tags" onclick="_gcSetRdioTab('tags')">Tags</button>
+        </div>
+
+        <div class="gc-panel active" id="gc-rd-groups">
+          <div class="gc-toolbar">
+            <button class="gc-badge-btn" onclick="_gcAddGroup()"><i class="fas fa-plus"></i> Add group</button>
+          </div>
+          <div class="gc-scroll" id="gc-groups"></div>
+        </div>
+
+        <div class="gc-panel" id="gc-rd-tags">
+          <div class="gc-toolbar">
+            <button class="gc-badge-btn" onclick="_gcAddTag()"><i class="fas fa-plus"></i> Add tag</button>
+          </div>
+          <div class="gc-scroll" id="gc-tags"></div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
+        <button class="btn btn-secondary" onclick="closeGlobalConfig()" style="flex: 1;">Cancel</button>
+        <button class="btn btn-primary" onclick="_gcSave()" style="flex: 1;" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
       </div>
     </div>
   </div>
@@ -1329,6 +2083,7 @@
   <div id="toast-stack"></div>
 
   <script src="config.js"></script>
+  <script src="ui-dialogs.js"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -1373,6 +2128,24 @@
         .replace(/'/g, '&#39;');
     }
 
+    // Escape a value for use as a single-quoted JS string literal that is itself
+    // embedded inside an inline HTML event handler (onclick="fn('...')"). HTML
+    // entity-encoding is NOT safe there: the browser HTML-decodes the attribute
+    // before compiling the handler, so escapeHtml's &#39; becomes ' again and
+    // breaks out of the JS string. Encoding every non-alphanumeric as \xHH / \uHHHH
+    // survives both the HTML-attribute parse and the JS-string parse (no quotes,
+    // ampersands, or angle brackets are ever emitted). Prefer passing indices and
+    // looking data up, but this makes any inline handler arg injection-proof.
+    function jsArg(value) {
+      if (value == null) return '';
+      return String(value).replace(/[^a-zA-Z0-9]/g, (ch) => {
+        const c = ch.charCodeAt(0);
+        return c < 256
+          ? '\\x' + c.toString(16).padStart(2, '0')
+          : '\\u' + c.toString(16).padStart(4, '0');
+      });
+    }
+
     // Render a timestamp that may be either Unix seconds (numbers from the
     // editor-requests API) or an ISO string (from the users API). Null/garbage
     // renders as a dash instead of a bogus 1970 date.
@@ -1415,7 +2188,7 @@
       is_map_editor: false,
       can_manage_users: false,
       can_assign_privileged_roles: false,
-      tabs: { requests: false, users: false, dev: false }
+      tabs: { requests: false, users: false, dev: false, nodes: false }
     };
 
     // Dev-tab status polling state. We refresh /api/status while the Dev
@@ -1423,6 +2196,12 @@
     // requests in the background.
     let _devStatusTimer = null;
     const _devStatusIntervalMs = 30_000;
+
+    // Nodes-tab polling state. Same pattern as the Dev tab: refresh the
+    // feeder-node list every 10s only while the Nodes panel is active.
+    let allNodes = [];
+    let _nodesTimer = null;
+    const _nodesIntervalMs = 10_000;
     
     function switchTab(tab) {
       currentTab = tab;
@@ -1446,6 +2225,9 @@
       if (tab === 'users' && allUsers.length === 0) {
         loadUsers();
       }
+      if (tab === 'nodes' && allNodes.length === 0) {
+        loadNodes();
+      }
 
       // Dev tab: start polling /api/status when entered, stop when left.
       // Other tabs don't need a per-tab polling loop.
@@ -1453,6 +2235,14 @@
         startDevStatusPolling();
       } else {
         stopDevStatusPolling();
+      }
+
+      // Nodes tab: start the 10s node-list refresh when entered, stop
+      // when left, so we don't leak the interval in the background.
+      if (tab === 'nodes') {
+        startNodesPolling();
+      } else {
+        stopNodesPolling();
       }
     }
 
@@ -1463,6 +2253,8 @@
         await loadUsers();
       } else if (currentTab === 'dev') {
         await refreshDevStatus();
+      } else if (currentTab === 'nodes') {
+        await loadNodes();
       }
     }
 
@@ -1773,6 +2565,2677 @@
         .join('');
     }
     
+    // === Nodes tab — feeder node management ============================
+    function startNodesPolling() {
+      // First refresh happens via switchTab's lazy-load / this immediate
+      // call; then every _nodesIntervalMs while the tab stays active.
+      if (allNodes.length > 0) loadNodes();
+      if (_nodesTimer) return;
+      _nodesTimer = setInterval(loadNodes, _nodesIntervalMs);
+    }
+
+    function stopNodesPolling() {
+      if (_nodesTimer) {
+        clearInterval(_nodesTimer);
+        _nodesTimer = null;
+      }
+    }
+
+    async function loadNodes() {
+      const grid = document.getElementById('nodes-grid');
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        allNodes = data.nodes || [];
+        renderNodes();
+        loadAutoUpdateState();
+      } catch (e) {
+        console.error('Error loading nodes:', e);
+        if (grid) grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <p>Failed to load feeder nodes: ${escapeHtml(e.message)}</p>
+          </div>`;
+      }
+    }
+
+    // Per-node readiness chips: CPU calibration + JMBE voice codec. A node won't
+    // start decoding (and produce audio) until both are ready, so surface it.
+    // Returns '' when the node hasn't reported (older build / no status yet).
+    function _ndReadinessHtml(st) {
+      if (!st || (st.calibrated == null && st.jmbeInstalled == null)) return '';
+      const chip = (label, v) => {
+        const state = v === true ? 'ok' : (v === false ? 'bad' : 'unknown');
+        const mark = v === true ? '✓' : (v === false ? '✗' : '—');
+        return `<span class="nd-ready ${state}">${label} ${mark}</span>`;
+      };
+      return `<div class="node-ready-row" title="Node must be calibrated and have the JMBE codec before it decodes voice">`
+        + chip('Calibrated', st.calibrated) + chip('JMBE', st.jmbeInstalled) + `</div>`;
+    }
+
+    // Live activity chips: is the node DECODING (SDR-Trunk following the trunk)
+    // and FEEDING (forwarding to central rdio). Reuses the .nd-ready chip styles.
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, st) {
+      const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
+      let dec;
+      if (!online) dec = chip('unknown', 'Offline');
+      else if (!sdrUp) dec = chip('bad', 'SDR-Trunk down');
+      else if (decoding) dec = chip('ok', 'Decoding');
+      else dec = chip('unknown', 'Idle');
+      const uploading = !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
+      let feed;
+      if (!feedEnabled) feed = chip('unknown', 'Feed off');
+      else feed = uploading ? chip('ok', 'Feeding') : chip('unknown', 'Feed on');
+      return `<div class="node-ready-row">${dec}${feed}</div>`;
+    }
+
+    function _nodeVer(label, v) {
+      return `<span class="node-ver"><span class="k">${escapeHtml(label)}</span>${escapeHtml(v == null ? '—' : v)}</span>`;
+    }
+
+    function _nodeCard(node) {
+      const id = node.id;
+      const online = !!node.online;
+      const name = node.name || 'Unnamed node';
+      const userId = node.userId || '';
+      const userShort = userId ? escapeHtml(userId.slice(0, 8)) + '…' : '—';
+      const installId = node.installId || node.install_id || '';
+      const installShort = installId ? escapeHtml(String(installId).slice(0, 8)) + '…' : '—';
+      const enabled = node.enabled !== false; // default to enabled unless explicitly false
+      const feedEnabled = node.feedEnabled === true; // feed to central rdio; off by default
+      const st = node.status || null;
+      const owner = node.ownerUsername ? escapeHtml(node.ownerUsername) : userShort;
+      // Decoding = SDR-Trunk up AND following the trunk (a control lock or a live
+      // call). Feeding = forwarding to central rdio (green once uploads are flowing).
+      const sdrUp = !!(st && st.components && st.components.sdrtrunk === 'running');
+      const decoding = !!(st && (
+        (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
+        (Array.isArray(st.channels) && st.channels.some(c =>
+          c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
+      ));
+
+      // Optional status metrics — render a small secondary row when present.
+      const statusBits = [];
+      if (st) {
+        if (st.queueDepth != null) statusBits.push({ label: 'queue', value: st.queueDepth });
+        if (st.callsPerMin != null) statusBits.push({ label: 'calls/min', value: st.callsPerMin });
+        if (st.uploadsPerMin != null) statusBits.push({ label: 'uploads/min', value: st.uploadsPerMin });
+        if (st.errors != null) statusBits.push({ label: 'errors', value: st.errors });
+      }
+      const statusRow = statusBits.length
+        ? `<div class="dev-card-secondary">${statusBits
+            .map(b => `<span>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
+        : '';
+
+      return `
+        <div class="dev-card">
+          <div class="dev-card-head" style="padding-right: 0;">
+            <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
+            <div class="dev-card-name">${escapeHtml(name)} <span class="node-kind-badge">${escapeHtml(node.kind || 'radio')}</span></div>
+          </div>
+          <div class="node-versions">
+            ${_nodeVer('agent', node.agentVersion)}
+            ${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
+            ${_nodeVer('rdio', node.rdioVersion)}
+          </div>
+          ${_ndReadinessHtml(st)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, st)}
+          <div class="dev-card-secondary">
+            <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
+            <span>install <span class="node-mono">${installShort}</span></span>
+          </div>
+          ${statusRow}
+          <div class="node-enable-row">
+            <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${jsArg(id)}')">
+              <i class="fas fa-gauge-high"></i> Details
+            </button>
+            <span class="lbl" style="text-align: right;">Node ${enabled ? 'on' : 'off'}</span>
+            <label class="node-switch" title="Capture on/off. Off stops decoding (all channels) but the agent stays connected and re-enables live. To cut a node off entirely, delete or rotate its key.">
+              <input type="checkbox" ${enabled ? 'checked' : ''}
+                     onchange="toggleNode('${jsArg(id)}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+          </div>
+          <div class="node-enable-row">
+            <div style="display:flex; gap:0.4rem;">
+              <button class="btn btn-secondary btn-sm ${(typeof node.lat === 'number') ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${(typeof node.lat === 'number') ? 'View antenna location' : 'No location set'}">
+                <i class="fas fa-location-dot"></i>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
+                <i class="fas fa-download"></i>
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)">
+                <i class="fas fa-key"></i>
+              </button>
+              ${userPermissions.is_owner
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
+                : ''}
+            </div>
+            <span class="lbl" style="text-align: right;">Feed → rdio ${feedEnabled ? 'on' : 'off'}</span>
+            <label class="node-switch" title="Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading) — verify reception before feeding the live system.">
+              <input type="checkbox" ${feedEnabled ? 'checked' : ''}
+                     onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+          </div>
+        </div>`;
+    }
+
+    function renderNodes() {
+      const grid = document.getElementById('nodes-grid');
+      if (!grid) return;
+      if (!allNodes.length) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <i class="fas fa-satellite-dish"></i>
+            <p>No feeder nodes yet. Contributors appear here automatically when their node connects.</p>
+          </div>`;
+        return;
+      }
+      grid.innerHTML = allNodes.map(_nodeCard).join('');
+    }
+
+    async function toggleNode(id, newValue, inputEl) {
+      if (inputEl) inputEl.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': await authHeader(),
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ enabled: newValue })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(`Node ${newValue ? 'enabled' : 'disabled'}.`, 'success');
+        await loadNodes();
+      } catch (e) {
+        console.error('Error toggling node:', e);
+        showToast(`Failed to update node: ${e.message}`, 'error');
+        // Revert the checkbox to its prior state on failure.
+        if (inputEl) { inputEl.checked = !newValue; inputEl.disabled = false; }
+      }
+    }
+
+    // Toggle whether decoded calls are forwarded to the central rdio. Separate
+    // from the node being on — off lets the operator verify config + reception
+    // before feeding the live system.
+    async function toggleNodeFeed(id, newValue, inputEl) {
+      if (inputEl) inputEl.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ feed_enabled: newValue })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(newValue ? 'Feed to central rdio ENABLED.' : 'Feed disabled (node keeps decoding).', 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Failed to update feed: ${e.message}`, 'error');
+        if (inputEl) { inputEl.checked = !newValue; inputEl.disabled = false; }
+      }
+    }
+
+    // Owner-only: permanently delete a node. If its agent reconnects while the
+    // contributor still holds the role, it reappears.
+    async function deleteNode(id) {
+      if (!userPermissions.is_owner) { showToast('Only owners can delete nodes.', 'warn'); return; }
+      const node = (allNodes || []).find(n => n.id === id);
+      const who = node ? (node.name || id) : id;
+      if (!await uiConfirm(`Delete node "${who}"? Its key is revoked and it cannot reconnect. This cannot be undone.`, { danger: true, okText: 'Delete' })) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
+          method: 'DELETE', headers: { 'Authorization': await authHeader() },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Node deleted.', 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Failed to delete node: ${e.message}`, 'error');
+      }
+    }
+
+    // Re-issue a node's per-node token. The old key stops working immediately; the
+    // node must be re-installed with the new one. Reveals the new token once.
+    async function rotateNodeToken(id) {
+      const node = (allNodes || []).find(n => n.id === id);
+      const who = node ? (node.name || id) : id;
+      if (!await uiConfirm(`Re-issue the key for "${who}"? The old key/installer stops working and the node must be re-installed with the new key.`, { danger: true, okText: 'Re-issue' })) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/rotate-token`, {
+          method: 'POST', headers: { 'Authorization': await authHeader() },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        // Reveal once — staff hand this to the operator to re-install.
+        await uiConfirm(`New key for "${who}" (shown once — copy it now):\n\n${data.token}`, { okText: 'Copied' });
+        await loadNodes();
+      } catch (e) {
+        showToast(`Failed to rotate key: ${e.message}`, 'error');
+      }
+    }
+
+    // View a node's EXACT antenna location on a small read-only map (owner +
+    // team members only — never public). Used for coverage + channel tuning.
+    let _locViewMap = null;
+    function viewNodeLocation(id) {
+      const node = allNodes.find(n => String(n.id) === String(id));
+      if (!node || typeof node.lat !== 'number' || typeof node.lon !== 'number') {
+        showToast('No location set for this node.', 'warn');
+        return;
+      }
+      const overlay = document.createElement('div');
+      overlay.id = 'loc-view-modal';
+      overlay.className = 'loc-view-overlay';
+      overlay.innerHTML = `
+        <div class="loc-view-box">
+          <div class="loc-view-head">
+            <b><i class="fas fa-location-dot"></i> ${escapeHtml(node.name || 'Node')}</b>
+            <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
+          </div>
+          <div id="loc-view-map"></div>
+          <div class="loc-view-note">Exact antenna location, set by the operator — used for coverage calculation and channel tuning. Staff/owner only, never public.</div>
+        </div>`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
+      document.body.appendChild(overlay);
+      const c = [node.lat, node.lon];
+      const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+      const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
+      const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 15);
+      L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
+      L.marker(c).addTo(map);
+      _locViewMap = map;
+      setTimeout(() => map.invalidateSize(), 80);
+    }
+    function closeNodeLocation() {
+      if (_locViewMap) { _locViewMap.remove(); _locViewMap = null; }
+      const m = document.getElementById('loc-view-modal'); if (m) m.remove();
+    }
+
+    // Trigger an immediate (manual) update on one node. Manual updates always
+    // run, even when auto-update is paused.
+    async function updateNodeNow(id) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/cmd`, {
+          method: 'POST',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'update' })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        showToast('Update triggered on node.', 'success');
+      } catch (e) {
+        showToast(`Update failed: ${e.message}`, 'error');
+      }
+    }
+
+    // Trigger a manual update on every online node. Manual updates always run,
+    // even when auto-update is paused.
+    async function updateAllNodes() {
+      if (!await uiConfirm('Trigger an update on all online nodes now?')) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/update-all`, {
+          method: 'POST', headers: { 'Authorization': await authHeader() },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast(`Update triggered on ${data.triggered ?? 0} of ${data.total ?? 0} nodes.`, 'success');
+      } catch (e) {
+        showToast(`Update all failed: ${e.message}`, 'error');
+      }
+    }
+
+    // Reflect the current global auto-update state in the toggle.
+    async function loadAutoUpdateState() {
+      const el = document.getElementById('auto-update-toggle');
+      if (!el) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/auto-update`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        el.checked = data.enabled !== false;
+      } catch (e) { /* leave as-is */ }
+    }
+
+    // Global toggle: pause/resume automatic node self-updates. Manual updates
+    // (Update / Update all) still trigger regardless.
+    async function toggleAutoUpdate(enabled) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/auto-update`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(enabled ? 'Auto-update enabled for all nodes.' : 'Auto-update paused (manual updates still work).', 'success');
+      } catch (e) {
+        showToast(`Failed to change auto-update: ${e.message}`, 'error');
+        const el = document.getElementById('auto-update-toggle');
+        if (el) el.checked = !enabled;
+      }
+    }
+
+    // === Node detail drawer (P3) ======================================
+    // One staff WebSocket per open drawer. On open we auth, subscribe to the
+    // node, render its tuners/channels/events from nodeStatus frames, and
+    // stream a spectrum waterfall from BINARY frames. Closing tears the whole
+    // lot down (spectrumStop + unsubscribe + socket close). No reconnect in P3.
+    let _ndWs = null;
+    let _ndNodeId = null;
+    let _ndAuthed = false;
+    let _ndStatus = null;          // last status object we saw (null = none yet)
+    let _ndTuners = [];
+    let _ndTunersSig = null;        // signature of the current tuner SET (serial+type list); full-rebuild only when this changes
+    let _ndChannels = [];
+    let _ndCalls = [];             // st.activeCalls[] — calls currently up (incl. dynamic P25 traffic channels)
+    let _ndEvents = [];
+    let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
+    let _ndReqSeq = 0;
+    const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
+    const _ndWf = {
+      wf: null, wfCtx: null, wfW: 0, wfH: 0,   // waterfall canvas + device-pixel buffer size
+      tr: null, trCtx: null, trW: 0, trH: 0,   // FFT trace canvas + device-pixel buffer size
+      dpr: 1,
+      lastCenter: null, lastSr: null, lastBins: null,
+      agcLo: -100, agcHi: -20, agcInit: false, // slow-AGC dB window (agcInit: snap on first frame)
+      ro: null                                 // ResizeObserver (re-fits buffers on layout change)
+    };
+
+    // --- New drawer sub-view / editor / log state (P1/P2/P4/P5) ---
+    let _ndNode = null;            // the node object from the list (for versions etc.)
+    let _ndView = 'live';          // active drawer sub-view
+    let _ndConfig = null;          // fetched configOverride ({channels, tuners, ...})
+    let _ndCfgLoading = false;
+    let _ndLog = [];               // combined live event log (newest pushed to end)
+    const _ndSeenEv = new Set();   // dedupe keys for ingested backend events
+    let _ndPrevChan = {};          // channelId -> {type, state} snapshot for transition diff
+    let _ndCallStart = {};         // channelId -> epoch ms when the current call started
+    let _ndNpTimer = null;         // 1s ticker for "now playing" elapsed clocks
+
+    // API_BASE_URL is an http(s) URL (config.js: https://api.forcequit.xyz).
+    // Swapping the leading "http" for "ws" turns https->wss and http->ws.
+    function _ndWsUrl() {
+      return API_BASE_URL.replace(/^http/i, 'ws') + '/api/node-ws/staff';
+    }
+
+    function _ndWsSend(obj) {
+      try {
+        if (_ndWs && _ndWs.readyState === WebSocket.OPEN) _ndWs.send(JSON.stringify(obj));
+      } catch (e) { console.error('node-drawer send failed:', e); }
+    }
+
+    async function openNodeDrawer(nodeId) {
+      // Close any drawer/socket still open so re-opening (without an explicit
+      // close) can't orphan the previous WebSocket — its onclose guard
+      // (_ndWs === ws) would no longer match, leaving it receiving frames in the
+      // background forever.
+      if (_ndWs) { try { closeNodeDrawer(); } catch (e) { /* ignore */ } }
+      // Reset per-drawer state.
+      const node = allNodes.find(n => String(n.id) === String(nodeId)) || {};
+      _ndNode = node;
+      _ndNodeId = nodeId;
+      _ndAuthed = false;
+      _ndStatus = null;
+      _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = [];
+      _ndTunersSig = null;
+      _ndSpectrumTunerId = null;
+      _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
+      _ndPrevChan = {}; _ndCallStart = {};
+      _ndWf.lastCenter = null; _ndWf.lastSr = null; _ndWf.lastBins = null;
+      _ndWf.agcLo = -100; _ndWf.agcHi = -20; _ndWf.agcInit = false;
+      _ndSetView('live');
+      _ndStartNpTicker();
+
+      const drawer = document.getElementById('node-drawer');
+      drawer.classList.add('open');
+      document.getElementById('nd-name').textContent = node.name || 'Node';
+      _ndRenderVersions();
+      const dot = document.getElementById('nd-dot');
+      if (dot) dot.classList.toggle('online', !!node.online);
+      _ndSetConn('connecting', node.online);
+      _ndInitWaterfall();
+      _ndRenderAll();
+      _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
+
+      // Supabase access token — same source as authHeader().
+      let token = null;
+      try {
+        const { data } = await sb.auth.getSession();
+        token = data?.session?.access_token || null;
+      } catch (e) { /* fall through */ }
+      if (!token) { _ndBanner('err', 'No active session — please log in again.'); return; }
+
+      let ws;
+      try { ws = new WebSocket(_ndWsUrl()); }
+      catch (e) { _ndBanner('err', 'Could not open staff socket: ' + e.message); return; }
+      ws.binaryType = 'arraybuffer';
+      _ndWs = ws;
+
+      // Backend requires the auth frame within 5s — guard so we surface a
+      // clear message if authOk never arrives.
+      const authTimer = setTimeout(() => {
+        if (!_ndAuthed && _ndWs === ws) {
+          _ndBanner('err', 'Authentication timed out.');
+          try { ws.close(); } catch (e) {}
+        }
+      }, 6000);
+
+      ws.onopen = () => { _ndWsSend({ t: 'auth', data: { token } }); };
+
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+          _ndHandleText(msg, authTimer);
+        } else if (ev.data instanceof ArrayBuffer) {
+          _ndHandleSpectrum(ev.data);
+        } else if (ev.data instanceof Blob) {
+          // Fallback in case binaryType wasn't honoured.
+          ev.data.arrayBuffer().then(_ndHandleSpectrum).catch(() => {});
+        }
+      };
+
+      ws.onclose = () => {
+        clearTimeout(authTimer);
+        if (_ndWs === ws) {
+          _ndWs = null;
+          const d = document.getElementById('node-drawer');
+          if (d && d.classList.contains('open')) _ndSetConn('disconnected');
+        }
+      };
+      ws.onerror = () => { /* onclose drives the UI */ };
+    }
+
+    function _ndHandleText(msg, authTimer) {
+      const t = msg && msg.t;
+      const d = (msg && msg.data) || {};
+      if (t === 'authOk') {
+        clearTimeout(authTimer);
+        _ndAuthed = true;
+        _ndSetConn('connected');
+        _ndWsSend({ t: 'subscribeNode', data: { nodeId: _ndNodeId } });
+      } else if (t === 'authError') {
+        clearTimeout(authTimer);
+        _ndBanner('err', 'Authorization rejected: ' + (d.message || 'not owner/dev.'));
+        try { if (_ndWs) _ndWs.close(); } catch (e) {}
+      } else if (t === 'nodeStatus') {
+        _ndOnStatus(d);
+      } else if (t === 'event') {
+        if (d.event) {
+          _ndEvents.push(d.event);
+          if (_ndEvents.length > 200) _ndEvents.shift();
+          _ndIngestEvent(d.event);
+          _ndRenderEvents();
+        }
+      } else if (t === 'cmdResult') {
+        _ndOnCmdResult(d);
+      }
+    }
+
+    function _ndOnStatus(d) {
+      if (String(d.nodeId) !== String(_ndNodeId)) return;
+      _ndSetConn('connected', d.online);
+      const st = d.status || {};
+      _ndStatus = st;
+      _ndTuners = Array.isArray(st.tuners) ? st.tuners : [];
+      _ndChannels = Array.isArray(st.channels) ? st.channels : [];
+      _ndCalls = Array.isArray(st.activeCalls) ? st.activeCalls : [];
+      if (Array.isArray(st.events)) {
+        _ndEvents = st.events.slice(-200);
+        st.events.forEach(_ndIngestEvent);
+      }
+      _ndDiffChannels();       // detect control-lock / call start-end transitions -> log
+      _ndDiffCalls();          // track client-side elapsed clocks for active calls
+      // Tuner table: only FULL-rebuild when the set of SDRs changes (new/removed
+      // device). On every other status frame just refresh the read-only cells so
+      // open gain dropdowns / in-progress edits are never clobbered. (Mirrors the
+      // channel table, where status frames only rewrite the live "State" cell.)
+      const sig = _ndTunersSignature();
+      if (sig !== _ndTunersSig || !document.querySelector('#nd-tuners table')) {
+        _ndRenderTuners();     // sets _ndTunersSig
+      } else {
+        _ndUpdateTunersLive(); // live-only overlay; leaves editable controls intact
+      }
+      _ndRenderChannels();
+      _ndRenderEvents();
+      _ndRenderNowPlaying();
+      _ndRenderCfgSync();
+      _ndRenderVersions();     // reflect a just-completed component update live
+      _ndRenderTunerSelector();
+      // Auto-start the waterfall on the first tuner once tuners are known.
+      if (_ndSpectrumTunerId == null && _ndTuners.length) {
+        const t0 = _ndTuners[0];
+        _ndStartSpectrum(t0.id != null ? t0.id : t0.index);
+      }
+    }
+
+    function _ndOnCmdResult(d) {
+      const meta = _ndReqMeta[d.reqId];
+      const label = meta ? meta.label : 'Command';
+      if (meta) delete _ndReqMeta[d.reqId];
+      if (d.ok) showToast(`${label}: ${d.message || 'OK'}`, 'success');
+      else showToast(`${label}: ${d.message || 'failed'}`, 'error');
+    }
+
+    function _ndCmd(action, args, label) {
+      if (!_ndWs || !_ndAuthed) { showToast('Not connected to node.', 'error'); return; }
+      const reqId = 'r' + (++_ndReqSeq);
+      _ndReqMeta[reqId] = { label: label || action };
+      _ndWsSend({ t: 'cmd', data: { nodeId: _ndNodeId, action, args: args || {}, id: reqId } });
+    }
+
+    // --- Spectrum lifecycle ---
+    function _ndStartSpectrum(tunerId) {
+      if (tunerId == null || !_ndWs || !_ndAuthed) return;
+      _ndSpectrumTunerId = tunerId;
+      // Request a high-resolution stream. The control server sends binCount
+      // per frame, so the renderer handles whatever it actually gets.
+      _ndWsSend({ t: 'spectrumStart', data: { nodeId: _ndNodeId, tunerId, fps: 16, bins: 1024 } });
+      const s = document.getElementById('nd-wf-status');
+      if (s) s.textContent = 'streaming · tuner ' + tunerId;
+    }
+
+    function _ndSwitchSpectrum(tunerId) {
+      if (String(tunerId) === String(_ndSpectrumTunerId)) return;
+      if (_ndSpectrumTunerId != null) {
+        _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
+      }
+      _ndSpectrumTunerId = null;
+      _ndInitWaterfall();
+      _ndStartSpectrum(tunerId);
+    }
+
+    // Parse one BINARY spectrum frame (contract A, little-endian):
+    //   u8 type=0x01 | u8 tunerIndex | u64 centerFreqHz | u32 sampleRateHz |
+    //   u16 binCount | int8[binCount] dB
+    function _ndHandleSpectrum(buf) {
+      const dv = new DataView(buf);
+      if (dv.byteLength < 16) return;           // header is 1+1+8+4+2 = 16 bytes
+      let o = 0;
+      const type = dv.getUint8(o); o += 1;
+      if (type !== 0x01) return;
+      const tunerIndex = dv.getUint8(o); o += 1;
+      // u64 little-endian = lo u32 + hi u32 * 2^32 (freqs fit in a JS double).
+      const lo = dv.getUint32(o, true);
+      const hi = dv.getUint32(o + 4, true);
+      o += 8;
+      const centerFreqHz = hi * 4294967296 + lo;
+      const sampleRate = dv.getUint32(o, true); o += 4;
+      const binCount = dv.getUint16(o, true); o += 2;
+      if (dv.byteLength < o + binCount) return; // truncated frame
+      const bins = new Int8Array(buf, o, binCount);
+      _ndDrawSpectrum(centerFreqHz, sampleRate, bins);
+    }
+
+    function _ndInitWaterfall() {
+      const wf = document.getElementById('nd-waterfall');
+      const tr = document.getElementById('nd-trace');
+      if (!wf || !tr) return;
+      _ndWf.wf = wf; _ndWf.wfCtx = wf.getContext('2d');
+      _ndWf.tr = tr; _ndWf.trCtx = tr.getContext('2d');
+      // Fresh waterfall history + auto-range window on (re)init (per-tuner).
+      _ndWf.wfW = 0; _ndWf.wfH = 0;
+      _ndWf.lastBins = null;
+      _ndWf.agcLo = -100; _ndWf.agcHi = -20; _ndWf.agcInit = false;
+      _ndResizeCanvases();
+      // Re-fit the internal buffers whenever the column width (or DPR) changes.
+      if (!_ndWf.ro && 'ResizeObserver' in window) {
+        _ndWf.ro = new ResizeObserver(() => _ndResizeCanvases());
+        _ndWf.ro.observe(wf);
+        _ndWf.ro.observe(tr);
+      }
+      _ndBindWfHover();
+    }
+
+    function _ndCloneCanvas(src) {
+      const c = document.createElement('canvas');
+      c.width = src.width; c.height = src.height;
+      c.getContext('2d').drawImage(src, 0, 0);
+      return c;
+    }
+
+    // Size each canvas' backing buffer to its CSS box * devicePixelRatio so the
+    // spectrum renders at real screen resolution (crisp, not upscaled from a
+    // fixed 512px buffer). Called on init and whenever the layout/DPR changes.
+    function _ndResizeCanvases() {
+      const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+      _ndWf.dpr = dpr;
+      const wf = _ndWf.wf, tr = _ndWf.tr;
+      if (wf && wf.clientWidth) {
+        const w = Math.max(1, Math.round(wf.clientWidth * dpr));
+        const h = Math.max(1, Math.round(wf.clientHeight * dpr));
+        if (w !== _ndWf.wfW || h !== _ndWf.wfH) {
+          // Preserve existing waterfall history by blitting the old buffer.
+          const old = (_ndWf.wfW && _ndWf.wfH) ? _ndCloneCanvas(wf) : null;
+          _ndWf.wfW = w; _ndWf.wfH = h;
+          wf.width = w; wf.height = h;
+          _ndWf.wfCtx.imageSmoothingEnabled = true;
+          _ndWf.wfCtx.fillStyle = '#05070d';
+          _ndWf.wfCtx.fillRect(0, 0, w, h);
+          if (old) _ndWf.wfCtx.drawImage(old, 0, 0, w, h);
+        }
+      }
+      if (tr && tr.clientWidth) {
+        const w = Math.max(1, Math.round(tr.clientWidth * dpr));
+        const h = Math.max(1, Math.round(tr.clientHeight * dpr));
+        _ndWf.trW = w; _ndWf.trH = h;
+        tr.width = w; tr.height = h;
+        _ndWf.trCtx.imageSmoothingEnabled = true;
+        if (_ndWf.lastBins) _ndDrawTrace(_ndWf.lastBins);
+        else { _ndWf.trCtx.fillStyle = '#070b14'; _ndWf.trCtx.fillRect(0, 0, w, h); }
+      }
+    }
+
+    // Frequency-under-cursor tooltip + vertical cursor line (P6c).
+    let _ndWfHoverBound = false;
+    function _ndBindWfHover() {
+      if (_ndWfHoverBound) return;
+      const wrap = document.getElementById('nd-wf-wrap');
+      if (!wrap) return;
+      _ndWfHoverBound = true;
+      const cursor = document.getElementById('nd-wf-cursor');
+      const tip = document.getElementById('nd-wf-tip');
+      wrap.addEventListener('mousemove', (e) => {
+        const rect = wrap.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        if (x < 0) x = 0; if (x > rect.width) x = rect.width;
+        if (cursor) { cursor.style.display = 'block'; cursor.style.left = x + 'px'; }
+        if (tip && _ndWf.lastCenter != null && _ndWf.lastSr != null) {
+          const frac = rect.width ? x / rect.width : 0;
+          const hz = _ndWf.lastCenter - _ndWf.lastSr / 2 + frac * _ndWf.lastSr;
+          tip.textContent = (hz / 1e6).toFixed(4) + ' MHz';
+          tip.style.display = 'block';
+          // Keep the tooltip inside the pane.
+          let tx = x;
+          const half = tip.offsetWidth / 2;
+          if (tx < half + 2) tx = half + 2;
+          if (tx > rect.width - half - 2) tx = rect.width - half - 2;
+          tip.style.left = tx + 'px';
+        }
+      });
+      wrap.addEventListener('mouseleave', () => {
+        if (cursor) cursor.style.display = 'none';
+        if (tip) tip.style.display = 'none';
+      });
+    }
+
+    // dB (int8) -> colour across a fixed 5-stop gradient (P6a):
+    //   weak = BLUE -> cyan -> green -> yellow -> strong = RED.
+    // Stops are evenly spaced over the noise-floor window [lo, hi].
+    const _ND_CMAP = [
+      [4, 6, 24],       // near-black blue (noise floor)
+      [8, 18, 84],      // deep blue
+      [12, 44, 170],    // blue
+      [0, 108, 220],    // bright blue
+      [0, 170, 210],    // cyan
+      [10, 200, 140],   // teal-green
+      [90, 210, 60],    // green
+      [200, 220, 40],   // yellow-green
+      [245, 190, 20],   // amber
+      [245, 110, 25],   // orange
+      [235, 50, 30],    // red (strong)
+      [255, 180, 170]   // white-hot peak
+    ];
+    function _ndDbRgb(db, lo, hi) {
+      if (lo == null) lo = -105;
+      if (hi == null) hi = -15;
+      const rng = (hi - lo) || 1;
+      let n = (db - lo) / rng;
+      n = n < 0 ? 0 : n > 1 ? 1 : n;
+      const segs = _ND_CMAP.length - 1;
+      const f = n * segs;
+      let i = f | 0;
+      if (i >= segs) i = segs - 1;
+      const t = f - i;
+      const a = _ND_CMAP[i], b = _ND_CMAP[i + 1];
+      return [
+        (a[0] + (b[0] - a[0]) * t) | 0,
+        (a[1] + (b[1] - a[1]) * t) | 0,
+        (a[2] + (b[2] - a[2]) * t) | 0
+      ];
+    }
+
+    // Auto-range the dB→colour / dB→height mapping like SDR-Trunk. Derive a
+    // robust floor (low percentile) and ceiling (high percentile) from THIS
+    // frame's int8 dB bins — ignoring extreme outliers — then ease a running
+    // window (slow AGC attack/decay) toward them. The floor maps to the cold
+    // (blue) end of _ND_CMAP and the ceiling to the hot (red) end, so a flat
+    // noise floor renders blue/dark and only real signals climb into
+    // yellow→red. Shared by the waterfall AND the trace so both panes agree.
+    function _ndUpdateAutoRange(bins) {
+      const n = bins.length;
+      if (!n) return;
+      const hist = _ndWf._hist || (_ndWf._hist = new Uint16Array(256));
+      hist.fill(0);
+      let mn = 127, mx = -128;
+      for (let i = 0; i < n; i++) {
+        const v = bins[i];
+        hist[v + 128]++;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      // 5th percentile → floor (drops dead/outlier-low bins); 98th → ceiling
+      // (stops a lone hot carrier from dominating the whole scale).
+      const loN = 0.05 * n, hiN = 0.98 * n;
+      let floor = mn, ceil = mx, acc = 0, gotFloor = false;
+      for (let b = 0; b < 256; b++) {
+        const c = hist[b];
+        if (!c) continue;
+        acc += c;
+        if (!gotFloor && acc >= loN) { floor = b - 128; gotFloor = true; }
+        if (acc >= hiN) { ceil = b - 128; break; }
+      }
+      // Push the floor a little below the noise so it lands in the blue/dark
+      // end, and hold a minimum dynamic span so a flat (signal-less) input
+      // still shows blue instead of collapsing the window onto one colour.
+      const floorTgt = floor - 6;
+      const ceilTgt = Math.max(ceil + 4, floorTgt + 24);
+      // First real frame: SNAP the window straight to the data range (otherwise
+      // the -100/-20 init is far from the actual dB values and the first ~2s of
+      // waterfall paints all-red while the AGC ramps in). After that, ease.
+      if (!_ndWf.agcInit) {
+        _ndWf.agcLo = floorTgt; _ndWf.agcHi = ceilTgt; _ndWf.agcInit = true;
+      } else {
+        const ease = 0.12;                       // slow AGC attack/decay
+        _ndWf.agcLo += (floorTgt - _ndWf.agcLo) * ease;
+        _ndWf.agcHi += (ceilTgt - _ndWf.agcHi) * ease;
+      }
+    }
+
+    function _ndDrawSpectrum(centerFreqHz, sampleRate, bins) {
+      _ndWf.lastCenter = centerFreqHz;
+      _ndWf.lastSr = sampleRate;
+      _ndWf.lastBins = bins;
+      // Advance the shared auto-range window ONCE per incoming frame, then both
+      // the waterfall (below) and the trace (called at the end) map through it.
+      _ndUpdateAutoRange(bins);
+      const ctx = _ndWf.wfCtx;
+      if (!ctx) return;
+      const W = _ndWf.wfW, H = _ndWf.wfH;
+      if (!W || !H) return;
+      const n = bins.length;
+      // Scroll the waterfall down one device row, then paint the new row on top.
+      // (Exact pixel copy — no smoothing blur accumulates in the history.)
+      const prev = ctx.getImageData(0, 0, W, H - 1);
+      ctx.putImageData(prev, 0, 1);
+      const row = ctx.createImageData(W, 1);
+      const data = row.data;
+      // Interpolate bins across the full device width (smooth gradient rather
+      // than one fat rect per bin when there are fewer bins than pixels).
+      const span = n > 1 ? (n - 1) : 1;
+      for (let x = 0; x < W; x++) {
+        const bp = W > 1 ? (x / (W - 1)) * span : 0;
+        const i0 = bp | 0;
+        const i1 = i0 + 1 < n ? i0 + 1 : i0;
+        const db = bins[i0] + (bins[i1] - bins[i0]) * (bp - i0);
+        const rgb = _ndDbRgb(db, _ndWf.agcLo, _ndWf.agcHi);
+        const p = x * 4;
+        data[p] = rgb[0]; data[p + 1] = rgb[1]; data[p + 2] = rgb[2]; data[p + 3] = 255;
+      }
+      ctx.putImageData(row, 0, 0);
+      _ndDrawTrace(bins);
+      _ndUpdateAxis(centerFreqHz, sampleRate);
+    }
+
+    // Live FFT trace of the current frame: filled, anti-aliased spectrum line
+    // with a faint dB grid + baseline, auto-scaling the dB window to the data
+    // (slow AGC) so signals use the full height — SDR-Trunk-style (P6b).
+    function _ndDrawTrace(bins) {
+      const ctx = _ndWf.trCtx;
+      if (!ctx) return;
+      const W = _ndWf.trW, H = _ndWf.trH, dpr = _ndWf.dpr || 1;
+      if (!W || !H) return;
+      const n = bins.length;
+
+      // Reuse the shared auto-range window advanced once per frame by
+      // _ndUpdateAutoRange (the waterfall path), so the trace and waterfall
+      // always agree. On a standalone redraw (e.g. resize) we simply reuse the
+      // last window rather than advancing the AGC again.
+      const lo = _ndWf.agcLo, hi = _ndWf.agcHi, rng = (hi - lo) || 1;
+      const pad = Math.round(3 * dpr);
+      const plotH = H - pad * 2;
+      const yFor = db => {
+        let v = (db - lo) / rng;
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        return pad + (1 - v) * plotH;
+      };
+
+      // Pane background.
+      ctx.fillStyle = '#070b14';
+      ctx.fillRect(0, 0, W, H);
+
+      // Horizontal dB grid at nice 20 dB steps inside the current window.
+      ctx.font = (9 * dpr) + 'px ui-monospace, Menlo, monospace';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(1, dpr | 0);
+      const step = 20;
+      for (let db = Math.ceil(hi / step) * step; db > lo; db -= step) {
+        const y = yFor(db);
+        ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+        ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
+        ctx.fillStyle = 'rgba(148,163,184,0.5)';
+        ctx.fillText(Math.round(db) + ' dB', 3 * dpr, y);
+      }
+      // Baseline anchored at the bottom of the pane.
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.beginPath(); ctx.moveTo(0, H - 0.5); ctx.lineTo(W, H - 0.5); ctx.stroke();
+
+      // Interpolated dB at a device-x column.
+      const span = n > 1 ? (n - 1) : 1;
+      const dbAt = x => {
+        const bp = W > 1 ? (x / (W - 1)) * span : 0;
+        const i0 = bp | 0, i1 = i0 + 1 < n ? i0 + 1 : i0;
+        return bins[i0] + (bins[i1] - bins[i0]) * (bp - i0);
+      };
+
+      // Filled area under the curve (subtle vertical gradient).
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      for (let x = 0; x < W; x++) ctx.lineTo(x, yFor(dbAt(x)));
+      ctx.lineTo(W - 1, H);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, 'rgba(56,189,248,0.32)');
+      grad.addColorStop(1, 'rgba(56,189,248,0.02)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Anti-aliased spectrum line on top.
+      ctx.beginPath();
+      for (let x = 0; x < W; x++) {
+        const y = yFor(dbAt(x));
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = '#7dd3fc';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1, 1.25 * dpr);
+      ctx.stroke();
+    }
+
+    function _ndUpdateAxis(centerFreqHz, sampleRate) {
+      const half = sampleRate / 2;
+      const fmt = hz => (hz / 1e6).toFixed(3) + ' MHz';
+      const l = document.getElementById('nd-axis-l');
+      const m = document.getElementById('nd-axis-m');
+      const r = document.getElementById('nd-axis-r');
+      if (l) l.textContent = fmt(centerFreqHz - half);
+      if (m) m.textContent = fmt(centerFreqHz);
+      if (r) r.textContent = fmt(centerFreqHz + half);
+    }
+
+    // --- Rendering ---
+    function _ndRenderAll() {
+      _ndBanner(null);
+      _ndRenderTuners();
+      _ndRenderChannels();
+      _ndRenderEvents();
+      _ndRenderNowPlaying();
+      _ndRenderTunerSelector();
+      _ndCfgRender();
+      _ndRenderCfgSync();
+    }
+
+    // --- Drawer sub-view switching (P4/P5/P1) ---
+    function _ndSetView(name) {
+      _ndView = name;
+      document.querySelectorAll('#nd-tabs .nd-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === name);
+      });
+      document.querySelectorAll('#node-drawer .nd-view').forEach(v => {
+        v.classList.toggle('active', v.id === 'nd-view-' + name);
+      });
+      if (name === 'config' && !_ndConfig && !_ndCfgLoading) _ndCfgFetch();
+      if (name === 'nowplaying') _ndRenderNowPlaying();
+    }
+
+    function _ndEmpty(title, sub) {
+      return `<div class="nd-empty"><i class="fas fa-circle-info"></i>${escapeHtml(title)}` +
+        (sub ? ` — ${escapeHtml(sub)}` : '') + `</div>`;
+    }
+
+    // Per-SDR serial for a live tuner object (used to match config_override.tuners).
+    function _ndTunerSerial(t) {
+      return t.serial != null ? String(t.serial)
+        : (t.deviceSerial != null ? String(t.deviceSerial)
+        : (t.id != null ? String(t.id) : String(t.index != null ? t.index : '')));
+    }
+
+    // --- Device-aware tuner profiles -------------------------------------
+    // Each SDR type exposes a DIFFERENT set of settable controls. These lists
+    // come from the SDR-Trunk config reference (docs/sdrtrunk-config-reference.md
+    // "Tuner config (per device)") — they are the doc's per-TYPE defaults, NOT
+    // device-reported capabilities. Exact per-unit sample-rate / gain ranges
+    // would need a capabilities field on the fork's /tuners endpoint.
+    const _ND_SR_RTL = [230400,240000,288000,912000,960000,1200000,1440000,1600000,1800000,1920000,2016000,2048000,2160000,2304000,2400000,2560000,2880000];
+    const _ND_SR_HACKRF = [1750000,2000000,4000000,5000000,8000000,10000000,12500000,16000000,20000000];
+    const _ND_SR_AIRSPY = [2500000,3000000,6000000,10000000];
+    const _ND_SR_SDRPLAY = [2000000,3000000,4000000,5000000,6000000,7000000,8000000,9000000,10000000];
+    // RTL tuner-chip gain tables (dB). SDR-Trunk selects discrete gain steps;
+    // values are rounded to whole units on send (the control server takes ints).
+    const _ND_G_R820T = [0.0,0.9,1.4,2.7,3.7,7.7,8.7,12.5,14.4,15.7,16.6,19.7,20.7,22.9,25.4,28.0,29.7,32.8,33.8,36.4,37.2,38.6,40.2,42.1,43.4,43.9,44.5,48.0,49.6];
+    const _ND_G_E4000 = [-1.0,1.5,4.0,6.5,9.0,11.5,14.0,16.5,19.0,21.5,24.0,29.0,34.0,42.0];
+    const _ND_G_FC0013 = [-9.9,-3.0,7.1,17.9,19.2,20.8,22.9,25.4,28.0,29.7,32.8,33.8,36.4,37.2,38.6,40.2,42.1,43.4,43.9,44.5,48.0,49.6];
+
+    // Build an inclusive numeric range [min..max] step `step`.
+    function _ndRange(min, max, step) {
+      const a = [];
+      for (let v = min; v <= max + 1e-9; v += step) a.push(Math.round(v * 1000) / 1000);
+      return a;
+    }
+
+    // Return the control profile for a tuner, keyed off its reported `type`
+    // (falling back to `tunerClass`). Each profile has:
+    //   sr:      array of settable sample rates (Hz) | null (fixed-rate device)
+    //   srDef:   default sample rate to preselect
+    //   scalar:  true → the single gain control is sent as top-level `gain`
+    //   freeform:true → unknown device; render today's plain number inputs
+    //   gains:   ordered list of gain-control descriptors. Each descriptor:
+    //            { key, label, kind:'select'|'num'|'check', opts?, min,max,step,
+    //              def, unit?, mode?(the gain-mode selector), custom?(only live
+    //              in CUSTOM mode) }. `key` is the gainParams field sent to the
+    //            control server (gain/auto/gainMode/lnaGain/vgaGain/amp/lnaState/
+    //            gainReduction/attenuation/lna).
+    function _ndTunerProfile(t) {
+      const s = ((t && (t.type || t.tunerClass)) || '').toString().toLowerCase();
+      const has = (x) => s.indexOf(x) !== -1;
+      // Airspy + HydraSDR share one gain model (HydraSDR bias_t not wired here).
+      const airspyGains = [
+        { key:'gainMode', label:'Mode', kind:'select', mode:true, def:'LINEARITY',
+          opts:[{v:'LINEARITY',label:'Linearity'},{v:'SENSITIVITY',label:'Sensitivity'},{v:'CUSTOM',label:'Custom'}] },
+        { key:'gain', label:'Gain', kind:'select', opts:_ndRange(1,22,1), def:14 },
+        { key:'lna', label:'LNA', kind:'select', opts:_ndRange(0,14,1), def:0, custom:true },
+        { key:'auto', label:'AGC', kind:'check', custom:true } ];
+      if (has('hf+') || has('hf plus') || has('airspy hf')) return { key:'airspyhf', sr:null, gains:[
+        { key:'attenuation', label:'Atten', unit:'dB', kind:'select', opts:_ndRange(0,48,6), def:0 },
+        { key:'auto', label:'AGC', kind:'check', agc:true, overrides:['attenuation'] },
+        { key:'lna', label:'LNA', kind:'check' } ] };
+      if (has('hydra')) return { key:'hydrasdr', sr:_ND_SR_AIRSPY, srDef:10000000, gains:airspyGains };
+      if (has('airspy')) return { key:'airspy', sr:_ND_SR_AIRSPY, srDef:10000000, gains:airspyGains };
+      if (has('hackrf')) return { key:'hackrf', sr:_ND_SR_HACKRF, srDef:10000000, gains:[
+        { key:'lnaGain', label:'LNA', unit:'dB', kind:'select', opts:_ndRange(0,40,8), def:16 },
+        { key:'vgaGain', label:'VGA', unit:'dB', kind:'select', opts:_ndRange(0,62,2), def:20 },
+        { key:'amp', label:'Amp', kind:'check' } ] };
+      if (has('sdrplay') || has('rsp')) return { key:'sdrplay', sr:_ND_SR_SDRPLAY, srDef:2000000, gains:[
+        { key:'lnaState', label:'LNA state', kind:'num', min:0, max:9, step:1, def:0 },
+        { key:'gainReduction', label:'Gain red.', unit:'dB', kind:'num', min:20, max:59, step:1, def:50 },
+        { key:'auto', label:'AGC', kind:'check', agc:true, overrides:['lnaState','gainReduction'] } ] };
+      if (has('funcube') || has('fcd')) return { key:'fcd', sr:null, gains:[
+        { key:'lnaGain', label:'LNA gain', unit:'dB', kind:'select', opts:_ndRange(0,30,5), def:20 } ] };
+      // RTL family — chip-specific gain models. Check specific chips before RTL.
+      if (has('e4k') || has('e4000')) return { key:'e4000', sr:_ND_SR_RTL, srDef:2400000, scalar:true, gains:[
+        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_E4000, def:24 },
+        { key:'auto', label:'Auto', kind:'check', agc:true, overrides:['gain'] } ] };
+      if (has('fc0013')) return { key:'fc0013', sr:_ND_SR_RTL, srDef:2400000, gains:[
+        { key:'gain', label:'LNA', unit:'dB', kind:'select', opts:_ND_G_FC0013, def:19.2 },
+        { key:'auto', label:'AGC', kind:'check', agc:true, overrides:['gain'] } ] };
+      if (has('820') || has('828') || has('rtl')) return { key:'r820t', sr:_ND_SR_RTL, srDef:2400000, scalar:true, gains:[
+        { key:'gain', label:'Master', unit:'dB', kind:'select', opts:_ND_G_R820T, def:28.0 },
+        { key:'auto', label:'Auto', kind:'check', agc:true, overrides:['gain'] } ] };
+      return { key:'unknown', freeform:true };
+    }
+
+    // Nearest list entry to `val` (numeric), or null when `val` is unusable.
+    function _ndClosest(list, val) {
+      if (val == null || val === '' || Number.isNaN(Number(val))) return null;
+      const n = Number(val);
+      let best = list[0], bd = Infinity;
+      list.forEach(x => { const d = Math.abs(Number(x) - n); if (d < bd) { bd = d; best = x; } });
+      return best;
+    }
+
+    // <option> list for a gain/sample-rate select. opts entries are either a
+    // plain number or { v, label }.
+    function _ndOptsHtml(opts, sel) {
+      return opts.map(o => {
+        const v = (o && typeof o === 'object') ? o.v : o;
+        const lbl = (o && typeof o === 'object') ? o.label : String(o);
+        return `<option value="${escapeHtml(String(v))}"${String(v) === String(sel) ? ' selected' : ''}>${escapeHtml(lbl)}</option>`;
+      }).join('');
+    }
+
+    // Sample-rate cell for one tuner row (device-aware).
+    function _ndSrCellHtml(i, prof, t) {
+      if (prof.freeform) {
+        const srMs = t.sampleRate != null ? (t.sampleRate / 1e6) : '';
+        return `<input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span>`;
+      }
+      if (!prof.sr) return `<span class="nd-sub" title="This device has a fixed sample rate">fixed rate</span>`;
+      const sel = _ndClosest(prof.sr, t.sampleRate != null ? t.sampleRate : prof.srDef);
+      const opts = prof.sr.map(hz => ({ v: hz, label: (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + ' M' }));
+      return `<select class="nd-input nd-sel" id="nd-sr-${i}">${_ndOptsHtml(opts, sel)}</select>`;
+    }
+
+    // Initial state for a device's Auto/AGC gain toggle. Persisted config wins
+    // (survives restart); otherwise reflect whatever the live tuner reports —
+    // an autoGain/agc flag, gainParams.auto/agcMode, or a null gain (which the
+    // fork uses to mean "hardware auto").
+    function _ndTunerAutoState(t, prof) {
+      const serial = _ndTunerSerial(t);
+      if (_ndConfig && Array.isArray(_ndConfig.tuners)) {
+        const e = _ndConfig.tuners.find(x => String(x.serial) === String(serial));
+        if (e && typeof e.autoGain === 'boolean') return e.autoGain;
+      }
+      if (!t) return false;
+      if (t.autoGain === true || t.agc === true) return true;
+      if (t.gainParams && (t.gainParams.auto === true || t.gainParams.agcMode)) return true;
+      if (prof && prof.scalar && t.gain === null) return true;
+      return false;
+    }
+
+    // Gain cell for one tuner row: a stack of device-specific controls.
+    function _ndGainCellHtml(i, prof, t) {
+      if (prof.freeform) {
+        const gain = t.gain != null ? t.gain : '';
+        return `<input class="nd-input nd-input-sm" id="nd-g-${i}-gain" type="number" step="1" placeholder="auto" value="${escapeHtml(String(gain))}">`;
+      }
+      const modeCtl = prof.gains.find(g => g.mode);
+      const modeVal = modeCtl ? (modeCtl.def || 'LINEARITY') : null;
+      const curScalar = (prof.scalar && t.gain != null && !Number.isNaN(Number(t.gain))) ? Number(t.gain) : null;
+      // Auto-gain (AGC): which control governs it, which manual axes it greys
+      // out, and whether it starts on (live/persisted state).
+      const agcCtl = prof.gains.find(g => g.agc);
+      const govKeys = (agcCtl && agcCtl.overrides) ? agcCtl.overrides : [];
+      const autoOn = agcCtl ? _ndTunerAutoState(t, prof) : false;
+      return prof.gains.map(g => {
+        const id = `nd-g-${i}-${g.key}`;
+        const gov = govKeys.indexOf(g.key) !== -1;   // greyed while Auto is on
+        const dis = ((g.custom && modeVal !== 'CUSTOM') || (gov && autoOn)) ? ' disabled' : '';
+        let ctl;
+        if (g.kind === 'check') {
+          const chk = (g.agc && autoOn) ? ' checked' : '';
+          const onCh = g.agc ? ` onchange="_ndAutoGain(${i})"` : '';
+          ctl = `<input type="checkbox" id="${id}"${dis}${chk}${onCh}>`;
+        } else if (g.kind === 'num') {
+          ctl = `<input class="nd-input nd-input-sm" id="${id}" type="number" min="${g.min}" max="${g.max}" step="${g.step}" value="${g.def}"${dis}>`;
+        } else {
+          let sel = g.def;
+          if (g.mode) sel = modeVal;
+          else if (prof.scalar && curScalar != null) sel = _ndClosest(g.opts.map(o => (o && typeof o === 'object') ? o.v : o), curScalar);
+          const onCh = g.mode ? ` onchange="_ndGainMode(${i})"` : '';
+          ctl = `<select class="nd-input nd-sel" id="${id}"${onCh}${dis}>${_ndOptsHtml(g.opts, sel)}</select>`;
+        }
+        const unit = g.unit ? `<span class="nd-unit">${g.unit}</span>` : '';
+        return `<div class="nd-gc" data-custom="${g.custom ? 1 : 0}"${gov ? ' data-agcgov="1"' : ''}><label for="${id}">${escapeHtml(g.label)}</label>${ctl}${unit}</div>`;
+      }).join('');
+    }
+
+    // Enable/disable Airspy/HydraSDR CUSTOM-only gain axes when the gain mode
+    // selector changes.
+    function _ndGainMode(i) {
+      const modeEl = document.getElementById(`nd-g-${i}-gainMode`);
+      if (!modeEl) return;
+      const custom = modeEl.value === 'CUSTOM';
+      document.querySelectorAll(`#nd-tuners tr[data-tuner="${i}"] .nd-gc[data-custom="1"] input, #nd-tuners tr[data-tuner="${i}"] .nd-gc[data-custom="1"] select`)
+        .forEach(el => { el.disabled = !custom; });
+    }
+
+    // Auto-gain (AGC) toggle: grey out the manual gain axis/axes this device's
+    // Auto control governs while it's on. On Apply, _ndApplyTuner sends the auto
+    // flag instead of the manual gain (see below).
+    function _ndAutoGain(i) {
+      const auto = document.getElementById(`nd-g-${i}-auto`);
+      if (!auto) return;
+      const on = auto.checked;
+      document.querySelectorAll(`#nd-tuners tr[data-tuner="${i}"] .nd-gc[data-agcgov="1"] input, #nd-tuners tr[data-tuner="${i}"] .nd-gc[data-agcgov="1"] select`)
+        .forEach(el => { el.disabled = on; });
+    }
+
+    // P2 — per-SDR tuner panel. NOTE: frequency is READ-ONLY here; it is
+    // controlled by the channels, never set on the SDR itself. Each row shows
+    // ONLY the controls that device actually has (see _ndTunerProfile).
+    function _ndRenderTuners() {
+      const el = document.getElementById('nd-tuners');
+      if (!el) return;
+      if (!_ndTuners.length) {
+        el.innerHTML = _ndEmpty('No tuners reported', _ndStatus ? 'SDR-Trunk may be down or node offline' : 'waiting for node status…');
+        _ndTunersSig = _ndTunersSignature();
+        return;
+      }
+      const rows = _ndTuners.map((t, i) => {
+        const prof = _ndTunerProfile(t);
+        const serial = _ndTunerSerial(t);
+        const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) + ' MHz' : '—';
+        const searchMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) : '';
+        const ppm = t.ppm != null ? t.ppm : '';
+        const autoPpm = t.autoPpm === true;
+        const measured = t.measuredPpmError != null ? Number(t.measuredPpmError).toFixed(2) : '—';
+        const stat = escapeHtml(t.status || (t.available === false ? 'unavailable' : '—'));
+        return `<tr data-tuner="${i}">
+          <td><div class="nd-strong">${escapeHtml(t.name || ('Tuner ' + serial))}</div>
+              <div class="nd-sub">${escapeHtml(t.type || t.tunerClass || '')}${serial ? ' · ' + escapeHtml(serial) : ''}</div></td>
+          <td>${_ndSrCellHtml(i, prof, t)}</td>
+          <td class="nd-gain-cell">${_ndGainCellHtml(i, prof, t)}</td>
+          <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
+          <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})"></td>
+          <td id="nd-meas-${i}">${measured}</td>
+          <td><span class="nd-sub" id="nd-freq-${i}" title="Center frequency the channels are driving — read-only">${freqMhz}</span></td>
+          <td id="nd-tstat-${i}">${stat}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="_ndApplyTuner(${i})">Apply</button></td>
+          <td class="nd-tune-cell">
+            <div class="nd-tune-wrap">
+              <input class="nd-input nd-input-sm" id="nd-searchfreq-${i}" type="number" step="0.0001" placeholder="MHz" value="${escapeHtml(searchMhz)}">
+              <button class="btn btn-secondary btn-sm nd-tune-btn" onclick="_ndTuneSearch(${i})" title="Sweep this SDR's centre frequency to hunt for signals on the spectrum. Does NOT change what the channels decode."><i class="fas fa-magnifying-glass"></i> Tune</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `<table class="nd-table"><thead><tr>
+        <th>SDR</th><th>Sample rate</th><th>Gain</th><th>PPM</th><th>Auto-PPM</th><th>Meas. err</th><th>Frequency</th><th>Status</th><th></th>
+        <th>Search tune <span class="nd-sub" style="font-weight:400; text-transform:none; letter-spacing:0;">(MHz — moves spectrum to hunt; channels still control decode)</span></th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+      _ndTunersSig = _ndTunersSignature();
+    }
+
+    // Signature of the current tuner SET: serial + device type per row, in order.
+    // A change here means an SDR was added / removed / re-typed and the editable
+    // per-device controls (which depend on the device profile) must be rebuilt.
+    // A pure value change (frequency / gain readback / status) does NOT change it,
+    // so ~1/sec status frames don't trigger a full rebuild.
+    function _ndTunersSignature() {
+      return _ndTuners
+        .map(t => _ndTunerSerial(t) + ':' + ((t.type || t.tunerClass || '')).toString().toLowerCase())
+        .join('|');
+    }
+
+    // Light live-overlay for the tuner table (analogue of _ndRenderChannels for
+    // channels): on a status frame, refresh ONLY the read-only cells —
+    // Frequency, Meas. err, Status — via textContent. Every editable
+    // <input>/<select> (gain, auto-gain, sample-rate, PPM, auto-PPM, search-tune,
+    // Apply) is left completely untouched, so focus, open dropdowns and
+    // in-progress unapplied edits survive. Never rebuilds table HTML.
+    function _ndUpdateTunersLive() {
+      if (!_ndTuners.length) return;
+      _ndTuners.forEach((t, i) => {
+        const freqMhz = t.frequency != null ? (t.frequency / 1e6).toFixed(4) + ' MHz' : '—';
+        const measured = t.measuredPpmError != null ? Number(t.measuredPpmError).toFixed(2) : '—';
+        const stat = t.status || (t.available === false ? 'unavailable' : '—');
+        const fEl = document.getElementById('nd-freq-' + i);
+        if (fEl) fEl.textContent = freqMhz;
+        const mEl = document.getElementById('nd-meas-' + i);
+        if (mEl) mEl.textContent = measured;
+        const sEl = document.getElementById('nd-tstat-' + i);
+        if (sEl) sEl.textContent = stat;
+      });
+    }
+
+    // Manual / search tune: sweep this SDR's CENTER frequency to hunt for
+    // signals (e.g. to find the P25 control channel on the waterfall). This is
+    // deliberately separate from the channel decode frequency — channels still
+    // drive what actually gets decoded; this only moves the spectrum window.
+    function _ndTuneSearch(i) {
+      const t = _ndTuners[i];
+      if (!t) return;
+      const tid = t.id != null ? t.id : t.index;
+      const el = document.getElementById('nd-searchfreq-' + i);
+      const mhz = el && el.value !== '' ? parseFloat(el.value) : null;
+      if (mhz == null || Number.isNaN(mhz)) { showToast('Enter a search frequency in MHz.', 'warn'); return; }
+      const hz = Math.round(mhz * 1e6);
+      _ndCmd('tunerSet', { tunerId: tid, frequency: hz }, `Search-tune ${t.name || ('tuner ' + _ndTunerSerial(t))} → ${mhz.toFixed(4)} MHz`);
+      showToast(`Tuning to ${mhz.toFixed(4)} MHz…`, 'success', 1500);
+    }
+
+    function _ndToggleAutoPpm(i) {
+      const auto = document.getElementById('nd-autoppm-' + i);
+      const ppm = document.getElementById('nd-ppm-' + i);
+      if (ppm && auto) ppm.disabled = auto.checked;
+    }
+
+    function _ndApplyTuner(i) {
+      const t = _ndTuners[i];
+      if (!t) return;
+      const tid = t.id != null ? t.id : t.index;
+      const serial = _ndTunerSerial(t);
+      const prof = _ndTunerProfile(t);
+      const pEl = document.getElementById('nd-ppm-' + i);
+      const aEl = document.getElementById('nd-autoppm-' + i);
+      const ppm = pEl && pEl.value !== '' ? parseFloat(pEl.value) : null;
+      const autoPpm = !!(aEl && aEl.checked);
+      const args = { tunerId: tid };
+
+      // Sample rate — a MHz free-number for unknown devices, otherwise a Hz
+      // dropdown; omitted entirely for fixed-rate devices (FCD / Airspy HF+).
+      const srEl = document.getElementById('nd-sr-' + i);
+      if (srEl && srEl.value !== '') {
+        const raw = parseFloat(srEl.value);
+        if (!Number.isNaN(raw)) args.sampleRate = prof.freeform ? Math.round(raw * 1e6) : Math.round(raw);
+      }
+
+      // Auto-gain (AGC): if this device has an Auto toggle and it's on, send the
+      // auto flag in gainParams and skip the manual gain value entirely.
+      const autoEl = document.getElementById('nd-g-' + i + '-auto');
+      const autoOn = !!(autoEl && autoEl.checked);
+
+      // Gain — single scalar `gain` for simple/unknown devices; a device-shaped
+      // `gainParams` object for multi-axis devices. Numeric gain axes are
+      // rounded to whole units (the control server decodes ints).
+      if (prof.freeform || prof.scalar) {
+        if (autoOn) {
+          // Scalar devices (RTL R820T/E4K…) send the master gain as a top-level
+          // scalar for manual; for auto we send gainParams:{auto:true} instead.
+          args.gainParams = { auto: true };
+        } else {
+          const gEl = document.getElementById('nd-g-' + i + '-gain');
+          if (gEl && gEl.value !== '') {
+            const g = parseFloat(gEl.value);
+            if (!Number.isNaN(g)) args.gain = Math.round(g);
+          }
+        }
+      } else {
+        const gp = {};
+        prof.gains.forEach(g => {
+          const gEl = document.getElementById('nd-g-' + i + '-' + g.key);
+          if (!gEl) return;
+          if (g.kind === 'check') gp[g.key] = !!gEl.checked;
+          else if (g.mode) gp[g.key] = gEl.value; // gainMode enum string
+          else { const v = parseFloat(gEl.value); if (!Number.isNaN(v)) gp[g.key] = Math.round(v); }
+        });
+        if (Object.keys(gp).length) args.gainParams = gp;
+      }
+
+      args.autoPpm = autoPpm;
+      if (!autoPpm && ppm != null && !Number.isNaN(ppm)) args.ppm = ppm;
+      _ndCmd('tunerSet', args, `Set ${t.name || ('tuner ' + serial)}`);
+
+      // Persist the per-SDR settings into config_override.tuners[] (keyed by
+      // serial) so they survive a restart. Non-blocking; toast reports outcome.
+      _ndPersistTuner(serial, {
+        serial,
+        label: t.name || undefined,
+        sampleRate: args.sampleRate,
+        gain: args.gain,
+        gainParams: args.gainParams,
+        ppm: args.ppm,
+        autoPpm,
+        autoGain: autoOn
+      });
+      showToast('Applying tuner change…', 'success', 1500);
+    }
+
+    async function _ndPersistTuner(serial, patch) {
+      if (!serial) return;
+      try {
+        if (!_ndConfig) await _ndCfgFetch();
+        const cfg = _ndConfig || (_ndConfig = {});
+        if (!Array.isArray(cfg.tuners)) cfg.tuners = [];
+        let entry = cfg.tuners.find(x => String(x.serial) === String(serial));
+        if (!entry) { entry = { serial }; cfg.tuners.push(entry); }
+        Object.keys(patch).forEach(k => { if (patch[k] !== undefined) entry[k] = patch[k]; });
+        // Reconcile the mutually-exclusive gain fields so a value from the previous
+        // mode can't linger and get re-applied on restart. Merging only-defined keys
+        // left, e.g., a stale scalar `gain` beside a new `gainParams:{auto:true}`.
+        if (patch.autoGain === true) {
+          delete entry.gain;                 // auto: params carry {auto:true}, no scalar
+        } else if (patch.gainParams !== undefined) {
+          delete entry.gain;                 // multi-axis manual: params authoritative
+        } else if (patch.gain !== undefined) {
+          delete entry.gainParams;           // scalar manual: drop any stale params bag
+        }
+        await _ndCfgPatch(cfg, false);
+      } catch (e) {
+        showToast('Tuner setting not persisted: ' + e.message, 'error');
+      }
+    }
+
+    // Live-state overlay for the UNIFIED channel manager. This no longer owns
+    // its own table — it only refreshes the live "State" cell of each config
+    // row (id nd-ch-<i>-live) plus any read-only "not in saved config" rows,
+    // so frequent status frames never clobber in-progress edits to the config
+    // inputs. The full editable table is (re)built by _ndCfgRender().
+    const _ND_LIVE_ACTIVE = new Set(['CALL', 'ACTIVE', 'DATA', 'ENCRYPTED']);
+
+    // Match a config channel {name, frequency(Hz)} to a live status channel.
+    // Primary key = frequency in Hz (exact); fallback = name (case-insensitive).
+    // Returns {chan, index} into _ndChannels, or null.
+    function _ndMatchLiveChannel(cfg) {
+      if (!cfg) return null;
+      const f = cfg.frequency;
+      if (f != null && f !== '') {
+        const iF = _ndChannels.findIndex(c => c.frequency != null && Number(c.frequency) === Number(f));
+        if (iF >= 0) return { chan: _ndChannels[iF], index: iF };
+      }
+      const nm = String(cfg.name || '').trim().toLowerCase();
+      if (nm) {
+        const iN = _ndChannels.findIndex(c => String(c.name || '').trim().toLowerCase() === nm);
+        if (iN >= 0) return { chan: _ndChannels[iN], index: iN };
+      }
+      return null;
+    }
+
+    // Build the live "State" cell for a matched (or absent) live channel:
+    // a colour-coded SDR-Trunk-style badge, the from→to line for active calls,
+    // and a live Start/Stop toggle when the channel is addressable by id.
+    function _ndLiveStateHtml(match) {
+      const live = match ? match.chan : null;
+      if (!live) return `<span class="nd-state offline" title="No live channel matched">offline</span>`;
+      const st = String(live.state || '').toUpperCase();
+      const isControl = live.control === true || st === 'CONTROL';
+      let cls, label;
+      if (isControl) { cls = 'control'; label = 'Control'; }
+      else if (st === 'ENCRYPTED') { cls = 'enc'; label = 'Encrypted'; }
+      else if (st === 'ERROR') { cls = 'error'; label = 'Error'; }
+      else if (_ND_LIVE_ACTIVE.has(st)) { cls = 'call'; label = 'Call'; }
+      else if (st === '' || st === 'IDLE') { cls = 'idle'; label = 'Idle'; }
+      else { cls = 'idle'; label = live.state; }
+      const isActive = _ND_LIVE_ACTIVE.has(st) && !isControl;
+      let ft = '';
+      if (isActive) {
+        const from = live.fromAlias || live.from || '';
+        const to = live.toAlias || live.to || '';
+        if (from || to) ft = `<div class="nd-ch-live-ft">${escapeHtml(String(from || '—'))} → <span class="nd-alias">${escapeHtml(String(to || '—'))}</span></div>`;
+      }
+      let btn = '';
+      if (live.id != null) {
+        const running = live.processing === true || isActive || isControl;
+        btn = running
+          ? `<button class="btn btn-danger btn-sm nd-ch-livebtn" onclick="_ndChannel(${match.index}, false)" title="Stop this channel"><i class="fas fa-stop"></i></button>`
+          : `<button class="btn btn-success btn-sm nd-ch-livebtn" onclick="_ndChannel(${match.index}, true)" title="Start this channel"><i class="fas fa-play"></i></button>`;
+      }
+      return `<div class="nd-ch-livecol"><span class="nd-state ${cls}">${escapeHtml(label)}</span>${btn}</div>${ft}`;
+    }
+
+    function _ndRenderChannels() {
+      const chans = (_ndConfig && Array.isArray(_ndConfig.channels)) ? _ndConfig.channels : [];
+      const matched = new Set();
+      chans.forEach((cfg, i) => {
+        const m = _ndMatchLiveChannel(cfg);
+        if (m) matched.add(m.index);
+        const cell = document.getElementById('nd-ch-' + i + '-live');
+        if (cell) cell.innerHTML = _ndLiveStateHtml(m);
+        const row = document.getElementById('nd-ch-row-' + i);
+        if (row) {
+          const live = m ? m.chan : null;
+          const st = live ? String(live.state || '').toUpperCase() : '';
+          const isControl = !!(live && (live.control === true || st === 'CONTROL'));
+          const lit = !!(live && _ND_LIVE_ACTIVE.has(st)) && !isControl;
+          row.classList.toggle('nd-ch-live-ctrl', isControl);
+          row.classList.toggle('nd-ch-live-lit', lit);
+        }
+      });
+      _ndRenderUnmatchedLive(matched);
+    }
+
+    // Surface ONLY genuinely-active live calls that aren't matched to a saved
+    // config row (e.g. dynamically-allocated traffic channels mid-call). Idle /
+    // control / stale channels are NOT shown — they would otherwise appear as
+    // un-removable rows the user can't delete. This is read-only + transient.
+    function _ndRenderUnmatchedLive(matchedSet) {
+      const host = document.getElementById('nd-ch-unmatched');
+      if (!host) return;
+      const extra = [];
+      _ndChannels.forEach((c, idx) => {
+        if (matchedSet.has(idx)) return;
+        const st = String(c.state || '').toUpperCase();
+        const isControl = c.control === true || st === 'CONTROL';
+        // Only genuinely-active (in-progress call) unmatched channels.
+        if (!_ND_LIVE_ACTIVE.has(st) || isControl) return;
+        extra.push({ chan: c, index: idx });
+      });
+      if (!extra.length) { host.innerHTML = ''; return; }
+      const rows = extra.map(m => {
+        const c = m.chan;
+        const sys = [c.system, c.site].filter(Boolean).map(escapeHtml).join(' · ');
+        const freq = c.frequency != null ? (c.frequency / 1e6).toFixed(4) + ' MHz' : '—';
+        const detail = [freq, sys].filter(Boolean).join(' · ');
+        return `<tr>
+          <td class="nd-ch-w-name"><div class="nd-strong">${escapeHtml(c.name || ('Channel ' + (c.id != null ? c.id : m.index)))}</div><div class="nd-sub">not in saved config</div></td>
+          <td class="nd-sub">${escapeHtml(detail)}</td>
+          <td class="nd-ch-live-cell">${_ndLiveStateHtml(m)}</td>
+        </tr>`;
+      }).join('');
+      host.innerHTML = `<div class="nd-ch-unmatched-h"><i class="fas fa-circle-info"></i> Active calls not in saved config</div>
+        <table class="nd-ch-table"><tbody>${rows}</tbody></table>`;
+    }
+
+    function _ndChannel(i, start) {
+      const c = _ndChannels[i];
+      if (!c) return;
+      const cid = c.id;
+      // Send the name too: channel ids change on every playlist reload, so the
+      // agent resolves the current id by name (stable) with the id as fallback.
+      _ndCmd(start ? 'startChannel' : 'stopChannel', { channelId: cid, channelName: c.name || '' },
+        `${start ? 'Start' : 'Stop'} ${c.name || ('channel ' + cid)}`);
+    }
+
+    // --- Live event log (P5) -------------------------------------------
+    // The Events tab is a rolling, live-only log fed by three sources:
+    //   1) WS `event` frames and status.events (deduped) — call/decode events
+    //   2) channel type transitions (control-channel lock vs traffic/idle)
+    //   3) call start/end derived from channel state changes
+    function _ndLogPush(kind, text, at, ft) {
+      _ndLog.push({ kind, text, at: at != null ? at : Date.now(), ft: ft || '' });
+      if (_ndLog.length > 200) _ndLog.shift();
+      _ndRenderEvents();
+    }
+
+    // Turn a backend event object into a log line, deduping repeats seen
+    // across successive status frames.
+    function _ndIngestEvent(e) {
+      if (!e) return;
+      // Timestamp: prefer `at` (epoch ms), then `timeStart`.
+      const at = e.at != null ? e.at : (e.timeStart != null ? e.timeStart : Date.now());
+      const key = [e.type, e.timeStart != null ? e.timeStart : at, e.from, e.to, e.channel].join('|');
+      if (_ndSeenEv.has(key)) return;
+      _ndSeenEv.add(key);
+      if (_ndSeenEv.size > 600) { _ndSeenEv.clear(); } // keep the set bounded
+      // Prefer human aliases for the from/to line.
+      const from = e.fromAlias || e.from || '';
+      const to = e.toAlias || e.to || '';
+      const ft = (from || to) ? `${from || '—'} → ${to || '—'}` : '';
+      const label = e.typeLabel || e.type || 'event';
+      const proto = e.protocol ? ' · ' + e.protocol : '';
+      const dur = (e.durationMs != null && e.durationMs > 0) ? ' · ' + _ndFmtElapsed(e.durationMs) : '';
+      const chan = e.channel ? ' · ' + e.channel : '';
+      _ndLog.push({
+        kind: 'event',
+        text: label + proto + dur + chan,
+        at,
+        ft
+      });
+      if (_ndLog.length > 200) _ndLog.shift();
+    }
+
+    // Compare the latest channels against the previous snapshot and log
+    // meaningful transitions (control-channel lock, call start/end).
+    function _ndDiffChannels() {
+      const next = {};
+      _ndChannels.forEach(c => {
+        const cid = String(c.id != null ? c.id : (c.name || ''));
+        if (!cid) return;
+        const state = String(c.state || '').toUpperCase();
+        // A channel is the P25 control channel iff `control === true`
+        // (or the reported state is CONTROL) — NOT the config `type`.
+        const isControl = c.control === true || state === 'CONTROL';
+        next[cid] = { state, control: isControl };
+        const prev = _ndPrevChan[cid] || {};
+        const label = c.name || ('channel ' + cid);
+        // Control-channel lock is the headline transition.
+        if (isControl && !prev.control) {
+          _ndLogPush('control', `${label} locked as CONTROL channel`, Date.now());
+        } else if (!isControl && prev.control) {
+          _ndLogPush('traffic', `${label} released control channel`, Date.now());
+        }
+        // Call start / end from the active-state edge (excluding the control channel).
+        const ACTIVE = (s) => s === 'CALL' || s === 'ACTIVE' || s === 'DATA' || s === 'ENCRYPTED';
+        const wasActive = ACTIVE(prev.state || '') && !prev.control;
+        const isActive = ACTIVE(state) && !isControl;
+        const fromLbl = c.fromAlias || c.from || '';
+        const toLbl = c.toAlias || c.to || '';
+        const ft = (fromLbl || toLbl) ? `${fromLbl || '—'} → ${toLbl || '—'}` : '';
+        if (isActive && !wasActive) {
+          _ndLogPush('callstart', `Call start · ${label}`, Date.now(), ft);
+        } else if (!isActive && wasActive) {
+          _ndLogPush('callend', `Call end · ${label}`, Date.now(), ft);
+        }
+      });
+      _ndPrevChan = next;
+    }
+
+    // Maintain client-side call clocks keyed by channelId+to for the active
+    // calls (activeCalls has no start timestamp). Records a start on the
+    // idle→active edge and drops clocks when a call is no longer up.
+    function _ndCallKey(c) {
+      const cid = c.channelId != null ? c.channelId
+        : (c.id != null ? c.id : (c.channelName || c.name || ''));
+      const to = c.to != null ? c.to : (c.talkgroup != null ? c.talkgroup : '');
+      return String(cid) + '|' + String(to);
+    }
+    function _ndDiffCalls() {
+      const calls = _ndActiveCalls();
+      const seen = new Set();
+      calls.forEach(c => {
+        const k = _ndCallKey(c);
+        seen.add(k);
+        if (_ndCallStart[k] == null) _ndCallStart[k] = Date.now();
+      });
+      Object.keys(_ndCallStart).forEach(k => { if (!seen.has(k)) delete _ndCallStart[k]; });
+    }
+
+    function _ndRenderEvents() {
+      const el = document.getElementById('nd-events');
+      if (!el) return;
+      if (!_ndLog.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No events yet — live activity will appear here.</div>`; return; }
+      el.innerHTML = _ndLog.slice().reverse().map(e => {
+        const at = e.at != null ? new Date(e.at) : null;
+        const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
+        const cls = e.kind && e.kind !== 'event' ? ' ' + e.kind : '';
+        const typeCls = (e.kind === 'control' || e.kind === 'callstart') ? ' ' + e.kind : '';
+        return `<div class="nd-event-row nd-log-row${cls}">
+          <span class="nd-ev-time">${escapeHtml(time)}</span>
+          <span class="nd-ev-type${typeCls}">${escapeHtml(e.text)}</span>
+          <span class="nd-ev-ft">${escapeHtml(e.ft || '')}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // --- Now playing (P4) ----------------------------------------------
+    function _ndActiveCalls() {
+      // Data calls (state DATA) are hidden from Now Playing — they carry no voice
+      // and just take up space.
+      const isData = (c) => String(c.state || '').toUpperCase() === 'DATA';
+      // Prefer the dedicated activeCalls array (includes dynamically-allocated
+      // P25 traffic channels not present in the channels list). Fall back to
+      // channels in a live state only when activeCalls is absent.
+      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c));
+      const ACTIVE = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
+      return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && (c.from || c.to || c.frequency != null));
+    }
+
+    function _ndRenderNowPlaying() {
+      const el = document.getElementById('nd-nowplaying');
+      const countEl = document.getElementById('nd-np-count');
+      if (!el) return;
+      const calls = _ndActiveCalls();
+      if (countEl) {
+        if (calls.length) { countEl.style.display = ''; countEl.textContent = String(calls.length); }
+        else countEl.style.display = 'none';
+      }
+      if (!calls.length) {
+        el.innerHTML = _ndEmpty('No active calls', _ndStatus ? 'Channels are idle or on control only' : 'waiting for node status…');
+        return;
+      }
+      el.innerHTML = `<div class="nd-np-grid">` + calls.map(c => {
+        const key = _ndCallKey(c);
+        // Talkgroup headline: prefer toAlias, then talkgroup, then to.
+        const tg = c.toAlias || c.talkgroup || c.to || '—';
+        // Who's transmitting: prefer fromAlias, then from.
+        const fromLbl = c.fromAlias || c.from || '—';
+        const talker = c.talkerAlias ? ` <span class="nd-alias">(${escapeHtml(String(c.talkerAlias))})</span>` : '';
+        const start = _ndCallStart[key];
+        const elapsed = start ? _ndFmtElapsed(Date.now() - start) : '—';
+        const chan = c.channelName || c.name || '';
+        const sys = [c.system, c.site].filter(Boolean).join(' · ');
+        const freq = c.frequency != null ? (c.frequency / 1e6).toFixed(4) + ' MHz' : '';
+        const sub = [chan, sys, freq].filter(Boolean).join(' · ');
+        return `<div class="nd-np-card">
+          <span class="nd-np-live"></span>
+          <div class="nd-np-main">
+            <div class="nd-np-tg">${escapeHtml(String(tg))}</div>
+            <div class="nd-np-ft">${escapeHtml(String(fromLbl))} → ${escapeHtml(String(tg))}${talker}</div>
+            ${sub ? `<div class="nd-np-sub">${escapeHtml(sub)}</div>` : ''}
+          </div>
+          <div class="nd-np-elapsed" data-cid="${escapeHtml(key)}">${elapsed}</div>
+        </div>`;
+      }).join('') + `</div>`;
+    }
+
+    function _ndFmtElapsed(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(s / 60);
+      return (m > 0 ? m + ':' : '0:') + String(s % 60).padStart(2, '0');
+    }
+
+    // Tick the elapsed clocks in-place once a second (no full re-render).
+    function _ndStartNpTicker() {
+      _ndStopNpTicker();
+      _ndNpTimer = setInterval(() => {
+        // Now-playing is always visible in the full-screen layout, so the
+        // elapsed clocks tick continuously (no active-view gate any more).
+        document.querySelectorAll('#nd-nowplaying .nd-np-elapsed').forEach(node => {
+          const cid = node.getAttribute('data-cid');
+          const start = _ndCallStart[cid];
+          if (start) node.textContent = _ndFmtElapsed(Date.now() - start);
+        });
+      }, 1000);
+    }
+    function _ndStopNpTicker() { if (_ndNpTimer) { clearInterval(_ndNpTimer); _ndNpTimer = null; } }
+
+    // === Per-node channel editor (P1) ==================================
+    const _ND_DECODERS = ['p25p2', 'p25p1', 'dmr', 'nbfm', 'am'];
+
+    // Available SDR serials for the per-channel "sdr" picker — merged from the
+    // live tuners and any serials already referenced in the saved config.
+    function _ndCfgSerials() {
+      const set = new Set();
+      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s) set.add(s); });
+      if (_ndConfig && Array.isArray(_ndConfig.tuners)) {
+        _ndConfig.tuners.forEach(t => { if (t && t.serial != null) set.add(String(t.serial)); });
+      }
+      if (_ndConfig && Array.isArray(_ndConfig.channels)) {
+        _ndConfig.channels.forEach(c => { if (c && c.sdr) set.add(String(c.sdr)); });
+      }
+      return Array.from(set);
+    }
+
+    async function _ndCfgFetch() {
+      _ndCfgLoading = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const node = data.node || data;
+        _ndConfig = node.configOverride || node.config_override || {};
+        if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+        if (!Array.isArray(_ndConfig.tuners)) _ndConfig.tuners = [];
+        if (node.configVersion != null && _ndNode) _ndNode.configVersion = node.configVersion;
+      } catch (e) {
+        const el = document.getElementById('nd-cfg-channels');
+        if (el) el.innerHTML = _ndEmpty('Could not load config', e.message);
+        _ndCfgLoading = false;
+        return;
+      }
+      _ndCfgLoading = false;
+      _ndCfgRender();
+      _ndRenderCfgSync();
+    }
+
+    function _ndCfgReload() { _ndConfig = null; _ndCfgFetch(); }
+
+    // Read the current editor inputs back into _ndConfig.channels, preserving
+    // any unknown fields already on each channel object.
+    function _ndCfgReadDom() {
+      if (!_ndConfig || !Array.isArray(_ndConfig.channels)) return;
+      _ndConfig.channels = _ndConfig.channels.map((orig, i) => {
+        const g = id => document.getElementById('nd-ch-' + i + '-' + id);
+        const c = Object.assign({}, orig);
+        const name = g('name'); if (name) c.name = name.value;
+        const freq = g('freq');
+        if (freq) c.frequency = freq.value !== '' ? Math.round(parseFloat(freq.value) * 1e6) : null;
+        const dec = g('dec'); if (dec) c.decoder = dec.value;
+        const sys = g('sys'); if (sys) c.system = sys.value;
+        const site = g('site'); if (site) c.site = site.value;
+        const auto = g('auto'); if (auto) c.autoStart = auto.checked;
+        const order = g('order'); if (order) c.order = order.value !== '' ? parseInt(order.value, 10) : null;
+        const sdr = g('sdr'); if (sdr) { if (sdr.value) c.sdr = sdr.value; else delete c.sdr; }
+        // Decoder-specific settings (from the expandable sub-row). Read against
+        // the currently selected decoder; drop it when empty so the agent uses
+        // SDR-Trunk defaults.
+        const dc = _ndReadDecoderConfig(i, c.decoder || 'p25p2');
+        if (dc && Object.keys(dc).length > 0) c.decoderConfig = dc;
+        else delete c.decoderConfig;
+        return c;
+      });
+    }
+
+    // Per-decoder default values (mirrors the SDR-Trunk config reference). Used
+    // to seed the sub-row inputs so a fresh channel already shows sane defaults.
+    const _ND_DEC_DEFAULTS = {
+      p25p1: { modulation: 'C4FM', ignoreDataCalls: false, trafficPoolSize: 20 },
+      p25p2: { autoDetectScramble: true, ignoreDataCalls: false, trafficPoolSize: 20 },
+      dmr:   { ignoreDataCalls: true, ignoreCrc: false, useCompressedTalkgroups: false, trafficPoolSize: 20 },
+      nbfm:  { bandwidth: 'BW_12_5', talkgroup: 1, audioFilter: true },
+      am:    { bandwidth: 'BW_15_0', talkgroup: 1, squelch: -78, autoTrack: true },
+    };
+    const _ND_BW_NBFM = ['BW_7_5', 'BW_12_5', 'BW_25_0'];
+    const _ND_BW_AM = ['BW_3_0', 'BW_5_0', 'BW_8_33', 'BW_15_0', 'BW_25_0'];
+
+    // Build the decoder-specific inputs for channel i. dc is the current
+    // decoderConfig (may be partial); missing fields fall back to the decoder
+    // default so the UI always shows a concrete value.
+    function _ndDecoderFieldsHtml(i, decoder, dc) {
+      dc = dc || {};
+      const def = _ND_DEC_DEFAULTS[decoder] || {};
+      const val = k => (dc[k] !== undefined ? dc[k] : def[k]);
+      const pid = id => `nd-ch-${i}-dc-${id}`;
+      const numF = (id, label, v, opts) => {
+        opts = opts || {};
+        const a = [];
+        if (opts.min != null) a.push(`min="${opts.min}"`);
+        if (opts.max != null) a.push(`max="${opts.max}"`);
+        a.push(`step="${opts.step || 1}"`);
+        const vv = (v != null && v !== '') ? escapeHtml(String(v)) : '';
+        return `<label class="nd-dc-f"><span>${label}</span><input type="number" id="${pid(id)}" ${a.join(' ')} value="${vv}"></label>`;
+      };
+      const boolF = (id, label, v) => `<label class="nd-dc-f nd-dc-bool"><input type="checkbox" id="${pid(id)}" ${v ? 'checked' : ''}><span>${label}</span></label>`;
+      const selF = (id, label, v, options) => {
+        const o = options.map(x => `<option value="${x}" ${x === v ? 'selected' : ''}>${x}</option>`).join('');
+        return `<label class="nd-dc-f"><span>${label}</span><select id="${pid(id)}">${o}</select></label>`;
+      };
+      switch (decoder) {
+        case 'p25p1':
+          return selF('modulation', 'Modulation', val('modulation'), ['C4FM', 'CQPSK'])
+            + boolF('ignoreDataCalls', 'Ignore data calls', val('ignoreDataCalls'))
+            + numF('trafficPoolSize', 'Traffic pool', val('trafficPoolSize'), { min: 0, max: 50 });
+        case 'p25p2': {
+          const sc = dc.scramble || {};
+          return boolF('autoDetectScramble', 'Auto-detect scramble', val('autoDetectScramble'))
+            + boolF('ignoreDataCalls', 'Ignore data calls', val('ignoreDataCalls'))
+            + numF('trafficPoolSize', 'Traffic pool', val('trafficPoolSize'), { min: 0, max: 50 })
+            + `<div class="nd-dc-group"><span class="nd-dc-group-h">Manual scramble (leave blank to auto-detect)</span>`
+            + numF('scramble-wacn', 'WACN', sc.wacn)
+            + numF('scramble-system', 'System', sc.system)
+            + numF('scramble-nac', 'NAC', sc.nac)
+            + `</div>`;
+        }
+        case 'dmr':
+          return boolF('ignoreDataCalls', 'Ignore data calls', val('ignoreDataCalls'))
+            + boolF('ignoreCrc', 'Ignore CRC', val('ignoreCrc'))
+            + boolF('useCompressedTalkgroups', 'Compressed TGs (Hytera)', val('useCompressedTalkgroups'))
+            + numF('trafficPoolSize', 'Traffic pool', val('trafficPoolSize'), { min: 0, max: 50 })
+            + _ndDmrTimeslotsHtml(i, dc.timeslots);
+        case 'nbfm':
+          return selF('bandwidth', 'Bandwidth', val('bandwidth'), _ND_BW_NBFM)
+            + numF('talkgroup', 'Talkgroup', val('talkgroup'), { min: 1, max: 65535 })
+            + boolF('audioFilter', 'Audio filter', val('audioFilter'));
+        case 'am':
+          return selF('bandwidth', 'Bandwidth', val('bandwidth'), _ND_BW_AM)
+            + numF('talkgroup', 'Talkgroup', val('talkgroup'), { min: 1, max: 65535 })
+            + numF('squelch', 'Squelch (dB)', val('squelch'))
+            + boolF('autoTrack', 'Auto-track', val('autoTrack'));
+        default:
+          return `<span class="nd-dc-ts-empty">No settings for this decoder.</span>`;
+      }
+    }
+
+    // DMR logical-slot table: LCN → downlink / uplink (MHz in the UI, Hz stored).
+    function _ndDmrTimeslotsHtml(i, timeslots) {
+      timeslots = Array.isArray(timeslots) ? timeslots : [];
+      const rows = timeslots.map((ts, j) => {
+        ts = ts || {};
+        const dl = ts.downlink != null ? ts.downlink / 1e6 : '';
+        const ul = ts.uplink != null ? ts.uplink / 1e6 : '';
+        return `<tr id="nd-ch-${i}-ts-${j}">
+          <td><input type="number" id="nd-ch-${i}-ts-${j}-lcn" placeholder="LCN" value="${ts.lcn != null ? escapeHtml(String(ts.lcn)) : ''}" style="width:70px"></td>
+          <td><input type="number" step="0.000001" id="nd-ch-${i}-ts-${j}-dl" placeholder="Downlink MHz" value="${dl !== '' ? escapeHtml(String(dl)) : ''}" style="width:120px"></td>
+          <td><input type="number" step="0.000001" id="nd-ch-${i}-ts-${j}-ul" placeholder="Uplink MHz" value="${ul !== '' ? escapeHtml(String(ul)) : ''}" style="width:120px"></td>
+          <td><button class="gc-icon-btn" title="Remove timeslot" onclick="_ndDmrRemoveTs(${i}, ${j})"><i class="fas fa-times"></i></button></td>
+        </tr>`;
+      }).join('');
+      const body = rows || `<tr><td colspan="4" class="nd-dc-ts-empty">No timeslots — DMR will auto-track.</td></tr>`;
+      return `<div class="nd-dc-ts">
+        <div class="nd-dc-ts-h">Timeslots (LCN → downlink / uplink MHz)</div>
+        <table class="nd-dc-ts-table" id="nd-ch-${i}-ts-table"><tbody>${body}</tbody></table>
+        <button class="btn btn-sm" onclick="_ndDmrAddTs(${i})"><i class="fas fa-plus"></i> Add timeslot</button>
+      </div>`;
+    }
+
+    // Re-render just one channel's detail body (used on decoder change + DMR
+    // timeslot add/remove).
+    function _ndRenderDetailBody(i, decoder, dc) {
+      const body = document.getElementById(`nd-ch-detail-body-${i}`);
+      if (body) body.innerHTML = _ndDecoderFieldsHtml(i, decoder, dc || {});
+    }
+
+    // Toggle a channel's decoder-settings sub-row.
+    function _ndCfgToggleDetail(i) {
+      const row = document.getElementById(`nd-ch-detail-${i}`);
+      const btn = document.getElementById(`nd-ch-${i}-gear`);
+      if (!row) return;
+      const open = row.style.display === 'none' || row.style.display === '';
+      row.style.display = open ? 'table-row' : 'none';
+      if (btn) btn.classList.toggle('nd-ch-gear-open', open);
+    }
+
+    // Decoder select changed: re-render the sub-row for the new decoder, carrying
+    // over any overlapping field values the operator had entered.
+    function _ndCfgDecoderChanged(i) {
+      const decEl = document.getElementById(`nd-ch-${i}-dec`);
+      if (!decEl) return;
+      _ndRenderDetailBody(i, decEl.value, _ndReadDecoderConfigLoose(i));
+    }
+
+    // Loose read of the currently-rendered dc inputs into a flat bag (for
+    // carrying overlapping values across a decoder change). Nested scramble/
+    // timeslots are intentionally not carried (they're decoder-specific).
+    function _ndReadDecoderConfigLoose(i) {
+      const bag = {};
+      document.querySelectorAll(`[id^="nd-ch-${i}-dc-"]`).forEach(el => {
+        const key = el.id.slice(`nd-ch-${i}-dc-`.length);
+        if (key.indexOf('scramble-') === 0) return;
+        if (el.type === 'checkbox') bag[key] = el.checked;
+        else if (el.value !== '') {
+          const n = Number(el.value);
+          bag[key] = (el.type === 'number' && !isNaN(n)) ? n : el.value;
+        }
+      });
+      return bag;
+    }
+
+    function _ndDmrAddTs(i) {
+      const dc = _ndReadDecoderConfig(i, 'dmr');
+      if (!Array.isArray(dc.timeslots)) dc.timeslots = [];
+      dc.timeslots.push({});
+      _ndRenderDetailBody(i, 'dmr', dc);
+    }
+
+    function _ndDmrRemoveTs(i, j) {
+      const dc = _ndReadDecoderConfig(i, 'dmr');
+      if (Array.isArray(dc.timeslots)) dc.timeslots.splice(j, 1);
+      _ndRenderDetailBody(i, 'dmr', dc);
+    }
+
+    // Read DMR timeslot rows back into [{lcn,downlink,uplink}] (Hz).
+    function _ndReadDmrTimeslots(i) {
+      const table = document.getElementById(`nd-ch-${i}-ts-table`);
+      if (!table) return [];
+      const out = [];
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        const lcnEl = tr.querySelector('input[id$="-lcn"]');
+        const dlEl = tr.querySelector('input[id$="-dl"]');
+        const ulEl = tr.querySelector('input[id$="-ul"]');
+        const ts = {};
+        if (lcnEl && lcnEl.value !== '') { const n = parseInt(lcnEl.value, 10); if (!isNaN(n)) ts.lcn = n; }
+        if (dlEl && dlEl.value !== '') { const n = Math.round(parseFloat(dlEl.value) * 1e6); if (!isNaN(n)) ts.downlink = n; }
+        if (ulEl && ulEl.value !== '') { const n = Math.round(parseFloat(ulEl.value) * 1e6); if (!isNaN(n)) ts.uplink = n; }
+        if (Object.keys(ts).length) out.push(ts);
+      });
+      return out;
+    }
+
+    // Read the decoder-specific inputs for channel i into a decoderConfig object,
+    // including only fields relevant to `decoder` (matching the JSON contract).
+    function _ndReadDecoderConfig(i, decoder) {
+      const g = id => document.getElementById(`nd-ch-${i}-dc-${id}`);
+      const numV = el => { if (!el || el.value === '') return undefined; const n = parseInt(el.value, 10); return isNaN(n) ? undefined : n; };
+      const dc = {};
+      const setNum = (k, el) => { const v = numV(el); if (v !== undefined) dc[k] = v; };
+      const setBool = (k, el) => { if (el) dc[k] = el.checked; };
+      const setStr = (k, el) => { if (el && el.value) dc[k] = el.value; };
+      switch (decoder) {
+        case 'p25p1':
+          setStr('modulation', g('modulation'));
+          setBool('ignoreDataCalls', g('ignoreDataCalls'));
+          setNum('trafficPoolSize', g('trafficPoolSize'));
+          break;
+        case 'p25p2': {
+          setBool('autoDetectScramble', g('autoDetectScramble'));
+          setBool('ignoreDataCalls', g('ignoreDataCalls'));
+          setNum('trafficPoolSize', g('trafficPoolSize'));
+          const w = numV(g('scramble-wacn')), sy = numV(g('scramble-system')), na = numV(g('scramble-nac'));
+          if (w !== undefined || sy !== undefined || na !== undefined) {
+            dc.scramble = {};
+            if (w !== undefined) dc.scramble.wacn = w;
+            if (sy !== undefined) dc.scramble.system = sy;
+            if (na !== undefined) dc.scramble.nac = na;
+          }
+          break;
+        }
+        case 'dmr': {
+          setBool('ignoreDataCalls', g('ignoreDataCalls'));
+          setBool('ignoreCrc', g('ignoreCrc'));
+          setBool('useCompressedTalkgroups', g('useCompressedTalkgroups'));
+          setNum('trafficPoolSize', g('trafficPoolSize'));
+          const ts = _ndReadDmrTimeslots(i);
+          if (ts.length) dc.timeslots = ts;
+          break;
+        }
+        case 'nbfm':
+          setStr('bandwidth', g('bandwidth'));
+          setNum('talkgroup', g('talkgroup'));
+          setBool('audioFilter', g('audioFilter'));
+          break;
+        case 'am':
+          setStr('bandwidth', g('bandwidth'));
+          setNum('talkgroup', g('talkgroup'));
+          setNum('squelch', g('squelch'));
+          setBool('autoTrack', g('autoTrack'));
+          break;
+      }
+      return dc;
+    }
+
+    function _ndCfgRender() {
+      const el = document.getElementById('nd-cfg-channels');
+      if (!el) return;
+      if (!_ndConfig) {
+        el.innerHTML = _ndEmpty('Loading config…', 'fetching current channels');
+        return;
+      }
+      const chans = _ndConfig.channels || [];
+      if (!chans.length) {
+        el.innerHTML = _ndEmpty('No channels configured', 'Use “Add channel” to create one') +
+          `<div id="nd-ch-unmatched"></div>`;
+        _ndRenderChannels(); // still surface any live-only channels below
+        return;
+      }
+      const serials = _ndCfgSerials();
+      const rows = chans.map((c, i) => {
+        const freqMhz = c.frequency != null ? (c.frequency / 1e6) : '';
+        const decoder = c.decoder || 'p25p2';
+        const decOpts = _ND_DECODERS.map(d => `<option value="${d}" ${d === decoder ? 'selected' : ''}>${d}</option>`).join('');
+        const sdrCur = c.sdr != null ? String(c.sdr) : '';
+        const sdrOpts = [`<option value="" ${sdrCur === '' ? 'selected' : ''}>Auto</option>`]
+          .concat(serials.map(s => `<option value="${escapeHtml(s)}" ${String(s) === sdrCur ? 'selected' : ''}>${escapeHtml(s)}</option>`)).join('');
+        const detailBody = _ndDecoderFieldsHtml(i, decoder, c.decoderConfig || {});
+        return `<tr id="nd-ch-row-${i}">
+          <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
+          <td class="nd-ch-w-name"><input type="text" id="nd-ch-${i}-name" placeholder="Channel name" value="${escapeHtml(c.name || '')}"></td>
+          <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-sys" placeholder="System" value="${escapeHtml(c.system || '')}"></td>
+          <td class="nd-ch-w-sys"><input type="text" id="nd-ch-${i}-site" placeholder="Site" value="${escapeHtml(c.site || '')}"></td>
+          <td><select id="nd-ch-${i}-dec" title="Decoder / protocol" onchange="_ndCfgDecoderChanged(${i})">${decOpts}</select></td>
+          <td class="nd-ch-w-freq"><input type="number" step="0.000001" id="nd-ch-${i}-freq" placeholder="MHz" value="${escapeHtml(String(freqMhz))}"></td>
+          <td><select id="nd-ch-${i}-sdr" title="Pin this channel to a specific SDR (or Auto)">${sdrOpts}</select></td>
+          <td class="nd-ch-live-cell" id="nd-ch-${i}-live"><span class="nd-state offline">—</span></td>
+          <td><div class="nd-ch-actions"><button class="gc-icon-btn" id="nd-ch-${i}-gear" title="Decoder settings" onclick="_ndCfgToggleDetail(${i})"><i class="fas fa-sliders-h"></i></button><button class="gc-icon-btn" title="Delete channel" onclick="_ndCfgRemoveChannel(${i})"><i class="fas fa-trash"></i></button></div></td>
+        </tr>
+        <tr id="nd-ch-detail-${i}" class="nd-ch-detail-row" style="display:none"><td colspan="9"><div class="nd-ch-detail-inner" id="nd-ch-detail-body-${i}">${detailBody}</div></td></tr>`;
+      }).join('');
+      el.innerHTML = `<table class="nd-ch-table">
+        <thead><tr>
+          <th title="Auto-start this channel when the node comes up">Auto-start</th><th>Name</th><th>System</th><th>Site</th><th>Decoder</th><th>Freq (MHz)</th><th>SDR</th><th>State</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div id="nd-ch-unmatched"></div>`;
+      _ndRenderChannels(); // paint live-state cells + any unmatched-live rows now
+    }
+
+    function _ndCfgAddChannel() {
+      if (!_ndConfig) { showToast('Config still loading…', 'warn'); return; }
+      _ndCfgReadDom();
+      if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+      _ndConfig.channels.push({
+        name: '', frequency: null, decoder: 'p25p2',
+        system: '', site: '', autoStart: true,
+        order: _ndConfig.channels.length, sdr: '',
+        // p25p2 (NSW PSN) defaults: empty carries the auto-detect-scramble default.
+        decoderConfig: {}
+      });
+      _ndCfgRender();
+    }
+
+    function _ndCfgRemoveChannel(i) {
+      if (!_ndConfig || !Array.isArray(_ndConfig.channels)) return;
+      _ndCfgReadDom();
+      _ndConfig.channels.splice(i, 1);
+      _ndCfgRender();
+    }
+
+    // PATCH the full merged config_override back to the node.
+    async function _ndCfgPatch(cfg, notify) {
+      const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config_override: cfg })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      try {
+        const data = await res.json();
+        const node = data.node || data;
+        if (node && (node.configOverride || node.config_override)) {
+          _ndConfig = node.configOverride || node.config_override;
+          if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
+          if (!Array.isArray(_ndConfig.tuners)) _ndConfig.tuners = [];
+        }
+        if (node && node.configVersion != null && _ndNode) _ndNode.configVersion = node.configVersion;
+      } catch (e) { /* body may be empty */ }
+      if (notify) showToast('Config saved.', 'success');
+    }
+
+    async function _ndCfgSave() {
+      if (!_ndConfig) { showToast('Config not loaded yet.', 'warn'); return; }
+      _ndCfgReadDom();
+      try {
+        await _ndCfgPatch(_ndConfig, false);
+        _ndCfgRender();
+        _ndRenderCfgSync();
+      } catch (e) { showToast('Save failed: ' + e.message, 'error'); return; }
+      // Saving alone only persists the override; the running SDR-Trunk keeps its
+      // old playlist until the node re-applies. Push straight away so Save = apply
+      // (agent re-renders the playlist and reloads it — see configapply.Apply).
+      // If the node is offline the push 409s; the config is still saved and will
+      // apply on the node's next connect.
+      await _ndCfgPush(true);
+    }
+
+    // Sync the currently-saved config to the node: the agent re-renders the
+    // SDR-Trunk playlist, reloads it, and restarts channels so the change goes
+    // live. Called by "Save & sync" after the config is persisted.
+    async function _ndCfgPush(savedContext) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/push-config`, {
+          method: 'POST', headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Saved & synced — the node is applying the new config.', 'success');
+      } catch (e) {
+        showToast('Saved, but not synced to the node (offline?): ' + e.message, 'warn');
+      }
+    }
+
+    // Collapse a long (sha256) config version to a 7-char prefix for display;
+    // leave short/human versions untouched.
+    function _ndCfgShort(v) {
+      const s = String(v);
+      return /^[0-9a-f]{16,}$/i.test(s) ? s.slice(0, 7) : s;
+    }
+
+    // "Config out of sync" hint: the node's stored config version vs the
+    // version the running agent reports as applied. Renders a compact badge
+    // only — the full sha256 version never appears inline; a short prefix is
+    // exposed in the hover title for debugging.
+    function _ndRenderCfgSync() {
+      const el = document.getElementById('nd-cfg-sync');
+      if (!el) return;
+      const local = _ndNode ? _ndNode.configVersion : null;
+      const applied = _ndStatus
+        ? (_ndStatus.appliedConfigVersion != null ? _ndStatus.appliedConfigVersion : _ndStatus.configVersion)
+        : null;
+      if (local == null || applied == null) {
+        el.className = 'nd-sync-hint'; el.textContent = ''; el.removeAttribute('title'); return;
+      }
+      if (String(local) !== String(applied)) {
+        el.className = 'nd-sync-hint out';
+        el.title = `node applied v${_ndCfgShort(applied)} · saved config v${_ndCfgShort(local)}`;
+        el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> Out of sync`;
+      } else {
+        el.className = 'nd-sync-hint ok';
+        el.title = `config v${_ndCfgShort(local)}`;
+        el.innerHTML = `<i class="fas fa-check"></i> In sync`;
+      }
+    }
+
+    // Version chips in the drawer header. Prefers the live status frame (what the
+    // agent is running right now — reflects a just-completed component update)
+    // and falls back to the node-list snapshot (last hello). This is the quick
+    // "what is this node actually on?" readout, e.g. to confirm sdrtrunk 0.6.3.
+    function _ndRenderVersions() {
+      const el = document.getElementById('nd-versions');
+      if (!el) return;
+      const s = _ndStatus || {};
+      const n = _ndNode || {};
+      const agent = s.agentVersion || n.agentVersion;
+      const sdrtrunk = s.sdrtrunkVersion || n.sdrtrunkVersion;
+      const rdio = s.rdioVersion || n.rdioVersion;
+      // Readiness chips prefer the live status frame, falling back to the node's
+      // last-cached status.
+      const rst = (_ndStatus && (_ndStatus.calibrated != null || _ndStatus.jmbeInstalled != null))
+        ? _ndStatus : (n.status || null);
+      el.innerHTML =
+        _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
+        + _ndReadinessHtml(rst);
+    }
+
+    let _ndTunerSelSig = null;
+    function _ndRenderTunerSelector() {
+      const el = document.getElementById('nd-wf-tuner');
+      if (!el) return;
+      if (_ndTuners.length <= 1) { el.style.display = 'none'; el.innerHTML = ''; _ndTunerSelSig = null; return; }
+      el.style.display = '';
+      // Rebuild the <option>s only when the set/labels/selection actually change.
+      // This runs on every status frame (~1/s); an unconditional innerHTML rebuild
+      // snapped the native dropdown shut each frame while an operator had it open
+      // to switch tuners (same class of bug as the gain dropdown).
+      const sig = _ndTuners.map(t => (t.id != null ? t.id : t.index) + ':' + (t.name || '')).join('|')
+        + '#' + String(_ndSpectrumTunerId);
+      if (sig === _ndTunerSelSig) return;
+      _ndTunerSelSig = sig;
+      el.innerHTML = _ndTuners.map(t => {
+        const tid = t.id != null ? t.id : t.index;
+        const sel = String(tid) === String(_ndSpectrumTunerId) ? 'selected' : '';
+        return `<option value="${escapeHtml(String(tid))}" ${sel}>${escapeHtml(t.name || ('Tuner ' + tid))}</option>`;
+      }).join('');
+    }
+
+    function _ndSetConn(state, online) {
+      const dot = document.getElementById('nd-dot');
+      if (online != null && dot) dot.classList.toggle('online', !!online);
+      const sub = document.getElementById('nd-conn');
+      if (!sub) return;
+      const map = {
+        connecting: 'connecting…',
+        connected: online === false ? 'node offline · live control' : 'online · live control',
+        disconnected: 'disconnected — close and reopen to reconnect'
+      };
+      sub.textContent = map[state] || state;
+      sub.className = 'node-drawer-sub' + (state === 'disconnected' ? ' err' : '');
+      if (state === 'disconnected') _ndBanner('err', 'Connection dropped. Close and reopen this drawer to reconnect.');
+    }
+
+    function _ndBanner(kind, msg) {
+      const el = document.getElementById('nd-banner');
+      if (!el) return;
+      if (!msg) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      el.style.display = '';
+      el.className = 'nd-banner ' + (kind === 'err' ? 'err' : 'warn');
+      el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> ${escapeHtml(msg)}`;
+    }
+
+    // --- Control buttons ---
+    async function _ndRestart(name) {
+      if (!await uiConfirm(`Restart the "${name}" component on this node?`)) return;
+      _ndCmd('restartComponent', { name }, `Restart ${name}`);
+    }
+    function _ndReloadPlaylist() { _ndCmd('reloadPlaylist', {}, 'Reload playlist'); }
+    async function _ndUpdate() {
+      if (!await uiConfirm('Trigger a software update on this node? Services may restart.')) return;
+      _ndCmd('update', {}, 'Trigger update');
+    }
+    async function _ndReboot() {
+      if (!await uiConfirm('Restart the node agent? The node will briefly go offline.', { danger: true, okText: 'Restart' })) return;
+      _ndCmd('rebootAgent', {}, 'Restart agent');
+    }
+
+    function closeNodeDrawer() {
+      const drawer = document.getElementById('node-drawer');
+      if (!drawer || !drawer.classList.contains('open')) return;
+      // Stop any live spectrum + unsubscribe while the socket is still open,
+      // then tear the socket down (suppress onclose so it doesn't flip the UI
+      // to a "disconnected" state on an intentional close).
+      if (_ndWs && _ndWs.readyState === WebSocket.OPEN) {
+        if (_ndSpectrumTunerId != null) {
+          _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
+        }
+        _ndWsSend({ t: 'unsubscribeNode', data: { nodeId: _ndNodeId } });
+      }
+      _ndSpectrumTunerId = null;
+      if (_ndWs) { try { _ndWs.onclose = null; _ndWs.close(); } catch (e) {} _ndWs = null; }
+      _ndAuthed = false;
+      _ndStopNpTicker();
+      drawer.classList.remove('open');
+    }
+
+    // === Global node settings (P3) =====================================
+    // One shared config fanned out to every node: a list of agencies (each one
+    // unifies an SDR-Trunk alias + stream and an rdio system + API key, keyed by
+    // its System ID) plus the global rdio groups / tags. Loaded once into _gcData
+    // and edited in place (unknown fields are preserved), then PUT back to
+    // /api/nodes/global-config which fans it out to all nodes.
+    let _gcData = null;
+    let _gcTab = 'agencies';
+    let _gcRdioTab = 'groups';
+    const _gcOpenAgency = new Set();
+    const _gcOpenTg = new Set(); // keys "agencyIdx:tgIdx"
+
+    // --- SDR-Trunk alias identifier types (proper sub-editors for the common
+    // ones; anything else falls back to the generic key/value attr rows). Field
+    // `k` is the XML attribute name; `t` is the control type. ---
+    const GC_TG_PROTOCOLS = ['AM', 'APCO25', 'DMR', 'FLEETSYNC', 'LTR', 'LTR_NET', 'MDC1200', 'MPT1327', 'NBFM', 'PASSPORT'];
+    const GC_RADIO_PROTOCOLS = ['APCO25', 'DMR', 'PASSPORT'];
+    const GC_ID_TYPES = {
+      talkgroup: { label: 'Talkgroup', fields: [
+        { k: 'value', t: 'number', label: 'Value' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_TG_PROTOCOLS } ] },
+      talkgroupRange: { label: 'Talkgroup range', fields: [
+        { k: 'min', t: 'number', label: 'Min' },
+        { k: 'max', t: 'number', label: 'Max' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_TG_PROTOCOLS } ] },
+      radio: { label: 'Radio ID', fields: [
+        { k: 'value', t: 'number', label: 'Value' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_RADIO_PROTOCOLS } ] },
+      radioRange: { label: 'Radio ID range', fields: [
+        { k: 'min', t: 'number', label: 'Min' },
+        { k: 'max', t: 'number', label: 'Max' },
+        { k: 'protocol', t: 'select', label: 'Protocol', opts: GC_RADIO_PROTOCOLS } ] },
+      p25FullyQualifiedTalkgroup: { label: 'P25 fully-qualified talkgroup', fields: [
+        { k: 'wacn', t: 'number', label: 'WACN' },
+        { k: 'system', t: 'number', label: 'System' },
+        { k: 'value', t: 'number', label: 'Value' } ] },
+      p25FullyQualifiedRadio: { label: 'P25 fully-qualified radio', fields: [
+        { k: 'wacn', t: 'number', label: 'WACN' },
+        { k: 'system', t: 'number', label: 'System' },
+        { k: 'value', t: 'number', label: 'Value' } ] },
+      dcs: { label: 'DCS', fields: [ { k: 'code', t: 'text', label: 'Code' } ] },
+      esn: { label: 'ESN', fields: [ { k: 'esn', t: 'text', label: 'ESN (* wildcard)' } ] },
+      statusID: { label: 'Status ID', fields: [ { k: 'status', t: 'number', label: 'Status (0–255)' } ] },
+      unitStatusID: { label: 'Unit status ID', fields: [ { k: 'status', t: 'number', label: 'Status (0–255)' } ] },
+    };
+    // rdio LED = named-colour dropdown (NOT a colour picker). Alerts = None + 1..9.
+    const GC_LED_COLORS = ['blue', 'cyan', 'green', 'magenta', 'orange', 'red', 'white', 'yellow'];
+    // Swatch hues for the LED preset names (used for the agency colour dot).
+    const GC_LED_HEX = { blue: '#2563eb', cyan: '#06b6d4', green: '#22c55e', magenta: '#d946ef', orange: '#f97316', red: '#ef4444', white: '#e5e7eb', yellow: '#eab308' };
+    function _gcLedHex(led) { return GC_LED_HEX[String(led || '').toLowerCase()] || null; }
+    const GC_ALERTS = ['alert1', 'alert2', 'alert3', 'alert4', 'alert5', 'alert6', 'alert7', 'alert8', 'alert9'];
+
+    async function openGlobalConfig() {
+      const modal = document.getElementById('global-config-modal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      _gcTab = 'agencies'; _gcRdioTab = 'groups';
+      _gcOpenAgency.clear(); _gcOpenTg.clear();
+      _gcSetTab('agencies'); _gcSetRdioTab('groups');
+      document.getElementById('gc-agencies').innerHTML = `<div class="gc-empty"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
+      await _gcLoad();
+    }
+
+    function closeGlobalConfig() {
+      const modal = document.getElementById('global-config-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function _gcSetTab(name) {
+      _gcTab = name;
+      document.querySelectorAll('.gc-tabs .gc-tab').forEach(b => b.classList.toggle('active', b.dataset.gc === name));
+      document.getElementById('gc-panel-agencies').classList.toggle('active', name === 'agencies');
+      document.getElementById('gc-panel-grouptags').classList.toggle('active', name === 'grouptags');
+    }
+
+    function _gcSetRdioTab(name) {
+      _gcRdioTab = name;
+      document.querySelectorAll('.gc-subtabs .gc-subtab').forEach(b => b.classList.toggle('active', b.dataset.rd === name));
+      document.getElementById('gc-rd-groups').classList.toggle('active', name === 'groups');
+      document.getElementById('gc-rd-tags').classList.toggle('active', name === 'tags');
+    }
+
+    async function _gcLoad() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/global-config`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const cfg = data.config || data || {};
+        _gcData = {
+          // Unified agencies: each owns its SDR-Trunk alias AND its rdio system
+          // (the backend derives both). Groups & Tags stay global flat lists.
+          agencies: Array.isArray(cfg.agencies) ? cfg.agencies : [],
+          rdioGroups: Array.isArray(cfg.rdioGroups) ? cfg.rdioGroups : [],
+          rdioTags: Array.isArray(cfg.rdioTags) ? cfg.rdioTags : [],
+          version: cfg.version, updatedAt: cfg.updatedAt
+        };
+        _gcRenderMeta();
+        _gcRenderAll();
+      } catch (e) {
+        document.getElementById('gc-agencies').innerHTML = `<div class="gc-empty">Failed to load global config: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function _gcRenderMeta() {
+      const el = document.getElementById('gc-meta');
+      if (!el || !_gcData) return;
+      const bits = [];
+      if (_gcData.version != null) bits.push(`<span>version <strong>${escapeHtml(String(_gcData.version))}</strong></span>`);
+      if (_gcData.updatedAt) bits.push(`<span>updated ${escapeHtml(fmtDate(_gcData.updatedAt, { time: true }))}</span>`);
+      el.innerHTML = bits.join('');
+    }
+
+    function _gcRenderAll() {
+      _gcRenderAgencies();
+      _gcRenderGroups();
+      _gcRenderTags();
+    }
+
+    // --- SDR-Trunk aliases ---
+    // Colour is an ARGB int (SDR-Trunk stores e.g. -65536); the editor shows a
+    // real colour picker over the RGB channels while preserving the alpha byte.
+    function _gcColorHex(color) {
+      if (color == null || color === '') return '#000000';
+      const s = String(color).trim();
+      if (s[0] === '#') {
+        let h = s.slice(1);
+        if (h.length === 8) h = h.slice(2);            // strip AA from #AARRGGBB
+        if (h.length === 3) h = h.split('').map(c => c + c).join('');
+        return (h.length === 6 && /^[0-9a-fA-F]{6}$/.test(h)) ? '#' + h.toLowerCase() : '#000000';
+      }
+      const n = Number(s);
+      if (!Number.isFinite(n)) return '#000000';
+      return '#' + ((n >>> 0) & 0xFFFFFF).toString(16).padStart(6, '0');
+    }
+    function _gcColorAlpha(color) {
+      if (color == null || color === '') return 0xFF;
+      const s = String(color).trim();
+      if (s[0] === '#') { const h = s.slice(1); return h.length === 8 ? parseInt(h.slice(0, 2), 16) : 0xFF; }
+      const n = Number(s);
+      if (!Number.isFinite(n)) return 0xFF;
+      return ((n >>> 0) >>> 24) & 0xFF;
+    }
+    // --- Agencies (each unifies an SDR-Trunk alias + an rdio system) ---
+    // One colour per agency, chosen from rdio's LED presets. We store the named
+    // colour on `led` (rdio system) AND derive the SDR-Trunk alias colour (ARGB
+    // int) so both systems render the same colour. Empty clears both.
+    function _gcAgencyLedSet(i, val) {
+      const a = _gcData.agencies[i];
+      if (!a) return;
+      const v = String(val || '').trim();
+      if (v === '') { delete a.led; delete a.color; _gcRenderAgencies(); return; }
+      a.led = v;
+      const hex = _gcLedHex(v);
+      if (hex) { const rgb = parseInt(hex.slice(1), 16) & 0xFFFFFF; a.color = String(((0xFF << 24) | rgb) | 0); }
+      _gcRenderAgencies();
+    }
+    // priority: undefined/100 = normal monitor, -1 = do-not-monitor, 1..99 = priority.
+    function _gcAgencyPriorityVal(a) {
+      const p = a && a.priority;
+      if (p === -1 || String(p) === '-1') return '-1';
+      const n = Number(p);
+      if (p == null || p === '' || n === 100 || !Number.isFinite(n)) return 'default';
+      if (n >= 1 && n <= 99) return String(n);
+      return 'default';
+    }
+    function _gcAgencyPrioritySet(i, val) {
+      const a = _gcData.agencies[i]; if (!a) return;
+      if (val === 'default') delete a.priority; else a.priority = Number(val);
+    }
+    function _gcAgencyStreamSet(i, val) {
+      const a = _gcData.agencies[i]; if (!a) return;
+      const t = String(val).trim();
+      if (t === '') delete a.streamTalkgroupAlias; else a.streamTalkgroupAlias = t;
+    }
+    function _gcIconNames() {
+      const set = new Set();
+      (_gcData.agencies || []).forEach(a => { if (a && a.iconName) set.add(a.iconName); });
+      return Array.from(set).sort();
+    }
+
+    function _gcRenderAgencies() {
+      const el = document.getElementById('gc-agencies');
+      if (!el || !_gcData) return;
+      const q = (document.getElementById('gc-agency-search').value || '').toLowerCase();
+      const list = _gcData.agencies;
+      const cnt = document.getElementById('gc-agency-count');
+      if (cnt) cnt.textContent = list.length + (list.length === 1 ? ' agency' : ' agencies');
+      const matchTg = (tg) => String(tg.label || '').toLowerCase().includes(q) || String(tg.name || '').toLowerCase().includes(q) || String(tg.id == null ? '' : tg.id).toLowerCase().includes(q);
+      const shown = list.map((a, i) => ({ a, i })).filter(({ a }) =>
+        !q || String(a.name || '').toLowerCase().includes(q) || String(a.systemId == null ? '' : a.systemId).toLowerCase().includes(q)
+        || (Array.isArray(a.talkgroups) && a.talkgroups.some(matchTg)));
+      const datalist = `<datalist id="gc-icon-names">${_gcIconNames().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>`;
+      if (!shown.length) { el.innerHTML = datalist + `<div class="gc-empty">No agencies${q ? ' match your search' : ' yet'}.</div>`; return; }
+      el.innerHTML = datalist + shown.map(({ a, i }) => {
+        const open = _gcOpenAgency.has(i);
+        const aliasIds = Array.isArray(a.aliasIds) ? a.aliasIds : [];
+        const tgs = Array.isArray(a.talkgroups) ? a.talkgroups : [];
+        const units = Array.isArray(a.units) ? a.units : [];
+        const transcribeOn = a.transcribe !== false; // default true
+        const swHex = _gcLedHex(a.led) || (a.color ? _gcColorHex(a.color) : null);
+        const priVal = _gcAgencyPriorityVal(a);
+        const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Monitor (default)</option>`,
+          `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
+          .concat(Array.from({ length: 99 }, (_, n) => { const v = String(n + 1); return `<option value="${v}" ${v === priVal ? 'selected' : ''}>Priority ${v}</option>`; })).join('');
+        const idEditors = aliasIds.map((id, idi) => _gcRenderId(i, idi, id)).join('');
+        const shownTgs = tgs.map((tg, ti) => ({ tg, ti })).filter(({ tg }) => !q || matchTg(tg));
+        const body = !open ? '' : `<div class="gc-card-body">
+          <section class="gc-sect gc-sect-global">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-global">Global</span> Agency</div>
+            <div class="gc-inline">
+              <div class="nd-fld"><label>System ID</label><input type="number" style="max-width:110px;" value="${escapeHtml(String(a.systemId == null ? '' : a.systemId))}" oninput="_gcAgencySet(${i},'systemId',this.value)"></div>
+              <div class="nd-fld" style="flex:1;min-width:200px;"><label>Name</label><input type="text" value="${escapeHtml(a.name || '')}" oninput="_gcAgencySet(${i},'name',this.value)"></div>
+              <div class="nd-fld"><label>Icon</label><input type="text" list="gc-icon-names" value="${escapeHtml(a.iconName || '')}" oninput="_gcAgencySet(${i},'iconName',this.value)" placeholder="named icon"></div>
+              <div class="nd-fld"><label>Colour</label>${_gcLedSelect(a.led, `_gcAgencyLedSet(${i},this.value)`)}</div>
+              <div class="nd-fld"><label>Priority</label><select onchange="_gcAgencyPrioritySet(${i},this.value)">${prioOpts}</select></div>
+            </div>
+            <div class="gc-inline" style="align-items:center;">
+              <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(a.delay != null ? String(a.delay) : '')}" oninput="_gcAgencySet(${i},'delay',this.value)"></div>
+              <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(a.alert, `_gcAgencySet(${i},'alert',this.value,true)`)}</div>
+              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Auto-populate</label><label class="node-switch"><input type="checkbox" ${a.autoPopulate ? 'checked' : ''} onchange="_gcAgencySet(${i},'autoPopulate',this.checked)"><span class="track"></span></label></div>
+              <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcAgencySet(${i},'transcribe',this.checked)"><span class="track"></span></label></div>
+            </div>
+            <div class="gc-inline">
+              <div class="nd-fld" style="flex:1;min-width:220px;"><label>Transcription prompt</label><textarea rows="2" oninput="_gcAgencySet(${i},'transcriptionPrompt',this.value)">${escapeHtml(a.transcriptionPrompt || '')}</textarea></div>
+              <div class="nd-fld" style="flex:1;min-width:220px;"><label>Blacklists (comma-separated ids)</label><textarea rows="2" oninput="_gcAgencySet(${i},'blacklists',this.value)">${escapeHtml(a.blacklists == null ? '' : String(a.blacklists))}</textarea></div>
+            </div>
+          </section>
+
+          <section class="gc-sect gc-sect-sdr">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Alias &amp; streaming ranges</div>
+            <div class="gc-hint">Talkgroup / radio ids streamed for this agency. Priority &amp; broadcast channel are set automatically from the fields above.</div>
+            ${idEditors || `<div class="gc-empty" style="padding:0.6rem;">No streaming ranges.</div>`}
+            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add range</button>
+            <div class="gc-inline" style="margin-top:0.6rem;">
+              <div class="nd-fld"><label>Stream as talkgroup</label><input type="number" style="max-width:140px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAgencyStreamSet(${i},this.value)" placeholder="talkgroup"></div>
+            </div>
+          </section>
+
+          <section class="gc-sect gc-sect-rdio">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-rdio">rdio</span> Talkgroups <span class="gc-sect-count">${tgs.length}</span></div>
+            ${shownTgs.map(({ tg, ti }) => _gcRenderTg(i, ti, tg)).join('') || `<div class="gc-empty" style="padding:0.6rem;">No talkgroups${q ? ' match your search' : ''}.</div>`}
+            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddTg(${i})"><i class="fas fa-plus"></i> Add talkgroup</button>
+          </section>
+
+          <section class="gc-sect gc-sect-rdio">
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-rdio">rdio</span> Units <span class="gc-sect-count">${units.length}</span></div>
+            <div class="nd-table-scroll">
+            <table class="gc-table"><thead><tr><th>ID</th><th>Label</th><th></th></tr></thead><tbody>
+            ${units.map((u, ui) => `<tr>
+              <td><input type="number" value="${escapeHtml(String(u.id == null ? '' : u.id))}" oninput="_gcUnitSet(${i},${ui},'id',this.value)"></td>
+              <td><input type="text" value="${escapeHtml(u.label || '')}" oninput="_gcUnitSet(${i},${ui},'label',this.value)"></td>
+              <td><button class="gc-icon-btn" onclick="_gcRemoveUnit(${i},${ui})"><i class="fas fa-trash"></i></button></td>
+            </tr>`).join('')}
+            </tbody></table></div>
+            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddUnit(${i})"><i class="fas fa-plus"></i> Add unit</button>
+          </section>
+        </div>`;
+        const ledDot = `<span class="gc-color-swatch" style="width:12px;height:12px;background:${swHex || 'transparent'};${swHex ? '' : 'opacity:0.3;border-style:dashed;'}"></span>`;
+        const priBadge = priVal === '-1' ? ' · muted' : (priVal !== 'default' ? ' · pri ' + priVal : '');
+        return `<div class="gc-card ${open ? 'open' : ''}">
+          <div class="gc-card-head">
+            <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleAgency(${i})"></i>
+            ${ledDot}
+            <span class="gc-card-title" onclick="_gcToggleAgency(${i})">${escapeHtml(a.name || ('Agency ' + (a.systemId != null && a.systemId !== '' ? a.systemId : i)))}</span>
+            <span class="gc-card-meta">${tgs.length} TG · ${units.length} units${a.systemId != null && a.systemId !== '' ? ' · id ' + escapeHtml(String(a.systemId)) : ''}${priBadge}</span>
+            <button class="gc-icon-btn" title="Remove agency" onclick="_gcRemoveAgency(${i})"><i class="fas fa-trash"></i></button>
+          </div>
+          ${body}
+        </div>`;
+      }).join('');
+    }
+
+    // One identifier: proper fields for the common types, generic key/value rows
+    // for the rest (and for any extra attributes on a typed id).
+    function _gcRenderId(i, idi, id) {
+      const attrs = (id && id.attrs && typeof id.attrs === 'object') ? id.attrs : {};
+      const type = (id && id.type) || '';
+      const spec = GC_ID_TYPES[type];
+      const typeKeys = Object.keys(GC_ID_TYPES);
+      let typeOpts = (type ? '' : `<option value="" selected>— pick type —</option>`) +
+        typeKeys.map(k => `<option value="${k}" ${k === type ? 'selected' : ''}>${escapeHtml(GC_ID_TYPES[k].label)}</option>`).join('');
+      if (type && !typeKeys.includes(type)) typeOpts += `<option value="${escapeHtml(type)}" selected>${escapeHtml(type)}</option>`;
+
+      const usedKeys = [];
+      let fieldsHtml = '';
+      if (spec) {
+        fieldsHtml = `<div class="gc-inline" style="margin:0.3rem 0;">` + spec.fields.map(f => {
+          usedKeys.push(f.k);
+          const val = attrs[f.k] == null ? '' : String(attrs[f.k]);
+          if (f.t === 'select') {
+            const opts = `<option value="">—</option>` + f.opts.map(o => `<option value="${escapeHtml(o)}" ${o === val ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('') +
+              ((val && !f.opts.includes(val)) ? `<option value="${escapeHtml(val)}" selected>${escapeHtml(val)}</option>` : '');
+            return `<div class="nd-fld"><label>${escapeHtml(f.label)}</label><select onchange="_gcIdAttr(${i},${idi},'${f.k}',this.value)">${opts}</select></div>`;
+          }
+          return `<div class="nd-fld"><label>${escapeHtml(f.label)}</label><input type="${f.t}" value="${escapeHtml(val)}" oninput="_gcIdAttr(${i},${idi},'${f.k}',this.value)"></div>`;
+        }).join('') + `</div>`;
+      }
+      const extraKeys = Object.keys(attrs).filter(k => !usedKeys.includes(k));
+      const extraRows = extraKeys.map(k => `
+        <div class="gc-attr-row">
+          <input type="text" style="max-width:140px;" value="${escapeHtml(k)}" onchange="_gcAttrRename(${i},${idi},'${jsArg(k)}',this.value)" placeholder="key">
+          <input type="text" value="${escapeHtml(String(attrs[k] == null ? '' : attrs[k]))}" oninput="_gcAttrVal(${i},${idi},'${jsArg(k)}',this.value)" placeholder="value">
+          <button class="gc-icon-btn" onclick="_gcRemoveAttr(${i},${idi},'${jsArg(k)}')"><i class="fas fa-xmark"></i></button>
+        </div>`).join('');
+      return `<div class="nd-cfg-row" style="margin-bottom:0.5rem;">
+        <div class="gc-attr-row">
+          <div class="nd-fld" style="flex:0 0 220px;"><label>Type</label><select onchange="_gcIdTypeSet(${i},${idi},this.value)">${typeOpts}</select></div>
+          <button class="gc-icon-btn" style="align-self:flex-end;" title="Remove identifier" onclick="_gcRemoveId(${i},${idi})"><i class="fas fa-trash"></i></button>
+        </div>
+        ${fieldsHtml}
+        ${extraRows}
+        <button class="gc-badge-btn" style="margin-top:0.2rem;" onclick="_gcAddAttr(${i},${idi})"><i class="fas fa-plus"></i> Add attribute</button>
+      </div>`;
+    }
+
+    function _gcToggleAgency(i) { if (_gcOpenAgency.has(i)) _gcOpenAgency.delete(i); else _gcOpenAgency.add(i); _gcRenderAgencies(); }
+    function _gcAgencySet(i, field, val, delEmpty) { const a = _gcData.agencies[i]; if (a) _gcAssignField(a, field, val, delEmpty); }
+    function _gcAddAgency() { _gcData.agencies.push({ systemId: '', name: 'New agency', aliasIds: [], talkgroups: [], units: [] }); _gcOpenAgency.clear(); _gcOpenAgency.add(_gcData.agencies.length - 1); _gcRenderAgencies(); }
+    async function _gcRemoveAgency(i) { if (!await uiConfirm('Remove this agency (its alias, system, talkgroups and units)?', { danger: true, okText: 'Remove' })) return; _gcData.agencies.splice(i, 1); _gcOpenAgency.clear(); _gcOpenTg.clear(); _gcRenderAgencies(); }
+    // Streaming ranges live on agency.aliasIds — same {type, attrs} shape and editor
+    // as the old SDR-Trunk alias ids (the backend adds priority/broadcastChannel).
+    function _gcAddId(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.aliasIds)) a.aliasIds = []; a.aliasIds.push({ type: 'talkgroup', attrs: {} }); _gcRenderAgencies(); }
+    function _gcRemoveId(i, idi) { _gcData.agencies[i].aliasIds.splice(idi, 1); _gcRenderAgencies(); }
+    function _gcIdTypeSet(i, idi, type) {
+      const id = _gcData.agencies[i].aliasIds[idi];
+      if (!id) return;
+      id.type = type; id.attrs = {};   // fields differ per type — reset attrs
+      _gcRenderAgencies();
+    }
+    function _gcIdAttr(i, idi, key, val) {
+      const id = _gcData.agencies[i].aliasIds[idi];
+      if (!id) return;
+      if (!id.attrs) id.attrs = {};
+      if (val === '') delete id.attrs[key]; else id.attrs[key] = val;
+    }
+    function _gcAttrVal(i, idi, key, val) { const id = _gcData.agencies[i].aliasIds[idi]; if (id) { if (!id.attrs) id.attrs = {}; id.attrs[key] = val; } }
+    function _gcAttrRename(i, idi, oldKey, newKey) {
+      const id = _gcData.agencies[i].aliasIds[idi];
+      if (!id || !id.attrs || newKey === oldKey) return;
+      const rebuilt = {};
+      Object.keys(id.attrs).forEach(k => { rebuilt[k === oldKey ? newKey : k] = id.attrs[k]; });
+      id.attrs = rebuilt; _gcRenderAgencies();
+    }
+    function _gcAddAttr(i, idi) {
+      const id = _gcData.agencies[i].aliasIds[idi];
+      if (!id.attrs) id.attrs = {};
+      let k = 'key', n = 1; while (Object.prototype.hasOwnProperty.call(id.attrs, k)) k = 'key' + (++n);
+      id.attrs[k] = ''; _gcRenderAgencies();
+    }
+    function _gcRemoveAttr(i, idi, key) { const id = _gcData.agencies[i].aliasIds[idi]; if (id && id.attrs) delete id.attrs[key]; _gcRenderAgencies(); }
+
+    // --- rdio: option lists for group/tag pickers ---
+    function _gcOptions(list, cur) {
+      const c = cur == null ? '' : String(cur);
+      let opts = `<option value="" ${c === '' ? 'selected' : ''}>—</option>`;
+      let found = false;
+      opts += (list || []).map(o => {
+        const v = String(o._id != null ? o._id : '');
+        if (v === c) found = true;
+        return `<option value="${escapeHtml(v)}" ${v === c ? 'selected' : ''}>${escapeHtml(o.label || v)}</option>`;
+      }).join('');
+      if (!found && c !== '') opts += `<option value="${escapeHtml(c)}" selected>${escapeHtml(c)} (unknown)</option>`;
+      return opts;
+    }
+
+    // --- rdio led / alert selects (rdio never uses a colour picker — led is a
+    // named-colour dropdown; alert is None + alert1..9). Empty = default, which we
+    // drop from the object so it stays in its default state. ---
+    function _gcLedSelect(value, onchange) {
+      const cur = value == null ? '' : String(value);
+      const known = GC_LED_COLORS.includes(cur);
+      return `<select onchange="${onchange}">` +
+        `<option value="" ${cur === '' ? 'selected' : ''}>Default</option>` +
+        GC_LED_COLORS.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('') +
+        ((cur && !known) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '') +
+        `</select>`;
+    }
+    function _gcAlertSelect(value, onchange) {
+      const cur = value == null ? '' : String(value);
+      const known = GC_ALERTS.includes(cur);
+      return `<select onchange="${onchange}">` +
+        `<option value="" ${cur === '' ? 'selected' : ''}>None</option>` +
+        GC_ALERTS.map(a => `<option value="${a}" ${a === cur ? 'selected' : ''}>${a}</option>`).join('') +
+        ((cur && !known) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '') +
+        `</select>`;
+    }
+    // Assign a field, dropping it entirely when cleared (led/alert default state).
+    function _gcAssignField(obj, field, val, deleteEmpty) {
+      if (deleteEmpty && (val === '' || val == null)) delete obj[field]; else obj[field] = val;
+    }
+
+    // One talkgroup, as a collapsible sub-panel (agencies can hold 80+).
+    function _gcRenderTg(i, ti, tg) {
+      const key = i + ':' + ti;
+      const open = _gcOpenTg.has(key);
+      const transcribeOn = tg.transcribe !== false; // default true
+      const grpLabel = (_gcData.rdioGroups.find(g => String(g._id) === String(tg.groupId)) || {}).label;
+      const tagLabel = (_gcData.rdioTags.find(t => String(t._id) === String(tg.tagId)) || {}).label;
+      const meta = [grpLabel, tagLabel].filter(Boolean).map(escapeHtml).join(' · ');
+      const body = !open ? '' : `<div class="gc-card-body" style="padding-top:0.4rem;">
+        <div class="gc-inline">
+          <div class="nd-fld"><label>ID</label><input type="number" style="max-width:100px;" value="${escapeHtml(String(tg.id == null ? '' : tg.id))}" oninput="_gcTgSet(${i},${ti},'id',this.value)"></div>
+          <div class="nd-fld"><label>Label</label><input type="text" value="${escapeHtml(tg.label || '')}" oninput="_gcTgSet(${i},${ti},'label',this.value)"></div>
+          <div class="nd-fld"><label>Name</label><input type="text" value="${escapeHtml(tg.name || '')}" oninput="_gcTgSet(${i},${ti},'name',this.value)"></div>
+        </div>
+        <div class="gc-inline">
+          <div class="nd-fld"><label>Group</label><select onchange="_gcTgSet(${i},${ti},'groupId',this.value)">${_gcOptions(_gcData.rdioGroups, tg.groupId)}</select></div>
+          <div class="nd-fld"><label>Tag</label><select onchange="_gcTgSet(${i},${ti},'tagId',this.value)">${_gcOptions(_gcData.rdioTags, tg.tagId)}</select></div>
+          <div class="nd-fld"><label>Frequency (Hz)</label><input type="number" style="max-width:130px;" value="${escapeHtml(tg.frequency != null ? String(tg.frequency) : '')}" oninput="_gcTgSet(${i},${ti},'frequency',this.value)"></div>
+          <div class="nd-fld"><label>Delay</label><input type="number" style="max-width:90px;" value="${escapeHtml(tg.delay != null ? String(tg.delay) : '')}" oninput="_gcTgSet(${i},${ti},'delay',this.value)"></div>
+          <div class="nd-fld"><label>Alert</label>${_gcAlertSelect(tg.alert, `_gcTgSet(${i},${ti},'alert',this.value,true)`)}</div>
+          <div class="nd-fld" style="flex-direction:row;align-items:center;gap:0.4rem;"><label style="margin:0;">Transcribe</label><label class="node-switch"><input type="checkbox" ${transcribeOn ? 'checked' : ''} onchange="_gcTgSet(${i},${ti},'transcribe',this.checked)"><span class="track"></span></label></div>
+        </div>
+      </div>`;
+      return `<div class="gc-card ${open ? 'open' : ''}" style="margin-bottom:0.3rem;">
+        <div class="gc-card-head" style="padding:0.4rem 0.6rem;">
+          <i class="fas fa-chevron-right gc-caret" onclick="_gcToggleTg(${i},${ti})"></i>
+          <span class="gc-card-title" style="font-size:0.8rem;" onclick="_gcToggleTg(${i},${ti})">${escapeHtml(String(tg.id == null ? '?' : tg.id))} · ${escapeHtml(tg.label || tg.name || '(unnamed)')}</span>
+          <span class="gc-card-meta">${meta}</span>
+          <button class="gc-icon-btn" title="Remove talkgroup" onclick="_gcRemoveTg(${i},${ti})"><i class="fas fa-trash"></i></button>
+        </div>
+        ${body}
+      </div>`;
+    }
+
+    function _gcToggleTg(i, ti) { const k = i + ':' + ti; if (_gcOpenTg.has(k)) _gcOpenTg.delete(k); else _gcOpenTg.add(k); _gcRenderAgencies(); }
+    function _gcTgSet(i, ti, field, val, delEmpty) { const tg = _gcData.agencies[i].talkgroups[ti]; if (tg) _gcAssignField(tg, field, val, delEmpty); }
+    function _gcAddTg(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.talkgroups)) a.talkgroups = []; a.talkgroups.push({ id: '', label: '', name: '', groupId: '', tagId: '' }); _gcOpenTg.add(i + ':' + (a.talkgroups.length - 1)); _gcRenderAgencies(); }
+    function _gcRemoveTg(i, ti) { _gcData.agencies[i].talkgroups.splice(ti, 1); _gcOpenTg.clear(); _gcRenderAgencies(); }
+    function _gcUnitSet(i, ui, field, val) { const u = _gcData.agencies[i].units[ui]; if (u) u[field] = val; }
+    function _gcAddUnit(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.units)) a.units = []; a.units.push({ id: '', label: '', order: a.units.length }); _gcRenderAgencies(); }
+    function _gcRemoveUnit(i, ui) { _gcData.agencies[i].units.splice(ui, 1); _gcRenderAgencies(); }
+
+    // --- rdio groups / tags (flat global {_id, label} lists) ---
+    // Label-only rows; _id is auto-assigned (max+1) and shown read-only so the
+    // talkgroup group/tag dropdowns can reference it.
+    function _gcNextId(list) {
+      let max = 0;
+      (list || []).forEach(o => { const n = Number(o && o._id); if (Number.isFinite(n) && n > max) max = n; });
+      return max + 1;
+    }
+    function _gcRenderKv(containerId, list, prefix) {
+      const el = document.getElementById(containerId);
+      if (!el || !_gcData) return;
+      if (!list.length) { el.innerHTML = `<div class="gc-empty">None yet.</div>`; return; }
+      el.innerHTML = `<table class="gc-table"><thead><tr><th style="width:56px;">_id</th><th>Label</th><th></th></tr></thead><tbody>` +
+        list.map((o, i) => `<tr>
+          <td style="color:var(--text-soft);">${escapeHtml(String(o._id == null ? '' : o._id))}</td>
+          <td><input type="text" value="${escapeHtml(o.label || '')}" oninput="${prefix}Set(${i},'label',this.value)"></td>
+          <td><button class="gc-icon-btn" onclick="${prefix}Remove(${i})"><i class="fas fa-trash"></i></button></td>
+        </tr>`).join('') + `</tbody></table>`;
+    }
+    function _gcRenderGroups() { _gcRenderKv('gc-groups', _gcData.rdioGroups, '_gcGroup'); }
+    function _gcRenderTags() { _gcRenderKv('gc-tags', _gcData.rdioTags, '_gcTag'); }
+    // Label edits re-render the (hidden) agencies container so the tg dropdowns
+    // reflect the new labels live, without disturbing focus on this input.
+    function _gcGroupSet(i, f, v) { const o = _gcData.rdioGroups[i]; if (o) { o[f] = v; _gcRenderAgencies(); } }
+    function _gcGroupRemove(i) { _gcData.rdioGroups.splice(i, 1); _gcRenderGroups(); _gcRenderAgencies(); }
+    function _gcAddGroup() { _gcData.rdioGroups.push({ _id: _gcNextId(_gcData.rdioGroups), label: '' }); _gcRenderGroups(); _gcRenderAgencies(); }
+    function _gcTagSet(i, f, v) { const o = _gcData.rdioTags[i]; if (o) { o[f] = v; _gcRenderAgencies(); } }
+    function _gcTagRemove(i) { _gcData.rdioTags.splice(i, 1); _gcRenderTags(); _gcRenderAgencies(); }
+    function _gcAddTag() { _gcData.rdioTags.push({ _id: _gcNextId(_gcData.rdioTags), label: '' }); _gcRenderTags(); _gcRenderAgencies(); }
+
+    async function _gcSave() {
+      if (!_gcData) return;
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      // Text inputs yield strings; coerce rdio's numeric fields back to numbers so
+      // the config matches rdio-scanner's expected types. Non-numeric values pass
+      // through untouched, and any unlisted field is preserved as-is.
+      const num = v => (v !== '' && v != null && !Number.isNaN(Number(v))) ? Number(v) : v;
+      const coerce = (o, keys) => keys.forEach(k => { if (k in o) o[k] = num(o[k]); });
+      _gcData.agencies.forEach(a => {
+        coerce(a, ['systemId', 'delay']);
+        (a.talkgroups || []).forEach(tg => coerce(tg, ['id', 'frequency', 'delay', 'groupId', 'tagId']));
+        (a.units || []).forEach(u => coerce(u, ['id', 'order']));
+      });
+      _gcData.rdioGroups.forEach(g => coerce(g, ['_id']));
+      _gcData.rdioTags.forEach(t => coerce(t, ['_id']));
+      const btn = document.getElementById('gc-save-btn');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/global-config`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agencies: _gcData.agencies,
+            rdioGroups: _gcData.rdioGroups,
+            rdioTags: _gcData.rdioTags
+          })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data && data.config) {
+          const cfg = data.config;
+          if (Array.isArray(cfg.agencies)) _gcData.agencies = cfg.agencies;
+          if (Array.isArray(cfg.rdioGroups)) _gcData.rdioGroups = cfg.rdioGroups;
+          if (Array.isArray(cfg.rdioTags)) _gcData.rdioTags = cfg.rdioTags;
+          _gcData.version = cfg.version; _gcData.updatedAt = cfg.updatedAt;
+          _gcRenderMeta();
+        }
+        const fan = data && data.fanout;
+        const n = fan ? (fan.pushed != null ? fan.pushed : 0) : null;
+        const total = fan && fan.total != null ? fan.total : null;
+        showToast(n != null ? `Saved · synced to ${n}${total != null ? '/' + total : ''} node${n === 1 ? '' : 's'}.` : 'Global config saved.', 'success');
+      } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
     async function doAdminLogin() {
       const email = document.getElementById('admin-login-email').value;
       const password = document.getElementById('admin-login-password').value;
@@ -1874,6 +5337,7 @@
           requests: !!(result.is_owner || result.is_team_member),
           users:    !!result.can_manage_users,
           dev:      !!result.is_owner,  // legacy: only owners had dev-equivalent access
+          nodes:    !!(result.is_owner || result.is_dev),  // legacy: owner|dev see nodes
         };
         userPermissions = {
           is_owner: !!result.is_owner,
@@ -1916,16 +5380,19 @@
       const reqBtn = document.querySelector('[data-tab="requests"]');
       const usrBtn = document.querySelector('[data-tab="users"]');
       const devBtn = document.querySelector('[data-tab="dev"]');
+      const nodBtn = document.querySelector('[data-tab="nodes"]');
       if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
       if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
+      if (nodBtn) nodBtn.style.display = tabs.nodes    ? '' : 'none';
 
       // Pick a default tab the user can actually see. Without this a
       // dev-only user would open the page on the (now-hidden) Requests
       // tab and stare at an empty container.
       const defaultTab = tabs.requests ? 'requests' :
                          tabs.users    ? 'users' :
-                         tabs.dev      ? 'dev' : null;
+                         tabs.dev      ? 'dev' :
+                         tabs.nodes    ? 'nodes' : null;
       if (defaultTab && defaultTab !== currentTab) {
         switchTab(defaultTab);
       }
@@ -2155,6 +5622,9 @@
               <button class="btn btn-secondary btn-sm" data-user-id="${escapeHtml(user.id)}" title="Edit roles">
                 <i class="fas fa-user-edit"></i>
               </button>
+              ${userPermissions.is_owner
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${jsArg(user.id)}')" title="Delete user (owner only)"><i class="fas fa-trash"></i></button>`
+                : ''}
             </td>
           </tr>
         `;
@@ -2180,6 +5650,30 @@
       `;
     }
     
+    // Owner-only: permanently delete a user account (Supabase user + roles +
+    // feeder token + nodes). The backend re-checks owner and blocks self-delete.
+    async function deleteUser(userId) {
+      if (!userPermissions.is_owner) { showToast('Only owners can delete users.', 'warn'); return; }
+      const user = allUsers.find(u => u.id === userId);
+      const who = user ? (user.username || user.email || userId) : userId;
+      const ownerWarn = user && (user.roles || []).some(r => r.role === 'owner') ? ' This user is an OWNER.' : '';
+      if (!await uiConfirm(`Permanently delete ${who}? This removes their account, roles, feeder token and nodes. Cannot be undone.${ownerWarn}`, { danger: true, okText: 'Delete user' })) return;
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': await authHeader() },
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.error || 'Failed to delete user');
+        }
+        showToast('User deleted.', 'success');
+        await loadUsers();
+      } catch (error) {
+        showToast(`Delete failed: ${error.message}`, 'error');
+      }
+    }
+
     function editUserRoles(userId) {
       const user = allUsers.find(u => u.id === userId);
       if (!user) return;
@@ -2330,6 +5824,11 @@
         };
         const regionHtml = regionLabels[req.region] || escapeHtml(req.region) || '—';
         
+        // Owners can delete ANY request (any status) to clear it out — including
+        // incomplete Discord "draft" signups. The backend re-checks owner.
+        const delBtn = userPermissions.is_owner
+          ? `<button class="btn btn-danger btn-sm" onclick="deleteRequest(${req.id})" title="Delete request (owner only)"><i class="fas fa-trash"></i></button>`
+          : '';
         let actionsHtml = '';
         if (req.status === 'pending') {
           actionsHtml = `
@@ -2343,14 +5842,10 @@
               <button class="btn btn-secondary btn-sm" onclick="viewDetails(${req.id})" title="View full details">
                 <i class="fas fa-eye"></i>
               </button>
+              ${delBtn}
             </div>
           `;
         } else {
-          // Owners can delete rejected requests to clear them out. The
-          // button is owner-only here; the backend re-checks owner + status.
-          const delBtn = (req.status === 'rejected' && userPermissions.is_owner)
-            ? `<button class="btn btn-danger btn-sm" onclick="deleteRequest(${req.id})" title="Delete rejected request (owner only)"><i class="fas fa-trash"></i></button>`
-            : '';
           actionsHtml = `
             <div class="action-buttons">
               <button class="btn btn-secondary btn-sm" onclick="viewDetails(${req.id})" title="View details">
@@ -2615,15 +6110,17 @@
       currentApproval = null;
     }
 
-    // Owner-only: permanently delete a REJECTED request. The backend
-    // re-checks the owner role and the rejected status, so a non-owner
-    // hand-crafting the call still gets a 403/400.
+    // Owner-only: permanently delete a request of ANY status. The backend
+    // re-checks the owner role. Deleting an approved request does NOT revoke the
+    // roles it granted (manage those in the Users tab).
     async function deleteRequest(requestId) {
       const req = allRequests.find(r => r.id === requestId);
       if (!req) return;
       if (!userPermissions.is_owner) { showToast('Only owners can delete requests.', 'warn'); return; }
-      if (req.status !== 'rejected') { showToast('Only rejected requests can be deleted.', 'warn'); return; }
-      if (!confirm(`Delete this rejected request from ${req.email || 'unknown'}? This cannot be undone.`)) return;
+      const warn = req.status === 'approved'
+        ? ` This request is APPROVED — deleting it won't remove their roles (do that in the Users tab).`
+        : '';
+      if (!await uiConfirm(`Delete the ${req.status} request from ${req.email || 'unknown'}? This cannot be undone.${warn}`, { danger: true, okText: 'Delete' })) return;
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests/${requestId}`, {
           method: 'DELETE',
@@ -2633,7 +6130,7 @@
           const error = await response.json().catch(() => ({}));
           throw new Error(error.error || 'Failed to delete request');
         }
-        showToast('Rejected request deleted.', 'success');
+        showToast('Request deleted.', 'success');
         await loadRequests();
       } catch (error) {
         showToast(`Delete failed: ${error.message}`, 'error');
@@ -2878,6 +6375,12 @@
       }
     });
 
+    document.getElementById('global-config-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('global-config-modal')) {
+        closeGlobalConfig();
+      }
+    });
+
     // Delegated handler for per-user "edit roles" buttons (id passed via data attr).
     document.getElementById('users-container').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-user-id]');
@@ -2892,6 +6395,8 @@
         closeDetailsModal();
         closeEditRolesModal();
         closeRejectModal();
+        closeNodeDrawer();
+        closeGlobalConfig();
       }
     });
     

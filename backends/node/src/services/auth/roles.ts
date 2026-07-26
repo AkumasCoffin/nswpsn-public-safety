@@ -91,6 +91,15 @@ export async function canManageUsers(userId: string): Promise<boolean> {
 }
 
 /**
+ * Owner OR dev — gates the feeder-node management screens (Nodes tab) and
+ * the staff /api/nodes endpoints. Mirrors the check-admin `can_view_dev`
+ * flag (isOwner || isDev).
+ */
+export async function canManageNodes(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'dev']);
+}
+
+/**
  * Only owners can grant the privileged roles (team_member, dev, owner).
  * Team members can edit users but not promote them. Mirrors python's
  *   'can_assign_privileged_roles': is_owner

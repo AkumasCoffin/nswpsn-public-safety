@@ -74,9 +74,18 @@ backends/data/centralwatch_cameras.json
 # cache, and sqlite session state. Machine-local; never committed.
 backends/data/.waze-browser-profile/
 
+# Backend LiveStore hydration snapshots (one JSON per source). Regenerated at
+# runtime and machine-local — never commit them (they collide with each host's
+# own live state on pull).
+backends/node/state/
+
 # Editor-uploaded incident photos. The repo root doubles as the Apache
 # webroot, so these land in-tree at uploads/incident-images/<id>/ and are
 # served (and Cloudflare-resized) from nswpsn.forcequit.xyz. Machine-local
 # user data — only the hardening .htaccess is tracked.
 uploads/*
 !uploads/.htaccess
+
+# Node-agent binaries + feeder components served at nswpsn.forcequit.xyz/downloads/
+# (built by deploy.sh / placed by hand; never committed)
+/downloads/
