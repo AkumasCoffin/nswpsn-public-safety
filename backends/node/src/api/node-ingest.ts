@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
-import { bumpNodeCallStat } from '../services/nodes/registry.js';
+import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 
@@ -261,13 +261,17 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   // 7. Forward to central Pagermon. Its ingest API is POST /api/messages with
   //    address/message/datetime/source. We send the apikey both as the
   //    Authorization header (Pagermon 1.x) and an `apikey` field (older) for
-  //    compatibility.
+  //    compatibility. The `source` is the NODE'S NAME (authoritative, set here)
+  //    so each page in Pagermon is attributable to the node that heard it —
+  //    falling back to the agent-reported label if the row can't be read.
+  const nodeRow = await getNode(node.id).catch(() => null);
+  const source = nodeRow?.name || parsed.source;
   const datetime = normalisePagerDatetime(parsed.timestamp);
   const body = new URLSearchParams({
     address: parsed.address,
     message: parsed.message,
     datetime,
-    source: parsed.source,
+    source,
     apikey: ingest.apiKey,
   });
   const target = `${ingest.url.replace(/\/$/, '')}/api/messages`;
@@ -293,7 +297,7 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed');
     }
-    log.info(`pager relay ok node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source}`);
+    log.info(`pager relay ok node=${node.id.slice(0, 8)} addr=${parsed.address} src=${source}`);
     return c.json({ ok: true });
   }
 
