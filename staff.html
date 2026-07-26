@@ -1697,6 +1697,7 @@
             <i class="fas fa-wave-square"></i> Spectrum
             <div class="nd-wf-toolbar">
               <select id="nd-wf-tuner" style="display: none;" onchange="_ndSwitchSpectrum(this.value)"></select>
+              <button class="btn btn-secondary btn-sm" id="nd-wf-toggle" onclick="_ndToggleSpectrum()"><i class="fas fa-play"></i> Start spectrum</button>
               <span class="nd-wf-status" id="nd-wf-status">idle</span>
             </div>
           </div>
@@ -1776,9 +1777,9 @@
 
             <div class="nd-panel">
               <div class="nd-panel-h">
-                <i class="fas fa-clock-rotate-left"></i> Live event log
+                <i class="fas fa-clock-rotate-left"></i> <span id="nd-events-title">Live event log</span>
                 <span class="nd-h-spacer"></span>
-                <span class="nd-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · live only</span>
+                <span class="nd-sub" id="nd-events-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · live only</span>
               </div>
               <div class="nd-panel-b"><div class="nd-events" id="nd-events"></div></div>
             </div>
@@ -2963,6 +2964,7 @@
     let _ndChannels = [];
     let _ndCalls = [];             // st.activeCalls[] — calls currently up (incl. dynamic P25 traffic channels)
     let _ndEvents = [];
+    let _ndPagerMsgs = [];         // pager nodes: recent decoded pages (buffered server-side + live)
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
     let _ndReqSeq = 0;
     const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
@@ -3010,7 +3012,7 @@
       _ndNodeId = nodeId;
       _ndAuthed = false;
       _ndStatus = null;
-      _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = [];
+      _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndSpectrumTunerId = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
@@ -3024,11 +3026,18 @@
       drawer.classList.add('open');
       drawer.dataset.kind = node.kind || 'radio'; // toggles radio-only vs pager-only panels
       document.getElementById('nd-name').textContent = node.name || 'Node';
+      // Repurpose the event-log panel header for pager nodes (it shows pages).
+      const _isPagerDrawer = (node.kind || 'radio') === 'pager';
+      const _evTitle = document.getElementById('nd-events-title');
+      const _evSub = document.getElementById('nd-events-sub');
+      if (_evTitle) _evTitle.textContent = _isPagerDrawer ? 'Messages' : 'Live event log';
+      if (_evSub) _evSub.textContent = _isPagerDrawer ? 'newest first' : 'newest first · live only';
       _ndRenderVersions();
       const dot = document.getElementById('nd-dot');
       if (dot) dot.classList.toggle('online', !!node.online);
       _ndSetConn('connecting', node.online);
       _ndInitWaterfall();
+      _ndUpdateSpectrumToggle(); // reset the Start/Stop button (drawer HTML is reused)
       _ndRenderAll();
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
 
@@ -3101,6 +3110,18 @@
           _ndIngestEvent(d.event);
           _ndRenderEvents();
         }
+      } else if (t === 'pagerHistory') {
+        // Recent decoded pages replayed on subscribe — show history immediately.
+        if (String(d.nodeId) === String(_ndNodeId) && Array.isArray(d.messages)) {
+          _ndPagerMsgs = d.messages.slice(-200);
+          _ndRenderEvents();
+        }
+      } else if (t === 'pagerMessage') {
+        if (String(d.nodeId) === String(_ndNodeId) && d.message) {
+          _ndPagerMsgs.push(d.message);
+          if (_ndPagerMsgs.length > 200) _ndPagerMsgs.shift();
+          _ndRenderEvents();
+        }
       } else if (t === 'cmdResult') {
         _ndOnCmdResult(d);
       }
@@ -3136,11 +3157,8 @@
       _ndRenderCfgSync();
       _ndRenderVersions();     // reflect a just-completed component update live
       _ndRenderTunerSelector();
-      // Auto-start the waterfall on the first tuner once tuners are known.
-      if (_ndSpectrumTunerId == null && _ndTuners.length) {
-        const t0 = _ndTuners[0];
-        _ndStartSpectrum(t0.id != null ? t0.id : t0.index);
-      }
+      // Spectrum is opt-in: staff press "Start spectrum" (see _ndToggleSpectrum).
+      // Not auto-started, so opening the drawer to change settings doesn't stream.
     }
 
     function _ndOnCmdResult(d) {
@@ -3159,6 +3177,32 @@
     }
 
     // --- Spectrum lifecycle ---
+    // Spectrum streaming is OPT-IN via the Start/Stop button so staff can open the
+    // drawer to change settings without pulling a live spectrum stream.
+    function _ndToggleSpectrum() {
+      if (_ndSpectrumTunerId != null) {
+        _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
+        _ndSpectrumTunerId = null;
+        _ndInitWaterfall();
+        const s = document.getElementById('nd-wf-status'); if (s) s.textContent = 'idle';
+        _ndUpdateSpectrumToggle();
+        return;
+      }
+      if (!_ndTuners.length) { showToast('No tuners reported yet.', 'warn'); return; }
+      const sel = document.getElementById('nd-wf-tuner');
+      const t0 = _ndTuners[0];
+      const tid = (sel && sel.value !== '') ? sel.value : (t0.id != null ? t0.id : t0.index);
+      _ndStartSpectrum(tid);
+    }
+
+    function _ndUpdateSpectrumToggle() {
+      const b = document.getElementById('nd-wf-toggle');
+      if (!b) return;
+      const on = _ndSpectrumTunerId != null;
+      b.innerHTML = on ? '<i class="fas fa-stop"></i> Stop spectrum' : '<i class="fas fa-play"></i> Start spectrum';
+      b.classList.toggle('btn-danger', on);
+    }
+
     function _ndStartSpectrum(tunerId) {
       if (tunerId == null || !_ndWs || !_ndAuthed) return;
       _ndSpectrumTunerId = tunerId;
@@ -3167,13 +3211,15 @@
       _ndWsSend({ t: 'spectrumStart', data: { nodeId: _ndNodeId, tunerId, fps: 16, bins: 1024 } });
       const s = document.getElementById('nd-wf-status');
       if (s) s.textContent = 'streaming · tuner ' + tunerId;
+      _ndUpdateSpectrumToggle();
     }
 
     function _ndSwitchSpectrum(tunerId) {
+      // Changing the tuner only re-points an ACTIVE stream — it never auto-starts
+      // one (spectrum is opt-in via the Start button).
+      if (_ndSpectrumTunerId == null) return;
       if (String(tunerId) === String(_ndSpectrumTunerId)) return;
-      if (_ndSpectrumTunerId != null) {
-        _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
-      }
+      _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
       _ndSpectrumTunerId = null;
       _ndInitWaterfall();
       _ndStartSpectrum(tunerId);
@@ -4228,6 +4274,20 @@
     function _ndRenderEvents() {
       const el = document.getElementById('nd-events');
       if (!el) return;
+      // Pager nodes: the "event log" shows decoded pages (newest first).
+      if (((_ndNode && _ndNode.kind) || 'radio') === 'pager') {
+        if (!_ndPagerMsgs.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No pages yet — decoded messages will appear here.</div>`; return; }
+        el.innerHTML = _ndPagerMsgs.slice().reverse().map(m => {
+          const at = m.at != null ? new Date(m.at) : null;
+          const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
+          return `<div class="nd-event-row nd-log-row">
+            <span class="nd-ev-time">${escapeHtml(time)}</span>
+            <span class="nd-ev-type"><span class="node-mono">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>
+            <span class="nd-ev-ft">${escapeHtml(m.source || '')}</span>
+          </div>`;
+        }).join('');
+        return;
+      }
       if (!_ndLog.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No events yet — live activity will appear here.</div>`; return; }
       el.innerHTML = _ndLog.slice().reverse().map(e => {
         const at = e.at != null ? new Date(e.at) : null;
