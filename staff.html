@@ -1719,6 +1719,7 @@
                 <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
                 <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
                 <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRestartReaders()"><i class="fas fa-rotate"></i> Restart readers</button>
+                <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRescanSdr()"><i class="fas fa-magnifying-glass"></i> Recheck SDRs</button>
                 <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
                 <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
@@ -3592,6 +3593,14 @@
           <span>messages <strong>${msgs}</strong> · last 10 min</span>
           ${qd != null ? `<span>queue <strong>${qd}</strong></span>` : ''}
         </div>`;
+    }
+
+    // Recheck SDRs: agent stops readers, re-detects the dongles (re-measures ppm),
+    // and restarts readers against the new set. Takes ~30s per SDR.
+    async function _ndRescanSdr() {
+      if (!await uiConfirm('Recheck SDRs on this node? Readers will stop briefly while it re-detects the dongles (~30s per SDR).')) return;
+      _ndCmd('rescanSdr', {}, 'Recheck SDRs');
+      showToast('Rechecking SDRs — readers will restart shortly.', 'success');
     }
 
     // Restart every reader on a pager node (one restartComponent per reader).
