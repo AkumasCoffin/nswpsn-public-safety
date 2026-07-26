@@ -28,7 +28,6 @@ import {
   rotateNodeToken,
   deleteNode,
   setNodeLocation,
-  setPagerPrimary,
   countNodesForUser,
   MAX_NODES_PER_USER,
   isNodeKind,
@@ -36,12 +35,7 @@ import {
   type NodeRow,
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
-import { pushConfigToNode } from '../services/nodes/configPush.js';
-import { pagerPrimaryOf } from '../services/nodes/configMerge.js';
 import { hub } from '../services/nodes/hub.js';
-
-// Shared Zod schema for the single-SDR primary frequency selector.
-const PagerPrimarySchema = z.object({ primary: z.enum(['NSWRFS', 'FRNSW']) });
 
 export const feederRouter = new Hono();
 
@@ -134,8 +128,6 @@ function feederNodeView(n: NodeRow) {
     // running-reader count, for the pager card.
     messagesLast10m: callsLast10m,
     readersUp: isPager ? readersUp : null,
-    // Which frequency a single-SDR pager node listens to (persisted preference).
-    pagerPrimary: isPager ? pagerPrimaryOf(n) : null,
     queueDepth: typeof st?.queueDepth === 'number' ? st.queueDepth : null,
     calibrated: st?.calibrated ?? null,
     jmbeInstalled: st?.jmbeInstalled ?? null,
@@ -520,28 +512,6 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');
     return c.json({ error: 'Failed to set location' }, 500);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// PUT /api/feeder/nodes/:id/pager-primary — the owner picks which frequency a
-// SINGLE-SDR pager node listens to (NSWRFS default / FRNSW). Persisted in
-// config_override so it survives restarts/updates; pushed live if online.
-// ---------------------------------------------------------------------------
-feederRouter.put('/api/feeder/nodes/:id/pager-primary', async (c) => {
-  const node = await ownedNode(c);
-  if (!node) return c.json({ error: 'not your node' }, 404);
-  if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
-  const parsed = PagerPrimarySchema.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) return c.json({ error: 'invalid primary' }, 400);
-  try {
-    const updated = await setPagerPrimary(node.id, parsed.data.primary);
-    if (!updated) return c.json({ error: 'update failed' }, 500);
-    await pushConfigToNode(node.id).catch(() => {}); // apply live if the node is online
-    return c.json({ node: feederNodeView(updated) });
-  } catch (err) {
-    log.error({ err, id: node.id }, 'Error setting pager primary');
-    return c.json({ error: 'Failed to set primary frequency' }, 500);
   }
 });
 
