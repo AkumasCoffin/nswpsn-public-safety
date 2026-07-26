@@ -353,6 +353,8 @@
     }
     .modal-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
     .modal-actions .dl-btn { width: auto; margin: 0; }
+    .dl-btn.danger { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.45); color: #fca5a5; }
+    .dl-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.25); color: #fecaca; }
     .loc-modal { max-width: 620px; }
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
     #loc-map, #loc-map * { box-sizing: initial; } /* Leaflet needs its own box model */
@@ -455,6 +457,35 @@
       el.querySelector('span').textContent = message;
       stack.appendChild(el);
       setTimeout(() => { el.classList.add('fade-out'); setTimeout(() => el.remove(), 350); }, ms);
+    }
+
+    // In-page confirm dialog — replaces the browser's native confirm(). Returns
+    // a Promise<boolean>. Pass a string or { title, message, confirmLabel,
+    // cancelLabel, danger }.
+    function confirmDialog(opts) {
+      const o = typeof opts === 'string' ? { message: opts } : (opts || {});
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+          <div class="modal">
+            <h3><i class="fas ${o.danger ? 'fa-triangle-exclamation' : 'fa-circle-question'}"></i> ${escapeHtml(o.title || 'Please confirm')}</h3>
+            <p></p>
+            <div class="modal-actions">
+              <button class="dl-btn ${o.danger ? 'danger' : ''}" data-act="ok"><i class="fas fa-check"></i> ${escapeHtml(o.confirmLabel || 'Confirm')}</button>
+              <button class="mini-btn" data-act="cancel">${escapeHtml(o.cancelLabel || 'Cancel')}</button>
+            </div>
+          </div>`;
+        overlay.querySelector('p').textContent = o.message || '';
+        const done = (val) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(val); };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); else if (e.key === 'Enter') done(true); };
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        overlay.querySelector('[data-act="ok"]').addEventListener('click', () => done(true));
+        overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => done(false));
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => { const b = overlay.querySelector('[data-act="ok"]'); if (b) b.focus(); }, 30);
+      });
     }
 
     function fmtLastSeen(value) {
@@ -715,7 +746,11 @@
     }
 
     async function rotateNode(nodeId, btn) {
-      if (!confirm('Re-issue this node’s key? The old installer/key stops working and the node must be re-installed with the new one.')) return;
+      if (!await confirmDialog({
+        title: 'Re-issue node key?',
+        message: 'The old installer/key stops working and the node must be re-installed with the new one.',
+        confirmLabel: 'Re-issue key', danger: true,
+      })) return;
       const original = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
       try {
         const token = await rotateNodeToken(nodeId);
@@ -729,7 +764,11 @@
     }
 
     async function deleteFeederNode(nodeId, btn) {
-      if (!confirm('Delete this node? It will be cut off and cannot reconnect.')) return;
+      if (!await confirmDialog({
+        title: 'Delete this node?',
+        message: 'It will be cut off and cannot reconnect.',
+        confirmLabel: 'Delete node', danger: true,
+      })) return;
       btn.disabled = true;
       try {
         const jwt = await getToken();
@@ -898,7 +937,11 @@
           // connected there's no working installer to break — do it silently.
           // Only warn once a machine has actually bound/run this node.
           const everConnected = !!(n.installId || n.lastSeenAt);
-          if (everConnected && !confirm('This issues a NEW key for the node. The current installer stops working and the node must be re-installed with the new one. Continue?')) return;
+          if (everConnected && !await confirmDialog({
+            title: 'Issue a new key?',
+            message: 'This issues a NEW key for the node. The current installer stops working and the node must be re-installed with the new one.',
+            confirmLabel: 'Issue new key', danger: true,
+          })) return;
           token = await rotateNodeToken(nodeId);
           if (!token) throw new Error('could not get a node key');
           await refreshNodes();
