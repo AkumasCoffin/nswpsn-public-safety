@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { getPool } from '../../db/pool.js';
 import { log } from '../../lib/log.js';
+import { config } from '../../config.js';
 import { loadPresets } from './configMerge.js';
 
 // ── shapes ─────────────────────────────────────────────────────────────────
@@ -498,6 +499,63 @@ export async function setAutoUpdate(enabled: boolean): Promise<void> {
     `INSERT INTO feeder_global_config (id, auto_update) VALUES (1, $1)
      ON CONFLICT (id) DO UPDATE SET auto_update = EXCLUDED.auto_update`,
     [enabled],
+  );
+}
+
+// ── Pagermon ingest target (SERVER-ONLY secret) ──────────────────────────────
+// The central Pagermon the pager-node relay forwards INTO. Stored on the
+// singleton row (owner-set in staff) so it's editable without a redeploy, but
+// deliberately kept OUT of GlobalConfigSchema / buildConfigPayload — it is never
+// fanned out to agents. Falls back to env (config.PAGERMON_INGEST_*).
+
+export interface PagerIngest {
+  url: string | null;
+  apiKey: string | null;
+}
+
+/** Read the Pagermon ingest URL + key: DB row first, then env fallback. Never
+ *  throws — returns nulls when the DB is down and env is unset. */
+export async function getPagerIngest(): Promise<PagerIngest> {
+  const envUrl = config.PAGERMON_INGEST_URL ?? null;
+  const envKey = config.PAGERMON_INGEST_API_KEY ?? null;
+  const pool = await getPool();
+  if (!pool) return { url: envUrl, apiKey: envKey };
+  try {
+    const res = await pool.query<{ pagermon_ingest_url: string | null; pagermon_ingest_api_key: string | null }>(
+      'SELECT pagermon_ingest_url, pagermon_ingest_api_key FROM feeder_global_config WHERE id = 1',
+    );
+    const row = res.rows[0];
+    return {
+      url: (row?.pagermon_ingest_url ?? null) || envUrl,
+      apiKey: (row?.pagermon_ingest_api_key ?? null) || envKey,
+    };
+  } catch (err) {
+    log.warn({ err }, 'getPagerIngest: DB read failed, using env fallback');
+    return { url: envUrl, apiKey: envKey };
+  }
+}
+
+/** Upsert the Pagermon ingest URL + key on the singleton row, without touching
+ *  the radio config columns. A null field clears that column (falls back to env).
+ *  Pass `apiKey === undefined` to leave the stored key unchanged. */
+export async function setPagerIngest(url: string | null, apiKey?: string | null): Promise<void> {
+  const pool = await getPool();
+  if (!pool) return;
+  if (apiKey === undefined) {
+    await pool.query(
+      `INSERT INTO feeder_global_config (id, pagermon_ingest_url) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET pagermon_ingest_url = EXCLUDED.pagermon_ingest_url`,
+      [url],
+    );
+    return;
+  }
+  await pool.query(
+    `INSERT INTO feeder_global_config (id, pagermon_ingest_url, pagermon_ingest_api_key)
+       VALUES (1, $1, $2)
+     ON CONFLICT (id) DO UPDATE SET
+       pagermon_ingest_url     = EXCLUDED.pagermon_ingest_url,
+       pagermon_ingest_api_key = EXCLUDED.pagermon_ingest_api_key`,
+    [url, apiKey],
   );
 }
 

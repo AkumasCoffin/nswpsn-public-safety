@@ -1,0 +1,12 @@
+# Built binaries
+/nodeagent-pager
+/nodeagent-pager.exe
+*.exe
+
+# Per-install runtime state (config with the node token, disk queue, logs)
+/agent.yaml
+/data/
+
+# OS cruft
+Thumbs.db
+.DS_Store

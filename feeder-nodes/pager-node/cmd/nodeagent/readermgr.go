@@ -1,0 +1,203 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/agentcfg"
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/pagersdr"
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/reader"
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/supervise"
+	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/wsclient"
+)
+
+// maxReaders caps the number of concurrent readers. The locked frequency plan is
+// at most two (NSW RFS + Fire & Rescue NSW), so extra dongles beyond two are
+// idle spares.
+const maxReaders = 2
+
+// defaultPagerFrequencies is the locked frequency plan used until a configPush
+// supplies one, in priority order (1 SDR -> first only; 2+ -> first two).
+var defaultPagerFrequencies = []wsclient.PagerFrequency{
+	{Label: "NSWRFS", MHz: 148.5875}, // NSW Rural Fire Service
+	{Label: "FRNSW", MHz: 148.9625},  // Fire & Rescue NSW
+}
+
+// defaultPagerProtocols is the locked POCSAG demodulator set.
+var defaultPagerProtocols = []string{"POCSAG512", "POCSAG1200", "POCSAG2400"}
+
+// readerManager owns the pager reader components. It detects the attached SDRs
+// once, then (re)computes the reader set from a frequency plan whenever a config
+// is applied: it writes each reader.sh (pinned to a dongle by serial), and runs
+// them under a supervisor. captureEnabled=false stops the readers (they are
+// registered disabled) while keeping the agent connected.
+//
+// Because the supervisor's component set is fixed at construction, a config
+// change rebuilds it: the current supervisor's sub-context is cancelled (killing
+// its readers) and a fresh supervisor is started under a new sub-context derived
+// from the agent's root context.
+//
+// It implements wsclient.ConfigApplier (Apply + Restart) and supplies the
+// heartbeat's component states via Status.
+type readerManager struct {
+	rootCtx    context.Context
+	dataDir    string
+	readersDir string
+	relayURL   string
+
+	mu        sync.Mutex
+	devices   []pagersdr.Device
+	sup       *supervise.Supervisor
+	supCancel context.CancelFunc
+}
+
+// newReaderManager detects + de-duplicates the attached SDR serials (best-effort;
+// a detection failure leaves the manager with no devices, so it simply runs no
+// readers until hardware/serials are sorted out) and prepares the reader script
+// directory. relayAddr is the loopback relay host:port the readers POST to.
+func newReaderManager(rootCtx context.Context, dataDir, relayAddr string) *readerManager {
+	m := &readerManager{
+		rootCtx:    rootCtx,
+		dataDir:    dataDir,
+		readersDir: filepath.Join(dataDir, "readers"),
+		relayURL:   "http://" + relayAddr + "/pager",
+	}
+	m.devices = detectDevices()
+	return m
+}
+
+// detectDevices enumerates the SDRs and ensures distinct serials, logging and
+// returning an empty list on failure rather than aborting the agent.
+func detectDevices() []pagersdr.Device {
+	devs, err := pagersdr.Detect()
+	if err != nil {
+		log.Printf("readers: SDR detection failed (%v); no readers will run until it succeeds", err)
+		return nil
+	}
+	log.Printf("readers: detected %d SDR device(s)", len(devs))
+
+	devs, err = pagersdr.EnsureDistinctSerials(devs)
+	if err != nil {
+		log.Printf("readers: ensuring distinct SDR serials failed (%v); proceeding with detected serials", err)
+	}
+	for _, d := range devs {
+		log.Printf("readers: SDR index=%d serial=%q", d.Index, d.Serial)
+	}
+	return devs
+}
+
+// Apply (re)computes the reader set from cfg and (re)starts the supervisor.
+// feedEnabled requires no agent action (the backend feed-gates the forward and
+// still counts reception) — it is only logged. captureEnabled drives whether the
+// readers run.
+func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	freqs := cfg.Frequencies
+	if len(freqs) == 0 {
+		freqs = defaultPagerFrequencies
+	}
+	protocols := cfg.Protocols
+	if len(protocols) == 0 {
+		protocols = defaultPagerProtocols
+	}
+
+	// Reader count: one per available dongle, capped by the frequency plan and the
+	// two-frequency ceiling. 1 SDR -> first frequency only; 2+ -> first two.
+	n := min(len(m.devices), min(len(freqs), maxReaders))
+
+	if !cfg.CaptureEnabled {
+		log.Printf("readers: capture disabled; %d reader(s) will be registered but stopped", n)
+	}
+	if !cfg.FeedEnabled {
+		log.Printf("readers: feed disabled by config (backend feed-gates the forward); readers still capture")
+	}
+
+	comps := make(map[string]agentcfg.ComponentCfg, n)
+	for i := 0; i < n; i++ {
+		label := sanitizeLabel(freqs[i].Label, i)
+		dev := m.devices[i]
+		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, protocols, m.relayURL)
+		if err != nil {
+			return fmt.Errorf("write reader script for %s: %w", label, err)
+		}
+		log.Printf("readers: %s -> %.4f MHz on SDR serial %q (%s)", label, freqs[i].MHz, dev.Serial, scriptPath)
+		comps["reader:"+label] = agentcfg.ComponentCfg{
+			Enabled: cfg.CaptureEnabled,
+			Command: "bash",
+			Args:    []string{scriptPath},
+		}
+	}
+
+	m.rebuild(comps)
+	return nil
+}
+
+// rebuild swaps in a fresh supervisor for comps: it cancels the current
+// supervisor's sub-context (killing its readers) and starts a new supervisor
+// under a new sub-context. Caller must hold m.mu.
+func (m *readerManager) rebuild(comps map[string]agentcfg.ComponentCfg) {
+	if m.supCancel != nil {
+		m.supCancel()
+	}
+	subCtx, cancel := context.WithCancel(m.rootCtx)
+	sup := supervise.New(m.dataDir, comps)
+	sup.Start(subCtx)
+	m.sup = sup
+	m.supCancel = cancel
+}
+
+// Restart restarts a single named reader component (e.g. "reader:NSWRFS").
+func (m *readerManager) Restart(component string) error {
+	m.mu.Lock()
+	sup := m.sup
+	m.mu.Unlock()
+	if sup == nil {
+		return fmt.Errorf("no readers running")
+	}
+	return sup.Restart(component)
+}
+
+// Status returns the reader component states normalized to "running"/"stopped"
+// for the heartbeat.
+func (m *readerManager) Status() map[string]string {
+	m.mu.Lock()
+	sup := m.sup
+	m.mu.Unlock()
+	out := map[string]string{}
+	if sup == nil {
+		return out
+	}
+	for name, st := range sup.Status() {
+		if st == supervise.StatusRunning {
+			out[name] = "running"
+		} else {
+			out[name] = "stopped"
+		}
+	}
+	return out
+}
+
+// sanitizeLabel makes a frequency label safe for a filename/component name,
+// falling back to a positional label when empty.
+func sanitizeLabel(label string, idx int) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return fmt.Sprintf("PAGER%d", idx+1)
+	}
+	// Replace path/shell-unfriendly characters with underscores.
+	repl := func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}
+	return strings.Map(repl, label)
+}

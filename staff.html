@@ -1638,6 +1638,9 @@
           <button class="btn btn-secondary btn-sm" onclick="openGlobalConfig()">
             <i class="fas fa-globe"></i> Global settings
           </button>
+          <button class="btn btn-secondary btn-sm" onclick="openPagerConfig()" title="Set the central Pagermon that pager nodes forward decoded pages into">
+            <i class="fas fa-tower-broadcast"></i> Pagermon
+          </button>
           <button class="btn btn-secondary btn-sm" onclick="loadNodes()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
@@ -1805,6 +1808,35 @@
       <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
         <button class="btn btn-secondary" onclick="closeGlobalConfig()" style="flex: 1;">Cancel</button>
         <button class="btn btn-primary" onclick="_gcSave()" style="flex: 1;" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pagermon ingest config -->
+  <div id="pager-config-modal" class="modal">
+    <div class="modal-content" style="max-width: 560px;">
+      <div class="modal-header">
+        <h2><i class="fas fa-tower-broadcast" style="color: var(--accent);"></i> Pagermon ingest</h2>
+        <button class="modal-close" onclick="closePagerConfig()">&times;</button>
+      </div>
+      <p style="color: var(--text-soft); font-size: 0.85rem; margin: 0 0 0.9rem;">
+        The central Pagermon that <b>pager</b> feeder nodes forward decoded pages into. Stored
+        server-side and <b>never sent to nodes</b> — the backend relays each page with this key,
+        so a node's Feed toggle is what cuts its feed.
+      </p>
+      <div class="credential-box">
+        <label>Pagermon URL</label>
+        <input type="url" id="pager-url" placeholder="https://pagermon.example.com"
+               style="width:100%; box-sizing:border-box; padding:0.5rem 0.6rem; background:var(--bg-input,#0f172a); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:7px;">
+      </div>
+      <div class="credential-box" style="margin-top:0.6rem;">
+        <label>API key <span id="pager-key-status" style="color:var(--text-soft); font-weight:400; font-size:0.75rem;"></span></label>
+        <input type="password" id="pager-key" placeholder="leave blank to keep current"
+               style="width:100%; box-sizing:border-box; padding:0.5rem 0.6rem; background:var(--bg-input,#0f172a); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:7px;">
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
+        <button class="btn btn-secondary" onclick="closePagerConfig()" style="flex: 1;">Cancel</button>
+        <button class="btn btn-primary" onclick="savePagerConfig()" style="flex: 1;" id="pager-save-btn"><i class="fas fa-floppy-disk"></i> Save</button>
       </div>
     </div>
   </div>
@@ -2616,19 +2648,20 @@
         + chip('Calibrated', st.calibrated) + chip('JMBE', st.jmbeInstalled) + `</div>`;
     }
 
-    // Live activity chips: is the node DECODING (SDR-Trunk following the trunk)
-    // and FEEDING (forwarding to central rdio). Reuses the .nd-ready chip styles.
-    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, st) {
+    // Live activity chips: is the node DECODING (radio: SDR-Trunk following the
+    // trunk; pager: readers up) and FEEDING (radio: forwarding to central rdio;
+    // pager: uploading to Pagermon). Reuses the .nd-ready chip styles.
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind) {
       const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
+      const isPager = kind === 'pager';
       let dec;
       if (!online) dec = chip('unknown', 'Offline');
-      else if (!sdrUp) dec = chip('bad', 'SDR-Trunk down');
-      else if (decoding) dec = chip('ok', 'Decoding');
+      else if (!sdrUp) dec = chip('bad', isPager ? 'No readers' : 'SDR-Trunk down');
+      else if (decoding) dec = chip('ok', isPager ? 'Decoding POCSAG' : 'Decoding');
       else dec = chip('unknown', 'Idle');
-      const uploading = !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
       let feed;
       if (!feedEnabled) feed = chip('unknown', 'Feed off');
-      else feed = uploading ? chip('ok', 'Feeding') : chip('unknown', 'Feed on');
+      else feed = uploading ? chip('ok', isPager ? 'Uploading' : 'Feeding') : chip('unknown', 'Feed on');
       return `<div class="node-ready-row">${dec}${feed}</div>`;
     }
 
@@ -2647,15 +2680,28 @@
       const enabled = node.enabled !== false; // default to enabled unless explicitly false
       const feedEnabled = node.feedEnabled === true; // feed to central rdio; off by default
       const st = node.status || null;
+      const kind = node.kind || 'radio';
+      const isPager = kind === 'pager';
       const owner = node.ownerUsername ? escapeHtml(node.ownerUsername) : userShort;
-      // Decoding = SDR-Trunk up AND following the trunk (a control lock or a live
-      // call). Feeding = forwarding to central rdio (green once uploads are flowing).
-      const sdrUp = !!(st && st.components && st.components.sdrtrunk === 'running');
-      const decoding = !!(st && (
-        (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
-        (Array.isArray(st.channels) && st.channels.some(c =>
-          c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
-      ));
+      // Decoding: radio = SDR-Trunk up AND following the trunk (control lock or a
+      // live call); pager = one or more POCSAG readers running. Feeding: uploads
+      // flowing (radio → central rdio; pager → Pagermon).
+      const readersUp = st && st.components
+        ? Object.entries(st.components).filter(([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run')).length
+        : 0;
+      const sdrUp = isPager
+        ? readersUp > 0
+        : !!(st && st.components && st.components.sdrtrunk === 'running');
+      const decoding = isPager
+        ? (online && readersUp > 0)
+        : !!(st && (
+            (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
+            (Array.isArray(st.channels) && st.channels.some(c =>
+              c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
+          ));
+      const uploading = isPager
+        ? Number(node.messagesLast10m || 0) > 0
+        : !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
 
       // Optional status metrics — render a small secondary row when present.
       const statusBits = [];
@@ -2678,11 +2724,11 @@
           </div>
           <div class="node-versions">
             ${_nodeVer('agent', node.agentVersion)}
-            ${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
-            ${_nodeVer('rdio', node.rdioVersion)}
+            ${isPager ? '' : `${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
+            ${_nodeVer('rdio', node.rdioVersion)}`}
           </div>
-          ${_ndReadinessHtml(st)}
-          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, st)}
+          ${isPager ? '' : _ndReadinessHtml(st)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind)}
           <div class="dev-card-secondary">
             <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
             <span>install <span class="node-mono">${installShort}</span></span>
@@ -2714,8 +2760,8 @@
                 ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
                 : ''}
             </div>
-            <span class="lbl" style="text-align: right;">Feed → rdio ${feedEnabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading) — verify reception before feeding the live system.">
+            <span class="lbl" style="text-align: right;">Feed → ${isPager ? 'Pagermon' : 'rdio'} ${feedEnabled ? 'on' : 'off'}</span>
+            <label class="node-switch" title="${isPager ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading — verify reception before feeding the live system.' : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading) — verify reception before feeding the live system."}">
               <input type="checkbox" ${feedEnabled ? 'checked' : ''}
                      onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
@@ -4789,6 +4835,59 @@
     function closeGlobalConfig() {
       const modal = document.getElementById('global-config-modal');
       if (modal) modal.style.display = 'none';
+    }
+
+    // ── Pagermon ingest config (central Pagermon the pager nodes forward into) ──
+    async function openPagerConfig() {
+      const modal = document.getElementById('pager-config-modal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      const urlEl = document.getElementById('pager-url');
+      const keyEl = document.getElementById('pager-key');
+      const statusEl = document.getElementById('pager-key-status');
+      urlEl.value = ''; keyEl.value = ''; statusEl.textContent = 'loading…';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/pager-config`, {
+          headers: { 'Authorization': await authHeader() },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        urlEl.value = data.url || '';
+        statusEl.textContent = data.keySet ? '(a key is set — leave blank to keep it)' : '(no key set)';
+      } catch (e) {
+        statusEl.textContent = '';
+        showToast(`Failed to load Pagermon config: ${e.message}`, 'error');
+      }
+    }
+
+    function closePagerConfig() {
+      const modal = document.getElementById('pager-config-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    async function savePagerConfig() {
+      const btn = document.getElementById('pager-save-btn');
+      const url = document.getElementById('pager-url').value.trim();
+      const key = document.getElementById('pager-key').value;
+      // Only send apiKey when the operator typed one (blank = keep the stored key).
+      const body = { url };
+      if (key !== '') body.apiKey = key;
+      const original = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/pager-config`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Pagermon ingest saved.', 'success');
+        closePagerConfig();
+      } catch (e) {
+        showToast(`Failed to save Pagermon config: ${e.message}`, 'error');
+      } finally {
+        btn.disabled = false; btn.innerHTML = original;
+      }
     }
 
     function _gcSetTab(name) {

@@ -109,6 +109,28 @@ function loadManifest(): Manifest {
   return out;
 }
 
+/**
+ * Tailor the manifest to a node's kind. The agent's self-update code always
+ * updates the component named "agent", so for a PAGER node we REMAP the
+ * `pager-agent` entry onto `agent` (the pager binary) and drop the radio-only
+ * `sdrtrunk`/`rdio` components it doesn't run. Radio nodes get the manifest
+ * unchanged minus the internal `pager-agent` entry.
+ */
+function manifestForKind(full: Manifest, kind: string): Manifest {
+  if (kind === 'pager') {
+    const out: Manifest = {};
+    const pa = full['pager-agent'];
+    if (pa) out['agent'] = pa; // pager binary served as component "agent"
+    return out;
+  }
+  const out: Manifest = {};
+  for (const [k, v] of Object.entries(full)) {
+    if (k === 'pager-agent') continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/node-updates/manifest — node-token authenticated.
 // ---------------------------------------------------------------------------
@@ -126,7 +148,7 @@ nodeUpdatesRouter.get('/api/node-updates/manifest', async (c) => {
     // update commands always apply regardless of this flag. A missing field is
     // treated as enabled on the agent side.
     const autoUpdate = await getAutoUpdate();
-    return c.json({ ...loadManifest(), autoUpdate } as object);
+    return c.json({ ...manifestForKind(loadManifest(), r.kind), autoUpdate } as object);
   } catch (err) {
     log.error({ err }, 'Error loading node update manifest');
     return c.json({ error: 'manifest unavailable' }, 503);
