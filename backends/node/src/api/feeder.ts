@@ -551,9 +551,12 @@ async function serveInstaller(c: import('hono').Context, os: 'linux' | 'windows'
     return c.json({ error: 'pager nodes are Linux only' }, 400);
   }
   const body = os === 'linux' ? linuxInstaller(token, resolved.kind) : windowsInstaller(token, resolved.kind);
+  const ext = os === 'linux' ? 'sh' : 'ps1';
   return c.body(body, 200, {
     'Content-Type': os === 'linux' ? 'text/x-shellscript' : 'text/plain; charset=utf-8',
-    'Content-Disposition': `attachment; filename="install-nswpsn-node.${os === 'linux' ? 'sh' : 'ps1'}"`,
+    // Name the file by node kind so a radio vs pager installer is identifiable.
+    'Content-Disposition': `attachment; filename="install-nswpsn-${resolved.kind}-node.${ext}"`,
+    'Access-Control-Expose-Headers': 'Content-Disposition',
     'Cache-Control': 'no-store',
   });
 }
