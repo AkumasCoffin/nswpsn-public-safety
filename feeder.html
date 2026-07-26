@@ -613,6 +613,20 @@
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
       _feederNodes = nodes;
+      // Which node kinds this user may create (by role). Default permissive if an
+      // older backend doesn't send it. adsb needs radio_contributor (roleForKind).
+      const cc = data.canCreate || { radio: true, pager: true };
+      const opts = [];
+      if (cc.radio) opts.push('<option value="radio">PSN</option>');
+      if (cc.pager) opts.push('<option value="pager">Pager</option>');
+      if (cc.radio) opts.push('<option value="adsb">ADSB — coming soon</option>');
+      const addNodeHtml = opts.length
+        ? `<div class="add-node">
+             <select id="new-node-kind" aria-label="Node type">${opts.join('')}</select>
+             <button class="dl-btn" onclick="addNode(this)"><i class="fas fa-plus"></i> Add node</button>
+           </div>
+           <p class="add-node-hint">Nodes are named automatically. Pick a type and add.</p>`
+        : `<p class="add-node-hint">Your account doesn't have a contributor role that can create nodes.</p>`;
       const nodesHtml = nodes.length
         ? `<div class="node-list">${nodes.map(_nodeRow).join('')}</div>`
         : `<div class="empty-state">
@@ -631,15 +645,7 @@
             Deleting or re-issuing a node's key cuts off just that one node — nothing else.
           </p>
 
-          <div class="add-node">
-            <select id="new-node-kind" aria-label="Node type">
-              <option value="radio">PSN</option>
-              <option value="pager">Pager</option>
-              <option value="adsb">ADSB — coming soon</option>
-            </select>
-            <button class="dl-btn" onclick="addNode(this)"><i class="fas fa-plus"></i> Add node</button>
-          </div>
-          <p class="add-node-hint">Nodes are named automatically. Pick a type and add.</p>
+          ${addNodeHtml}
 
           <div class="section-h">Nodes</div>
           <div id="nodes-region">${nodesHtml}</div>

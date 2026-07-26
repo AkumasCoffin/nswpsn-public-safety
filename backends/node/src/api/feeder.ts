@@ -57,15 +57,24 @@ function psSingleQuote(v: string): string {
   return `'${v.replace(/'/g, `''`)}'`;
 }
 
-const requireRadioContributor: MiddlewareHandler = async (c, next) => {
+// The feeder API is open to EITHER contributor role; the specific role a node
+// KIND needs is checked per-action (see roleForKind + the create handler).
+const requireContributor: MiddlewareHandler = async (c, next) => {
   const userId = c.get('userId');
-  if (!userId || !(await hasRole(userId, ['radio_contributor']))) {
-    return c.json({ error: 'not a radio contributor' }, 403);
+  if (!userId || !(await hasRole(userId, ['radio_contributor', 'pager_contributor']))) {
+    return c.json({ error: 'not a feeder contributor' }, 403);
   }
   await next();
 };
 
-feederRouter.use('/api/feeder/*', requireSupabaseJwt, requireRadioContributor);
+feederRouter.use('/api/feeder/*', requireSupabaseJwt, requireContributor);
+
+/** The contributor role that gates a given node kind: pager nodes need
+ *  pager_contributor; radio (and adsb, until it has its own role) need
+ *  radio_contributor. Mirrored in resolveNodeToken so the ongoing gate matches. */
+export function roleForKind(kind: string): 'radio_contributor' | 'pager_contributor' {
+  return kind === 'pager' ? 'pager_contributor' : 'radio_contributor';
+}
 
 /** The volunteer-facing view of one of their nodes (name/type/key-prefix +
  *  live activity). No secrets — only the token PREFIX, never the token/hash. */
@@ -141,7 +150,13 @@ feederRouter.get('/api/feeder/me', async (c) => {
   const userId = c.get('userId') as string;
   try {
     const nodes = (await listNodesForUser(userId)).map(feederNodeView);
-    return c.json({ role: true, nodes });
+    // Which node kinds this user may create, by role — so the UI can offer only
+    // what they're allowed (backend still enforces it on create).
+    const [radio, pager] = await Promise.all([
+      hasRole(userId, ['radio_contributor']),
+      hasRole(userId, ['pager_contributor']),
+    ]);
+    return c.json({ role: true, nodes, canCreate: { radio, pager } });
   } catch (err) {
     log.error({ err, userId }, 'Error building feeder me');
     return c.json({ error: 'Failed to load feeder info' }, 500);
@@ -163,6 +178,12 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     const parsed = CreateNodeSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
+    }
+    // Creating a node of a given kind is locked to that kind's contributor role:
+    // radio (PSN) → radio_contributor, pager → pager_contributor.
+    const needed = roleForKind(parsed.data.kind);
+    if (!(await hasRole(userId, [needed]))) {
+      return c.json({ error: `creating a ${parsed.data.kind} node requires the ${needed} role` }, 403);
     }
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached' }, 429);
