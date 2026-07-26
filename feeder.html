@@ -572,7 +572,7 @@
     let _feederNodes = [];
     const _kindLabel = { radio: 'Radio', pager: 'Pager', adsb: 'ADS-B' };
     const LOC_RADIUS_M = 5000; // the 5km circle radius = the max fuzz distance
-    const _loc = { map: null, marker: null, thenInstall: false, node: null };
+    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, create: false, createKind: null };
 
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
@@ -677,32 +677,28 @@
         </div>`;
     }
 
-    // Create a node (type only — auto-named server-side) → then require a
-    // location before the installer can be downloaded.
-    async function addNode(btn) {
+    // Start creating a node (type only — auto-named server-side). We do NOT
+    // create it yet: the location picker collects a location first, then the
+    // node is created WITH that location in one request (see saveLocation), so
+    // a reload mid-create never leaves a locationless orphan.
+    function addNode() {
       const kind = document.getElementById('new-node-kind').value;
-      const original = btn.innerHTML;
-      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding…';
-      try {
-        const jwt = await getToken();
-        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
-        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        _nodeTokens[data.node.id] = data.token;
-        await refreshNodes();
-        // Location is required before downloading — go straight to the picker,
-        // then offer the installer once it's set.
-        openLocationPicker(data.node.id, { thenInstall: true, node: data.node });
-      } catch (e) {
-        showToast(`Could not add node: ${e.message}`, 'error');
-      } finally {
-        btn.disabled = false; btn.innerHTML = original;
-      }
+      openLocationPicker(null, { create: true, kind });
+    }
+
+    // Create the node together with its (already-fuzzed) location.
+    async function createNodeWithLocation(kind, lat, lon) {
+      const jwt = await getToken();
+      if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); throw new Error('login'); }
+      const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, lat, lon }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      _nodeTokens[data.node.id] = data.token;
+      return data.node;
     }
 
     // Rotate a node's token (owner-scoped). Returns the new plaintext or null.
@@ -788,10 +784,18 @@
     // point is randomised anywhere in that circle before it leaves the browser.
     function openLocationPicker(nodeId, opts) {
       closeLocationPicker(); // never stack two pickers (auto-resume + explicit)
-      _loc.thenInstall = !!(opts && opts.thenInstall);
-      _loc.node = (opts && opts.node) || (_feederNodes || []).find(n => n.id === nodeId) || { id: nodeId };
+      _loc.create = !!(opts && opts.create);
+      _loc.createKind = (opts && opts.kind) || null;
+      _loc.nodeId = nodeId || null;
+      // create + the download gate both require a location before proceeding.
+      _loc.thenInstall = _loc.create || !!(opts && opts.thenInstall);
+      _loc.node = (opts && opts.node) || (_feederNodes || []).find(n => n.id === nodeId) || (nodeId ? { id: nodeId } : null);
       const node = (_feederNodes || []).find(n => n.id === nodeId);
       const existing = node && typeof node.lat === 'number' ? [node.lat, node.lon] : null;
+      // Cancel is safe when nothing is created yet (create mode) or when just
+      // editing an already-located node; it's withheld only for a real node
+      // that still lacks a location (must set one).
+      const canCancel = _loc.create || !_loc.thenInstall;
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
       overlay.className = 'modal-overlay';
@@ -801,12 +805,11 @@
           <p>Drag the pin (or click the map) so <b>your antenna sits at the centre</b> of the
              <b>5&nbsp;km circle</b>. On save the stored point is <b>randomised anywhere inside the
              circle</b> — your exact location is never sent or shown, so it stays private even from us.
-             ${_loc.thenInstall ? 'Set your location to continue to the installer.' : ''}</p>
+             ${_loc.create ? 'Your node is created when you save this location.' : (_loc.thenInstall ? 'Set your location to continue to the installer.' : '')}</p>
           <div id="loc-map"></div>
           <div class="modal-actions">
-            <button class="dl-btn" onclick="saveLocation('${nodeId}',this)"><i class="fas fa-check"></i> Save location</button>
-            ${existing && !_loc.thenInstall ? `<button class="mini-btn danger" onclick="clearLocation('${nodeId}',this)">Clear</button>` : ''}
-            ${_loc.thenInstall ? '' : `<button class="mini-btn" onclick="closeLocationPicker()">Cancel</button>`}
+            <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> ${_loc.create ? 'Create node' : 'Save location'}</button>
+            ${canCancel ? `<button class="mini-btn" onclick="closeLocationPicker()">Cancel</button>` : ''}
           </div>
         </div>`;
       document.body.appendChild(overlay);
@@ -841,34 +844,36 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     }
 
-    async function saveLocation(nodeId, btn) {
+    async function saveLocation(btn) {
       if (!_loc.marker) return;
       const c = _loc.marker.getLatLng();
       const f = fuzzInCircle(c.lat, c.lng, LOC_RADIUS_M);
+      const create = _loc.create;
+      const kind = _loc.createKind;
+      const nodeId = _loc.nodeId;
       const thenInstall = _loc.thenInstall;
       const node = _loc.node;
-      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+      const label = create ? 'Create node' : 'Save location';
+      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + (create ? 'Creating…' : 'Saving…');
       try {
-        await putLocation(nodeId, { lat: f.lat, lon: f.lon });
-        showToast('Location saved (randomised for privacy).', 'success');
-        closeLocationPicker();
-        await refreshNodes();
-        // Location set → now offer the installer (create flow).
-        if (thenInstall) showInstallModal(node || { id: nodeId });
+        if (create) {
+          // Node doesn't exist yet — create it WITH the fuzzed location.
+          const created = await createNodeWithLocation(kind, f.lat, f.lon);
+          showToast('Node created (location randomised for privacy).', 'success');
+          closeLocationPicker();
+          await refreshNodes();
+          showInstallModal(created);
+        } else {
+          await putLocation(nodeId, { lat: f.lat, lon: f.lon });
+          showToast('Location saved (randomised for privacy).', 'success');
+          closeLocationPicker();
+          await refreshNodes();
+          if (thenInstall) showInstallModal(node || { id: nodeId });
+        }
       } catch (e) {
-        showToast('Could not save location.', 'error');
-        btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Save location';
+        showToast(create ? 'Could not create node.' : 'Could not save location.', 'error');
+        btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> ' + label;
       }
-    }
-
-    async function clearLocation(nodeId, btn) {
-      btn.disabled = true;
-      try {
-        await putLocation(nodeId, { lat: null, lon: null });
-        showToast('Location cleared.', 'success');
-        closeLocationPicker();
-        await refreshNodes();
-      } catch (e) { showToast('Could not clear location.', 'error'); btn.disabled = false; }
     }
 
     // Download a node's installer (POST, token in body). Uses the session token if
