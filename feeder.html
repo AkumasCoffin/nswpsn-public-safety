@@ -810,9 +810,12 @@
         </div>`;
       document.body.appendChild(overlay);
       const center = existing || [-33.8688, 151.2093];
-      const map = L.map('loc-map').setView(center, existing ? 11 : 10);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        { maxZoom: 19, attribution: '© OpenStreetMap © CARTO' }).addTo(map);
+      const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+      const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+        { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
+      const map = L.map('loc-map', { layers: [dark] }).setView(center, existing ? 11 : 10);
+      L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
       const marker = L.marker(center, { draggable: true }).addTo(map);
       const circle = L.circle(center, { radius: LOC_RADIUS_M, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.08 }).addTo(map);
       const sync = () => circle.setLatLng(marker.getLatLng());

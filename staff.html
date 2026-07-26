@@ -2845,8 +2845,10 @@
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
       const c = [node.lat, node.lon];
-      const map = L.map('loc-view-map', { attributionControl: false }).setView(c, 11);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+      const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+      const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
+      const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 11);
+      L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
       L.circle(c, { radius: 5000, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.1 }).addTo(map);
       _locViewMap = map;
       setTimeout(() => map.invalidateSize(), 80);
