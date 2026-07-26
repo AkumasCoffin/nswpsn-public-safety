@@ -315,9 +315,6 @@
     .node-chip.off { opacity: 0.6; }
     .node-stat { font-size: 0.78rem; color: var(--text-soft); margin-top: 0.45rem; }
     .node-stat b { color: var(--text-primary); font-weight: 700; }
-    .node-pager-ctl { margin-top: 0.5rem; font-size: 0.78rem; color: var(--text-soft); }
-    .node-pager-ctl label { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-    .node-pager-ctl select { background: rgba(255,255,255,0.05); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 0.2rem 0.4rem; font-size: 0.76rem; }
     /* Add-node form */
     .add-node { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.25rem 0 0.5rem; }
     .add-node input, .add-node select {
@@ -705,18 +702,6 @@
         statHtml = `<div class="node-stat">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
       }
 
-      // Pager: which frequency to use when only ONE SDR is connected. Persisted,
-      // so it survives restarts/updates until changed here. (2 SDRs run both.)
-      const pagerCtl = isPager ? `
-        <div class="node-pager-ctl">
-          <label><i class="fas fa-tower-broadcast"></i> Single-SDR frequency
-            <select onchange="setPagerPrimary('${node.id}', this.value, this)">
-              <option value="NSWRFS" ${node.pagerPrimary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
-              <option value="FRNSW" ${node.pagerPrimary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9625)</option>
-            </select>
-          </label>
-        </div>` : '';
-
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const keyStr = node.tokenPrefix ? ` · key <code>${escapeHtml(node.tokenPrefix)}…</code>` : '';
       const locStr = located ? ' · <i class="fas fa-location-dot"></i> located' : '';
@@ -741,30 +726,10 @@
             <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}${keyStr}${locStr}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
-            ${pagerCtl}
             ${actions}
           </div>
           ${agentHtml}
         </div>`;
-    }
-
-    // Set which frequency a single-SDR pager node listens to (persisted).
-    async function setPagerPrimary(nodeId, primary, el) {
-      if (el) el.disabled = true;
-      try {
-        const jwt = await getToken();
-        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/pager-primary`, {
-          method: 'PUT',
-          headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ primary }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Single-SDR frequency set to ${primary === 'FRNSW' ? 'Fire & Rescue' : 'NSW RFS'}.`, 'success');
-        await refreshNodes();
-      } catch (e) {
-        showToast('Could not change frequency.', 'error');
-        if (el) el.disabled = false;
-      }
     }
 
     // Create a node (type only — auto-named server-side), then OFFER to set its
