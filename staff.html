@@ -5871,10 +5871,16 @@
         // ID (from the signup form / approval) shows gray. Accounts sharing
         // a Discord ID get a warning badge — same person, multiple signups.
         let discordHtml = '<span class="no-roles">—</span>';
+        // Prefer the resolved Discord display name (from the API, by id); fall
+        // back to the raw id (name fills in on a later load once resolved).
+        const dName = user.discord_username ? escapeHtml(user.discord_username) : null;
+        const dId = user.discord_id ? escapeHtml(user.discord_id) : null;
         if (user.discord_linked) {
-          discordHtml = `<span title="Discord account linked (OAuth)" style="color:#818cf8;"><i class="fab fa-discord"></i>${user.discord_id ? ` <span class="discord-id">${escapeHtml(user.discord_id)}</span>` : ' Linked'}</span>`;
+          const tip = 'Discord account linked (OAuth)' + (dId ? ` · ID ${dId}` : '');
+          discordHtml = `<span title="${tip}" style="color:#818cf8;"><i class="fab fa-discord"></i> ${dName || dId || 'Linked'}</span>`;
         } else if (user.discord_id) {
-          discordHtml = `<span class="discord-id" title="Discord ID from signup form (account not OAuth-linked)">${escapeHtml(user.discord_id)}</span>`;
+          const tip = `Discord ID from signup form (not OAuth-linked) · ${dId}`;
+          discordHtml = `<span class="discord-id" title="${tip}"><i class="fab fa-discord"></i> ${dName || dId}</span>`;
         }
         if (_isDupeUser(user, dupeGroups)) {
           const n = dupeGroups.get((user.discord_id || '').trim().toLowerCase());
