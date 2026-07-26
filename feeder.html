@@ -787,6 +787,7 @@
     // Map picker: drop a pin so the 5km circle covers the antenna; on save the
     // point is randomised anywhere in that circle before it leaves the browser.
     function openLocationPicker(nodeId, opts) {
+      closeLocationPicker(); // never stack two pickers (auto-resume + explicit)
       _loc.thenInstall = !!(opts && opts.thenInstall);
       _loc.node = (opts && opts.node) || (_feederNodes || []).find(n => n.id === nodeId) || { id: nodeId };
       const node = (_feederNodes || []).find(n => n.id === nodeId);
@@ -975,7 +976,19 @@
                <i class="fas fa-satellite-dish"></i>
                <p>No nodes yet — add one above to get its installer.</p>
              </div>`;
+        maybeResumeLocationPicker();
       } catch (e) { /* keep last render on transient errors */ }
+    }
+
+    // Location is required, but the node row is created server-side before the
+    // picker opens — so a page reload mid-create would leave a node with no
+    // location and no modal. Re-open the required picker for the first node
+    // that still lacks one (unless a picker/install modal is already up).
+    function maybeResumeLocationPicker() {
+      if (document.getElementById('loc-modal')) return;   // picker already open
+      if (document.getElementById('token-modal')) return; // finishing an install
+      const n = (_feederNodes || []).find(x => typeof x.lat !== 'number');
+      if (n) openLocationPicker(n.id, { thenInstall: true, node: n });
     }
 
     // Pause polling when the tab is hidden; resume on return.
