@@ -128,6 +128,13 @@ const Schema = z.object({
   PAGERMON_INGEST_URL: z.string().optional(),
   PAGERMON_INGEST_API_KEY: z.string().optional(),
 
+  // Pager capcodes to DROP from the relay (comma-separated) — non-message
+  // transmitters that clutter the feed with encoded/binary data frames rather
+  // than human-readable pages (e.g. FRNSW 521839 fires ~1/min of base64 data).
+  // Dropped before the Pagermon forward AND the staff drawer buffer. Defaults to
+  // 521839; set to empty to block nothing, or add more comma-separated capcodes.
+  PAGER_BLOCKED_CAPCODES: z.string().default('521839'),
+
   // Supabase project URL — used by /api/users (Auth Admin API listing)
   // and the JWT issuer-claim check. Mirrors Python's SUPABASE_URL.
   SUPABASE_URL: z.string().url().optional(),
