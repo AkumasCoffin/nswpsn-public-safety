@@ -30,6 +30,7 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
+import { getCachedDiscordName, queueDiscordResolve } from '../services/discordUsers.js';
 import {
   invalidateUserRolesCache,
   isPrivilegedRole,
@@ -216,16 +217,24 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
       userRolesMap.set(row.user_id, list);
     }
 
-    const result = usersList.map((u) => ({
-      id: u.id,
-      email: u.email,
-      username: usernameFromMetadata(u.user_metadata),
-      ...discordInfo(u),
-      created_at: u.created_at,
-      last_sign_in: u.last_sign_in_at,
-      email_confirmed: u.email_confirmed_at !== null && u.email_confirmed_at !== undefined,
-      roles: u.id ? (userRolesMap.get(u.id) ?? []) : [],
-    }));
+    const result = usersList.map((u) => {
+      const d = discordInfo(u);
+      // Resolve the Discord display name from the id (cached; background-fetched
+      // via the Discord API so the next load fills it in). Prefer any explicit
+      // metadata username; fall back to the resolved Discord name.
+      if (d.discord_id) queueDiscordResolve(d.discord_id);
+      return {
+        id: u.id,
+        email: u.email,
+        username: usernameFromMetadata(u.user_metadata),
+        ...d,
+        discord_username: getCachedDiscordName(d.discord_id),
+        created_at: u.created_at,
+        last_sign_in: u.last_sign_in_at,
+        email_confirmed: u.email_confirmed_at !== null && u.email_confirmed_at !== undefined,
+        roles: u.id ? (userRolesMap.get(u.id) ?? []) : [],
+      };
+    });
 
     result.sort((a, b) => {
       const ae = (a.email ?? '').toLowerCase();
