@@ -182,6 +182,15 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
 // hostile/buggy node can't stream a giant body into RAM.
 const MAX_PAGER_BYTES = 64 * 1024;
 
+// Capcodes to drop entirely (non-message data/encoded transmitters). Parsed once
+// from PAGER_BLOCKED_CAPCODES. Dropped before forward + drawer buffer.
+const BLOCKED_CAPCODES = new Set(
+  (config.PAGER_BLOCKED_CAPCODES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
 const PagerMsgSchema = z.object({
   // POCSAG capcode / address (digits). Kept as a string — Pagermon treats it as text.
   address: z.string().min(1).max(32),
@@ -245,6 +254,12 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     parsed = PagerMsgSchema.parse(await c.req.json());
   } catch {
     return c.json({ error: 'bad body' }, 400);
+  }
+
+  // 5a. Drop blocked capcodes (non-message data transmitters) entirely — no
+  //     buffer, no forward. Ack so the agent's queue still drains.
+  if (BLOCKED_CAPCODES.has(parsed.address)) {
+    return c.json({ ok: true, dropped: 'blocked capcode' });
   }
 
   // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
