@@ -797,15 +797,15 @@
       overlay.innerHTML = `
         <div class="modal loc-modal">
           <h3><i class="fas fa-location-dot"></i> Node location ${_loc.thenInstall ? '<span class="req">required</span>' : ''}</h3>
-          <p>Set your node's location before downloading the installer. Drag the pin (or click the map)
-             so the <b>5&nbsp;km circle</b> covers your antenna. On save the stored point is
-             <b>randomised anywhere inside the circle</b> — your exact location is never sent or shown,
-             so it stays private even from us.</p>
+          <p>Drag the pin (or click the map) so <b>your antenna sits at the centre</b> of the
+             <b>5&nbsp;km circle</b>. On save the stored point is <b>randomised anywhere inside the
+             circle</b> — your exact location is never sent or shown, so it stays private even from us.
+             ${_loc.thenInstall ? 'Set your location to continue to the installer.' : ''}</p>
           <div id="loc-map"></div>
           <div class="modal-actions">
             <button class="dl-btn" onclick="saveLocation('${nodeId}',this)"><i class="fas fa-check"></i> Save location</button>
             ${existing && !_loc.thenInstall ? `<button class="mini-btn danger" onclick="clearLocation('${nodeId}',this)">Clear</button>` : ''}
-            <button class="mini-btn" onclick="closeLocationPicker()">${_loc.thenInstall ? 'Later' : 'Cancel'}</button>
+            ${_loc.thenInstall ? '' : `<button class="mini-btn" onclick="closeLocationPicker()">Cancel</button>`}
           </div>
         </div>`;
       document.body.appendChild(overlay);
