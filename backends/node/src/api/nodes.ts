@@ -27,6 +27,7 @@ import {
   countNodesForUser,
   MAX_NODES_PER_USER,
   isNodeKind,
+  autoNodeName,
   updateNode,
   deleteNode,
   getNodeStats,
@@ -35,7 +36,7 @@ import {
 } from '../services/nodes/registry.js';
 import { hub } from '../services/nodes/hub.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
-import { getUsernameMap } from './users.js';
+import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
@@ -356,7 +357,8 @@ nodesRouter.get('/api/nodes/:id/stats', requireRole(canManageNodes), async (c) =
 // ---------------------------------------------------------------------------
 const CreateSchema = z.object({
   userId: z.string().min(1),
-  name: z.string().min(1).max(120),
+  // Optional — auto-named {kind}-{user}-{uuid} when omitted.
+  name: z.string().max(120).optional(),
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
 });
 nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
@@ -365,10 +367,11 @@ nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
-    const { userId, name, kind } = parsed.data;
+    const { userId, kind } = parsed.data;
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached for this user' }, 429);
     }
+    const name = parsed.data.name?.trim() || autoNodeName(kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
     const node = await createNode(userId, name, kind, tokenHash, tokenPrefix);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);

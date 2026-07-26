@@ -77,6 +77,29 @@ function usernameFromMetadata(meta: Record<string, unknown> | undefined): string
 }
 
 /**
+ * Best-effort single-user display name (username, else email local-part).
+ * Returns null when Supabase isn't configured / the user isn't found, so callers
+ * can fall back (e.g. to a slice of the user id).
+ */
+export async function getUsername(userId: string): Promise<string | null> {
+  if (!config.SUPABASE_URL || !config.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const res = await fetch(`${config.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      headers: {
+        apikey: config.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${config.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const u = (await res.json()) as SupabaseUser;
+    return usernameFromMetadata(u.user_metadata) ?? u.email?.split('@')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Best-effort map of Supabase user id -> display username (email as fallback).
  * Returns an empty map when Supabase isn't configured or the fetch fails, so
  * callers (e.g. the Nodes list) degrade gracefully to showing ids.

@@ -30,8 +30,10 @@ import {
   countNodesForUser,
   MAX_NODES_PER_USER,
   isNodeKind,
+  autoNodeName,
   type NodeRow,
 } from '../services/nodes/registry.js';
+import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
 
 export const feederRouter = new Hono();
@@ -130,7 +132,8 @@ feederRouter.get('/api/feeder/me', async (c) => {
 // Mints the node's own token, returned ONCE (bake into the installer now).
 // ---------------------------------------------------------------------------
 const CreateNodeSchema = z.object({
-  name: z.string().min(1).max(120),
+  // Optional — nodes are auto-named {kind}-{user}-{uuid} when no name is given.
+  name: z.string().max(120).optional(),
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
 });
 feederRouter.post('/api/feeder/nodes', async (c) => {
@@ -143,8 +146,9 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached' }, 429);
     }
+    const name = parsed.data.name?.trim() || autoNodeName(parsed.data.kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
-    const node = await createNode(userId, parsed.data.name, parsed.data.kind, tokenHash, tokenPrefix);
+    const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({ node: feederNodeView(node), token });
