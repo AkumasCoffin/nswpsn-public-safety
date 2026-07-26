@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -124,10 +125,17 @@ func extractSerial(desc string) string {
 func MeasurePPM(index int, dur time.Duration) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dur)
 	defer cancel()
-	// rtl_test -p runs until interrupted; the context timeout kills it after dur,
-	// which makes CombinedOutput return an error — we ignore it and parse whatever
-	// cumulative readings were emitted before the kill.
-	out, _ := exec.CommandContext(ctx, rtlTestBin, "-d", strconv.Itoa(index), "-p").CombinedOutput()
+	// rtl_test -p runs until interrupted; the context timeout stops it after dur.
+	cmd := exec.CommandContext(ctx, rtlTestBin, "-d", strconv.Itoa(index), "-p")
+	// Stop it with SIGINT (Ctrl-C) so it closes the USB device CLEANLY — a SIGKILL
+	// (the default) can leave the dongle briefly claimed and make the reader that
+	// starts next fail with "usb_claim_interface error". WaitDelay force-kills if
+	// rtl_test ignores the interrupt.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 5 * time.Second
+	// The interrupt makes CombinedOutput return an error — we ignore it and parse
+	// whatever cumulative readings were emitted before the stop.
+	out, _ := cmd.CombinedOutput()
 	text := string(out)
 	ms := cumPpmRe.FindAllStringSubmatch(text, -1)
 	if len(ms) == 0 {

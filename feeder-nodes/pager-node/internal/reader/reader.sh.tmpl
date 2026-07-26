@@ -4,7 +4,7 @@ set -euo pipefail
 # -p is the sample-clock (ppm) correction the agent measured for THIS dongle with
 # rtl_test -p at startup (0 = none).
 rtl_fm -d '{{.Serial}}' -f {{.FreqMHz}}M -M fm -s 22050 -p {{.PPM}} - \
- | multimon-ng {{.ProtoArgs}} -f alpha -t raw - \
+ | multimon-ng {{.ProtoArgs}} -t raw /dev/stdin \
  | while IFS= read -r line; do
      curl -s --max-time 5 '{{.RelayURL}}' \
        --data-binary "$line" \

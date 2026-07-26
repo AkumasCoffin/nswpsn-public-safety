@@ -93,27 +93,23 @@ func detectDevices() []pagersdr.Device {
 	return devs
 }
 
-// measurePPMs fills each device's PPM via rtl_test -p, concurrently (each dongle
-// is a distinct index, so the tests don't contend). A failure leaves ppm=0.
+// measurePPMs fills each device's PPM via rtl_test -p. Done SEQUENTIALLY (not in
+// parallel): two rtl_test processes opening dongles at the same instant can race
+// on USB and one fails to claim its device. A failure leaves ppm=0.
 func measurePPMs(devs []pagersdr.Device) {
 	if len(devs) == 0 {
 		return
 	}
-	log.Printf("readers: measuring SDR ppm (rtl_test -p, ~%s per dongle)…", pagersdr.PPMMeasureDur)
-	var wg sync.WaitGroup
+	log.Printf("readers: measuring SDR ppm (rtl_test -p, ~%s per dongle, sequential)…", pagersdr.PPMMeasureDur)
 	for i := range devs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			ppm, err := pagersdr.MeasurePPM(devs[i].Index, pagersdr.PPMMeasureDur)
-			if err != nil {
-				log.Printf("readers: ppm measure failed for SDR index=%d (%v); using ppm=0", devs[i].Index, err)
-				return
-			}
-			devs[i].PPM = ppm
-		}(i)
+		ppm, err := pagersdr.MeasurePPM(devs[i].Index, pagersdr.PPMMeasureDur)
+		if err != nil {
+			log.Printf("readers: ppm measure failed for SDR index=%d (%v); using ppm=0", devs[i].Index, err)
+			continue
+		}
+		devs[i].PPM = ppm
+		log.Printf("readers: SDR index=%d measured ppm=%d", devs[i].Index, ppm)
 	}
-	wg.Wait()
 }
 
 // Apply (re)computes the reader set from cfg and (re)starts the supervisor.
