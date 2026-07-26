@@ -33,6 +33,9 @@ type Config struct {
 	WSURL     string `yaml:"ws_url"`
 	NodeToken string `yaml:"node_token"`
 	InstallID string `yaml:"install_id"`
+	// Kind is the node type this agent runs as (radio/pager/adsb). Declared to
+	// the backend in hello; defaults to radio (the only type this agent serves).
+	Kind      string `yaml:"kind"`
 	DataDir   string `yaml:"data_dir"`
 	RelayAddr string `yaml:"relay_addr"`
 
@@ -153,6 +156,10 @@ func isLoopbackHost(h string) bool {
 func (c *Config) applyDefaults() bool {
 	changed := false
 
+	if strings.TrimSpace(c.Kind) == "" {
+		c.Kind = "radio"
+		changed = true
+	}
 	if strings.TrimSpace(c.RelayAddr) == "" {
 		c.RelayAddr = defaultRelayAddr
 		changed = true

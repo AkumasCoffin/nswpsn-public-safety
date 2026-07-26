@@ -45,6 +45,8 @@ type Hello struct {
 	Arch                 string `json:"arch"`
 	Hostname             string `json:"hostname"`
 	AppliedConfigVersion string `json:"appliedConfigVersion"`
+	// Kind is the node type this agent runs as (radio/pager/adsb).
+	Kind string `json:"kind"`
 }
 
 // Status is the periodic heartbeat describing the agent's live state.
