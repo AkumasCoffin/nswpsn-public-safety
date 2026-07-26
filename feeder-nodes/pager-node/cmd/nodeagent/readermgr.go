@@ -30,6 +30,11 @@ var defaultPagerFrequencies = []wsclient.PagerFrequency{
 // defaultPagerProtocols is the locked POCSAG demodulator set.
 var defaultPagerProtocols = []string{"POCSAG512", "POCSAG1200", "POCSAG2400"}
 
+// defaultGain is the fixed rtl_fm tuner gain (dB). A high fixed gain (near the
+// R820T max) matches the operator's proven Pagermon reader; rtl_fm clamps to the
+// nearest supported value per dongle.
+const defaultGain = "49.6"
+
 // readerManager owns the pager reader components. It detects the attached SDRs
 // once, then (re)computes the reader set from a frequency plan whenever a config
 // is applied: it writes each reader.sh (pinned to a dongle by serial), and runs
@@ -144,7 +149,7 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 	for i := 0; i < n; i++ {
 		label := sanitizeLabel(freqs[i].Label, i)
 		dev := m.devices[i]
-		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, dev.PPM, protocols, m.relayURL)
+		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, dev.PPM, defaultGain, protocols, m.relayURL)
 		if err != nil {
 			return fmt.Errorf("write reader script for %s: %w", label, err)
 		}
