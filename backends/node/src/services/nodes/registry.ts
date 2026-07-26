@@ -288,6 +288,28 @@ export async function setNodeLocation(
   return res.rows[0] ?? null;
 }
 
+/**
+ * Set a pager node's single-SDR primary frequency preference, merged into the
+ * JSONB config_override (so it persists across restarts/updates and other
+ * override keys are untouched). Guarded to kind='pager'. Returns the updated row.
+ */
+export async function setPagerPrimary(
+  id: string,
+  primary: 'NSWRFS' | 'FRNSW',
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = COALESCE(config_override, '{}'::jsonb)
+                             || jsonb_build_object('pagerPrimary', $2::text)
+     WHERE id = $1 AND kind = 'pager'
+     RETURNING ${NODE_COLS}`,
+    [id, primary],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function touchNodeSeen(id: string): Promise<void> {
   const pool = await getPool();
   if (!pool) return;
