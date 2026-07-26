@@ -109,22 +109,39 @@ export interface ConfigPayload {
   pager?: PagerConfig;
 }
 
-// Fixed pager plan (decided with the operator). NSW RFS is primary (runs with a
-// single SDR); Fire & Rescue NSW is added when a 2nd SDR is present. Kept in the
-// payload (not hard-coded in the agent) so making these staff-configurable later
-// is a small change.
+// Fixed pager plan (decided with the operator). NSW RFS + Fire & Rescue NSW.
+// The list is sent in PRIORITY ORDER: with a single SDR the agent runs only the
+// FIRST frequency; with two SDRs it runs both. Which one is first is a per-node
+// preference (config_override.pagerPrimary), default NSWRFS.
 const PAGER_FREQUENCIES: PagerFreq[] = [
   { label: 'NSWRFS', mhz: 148.5875 },
   { label: 'FRNSW', mhz: 148.9625 },
 ];
 const PAGER_PROTOCOLS = ['POCSAG512', 'POCSAG1200', 'POCSAG2400'];
+export const PAGER_PRIMARY_LABELS = ['NSWRFS', 'FRNSW'] as const;
+export type PagerPrimary = (typeof PAGER_PRIMARY_LABELS)[number];
+
+/** The per-node primary (single-SDR) frequency label — read from the persisted
+ *  config_override so it survives restarts/updates. Defaults to NSWRFS. */
+export function pagerPrimaryOf(node: NodeRow): PagerPrimary {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  return co['pagerPrimary'] === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+}
+
+/** Frequencies in priority order for this node: the chosen primary first. */
+function pagerFrequencies(node: NodeRow): PagerFreq[] {
+  const primary = pagerPrimaryOf(node);
+  const first = PAGER_FREQUENCIES.find((f) => f.label === primary);
+  const rest = PAGER_FREQUENCIES.filter((f) => f.label !== primary);
+  return first ? [first, ...rest] : [...PAGER_FREQUENCIES];
+}
 
 /** Build the lean config payload a PAGER node receives. No presets/rdio/SDR-Trunk
  *  doc, no Pagermon key — just capture/feed + the frequency plan, all hashed into
  *  configVersion so a toggle re-syncs the node. */
 function buildPagerPayload(node: NodeRow): ConfigPayload {
   const pager: PagerConfig = {
-    frequencies: PAGER_FREQUENCIES,
+    frequencies: pagerFrequencies(node),
     protocols: PAGER_PROTOCOLS,
   };
   const payloadNoVersion = {

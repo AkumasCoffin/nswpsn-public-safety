@@ -3660,7 +3660,17 @@
         }).join('');
       }
 
+      // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
+      const nFresh = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+      const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
       el.innerHTML = `
+        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
+          <span>Single-SDR frequency</span>
+          <select onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
+            <option value="NSWRFS" ${primary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
+            <option value="FRNSW" ${primary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9625)</option>
+          </select>
+        </div>
         <table class="nd-readers-table">
           <thead><tr><th>Frequency</th><th>Decoder</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
@@ -3669,6 +3679,25 @@
           <span>messages <strong>${msgs}</strong> · last 10 min</span>
           ${qd != null ? `<span>queue <strong>${qd}</strong></span>` : ''}
         </div>`;
+    }
+
+    // Staff: set the pager node's single-SDR primary frequency (persisted + live).
+    async function _ndSetPagerPrimary(primary, el) {
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-primary`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ primary }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(`Single-SDR frequency set to ${primary === 'FRNSW' ? 'Fire & Rescue' : 'NSW RFS'}.`, 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Could not change frequency: ${e.message}`, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
     }
 
     // Recheck SDRs: agent stops readers, re-detects the dongles (re-measures ppm),
