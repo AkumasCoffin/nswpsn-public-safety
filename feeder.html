@@ -819,12 +819,6 @@
       marker.on('drag', sync); marker.on('dragend', sync);
       map.on('click', (e) => { marker.setLatLng(e.latlng); sync(); });
       _loc.map = map; _loc.marker = marker;
-      if (!existing && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition((pos) => {
-          const c = [pos.coords.latitude, pos.coords.longitude];
-          map.setView(c, 11); marker.setLatLng(c); circle.setLatLng(c);
-        }, () => {}, { timeout: 8000 });
-      }
       setTimeout(() => map.invalidateSize(), 80);
     }
 
