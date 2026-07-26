@@ -64,6 +64,9 @@ type ConfigApplier interface {
 	Apply(cfg PagerConfig) error
 	// Restart restarts a single named reader component (e.g. "reader:NSWRFS").
 	Restart(component string) error
+	// Rescan stops the readers, re-detects the attached SDRs, and replays the last
+	// config (staff "Recheck SDRs"). Slow (re-measures ppm) — call in a goroutine.
+	Rescan() error
 }
 
 // StatusProvider returns the current reader component states (name -> status)
@@ -411,6 +414,16 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 			return
 		}
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "restarting " + a.Name})
+
+	case "rescanSdr":
+		// ACK immediately — a rescan stops the readers, frees the dongles, and
+		// re-measures ppm (~30s per SDR), which exceeds the staff command timeout.
+		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "rescan started"})
+		go func() {
+			if err := c.applier.Rescan(); err != nil {
+				log.Printf("wsclient: rescan failed: %v", err)
+			}
+		}()
 
 	case "rebootAgent":
 		log.Printf("wsclient: rebootAgent requested — exiting for service manager to relaunch")

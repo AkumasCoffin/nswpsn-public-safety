@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/pager-node/internal/pagersdr"
@@ -58,6 +59,7 @@ type readerManager struct {
 	devices   []pagersdr.Device
 	sup       *supervise.Supervisor
 	supCancel context.CancelFunc
+	lastCfg   wsclient.PagerConfig // last applied config, replayed on Rescan
 }
 
 // newReaderManager detects + de-duplicates the attached SDR serials (best-effort;
@@ -70,6 +72,9 @@ func newReaderManager(rootCtx context.Context, dataDir, relayAddr string) *reade
 		dataDir:    dataDir,
 		readersDir: filepath.Join(dataDir, "readers"),
 		relayURL:   "http://" + relayAddr + "/pager",
+		// Sensible default until the first configPush / Apply, so a Rescan before
+		// any config still (re)starts readers rather than leaving them disabled.
+		lastCfg: wsclient.PagerConfig{CaptureEnabled: true, FeedEnabled: true},
 	}
 	m.devices = detectDevices()
 	return m
@@ -124,6 +129,7 @@ func measurePPMs(devs []pagersdr.Device) {
 func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.lastCfg = cfg // remembered so Rescan can replay it after re-detecting SDRs
 
 	freqs := cfg.Frequencies
 	if len(freqs) == 0 {
@@ -177,6 +183,35 @@ func (m *readerManager) rebuild(comps map[string]agentcfg.ComponentCfg) {
 	sup.Start(subCtx)
 	m.sup = sup
 	m.supCancel = cancel
+}
+
+// Rescan stops the running readers, frees the dongles, re-detects the attached
+// SDRs (and re-measures ppm / re-assigns colliding serials), then replays the
+// last applied config so readers restart against the new device set. Used by the
+// staff "Recheck SDRs" button, e.g. to pick up a dongle that wasn't enumerated at
+// startup (USB still settling after a re-exec).
+func (m *readerManager) Rescan() error {
+	// Stop current readers first so rtl_test can open the dongles for detection.
+	m.mu.Lock()
+	if m.supCancel != nil {
+		m.supCancel()
+		m.supCancel = nil
+		m.sup = nil
+	}
+	cfg := m.lastCfg
+	m.mu.Unlock()
+
+	log.Printf("readers: rescan requested — stopped readers, re-detecting SDRs")
+	// Let the killed readers release their USB devices before rtl_test opens them.
+	time.Sleep(1500 * time.Millisecond)
+
+	devs := detectDevices()
+	m.mu.Lock()
+	m.devices = devs
+	m.mu.Unlock()
+	log.Printf("readers: rescan detected %d SDR device(s); re-applying readers", len(devs))
+
+	return m.Apply(cfg)
 }
 
 // Restart restarts a single named reader component (e.g. "reader:NSWRFS").

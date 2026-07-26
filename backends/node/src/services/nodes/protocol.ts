@@ -63,7 +63,8 @@ export type AgentCommandAction =
   | 'startChannel'
   | 'stopChannel'
   | 'tunerSet'
-  | 'pushConfig';
+  | 'pushConfig'
+  | 'rescanSdr';
 
 /** Runtime allowlist of commands staff may forward to an agent. Even though the
  *  cmd path is owner|dev-gated, validating the action here (rather than relaying
@@ -77,6 +78,7 @@ export const AGENT_COMMAND_ACTIONS: ReadonlySet<AgentCommandAction> = new Set([
   'stopChannel',
   'tunerSet',
   'pushConfig',
+  'rescanSdr',
 ]);
 
 export function isAgentCommandAction(a: unknown): a is AgentCommandAction {
