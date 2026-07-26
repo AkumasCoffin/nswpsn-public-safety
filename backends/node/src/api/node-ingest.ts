@@ -247,6 +247,16 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
+  // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
+  //     reception is visible even when the feed is off.
+  hub.recordPagerMessage(node.id, {
+    address: parsed.address,
+    message: parsed.message,
+    source: parsed.source,
+    freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+    at: Date.now(),
+  });
+
   // 6. Feed gate — accept + COUNT but don't forward when the feed is off (so
   //    reception still shows in the node's stats), ack so the queue drains.
   if (!node.feed_enabled) {

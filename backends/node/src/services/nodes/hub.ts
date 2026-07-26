@@ -39,6 +39,19 @@ const CMD_TIMEOUT_MS = 15_000;
 
 const UPLOAD_WINDOW_MS = 10 * 60 * 1000; // rolling "calls in the last 10 min"
 
+// How many recent pager messages to keep per node so opening the staff drawer
+// shows history immediately (in-memory, ephemeral — a live convenience buffer).
+const PAGER_BUFFER = 50;
+
+/** One decoded pager page kept in the per-node ring buffer / streamed to staff. */
+export interface PagerMessageView {
+  address: string;
+  message: string;
+  source: string; // reader label the page was heard on (e.g. NSWRFS / FRNSW)
+  freqMhz: number | null;
+  at: number; // epoch ms received
+}
+
 class NodeHub {
   private agents = new Map<string, AgentConn>();
   private staff = new Map<string, Set<StaffConn>>();
@@ -47,6 +60,18 @@ class NodeHub {
   // relay). In-memory + ephemeral: a rolling live signal, not durable stats
   // (node_call_stats owns the persisted per-day totals).
   private uploads = new Map<string, number[]>();
+  // Per-node ring buffer of recent decoded pager messages (newest last), so the
+  // staff drawer can show history the moment it subscribes.
+  private recentPager = new Map<string, PagerMessageView[]>();
+
+  /** Record a decoded pager message: keep it in the ring + push live to staff. */
+  recordPagerMessage(nodeId: string, msg: PagerMessageView): void {
+    const arr = this.recentPager.get(nodeId) ?? [];
+    arr.push(msg);
+    if (arr.length > PAGER_BUFFER) arr.splice(0, arr.length - PAGER_BUFFER);
+    this.recentPager.set(nodeId, arr);
+    this.broadcastToStaff(nodeId, 'pagerMessage', { nodeId, message: msg });
+  }
 
   /** Record one call successfully forwarded for a node (called by the relay). */
   recordUpload(nodeId: string): void {
@@ -241,6 +266,15 @@ class NodeHub {
       if (s.ws === ws) set.delete(s);
     }
     set.add({ ws, userId });
+    // Replay the recent pager message buffer so the drawer shows history at once.
+    const recent = this.recentPager.get(nodeId);
+    if (recent && recent.length && ws.readyState === ws.OPEN) {
+      try {
+        ws.send(envelope('pagerHistory', { nodeId, messages: recent }));
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   unsubscribeStaff(ws: WebSocket): void {
