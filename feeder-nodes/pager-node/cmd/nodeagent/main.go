@@ -221,10 +221,15 @@ func runAgent(ctx context.Context, configPath string) error {
 
 	// Reap any reader pipeline left running by a previous agent (a re-exec
 	// self-update keeps the PID/cgroup, so an orphaned rtl_fm survives holding a
-	// dongle open — SDR detection below would then fail to acquire it). Match the
-	// specific pipeline binaries so unrelated processes are never touched.
-	if n := supervise.KillStale([]string{"rtl_fm", "multimon-ng"}); n > 0 {
-		log.Printf("startup: reaped stale reader process match(es) before launch (%d term(s))", n)
+	// dongle open — SDR detection below would then fail to acquire it). Match on
+	// OUR reader-scripts directory path (unique to this agent's data dir), NOT a
+	// generic "rtl_fm"/"multimon-ng" — otherwise we'd kill an unrelated SDR tool
+	// on the same box (e.g. the operator's own Pagermon). KillStale kills the
+	// matched bash reader's whole process group so its rtl_fm/multimon children go
+	// with it.
+	readersDir := filepath.Join(cfg.DataDir, "readers")
+	if n := supervise.KillStale([]string{readersDir}); n > 0 {
+		log.Printf("startup: reaped stale reader group(s) before launch (%d)", n)
 	}
 
 	// Fetch the update manifest best-effort. The pager agent has no managed

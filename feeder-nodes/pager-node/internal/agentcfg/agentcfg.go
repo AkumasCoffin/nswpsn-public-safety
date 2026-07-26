@@ -4,7 +4,6 @@ package agentcfg
 import (
 	"crypto/rand"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"os"
@@ -114,7 +113,13 @@ func (c *Config) validateSecurity() error {
 			host = a
 		}
 		if !isLoopbackHost(host) {
-			log.Printf("WARNING: relay_addr %q is not loopback; the local relay is unauthenticated — any host that can reach it can inject messages under this node's identity", a)
+			// The relay is UNAUTHENTICATED — a non-loopback bind lets any host on
+			// the network POST forged pages under this node's identity. Refuse to
+			// run rather than merely warn (mirrors the server_url https refusal).
+			return fmt.Errorf(
+				"relay_addr %q must be loopback (127.0.0.1 / ::1 / localhost) — the local relay is unauthenticated and must not be exposed off-host",
+				a,
+			)
 		}
 	}
 	return nil

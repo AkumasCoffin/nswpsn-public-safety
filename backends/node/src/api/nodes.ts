@@ -415,6 +415,7 @@ nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
   const id = c.req.param('id');
   try {
     hub.forceDisconnectAgent(id);
+    hub.clearNode(id);
     const ok = await deleteNode(id);
     if (!ok) return c.json({ error: 'node not found' }, 404);
     _clearNodeTokenCache();

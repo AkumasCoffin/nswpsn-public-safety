@@ -2740,7 +2740,9 @@
       // Optional status metrics — render a small secondary row when present.
       const statusBits = [];
       if (st) {
-        if (st.queueDepth != null) statusBits.push({ label: 'queue', value: st.queueDepth });
+        // Only show the upload queue when there's an actual backlog — "queue 0"
+        // (the normal state) is noise.
+        if (st.queueDepth) statusBits.push({ label: 'queue', value: st.queueDepth });
         if (st.callsPerMin != null) statusBits.push({ label: 'calls/min', value: st.callsPerMin });
         if (st.uploadsPerMin != null) statusBits.push({ label: 'uploads/min', value: st.uploadsPerMin });
         if (st.errors != null) statusBits.push({ label: 'errors', value: st.errors });
@@ -3637,7 +3639,7 @@
       const comps = (st && st.components) || {};
       const readers = Object.keys(comps)
         .filter(k => k.indexOf('reader') === 0)
-        .map(k => ({ label: k.replace(/^reader:?/, '') || k, state: String(comps[k]) }));
+        .map(k => ({ comp: k, label: k.replace(/^reader:?/, '') || k, state: String(comps[k]) }));
       const online = !!(_ndNode && _ndNode.online);
       const msgs = Number((_ndNode && _ndNode.messagesLast10m) || 0);
       const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
@@ -3653,7 +3655,7 @@
           return `<tr>
             <td>${escapeHtml(r.label)}</td>
             <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}</td>
-            <td style="text-align:right;"><button class="btn btn-secondary btn-sm" onclick="_ndRestart('reader:${escapeHtml(r.label)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button></td>
+            <td style="text-align:right;"><button class="btn btn-secondary btn-sm" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button></td>
           </tr>`;
         }).join('');
       }
