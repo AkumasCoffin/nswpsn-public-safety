@@ -2840,16 +2840,19 @@
             <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
           </div>
           <div id="loc-view-map"></div>
-          <div class="loc-view-note">Approximate — randomised to ~5&nbsp;km for privacy. The circle marks the uncertainty; the exact location is not stored.</div>
+          <div class="loc-view-note">Privacy pin — randomised on the operator's device to a random spot within ~5&nbsp;km of the real antenna, so the exact location is never sent or stored. The ring shows that ~5&nbsp;km uncertainty.</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
       document.body.appendChild(overlay);
       const c = [node.lat, node.lon];
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
-      const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 11);
+      const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 12);
       L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
-      L.circle(c, { radius: 5000, color: '#38bdf8', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.1 }).addTo(map);
+      // Faint ring = the ~5km privacy uncertainty; the real antenna sits somewhere
+      // within it. The pin is the already-randomised point (never the true spot).
+      L.circle(c, { radius: 5000, color: '#38bdf8', weight: 1, opacity: 0.5, fillColor: '#38bdf8', fillOpacity: 0.06 }).addTo(map);
+      L.marker(c).addTo(map);
       _locViewMap = map;
       setTimeout(() => map.invalidateSize(), 80);
     }
