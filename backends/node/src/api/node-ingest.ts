@@ -260,6 +260,7 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   //     flood central Pagermon + the DB. Generous vs. real paging (a few/min);
   //     excess is ack'd + dropped so the agent's queue still drains.
   if (!pagerRateOk(node.id)) {
+    log.warn(`pager relay: RATE-LIMITED (dropped) node=${node.id.slice(0, 8)}`);
     return c.json({ ok: true, dropped: 'rate limit' });
   }
 
@@ -282,9 +283,15 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
+  // Trace EVERY received message (capcode + source only, never content) so a
+  // missing page can be traced to where it dropped: reception (never logged),
+  // blocklist, feed-off, or forwarded. Grep the backend log for "pager rx".
+  log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
+
   // 5a. Drop blocked capcodes (non-message data transmitters) entirely — no
   //     buffer, no forward. Ack so the agent's queue still drains.
   if (BLOCKED_CAPCODES.has(parsed.address)) {
+    log.info(`pager relay: BLOCKED capcode ${parsed.address} (dropped) node=${node.id.slice(0, 8)}`);
     return c.json({ ok: true, dropped: 'blocked capcode' });
   }
 
@@ -306,6 +313,7 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed (feed off)');
     }
+    log.info(`pager relay: FEED OFF, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
     return c.json({ ok: true, fed: false });
   }
 
