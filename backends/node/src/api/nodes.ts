@@ -46,8 +46,6 @@ import {
   GlobalConfigSchema,
   getAutoUpdate,
   setAutoUpdate,
-  getPagerIngest,
-  setPagerIngest,
 } from '../services/nodes/globalConfig.js';
 import { mintNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 
@@ -201,46 +199,6 @@ nodesRouter.post('/api/nodes/update-all', requireRole(canManageNodes), async (c)
   } catch (err) {
     log.error({ err }, 'Error triggering update-all');
     return c.json({ error: 'Failed to trigger update-all' }, 500);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Pagermon ingest target (central Pagermon the PAGER-node relay forwards into).
-// Server-only secret — GET never returns the key, only whether one is set.
-// Registered BEFORE /:id so the literal path wins.
-//   GET /api/nodes/pager-config  — { url, keySet }
-//   PUT /api/nodes/pager-config  — { url, apiKey? }  (omit apiKey to keep it)
-// ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes/pager-config', requireRole(canManageNodes), async (c) => {
-  try {
-    const p = await getPagerIngest();
-    return c.json({ url: p.url ?? '', keySet: !!p.apiKey });
-  } catch (err) {
-    log.error({ err }, 'Error fetching pager ingest config');
-    return c.json({ error: 'Failed to fetch pager config' }, 500);
-  }
-});
-
-const PagerConfigSchema = z.object({
-  url: z.string().url().max(2048).or(z.literal('')).nullable().optional(),
-  // Omit to leave the stored key unchanged; empty string clears it (env fallback).
-  apiKey: z.string().max(512).optional(),
-});
-
-nodesRouter.put('/api/nodes/pager-config', requireRole(canManageNodes), async (c) => {
-  try {
-    const body = await c.req.json().catch(() => null);
-    const parsed = PagerConfigSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
-    }
-    const url = parsed.data.url ? parsed.data.url : null;
-    await setPagerIngest(url, parsed.data.apiKey);
-    const p = await getPagerIngest();
-    return c.json({ url: p.url ?? '', keySet: !!p.apiKey });
-  } catch (err) {
-    log.error({ err }, 'Error saving pager ingest config');
-    return c.json({ error: 'Failed to save pager config' }, 500);
   }
 });
 

@@ -331,6 +331,13 @@
       gap: 1.1rem;
     }
     #nodes-grid .dev-card { padding: 1.3rem 1.35rem 1.1rem; }
+    /* Whole node card is a button opening the drawer. */
+    .node-card-btn { cursor: pointer; }
+    .node-card-btn:focus-visible { outline: 2px solid var(--accent, #38bdf8); outline-offset: 2px; }
+    .nd-card-open { margin-left: auto; align-self: center; color: var(--text-soft, #94a3b8); font-size: 0.8rem; }
+    /* Node controls inside the drawer (moved off the card). */
+    .nd-ctl-switches { display: flex; flex-direction: column; gap: 0.55rem; }
+    .nd-switch-row { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
 
     /* Card itself — icon + name + dot up top, big primary metric in the
        middle, secondary key/value row at the bottom. */
@@ -1652,9 +1659,6 @@
           <button class="btn btn-secondary btn-sm" onclick="openGlobalConfig()">
             <i class="fas fa-globe"></i> Global settings
           </button>
-          <button class="btn btn-secondary btn-sm" onclick="openPagerConfig()" title="Set the central Pagermon that pager nodes forward decoded pages into">
-            <i class="fas fa-tower-broadcast"></i> Pagermon
-          </button>
           <button class="btn btn-secondary btn-sm" onclick="loadNodes()">
             <i class="fas fa-sync-alt"></i> Refresh
           </button>
@@ -1711,6 +1715,12 @@
 
         <!-- Everything else flows below the spectrum in a reflowing grid. -->
         <div class="nd-panels">
+          <!-- Node controls (on/off, feed, key, location, delete) — moved off the card -->
+          <div class="nd-panel nd-span-all">
+            <div class="nd-panel-h"><i class="fas fa-toggle-on"></i> Node</div>
+            <div class="nd-panel-b" id="nd-node-ctl"></div>
+          </div>
+
           <!-- Controls -->
           <div class="nd-panel nd-span-all">
             <div class="nd-panel-h"><i class="fas fa-sliders"></i> Controls</div>
@@ -1830,35 +1840,6 @@
       <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
         <button class="btn btn-secondary" onclick="closeGlobalConfig()" style="flex: 1;">Cancel</button>
         <button class="btn btn-primary" onclick="_gcSave()" style="flex: 1;" id="gc-save-btn"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Pagermon ingest config -->
-  <div id="pager-config-modal" class="modal">
-    <div class="modal-content" style="max-width: 560px;">
-      <div class="modal-header">
-        <h2><i class="fas fa-tower-broadcast" style="color: var(--accent);"></i> Pagermon ingest</h2>
-        <button class="modal-close" onclick="closePagerConfig()">&times;</button>
-      </div>
-      <p style="color: var(--text-soft); font-size: 0.85rem; margin: 0 0 0.9rem;">
-        The central Pagermon that <b>pager</b> feeder nodes forward decoded pages into. Stored
-        server-side and <b>never sent to nodes</b> — the backend relays each page with this key,
-        so a node's Feed toggle is what cuts its feed.
-      </p>
-      <div class="credential-box">
-        <label>Pagermon URL</label>
-        <input type="url" id="pager-url" placeholder="https://pagermon.example.com"
-               style="width:100%; box-sizing:border-box; padding:0.5rem 0.6rem; background:var(--bg-input,#0f172a); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:7px;">
-      </div>
-      <div class="credential-box" style="margin-top:0.6rem;">
-        <label>API key <span id="pager-key-status" style="color:var(--text-soft); font-weight:400; font-size:0.75rem;"></span></label>
-        <input type="password" id="pager-key" placeholder="leave blank to keep current"
-               style="width:100%; box-sizing:border-box; padding:0.5rem 0.6rem; background:var(--bg-input,#0f172a); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:7px;">
-      </div>
-      <div style="display: flex; gap: 0.5rem; margin-top: 1.2rem;">
-        <button class="btn btn-secondary" onclick="closePagerConfig()" style="flex: 1;">Cancel</button>
-        <button class="btn btn-primary" onclick="savePagerConfig()" style="flex: 1;" id="pager-save-btn"><i class="fas fa-floppy-disk"></i> Save</button>
       </div>
     </div>
   </div>
@@ -2738,11 +2719,16 @@
             .map(b => `<span>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
         : '';
 
+      // The whole card is a button that opens the details drawer — all controls
+      // (on/off, feed, key, location, delete) now live inside the drawer.
       return `
-        <div class="dev-card">
+        <div class="dev-card node-card-btn" role="button" tabindex="0" title="Open node details"
+             onclick="openNodeDrawer('${jsArg(id)}')"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNodeDrawer('${jsArg(id)}')}">
           <div class="dev-card-head" style="padding-right: 0;">
             <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
             <div class="dev-card-name">${escapeHtml(name)} <span class="node-kind-badge">${escapeHtml(node.kind || 'radio')}</span></div>
+            <i class="fas fa-chevron-right nd-card-open" aria-hidden="true"></i>
           </div>
           <div class="node-versions">
             ${_nodeVer('agent', node.agentVersion)}
@@ -2756,39 +2742,6 @@
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
           ${statusRow}
-          <div class="node-enable-row">
-            <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${jsArg(id)}')">
-              <i class="fas fa-gauge-high"></i> Details
-            </button>
-            <span class="lbl" style="text-align: right;">Node ${enabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="Capture on/off. Off stops decoding (all channels) but the agent stays connected and re-enables live. To cut a node off entirely, delete or rotate its key.">
-              <input type="checkbox" ${enabled ? 'checked' : ''}
-                     onchange="toggleNode('${jsArg(id)}', this.checked, this)">
-              <span class="track"></span>
-            </label>
-          </div>
-          <div class="node-enable-row">
-            <div style="display:flex; gap:0.4rem;">
-              <button class="btn btn-secondary btn-sm ${(typeof node.lat === 'number') ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${(typeof node.lat === 'number') ? 'View antenna location' : 'No location set'}">
-                <i class="fas fa-location-dot"></i>
-              </button>
-              <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
-                <i class="fas fa-download"></i>
-              </button>
-              <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)">
-                <i class="fas fa-key"></i>
-              </button>
-              ${userPermissions.is_owner
-                ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
-                : ''}
-            </div>
-            <span class="lbl" style="text-align: right;">Feed → ${isPager ? 'Pagermon' : 'rdio'} ${feedEnabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="${isPager ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading — verify reception before feeding the live system.' : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading) — verify reception before feeding the live system."}">
-              <input type="checkbox" ${feedEnabled ? 'checked' : ''}
-                     onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
-              <span class="track"></span>
-            </label>
-          </div>
         </div>`;
     }
 
@@ -2804,6 +2757,11 @@
         return;
       }
       grid.innerHTML = allNodes.map(_nodeCard).join('');
+      // Keep the open drawer's moved controls in sync with the latest poll.
+      if (typeof _ndRenderNodeControls === 'function'
+          && document.getElementById('node-drawer')?.classList.contains('open')) {
+        _ndRenderNodeControls();
+      }
     }
 
     async function toggleNode(id, newValue, inputEl) {
@@ -3542,6 +3500,7 @@
     // --- Rendering ---
     function _ndRenderAll() {
       _ndBanner(null);
+      _ndRenderNodeControls();
       _ndRenderTuners();
       _ndRenderChannels();
       _ndRenderEvents();
@@ -3550,6 +3509,45 @@
       _ndRenderReaders();
       _ndCfgRender();
       _ndRenderCfgSync();
+    }
+
+    // Node controls moved off the card into the drawer: capture on/off, feed
+    // on/off, and the location / re-issue-key / delete actions. Reads the live
+    // node from allNodes so it reflects the latest polled state.
+    function _ndRenderNodeControls() {
+      const el = document.getElementById('nd-node-ctl');
+      if (!el) return;
+      const id = _ndNodeId;
+      const n = (allNodes || []).find(x => String(x.id) === String(id)) || _ndNode || {};
+      const enabled = n.enabled !== false;
+      const feedEnabled = n.feedEnabled === true;
+      const isPager = (n.kind || 'radio') === 'pager';
+      const located = typeof n.lat === 'number';
+      const feedTitle = isPager
+        ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
+        : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading).";
+      el.innerHTML = `
+        <div class="nd-ctl-switches">
+          <div class="nd-switch-row">
+            <label class="node-switch" title="Capture on/off. Off stops decoding but the agent stays connected and re-enables live.">
+              <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleNode('${jsArg(id)}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+            <span>Capture <b>${enabled ? 'on' : 'off'}</b></span>
+          </div>
+          <div class="nd-switch-row">
+            <label class="node-switch" title="${feedTitle}">
+              <input type="checkbox" ${feedEnabled ? 'checked' : ''} onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+            <span>Feed → ${isPager ? 'Pagermon' : 'rdio'} <b>${feedEnabled ? 'on' : 'off'}</b></span>
+          </div>
+        </div>
+        <div class="nd-controls" style="margin-top:0.8rem;">
+          <button class="btn btn-secondary btn-sm ${located ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${located ? 'View antenna location' : 'No location set'}"><i class="fas fa-location-dot"></i> Location</button>
+          <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)"><i class="fas fa-key"></i> Re-issue key</button>
+          ${userPermissions.is_owner ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i> Delete</button>` : ''}
+        </div>`;
     }
 
     // Pager drawer: render the per-frequency reader status from the live status
@@ -4926,58 +4924,6 @@
       if (modal) modal.style.display = 'none';
     }
 
-    // ── Pagermon ingest config (central Pagermon the pager nodes forward into) ──
-    async function openPagerConfig() {
-      const modal = document.getElementById('pager-config-modal');
-      if (!modal) return;
-      modal.style.display = 'flex';
-      const urlEl = document.getElementById('pager-url');
-      const keyEl = document.getElementById('pager-key');
-      const statusEl = document.getElementById('pager-key-status');
-      urlEl.value = ''; keyEl.value = ''; statusEl.textContent = 'loading…';
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/pager-config`, {
-          headers: { 'Authorization': await authHeader() },
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        urlEl.value = data.url || '';
-        statusEl.textContent = data.keySet ? '(a key is set — leave blank to keep it)' : '(no key set)';
-      } catch (e) {
-        statusEl.textContent = '';
-        showToast(`Failed to load Pagermon config: ${e.message}`, 'error');
-      }
-    }
-
-    function closePagerConfig() {
-      const modal = document.getElementById('pager-config-modal');
-      if (modal) modal.style.display = 'none';
-    }
-
-    async function savePagerConfig() {
-      const btn = document.getElementById('pager-save-btn');
-      const url = document.getElementById('pager-url').value.trim();
-      const key = document.getElementById('pager-key').value;
-      // Only send apiKey when the operator typed one (blank = keep the stored key).
-      const body = { url };
-      if (key !== '') body.apiKey = key;
-      const original = btn.innerHTML;
-      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/pager-config`, {
-          method: 'PUT',
-          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('Pagermon ingest saved.', 'success');
-        closePagerConfig();
-      } catch (e) {
-        showToast(`Failed to save Pagermon config: ${e.message}`, 'error');
-      } finally {
-        btn.disabled = false; btn.innerHTML = original;
-      }
-    }
 
     function _gcSetTab(name) {
       _gcTab = name;
