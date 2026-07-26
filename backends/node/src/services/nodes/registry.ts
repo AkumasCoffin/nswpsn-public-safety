@@ -5,6 +5,7 @@
  * lives in hub.ts and is merged on top by the API layer.
  */
 import { getPool } from '../../db/pool.js';
+import { randomUUID } from 'node:crypto';
 
 /** Feeder node types. Only 'radio' has a working agent today; 'pager'/'adsb'
  *  are provisionable now so their future agents slot in. */
@@ -12,6 +13,19 @@ export const NODE_KINDS = ['radio', 'pager', 'adsb'] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 export function isNodeKind(v: unknown): v is NodeKind {
   return typeof v === 'string' && (NODE_KINDS as readonly string[]).includes(v);
+}
+
+/** Auto-generated node name: `{kind}-{userslug}-{short-uuid}` (e.g.
+ *  radio-akumascoffin-a3f9c2d1). Unique + self-describing so operators don't
+ *  have to name each node. */
+export function autoNodeName(kind: string, username: string | null): string {
+  const slug =
+    (username || 'user')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'user';
+  return `${kind}-${slug}-${randomUUID().slice(0, 8)}`;
 }
 
 export interface NodeRow {

@@ -321,6 +321,7 @@
       color: var(--text-primary); padding: 0.55rem 0.7rem; font-family: inherit; font-size: 0.85rem;
     }
     .add-node .dl-btn { width: auto; margin: 0; white-space: nowrap; }
+    .add-node-hint { font-size: 0.75rem; color: var(--text-soft); margin: 0 0 0.5rem; }
     /* Per-node bits */
     .node-kind {
       font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
@@ -583,7 +584,6 @@
           </p>
 
           <div class="add-node">
-            <input id="new-node-name" type="text" placeholder="Node name (e.g. Home Scanner)" maxlength="120">
             <select id="new-node-kind" aria-label="Node type">
               <option value="radio">Radio (SDR-Trunk)</option>
               <option value="pager">Pager — coming soon</option>
@@ -591,6 +591,7 @@
             </select>
             <button class="dl-btn" onclick="addNode(this)"><i class="fas fa-plus"></i> Add node</button>
           </div>
+          <p class="add-node-hint">Nodes are named automatically (you can rename later). Pick a type and add.</p>
 
           <div class="section-h">Nodes</div>
           <div id="nodes-region">${nodesHtml}</div>
@@ -661,13 +662,9 @@
         </div>`;
     }
 
-    // Create a node (name + type) → mint its token → reveal once + refresh.
+    // Create a node (type only — auto-named server-side) → mint token → reveal.
     async function addNode(btn) {
-      const nameEl = document.getElementById('new-node-name');
-      const kindEl = document.getElementById('new-node-kind');
-      const name = (nameEl.value || '').trim();
-      const kind = kindEl.value;
-      if (!name) { showToast('Give the node a name first.', 'warn'); nameEl.focus(); return; }
+      const kind = document.getElementById('new-node-kind').value;
       const original = btn.innerHTML;
       btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding…';
       try {
@@ -676,12 +673,11 @@
         const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, kind }),
+          body: JSON.stringify({ kind }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         _nodeTokens[data.node.id] = data.token;
-        nameEl.value = '';
         showTokenModal(data.node, data.token);
         await refreshNodes();
       } catch (e) {
