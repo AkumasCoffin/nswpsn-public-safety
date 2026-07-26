@@ -893,7 +893,12 @@
         if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
         let token = _nodeTokens[nodeId];
         if (!token) {
-          if (!confirm('The installer needs a fresh key (the old one isn’t shown again). Re-issue this node’s key now?')) return;
+          // The key is shown once (hash-only at rest) and kept only in memory,
+          // so after a reload we must issue a fresh one. If the node has never
+          // connected there's no working installer to break — do it silently.
+          // Only warn once a machine has actually bound/run this node.
+          const everConnected = !!(n.installId || n.lastSeenAt);
+          if (everConnected && !confirm('This issues a NEW key for the node. The current installer stops working and the node must be re-installed with the new one. Continue?')) return;
           token = await rotateNodeToken(nodeId);
           if (!token) throw new Error('could not get a node key');
           await refreshNodes();
