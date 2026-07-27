@@ -290,13 +290,13 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   //      both the drawer buffer and Pagermon clean, without waiting for updates.
   const rawMessage = parsed.message;
   parsed.message = sanitizePagerText(parsed.message);
-  // DIAGNOSTIC: a framing mnemonic that SURVIVED the strip means the real bytes
-  // aren't the clean "… EOT" token we expect. Log them escaped (JSON.stringify
-  // renders control bytes as \u00XX and shows any brackets) so the exact form is
-  // visible. Grep the backend log for "pager msg mnemonic survived".
-  if (/(?:^|[^A-Za-z])(?:EOT|NUL|SOH|STX|ETX|ETB)(?:[^A-Za-z]|$)/.test(parsed.message)) {
+  // Invariant check: after cleaning, no bracketed mnemonic or control byte should
+  // remain. If one does, the cleaner missed a form — log it escaped (JSON.stringify
+  // renders control bytes as \u00XX and shows any brackets) so it's visible.
+  // Should stay silent now; grep the backend log for "pager msg not fully cleaned".
+  if (/<[A-Za-z]{2,3}>|[\u0000-\u001f\u007f]/.test(parsed.message)) {
     log.warn(
-      `pager msg mnemonic survived: raw=${JSON.stringify(rawMessage)} clean=${JSON.stringify(parsed.message)}`,
+      `pager msg not fully cleaned: raw=${JSON.stringify(rawMessage)} clean=${JSON.stringify(parsed.message)}`,
     );
   }
 
@@ -386,25 +386,26 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   return c.json({ error: 'upstream rejected', status: resp.status }, 502);
 });
 
-/** ASCII framing/terminator control-code NAMES some POCSAG decoders emit as
- *  literal text (EOT, NUL, STX, …) — all framing, never real content, none are
- *  English words. Mirrors the node agent's ctrlMnemonics. */
-const CTRL_MNEMONICS = new Set(['NUL', 'SOH', 'STX', 'ETX', 'EOT', 'ETB']);
+/** multimon-ng renders unprintable POCSAG control codes as BRACKETED mnemonics —
+ *  "<EOT>", "<NUL>", "<STX>", 2-letter "<CR>"/"<LF>", … — never real content.
+ *  Same class Pagermon's own reader.js strips (with /<[A-Za-z]{3}>/g); widened to
+ *  {2,3} for the 2-letter controls. */
+const BRACKET_MNEMONIC = /<[A-Za-z]{2,3}>/g;
 
-/** Strip a decoded POCSAG page's framing/padding artifacts: control bytes
- *  (< 0x20 and DEL 0x7F) and their leading/trailing text mnemonics ("EOT",
- *  "NUL"). Server-side mirror of the agent's cleanText, so pages stay clean even
- *  from a node still running an older agent. Only edges are touched. */
+/** Strip a decoded POCSAG page's framing/padding artifacts, mirroring both the
+ *  node agent's cleanText and Pagermon's reference reader: (1) raw control bytes
+ *  (< 0x20, DEL 0x7F) → space, (2) remove bracketed control mnemonics, (3) map
+ *  Ä/Ü to [ ] (POCSAG national chars), (4) collapse whitespace + trim. Kept
+ *  server-side too so pages stay clean even from a node on an older/other agent.
+ *  Unbracketed words (e.g. "CAN") are never touched. */
 function sanitizePagerText(s: string): string {
   let out = '';
   for (const ch of s) {
     const c = ch.codePointAt(0) ?? 0;
     out += c < 0x20 || c === 0x7f ? ' ' : ch;
   }
-  const fields = out.split(/\s+/).filter(Boolean);
-  while (fields.length && CTRL_MNEMONICS.has(fields[0]!)) fields.shift();
-  while (fields.length && CTRL_MNEMONICS.has(fields[fields.length - 1]!)) fields.pop();
-  return fields.join(' ');
+  out = out.replace(BRACKET_MNEMONIC, '').replace(/Ä/g, '[').replace(/Ü/g, ']');
+  return out.split(/\s+/).filter(Boolean).join(' ');
 }
 
 /** Pagermon's /api/messages expects `datetime` as a UNIX timestamp in SECONDS

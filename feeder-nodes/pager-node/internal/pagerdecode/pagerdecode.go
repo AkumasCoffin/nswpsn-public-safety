@@ -46,51 +46,36 @@ func ParseLine(line string) (*Message, bool) {
 	}, true
 }
 
-// ctrlMnemonics are ASCII framing/terminator control-code NAMES that some POCSAG
-// decoders emit as literal TEXT instead of the raw byte — e.g. a page ends with
-// EOT (0x04) shown as "EOT", starts with STX, or pads with NUL. All are message
-// framing, never real page content, and none are English words, so stripping
-// them at the message edges is safe. (The raw-byte forms are removed separately
-// below; this catches the text-mnemonic form.)
-var ctrlMnemonics = map[string]bool{
-	"NUL": true, // 0x00 padding
-	"SOH": true, // 0x01 start of heading
-	"STX": true, // 0x02 start of text
-	"ETX": true, // 0x03 end of text
-	"EOT": true, // 0x04 end of transmission
-	"ETB": true, // 0x17 end of block
-}
+// bracketMnemonicRe matches multimon-ng's bracketed control-code mnemonics — how
+// it renders unprintable POCSAG characters, e.g. "<EOT>", "<NUL>", "<STX>", and
+// 2-letter ones like "<CR>"/"<LF>". These are message framing, never real page
+// content. This is the same class Pagermon's own reader.js strips (with
+// /<[A-Za-z]{3}>/g); we widen to {2,3} to also catch the 2-letter controls.
+var bracketMnemonicRe = regexp.MustCompile(`<[A-Za-z]{2,3}>`)
+
+// natCharReplacer maps the POCSAG 7-bit national characters Ä/Ü to the [ ] they
+// stand in for on some paging networks (again mirroring Pagermon's reader.js).
+var natCharReplacer = strings.NewReplacer("Ä", "[", "Ü", "]")
 
 // cleanText strips the framing/padding artifacts a decoded POCSAG page carries.
-// Alpha pages are padded/terminated over the air with control codes (NUL 0x00,
-// EOT 0x04, …); depending on the decoder these arrive either as raw control
-// BYTES or as their literal text mnemonic ("NUL", "EOT"). Left in, they render
-// downstream as e.g. "MESSAGE NUL NUL" / "…288] EOT EOT". We (1) drop every
-// control byte (< 0x20 and DEL 0x7F), then (2) drop those same codes' text
-// mnemonics where they lead/trail the message. Printable content (POCSAG alpha
-// is 7-bit ASCII) is otherwise kept verbatim; only edges are touched so a real
-// mid-message word is never removed.
+// multimon-ng renders unprintable control codes as BRACKETED mnemonics
+// ("<EOT>", "<NUL>", …), so a page terminating on a control char comes out like
+// "…288] <EOT>"; some streams also carry raw control bytes. We (1) turn raw
+// control bytes into spaces, (2) remove the bracketed mnemonics, (3) map Ä/Ü to
+// [ ], then (4) collapse whitespace + trim. This mirrors Pagermon's reference
+// reader so our pages match what its normal readers produce. Real content
+// (unbracketed words like "CAN") is never touched.
 func cleanText(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		switch {
-		case r == '\t':
-			b.WriteByte(' ')
-		case r < 0x20 || r == 0x7f:
-			// Control byte (NUL/EOT/…): emit a space so words it sat between don't
-			// fuse; runs are collapsed below.
-			b.WriteByte(' ')
-		default:
+		if r < 0x20 || r == 0x7f {
+			b.WriteByte(' ') // raw control byte -> space (defense; runs collapsed below)
+		} else {
 			b.WriteRune(r)
 		}
 	}
-	fields := strings.Fields(b.String())
-	for len(fields) > 0 && ctrlMnemonics[fields[0]] {
-		fields = fields[1:]
-	}
-	for len(fields) > 0 && ctrlMnemonics[fields[len(fields)-1]] {
-		fields = fields[:len(fields)-1]
-	}
-	return strings.Join(fields, " ")
+	out := bracketMnemonicRe.ReplaceAllString(b.String(), "")
+	out = natCharReplacer.Replace(out)
+	return strings.Join(strings.Fields(out), " ")
 }
