@@ -288,7 +288,17 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   //      "EOT"/"NUL" text mnemonics), but doing it here as well keeps pages clean
   //      even when a node is still on an older agent that didn't — so it flows to
   //      both the drawer buffer and Pagermon clean, without waiting for updates.
+  const rawMessage = parsed.message;
   parsed.message = sanitizePagerText(parsed.message);
+  // DIAGNOSTIC: a framing mnemonic that SURVIVED the strip means the real bytes
+  // aren't the clean "… EOT" token we expect. Log them escaped (JSON.stringify
+  // renders control bytes as \u00XX and shows any brackets) so the exact form is
+  // visible. Grep the backend log for "pager msg mnemonic survived".
+  if (/(?:^|[^A-Za-z])(?:EOT|NUL|SOH|STX|ETX|ETB)(?:[^A-Za-z]|$)/.test(parsed.message)) {
+    log.warn(
+      `pager msg mnemonic survived: raw=${JSON.stringify(rawMessage)} clean=${JSON.stringify(parsed.message)}`,
+    );
+  }
 
   // Trace EVERY received message (capcode + source only, never content) so a
   // missing page can be traced to where it dropped: reception (never logged),
