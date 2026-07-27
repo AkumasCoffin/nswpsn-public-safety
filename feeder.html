@@ -634,7 +634,7 @@
       pager: { platforms: ['linux'] }, // rtl_fm | multimon-ng is a Linux stack
     };
     const hasAgent = (kind) => !!_kindAgent[kind];
-    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, createKind: null };
+    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, createKind: null, pinPlaced: false };
 
     // RFS zone list (grouped by Area Command) for the location picker dropdown.
     let _zoneGroups = null;
@@ -645,16 +645,20 @@
         const res = await fetch(`${API_BASE_URL}/api/feeder/zones`, {
           headers: jwt ? { 'Authorization': 'Bearer ' + jwt } : {},
         });
-        const data = await res.json().catch(() => ({}));
-        _zoneGroups = Array.isArray(data.groups) ? data.groups : [];
-      } catch (e) { _zoneGroups = []; }
-      return _zoneGroups;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const groups = Array.isArray(data.groups) ? data.groups : [];
+        // Only CACHE a non-empty list so a transient failure retries on the next
+        // open instead of sticking the picker with an empty dropdown.
+        if (groups.length) _zoneGroups = groups;
+        return groups;
+      } catch (e) { return []; }
     }
     function _zoneOptionsHtml(selected) {
       let out = `<option value="" ${selected ? '' : 'selected'} disabled>Select your RFS zone…</option>`;
       for (const g of (_zoneGroups || [])) {
         out += `<optgroup label="${escapeHtml(g.areaCommand)}">`;
-        for (const z of g.zones) {
+        for (const z of (g.zones || [])) {
           out += `<option value="${escapeHtml(z.name)}" ${z.name === selected ? 'selected' : ''}>${escapeHtml(z.name)}</option>`;
         }
         out += `</optgroup>`;
@@ -805,7 +809,13 @@
     // not before, so cancelling creates nothing. Then continue to the installer.
     async function addNode(btn) {
       const kind = document.getElementById('new-node-kind').value;
-      openLocationPicker(null, { createKind: kind, thenInstall: true });
+      const orig = btn ? btn.innerHTML : '';
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> …'; }
+      try {
+        await openLocationPicker(null, { createKind: kind, thenInstall: true });
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+      }
     }
 
     // Rotate a node's token (owner-scoped). Returns the new plaintext or null.
@@ -915,7 +925,12 @@
       const createMode = !!_loc.createKind;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
       const curZone = node.zone || '';
-      await loadZones();
+      const zones = await loadZones();
+      if (!zones.length) {
+        // No zones = can't pick one = can't create/save. Don't open a dead modal.
+        showToast('Could not load the RFS zone list. Check your connection and try again.', 'error');
+        return;
+      }
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
       overlay.className = 'modal-overlay';
@@ -955,7 +970,11 @@
       const map = L.map('loc-map', { layers: [dark] }).setView(center, zoomed ? 14 : 10);
       L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
       const marker = L.marker(center, { draggable: true }).addTo(map);
-      map.on('click', (e) => { marker.setLatLng(e.latlng); });
+      // An EXISTING pin is already "placed"; a fresh default marker is NOT — so we
+      // don't save the default Sydney coords unless the user actually moves/clicks it.
+      _loc.pinPlaced = !!zoomed;
+      marker.on('dragend', () => { _loc.pinPlaced = true; });
+      map.on('click', (e) => { marker.setLatLng(e.latlng); _loc.pinPlaced = true; });
       _loc.map = map; _loc.marker = marker;
       setTimeout(() => map.invalidateSize(), 80);
     }
@@ -1000,7 +1019,13 @@
       if (!zone) { showToast('Please select your RFS zone.', 'error'); return; }
       const pinOn = document.getElementById('loc-pin-on');
       let lat = null, lon = null;
-      if (pinOn && pinOn.checked && _loc.marker) {
+      if (pinOn && pinOn.checked) {
+        // Guard against saving the untouched default marker (Sydney CBD) as a real
+        // antenna location — require the user to actually place it, or untick the pin.
+        if (!_loc.marker || !_loc.pinPlaced) {
+          showToast('Click or drag the pin to your exact antenna location, or untick the exact-pin option.', 'error');
+          return;
+        }
         const c = _loc.marker.getLatLng();
         lat = c.lat; lon = c.lng;
       }
