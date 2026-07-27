@@ -42,6 +42,31 @@ func ParseLine(line string) (*Message, bool) {
 		Address:  strings.TrimSpace(m[1]),
 		Function: fn,
 		Alpha:    m[3] == "Alpha",
-		Text:     strings.TrimSpace(m[4]),
+		Text:     cleanText(m[4]),
 	}, true
+}
+
+// cleanText strips the control bytes multimon-ng passes through from a decoded
+// POCSAG page. Alpha pages are padded/terminated over the air with NUL (0x00)
+// and can carry stray C0 control bytes; left in, each renders downstream as
+// literal "NUL"/garbage (e.g. "MESSAGE NUL NUL"). We drop every control char
+// (< 0x20 and DEL 0x7F), turning any it leaves mid-text into a space, then
+// collapse runs of spaces and trim. Printable ASCII (POCSAG alpha is 7-bit) is
+// kept verbatim.
+func cleanText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteByte(' ')
+		case r < 0x20 || r == 0x7f:
+			// NUL padding and other control bytes: drop (emit a space so two words
+			// the padding sat between don't fuse), collapsed below.
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
