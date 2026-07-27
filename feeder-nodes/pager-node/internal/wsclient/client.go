@@ -78,6 +78,9 @@ type ConfigApplier interface {
 	// trigger a brief reader restart, so call in a goroutine.
 	AudioStart(label string) error
 	AudioStop() error
+	// SupportedGains returns the SDR's supported tuner-gain steps (dB) for the
+	// status heartbeat (staff gain dropdown), or nil if unknown.
+	SupportedGains() []float64
 }
 
 // StatusProvider returns the current reader component states (name -> status)
@@ -289,6 +292,7 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 		MemMB:         int(ms.Alloc / (1024 * 1024)),
 		DiskFreeMB:    0, // best-effort; not computed
 		ConfigVersion: c.appliedVersionPtr(),
+		PagerGains:    c.applier.SupportedGains(),
 	}
 	return c.writeType(conn, protocol.TypeStatus, st, "")
 }

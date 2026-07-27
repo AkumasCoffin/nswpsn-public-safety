@@ -3006,6 +3006,7 @@
     let _ndEvents = [];
     let _ndPagerMsgs = [];         // pager nodes: recent decoded pages (buffered server-side + live)
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
+    let _ndReadersSig = null;      // last-rendered pager Readers-panel signature (rebuild guard)
     let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
     let _ndAudioCtx = null;        // Web Audio context for the monitor
     let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)
@@ -3057,6 +3058,7 @@
       _ndStatus = null;
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
+      _ndReadersSig = null;
       _ndSpectrumTunerId = null;
       _ndAudioLabel = null; _ndAudioPlayhead = 0;
       try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
@@ -3705,7 +3707,7 @@
           const listening = _ndAudioLabel === r.label;
           return `<tr>
             <td>${escapeHtml(r.label)}</td>
-            <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}</td>
+            <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}${listening ? ' <span style="color:var(--accent,#38bdf8);font-weight:600;"><i class="fas fa-headphones"></i> monitoring</span>' : ''}</td>
             <td style="text-align:right; white-space:nowrap;">
               <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
               <button class="btn btn-secondary btn-sm" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button>
@@ -3719,7 +3721,34 @@
       const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
+      // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
+      // valid values; falls back to a free-text field if none are known yet.
+      const gains = (st && Array.isArray(st.pagerGains)) ? st.pagerGains : [];
+
+      // Rebuild-guard: this panel re-renders on every status frame (~15s). An
+      // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
+      // half-typed field mid-tune, so skip when nothing shown here changed.
+      const sig = JSON.stringify([online, readers.map(r => r.label + ':' + r.state),
+        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains]);
+      if (sig === _ndReadersSig) return;
+      _ndReadersSig = sig;
+
       const tuneInput = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem; width:6.5rem; text-align:right;';
+      const isAuto = /^auto$/i.test(gainVal);
+      let gainControl;
+      if (gains.length) {
+        let opts = `<option value="" ${gainVal === '' ? 'selected' : ''}>Default (49.6)</option>`
+                 + `<option value="auto" ${isAuto ? 'selected' : ''}>Auto (AGC)</option>`
+                 + gains.map(g => {
+                     const gs = String(g);
+                     const sel = (!isAuto && gainVal !== '' && Number(gainVal) === Number(g)) ? 'selected' : '';
+                     return `<option value="${escapeHtml(gs)}" ${sel}>${escapeHtml(gs)} dB</option>`;
+                   }).join('');
+        gainControl = `<select onchange="_ndSetPagerTuning({ gain: this.value }, this)" style="${tuneInput} width:auto; text-align:left;">${opts}</select>`;
+      } else {
+        gainControl = `<input type="text" value="${escapeHtml(gainVal)}" placeholder="49.6 / auto" style="${tuneInput}" onchange="_ndSetPagerTuning({ gain: this.value }, this)">`;
+      }
+
       el.innerHTML = `
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span>Single-SDR frequency</span>
@@ -3729,9 +3758,8 @@
           </select>
         </div>
         <div class="nd-switch-row" style="margin-bottom:0.5rem;">
-          <span title="Tuner gain in dB for all readers. Blank = agent default (49.6); &quot;auto&quot; = hardware AGC.">Gain (dB)</span>
-          <input type="text" value="${escapeHtml(gainVal)}" placeholder="49.6 / auto" style="${tuneInput}"
-            onchange="_ndSetPagerTuning({ gain: this.value }, this)">
+          <span title="Tuner gain for all readers. Default = agent default (49.6); Auto = hardware AGC; or pick a supported step.">Gain (dB)</span>
+          ${gainControl}
         </div>
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span title="Sample-clock correction (ppm) forced on all readers. Blank = auto-measure each startup.">PPM</span>

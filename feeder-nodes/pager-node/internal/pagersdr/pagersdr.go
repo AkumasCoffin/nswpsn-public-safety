@@ -24,9 +24,10 @@ import (
 
 // Device is one enumerated RTL-SDR dongle.
 type Device struct {
-	Index  int    // librtlsdr device index (as reported by rtl_test)
-	Serial string // USB serial ("SN:" from rtl_test); may be blank on unprogrammed clones
-	PPM    int    // measured sample-clock error (rtl_test -p); 0 if unmeasured
+	Index  int       // librtlsdr device index (as reported by rtl_test)
+	Serial string    // USB serial ("SN:" from rtl_test); may be blank on unprogrammed clones
+	PPM    int       // measured sample-clock error (rtl_test -p); 0 if unmeasured
+	Gains  []float64 // supported tuner-gain steps (dB) parsed from rtl_test; nil if unknown
 }
 
 const (
@@ -52,6 +53,10 @@ var deviceLineRe = regexp.MustCompile(`^\s*(\d+):\s+(.*)$`)
 // foundRe matches the "Found N device(s):" header that precedes the device list.
 var foundRe = regexp.MustCompile(`Found\s+\d+\s+device`)
 
+// gainsRe captures the space-separated gain list from rtl_test's line
+// "Supported gain values (29): 0.0 0.9 1.4 ... 49.6".
+var gainsRe = regexp.MustCompile(`Supported gain values\s*\(\d+\):\s*(.+)`)
+
 // Detect enumerates attached RTL-SDR dongles by running `rtl_test -t` (which
 // prints the device list to stderr, runs a brief tuner test, and exits) and
 // parsing its output. It returns a clear error if rtl_test is missing/fails and
@@ -73,6 +78,24 @@ func Detect() ([]Device, error) {
 		return nil, fmt.Errorf("%s reported no RTL-SDR devices", rtlTestBin)
 	}
 	return devs, nil
+}
+
+// parseGains extracts the supported tuner-gain steps (dB) from rtl_test output,
+// or nil if the line isn't present. rtl_test -t opens one device and prints its
+// tuner's gains; a node's dongles are the same model, so this list applies to
+// all of them.
+func parseGains(text string) []float64 {
+	m := gainsRe.FindStringSubmatch(text)
+	if m == nil {
+		return nil
+	}
+	var gains []float64
+	for _, tok := range strings.Fields(m[1]) {
+		if v, err := strconv.ParseFloat(tok, 64); err == nil {
+			gains = append(gains, v)
+		}
+	}
+	return gains
 }
 
 // parseDevices extracts the device list from rtl_test output. It starts
@@ -101,6 +124,13 @@ func parseDevices(text string) []Device {
 			continue
 		}
 		devs = append(devs, Device{Index: idx, Serial: extractSerial(m[2])})
+	}
+	// Attach the tuner's supported gain steps (same model across the node) to
+	// every device so a reader/UI can offer valid gains.
+	if gains := parseGains(text); len(gains) > 0 {
+		for i := range devs {
+			devs[i].Gains = gains
+		}
 	}
 	return devs
 }

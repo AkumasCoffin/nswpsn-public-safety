@@ -41,6 +41,9 @@ export interface StatusData {
   // Node readiness (null on older node builds).
   calibrated?: boolean | null;
   jmbeInstalled?: boolean | null;
+  // Pager nodes: the SDR's supported tuner-gain steps (dB) for the staff gain
+  // dropdown. Relayed to staff verbatim.
+  pagerGains?: number[];
 }
 
 export interface EventData {

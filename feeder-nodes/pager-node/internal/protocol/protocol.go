@@ -70,6 +70,10 @@ type Status struct {
 	// builds): CPU calibration done, and the JMBE voice codec installed.
 	Calibrated    *bool `json:"calibrated"`
 	JmbeInstalled *bool `json:"jmbeInstalled"`
+	// PagerGains lists the SDR's supported tuner-gain steps (dB), so staff can
+	// pick a valid value from a dropdown. Empty on non-pager nodes / if detection
+	// failed.
+	PagerGains []float64 `json:"pagerGains,omitempty"`
 }
 
 // HelloAck is the server's response to Hello.
