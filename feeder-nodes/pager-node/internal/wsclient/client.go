@@ -407,6 +407,17 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		Ppm:            raw.Pager.Ppm,
 	}
 
+	// No-op guard: the backend fans config out to EVERY online node on any global
+	// change, so a pager node keeps receiving pushes whose payload is byte-for-byte
+	// what it already runs (e.g. someone edited a RADIO channel). Re-applying would
+	// needlessly rebuild the readers (~2s decode gap), so if the pushed version
+	// matches what we've already applied, just re-ack and skip the apply.
+	if cfg.ConfigVersion != "" && cfg.ConfigVersion == c.getAppliedVersion() {
+		log.Printf("wsclient: config version %s already applied; skipping re-apply", cfg.ConfigVersion)
+		_ = c.sendMessage(protocol.TypeConfigApplied, protocol.ConfigApplied{ConfigVersion: cfg.ConfigVersion})
+		return
+	}
+
 	go func() {
 		c.applyMu.Lock()
 		defer c.applyMu.Unlock()
