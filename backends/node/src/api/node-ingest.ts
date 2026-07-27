@@ -369,14 +369,18 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   return c.json({ error: 'upstream rejected', status: resp.status }, 502);
 });
 
-/** Coerce the agent-supplied timestamp into an ISO string Pagermon accepts,
- *  falling back to now() when it's absent or unparseable. */
+/** Pagermon's /api/messages expects `datetime` as a UNIX timestamp in SECONDS
+ *  (its DB + our read path in sources/pager.ts both treat the column as unix
+ *  seconds). Sending an ISO string made Pagermon store an unparseable value and
+ *  render "Invalid date". We derive the seconds from the agent's timestamp,
+ *  which is stamped at DECODE/RECEIVE time on the node and preserved through the
+ *  upload queue — so the page carries when it was heard, not when it reached the
+ *  backend. Fall back to now() only if the agent sent nothing parseable. */
 function normalisePagerDatetime(ts: string | undefined): string {
-  if (ts) {
-    const d = new Date(ts);
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
-  }
-  return new Date().toISOString();
+  let ms = NaN;
+  if (ts) ms = new Date(ts).getTime();
+  if (Number.isNaN(ms)) ms = Date.now();
+  return String(Math.floor(ms / 1000));
 }
 
 // ---------------------------------------------------------------------------
