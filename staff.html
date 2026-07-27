@@ -3006,6 +3006,9 @@
     let _ndEvents = [];
     let _ndPagerMsgs = [];         // pager nodes: recent decoded pages (buffered server-side + live)
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
+    let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
+    let _ndAudioCtx = null;        // Web Audio context for the monitor
+    let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)
     let _ndReqSeq = 0;
     const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
     const _ndWf = {
@@ -3055,6 +3058,9 @@
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndSpectrumTunerId = null;
+      _ndAudioLabel = null; _ndAudioPlayhead = 0;
+      try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
+      _ndAudioCtx = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
       _ndPrevChan = {}; _ndCallStart = {};
       _ndWf.lastCenter = null; _ndWf.lastSr = null; _ndWf.lastBins = null;
@@ -3111,10 +3117,10 @@
           let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
           _ndHandleText(msg, authTimer);
         } else if (ev.data instanceof ArrayBuffer) {
-          _ndHandleSpectrum(ev.data);
+          _ndHandleBinary(ev.data);
         } else if (ev.data instanceof Blob) {
           // Fallback in case binaryType wasn't honoured.
-          ev.data.arrayBuffer().then(_ndHandleSpectrum).catch(() => {});
+          ev.data.arrayBuffer().then(_ndHandleBinary).catch(() => {});
         }
       };
 
@@ -3269,6 +3275,41 @@
     // Parse one BINARY spectrum frame (contract A, little-endian):
     //   u8 type=0x01 | u8 tunerIndex | u64 centerFreqHz | u32 sampleRateHz |
     //   u16 binCount | int8[binCount] dB
+    // Both spectrum (radio) and audio-monitor (pager) arrive as binary frames on
+    // the same socket; the first byte discriminates: 0x01 spectrum, 0x02 audio.
+    function _ndHandleBinary(buf) {
+      if (!buf || buf.byteLength < 1) return;
+      const type = new Uint8Array(buf, 0, 1)[0];
+      if (type === 0x02) _ndHandleAudio(buf);
+      else _ndHandleSpectrum(buf);
+    }
+
+    // Pager monitor audio frame: u8 type(0x02) | u8 reserved | u32 rate LE |
+    // u16 sampleCount LE | int16[] LE. Decode to float, schedule gap-free on the
+    // Web Audio clock so the beeps/signal play continuously while tuning.
+    function _ndHandleAudio(buf) {
+      if (_ndAudioLabel == null || !_ndAudioCtx) return; // not listening / no context
+      const dv = new DataView(buf);
+      if (dv.byteLength < 8) return;
+      if (dv.getUint8(0) !== 0x02) return;
+      const rate = dv.getUint32(2, true);
+      const count = dv.getUint16(6, true);
+      if (!rate || !count || dv.byteLength < 8 + count * 2) return;
+      const ctx = _ndAudioCtx;
+      const frame = ctx.createBuffer(1, count, rate);
+      const ch = frame.getChannelData(0);
+      for (let i = 0; i < count; i++) ch[i] = dv.getInt16(8 + i * 2, true) / 32768;
+      const src = ctx.createBufferSource();
+      src.buffer = frame;
+      src.connect(ctx.destination);
+      // Keep a small lead so network jitter doesn't cause gaps; if we've fallen
+      // behind (playhead in the past), resync to now + a short buffer.
+      const now = ctx.currentTime;
+      if (_ndAudioPlayhead < now + 0.05) _ndAudioPlayhead = now + 0.15;
+      src.start(_ndAudioPlayhead);
+      _ndAudioPlayhead += frame.duration;
+    }
+
     function _ndHandleSpectrum(buf) {
       const dv = new DataView(buf);
       if (dv.byteLength < 16) return;           // header is 1+1+8+4+2 = 16 bytes
@@ -3661,10 +3702,14 @@
       } else {
         rows = readers.map(r => {
           const running = /run/i.test(r.state);
+          const listening = _ndAudioLabel === r.label;
           return `<tr>
             <td>${escapeHtml(r.label)}</td>
             <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}</td>
-            <td style="text-align:right;"><button class="btn btn-secondary btn-sm" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button></td>
+            <td style="text-align:right; white-space:nowrap;">
+              <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button>
+            </td>
           </tr>`;
         }).join('');
       }
@@ -3705,6 +3750,9 @@
 
     // Staff: set the pager node's single-SDR primary frequency (persisted + live).
     async function _ndSetPagerPrimary(primary, el) {
+      // Switching frequency swaps the reader label, so any running audio monitor
+      // no longer matches — stop it so the UI/tap don't get stranded.
+      if (_ndAudioLabel != null) _ndAudioStop();
       if (el) el.disabled = true;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-primary`, {
@@ -3761,6 +3809,33 @@
       } finally {
         if (el) el.disabled = false;
       }
+    }
+
+    // Staff: toggle the browser audio monitor for one reader. Starting/stopping
+    // restarts that reader (~2s) so it (dis)connects the audio tap. Only one
+    // reader can be monitored at a time (the agent taps a single label).
+    function _ndAudioToggle(label) {
+      if (_ndAudioLabel === label) { _ndAudioStop(); return; }
+      if (_ndAudioLabel != null) { try { _ndWsSend({ t: 'audioStop', data: { nodeId: _ndNodeId } }); } catch (e) {} }
+      try {
+        if (!_ndAudioCtx) _ndAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (_ndAudioCtx.state === 'suspended') _ndAudioCtx.resume();
+      } catch (e) { showToast('Audio playback not supported in this browser.', 'error'); return; }
+      _ndAudioLabel = label;
+      _ndAudioPlayhead = 0;
+      _ndWsSend({ t: 'audioStart', data: { nodeId: _ndNodeId, label } });
+      showToast(`Starting audio monitor for ${label} — reader restarts (~2s).`, 'success');
+      _ndRenderReaders();
+    }
+
+    function _ndAudioStop() {
+      if (_ndAudioLabel == null) return;
+      try { _ndWsSend({ t: 'audioStop', data: { nodeId: _ndNodeId } }); } catch (e) {}
+      _ndAudioLabel = null;
+      _ndAudioPlayhead = 0;
+      try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
+      _ndAudioCtx = null;
+      _ndRenderReaders();
     }
 
     // Recheck SDRs: agent stops readers, re-detects the dongles (re-measures ppm),
@@ -5041,9 +5116,18 @@
         if (_ndSpectrumTunerId != null) {
           _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
         }
+        if (_ndAudioLabel != null) {
+          _ndWsSend({ t: 'audioStop', data: { nodeId: _ndNodeId } });
+        }
         _ndWsSend({ t: 'unsubscribeNode', data: { nodeId: _ndNodeId } });
       }
       _ndSpectrumTunerId = null;
+      // Tear down the monitor audio context (frees the tab's audio; the tap on
+      // the node stops via the audioStop above / reader rebuild).
+      _ndAudioLabel = null;
+      _ndAudioPlayhead = 0;
+      try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
+      _ndAudioCtx = null;
       if (_ndWs) { try { _ndWs.onclose = null; _ndWs.close(); } catch (e) {} _ndWs = null; }
       _ndAuthed = false;
       _ndStopNpTicker();

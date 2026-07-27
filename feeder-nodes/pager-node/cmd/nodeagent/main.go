@@ -269,6 +269,10 @@ func runAgent(ctx context.Context, configPath string) error {
 	// status provider (reader component states).
 	ws := wsclient.New(cfg, q, readerMgr, readerMgr.Status)
 
+	// The monitor-audio tap (reader tee -> relay /audio) forwards framed PCM up
+	// the WS as binary frames; the backend relays them to subscribed staff.
+	listener.SetAudioSink(func(b []byte) { _ = ws.SendBinary(b) })
+
 	// The queue sender POSTs each buffered message to the backend relay.
 	sender := newSender(cfg)
 

@@ -25,7 +25,12 @@ const (
 	TypeCmd           = "cmd"
 	TypeSpectrumStart = "spectrumStart"
 	TypeSpectrumStop  = "spectrumStop"
-	TypeDisabled      = "disabled"
+	// TypeAudioStart/Stop toggle streaming a reader's rtl_fm audio to staff (for
+	// tuning). Handled directly by the agent (not via the 'cmd' allowlist), like
+	// spectrum. AudioStart carries { label } naming the reader to tap.
+	TypeAudioStart = "audioStart"
+	TypeAudioStop  = "audioStop"
+	TypeDisabled   = "disabled"
 )
 
 // Envelope is the outer frame for every message.

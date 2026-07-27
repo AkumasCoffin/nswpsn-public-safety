@@ -384,7 +384,13 @@ async function handleStaffMessage(
       return;
     }
     case 'spectrumStart':
-    case 'spectrumStop': {
+    case 'spectrumStop':
+    case 'audioStart':
+    case 'audioStop': {
+      // Live stream control (spectrum for radio, audio monitor for pager):
+      // forwarded straight to the agent, which streams binary frames back that
+      // the hub relays to this staff subscriber. Not in the 'cmd' allowlist by
+      // design — these are transient stream toggles, not durable node commands.
       const d = (data ?? {}) as { nodeId?: string };
       if (!d.nodeId) return;
       hub.sendToAgent(d.nodeId, t, data);

@@ -70,13 +70,15 @@ type readerManager struct {
 	dataDir    string
 	readersDir string
 	relayURL   string
+	audioURL   string
 
-	rescanMu  sync.Mutex // single-flights Rescan (SDR detection can't run twice at once)
-	mu        sync.Mutex
-	devices   []pagersdr.Device
-	sup       *supervise.Supervisor
-	supCancel context.CancelFunc
-	lastCfg   wsclient.PagerConfig // last applied config, replayed on Rescan
+	rescanMu   sync.Mutex // single-flights Rescan (SDR detection can't run twice at once)
+	mu         sync.Mutex
+	devices    []pagersdr.Device
+	sup        *supervise.Supervisor
+	supCancel  context.CancelFunc
+	lastCfg    wsclient.PagerConfig // last applied config, replayed on Rescan
+	audioLabel string               // reader label currently tapped for browser audio ("" = none)
 }
 
 // newReaderManager detects + de-duplicates the attached SDR serials (best-effort;
@@ -89,6 +91,7 @@ func newReaderManager(rootCtx context.Context, dataDir, relayAddr string) *reade
 		dataDir:    dataDir,
 		readersDir: filepath.Join(dataDir, "readers"),
 		relayURL:   "http://" + relayAddr + "/pager",
+		audioURL:   "http://" + relayAddr + "/audio",
 		// Sensible default until the first configPush / Apply, so a Rescan before
 		// any config still (re)starts readers rather than leaving them disabled.
 		lastCfg: wsclient.PagerConfig{CaptureEnabled: true, FeedEnabled: true},
@@ -208,11 +211,17 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 		if cfg.Ppm != nil {
 			ppm = *cfg.Ppm
 		}
-		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, ppm, gain, protocols, m.relayURL)
+		// Tap this reader's audio to the loopback relay only while staff are
+		// monitoring THIS label (browser "Listen"); others get no tee (no overhead).
+		audioURL := ""
+		if m.audioLabel != "" && m.audioLabel == label {
+			audioURL = m.audioURL
+		}
+		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, ppm, gain, protocols, m.relayURL, audioURL)
 		if err != nil {
 			return fmt.Errorf("write reader script for %s: %w", label, err)
 		}
-		log.Printf("readers: %s -> %.4f MHz on SDR serial %q ppm=%d gain=%q (%s)", label, freqs[i].MHz, dev.Serial, ppm, gain, scriptPath)
+		log.Printf("readers: %s -> %.4f MHz on SDR serial %q ppm=%d gain=%q audio=%t (%s)", label, freqs[i].MHz, dev.Serial, ppm, gain, audioURL != "", scriptPath)
 		comps["reader:"+label] = agentcfg.ComponentCfg{
 			Enabled: cfg.CaptureEnabled,
 			Command: "bash",
@@ -277,6 +286,34 @@ func (m *readerManager) Rescan() error {
 	m.mu.Unlock()
 	log.Printf("readers: rescan detected %d SDR device(s); re-applying readers", len(devs))
 
+	return m.Apply(cfg)
+}
+
+// AudioStart taps the named reader's rtl_fm audio for the browser monitor by
+// rebuilding that reader with a tee to the loopback relay's /audio endpoint. The
+// label matches a frequency label (e.g. "NSWRFS"); a "reader:" prefix from the
+// staff UI is tolerated. Triggers a brief reader restart (the USB-settle applies).
+func (m *readerManager) AudioStart(label string) error {
+	label = strings.TrimPrefix(strings.TrimSpace(label), "reader:")
+	m.mu.Lock()
+	m.audioLabel = label
+	cfg := m.lastCfg
+	m.mu.Unlock()
+	log.Printf("readers: audio monitor start for %q", label)
+	return m.Apply(cfg)
+}
+
+// AudioStop clears the audio tap and rebuilds the readers without the tee.
+func (m *readerManager) AudioStop() error {
+	m.mu.Lock()
+	had := m.audioLabel
+	m.audioLabel = ""
+	cfg := m.lastCfg
+	m.mu.Unlock()
+	if had == "" {
+		return nil // nothing was tapping; avoid a needless reader restart
+	}
+	log.Printf("readers: audio monitor stop (was %q)", had)
 	return m.Apply(cfg)
 }
 
