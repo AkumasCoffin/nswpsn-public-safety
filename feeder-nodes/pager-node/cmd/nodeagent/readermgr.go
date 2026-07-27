@@ -328,6 +328,18 @@ func (m *readerManager) Restart(component string) error {
 	return sup.Restart(component)
 }
 
+// SupportedGains returns the SDR's supported tuner-gain steps (dB) for the staff
+// gain dropdown, or nil if not detected. The dongles are the same model, so the
+// first device's list represents the node.
+func (m *readerManager) SupportedGains() []float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.devices) > 0 {
+		return m.devices[0].Gains
+	}
+	return nil
+}
+
 // Status returns the reader component states normalized to "running"/"stopped"
 // for the heartbeat.
 func (m *readerManager) Status() map[string]string {
