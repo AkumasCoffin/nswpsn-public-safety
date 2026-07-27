@@ -561,13 +561,20 @@ func (c *Client) sendMessage(t string, data any) error {
 	return conn.WriteMessage(websocket.TextMessage, b)
 }
 
-// loadAppliedVersion reads the persisted applied config version into memory.
+// loadAppliedVersion seeds the reported config version from the persisted FULL
+// config, which is the single source of truth: the version is only trustworthy
+// if we can actually replay the config it names on boot. A node upgraded from an
+// older agent has the legacy version file but no full config — reporting that
+// stale version would make the backend skip the push (version matches) while the
+// node runs the default plan, stranding it on the wrong frequency. Reporting ""
+// instead forces a push that both corrects the readers and writes the full
+// config, so subsequent restarts resume cleanly.
 func (c *Client) loadAppliedVersion() {
-	b, err := os.ReadFile(c.cfg.AppliedConfigVersionPath())
-	if err != nil {
-		return
+	pc, ok := LoadPersistedConfig(c.cfg)
+	if !ok {
+		return // no trustworthy config → report "" and let the backend push
 	}
-	c.setAppliedVersion(strings.TrimSpace(string(b)))
+	c.setAppliedVersion(strings.TrimSpace(pc.ConfigVersion))
 }
 
 func (c *Client) setAppliedVersion(v string) {
