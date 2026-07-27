@@ -26,7 +26,7 @@ const maxReaders = 2
 // supplies one, in priority order (1 SDR -> first only; 2+ -> first two).
 var defaultPagerFrequencies = []wsclient.PagerFrequency{
 	{Label: "NSWRFS", MHz: 148.5875}, // NSW Rural Fire Service
-	{Label: "FRNSW", MHz: 148.9625},  // Fire & Rescue NSW
+	{Label: "FRNSW", MHz: 148.9875},  // Fire & Rescue NSW
 }
 
 // defaultPagerProtocols is the locked POCSAG demodulator set.

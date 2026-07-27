@@ -121,7 +121,7 @@ export interface ConfigPayload {
 // preference (config_override.pagerPrimary), default NSWRFS.
 const PAGER_FREQUENCIES: PagerFreq[] = [
   { label: 'NSWRFS', mhz: 148.5875 },
-  { label: 'FRNSW', mhz: 148.9625 },
+  { label: 'FRNSW', mhz: 148.9875 },
 ];
 const PAGER_PROTOCOLS = ['POCSAG512', 'POCSAG1200', 'POCSAG2400'];
 export const PAGER_PRIMARY_LABELS = ['NSWRFS', 'FRNSW'] as const;

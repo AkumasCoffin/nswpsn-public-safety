@@ -32,7 +32,7 @@ describe('buildConfigPayload (pager)', () => {
   it('returns a lean pager payload: NSW RFS + FRNSW frequencies, POCSAG rates, no rdio doc', async () => {
     const p = await buildConfigPayload(pagerNode());
     expect(p.pager).toBeDefined();
-    expect(p.pager!.frequencies.map((f) => f.mhz)).toEqual([148.5875, 148.9625]);
+    expect(p.pager!.frequencies.map((f) => f.mhz)).toEqual([148.5875, 148.9875]);
     expect(p.pager!.frequencies[0]!.label).toBe('NSWRFS');
     expect(p.pager!.protocols).toEqual(['POCSAG512', 'POCSAG1200', 'POCSAG2400']);
     // No radio payload leaks into a pager node.
