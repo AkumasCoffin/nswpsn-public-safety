@@ -46,13 +46,30 @@ func ParseLine(line string) (*Message, bool) {
 	}, true
 }
 
-// cleanText strips the control bytes multimon-ng passes through from a decoded
-// POCSAG page. Alpha pages are padded/terminated over the air with NUL (0x00)
-// and can carry stray C0 control bytes; left in, each renders downstream as
-// literal "NUL"/garbage (e.g. "MESSAGE NUL NUL"). We drop every control char
-// (< 0x20 and DEL 0x7F), turning any it leaves mid-text into a space, then
-// collapse runs of spaces and trim. Printable ASCII (POCSAG alpha is 7-bit) is
-// kept verbatim.
+// ctrlMnemonics are ASCII framing/terminator control-code NAMES that some POCSAG
+// decoders emit as literal TEXT instead of the raw byte — e.g. a page ends with
+// EOT (0x04) shown as "EOT", starts with STX, or pads with NUL. All are message
+// framing, never real page content, and none are English words, so stripping
+// them at the message edges is safe. (The raw-byte forms are removed separately
+// below; this catches the text-mnemonic form.)
+var ctrlMnemonics = map[string]bool{
+	"NUL": true, // 0x00 padding
+	"SOH": true, // 0x01 start of heading
+	"STX": true, // 0x02 start of text
+	"ETX": true, // 0x03 end of text
+	"EOT": true, // 0x04 end of transmission
+	"ETB": true, // 0x17 end of block
+}
+
+// cleanText strips the framing/padding artifacts a decoded POCSAG page carries.
+// Alpha pages are padded/terminated over the air with control codes (NUL 0x00,
+// EOT 0x04, …); depending on the decoder these arrive either as raw control
+// BYTES or as their literal text mnemonic ("NUL", "EOT"). Left in, they render
+// downstream as e.g. "MESSAGE NUL NUL" / "…288] EOT EOT". We (1) drop every
+// control byte (< 0x20 and DEL 0x7F), then (2) drop those same codes' text
+// mnemonics where they lead/trail the message. Printable content (POCSAG alpha
+// is 7-bit ASCII) is otherwise kept verbatim; only edges are touched so a real
+// mid-message word is never removed.
 func cleanText(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -61,12 +78,19 @@ func cleanText(s string) string {
 		case r == '\t':
 			b.WriteByte(' ')
 		case r < 0x20 || r == 0x7f:
-			// NUL padding and other control bytes: drop (emit a space so two words
-			// the padding sat between don't fuse), collapsed below.
+			// Control byte (NUL/EOT/…): emit a space so words it sat between don't
+			// fuse; runs are collapsed below.
 			b.WriteByte(' ')
 		default:
 			b.WriteRune(r)
 		}
 	}
-	return strings.Join(strings.Fields(b.String()), " ")
+	fields := strings.Fields(b.String())
+	for len(fields) > 0 && ctrlMnemonics[fields[0]] {
+		fields = fields[1:]
+	}
+	for len(fields) > 0 && ctrlMnemonics[fields[len(fields)-1]] {
+		fields = fields[:len(fields)-1]
+	}
+	return strings.Join(fields, " ")
 }

@@ -87,6 +87,50 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
+			name:   "trailing EOT mnemonics (literal text) stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: FIRECALL OLD GLEN INNES RD [152.66218,-29.848288] EOT EOT",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "FIRECALL OLD GLEN INNES RD [152.66218,-29.848288]",
+			},
+		},
+		{
+			name:   "leading STX + trailing EOT mnemonic stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: STX HELLO WORLD EOT",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "HELLO WORLD",
+			},
+		},
+		{
+			name:   "raw EOT control byte stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: HELLO\x04\x04",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "HELLO",
+			},
+		},
+		{
+			name:   "real word CAN not stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: DO WHAT YOU CAN",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "DO WHAT YOU CAN",
+			},
+		},
+		{
 			name:   "non-matching banner",
 			line:   "Enabled demodulators: POCSAG512 POCSAG1200 POCSAG2400",
 			wantOK: false,
