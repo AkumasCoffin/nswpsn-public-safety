@@ -8,14 +8,14 @@
   
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://nswpsn.forcequit.xyz/editor-signup.html">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/signup.html">
   <meta property="og:title" content="Become a Forcequit Editor">
   <meta property="og:description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
   
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/editor-signup.html">
+  <meta name="twitter:url" content="https://nswpsn.forcequit.xyz/signup.html">
   <meta name="twitter:title" content="Become a Forcequit Editor">
   <meta name="twitter:description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
@@ -24,7 +24,7 @@
   <meta name="description" content="Request editor access to contribute to NSW PSN - the real-time emergency services map for New South Wales.">
   <meta name="theme-color" content="#f97316">
   
-  <link rel="canonical" href="https://nswpsn.forcequit.xyz/editor-signup">
+  <link rel="canonical" href="https://nswpsn.forcequit.xyz/signup">
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -948,7 +948,7 @@
           if (suError) {
             const already = /already|registered|exists/i.test(suError.message || '');
             messageEl.innerHTML = already
-              ? 'This email already has an account — <a href="login.html?redirect=/editor-signup.html" style="color:var(--accent);">sign in</a> and then submit your request.'
+              ? 'This email already has an account — <a href="login.html?redirect=/signup.html" style="color:var(--accent);">sign in</a> and then submit your request.'
               : escapeHtmlSignup(suError.message || 'Could not create your account.');
             messageEl.className = 'message error';
             submitBtn.disabled = false;
@@ -960,7 +960,7 @@
             // user to confirm + sign in, then resubmit (form stays filled) so
             // the request links to their verified account.
             messageEl.innerHTML = 'Account created! Check your email to confirm your address, then '
-              + '<a href="login.html?redirect=/editor-signup.html" style="color:var(--accent);">sign in</a> '
+              + '<a href="login.html?redirect=/signup.html" style="color:var(--accent);">sign in</a> '
               + 'and press Submit Request again to send your request.';
             messageEl.className = 'message success';
             submitBtn.disabled = false;

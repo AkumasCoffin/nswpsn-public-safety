@@ -138,7 +138,11 @@ export async function resolveNodeToken(token: string): Promise<ResolveResult> {
   }
 
   if (!entry) return { ok: false, reason: 'bad_token' };
-  if (!(await hasRole(entry.userId, ['radio_contributor']))) {
+  // Ongoing role gate, matched to the node's KIND: a pager node needs
+  // pager_contributor, radio (and adsb) needs radio_contributor. Losing the
+  // relevant role stops that user's nodes of that kind.
+  const neededRole = entry.kind === 'pager' ? 'pager_contributor' : 'radio_contributor';
+  if (!(await hasRole(entry.userId, [neededRole]))) {
     return { ok: false, reason: 'no_role' };
   }
   return {

@@ -114,8 +114,26 @@ const Schema = z.object({
   // the pager source skips polling and `/api/pager/hits` returns an
   // empty FeatureCollection. Mirrors Python's PAGERMON_URL +
   // PAGERMON_API_KEY at external_api_proxy.py:791-792.
+  // NOTE: this is the READ path (we poll it to draw pages on the map).
   PAGERMON_URL: z.string().optional(),
   PAGERMON_API_KEY: z.string().optional(),
+
+  // Central Pagermon the PAGER feeder-node relay forwards INTO (the inverse of
+  // the read path above). Pager nodes decode POCSAG locally and relay each
+  // message to /api/node-ingest/pager-upload, which forwards it here with the
+  // server-held apikey — so the key stays server-side and a node's enable/feed
+  // toggle is what cuts its feed. Distinct from PAGERMON_URL on purpose. These
+  // are the FALLBACK/default; the staff-set DB values (feeder_global_config)
+  // take precedence. When neither is set, pager-upload returns 503.
+  PAGERMON_INGEST_URL: z.string().optional(),
+  PAGERMON_INGEST_API_KEY: z.string().optional(),
+
+  // Pager capcodes to DROP from the relay (comma-separated) — non-message
+  // transmitters that clutter the feed with encoded/binary data frames rather
+  // than human-readable pages (e.g. FRNSW 521839 fires ~1/min of base64 data).
+  // Dropped before the Pagermon forward AND the staff drawer buffer. Defaults to
+  // 521839; set to empty to block nothing, or add more comma-separated capcodes.
+  PAGER_BLOCKED_CAPCODES: z.string().default('521839'),
 
   // Supabase project URL — used by /api/users (Auth Admin API listing)
   // and the JWT issuer-claim check. Mirrors Python's SUPABASE_URL.

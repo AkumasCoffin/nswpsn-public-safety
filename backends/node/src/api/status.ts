@@ -379,6 +379,45 @@ function checkRdioScheduler(nowMs: number): Record<string, unknown> {
   };
 }
 
+// Friendly display labels for the Data Sources health panel, keyed by the actual
+// registered source name (allSources()). Without these the dev panel shows raw
+// snake_case (e.g. "traffic_roadwork"). Each label names the real UPSTREAM
+// provider so a glance tells you where the data comes from (all traffic_* feeds
+// are LiveTraffic / Transport for NSW). Unlisted names fall back to Title Case.
+const SOURCE_LABELS: Record<string, string> = {
+  rfs_incidents: 'RFS incidents',
+  bom_warnings: 'BOM warnings',
+  pager: 'Pagermon',
+  traffic_incidents: 'LiveTraffic — incidents',
+  traffic_roadwork: 'LiveTraffic — roadwork',
+  traffic_flood: 'LiveTraffic — flood',
+  traffic_fire: 'LiveTraffic — fire',
+  traffic_majorevent: 'LiveTraffic — major events',
+  traffic_cameras: 'LiveTraffic — cameras',
+  beachwatch: 'Beachwatch',
+  beachsafe: 'BeachSafe',
+  weather_current: 'BOM weather',
+  weather_radar: 'RainViewer radar',
+  aviation_cameras: 'Airservices cameras',
+  endeavour_current: 'Endeavour outages',
+  endeavour_planned: 'Endeavour planned',
+  endeavour_maintenance: 'Endeavour maintenance',
+  ausgrid: 'Ausgrid outages',
+  ausgrid_stats: 'Ausgrid stats',
+  essential_current: 'Essential Energy outages',
+  essential_future: 'Essential Energy planned',
+  firms_hotspots: 'NASA FIRMS hotspots',
+  adsb_aircraft: 'ADS-B aircraft',
+  user_incidents: 'User reports',
+};
+
+function sourceLabel(name: string): string {
+  return (
+    SOURCE_LABELS[name] ??
+    name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
 function summariseSources(nowMs: number): {
   block: Record<string, Record<string, unknown>>;
   counts: { ok: number; unknown: number; total: number };
@@ -401,6 +440,7 @@ function summariseSources(nowMs: number): {
       ok: has,
       status,
       family: s.family,
+      label: sourceLabel(s.name),
       last_success_age_secs:
         m?.last_ok_at != null ? nowSec - m.last_ok_at : null,
       last_error_age_secs:
