@@ -92,6 +92,11 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     // Pager tuner overrides (persisted); null when unset (agent uses defaults).
     pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
     pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,
+    // Self-update in progress (agent swapping/re-execing) — shown as "updating"
+    // instead of offline during the brief disconnect.
+    updating: hub.isUpdating(node.id),
+    // Pager: reader labels currently decoding (e.g. ['NSWRFS','FRNSW']).
+    pagerDecoding: node.kind === 'pager' ? hub.pagerDecoding(node.id) : null,
   };
 }
 

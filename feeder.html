@@ -313,6 +313,9 @@
     .node-chip.ok { color: #86efac; border-color: rgba(34, 197, 94, 0.45); background: rgba(34, 197, 94, 0.13); }
     .node-chip.warn { color: #fcd34d; border-color: rgba(234, 179, 8, 0.45); background: rgba(234, 179, 8, 0.13); }
     .node-chip.off { opacity: 0.6; }
+    .node-chip.updating { color: #c084fc; border-color: rgba(168, 85, 247, 0.45); background: rgba(168, 85, 247, 0.14); }
+    .node-dot.updating { background: #a855f7; box-shadow: 0 0 8px rgba(168, 85, 247, 0.6); opacity: 1; animation: nodePulse 1.2s ease-in-out infinite; }
+    @keyframes nodePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .node-stat { font-size: 0.78rem; color: var(--text-soft); margin-top: 0.45rem; }
     .node-stat b { color: var(--text-primary); font-weight: 700; }
     /* Add-node form */
@@ -662,6 +665,7 @@
 
     function _nodeRow(node) {
       const online = !!node.online;
+      const updating = !!node.updating;
       const name = node.name || 'Unnamed node';
       const lastSeen = fmtLastSeen(node.lastSeenAt);
       const kind = node.kind || 'radio';
@@ -670,17 +674,23 @@
       const agentCfg = _kindAgent[kind];
       const agent = node.agentVersion;
       const agentHtml = agent ? `<span class="node-ver">agent ${escapeHtml(agent)}</span>` : '';
+      // Pager: which frequencies are decoding right now (RFS / FR / both).
+      const freqShort = (l) => { const u = String(l).toUpperCase(); return (u === 'NSWRFS' || u === 'RFS') ? 'RFS' : (u === 'FRNSW' || u === 'FR') ? 'FR' : l; };
+      const decodedLabels = Array.isArray(node.pagerDecoding) ? node.pagerDecoding.map(freqShort) : [];
 
       const chip = (cls, label) => `<span class="node-chip ${cls}">${escapeHtml(label)}</span>`;
+      const chipHtml = (cls, html) => `<span class="node-chip ${cls}">${html}</span>`;
       let chips;
       if (!agentCfg) {
         chips = chip('', 'agent coming soon');
+      } else if (updating) {
+        chips = chipHtml('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
       } else if (!online) {
         chips = chip('off', 'Offline');
       } else if (isPager) {
         let out = '';
         if (!node.sdrUp) out += chip('warn', 'No readers');
-        else if (node.decoding) out += chip('ok', 'Decoding POCSAG');
+        else if (node.decoding) out += chip('ok', 'Decoding ' + (decodedLabels.length ? decodedLabels.join(' + ') : 'POCSAG'));
         else out += chip('', 'Idle');
         if (node.feedEnabled === false) out += chip('off', 'Feed off');
         else if (node.uploading) out += chip('ok', 'Uploading');
@@ -734,10 +744,10 @@
 
       return `
         <div class="node-row">
-          <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
+          <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? 'Updating…' : (online ? 'Online' : 'Offline')}"></span>
           <div class="node-meta">
             <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
-            <div class="node-sub">${online ? 'Online' : 'Offline'} · last seen ${escapeHtml(lastSeen)}${keyStr}${locStr}</div>
+            <div class="node-sub">${updating ? 'Updating…' : (online ? 'Online' : 'Offline')} · last seen ${escapeHtml(lastSeen)}${keyStr}${locStr}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
             ${actions}
