@@ -53,6 +53,12 @@ type PagerConfig struct {
 	FeedEnabled    bool
 	Frequencies    []PagerFrequency
 	Protocols      []string
+	// Gain overrides the reader tuner gain (dB) for ALL readers. "" = agent
+	// default; "auto" = hardware AGC; a number = that fixed gain.
+	Gain string
+	// Ppm, when non-nil, overrides the per-dongle measured ppm for ALL readers
+	// (nil = keep the auto-measured value).
+	Ppm *int
 }
 
 // ConfigApplier applies a pushed pager config to the reader/supervisor manager
@@ -352,6 +358,8 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		Pager          struct {
 			Frequencies []PagerFrequency `json:"frequencies"`
 			Protocols   []string         `json:"protocols"`
+			Gain        string           `json:"gain"`
+			Ppm         *int             `json:"ppm"`
 		} `json:"pager"`
 	}
 	if err := json.Unmarshal(env.Data, &raw); err != nil {
@@ -368,6 +376,8 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		FeedEnabled:    raw.FeedEnabled,
 		Frequencies:    raw.Pager.Frequencies,
 		Protocols:      raw.Pager.Protocols,
+		Gain:           raw.Pager.Gain,
+		Ppm:            raw.Pager.Ppm,
 	}
 
 	go func() {
