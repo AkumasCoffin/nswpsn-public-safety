@@ -24,6 +24,8 @@ import {
   getNode,
   createNode,
   rotateNodeToken,
+  setPagerPrimary,
+  setPagerTuning,
   countNodesForUser,
   MAX_NODES_PER_USER,
   isNodeKind,
@@ -38,7 +40,8 @@ import { hub } from '../services/nodes/hub.js';
 import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
-import { buildConfigPayload } from '../services/nodes/configMerge.js';
+import { buildConfigPayload, pagerPrimaryOf, pagerGainOf, pagerPpmOf } from '../services/nodes/configMerge.js';
+import { isValidZone } from '../services/nodes/rfsZones.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
 import {
   getGlobalConfig,
@@ -79,9 +82,23 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     tokenPrefix: node.token_prefix,
     lat: node.lat,
     lon: node.lon,
+    zone: node.zone,
     online: live.online,
     status: live.status,
     lastStatusAt: live.lastStatusAt,
+    // Rolling 10-min relayed count — radio calls forwarded / pager messages
+    // forwarded to Pagermon. Used by the staff activity chips.
+    messagesLast10m: hub.uploadsInWindow(node.id),
+    // Pager single-SDR primary frequency preference (persisted).
+    pagerPrimary: node.kind === 'pager' ? pagerPrimaryOf(node) : null,
+    // Pager tuner overrides (persisted); null when unset (agent uses defaults).
+    pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
+    pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,
+    // Self-update in progress (agent swapping/re-execing) — shown as "updating"
+    // instead of offline during the brief disconnect.
+    updating: hub.isUpdating(node.id),
+    // Pager: reader labels currently decoding (e.g. ['NSWRFS','FRNSW']).
+    pagerDecoding: node.kind === 'pager' ? hub.pagerDecoding(node.id) : null,
   };
 }
 
@@ -256,6 +273,70 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// PUT /api/nodes/:id/pager-primary — staff set a pager node's single-SDR
+// primary frequency (NSWRFS default / FRNSW). Persisted + pushed live.
+// ---------------------------------------------------------------------------
+const PagerPrimarySchema = z.object({ primary: z.enum(['NSWRFS', 'FRNSW']) });
+nodesRouter.put('/api/nodes/:id/pager-primary', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
+    const parsed = PagerPrimarySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid primary' }, 400);
+    const updated = await setPagerPrimary(id, parsed.data.primary);
+    if (!updated) return c.json({ error: 'update failed' }, 500);
+    await pushConfigToNode(id).catch(() => {}); // apply live if online
+    return c.json(toApi(updated));
+  } catch (err) {
+    log.error({ err, id }, 'Error setting pager primary');
+    return c.json({ error: 'Failed to set primary frequency' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/nodes/:id/pager-tuning — staff set a pager node's tuner-gain / ppm
+// overrides (applied to all readers). Persisted + pushed live. Each field is
+// optional: send a value to set it, null to clear (revert to agent default),
+// or omit to leave it unchanged. gain: 0–60 dB or "auto" (hardware AGC);
+// ppm: -200..200. Both are stored as config_override keys, so they survive
+// restarts/updates the same way the primary frequency does.
+// ---------------------------------------------------------------------------
+const PagerTuningSchema = z
+  .object({
+    gain: z.union([z.literal('auto'), z.number().min(0).max(60), z.null()]).optional(),
+    ppm: z.union([z.number().int().min(-200).max(200), z.null()]).optional(),
+  })
+  .refine((v) => v.gain !== undefined || v.ppm !== undefined, {
+    message: 'provide gain and/or ppm',
+  });
+nodesRouter.put('/api/nodes/:id/pager-tuning', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
+    const parsed = PagerTuningSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid tuning' }, 400);
+
+    const patch: { gain?: string | null; ppm?: number | null } = {};
+    if (parsed.data.gain !== undefined) {
+      patch.gain = parsed.data.gain === null ? null : String(parsed.data.gain);
+    }
+    if (parsed.data.ppm !== undefined) patch.ppm = parsed.data.ppm;
+
+    const updated = await setPagerTuning(id, patch);
+    if (!updated) return c.json({ error: 'update failed' }, 500);
+    await pushConfigToNode(id).catch(() => {}); // apply live if online
+    return c.json(toApi(updated));
+  } catch (err) {
+    log.error({ err, id }, 'Error setting pager tuning');
+    return c.json({ error: 'Failed to set tuner overrides' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/nodes/:id/cmd  — send a command to a live agent.
 // ---------------------------------------------------------------------------
 nodesRouter.post('/api/nodes/:id/cmd', requireRole(canManageNodes), async (c) => {
@@ -360,6 +441,7 @@ nodesRouter.get('/api/nodes/:id/stats', requireRole(canManageNodes), async (c) =
 const CreateSchema = z.object({
   userId: z.string().min(1),
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
+  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
 });
 nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
   try {
@@ -367,13 +449,13 @@ nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
-    const { userId, kind } = parsed.data;
+    const { userId, kind, zone } = parsed.data;
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached for this user' }, 429);
     }
     const name = autoNodeName(kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
-    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix);
+    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix, zone);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({ node: toApi(node), token });
@@ -412,6 +494,7 @@ nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
   const id = c.req.param('id');
   try {
     hub.forceDisconnectAgent(id);
+    hub.clearNode(id);
     const ok = await deleteNode(id);
     if (!ok) return c.json({ error: 'node not found' }, 404);
     _clearNodeTokenCache();

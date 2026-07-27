@@ -76,9 +76,11 @@
     ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.4); }
 
     .container {
-      max-width: 1200px;
+      /* Fill wide screens (admin dashboard) instead of a narrow centred column;
+         a high cap keeps text lines sane on ultra-wide displays. */
+      max-width: min(2200px, 100%);
       margin: 0 auto;
-      padding: 1.5rem 2rem 3rem;
+      padding: 1.5rem clamp(1rem, 3vw, 3rem) 3rem;
     }
 
     /* === Header — sticky glassy topbar ================================ */
@@ -191,6 +193,10 @@
       padding: 0.35rem 0.7rem;
       font-size: 0.78rem;
     }
+    /* Inline row action buttons (e.g. user Edit-roles + Delete) — keep them from
+       squishing together and force a comfortable min tap size. */
+    .row-actions { display: inline-flex; gap: 0.4rem; align-items: center; flex-wrap: nowrap; }
+    .row-actions .btn-sm { min-width: 2rem; justify-content: center; }
 
     /* === Stat cards ==================================================== */
     .stats-bar {
@@ -318,13 +324,39 @@
       height: 1px;
       background: linear-gradient(90deg, var(--border-subtle), transparent);
     }
+    /* Data-source sub-groups (Traffic, Power, Weather, …) inside the section. */
+    .dev-subgroup { margin-bottom: 1.5rem; }
+    .dev-subgroup:last-child { margin-bottom: 0; }
+    .dev-subgroup-h {
+      display: flex; align-items: center; gap: 0.6rem;
+      font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+      font-weight: 600; color: var(--text-soft); margin: 0 0 0.7rem;
+    }
+    .dev-subgroup-h .count {
+      font-size: 0.66rem; letter-spacing: 0.04em; color: var(--text-soft);
+      background: rgba(148,163,184,0.12); border: 1px solid var(--border-subtle);
+      border-radius: 999px; padding: 0.02rem 0.45rem; font-weight: 600;
+    }
 
     /* Card grid — wider cards, more breathing room. */
     .dev-card-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-      gap: 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+      gap: 1.15rem;
     }
+    /* Feeder node cards a bit larger than the generic device cards. */
+    #nodes-grid {
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1.1rem;
+    }
+    #nodes-grid .dev-card { padding: 1.3rem 1.35rem 1.1rem; }
+    /* Whole node card is a button opening the drawer. */
+    .node-card-btn { cursor: pointer; }
+    .node-card-btn:focus-visible { outline: 2px solid var(--accent, #38bdf8); outline-offset: 2px; }
+    .nd-card-open { margin-left: auto; align-self: center; color: var(--text-soft, #94a3b8); font-size: 0.8rem; }
+    /* Node controls inside the drawer (moved off the card). */
+    .nd-ctl-switches { display: flex; flex-direction: column; gap: 0.55rem; }
+    .nd-switch-row { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; color: var(--text-primary, #e2e8f0); }
 
     /* Card itself — icon + name + dot up top, big primary metric in the
        middle, secondary key/value row at the bottom. */
@@ -335,12 +367,12 @@
         var(--bg-card);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
-      padding: 1.1rem 1.15rem 0.9rem;
+      padding: 1.2rem 1.25rem 1rem;
       transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
     }
     .dev-card:hover {
       transform: translateY(-1px);
-      border-color: rgba(34, 197, 94, 0.35);
+      border-color: rgba(56, 189, 248, 0.35);
       box-shadow: 0 4px 18px rgba(0,0,0,0.25);
     }
     .dev-card.degraded:hover { border-color: rgba(234, 179, 8, 0.4); }
@@ -373,8 +405,10 @@
       width: 32px; height: 32px;
       display: flex; align-items: center; justify-content: center;
       border-radius: 8px;
-      background: rgba(34, 197, 94, 0.12);
-      color: var(--success);
+      /* Neutral by default (tied to the site's cyan accent) so a wall of cards
+         doesn't read as "all green/ok" — colour is reserved for real status. */
+      background: rgba(56, 189, 248, 0.10);
+      color: var(--accent, #38bdf8);
       flex-shrink: 0;
     }
     .dev-card.degraded .dev-card-icon { background: rgba(234, 179, 8, 0.12); color: var(--warning); }
@@ -478,6 +512,7 @@
       flex-shrink: 0;
     }
     .node-dot.online { background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.55); opacity: 1; }
+    .node-dot.updating { background: #a855f7; box-shadow: 0 0 8px rgba(168, 85, 247, 0.6); opacity: 1; animation: nodePulse 1.2s ease-in-out infinite; }
     /* Small monospace pill for install id / user id. */
     .node-mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -506,6 +541,8 @@
     .nd-ready.ok { background: rgba(34,197,94,0.15); color: #4ade80; }
     .nd-ready.bad { background: rgba(239,68,68,0.15); color: #f87171; }
     .nd-ready.unknown { background: var(--accent-soft); color: var(--text-soft); }
+    .nd-ready.updating { background: rgba(168,85,247,0.18); color: #c084fc; }
+    @keyframes nodePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
     /* iOS-ish enabled toggle switch (mirrors dashboard's .swx). */
     .node-switch { position: relative; display: inline-block; width: 34px; height: 18px; flex-shrink: 0; }
     .node-switch input { opacity: 0; width: 0; height: 0; }
@@ -538,6 +575,20 @@
       display: none;
     }
     .node-drawer.open { display: block; }
+    /* Kind-aware panels: show radio-only vs pager-only sections by node kind. */
+    #node-drawer[data-kind="pager"] .nd-radio-only { display: none !important; }
+    #node-drawer:not([data-kind="pager"]) .nd-pager-only { display: none !important; }
+    .nd-readers-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .nd-readers-table th, .nd-readers-table td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-subtle, #334155); }
+    .nd-readers-table th { color: var(--text-soft, #94a3b8); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .nd-readers-table .r-run { color: #4ade80; }
+    .nd-readers-table .r-stop { color: #fca5a5; }
+    .nd-pager-filtered { opacity: 0.55; }
+    .nd-pager-filt-badge {
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+      color: #fca5a5; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 4px; padding: 0.02rem 0.34rem; vertical-align: middle;
+    }
     .node-drawer-panel {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
@@ -1622,7 +1673,7 @@
         <div class="dev-card-grid" id="dev-internals-grid"></div>
 
         <h3 class="dev-section-h">Data Sources</h3>
-        <div class="dev-card-grid" id="dev-sources-grid"></div>
+        <div id="dev-sources-grid"></div>
       </div>
 
       <!-- Nodes Tab -->
@@ -1671,11 +1722,12 @@
         <div class="nd-tabs" id="nd-tabs"></div>
 
         <!-- FULL-WIDTH SPECTRUM BAND (spans the top of the drawer) -->
-        <div class="nd-panel nd-spectrum-band">
+        <div class="nd-panel nd-spectrum-band nd-radio-only">
           <div class="nd-panel-h">
             <i class="fas fa-wave-square"></i> Spectrum
             <div class="nd-wf-toolbar">
               <select id="nd-wf-tuner" style="display: none;" onchange="_ndSwitchSpectrum(this.value)"></select>
+              <button class="btn btn-secondary btn-sm" id="nd-wf-toggle" onclick="_ndToggleSpectrum()"><i class="fas fa-play"></i> Start spectrum</button>
               <span class="nd-wf-status" id="nd-wf-status">idle</span>
             </div>
           </div>
@@ -1694,27 +1746,41 @@
 
         <!-- Everything else flows below the spectrum in a reflowing grid. -->
         <div class="nd-panels">
+          <!-- Node controls (on/off, feed, key, location, delete) — moved off the card -->
+          <div class="nd-panel nd-span-all">
+            <div class="nd-panel-h"><i class="fas fa-toggle-on"></i> Node</div>
+            <div class="nd-panel-b" id="nd-node-ctl"></div>
+          </div>
+
           <!-- Controls -->
           <div class="nd-panel nd-span-all">
             <div class="nd-panel-h"><i class="fas fa-sliders"></i> Controls</div>
             <div class="nd-panel-b">
               <div class="nd-controls">
-                <button class="btn btn-secondary btn-sm" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
-                <button class="btn btn-secondary btn-sm" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+                <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
+                <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+                <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRestartReaders()"><i class="fas fa-rotate"></i> Restart readers</button>
+                <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRescanSdr()"><i class="fas fa-magnifying-glass"></i> Recheck SDRs</button>
                 <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
                 <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
             </div>
           </div>
 
+          <!-- Readers (pager) -->
+          <div class="nd-panel nd-span-all nd-pager-only">
+            <div class="nd-panel-h"><i class="fas fa-tower-broadcast"></i> Readers</div>
+            <div class="nd-panel-b" id="nd-readers"></div>
+          </div>
+
           <!-- Tuners -->
-          <div class="nd-panel nd-span-all">
+          <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h"><i class="fas fa-satellite-dish"></i> Tuners</div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-tuners"></div></div>
           </div>
 
           <!-- Channels (unified config + live manager) -->
-          <div class="nd-panel nd-span-all">
+          <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h">
               <i class="fas fa-broadcast-tower"></i> Channels
               <span class="nd-h-spacer"></span>
@@ -1731,7 +1797,7 @@
 
           <!-- Now playing + live event log pair up side-by-side (stack narrow) -->
           <div class="nd-panels-split">
-            <div class="nd-panel">
+            <div class="nd-panel nd-radio-only">
               <div class="nd-panel-h">
                 <i class="fas fa-tower-broadcast"></i> Now playing
                 <span class="nd-tab-count" id="nd-np-count" style="display:none;"></span>
@@ -1741,9 +1807,9 @@
 
             <div class="nd-panel">
               <div class="nd-panel-h">
-                <i class="fas fa-clock-rotate-left"></i> Live event log
+                <i class="fas fa-clock-rotate-left"></i> <span id="nd-events-title">Live event log</span>
                 <span class="nd-h-spacer"></span>
-                <span class="nd-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · live only</span>
+                <span class="nd-sub" id="nd-events-sub" style="text-transform:none; letter-spacing:0; font-weight:400;">newest first · live only</span>
               </div>
               <div class="nd-panel-b"><div class="nd-events" id="nd-events"></div></div>
             </div>
@@ -2542,27 +2608,38 @@
       // registers them. weather_radar is RainViewer tile metadata, not
       // an incident feed — its freshness is uninteresting for ops.
       const HIDDEN_SOURCES = new Set(['weather_radar']);
-      const order = [
-        'rfs_incidents', 'bom_warnings', 'pager',
-        'traffic_incidents', 'traffic_roadwork', 'traffic_flood',
-        'traffic_fire', 'traffic_majorevent', 'traffic_cameras',
-        'beachwatch', 'beachsafe',
-        'weather_current',
-        'aviation_cameras',
-        'endeavour_current', 'endeavour_planned', 'endeavour_maintenance',
-        'ausgrid', 'ausgrid_stats',
-        'essential_current', 'essential_future',
+      // Data sources grouped by upstream provider/category, in display order.
+      // A source not in any group falls into "Other" (so new backend sources
+      // still render without a UI change).
+      const _sourceGroups = [
+        { label: 'Traffic — LiveTraffic', names: ['traffic_incidents', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent', 'traffic_cameras'] },
+        { label: 'Fire & emergency', names: ['rfs_incidents', 'firms_hotspots', 'pager'] },
+        { label: 'Power outages', names: ['endeavour_current', 'endeavour_planned', 'endeavour_maintenance', 'ausgrid', 'ausgrid_stats', 'essential_current', 'essential_future'] },
+        { label: 'Weather', names: ['bom_warnings', 'weather_current'] },
+        { label: 'Beach', names: ['beachwatch', 'beachsafe'] },
+        { label: 'Aviation', names: ['aviation_cameras', 'adsb_aircraft'] },
+        { label: 'Community', names: ['user_incidents'] },
       ];
-      // Stable known sources first, then any unknown ones the backend
-      // gained without a UI update — appended in alphabetical order so
-      // the grid still renders new sources without code changes.
-      const known = new Set(order);
-      const extras = Object.keys(sources).filter(n => !known.has(n) && !HIDDEN_SOURCES.has(n)).sort();
+      const _grid = (names) => `<div class="dev-card-grid">${names.map(n => _sourceCard(n, sources[n])).join('')}</div>`;
       const srcGrid = document.getElementById('dev-sources-grid');
-      if (srcGrid) srcGrid.innerHTML = [...order, ...extras]
-        .filter(name => sources[name] && !HIDDEN_SOURCES.has(name))
-        .map(name => _sourceCard(name, sources[name]))
-        .join('');
+      if (srcGrid) {
+        const grouped = new Set();
+        let html = '';
+        for (const g of _sourceGroups) {
+          const present = g.names.filter(n => sources[n] && !HIDDEN_SOURCES.has(n));
+          if (!present.length) continue;
+          present.forEach(n => grouped.add(n));
+          html += `<div class="dev-subgroup"><div class="dev-subgroup-h">${escapeHtml(g.label)} <span class="count">${present.length}</span></div>${_grid(present)}</div>`;
+        }
+        // Any present source not placed in a group → "Other" (alphabetical).
+        const others = Object.keys(sources)
+          .filter(n => sources[n] && !grouped.has(n) && !HIDDEN_SOURCES.has(n))
+          .sort();
+        if (others.length) {
+          html += `<div class="dev-subgroup"><div class="dev-subgroup-h">Other <span class="count">${others.length}</span></div>${_grid(others)}</div>`;
+        }
+        srcGrid.innerHTML = html || `<div class="nd-empty" style="border:none;background:none;">No data sources reported.</div>`;
+      }
     }
     
     // === Nodes tab — feeder node management ============================
@@ -2616,19 +2693,33 @@
         + chip('Calibrated', st.calibrated) + chip('JMBE', st.jmbeInstalled) + `</div>`;
     }
 
-    // Live activity chips: is the node DECODING (SDR-Trunk following the trunk)
-    // and FEEDING (forwarding to central rdio). Reuses the .nd-ready chip styles.
-    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, st) {
+    // Live activity chips: is the node DECODING (radio: SDR-Trunk following the
+    // trunk; pager: readers up) and FEEDING (radio: forwarding to central rdio;
+    // pager: uploading to Pagermon). Reuses the .nd-ready chip styles.
+    // Map a pager reader label to a short chip name.
+    function _pagerFreqShort(label) {
+      const u = String(label).toUpperCase();
+      if (u === 'NSWRFS' || u === 'RFS') return 'RFS';
+      if (u === 'FRNSW' || u === 'FR') return 'FR';
+      return label;
+    }
+
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels) {
       const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
+      const isPager = kind === 'pager';
       let dec;
-      if (!online) dec = chip('unknown', 'Offline');
-      else if (!sdrUp) dec = chip('bad', 'SDR-Trunk down');
-      else if (decoding) dec = chip('ok', 'Decoding');
-      else dec = chip('unknown', 'Idle');
-      const uploading = !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
+      if (updating) dec = chip('updating', '<i class="fas fa-arrows-rotate"></i> Updating');
+      else if (!online) dec = chip('unknown', 'Offline');
+      else if (!sdrUp) dec = chip('bad', isPager ? 'No readers' : 'SDR-Trunk down');
+      else if (decoding) {
+        // Pager: name which frequencies are decoding (RFS / FR / both) so staff
+        // AND owners can see coverage at a glance; fall back to a generic label.
+        const labels = Array.isArray(decodedLabels) ? decodedLabels.map(_pagerFreqShort) : [];
+        dec = chip('ok', isPager ? 'Decoding ' + (labels.length ? labels.join(' + ') : 'POCSAG') : 'Decoding');
+      } else dec = chip('unknown', 'Idle');
       let feed;
       if (!feedEnabled) feed = chip('unknown', 'Feed off');
-      else feed = uploading ? chip('ok', 'Feeding') : chip('unknown', 'Feed on');
+      else feed = uploading ? chip('ok', isPager ? 'Uploading' : 'Feeding') : chip('unknown', 'Feed on');
       return `<div class="node-ready-row">${dec}${feed}</div>`;
     }
 
@@ -2639,6 +2730,7 @@
     function _nodeCard(node) {
       const id = node.id;
       const online = !!node.online;
+      const updating = !!node.updating;
       const name = node.name || 'Unnamed node';
       const userId = node.userId || '';
       const userShort = userId ? escapeHtml(userId.slice(0, 8)) + '…' : '—';
@@ -2647,20 +2739,35 @@
       const enabled = node.enabled !== false; // default to enabled unless explicitly false
       const feedEnabled = node.feedEnabled === true; // feed to central rdio; off by default
       const st = node.status || null;
+      const kind = node.kind || 'radio';
+      const isPager = kind === 'pager';
       const owner = node.ownerUsername ? escapeHtml(node.ownerUsername) : userShort;
-      // Decoding = SDR-Trunk up AND following the trunk (a control lock or a live
-      // call). Feeding = forwarding to central rdio (green once uploads are flowing).
-      const sdrUp = !!(st && st.components && st.components.sdrtrunk === 'running');
-      const decoding = !!(st && (
-        (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
-        (Array.isArray(st.channels) && st.channels.some(c =>
-          c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
-      ));
+      // Decoding: radio = SDR-Trunk up AND following the trunk (control lock or a
+      // live call); pager = one or more POCSAG readers running. Feeding: uploads
+      // flowing (radio → central rdio; pager → Pagermon).
+      const readersUp = st && st.components
+        ? Object.entries(st.components).filter(([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run')).length
+        : 0;
+      const sdrUp = isPager
+        ? readersUp > 0
+        : !!(st && st.components && st.components.sdrtrunk === 'running');
+      const decoding = isPager
+        ? (online && readersUp > 0)
+        : !!(st && (
+            (Array.isArray(st.activeCalls) && st.activeCalls.length > 0) ||
+            (Array.isArray(st.channels) && st.channels.some(c =>
+              c && (c.processing || ['CONTROL', 'CALL', 'ACTIVE', 'DATA'].includes(String(c.state || '').toUpperCase()))))
+          ));
+      const uploading = isPager
+        ? Number(node.messagesLast10m || 0) > 0
+        : !!(st && st.uploadsPerMin != null && st.uploadsPerMin > 0);
 
       // Optional status metrics — render a small secondary row when present.
       const statusBits = [];
       if (st) {
-        if (st.queueDepth != null) statusBits.push({ label: 'queue', value: st.queueDepth });
+        // Only show the upload queue when there's an actual backlog — "queue 0"
+        // (the normal state) is noise.
+        if (st.queueDepth) statusBits.push({ label: 'queue', value: st.queueDepth });
         if (st.callsPerMin != null) statusBits.push({ label: 'calls/min', value: st.callsPerMin });
         if (st.uploadsPerMin != null) statusBits.push({ label: 'uploads/min', value: st.uploadsPerMin });
         if (st.errors != null) statusBits.push({ label: 'errors', value: st.errors });
@@ -2670,57 +2777,32 @@
             .map(b => `<span>${escapeHtml(b.label)} <strong>${escapeHtml(b.value)}</strong></span>`).join('')}</div>`
         : '';
 
+      // The whole card is a button that opens the details drawer — all controls
+      // (on/off, feed, key, location, delete) now live inside the drawer.
       return `
-        <div class="dev-card">
+        <div class="dev-card node-card-btn" role="button" tabindex="0" title="Open node details"
+             onclick="openNodeDrawer('${jsArg(id)}')"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNodeDrawer('${jsArg(id)}')}">
           <div class="dev-card-head" style="padding-right: 0;">
-            <span class="node-dot ${online ? 'online' : ''}" title="${online ? 'Online' : 'Offline'}"></span>
+            <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? 'Updating…' : (online ? 'Online' : 'Offline')}"></span>
             <div class="dev-card-name">${escapeHtml(name)} <span class="node-kind-badge">${escapeHtml(node.kind || 'radio')}</span></div>
+            <i class="fas fa-chevron-right nd-card-open" aria-hidden="true"></i>
           </div>
           <div class="node-versions">
             ${_nodeVer('agent', node.agentVersion)}
-            ${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
-            ${_nodeVer('rdio', node.rdioVersion)}
+            ${isPager ? '' : `${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
+            ${_nodeVer('rdio', node.rdioVersion)}`}
           </div>
-          ${_ndReadinessHtml(st)}
-          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, st)}
+          ${isPager ? '' : _ndReadinessHtml(st)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding)}
           <div class="dev-card-secondary">
             <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
+          <div class="dev-card-secondary">
+            <span><i class="fas fa-map"></i> zone ${node.zone ? `<strong>${escapeHtml(node.zone)}</strong>` : '<span style="color:#fbbf24">not set</span>'}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
+          </div>
           ${statusRow}
-          <div class="node-enable-row">
-            <button class="btn btn-secondary btn-sm" onclick="openNodeDrawer('${jsArg(id)}')">
-              <i class="fas fa-gauge-high"></i> Details
-            </button>
-            <span class="lbl" style="text-align: right;">Node ${enabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="Capture on/off. Off stops decoding (all channels) but the agent stays connected and re-enables live. To cut a node off entirely, delete or rotate its key.">
-              <input type="checkbox" ${enabled ? 'checked' : ''}
-                     onchange="toggleNode('${jsArg(id)}', this.checked, this)">
-              <span class="track"></span>
-            </label>
-          </div>
-          <div class="node-enable-row">
-            <div style="display:flex; gap:0.4rem;">
-              <button class="btn btn-secondary btn-sm ${(typeof node.lat === 'number') ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${(typeof node.lat === 'number') ? 'View antenna location' : 'No location set'}">
-                <i class="fas fa-location-dot"></i>
-              </button>
-              <button class="btn btn-secondary btn-sm" onclick="updateNodeNow('${jsArg(id)}')" title="Update this node now">
-                <i class="fas fa-download"></i>
-              </button>
-              <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)">
-                <i class="fas fa-key"></i>
-              </button>
-              ${userPermissions.is_owner
-                ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i></button>`
-                : ''}
-            </div>
-            <span class="lbl" style="text-align: right;">Feed → rdio ${feedEnabled ? 'on' : 'off'}</span>
-            <label class="node-switch" title="Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading) — verify reception before feeding the live system.">
-              <input type="checkbox" ${feedEnabled ? 'checked' : ''}
-                     onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
-              <span class="track"></span>
-            </label>
-          </div>
         </div>`;
     }
 
@@ -2736,6 +2818,11 @@
         return;
       }
       grid.innerHTML = allNodes.map(_nodeCard).join('');
+      // Keep the open drawer's moved controls in sync with the latest poll.
+      if (typeof _ndRenderNodeControls === 'function'
+          && document.getElementById('node-drawer')?.classList.contains('open')) {
+        _ndRenderNodeControls();
+      }
     }
 
     async function toggleNode(id, newValue, inputEl) {
@@ -2824,8 +2911,27 @@
     let _locViewMap = null;
     function viewNodeLocation(id) {
       const node = allNodes.find(n => String(n.id) === String(id));
-      if (!node || typeof node.lat !== 'number' || typeof node.lon !== 'number') {
-        showToast('No location set for this node.', 'warn');
+      if (!node) return;
+      const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
+      const zoneLine = node.zone
+        ? `<div class="loc-view-note"><i class="fas fa-map"></i> RFS zone: <b>${escapeHtml(node.zone)}</b></div>`
+        : `<div class="loc-view-note" style="color:#fbbf24">No zone set for this node.</div>`;
+      // Zone-only node (no exact pin) — show the zone, no map.
+      if (!hasPin) {
+        const overlay = document.createElement('div');
+        overlay.id = 'loc-view-modal';
+        overlay.className = 'loc-view-overlay';
+        overlay.innerHTML = `
+          <div class="loc-view-box">
+            <div class="loc-view-head">
+              <b><i class="fas fa-location-dot"></i> ${escapeHtml(node.name || 'Node')}</b>
+              <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
+            </div>
+            ${zoneLine}
+            <div class="loc-view-note">No exact antenna pin set (zone only). Staff/owner only, never public.</div>
+          </div>`;
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
+        document.body.appendChild(overlay);
         return;
       }
       const overlay = document.createElement('div');
@@ -2838,6 +2944,7 @@
             <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
           </div>
           <div id="loc-view-map"></div>
+          ${zoneLine}
           <div class="loc-view-note">Exact antenna location, set by the operator — used for coverage calculation and channel tuning. Staff/owner only, never public.</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
@@ -2937,7 +3044,12 @@
     let _ndChannels = [];
     let _ndCalls = [];             // st.activeCalls[] — calls currently up (incl. dynamic P25 traffic channels)
     let _ndEvents = [];
+    let _ndPagerMsgs = [];         // pager nodes: recent decoded pages (buffered server-side + live)
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
+    let _ndReadersSig = null;      // last-rendered pager Readers-panel signature (rebuild guard)
+    let _ndAudioLabel = null;      // reader label of the active pager audio monitor (null = off)
+    let _ndAudioCtx = null;        // Web Audio context for the monitor
+    let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)
     let _ndReqSeq = 0;
     const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
     const _ndWf = {
@@ -2984,9 +3096,13 @@
       _ndNodeId = nodeId;
       _ndAuthed = false;
       _ndStatus = null;
-      _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = [];
+      _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
+      _ndReadersSig = null;
       _ndSpectrumTunerId = null;
+      _ndAudioLabel = null; _ndAudioPlayhead = 0;
+      try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
+      _ndAudioCtx = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
       _ndPrevChan = {}; _ndCallStart = {};
       _ndWf.lastCenter = null; _ndWf.lastSr = null; _ndWf.lastBins = null;
@@ -2996,12 +3112,20 @@
 
       const drawer = document.getElementById('node-drawer');
       drawer.classList.add('open');
+      drawer.dataset.kind = node.kind || 'radio'; // toggles radio-only vs pager-only panels
       document.getElementById('nd-name').textContent = node.name || 'Node';
+      // Repurpose the event-log panel header for pager nodes (it shows pages).
+      const _isPagerDrawer = (node.kind || 'radio') === 'pager';
+      const _evTitle = document.getElementById('nd-events-title');
+      const _evSub = document.getElementById('nd-events-sub');
+      if (_evTitle) _evTitle.textContent = _isPagerDrawer ? 'Messages' : 'Live event log';
+      if (_evSub) _evSub.textContent = _isPagerDrawer ? 'newest first' : 'newest first · live only';
       _ndRenderVersions();
       const dot = document.getElementById('nd-dot');
       if (dot) dot.classList.toggle('online', !!node.online);
       _ndSetConn('connecting', node.online);
       _ndInitWaterfall();
+      _ndUpdateSpectrumToggle(); // reset the Start/Stop button (drawer HTML is reused)
       _ndRenderAll();
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
 
@@ -3035,10 +3159,10 @@
           let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
           _ndHandleText(msg, authTimer);
         } else if (ev.data instanceof ArrayBuffer) {
-          _ndHandleSpectrum(ev.data);
+          _ndHandleBinary(ev.data);
         } else if (ev.data instanceof Blob) {
           // Fallback in case binaryType wasn't honoured.
-          ev.data.arrayBuffer().then(_ndHandleSpectrum).catch(() => {});
+          ev.data.arrayBuffer().then(_ndHandleBinary).catch(() => {});
         }
       };
 
@@ -3074,6 +3198,18 @@
           _ndIngestEvent(d.event);
           _ndRenderEvents();
         }
+      } else if (t === 'pagerHistory') {
+        // Recent decoded pages replayed on subscribe — show history immediately.
+        if (String(d.nodeId) === String(_ndNodeId) && Array.isArray(d.messages)) {
+          _ndPagerMsgs = d.messages.slice(-200);
+          _ndRenderEvents();
+        }
+      } else if (t === 'pagerMessage') {
+        if (String(d.nodeId) === String(_ndNodeId) && d.message) {
+          _ndPagerMsgs.push(d.message);
+          if (_ndPagerMsgs.length > 200) _ndPagerMsgs.shift();
+          _ndRenderEvents();
+        }
       } else if (t === 'cmdResult') {
         _ndOnCmdResult(d);
       }
@@ -3105,15 +3241,13 @@
       }
       _ndRenderChannels();
       _ndRenderEvents();
+      _ndRenderReaders();      // pager: reader running/stopped + msg count live (no-op for radio)
       _ndRenderNowPlaying();
       _ndRenderCfgSync();
       _ndRenderVersions();     // reflect a just-completed component update live
       _ndRenderTunerSelector();
-      // Auto-start the waterfall on the first tuner once tuners are known.
-      if (_ndSpectrumTunerId == null && _ndTuners.length) {
-        const t0 = _ndTuners[0];
-        _ndStartSpectrum(t0.id != null ? t0.id : t0.index);
-      }
+      // Spectrum is opt-in: staff press "Start spectrum" (see _ndToggleSpectrum).
+      // Not auto-started, so opening the drawer to change settings doesn't stream.
     }
 
     function _ndOnCmdResult(d) {
@@ -3132,6 +3266,32 @@
     }
 
     // --- Spectrum lifecycle ---
+    // Spectrum streaming is OPT-IN via the Start/Stop button so staff can open the
+    // drawer to change settings without pulling a live spectrum stream.
+    function _ndToggleSpectrum() {
+      if (_ndSpectrumTunerId != null) {
+        _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
+        _ndSpectrumTunerId = null;
+        _ndInitWaterfall();
+        const s = document.getElementById('nd-wf-status'); if (s) s.textContent = 'idle';
+        _ndUpdateSpectrumToggle();
+        return;
+      }
+      if (!_ndTuners.length) { showToast('No tuners reported yet.', 'warn'); return; }
+      const sel = document.getElementById('nd-wf-tuner');
+      const t0 = _ndTuners[0];
+      const tid = (sel && sel.value !== '') ? sel.value : (t0.id != null ? t0.id : t0.index);
+      _ndStartSpectrum(tid);
+    }
+
+    function _ndUpdateSpectrumToggle() {
+      const b = document.getElementById('nd-wf-toggle');
+      if (!b) return;
+      const on = _ndSpectrumTunerId != null;
+      b.innerHTML = on ? '<i class="fas fa-stop"></i> Stop spectrum' : '<i class="fas fa-play"></i> Start spectrum';
+      b.classList.toggle('btn-danger', on);
+    }
+
     function _ndStartSpectrum(tunerId) {
       if (tunerId == null || !_ndWs || !_ndAuthed) return;
       _ndSpectrumTunerId = tunerId;
@@ -3140,13 +3300,15 @@
       _ndWsSend({ t: 'spectrumStart', data: { nodeId: _ndNodeId, tunerId, fps: 16, bins: 1024 } });
       const s = document.getElementById('nd-wf-status');
       if (s) s.textContent = 'streaming · tuner ' + tunerId;
+      _ndUpdateSpectrumToggle();
     }
 
     function _ndSwitchSpectrum(tunerId) {
+      // Changing the tuner only re-points an ACTIVE stream — it never auto-starts
+      // one (spectrum is opt-in via the Start button).
+      if (_ndSpectrumTunerId == null) return;
       if (String(tunerId) === String(_ndSpectrumTunerId)) return;
-      if (_ndSpectrumTunerId != null) {
-        _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
-      }
+      _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
       _ndSpectrumTunerId = null;
       _ndInitWaterfall();
       _ndStartSpectrum(tunerId);
@@ -3155,6 +3317,41 @@
     // Parse one BINARY spectrum frame (contract A, little-endian):
     //   u8 type=0x01 | u8 tunerIndex | u64 centerFreqHz | u32 sampleRateHz |
     //   u16 binCount | int8[binCount] dB
+    // Both spectrum (radio) and audio-monitor (pager) arrive as binary frames on
+    // the same socket; the first byte discriminates: 0x01 spectrum, 0x02 audio.
+    function _ndHandleBinary(buf) {
+      if (!buf || buf.byteLength < 1) return;
+      const type = new Uint8Array(buf, 0, 1)[0];
+      if (type === 0x02) _ndHandleAudio(buf);
+      else _ndHandleSpectrum(buf);
+    }
+
+    // Pager monitor audio frame: u8 type(0x02) | u8 reserved | u32 rate LE |
+    // u16 sampleCount LE | int16[] LE. Decode to float, schedule gap-free on the
+    // Web Audio clock so the beeps/signal play continuously while tuning.
+    function _ndHandleAudio(buf) {
+      if (_ndAudioLabel == null || !_ndAudioCtx) return; // not listening / no context
+      const dv = new DataView(buf);
+      if (dv.byteLength < 8) return;
+      if (dv.getUint8(0) !== 0x02) return;
+      const rate = dv.getUint32(2, true);
+      const count = dv.getUint16(6, true);
+      if (!rate || !count || dv.byteLength < 8 + count * 2) return;
+      const ctx = _ndAudioCtx;
+      const frame = ctx.createBuffer(1, count, rate);
+      const ch = frame.getChannelData(0);
+      for (let i = 0; i < count; i++) ch[i] = dv.getInt16(8 + i * 2, true) / 32768;
+      const src = ctx.createBufferSource();
+      src.buffer = frame;
+      src.connect(ctx.destination);
+      // Keep a small lead so network jitter doesn't cause gaps; if we've fallen
+      // behind (playhead in the past), resync to now + a short buffer.
+      const now = ctx.currentTime;
+      if (_ndAudioPlayhead < now + 0.05) _ndAudioPlayhead = now + 0.15;
+      src.start(_ndAudioPlayhead);
+      _ndAudioPlayhead += frame.duration;
+    }
+
     function _ndHandleSpectrum(buf) {
       const dv = new DataView(buf);
       if (dv.byteLength < 16) return;           // header is 1+1+8+4+2 = 16 bytes
@@ -3473,13 +3670,264 @@
     // --- Rendering ---
     function _ndRenderAll() {
       _ndBanner(null);
+      _ndRenderNodeControls();
       _ndRenderTuners();
       _ndRenderChannels();
       _ndRenderEvents();
       _ndRenderNowPlaying();
       _ndRenderTunerSelector();
+      _ndRenderReaders();
       _ndCfgRender();
       _ndRenderCfgSync();
+    }
+
+    // Node controls moved off the card into the drawer: capture on/off, feed
+    // on/off, and the location / re-issue-key / delete actions. Reads the live
+    // node from allNodes so it reflects the latest polled state.
+    function _ndRenderNodeControls() {
+      const el = document.getElementById('nd-node-ctl');
+      if (!el) return;
+      const id = _ndNodeId;
+      const n = (allNodes || []).find(x => String(x.id) === String(id)) || _ndNode || {};
+      const enabled = n.enabled !== false;
+      const feedEnabled = n.feedEnabled === true;
+      const isPager = (n.kind || 'radio') === 'pager';
+      const located = typeof n.lat === 'number';
+      const hasLoc = located || !!n.zone;
+      const locTitle = n.zone
+        ? `Zone: ${escapeHtml(n.zone)}${located ? ' · exact pin set' : ' · no exact pin'}`
+        : 'No location set';
+      const feedTitle = isPager
+        ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
+        : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading).";
+      el.innerHTML = `
+        <div class="nd-ctl-switches">
+          <div class="nd-switch-row">
+            <label class="node-switch" title="Capture on/off. Off stops decoding but the agent stays connected and re-enables live.">
+              <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleNode('${jsArg(id)}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+            <span>Capture <b>${enabled ? 'on' : 'off'}</b></span>
+          </div>
+          <div class="nd-switch-row">
+            <label class="node-switch" title="${feedTitle}">
+              <input type="checkbox" ${feedEnabled ? 'checked' : ''} onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
+              <span class="track"></span>
+            </label>
+            <span>Feed → ${isPager ? 'Pagermon' : 'rdio'} <b>${feedEnabled ? 'on' : 'off'}</b></span>
+          </div>
+        </div>
+        <div class="nd-controls" style="margin-top:0.8rem;">
+          <button class="btn btn-secondary btn-sm ${hasLoc ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${locTitle}"><i class="fas fa-location-dot"></i> Location</button>
+          <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)"><i class="fas fa-key"></i> Re-issue key</button>
+          ${userPermissions.is_owner ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i> Delete</button>` : ''}
+        </div>`;
+    }
+
+    // Pager drawer: render the per-frequency reader status from the live status
+    // frame's components (keys "reader:<label>") + a messages/10min line. No-op
+    // for radio nodes (the panel is CSS-hidden).
+    function _ndRenderReaders() {
+      const el = document.getElementById('nd-readers');
+      if (!el) return;
+      if ((_ndNode && _ndNode.kind) !== 'pager') return;
+      const st = _ndStatus || (_ndNode && _ndNode.status) || {};
+      const comps = (st && st.components) || {};
+      const readers = Object.keys(comps)
+        .filter(k => k.indexOf('reader') === 0)
+        .map(k => ({ comp: k, label: k.replace(/^reader:?/, '') || k, state: String(comps[k]) }));
+      // Read live-ish fields from the FRESH allNodes row (refreshed each poll), not
+      // the _ndNode snapshot captured at drawer-open — else the message count and
+      // online state freeze at open-time values (and never re-trigger the guard).
+      const nFresh = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+      const online = !!nFresh.online;
+      const msgs = Number(nFresh.messagesLast10m || 0);
+      const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
+
+      let rows;
+      if (!online) {
+        rows = `<tr><td colspan="3" style="color:var(--text-soft);">Node offline</td></tr>`;
+      } else if (readers.length === 0) {
+        rows = `<tr><td colspan="3" style="color:var(--text-soft);">No readers reported yet</td></tr>`;
+      } else {
+        rows = readers.map(r => {
+          const running = /run/i.test(r.state);
+          const listening = _ndAudioLabel === r.label;
+          return `<tr>
+            <td>${escapeHtml(r.label)}</td>
+            <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}${listening ? ' <span style="color:var(--accent,#38bdf8);font-weight:600;"><i class="fas fa-headphones"></i> monitoring</span>' : ''}</td>
+            <td style="text-align:right; white-space:nowrap;">
+              <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button>
+            </td>
+          </tr>`;
+        }).join('');
+      }
+
+      // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
+      const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+      const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
+      const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
+      // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
+      // valid values; falls back to a free-text field if none are known yet.
+      const gains = (st && Array.isArray(st.pagerGains)) ? st.pagerGains : [];
+
+      // Rebuild-guard: this panel re-renders on every status frame (~15s). An
+      // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
+      // half-typed field mid-tune, so skip when nothing shown here changed.
+      const sig = JSON.stringify([online, readers.map(r => r.label + ':' + r.state),
+        _ndAudioLabel, msgs, qd, primary, gainVal, ppmVal, gains]);
+      if (sig === _ndReadersSig) return;
+      _ndReadersSig = sig;
+
+      const tuneInput = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem; width:6.5rem; text-align:right;';
+      const isAuto = /^auto$/i.test(gainVal);
+      let gainControl;
+      if (gains.length) {
+        let opts = `<option value="" ${gainVal === '' ? 'selected' : ''}>Default (49.6)</option>`
+                 + `<option value="auto" ${isAuto ? 'selected' : ''}>Auto (AGC)</option>`
+                 + gains.map(g => {
+                     const gs = String(g);
+                     const sel = (!isAuto && gainVal !== '' && Number(gainVal) === Number(g)) ? 'selected' : '';
+                     return `<option value="${escapeHtml(gs)}" ${sel}>${escapeHtml(gs)} dB</option>`;
+                   }).join('');
+        gainControl = `<select onchange="_ndSetPagerTuning({ gain: this.value }, this)" style="${tuneInput} width:auto; text-align:left;">${opts}</select>`;
+      } else {
+        gainControl = `<input type="text" value="${escapeHtml(gainVal)}" placeholder="49.6 / auto" style="${tuneInput}" onchange="_ndSetPagerTuning({ gain: this.value }, this)">`;
+      }
+
+      el.innerHTML = `
+        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
+          <span>Single-SDR frequency</span>
+          <select onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
+            <option value="NSWRFS" ${primary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
+            <option value="FRNSW" ${primary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9875)</option>
+          </select>
+        </div>
+        <div class="nd-switch-row" style="margin-bottom:0.5rem;">
+          <span title="Tuner gain for all readers. Default = agent default (49.6); Auto = hardware AGC; or pick a supported step.">Gain (dB)</span>
+          ${gainControl}
+        </div>
+        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
+          <span title="Sample-clock correction (ppm) forced on all readers. Blank = auto-measure each startup.">PPM</span>
+          <input type="number" step="1" value="${escapeHtml(ppmVal)}" placeholder="auto" style="${tuneInput}"
+            onchange="_ndSetPagerTuning({ ppm: this.value }, this)">
+        </div>
+        <table class="nd-readers-table">
+          <thead><tr><th>Frequency</th><th>Decoder</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="dev-card-secondary" style="margin-top:0.6rem;">
+          <span>messages <strong>${msgs}</strong> · last 10 min</span>
+          ${qd != null ? `<span>queue <strong>${qd}</strong></span>` : ''}
+        </div>`;
+    }
+
+    // Staff: set the pager node's single-SDR primary frequency (persisted + live).
+    async function _ndSetPagerPrimary(primary, el) {
+      // Switching frequency swaps the reader label, so any running audio monitor
+      // no longer matches — stop it so the UI/tap don't get stranded.
+      if (_ndAudioLabel != null) _ndAudioStop();
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-primary`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ primary }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast(`Single-SDR frequency set to ${primary === 'FRNSW' ? 'Fire & Rescue' : 'NSW RFS'}.`, 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Could not change frequency: ${e.message}`, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
+    // Staff: set the pager node's tuner-gain / ppm overrides (persisted + live).
+    // Blank clears the field (revert to agent default). gain accepts a number or
+    // "auto"; ppm a whole number.
+    async function _ndSetPagerTuning(patch, el) {
+      const body = {};
+      if ('gain' in patch) {
+        const g = String(patch.gain).trim();
+        if (g === '') body.gain = null;
+        else if (/^auto$/i.test(g)) body.gain = 'auto';
+        else {
+          const n = Number(g);
+          if (!Number.isFinite(n) || n < 0 || n > 60) { showToast('Gain must be 0–60 dB or "auto".', 'error'); return; }
+          body.gain = n;
+        }
+      }
+      if ('ppm' in patch) {
+        const p = String(patch.ppm).trim();
+        if (p === '') body.ppm = null;
+        else {
+          const n = Number(p);
+          if (!Number.isInteger(n) || n < -200 || n > 200) { showToast('PPM must be a whole number (-200..200).', 'error'); return; }
+          body.ppm = n;
+        }
+      }
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-tuning`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Tuner override saved — readers restart to apply.', 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Could not save tuner override: ${e.message}`, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
+    // Staff: toggle the browser audio monitor for one reader. Starting/stopping
+    // restarts that reader (~2s) so it (dis)connects the audio tap. Only one
+    // reader can be monitored at a time (the agent taps a single label).
+    function _ndAudioToggle(label) {
+      if (_ndAudioLabel === label) { _ndAudioStop(); return; }
+      if (_ndAudioLabel != null) { try { _ndWsSend({ t: 'audioStop', data: { nodeId: _ndNodeId } }); } catch (e) {} }
+      try {
+        if (!_ndAudioCtx) _ndAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (_ndAudioCtx.state === 'suspended') _ndAudioCtx.resume();
+      } catch (e) { showToast('Audio playback not supported in this browser.', 'error'); return; }
+      _ndAudioLabel = label;
+      _ndAudioPlayhead = 0;
+      _ndWsSend({ t: 'audioStart', data: { nodeId: _ndNodeId, label } });
+      showToast(`Starting audio monitor for ${label} — reader restarts (~2s).`, 'success');
+      _ndRenderReaders();
+    }
+
+    function _ndAudioStop() {
+      if (_ndAudioLabel == null) return;
+      try { _ndWsSend({ t: 'audioStop', data: { nodeId: _ndNodeId } }); } catch (e) {}
+      _ndAudioLabel = null;
+      _ndAudioPlayhead = 0;
+      try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
+      _ndAudioCtx = null;
+      _ndRenderReaders();
+    }
+
+    // Recheck SDRs: agent stops readers, re-detects the dongles (re-measures ppm),
+    // and restarts readers against the new set. Takes ~30s per SDR.
+    async function _ndRescanSdr() {
+      if (!await uiConfirm('Recheck SDRs on this node? Readers will stop briefly while it re-detects the dongles (~30s per SDR).')) return;
+      _ndCmd('rescanSdr', {}, 'Recheck SDRs');
+      showToast('Rechecking SDRs — readers will restart shortly.', 'success');
+    }
+
+    // Restart every reader on a pager node (one restartComponent per reader).
+    function _ndRestartReaders() {
+      const st = _ndStatus || (_ndNode && _ndNode.status) || {};
+      const comps = (st && st.components) || {};
+      const readers = Object.keys(comps).filter(k => k.indexOf('reader') === 0);
+      if (readers.length === 0) { showToast('No readers to restart.', 'warn'); return; }
+      readers.forEach(name => _ndRestart(name));
     }
 
     // --- Drawer sub-view switching (P4/P5/P1) ---
@@ -4100,6 +4548,30 @@
     function _ndRenderEvents() {
       const el = document.getElementById('nd-events');
       if (!el) return;
+      // Pager nodes: the "event log" shows decoded pages (newest first).
+      if (((_ndNode && _ndNode.kind) || 'radio') === 'pager') {
+        // Surface how many are filtered (blocked, not forwarded) in the header.
+        const filteredN = _ndPagerMsgs.filter(m => m.filtered).length;
+        const subEl = document.getElementById('nd-events-sub');
+        if (subEl) subEl.textContent = filteredN ? `newest first · ${filteredN} filtered (shown dimmed)` : 'newest first';
+        if (!_ndPagerMsgs.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No pages yet — decoded messages (incl. filtered) will appear here.</div>`; return; }
+        el.innerHTML = _ndPagerMsgs.slice().reverse().map(m => {
+          const at = m.at != null ? new Date(m.at) : null;
+          const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
+          // Filtered (blocked-capcode) messages are buffered but not forwarded —
+          // show them dimmed with a badge so staff can see what's being dropped.
+          const filt = m.filtered ? ' nd-pager-filtered' : '';
+          const badge = m.filtered
+            ? `<span class="nd-pager-filt-badge" title="Not forwarded to Pagermon (${escapeHtml(m.filtered)})">filtered</span> `
+            : '';
+          return `<div class="nd-event-row nd-log-row${filt}">
+            <span class="nd-ev-time">${escapeHtml(time)}</span>
+            <span class="nd-ev-type">${badge}<span class="node-mono">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>
+            <span class="nd-ev-ft">${escapeHtml(m.source || '')}</span>
+          </div>`;
+        }).join('');
+        return;
+      }
       if (!_ndLog.length) { el.innerHTML = `<div class="nd-empty" style="border:none;background:none;">No events yet — live activity will appear here.</div>`; return; }
       el.innerHTML = _ndLog.slice().reverse().map(e => {
         const at = e.at != null ? new Date(e.at) : null;
@@ -4639,6 +5111,11 @@
       // last-cached status.
       const rst = (_ndStatus && (_ndStatus.calibrated != null || _ndStatus.jmbeInstalled != null))
         ? _ndStatus : (n.status || null);
+      // Pager nodes have no SDR-Trunk/rdio — show only the agent version.
+      if ((n.kind || 'radio') === 'pager') {
+        el.innerHTML = _nodeVer('agent', agent);
+        return;
+      }
       el.innerHTML =
         _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
         + _ndReadinessHtml(rst);
@@ -4714,9 +5191,18 @@
         if (_ndSpectrumTunerId != null) {
           _ndWsSend({ t: 'spectrumStop', data: { nodeId: _ndNodeId, tunerId: _ndSpectrumTunerId } });
         }
+        if (_ndAudioLabel != null) {
+          _ndWsSend({ t: 'audioStop', data: { nodeId: _ndNodeId } });
+        }
         _ndWsSend({ t: 'unsubscribeNode', data: { nodeId: _ndNodeId } });
       }
       _ndSpectrumTunerId = null;
+      // Tear down the monitor audio context (frees the tab's audio; the tap on
+      // the node stops via the audioStop above / reader rebuild).
+      _ndAudioLabel = null;
+      _ndAudioPlayhead = 0;
+      try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
+      _ndAudioCtx = null;
       if (_ndWs) { try { _ndWs.onclose = null; _ndWs.close(); } catch (e) {} _ndWs = null; }
       _ndAuthed = false;
       _ndStopNpTicker();
@@ -4790,6 +5276,7 @@
       const modal = document.getElementById('global-config-modal');
       if (modal) modal.style.display = 'none';
     }
+
 
     function _gcSetTab(name) {
       _gcTab = name;
@@ -5598,10 +6085,16 @@
         // ID (from the signup form / approval) shows gray. Accounts sharing
         // a Discord ID get a warning badge — same person, multiple signups.
         let discordHtml = '<span class="no-roles">—</span>';
+        // Prefer the resolved Discord display name (from the API, by id); fall
+        // back to the raw id (name fills in on a later load once resolved).
+        const dName = user.discord_username ? escapeHtml(user.discord_username) : null;
+        const dId = user.discord_id ? escapeHtml(user.discord_id) : null;
         if (user.discord_linked) {
-          discordHtml = `<span title="Discord account linked (OAuth)" style="color:#818cf8;"><i class="fab fa-discord"></i>${user.discord_id ? ` <span class="discord-id">${escapeHtml(user.discord_id)}</span>` : ' Linked'}</span>`;
+          const tip = 'Discord account linked (OAuth)' + (dId ? ` · ID ${dId}` : '');
+          discordHtml = `<span title="${tip}" style="color:#818cf8;"><i class="fab fa-discord"></i> ${dName || dId || 'Linked'}</span>`;
         } else if (user.discord_id) {
-          discordHtml = `<span class="discord-id" title="Discord ID from signup form (account not OAuth-linked)">${escapeHtml(user.discord_id)}</span>`;
+          const tip = `Discord ID from signup form (not OAuth-linked) · ${dId}`;
+          discordHtml = `<span class="discord-id" title="${tip}"><i class="fab fa-discord"></i> ${dName || dId}</span>`;
         }
         if (_isDupeUser(user, dupeGroups)) {
           const n = dupeGroups.get((user.discord_id || '').trim().toLowerCase());
@@ -5619,12 +6112,14 @@
             <td><span class="timestamp">${user.last_sign_in ? fmtDate(user.last_sign_in) : 'Never'}</span></td>
             <td><span class="timestamp">${fmtDate(user.created_at)}</span></td>
             <td>
-              <button class="btn btn-secondary btn-sm" data-user-id="${escapeHtml(user.id)}" title="Edit roles">
-                <i class="fas fa-user-edit"></i>
-              </button>
-              ${userPermissions.is_owner
-                ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${jsArg(user.id)}')" title="Delete user (owner only)"><i class="fas fa-trash"></i></button>`
-                : ''}
+              <div class="row-actions">
+                <button class="btn btn-secondary btn-sm" data-user-id="${escapeHtml(user.id)}" title="Edit roles">
+                  <i class="fas fa-user-edit"></i>
+                </button>
+                ${userPermissions.is_owner
+                  ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${jsArg(user.id)}')" title="Delete user (owner only)"><i class="fas fa-trash"></i></button>`
+                  : ''}
+              </div>
             </td>
           </tr>
         `;

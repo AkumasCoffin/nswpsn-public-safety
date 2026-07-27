@@ -54,6 +54,9 @@ export interface NodeRow {
   // Optional; null = unset. Visible to the operator + staff only, never public.
   lat: number | null;
   lon: number | null;
+  // Required NSW RFS zone (coarse area) the node covers. Null only on legacy rows
+  // created before zones existed; the API/UI require it going forward.
+  zone: string | null;
 }
 
 export interface HelloMeta {
@@ -67,7 +70,7 @@ export interface HelloMeta {
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at, token_prefix, lat, lon`;
+  last_seen_at, notes, created_at, token_prefix, lat, lon, zone`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -104,15 +107,16 @@ export async function createNode(
   kind: string,
   tokenHash: string,
   tokenPrefix: string,
+  zone: string,
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
   const cleanName = clampMeta(name, 120) || `${kind}-node`;
   const res = await pool.query<NodeRow>(
-    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO nodes (user_id, kind, name, token_hash, token_prefix, zone)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING ${NODE_COLS}`,
-    [userId, kind, cleanName, tokenHash, tokenPrefix],
+    [userId, kind, cleanName, tokenHash, tokenPrefix, zone],
   );
   return res.rows[0] ?? null;
 }
@@ -271,19 +275,75 @@ export async function updateNode(
 }
 
 /**
- * Set (or clear, with nulls) a node's exact antenna location — used for
- * coverage calculation and channel tuning. Optional; staff/owner-visible only.
+ * Set a node's location: its required RFS `zone` (coarse area) plus the OPTIONAL
+ * exact antenna pin (lat/lon — null = zone only). Staff/owner-visible only.
  */
 export async function setNodeLocation(
   id: string,
-  lat: number | null,
-  lon: number | null,
+  loc: { zone: string; lat: number | null; lon: number | null },
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
   const res = await pool.query<NodeRow>(
-    `UPDATE nodes SET lat = $2, lon = $3 WHERE id = $1 RETURNING ${NODE_COLS}`,
-    [id, lat, lon],
+    `UPDATE nodes SET zone = $2, lat = $3, lon = $4 WHERE id = $1 RETURNING ${NODE_COLS}`,
+    [id, loc.zone, loc.lat, loc.lon],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Set a pager node's single-SDR primary frequency preference, merged into the
+ * JSONB config_override (so it persists across restarts/updates and other
+ * override keys are untouched). Guarded to kind='pager'. Returns the updated row.
+ */
+export async function setPagerPrimary(
+  id: string,
+  primary: 'NSWRFS' | 'FRNSW',
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = COALESCE(config_override, '{}'::jsonb)
+                             || jsonb_build_object('pagerPrimary', $2::text)
+     WHERE id = $1 AND kind = 'pager'
+     RETURNING ${NODE_COLS}`,
+    [id, primary],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Set (or clear) a pager node's tuner-gain / ppm overrides, merged into the
+ * JSONB config_override so they persist across restarts/updates and don't touch
+ * other keys (e.g. pagerPrimary). Pass a value to set it, `null` to clear it,
+ * or `undefined` to leave that key untouched. Guarded to kind='pager'.
+ */
+export async function setPagerTuning(
+  id: string,
+  patch: { gain?: string | null; ppm?: number | null },
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+
+  const setObj: Record<string, unknown> = {};
+  const removeKeys: string[] = [];
+  if (patch.gain !== undefined) {
+    if (patch.gain === null || patch.gain === '') removeKeys.push('pagerGain');
+    else setObj['pagerGain'] = patch.gain;
+  }
+  if (patch.ppm !== undefined) {
+    if (patch.ppm === null) removeKeys.push('pagerPpm');
+    else setObj['pagerPpm'] = patch.ppm;
+  }
+
+  // (base - removeKeys[]) || setObj: remove cleared keys, then merge set keys.
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = (COALESCE(config_override, '{}'::jsonb) - $2::text[]) || $3::jsonb
+     WHERE id = $1 AND kind = 'pager'
+     RETURNING ${NODE_COLS}`,
+    [id, removeKeys, JSON.stringify(setObj)],
   );
   return res.rows[0] ?? null;
 }

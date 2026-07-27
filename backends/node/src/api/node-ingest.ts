@@ -19,10 +19,12 @@
  */
 import { Hono } from 'hono';
 import type { BodyData } from 'hono/utils/body';
+import { z } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
-import { bumpNodeCallStat } from '../services/nodes/registry.js';
+import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
+import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 
 export const nodeIngestRouter = new Hono();
@@ -164,6 +166,261 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
   );
   return c.json({ error: 'upstream rejected', status: resp.status }, 502);
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/node-ingest/pager-upload
+//
+// A PAGER feeder node decodes POCSAG locally (rtl_fm | multimon-ng) and relays
+// each decoded message here. We forward it into the ONE central Pagermon with
+// the server-held apikey (see globalConfig.getPagerIngest / config.PAGERMON_
+// INGEST_*), so the Pagermon key stays server-side and the node's feed toggle
+// cuts the feed — the SAME relay model as call-upload. Body is JSON (messages
+// are tiny), NOT multipart.
+// ---------------------------------------------------------------------------
+
+// A pager message is small — a few hundred bytes. Cap hard well below that so a
+// hostile/buggy node can't stream a giant body into RAM.
+const MAX_PAGER_BYTES = 64 * 1024;
+
+// Capcodes to drop entirely (non-message data/encoded transmitters). Parsed once
+// from PAGER_BLOCKED_CAPCODES. Dropped before forward + drawer buffer.
+const BLOCKED_CAPCODES = new Set(
+  (config.PAGER_BLOCKED_CAPCODES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+// Per-node rate limit: at most PAGER_RATE_MAX messages per PAGER_RATE_WINDOW_MS.
+// Real paging is a few/min; this bounds a compromised node's flood into Pagermon
+// + the DB. In-memory rolling window (ephemeral, like hub uploads).
+const PAGER_RATE_MAX = 120;
+const PAGER_RATE_WINDOW_MS = 60_000;
+const pagerRate = new Map<string, number[]>();
+function pagerRateOk(nodeId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - PAGER_RATE_WINDOW_MS;
+  const arr = (pagerRate.get(nodeId) ?? []).filter((t) => t >= cutoff);
+  if (arr.length >= PAGER_RATE_MAX) {
+    pagerRate.set(nodeId, arr);
+    return false;
+  }
+  arr.push(now);
+  pagerRate.set(nodeId, arr);
+  return true;
+}
+
+const PagerMsgSchema = z.object({
+  // POCSAG capcode / address (digits). Kept as a string — Pagermon treats it as text.
+  address: z.string().min(1).max(32),
+  // Decoder function bits 0-3 (optional).
+  function: z.union([z.number().int().min(0).max(3), z.string().max(2)]).optional(),
+  // The decoded message text.
+  message: z.string().max(4000).default(''),
+  // ISO-8601 timestamp from the agent; we default to now() if absent/garbage.
+  timestamp: z.string().max(40).optional(),
+  // A short label of the source reader (e.g. "NSWRFS" / "FRNSW").
+  source: z.string().max(64).default('pager'),
+  // The frequency in MHz the message was heard on (optional, informational).
+  freqMhz: z.number().optional(),
+});
+
+nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
+  // 1. Forward target must be configured (DB row first, then env).
+  const ingest = await getPagerIngest();
+  if (!ingest.url || !ingest.apiKey) {
+    return c.json({ error: 'pagermon ingest not configured' }, 503);
+  }
+
+  // 2-3. Node credentials + per-node token resolve (role gated), TOFU install
+  //      match — identical to call-upload.
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') {
+      return c.json({ error: 'contributor role removed' }, 403);
+    }
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  // Only pager-kind nodes may use this route — a radio node has no reason to,
+  // and its agent never posts here. Hard-reject rather than warn.
+  if (r.kind !== 'pager') {
+    return c.json({ error: 'not a pager node' }, 403);
+  }
+  const node = { id: r.nodeId, feed_enabled: r.feedEnabled };
+
+  // 3b. Per-node rate limit — a compromised node with feed on could otherwise
+  //     flood central Pagermon + the DB. Generous vs. real paging (a few/min);
+  //     excess is ack'd + dropped so the agent's queue still drains.
+  if (!pagerRateOk(node.id)) {
+    log.warn(`pager relay: RATE-LIMITED (dropped) node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: 'rate limit' });
+  }
+
+  // 4. Size guard — require Content-Length and cap it (same rationale as the
+  //    radio route: closes the chunked-body bypass).
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > MAX_PAGER_BYTES) {
+    return c.json({ error: 'message too large' }, 413);
+  }
+
+  // 5. Parse + validate the JSON message.
+  let parsed: z.infer<typeof PagerMsgSchema>;
+  try {
+    parsed = PagerMsgSchema.parse(await c.req.json());
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+
+  // 5·5. Sanitize the decoded text server-side too (defense in depth). The node
+  //      agent already strips POCSAG framing artifacts (control bytes + their
+  //      "EOT"/"NUL" text mnemonics), but doing it here as well keeps pages clean
+  //      even when a node is still on an older agent that didn't — so it flows to
+  //      both the drawer buffer and Pagermon clean, without waiting for updates.
+  const rawMessage = parsed.message;
+  parsed.message = sanitizePagerText(parsed.message);
+  // Invariant check: after cleaning, no bracketed mnemonic or control byte should
+  // remain. If one does, the cleaner missed a form — log it escaped (JSON.stringify
+  // renders control bytes as \u00XX and shows any brackets) so it's visible.
+  // Should stay silent now; grep the backend log for "pager msg not fully cleaned".
+  if (/<[A-Za-z]{2,3}>|[\u0000-\u001f\u007f]/.test(parsed.message)) {
+    log.warn(
+      `pager msg not fully cleaned: raw=${JSON.stringify(rawMessage)} clean=${JSON.stringify(parsed.message)}`,
+    );
+  }
+
+  // Trace EVERY received message (capcode + source only, never content) so a
+  // missing page can be traced to where it dropped: reception (never logged),
+  // blocklist, feed-off, or forwarded. Grep the backend log for "pager rx".
+  log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
+
+  const view = {
+    address: parsed.address,
+    message: parsed.message,
+    source: parsed.source,
+    freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+    at: Date.now(),
+  };
+
+  // 5a. Blocked capcodes (non-message data transmitters) are NOT forwarded to
+  //     Pagermon, but we STILL buffer them tagged as filtered so staff can see
+  //     what's being dropped in the drawer (useful when debugging a node).
+  if (BLOCKED_CAPCODES.has(parsed.address)) {
+    hub.recordPagerMessage(node.id, { ...view, filtered: 'blocked capcode' });
+    log.info(`pager relay: BLOCKED capcode ${parsed.address} (buffered as filtered, not forwarded) node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, dropped: 'blocked capcode' });
+  }
+
+  // 5b. Buffer the decoded message for the staff drawer BEFORE the feed gate, so
+  //     reception is visible even when the feed is off.
+  hub.recordPagerMessage(node.id, view);
+
+  // 6. Feed gate — accept + COUNT but don't forward when the feed is off (so
+  //    reception still shows in the node's stats), ack so the queue drains.
+  if (!node.feed_enabled) {
+    try {
+      await bumpNodeCallStat(node.id, 0);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed (feed off)');
+    }
+    log.info(`pager relay: FEED OFF, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, fed: false });
+  }
+
+  // 7. Forward to central Pagermon. Its ingest API is POST /api/messages with
+  //    address/message/datetime/source. We send the apikey both as the
+  //    Authorization header (Pagermon 1.x) and an `apikey` field (older) for
+  //    compatibility. The `source` is the NODE'S NAME (authoritative, set here)
+  //    so each page in Pagermon is attributable to the node that heard it —
+  //    falling back to the agent-reported label if the row can't be read.
+  const nodeRow = await getNode(node.id).catch(() => null);
+  const source = nodeRow?.name || parsed.source;
+  const datetime = normalisePagerDatetime(parsed.timestamp);
+  const body = new URLSearchParams({
+    address: parsed.address,
+    message: parsed.message,
+    datetime,
+    source,
+    apikey: ingest.apiKey,
+  });
+  const target = `${ingest.url.replace(/\/$/, '')}/api/messages`;
+  let resp: Response;
+  try {
+    resp = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: ingest.apiKey,
+      },
+      body,
+    });
+  } catch (err) {
+    log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: fetch failed');
+    return c.json({ error: 'relay failed' }, 502);
+  }
+
+  if (resp.ok) {
+    hub.recordUpload(node.id);
+    try {
+      await bumpNodeCallStat(node.id, 0);
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: stat bump failed');
+    }
+    log.info(`pager relay ok node=${node.id.slice(0, 8)} addr=${parsed.address} src=${source}`);
+    return c.json({ ok: true });
+  }
+
+  const snippet = (await resp.text().catch(() => '')).slice(0, 200);
+  log.warn(`pager relay: upstream ${resp.status} node=${node.id.slice(0, 8)} ${snippet}`);
+  return c.json({ error: 'upstream rejected', status: resp.status }, 502);
+});
+
+/** multimon-ng renders unprintable POCSAG control codes as BRACKETED mnemonics —
+ *  "<EOT>", "<NUL>", "<STX>", 2-letter "<CR>"/"<LF>", … — never real content.
+ *  Same class Pagermon's own reader.js strips (with /<[A-Za-z]{3}>/g); widened to
+ *  {2,3} for the 2-letter controls. */
+const BRACKET_MNEMONIC = /<[A-Za-z]{2,3}>/g;
+
+/** Strip a decoded POCSAG page's framing/padding artifacts, mirroring both the
+ *  node agent's cleanText and Pagermon's reference reader: (1) raw control bytes
+ *  (< 0x20, DEL 0x7F) → space, (2) remove bracketed control mnemonics, (3) map
+ *  Ä/Ü to [ ] (POCSAG national chars), (4) collapse whitespace + trim. Kept
+ *  server-side too so pages stay clean even from a node on an older/other agent.
+ *  Unbracketed words (e.g. "CAN") are never touched. */
+function sanitizePagerText(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0;
+    out += c < 0x20 || c === 0x7f ? ' ' : ch;
+  }
+  out = out.replace(BRACKET_MNEMONIC, '').replace(/Ä/g, '[').replace(/Ü/g, ']');
+  return out.split(/\s+/).filter(Boolean).join(' ');
+}
+
+/** Pagermon's /api/messages expects `datetime` as a UNIX timestamp in SECONDS
+ *  (its DB + our read path in sources/pager.ts both treat the column as unix
+ *  seconds). Sending an ISO string made Pagermon store an unparseable value and
+ *  render "Invalid date". We derive the seconds from the agent's timestamp,
+ *  which is stamped at DECODE/RECEIVE time on the node and preserved through the
+ *  upload queue — so the page carries when it was heard, not when it reached the
+ *  backend. Fall back to now() only if the agent sent nothing parseable. */
+function normalisePagerDatetime(ts: string | undefined): string {
+  let ms = NaN;
+  if (ts) ms = new Date(ts).getTime();
+  if (Number.isNaN(ms)) ms = Date.now();
+  return String(Math.floor(ms / 1000));
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/node-ingest/capabilities

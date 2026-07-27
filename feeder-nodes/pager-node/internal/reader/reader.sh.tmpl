@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Flags mirror the operator's proven Pagermon reader:
+#   rtl_fm: -g fixed gain (OMITTED when empty -> hardware AGC / auto gain),
+#           -p per-dongle ppm (measured at startup, or a manual override; 0 = none),
+#           -E dc (remove DC spike), -F 0 (enable the FIR downsample filter),
+#           -l 0 (no squelch), -A fast (fast arctan demod). -d addresses the dongle
+#           by its (assigned) USB serial; -f is the rtl_fm FREQUENCY.
+#   multimon-ng: -b1 (1-bit BCH error correction), -c (drop empty), -f alpha
+#           (alphanumeric output), -t raw /dev/stdin.
+# When AudioURL is set (staff pressed "Listen"), the raw 22050 Hz PCM is tee'd to
+# the loopback relay's /audio endpoint for the browser monitor. tee uses
+# --output-error=warn so a dropped audio consumer (staff stopped listening) never
+# breaks the decode pipeline; the curl streams the body with -T - (chunked).
+rtl_fm -d '{{.Serial}}'{{if .Gain}} -g {{.Gain}}{{end}} -p {{.PPM}} -E dc -F 0 -l 0 -A fast -f {{.FreqMHz}}M -s 22050 - \
+{{if .AudioURL}} | tee --output-error=warn >(curl -s -X POST -T - --max-time 86400 '{{.AudioURL}}' -H 'X-Pager-Source: {{.Label}}' 2>/dev/null || true) \
+{{end}} | multimon-ng -b1 -c {{.ProtoArgs}} -f alpha -t raw /dev/stdin \
+ | while IFS= read -r line; do
+     curl -s --max-time 5 '{{.RelayURL}}' \
+       --data-binary "$line" \
+       -H 'X-Pager-Source: {{.Label}}' \
+       -H "X-Pager-Freq: {{.FreqMHz}}" >/dev/null || true
+   done

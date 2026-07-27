@@ -73,6 +73,27 @@ export interface TunerSettings {
   type?: string;
 }
 
+/** One paging frequency a pager node scans, in priority order. The agent runs
+ *  one reader per frequency up to the number of SDRs detected (1 SDR → the
+ *  first only; 2 → both). */
+export interface PagerFreq {
+  label: string;
+  mhz: number;
+}
+
+/** Pager-node config: which frequencies + POCSAG rates to decode. The central
+ *  Pagermon URL/key are NEVER here — they stay server-side (the relay forwards). */
+export interface PagerConfig {
+  frequencies: PagerFreq[];
+  protocols: string[];
+  /** Optional tuner-gain override for ALL readers: a number-as-string (dB) or
+   *  "auto" (hardware AGC). Absent = the agent's built-in default gain. */
+  gain?: string;
+  /** Optional ppm override applied to ALL readers. Absent = the agent's
+   *  per-dongle auto-measured value. */
+  ppm?: number;
+}
+
 export interface ConfigPayload {
   configVersion: string;
   channels: ChannelPlan[];
@@ -85,11 +106,87 @@ export interface ConfigPayload {
   rdioConfig: Record<string, unknown>;
   streamTargets: StreamTarget[];
   /** Node on/off: when false the agent stops ALL capture (radio: every SDR-Trunk
-   *  channel), staying connected. */
+   *  channel; pager: all readers), staying connected. */
   captureEnabled: boolean;
-  /** Feed on/off: when false the agent disables the rdio downstream so rdio keeps
+  /** Feed on/off: when false the agent disables the downstream so it keeps
    *  running but stops uploading. */
   feedEnabled: boolean;
+  /** Present only for pager nodes — the frequencies/protocols to decode. */
+  pager?: PagerConfig;
+}
+
+// Fixed pager plan (decided with the operator). NSW RFS + Fire & Rescue NSW.
+// The list is sent in PRIORITY ORDER: with a single SDR the agent runs only the
+// FIRST frequency; with two SDRs it runs both. Which one is first is a per-node
+// preference (config_override.pagerPrimary), default NSWRFS.
+const PAGER_FREQUENCIES: PagerFreq[] = [
+  { label: 'NSWRFS', mhz: 148.5875 },
+  { label: 'FRNSW', mhz: 148.9875 },
+];
+const PAGER_PROTOCOLS = ['POCSAG512', 'POCSAG1200', 'POCSAG2400'];
+export const PAGER_PRIMARY_LABELS = ['NSWRFS', 'FRNSW'] as const;
+export type PagerPrimary = (typeof PAGER_PRIMARY_LABELS)[number];
+
+/** The per-node primary (single-SDR) frequency label — read from the persisted
+ *  config_override so it survives restarts/updates. Defaults to NSWRFS. */
+export function pagerPrimaryOf(node: NodeRow): PagerPrimary {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  return co['pagerPrimary'] === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+}
+
+/** The per-node tuner-gain override ("auto" or a number-as-string, dB), or
+ *  undefined when unset (agent uses its default). Read from config_override so
+ *  it persists across restarts/updates alongside the primary frequency. */
+export function pagerGainOf(node: NodeRow): string | undefined {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const g = co['pagerGain'];
+  if (g === 'auto') return 'auto';
+  if (typeof g === 'string' && g.trim() !== '' && Number.isFinite(Number(g))) return g;
+  return undefined;
+}
+
+/** The per-node ppm override, or undefined when unset (agent auto-measures). */
+export function pagerPpmOf(node: NodeRow): number | undefined {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const p = co['pagerPpm'];
+  return typeof p === 'number' && Number.isFinite(p) ? p : undefined;
+}
+
+/** Frequencies in priority order for this node: the chosen primary first. */
+function pagerFrequencies(node: NodeRow): PagerFreq[] {
+  const primary = pagerPrimaryOf(node);
+  const first = PAGER_FREQUENCIES.find((f) => f.label === primary);
+  const rest = PAGER_FREQUENCIES.filter((f) => f.label !== primary);
+  return first ? [first, ...rest] : [...PAGER_FREQUENCIES];
+}
+
+/** Build the lean config payload a PAGER node receives. No presets/rdio/SDR-Trunk
+ *  doc, no Pagermon key — just capture/feed + the frequency plan, all hashed into
+ *  configVersion so a toggle re-syncs the node. */
+function buildPagerPayload(node: NodeRow): ConfigPayload {
+  const pager: PagerConfig = {
+    frequencies: pagerFrequencies(node),
+    protocols: PAGER_PROTOCOLS,
+  };
+  // Only attach overrides when set, so nodes without them keep their previous
+  // configVersion (no spurious re-push). Both are hashed in below, so changing
+  // either bumps the version and re-syncs the node live.
+  const gain = pagerGainOf(node);
+  if (gain !== undefined) pager.gain = gain;
+  const ppm = pagerPpmOf(node);
+  if (ppm !== undefined) pager.ppm = ppm;
+  const payloadNoVersion = {
+    channels: [] as ChannelPlan[],
+    tuners: [] as TunerSettings[],
+    aliases: [] as Alias[],
+    rdioConfig: {} as Record<string, unknown>,
+    streamTargets: [] as StreamTarget[],
+    captureEnabled: node.enabled,
+    feedEnabled: node.feed_enabled,
+    pager,
+  };
+  const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
+  return { configVersion, ...payloadNoVersion };
 }
 
 // The "system" label reported in the channel plan — the radio network these
@@ -222,6 +319,9 @@ export async function buildConfigPayload(
   node: NodeRow,
   global?: GlobalConfig,
 ): Promise<ConfigPayload> {
+  // Pager nodes get a lean, radio-free payload (no presets, no rdio doc).
+  if (node.kind === 'pager') return buildPagerPayload(node);
+
   const presets = loadPresets();
   const globalCfg = global ?? (await getGlobalConfig());
   const override = parseOverride(node.config_override);
