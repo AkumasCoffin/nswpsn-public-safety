@@ -65,7 +65,51 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
-			name:   "trailing NUL padding stripped",
+			name:   "trailing bracketed EOT mnemonic (multimon form) stripped",
+			line:   "POCSAG1200: Address: 870016  Function: 3  Alpha: CVDO - 26-121978 - [152.942958,-29.706606] <EOT>",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "870016",
+				Function: 3,
+				Alpha:    true,
+				Text:     "CVDO - 26-121978 - [152.942958,-29.706606]",
+			},
+		},
+		{
+			name:   "fused double bracketed EOT stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: FIRECALL [152.66218,-29.848288]<EOT><EOT>",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "FIRECALL [152.66218,-29.848288]",
+			},
+		},
+		{
+			name:   "leading STX + trailing ETX bracketed mnemonics stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: <STX>HELLO WORLD<ETX>",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "HELLO WORLD",
+			},
+		},
+		{
+			name:   "national chars mapped to brackets",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: ÄTEST MESSAGEÜ",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "420008",
+				Function: 3,
+				Alpha:    true,
+				Text:     "[TEST MESSAGE]",
+			},
+		},
+		{
+			name:   "raw NUL padding bytes stripped",
 			line:   "POCSAG1200: Address: 180111  Function: 0  Alpha: 1421\x00\x00",
 			wantOK: true,
 			wantMsg: Message{
@@ -73,39 +117,6 @@ func TestParseLine(t *testing.T) {
 				Function: 0,
 				Alpha:    true,
 				Text:     "1421",
-			},
-		},
-		{
-			name:   "interior + trailing control bytes cleaned",
-			line:   "POCSAG1200: Address: 146126  Function: 0  Alpha: FRINC TYPE: AFA TURNOUT: 376 INC: 146126-27072026\x00 \x00",
-			wantOK: true,
-			wantMsg: Message{
-				Address:  "146126",
-				Function: 0,
-				Alpha:    true,
-				Text:     "FRINC TYPE: AFA TURNOUT: 376 INC: 146126-27072026",
-			},
-		},
-		{
-			name:   "trailing EOT mnemonics (literal text) stripped",
-			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: FIRECALL OLD GLEN INNES RD [152.66218,-29.848288] EOT EOT",
-			wantOK: true,
-			wantMsg: Message{
-				Address:  "420008",
-				Function: 3,
-				Alpha:    true,
-				Text:     "FIRECALL OLD GLEN INNES RD [152.66218,-29.848288]",
-			},
-		},
-		{
-			name:   "leading STX + trailing EOT mnemonic stripped",
-			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: STX HELLO WORLD EOT",
-			wantOK: true,
-			wantMsg: Message{
-				Address:  "420008",
-				Function: 3,
-				Alpha:    true,
-				Text:     "HELLO WORLD",
 			},
 		},
 		{
@@ -120,14 +131,14 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
-			name:   "real word CAN not stripped",
-			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: DO WHAT YOU CAN",
+			name:   "real unbracketed words (incl. CAN) not stripped",
+			line:   "POCSAG1200: Address: 420008  Function: 3  Alpha: DO WHAT YOU CAN EOT ROAD",
 			wantOK: true,
 			wantMsg: Message{
 				Address:  "420008",
 				Function: 3,
 				Alpha:    true,
-				Text:     "DO WHAT YOU CAN",
+				Text:     "DO WHAT YOU CAN EOT ROAD",
 			},
 		},
 		{
