@@ -196,6 +196,17 @@ func (c *Config) AppliedConfigVersionPath() string {
 	return filepath.Join(c.DataDir, "applied-config-version")
 }
 
+// AppliedConfigPath is the file recording the FULL config last successfully
+// applied (frequency plan + toggles), so the agent can replay the exact same
+// config on boot instead of a hardcoded default. Without this the agent would
+// boot on the default frequency order (NSW RFS first) yet still report the
+// persisted version, so the backend — seeing a matching version — sends no
+// push and the node stays on the wrong frequency (e.g. after a Fire & Rescue
+// primary was chosen). Persisting the whole config keeps boot honest.
+func (c *Config) AppliedConfigPath() string {
+	return filepath.Join(c.DataDir, "applied-config.json")
+}
+
 // Save round-trips the config back to YAML at path.
 func (c *Config) Save(path string) error {
 	b, err := yaml.Marshal(c)
