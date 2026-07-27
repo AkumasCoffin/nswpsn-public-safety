@@ -283,6 +283,13 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
+  // 5·5. Sanitize the decoded text server-side too (defense in depth). The node
+  //      agent already strips POCSAG framing artifacts (control bytes + their
+  //      "EOT"/"NUL" text mnemonics), but doing it here as well keeps pages clean
+  //      even when a node is still on an older agent that didn't — so it flows to
+  //      both the drawer buffer and Pagermon clean, without waiting for updates.
+  parsed.message = sanitizePagerText(parsed.message);
+
   // Trace EVERY received message (capcode + source only, never content) so a
   // missing page can be traced to where it dropped: reception (never logged),
   // blocklist, feed-off, or forwarded. Grep the backend log for "pager rx".
@@ -368,6 +375,27 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   log.warn(`pager relay: upstream ${resp.status} node=${node.id.slice(0, 8)} ${snippet}`);
   return c.json({ error: 'upstream rejected', status: resp.status }, 502);
 });
+
+/** ASCII framing/terminator control-code NAMES some POCSAG decoders emit as
+ *  literal text (EOT, NUL, STX, …) — all framing, never real content, none are
+ *  English words. Mirrors the node agent's ctrlMnemonics. */
+const CTRL_MNEMONICS = new Set(['NUL', 'SOH', 'STX', 'ETX', 'EOT', 'ETB']);
+
+/** Strip a decoded POCSAG page's framing/padding artifacts: control bytes
+ *  (< 0x20 and DEL 0x7F) and their leading/trailing text mnemonics ("EOT",
+ *  "NUL"). Server-side mirror of the agent's cleanText, so pages stay clean even
+ *  from a node still running an older agent. Only edges are touched. */
+function sanitizePagerText(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0;
+    out += c < 0x20 || c === 0x7f ? ' ' : ch;
+  }
+  const fields = out.split(/\s+/).filter(Boolean);
+  while (fields.length && CTRL_MNEMONICS.has(fields[0]!)) fields.shift();
+  while (fields.length && CTRL_MNEMONICS.has(fields[fields.length - 1]!)) fields.pop();
+  return fields.join(' ');
+}
 
 /** Pagermon's /api/messages expects `datetime` as a UNIX timestamp in SECONDS
  *  (its DB + our read path in sources/pager.ts both treat the column as unix
