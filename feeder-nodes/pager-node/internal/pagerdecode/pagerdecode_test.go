@@ -65,6 +65,28 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
+			name:   "trailing NUL padding stripped",
+			line:   "POCSAG1200: Address: 180111  Function: 0  Alpha: 1421\x00\x00",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "180111",
+				Function: 0,
+				Alpha:    true,
+				Text:     "1421",
+			},
+		},
+		{
+			name:   "interior + trailing control bytes cleaned",
+			line:   "POCSAG1200: Address: 146126  Function: 0  Alpha: FRINC TYPE: AFA TURNOUT: 376 INC: 146126-27072026\x00 \x00",
+			wantOK: true,
+			wantMsg: Message{
+				Address:  "146126",
+				Function: 0,
+				Alpha:    true,
+				Text:     "FRINC TYPE: AFA TURNOUT: 376 INC: 146126-27072026",
+			},
+		},
+		{
 			name:   "non-matching banner",
 			line:   "Enabled demodulators: POCSAG512 POCSAG1200 POCSAG2400",
 			wantOK: false,
