@@ -310,6 +310,41 @@ export async function setPagerPrimary(
   return res.rows[0] ?? null;
 }
 
+/**
+ * Set (or clear) a pager node's tuner-gain / ppm overrides, merged into the
+ * JSONB config_override so they persist across restarts/updates and don't touch
+ * other keys (e.g. pagerPrimary). Pass a value to set it, `null` to clear it,
+ * or `undefined` to leave that key untouched. Guarded to kind='pager'.
+ */
+export async function setPagerTuning(
+  id: string,
+  patch: { gain?: string | null; ppm?: number | null },
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+
+  const setObj: Record<string, unknown> = {};
+  const removeKeys: string[] = [];
+  if (patch.gain !== undefined) {
+    if (patch.gain === null || patch.gain === '') removeKeys.push('pagerGain');
+    else setObj['pagerGain'] = patch.gain;
+  }
+  if (patch.ppm !== undefined) {
+    if (patch.ppm === null) removeKeys.push('pagerPpm');
+    else setObj['pagerPpm'] = patch.ppm;
+  }
+
+  // (base - removeKeys[]) || setObj: remove cleared keys, then merge set keys.
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = (COALESCE(config_override, '{}'::jsonb) - $2::text[]) || $3::jsonb
+     WHERE id = $1 AND kind = 'pager'
+     RETURNING ${NODE_COLS}`,
+    [id, removeKeys, JSON.stringify(setObj)],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function touchNodeSeen(id: string): Promise<void> {
   const pool = await getPool();
   if (!pool) return;

@@ -37,6 +37,14 @@ var defaultPagerProtocols = []string{"POCSAG512", "POCSAG1200", "POCSAG2400"}
 // nearest supported value per dongle.
 const defaultGain = "49.6"
 
+// readerSwapSettle is how long rebuild waits after killing the old readers
+// before starting the new ones, so the just-killed rtl_fm releases its USB
+// dongle first. Without it a live reconfigure (e.g. switching the single-SDR
+// frequency) starts the new rtl_fm while the old one still holds the device,
+// which fails with "device busy" and crash-loops — so the switch never takes.
+// Matches the settle the Rescan path already uses.
+const readerSwapSettle = 1500 * time.Millisecond
+
 // maxPlausiblePPM bounds an accepted rtl_test -p reading. RTL crystal error is
 // realistically within this; a larger value means the measurement is unreliable
 // (common in a VM, where rtl_test -p compares against a jittery host clock) — we
@@ -170,6 +178,17 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 		protocols = defaultPagerProtocols
 	}
 
+	// Tuner gain: a config override (a number, or "auto" for AGC) wins over the
+	// agent default; reader.Write validates/normalizes it before it reaches rtl_fm.
+	gain := defaultGain
+	if strings.TrimSpace(cfg.Gain) != "" {
+		gain = cfg.Gain
+		log.Printf("readers: gain override in effect: %q", gain)
+	}
+	if cfg.Ppm != nil {
+		log.Printf("readers: ppm override in effect: %d (applied to all readers)", *cfg.Ppm)
+	}
+
 	// Reader count: one per available dongle, capped by the frequency plan and the
 	// two-frequency ceiling. 1 SDR -> first frequency only; 2+ -> first two.
 	n := min(len(m.devices), min(len(freqs), maxReaders))
@@ -185,11 +204,15 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 	for i := 0; i < n; i++ {
 		label := sanitizeLabel(freqs[i].Label, i)
 		dev := m.devices[i]
-		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, dev.PPM, defaultGain, protocols, m.relayURL)
+		ppm := dev.PPM
+		if cfg.Ppm != nil {
+			ppm = *cfg.Ppm
+		}
+		scriptPath, err := reader.Write(m.readersDir, label, freqs[i].MHz, dev.Serial, ppm, gain, protocols, m.relayURL)
 		if err != nil {
 			return fmt.Errorf("write reader script for %s: %w", label, err)
 		}
-		log.Printf("readers: %s -> %.4f MHz on SDR serial %q ppm=%d (%s)", label, freqs[i].MHz, dev.Serial, dev.PPM, scriptPath)
+		log.Printf("readers: %s -> %.4f MHz on SDR serial %q ppm=%d gain=%q (%s)", label, freqs[i].MHz, dev.Serial, ppm, gain, scriptPath)
 		comps["reader:"+label] = agentcfg.ComponentCfg{
 			Enabled: cfg.CaptureEnabled,
 			Command: "bash",
@@ -207,6 +230,10 @@ func (m *readerManager) Apply(cfg wsclient.PagerConfig) error {
 func (m *readerManager) rebuild(comps map[string]agentcfg.ComponentCfg) {
 	if m.supCancel != nil {
 		m.supCancel()
+		// Let the killed reader's rtl_fm release the SDR before the replacement
+		// opens it (else "device busy" -> crash-loop -> the switch never takes).
+		// Held under m.mu: a status call may stall briefly, fine for a reconfigure.
+		time.Sleep(readerSwapSettle)
 	}
 	subCtx, cancel := context.WithCancel(m.rootCtx)
 	sup := supervise.New(m.dataDir, comps)

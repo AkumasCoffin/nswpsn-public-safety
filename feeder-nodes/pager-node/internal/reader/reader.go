@@ -56,7 +56,7 @@ func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gai
 		Serial:    sanitizeToken(deviceSerial),
 		FreqMHz:   strconv.FormatFloat(freqMHz, 'f', -1, 64),
 		PPM:       strconv.Itoa(ppm),
-		Gain:      gain,
+		Gain:      normalizeGain(gain),
 		ProtoArgs: protoArgs(protocols),
 		RelayURL:  relayURL,
 		Label:     label,
@@ -112,6 +112,26 @@ func protoArgs(protocols []string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// normalizeGain validates the (backend-supplied) tuner gain before it is
+// interpolated UNQUOTED into the reader script's `rtl_fm -g` arg. Returns:
+//   - ""            for "auto"/empty/invalid → template omits -g (hardware AGC)
+//   - "<number>"    for a plausible numeric gain in dB (formatted canonically)
+// An out-of-range or non-numeric value falls back to auto rather than a fixed
+// default so a crafted config can never inject shell here, and a bad number
+// degrades safely instead of running the wrong gain silently.
+func normalizeGain(gain string) string {
+	g := strings.TrimSpace(strings.ToLower(gain))
+	if g == "" || g == "auto" {
+		return ""
+	}
+	v, err := strconv.ParseFloat(g, 64)
+	if err != nil || v < 0 || v > 60 {
+		log.Printf("reader: ignoring invalid gain %q (want 0–60 dB or \"auto\"); using auto gain", gain)
+		return ""
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 // sanitizeToken strips a value to a shell-safe alnum token for interpolation

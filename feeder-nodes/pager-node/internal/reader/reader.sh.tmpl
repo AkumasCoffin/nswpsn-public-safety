@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Flags mirror the operator's proven Pagermon reader:
-#   rtl_fm: -g fixed gain, -p per-dongle ppm (measured at startup; 0 if unmeasured),
+#   rtl_fm: -g fixed gain (OMITTED when empty -> hardware AGC / auto gain),
+#           -p per-dongle ppm (measured at startup, or a manual override; 0 = none),
 #           -E dc (remove DC spike), -F 0 (enable the FIR downsample filter),
 #           -l 0 (no squelch), -A fast (fast arctan demod). -d addresses the dongle
 #           by its (assigned) USB serial; -f is the rtl_fm FREQUENCY.
 #   multimon-ng: -b1 (1-bit BCH error correction), -c (drop empty), -f alpha
 #           (alphanumeric output), -t raw /dev/stdin.
-rtl_fm -d '{{.Serial}}' -g {{.Gain}} -p {{.PPM}} -E dc -F 0 -l 0 -A fast -f {{.FreqMHz}}M -s 22050 - \
+rtl_fm -d '{{.Serial}}'{{if .Gain}} -g {{.Gain}}{{end}} -p {{.PPM}} -E dc -F 0 -l 0 -A fast -f {{.FreqMHz}}M -s 22050 - \
  | multimon-ng -b1 -c {{.ProtoArgs}} -f alpha -t raw /dev/stdin \
  | while IFS= read -r line; do
      curl -s --max-time 5 '{{.RelayURL}}' \

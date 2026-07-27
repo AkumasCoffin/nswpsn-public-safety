@@ -86,6 +86,12 @@ export interface PagerFreq {
 export interface PagerConfig {
   frequencies: PagerFreq[];
   protocols: string[];
+  /** Optional tuner-gain override for ALL readers: a number-as-string (dB) or
+   *  "auto" (hardware AGC). Absent = the agent's built-in default gain. */
+  gain?: string;
+  /** Optional ppm override applied to ALL readers. Absent = the agent's
+   *  per-dongle auto-measured value. */
+  ppm?: number;
 }
 
 export interface ConfigPayload {
@@ -128,6 +134,24 @@ export function pagerPrimaryOf(node: NodeRow): PagerPrimary {
   return co['pagerPrimary'] === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
 }
 
+/** The per-node tuner-gain override ("auto" or a number-as-string, dB), or
+ *  undefined when unset (agent uses its default). Read from config_override so
+ *  it persists across restarts/updates alongside the primary frequency. */
+export function pagerGainOf(node: NodeRow): string | undefined {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const g = co['pagerGain'];
+  if (g === 'auto') return 'auto';
+  if (typeof g === 'string' && g.trim() !== '' && Number.isFinite(Number(g))) return g;
+  return undefined;
+}
+
+/** The per-node ppm override, or undefined when unset (agent auto-measures). */
+export function pagerPpmOf(node: NodeRow): number | undefined {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const p = co['pagerPpm'];
+  return typeof p === 'number' && Number.isFinite(p) ? p : undefined;
+}
+
 /** Frequencies in priority order for this node: the chosen primary first. */
 function pagerFrequencies(node: NodeRow): PagerFreq[] {
   const primary = pagerPrimaryOf(node);
@@ -144,6 +168,13 @@ function buildPagerPayload(node: NodeRow): ConfigPayload {
     frequencies: pagerFrequencies(node),
     protocols: PAGER_PROTOCOLS,
   };
+  // Only attach overrides when set, so nodes without them keep their previous
+  // configVersion (no spurious re-push). Both are hashed in below, so changing
+  // either bumps the version and re-syncs the node live.
+  const gain = pagerGainOf(node);
+  if (gain !== undefined) pager.gain = gain;
+  const ppm = pagerPpmOf(node);
+  if (ppm !== undefined) pager.ppm = ppm;
   const payloadNoVersion = {
     channels: [] as ChannelPlan[],
     tuners: [] as TunerSettings[],

@@ -3672,6 +3672,9 @@
       // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
       const nFresh = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
       const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
+      const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
+      const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
+      const tuneInput = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem; width:6.5rem; text-align:right;';
       el.innerHTML = `
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span>Single-SDR frequency</span>
@@ -3679,6 +3682,16 @@
             <option value="NSWRFS" ${primary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
             <option value="FRNSW" ${primary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9625)</option>
           </select>
+        </div>
+        <div class="nd-switch-row" style="margin-bottom:0.5rem;">
+          <span title="Tuner gain in dB for all readers. Blank = agent default (49.6); &quot;auto&quot; = hardware AGC.">Gain (dB)</span>
+          <input type="text" value="${escapeHtml(gainVal)}" placeholder="49.6 / auto" style="${tuneInput}"
+            onchange="_ndSetPagerTuning({ gain: this.value }, this)">
+        </div>
+        <div class="nd-switch-row" style="margin-bottom:0.7rem;">
+          <span title="Sample-clock correction (ppm) forced on all readers. Blank = auto-measure each startup.">PPM</span>
+          <input type="number" step="1" value="${escapeHtml(ppmVal)}" placeholder="auto" style="${tuneInput}"
+            onchange="_ndSetPagerTuning({ ppm: this.value }, this)">
         </div>
         <table class="nd-readers-table">
           <thead><tr><th>Frequency</th><th>Decoder</th><th></th></tr></thead>
@@ -3704,6 +3717,47 @@
         await loadNodes();
       } catch (e) {
         showToast(`Could not change frequency: ${e.message}`, 'error');
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
+    // Staff: set the pager node's tuner-gain / ppm overrides (persisted + live).
+    // Blank clears the field (revert to agent default). gain accepts a number or
+    // "auto"; ppm a whole number.
+    async function _ndSetPagerTuning(patch, el) {
+      const body = {};
+      if ('gain' in patch) {
+        const g = String(patch.gain).trim();
+        if (g === '') body.gain = null;
+        else if (/^auto$/i.test(g)) body.gain = 'auto';
+        else {
+          const n = Number(g);
+          if (!Number.isFinite(n) || n < 0 || n > 60) { showToast('Gain must be 0–60 dB or "auto".', 'error'); return; }
+          body.gain = n;
+        }
+      }
+      if ('ppm' in patch) {
+        const p = String(patch.ppm).trim();
+        if (p === '') body.ppm = null;
+        else {
+          const n = Number(p);
+          if (!Number.isInteger(n) || n < -200 || n > 200) { showToast('PPM must be a whole number (-200..200).', 'error'); return; }
+          body.ppm = n;
+        }
+      }
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-tuning`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        showToast('Tuner override saved — readers restart to apply.', 'success');
+        await loadNodes();
+      } catch (e) {
+        showToast(`Could not save tuner override: ${e.message}`, 'error');
       } finally {
         if (el) el.disabled = false;
       }
