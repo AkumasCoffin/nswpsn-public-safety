@@ -3736,8 +3736,12 @@
       const readers = Object.keys(comps)
         .filter(k => k.indexOf('reader') === 0)
         .map(k => ({ comp: k, label: k.replace(/^reader:?/, '') || k, state: String(comps[k]) }));
-      const online = !!(_ndNode && _ndNode.online);
-      const msgs = Number((_ndNode && _ndNode.messagesLast10m) || 0);
+      // Read live-ish fields from the FRESH allNodes row (refreshed each poll), not
+      // the _ndNode snapshot captured at drawer-open — else the message count and
+      // online state freeze at open-time values (and never re-trigger the guard).
+      const nFresh = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+      const online = !!nFresh.online;
+      const msgs = Number(nFresh.messagesLast10m || 0);
       const qd = (st && typeof st.queueDepth === 'number') ? st.queueDepth : null;
 
       let rows;
@@ -3761,7 +3765,6 @@
       }
 
       // Single-SDR primary frequency (persisted; 2 SDRs run both regardless).
-      const nFresh = (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
       const primary = nFresh.pagerPrimary === 'FRNSW' ? 'FRNSW' : 'NSWRFS';
       const gainVal = (nFresh.pagerGain == null) ? '' : String(nFresh.pagerGain);
       const ppmVal = (nFresh.pagerPpm == null) ? '' : String(nFresh.pagerPpm);
