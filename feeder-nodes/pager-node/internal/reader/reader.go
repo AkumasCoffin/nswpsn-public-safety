@@ -35,6 +35,7 @@ type tmplData struct {
 	Gain      string // fixed tuner gain (dB) for rtl_fm -g
 	ProtoArgs string // "-a POCSAG512 -a POCSAG1200 ..." for multimon-ng
 	RelayURL  string // loopback relay endpoint the decoded lines POST to
+	AudioURL  string // loopback relay /audio endpoint to tee PCM to (empty = off)
 	Label     string // human/source label (also the X-Pager-Source header)
 }
 
@@ -44,8 +45,10 @@ type tmplData struct {
 // gain is the fixed tuner gain in dB (rtl_fm -g); protocols selects the
 // multimon-ng POCSAG demodulators (defaulting to all three bauds when empty);
 // relayURL is the loopback endpoint decoded lines are POSTed to (e.g.
-// http://127.0.0.1:17390/pager).
-func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gain string, protocols []string, relayURL string) (path string, err error) {
+// http://127.0.0.1:17390/pager). audioURL, when non-empty, is the loopback
+// /audio endpoint the raw PCM is tee'd to for the browser monitor; empty leaves
+// the audio tap out of the pipeline entirely (no overhead when nobody listens).
+func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gain string, protocols []string, relayURL, audioURL string) (path string, err error) {
 	data := tmplData{
 		// The script is executed with bash, so every interpolated value is a
 		// potential shell-injection sink. Serial comes from device output and is
@@ -59,6 +62,7 @@ func Write(dir, label string, freqMHz float64, deviceSerial string, ppm int, gai
 		Gain:      normalizeGain(gain),
 		ProtoArgs: protoArgs(protocols),
 		RelayURL:  relayURL,
+		AudioURL:  audioURL,
 		Label:     label,
 	}
 

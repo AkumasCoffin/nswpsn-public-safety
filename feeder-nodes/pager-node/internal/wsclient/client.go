@@ -73,6 +73,11 @@ type ConfigApplier interface {
 	// Rescan stops the readers, re-detects the attached SDRs, and replays the last
 	// config (staff "Recheck SDRs"). Slow (re-measures ppm) — call in a goroutine.
 	Rescan() error
+	// AudioStart begins tapping the named reader's rtl_fm audio (rebuilds that
+	// reader with a tee to the loopback relay). AudioStop clears the tap. Both
+	// trigger a brief reader restart, so call in a goroutine.
+	AudioStart(label string) error
+	AudioStop() error
 }
 
 // StatusProvider returns the current reader component states (name -> status)
@@ -337,6 +342,24 @@ func (c *Client) handle(conn *websocket.Conn, env *protocol.Envelope) {
 	case protocol.TypeConfigPush:
 		c.handleConfigPush(env)
 
+	case protocol.TypeAudioStart:
+		var a struct {
+			Label string `json:"label"`
+		}
+		_ = json.Unmarshal(env.Data, &a)
+		go func() {
+			if err := c.applier.AudioStart(a.Label); err != nil {
+				log.Printf("wsclient: audioStart failed: %v", err)
+			}
+		}()
+
+	case protocol.TypeAudioStop:
+		go func() {
+			if err := c.applier.AudioStop(); err != nil {
+				log.Printf("wsclient: audioStop failed: %v", err)
+			}
+		}()
+
 	case protocol.TypeDisabled:
 		log.Printf("wsclient: server reports node disabled; will let socket close and back off")
 
@@ -550,6 +573,22 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 		}
 		return "agent: updating to v" + newVer + ", restarting", true
 	}
+}
+
+// SendBinary writes a raw binary frame (pager monitor audio) to the current
+// connection under the write mutex. The backend relays binary frames verbatim to
+// subscribed staff; the frame's own first byte discriminates audio from other
+// binary streams on the staff side. A no-op error when no socket is up (the tap
+// just drops until reconnect).
+func (c *Client) SendBinary(b []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	conn := c.conn
+	if conn == nil {
+		return errors.New("wsclient: no active connection")
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
+	return conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
 // sendMessage writes a typed, id-less frame to the current connection under the

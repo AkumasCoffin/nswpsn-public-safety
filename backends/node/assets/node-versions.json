@@ -15,7 +15,7 @@
   },
   "pager-agent": {
     "_comment": "The PAGER-node agent binary (Linux only, amd64/arm64). Served to pager nodes as component 'agent' by /api/node-updates/manifest (kind-aware remap); the pager agent has no sdrtrunk/rdio components.",
-    "version": "0.1.7",
+    "version": "0.1.8",
     "urls": {
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-pager-linux-amd64",
       "linux-arm64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-pager-linux-arm64"
