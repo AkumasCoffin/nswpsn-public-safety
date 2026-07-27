@@ -274,6 +274,11 @@ async function handleAgentMessage(
       return;
     }
     case 'event': {
+      // An agent about to self-update signals it here so the node shows
+      // "updating" (not "offline") across the swap + re-exec disconnect.
+      if ((data as { kind?: string } | undefined)?.kind === 'updating') {
+        hub.markUpdating(ctx.nodeId);
+      }
       hub.relayEvent(ctx.nodeId, data);
       return;
     }

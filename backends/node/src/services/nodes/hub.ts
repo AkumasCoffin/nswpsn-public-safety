@@ -67,6 +67,38 @@ class NodeHub {
   // Per-node ring buffer of recent decoded pager messages (newest last), so the
   // staff drawer can show history the moment it subscribes.
   private recentPager = new Map<string, PagerMessageView[]>();
+  // Per-node "self-update in progress until" epoch-ms. Set when the agent signals
+  // it's about to swap+re-exec; while set (and until it reconnects) the node is
+  // reported as UPDATING rather than offline, so the brief disconnect during an
+  // update doesn't flash as "offline".
+  private updatingUntil = new Map<string, number>();
+
+  /** Mark a node as updating for the next `ms` (agent about to swap+re-exec). */
+  markUpdating(nodeId: string, ms = 120_000): void {
+    this.updatingUntil.set(nodeId, Date.now() + ms);
+    log.info({ nodeId }, 'node self-update in progress (marked updating)');
+  }
+
+  /** Whether a node is mid self-update (signalled + within the window). */
+  isUpdating(nodeId: string): boolean {
+    const t = this.updatingUntil.get(nodeId);
+    if (t == null) return false;
+    if (Date.now() >= t) {
+      this.updatingUntil.delete(nodeId);
+      return false;
+    }
+    return true;
+  }
+
+  /** For a PAGER node, the reader labels currently decoding (e.g. ['NSWRFS','FRNSW']),
+   *  derived from the live status components. Empty when offline / none running. */
+  pagerDecoding(nodeId: string): string[] {
+    const comps = this.agents.get(nodeId)?.lastStatus?.components;
+    if (!comps) return [];
+    return Object.entries(comps)
+      .filter(([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run'))
+      .map(([k]) => k.replace(/^reader:?/, '') || k);
+  }
 
   /** Record a decoded pager message: keep it in the ring + push live to staff. */
   recordPagerMessage(nodeId: string, msg: PagerMessageView): void {
@@ -82,6 +114,7 @@ class NodeHub {
   clearNode(nodeId: string): void {
     this.uploads.delete(nodeId);
     this.recentPager.delete(nodeId);
+    this.updatingUntil.delete(nodeId);
   }
 
   /** Record one call successfully forwarded for a node (called by the relay). */
@@ -131,6 +164,9 @@ class NodeHub {
       lastStatusAt: null,
       connectedAt: Date.now(),
     });
+    // A fresh connection means any in-flight self-update finished (the agent
+    // re-execed and reconnected), so clear the updating marker.
+    this.updatingUntil.delete(nodeId);
     log.info({ nodeId, installId }, 'node agent connected');
     this.broadcastToStaff(nodeId, 'nodePresence', { nodeId, online: true });
   }

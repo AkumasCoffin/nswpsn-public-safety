@@ -565,6 +565,9 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 		// window must not each spawn a SwapAndRestart (the second helper's
 		// move-into-place would spin forever on an already-consumed pending file).
 		if c.swapScheduled.CompareAndSwap(false, true) {
+			// Tell the backend we're about to swap + re-exec so the node shows
+			// "updating" (not "offline") across the disconnect. Best-effort.
+			_ = c.sendMessage(protocol.TypeEvent, map[string]any{"kind": "updating", "version": newVer})
 			go func() {
 				time.Sleep(1 * time.Second)
 				if swerr := update.SwapAndRestart(pending); swerr != nil {
