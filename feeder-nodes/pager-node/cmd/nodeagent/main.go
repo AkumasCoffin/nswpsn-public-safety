@@ -245,9 +245,20 @@ func runAgent(ctx context.Context, configPath string) error {
 	// Reader manager: detect SDRs, de-dup serials, and start readers from the
 	// frequency plan. It owns its own supervisor and is (re)driven by configPush.
 	readerMgr := newReaderManager(ctx, cfg.DataDir, cfg.RelayAddr)
-	// Start the readers from the default plan until the backend pushes a config.
-	// Capture is enabled by default so a feeder captures immediately on boot.
-	if err := readerMgr.Apply(wsclient.PagerConfig{CaptureEnabled: true, FeedEnabled: true}); err != nil {
+	// Replay the LAST applied config on boot so the node resumes the frequency it
+	// was actually running (e.g. a Fire & Rescue primary) rather than the default
+	// NSW-RFS-first order. The backend won't re-push when the reported version
+	// matches, so booting on the default would silently strand the node on the
+	// wrong frequency. Falls back to the default plan only on a fresh install.
+	boot := wsclient.PagerConfig{CaptureEnabled: true, FeedEnabled: true}
+	if persisted, ok := wsclient.LoadPersistedConfig(cfg); ok {
+		boot = persisted
+		log.Printf("readers: resuming last applied config (version %q, %d freq, capture=%t feed=%t)",
+			persisted.ConfigVersion, len(persisted.Frequencies), persisted.CaptureEnabled, persisted.FeedEnabled)
+	} else {
+		log.Printf("readers: no persisted config; starting on default frequency plan until backend pushes")
+	}
+	if err := readerMgr.Apply(boot); err != nil {
 		log.Printf("readers: initial apply failed: %v", err)
 	}
 

@@ -383,9 +383,18 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 			return
 		}
 
-		c.setAppliedVersion(cfg.ConfigVersion)
-		if err := c.persistAppliedVersion(cfg.ConfigVersion); err != nil {
-			log.Printf("wsclient: persist applied config version failed: %v", err)
+		// Persist the FULL config BEFORE the version so the two files can never end
+		// up with a newer version than config: if the config write fails we skip the
+		// version write, leaving the old (matching) version so the backend re-pushes
+		// on the next connect. On boot main.go replays this exact config, so the node
+		// resumes the chosen frequency rather than the NSW-RFS-first default.
+		if err := c.persistAppliedConfig(cfg); err != nil {
+			log.Printf("wsclient: persist applied config failed (%v); leaving version stale so backend re-pushes", err)
+		} else {
+			c.setAppliedVersion(cfg.ConfigVersion)
+			if err := c.persistAppliedVersion(cfg.ConfigVersion); err != nil {
+				log.Printf("wsclient: persist applied config version failed: %v", err)
+			}
 		}
 		log.Printf("wsclient: config version %s applied", cfg.ConfigVersion)
 		_ = c.sendMessage(protocol.TypeConfigApplied, protocol.ConfigApplied{ConfigVersion: cfg.ConfigVersion})
@@ -592,6 +601,40 @@ func (c *Client) persistAppliedVersion(v string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// persistAppliedConfig atomically writes the full applied config (frequency plan
+// + toggles) so the agent can replay the exact config on boot rather than the
+// hardcoded default. See agentcfg.AppliedConfigPath for why this matters.
+func (c *Client) persistAppliedConfig(cfg PagerConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	path := c.cfg.AppliedConfigPath()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadPersistedConfig reads the full config last applied by this agent, so boot
+// can replay it (resuming e.g. a Fire & Rescue primary) instead of falling back
+// to the default frequency order. Returns ok=false when nothing is persisted yet
+// (fresh install) or the file is unreadable/corrupt, in which case the caller
+// uses its boot default.
+func LoadPersistedConfig(cfg *agentcfg.Config) (PagerConfig, bool) {
+	b, err := os.ReadFile(cfg.AppliedConfigPath())
+	if err != nil {
+		return PagerConfig{}, false
+	}
+	var pc PagerConfig
+	if err := json.Unmarshal(b, &pc); err != nil {
+		log.Printf("wsclient: persisted config unreadable (%v); using boot default", err)
+		return PagerConfig{}, false
+	}
+	return pc, true
 }
 
 // writeType serializes and writes a frame under the write mutex.
