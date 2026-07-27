@@ -367,6 +367,11 @@
     .dl-btn.danger { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.45); color: #fca5a5; }
     .dl-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.25); color: #fecaca; }
     .loc-modal { max-width: 620px; }
+    .loc-field { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.9rem; }
+    .loc-field > span { font-size: 0.85rem; font-weight: 600; color: var(--text-soft, #94a3b8); }
+    .loc-field select { padding: 0.55rem 0.6rem; border-radius: 8px; background: rgba(255,255,255,0.05); color: var(--text-primary, #e2e8f0); border: 1px solid var(--border-subtle, #334155); font-size: 0.9rem; width: 100%; }
+    .loc-pin-toggle { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; font-size: 0.9rem; cursor: pointer; }
+    .loc-pin-toggle input { width: 16px; height: 16px; flex: 0 0 auto; }
     #loc-map { height: 340px; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--border-subtle); }
     #loc-map, #loc-map * { box-sizing: initial; } /* Leaflet needs its own box model */
     .leaflet-container { background: #0b1220; }
@@ -619,7 +624,33 @@
       pager: { platforms: ['linux'] }, // rtl_fm | multimon-ng is a Linux stack
     };
     const hasAgent = (kind) => !!_kindAgent[kind];
-    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null };
+    const _loc = { map: null, marker: null, thenInstall: false, node: null, nodeId: null, createKind: null };
+
+    // RFS zone list (grouped by Area Command) for the location picker dropdown.
+    let _zoneGroups = null;
+    async function loadZones() {
+      if (_zoneGroups) return _zoneGroups;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/zones`, {
+          headers: jwt ? { 'Authorization': 'Bearer ' + jwt } : {},
+        });
+        const data = await res.json().catch(() => ({}));
+        _zoneGroups = Array.isArray(data.groups) ? data.groups : [];
+      } catch (e) { _zoneGroups = []; }
+      return _zoneGroups;
+    }
+    function _zoneOptionsHtml(selected) {
+      let out = `<option value="" ${selected ? '' : 'selected'} disabled>Select your RFS zone…</option>`;
+      for (const g of (_zoneGroups || [])) {
+        out += `<optgroup label="${escapeHtml(g.areaCommand)}">`;
+        for (const z of g.zones) {
+          out += `<option value="${escapeHtml(z.name)}" ${z.name === selected ? 'selected' : ''}>${escapeHtml(z.name)}</option>`;
+        }
+        out += `</optgroup>`;
+      }
+      return out;
+    }
 
     function renderRadioCard(data) {
       const nodes = data.nodes || [];
@@ -728,7 +759,10 @@
 
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
       const keyStr = node.tokenPrefix ? ` · key <code>${escapeHtml(node.tokenPrefix)}…</code>` : '';
-      const locStr = located ? ' · <i class="fas fa-location-dot"></i> located' : '';
+      const locStr = located ? ' · <i class="fas fa-location-dot"></i> exact pin' : '';
+      const zoneStr = node.zone
+        ? ` · <i class="fas fa-map"></i> ${escapeHtml(node.zone)}`
+        : ` · <span style="color:#fbbf24">no zone set</span>`;
       const _dlBtn = {
         windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>`,
         linux: `<button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`,
@@ -737,7 +771,7 @@
       const actions = `
         <div class="node-actions">
           ${dl}
-          <button class="mini-btn" title="${located ? 'Edit' : 'Set'} location" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${located ? 'Location' : 'Set location'}</button>
+          <button class="mini-btn" title="Set zone / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${node.zone ? 'Location' : 'Set zone'}</button>
           <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
           <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i></button>
         </div>`;
@@ -747,7 +781,7 @@
           <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? 'Updating…' : (online ? 'Online' : 'Offline')}"></span>
           <div class="node-meta">
             <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
-            <div class="node-sub">${updating ? 'Updating…' : (online ? 'Online' : 'Offline')} · last seen ${escapeHtml(lastSeen)}${keyStr}${locStr}</div>
+            <div class="node-sub">${updating ? 'Updating…' : (online ? 'Online' : 'Offline')} · last seen ${escapeHtml(lastSeen)}${zoneStr}${locStr}${keyStr}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
             ${actions}
@@ -756,32 +790,12 @@
         </div>`;
     }
 
-    // Create a node (type only — auto-named server-side), then OFFER to set its
-    // antenna location. Location is OPTIONAL (used for coverage + channel
-    // tuning), so the picker can be skipped straight to the installer.
+    // Create a node. A zone is REQUIRED, so we collect it (plus an optional exact
+    // pin) in the picker FIRST — the node is created on Save (see saveLocation),
+    // not before, so cancelling creates nothing. Then continue to the installer.
     async function addNode(btn) {
       const kind = document.getElementById('new-node-kind').value;
-      const original = btn ? btn.innerHTML : '';
-      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding…'; }
-      try {
-        const jwt = await getToken();
-        if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
-        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        _nodeTokens[data.node.id] = data.token;
-        await refreshNodes();
-        // Ask for the antenna location (optional) — Skip continues to the installer.
-        openLocationPicker(data.node.id, { thenInstall: true, node: data.node });
-      } catch (e) {
-        showToast(`Could not add node: ${e.message}`, 'error');
-      } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = original; }
-      }
+      openLocationPicker(null, { createKind: kind, thenInstall: true });
     }
 
     // Rotate a node's token (owner-scoped). Returns the new plaintext or null.
@@ -877,39 +891,58 @@
       document.body.appendChild(el);
     }
 
-    // Map picker: drop a pin on the EXACT antenna location. Used to calculate
-    // coverage and improve channel tuning. Location is OPTIONAL — the picker can
-    // be skipped (thenInstall continues to the installer).
-    function openLocationPicker(nodeId, opts) {
+    // Location picker: a REQUIRED RFS zone (coarse area) + an OPTIONAL exact
+    // antenna pin (for coverage + channel tuning). Used both to create a node
+    // (opts.createKind — node is created on Save) and to edit an existing one.
+    async function openLocationPicker(nodeId, opts) {
       closeLocationPicker(); // never stack two pickers
+      opts = opts || {};
       _loc.nodeId = nodeId || null;
-      _loc.thenInstall = !!(opts && opts.thenInstall);
-      _loc.node = (opts && opts.node) || (_feederNodes || []).find(n => n.id === nodeId) || (nodeId ? { id: nodeId } : null);
-      const node = (_feederNodes || []).find(n => n.id === nodeId);
-      const existing = node && typeof node.lat === 'number' ? [node.lat, node.lon] : null;
+      _loc.thenInstall = !!opts.thenInstall;
+      _loc.createKind = opts.createKind || null;
+      _loc.node = opts.node || (_feederNodes || []).find(n => n.id === nodeId) || (nodeId ? { id: nodeId } : null);
+      const node = _loc.node || {};
+      const createMode = !!_loc.createKind;
+      const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
+      const curZone = node.zone || '';
+      await loadZones();
       const overlay = document.createElement('div');
       overlay.id = 'loc-modal';
       overlay.className = 'modal-overlay';
       overlay.innerHTML = `
         <div class="modal loc-modal">
-          <h3><i class="fas fa-location-dot"></i> Antenna location</h3>
-          <p>Drop the pin on your <b>exact antenna location</b> (drag it, or click the map).
-             It's used to <b>calculate coverage</b> and for <b>more exact channel tuning</b>.
-             Optional — you can set it later, and your node still works without it.</p>
-          <div id="loc-map"></div>
+          <h3><i class="fas fa-location-dot"></i> Node location</h3>
+          <p>Every node needs a <b>zone</b> (your NSW RFS area). Optionally drop an
+             <b>exact antenna pin</b> — it improves <b>coverage</b> estimates and
+             <b>channel tuning</b>. The pin and zone are staff/owner only, never public.</p>
+          <label class="loc-field">
+            <span>RFS zone <span style="color:#f87171">*</span></span>
+            <select id="loc-zone">${_zoneOptionsHtml(curZone)}</select>
+          </label>
+          <label class="loc-pin-toggle">
+            <input type="checkbox" id="loc-pin-on" ${hasPin ? 'checked' : ''} onchange="_locTogglePin(this.checked)">
+            <span>Set an exact antenna pin (optional)</span>
+          </label>
+          <div id="loc-map" style="display:${hasPin ? 'block' : 'none'};"></div>
           <div class="modal-actions">
-            <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> Save location</button>
-            ${existing ? `<button class="mini-btn danger" onclick="clearLocation(this)">Clear</button>` : ''}
-            <button class="mini-btn" onclick="skipLocation()">${_loc.thenInstall ? 'Skip for now' : 'Cancel'}</button>
+            <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> ${createMode ? 'Create node' : 'Save'}</button>
+            ${(!createMode && hasPin) ? `<button class="mini-btn danger" onclick="clearLocation(this)">Remove pin</button>` : ''}
+            <button class="mini-btn" onclick="skipLocation()">Cancel</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
-      const center = existing || [-33.8688, 151.2093];
+      if (hasPin) _locInitMap([node.lat, node.lon], true);
+    }
+
+    // Lazily build the Leaflet pin map (only when the pin section is shown, so a
+    // hidden map never mis-sizes).
+    function _locInitMap(center, zoomed) {
+      if (_loc.map) { setTimeout(() => _loc.map.invalidateSize(), 40); return; }
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
         { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
         { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
-      const map = L.map('loc-map', { layers: [dark] }).setView(center, existing ? 14 : 10);
+      const map = L.map('loc-map', { layers: [dark] }).setView(center, zoomed ? 14 : 10);
       L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
       const marker = L.marker(center, { draggable: true }).addTo(map);
       map.on('click', (e) => { marker.setLatLng(e.latlng); });
@@ -917,14 +950,24 @@
       setTimeout(() => map.invalidateSize(), 80);
     }
 
-    // Skip/cancel the picker; in the create flow continue to the installer.
-    function skipLocation() {
-      const thenInstall = _loc.thenInstall;
-      const node = _loc.node;
-      const nodeId = _loc.nodeId;
-      closeLocationPicker();
-      if (thenInstall) showInstallModal(node || { id: nodeId });
+    // Toggle the optional exact-pin section.
+    function _locTogglePin(on) {
+      const mapEl = document.getElementById('loc-map');
+      if (!mapEl) return;
+      if (on) {
+        mapEl.style.display = 'block';
+        const node = _loc.node || {};
+        const center = typeof node.lat === 'number' ? [node.lat, node.lon] : [-33.8688, 151.2093];
+        _locInitMap(center, typeof node.lat === 'number');
+      } else {
+        mapEl.style.display = 'none';
+        if (_loc.map) { _loc.map.remove(); _loc.map = null; _loc.marker = null; }
+      }
     }
+
+    // Cancel the picker. In create mode nothing was created yet, so this simply
+    // aborts (no node); in edit mode it just closes.
+    function skipLocation() { closeLocationPicker(); }
 
     function closeLocationPicker() {
       if (_loc.map) { _loc.map.remove(); _loc.map = null; _loc.marker = null; }
@@ -942,33 +985,60 @@
     }
 
     async function saveLocation(btn) {
-      if (!_loc.marker) return;
-      const c = _loc.marker.getLatLng();       // exact antenna position
-      const nodeId = _loc.nodeId;
+      const zoneSel = document.getElementById('loc-zone');
+      const zone = zoneSel ? zoneSel.value : '';
+      if (!zone) { showToast('Please select your RFS zone.', 'error'); return; }
+      const pinOn = document.getElementById('loc-pin-on');
+      let lat = null, lon = null;
+      if (pinOn && pinOn.checked && _loc.marker) {
+        const c = _loc.marker.getLatLng();
+        lat = c.lat; lon = c.lng;
+      }
+      const createMode = !!_loc.createKind;
       const thenInstall = _loc.thenInstall;
-      const node = _loc.node;
       btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
       try {
-        await putLocation(nodeId, { lat: c.lat, lon: c.lng });
-        showToast('Antenna location saved.', 'success');
-        closeLocationPicker();
-        await refreshNodes();
-        if (thenInstall) showInstallModal(node || { id: nodeId });
+        if (createMode) {
+          const jwt = await getToken();
+          if (!jwt) { window.location.href = 'login.html?redirect=' + encodeURIComponent('/feeder.html'); return; }
+          const res = await fetch(`${API_BASE_URL}/api/feeder/nodes`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + jwt, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: _loc.createKind, zone }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          _nodeTokens[data.node.id] = data.token;
+          if (lat !== null) await putLocation(data.node.id, { zone, lat, lon });
+          closeLocationPicker();
+          await refreshNodes();
+          showInstallModal(data.node);
+        } else {
+          const nodeId = _loc.nodeId;
+          await putLocation(nodeId, { zone, lat, lon });
+          showToast('Location saved.', 'success');
+          closeLocationPicker();
+          await refreshNodes();
+          if (thenInstall) showInstallModal(_loc.node || { id: nodeId });
+        }
       } catch (e) {
-        showToast('Could not save location.', 'error');
-        btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Save location';
+        showToast(`Could not save: ${e.message}`, 'error');
+        btn.disabled = false; btn.innerHTML = `<i class="fas fa-check"></i> ${createMode ? 'Create node' : 'Save'}`;
       }
     }
 
+    // Remove just the exact pin, keeping the (required) zone.
     async function clearLocation(btn) {
-      const nodeId = _loc.nodeId;
+      const zoneSel = document.getElementById('loc-zone');
+      const zone = zoneSel ? zoneSel.value : ((_loc.node && _loc.node.zone) || '');
+      if (!zone) { showToast('Select a zone first.', 'error'); return; }
       btn.disabled = true;
       try {
-        await putLocation(nodeId, { lat: null, lon: null });
-        showToast('Location cleared.', 'success');
+        await putLocation(_loc.nodeId, { zone, lat: null, lon: null });
+        showToast('Pin removed.', 'success');
         closeLocationPicker();
         await refreshNodes();
-      } catch (e) { showToast('Could not clear location.', 'error'); btn.disabled = false; }
+      } catch (e) { showToast('Could not remove pin.', 'error'); btn.disabled = false; }
     }
 
     // Download a node's installer (POST, token in body). Uses the session token if

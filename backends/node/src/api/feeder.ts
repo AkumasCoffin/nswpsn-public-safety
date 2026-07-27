@@ -36,6 +36,7 @@ import {
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
+import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
 
 export const feederRouter = new Hono();
 
@@ -124,6 +125,7 @@ function feederNodeView(n: NodeRow) {
     tokenPrefix: n.token_prefix,
     lat: n.lat,
     lon: n.lon,
+    zone: n.zone,
     online,
     lastSeenAt: n.last_seen_at,
     agentVersion: n.agent_version,
@@ -174,9 +176,11 @@ feederRouter.get('/api/feeder/me', async (c) => {
 // Mints the node's own token, returned ONCE (bake into the installer now).
 // ---------------------------------------------------------------------------
 const CreateNodeSchema = z.object({
-  // Nodes are always auto-named {kind}-{user}-{uuid}. Location is optional and
-  // set separately via PUT .../location (used for coverage + channel tuning).
+  // Nodes are always auto-named {kind}-{user}-{uuid}. A coarse RFS `zone` is
+  // REQUIRED at creation; the exact antenna pin (lat/lon) stays optional and is
+  // set/updated separately via PUT .../location.
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
+  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
 });
 feederRouter.post('/api/feeder/nodes', async (c) => {
   const userId = c.get('userId') as string;
@@ -196,7 +200,7 @@ feederRouter.post('/api/feeder/nodes', async (c) => {
     }
     const name = autoNodeName(parsed.data.kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
-    const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix);
+    const node = await createNode(userId, name, parsed.data.kind, tokenHash, tokenPrefix, parsed.data.zone);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({ node: feederNodeView(node), token });
@@ -520,11 +524,22 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/feeder/nodes/:id/location — set the node's EXACT antenna location
-// (used for coverage calculation + more exact channel tuning). Optional; pass
-// null lat/lon to clear.
+// GET /api/feeder/zones — the RFS zone list (grouped by Area Command) that backs
+// the location picker's required zone dropdown. Reference data; any logged-in
+// user (feeder or staff) may read it.
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/zones', (c) => {
+  c.header('Cache-Control', 'public, max-age=3600');
+  return c.json({ groups: getZoneGroups() });
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/feeder/nodes/:id/location — set the node's location: its REQUIRED RFS
+// `zone` (coarse area) plus the OPTIONAL exact antenna pin (lat/lon for coverage
+// + channel tuning). Pass null lat/lon for "zone only".
 // ---------------------------------------------------------------------------
 const LocationSchema = z.object({
+  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
   lat: z.number().min(-90).max(90).nullable(),
   lon: z.number().min(-180).max(180).nullable(),
 });
@@ -534,7 +549,7 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   const parsed = LocationSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: 'invalid location' }, 400);
   try {
-    const updated = await setNodeLocation(node.id, parsed.data.lat, parsed.data.lon);
+    const updated = await setNodeLocation(node.id, parsed.data);
     return c.json({ node: updated ? feederNodeView(updated) : null });
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');

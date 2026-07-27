@@ -41,6 +41,7 @@ import { isAgentCommandAction } from '../services/nodes/protocol.js';
 import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import { buildConfigPayload, pagerPrimaryOf, pagerGainOf, pagerPpmOf } from '../services/nodes/configMerge.js';
+import { isValidZone } from '../services/nodes/rfsZones.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
 import {
   getGlobalConfig,
@@ -81,6 +82,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>) {
     tokenPrefix: node.token_prefix,
     lat: node.lat,
     lon: node.lon,
+    zone: node.zone,
     online: live.online,
     status: live.status,
     lastStatusAt: live.lastStatusAt,
@@ -439,6 +441,7 @@ nodesRouter.get('/api/nodes/:id/stats', requireRole(canManageNodes), async (c) =
 const CreateSchema = z.object({
   userId: z.string().min(1),
   kind: z.string().refine(isNodeKind, 'invalid node kind'),
+  zone: z.string().min(1).refine(isValidZone, 'unknown zone'),
 });
 nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
   try {
@@ -446,13 +449,13 @@ nodesRouter.post('/api/nodes', requireRole(canManageNodes), async (c) => {
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
-    const { userId, kind } = parsed.data;
+    const { userId, kind, zone } = parsed.data;
     if ((await countNodesForUser(userId)) >= MAX_NODES_PER_USER) {
       return c.json({ error: 'node limit reached for this user' }, 429);
     }
     const name = autoNodeName(kind, await getUsername(userId));
     const { token, tokenHash, tokenPrefix } = mintNodeToken();
-    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix);
+    const node = await createNode(userId, name, kind, tokenHash, tokenPrefix, zone);
     if (!node) return c.json({ error: 'registry unavailable' }, 503);
     c.header('Cache-Control', 'no-store');
     return c.json({ node: toApi(node), token });

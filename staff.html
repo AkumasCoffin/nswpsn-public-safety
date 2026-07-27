@@ -2799,6 +2799,9 @@
             <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
+          <div class="dev-card-secondary">
+            <span><i class="fas fa-map"></i> zone ${node.zone ? `<strong>${escapeHtml(node.zone)}</strong>` : '<span style="color:#fbbf24">not set</span>'}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
+          </div>
           ${statusRow}
         </div>`;
     }
@@ -2908,8 +2911,27 @@
     let _locViewMap = null;
     function viewNodeLocation(id) {
       const node = allNodes.find(n => String(n.id) === String(id));
-      if (!node || typeof node.lat !== 'number' || typeof node.lon !== 'number') {
-        showToast('No location set for this node.', 'warn');
+      if (!node) return;
+      const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
+      const zoneLine = node.zone
+        ? `<div class="loc-view-note"><i class="fas fa-map"></i> RFS zone: <b>${escapeHtml(node.zone)}</b></div>`
+        : `<div class="loc-view-note" style="color:#fbbf24">No zone set for this node.</div>`;
+      // Zone-only node (no exact pin) — show the zone, no map.
+      if (!hasPin) {
+        const overlay = document.createElement('div');
+        overlay.id = 'loc-view-modal';
+        overlay.className = 'loc-view-overlay';
+        overlay.innerHTML = `
+          <div class="loc-view-box">
+            <div class="loc-view-head">
+              <b><i class="fas fa-location-dot"></i> ${escapeHtml(node.name || 'Node')}</b>
+              <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
+            </div>
+            ${zoneLine}
+            <div class="loc-view-note">No exact antenna pin set (zone only). Staff/owner only, never public.</div>
+          </div>`;
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
+        document.body.appendChild(overlay);
         return;
       }
       const overlay = document.createElement('div');
@@ -2922,6 +2944,7 @@
             <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
           </div>
           <div id="loc-view-map"></div>
+          ${zoneLine}
           <div class="loc-view-note">Exact antenna location, set by the operator — used for coverage calculation and channel tuning. Staff/owner only, never public.</div>
         </div>`;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
@@ -3670,6 +3693,10 @@
       const feedEnabled = n.feedEnabled === true;
       const isPager = (n.kind || 'radio') === 'pager';
       const located = typeof n.lat === 'number';
+      const hasLoc = located || !!n.zone;
+      const locTitle = n.zone
+        ? `Zone: ${escapeHtml(n.zone)}${located ? ' · exact pin set' : ' · no exact pin'}`
+        : 'No location set';
       const feedTitle = isPager
         ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
         : "Forward calls to central rdio. Off disables the node's rdio downstream (rdio keeps running, stops uploading).";
@@ -3691,7 +3718,7 @@
           </div>
         </div>
         <div class="nd-controls" style="margin-top:0.8rem;">
-          <button class="btn btn-secondary btn-sm ${located ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${located ? 'View antenna location' : 'No location set'}"><i class="fas fa-location-dot"></i> Location</button>
+          <button class="btn btn-secondary btn-sm ${hasLoc ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${locTitle}"><i class="fas fa-location-dot"></i> Location</button>
           <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)"><i class="fas fa-key"></i> Re-issue key</button>
           ${userPermissions.is_owner ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i> Delete</button>` : ''}
         </div>`;
