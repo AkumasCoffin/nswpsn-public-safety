@@ -1,0 +1,217 @@
+[
+  {
+    "areaCommand": "Greater Sydney",
+    "zones": [
+      {
+        "name": "Northern Beaches",
+        "districts": "Northern Beaches"
+      },
+      {
+        "name": "Hornsby/Ku-ring-gai",
+        "districts": "Hornsby, Ku-ring-gai"
+      },
+      {
+        "name": "The Hills",
+        "districts": "The Hills"
+      },
+      {
+        "name": "Hawkesbury",
+        "districts": "Hawkesbury"
+      },
+      {
+        "name": "Cumberland",
+        "districts": "Blacktown, Fairfield, Penrith"
+      },
+      {
+        "name": "Blue Mountains",
+        "districts": "Blue Mountains"
+      },
+      {
+        "name": "Macarthur",
+        "districts": "Camden, Campbelltown, Liverpool"
+      },
+      {
+        "name": "Sutherland",
+        "districts": "Sutherland"
+      },
+      {
+        "name": "Illawarra",
+        "districts": "Kiama, Shellharbour, Wollongong"
+      },
+      {
+        "name": "Southern Highlands",
+        "districts": "Wingecarribee, Wollondilly"
+      }
+    ]
+  },
+  {
+    "areaCommand": "Hunter",
+    "zones": [
+      {
+        "name": "Lower North Coast",
+        "districts": "Kempsey, Nambucca"
+      },
+      {
+        "name": "Mid Coast",
+        "districts": "Lord Howe Island, Mid-Coast, Hastings"
+      },
+      {
+        "name": "Lower Hunter",
+        "districts": "Cessnock, Dungog, Maitland, Port Stephens"
+      },
+      {
+        "name": "Hunter Valley",
+        "districts": "Muswellbrook, Singleton"
+      },
+      {
+        "name": "Central Coast",
+        "districts": "Central Coast, Lake Macquarie"
+      }
+    ]
+  },
+  {
+    "areaCommand": "North Eastern",
+    "zones": [
+      {
+        "name": "Far North Coast",
+        "districts": "Ballina, Byron, Tweed"
+      },
+      {
+        "name": "Northern Rivers",
+        "districts": "Kyogle, Lismore, Richmond, Valley"
+      },
+      {
+        "name": "Clarence Valley",
+        "districts": "Clarence Valley"
+      },
+      {
+        "name": "Coffs Coast",
+        "districts": "Bellingen, Coffs Harbour"
+      },
+      {
+        "name": "Northern Tablelands",
+        "districts": "Glen Innes Severn, Inverell, Tenterfield"
+      },
+      {
+        "name": "New England",
+        "districts": "Armidale, Uralla, Walcha"
+      }
+    ]
+  },
+  {
+    "areaCommand": "North Western",
+    "zones": [
+      {
+        "name": "Namoi/Gwydir",
+        "districts": "Gwydir, Moree Plains, Narrabri"
+      },
+      {
+        "name": "Tamworth",
+        "districts": "Tamworth"
+      },
+      {
+        "name": "Liverpool Range",
+        "districts": "Gunnedah, Liverpool Plains, Upper Hunter"
+      },
+      {
+        "name": "Castlereagh",
+        "districts": "Gilgandra, Warrumbungle"
+      },
+      {
+        "name": "North West",
+        "districts": "Bogan, Coonamble, Walgett, Warren"
+      }
+    ]
+  },
+  {
+    "areaCommand": "South Eastern",
+    "zones": [
+      {
+        "name": "Shoalhaven",
+        "districts": "Shoalhaven"
+      },
+      {
+        "name": "Far South Coast",
+        "districts": "Bega Valley, Eurobodalla"
+      },
+      {
+        "name": "Southern Tablelands",
+        "districts": "Goulburn Mulwaree, Upper Lachlan, Yass Valley"
+      },
+      {
+        "name": "Lake George",
+        "districts": "Queanbeyan-Palerang"
+      },
+      {
+        "name": "Monaro",
+        "districts": "Snowy Monaro"
+      },
+      {
+        "name": "Riverina Highlands",
+        "districts": "Snowy Valleys"
+      }
+    ]
+  },
+  {
+    "areaCommand": "South Western",
+    "zones": [
+      {
+        "name": "Bland Temora",
+        "districts": "Bland, Temora"
+      },
+      {
+        "name": "Riverina",
+        "districts": "Coolamon, Junee, Lockhart, Wagga Wagga"
+      },
+      {
+        "name": "Southern Border",
+        "districts": "Albury, Berrigan, Federation, Greater Hume"
+      },
+      {
+        "name": "MIA",
+        "districts": "Carrathool, Griffith, Hay, Leeton, Narrandera"
+      },
+      {
+        "name": "Mid Murray",
+        "districts": "Edward River, Murray River, Murrumbidgee"
+      },
+      {
+        "name": "Lower Western",
+        "districts": "Balranald, Wentworth"
+      }
+    ]
+  },
+  {
+    "areaCommand": "Western",
+    "zones": [
+      {
+        "name": "Cudgegong",
+        "districts": "Cudgegong"
+      },
+      {
+        "name": "Chifley Lithgow",
+        "districts": "Bathurst, Lithgow, Oberon"
+      },
+      {
+        "name": "Orana",
+        "districts": "Dubbo, Narromine"
+      },
+      {
+        "name": "Canobolas",
+        "districts": "Blayney, Cabonne, Cowra, Orange"
+      },
+      {
+        "name": "South West Slopes",
+        "districts": "Cootamundra-Gundagai, Hilltops"
+      },
+      {
+        "name": "Mid Lachlan Valley",
+        "districts": "Forbes, Lachlan, Parkes, Weddin"
+      },
+      {
+        "name": "Far West",
+        "districts": "Bourke, Brewarrina, Central Darling, Cobar, Unincorporated"
+      }
+    ]
+  }
+]
