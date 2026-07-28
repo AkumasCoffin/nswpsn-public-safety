@@ -702,7 +702,11 @@
       }
     }
 
-    async function applySession(session) {
+    // `fresh` is true only for a genuine new sign-in (Discord OAuth return),
+    // false when an already-logged-in session merely loads the page. The draft
+    // request is created only when fresh, so visiting the page while already
+    // signed in no longer auto-creates a signup request without pressing Submit.
+    async function applySession(session, fresh) {
       if (!session) return;
       const user = session.user || {};
       const meta = user.user_metadata || {};
@@ -746,7 +750,9 @@
 
       // Record the signup in the admin queue immediately (Discord signups only —
       // they have a Discord identity; email signups submit the full form anyway).
-      if (discordIdentity && !_draftEnsured) {
+      // Only on a FRESH sign-in — an already-logged-in user re-visiting the page
+      // must not silently create a request.
+      if (discordIdentity && fresh && !_draftEnsured) {
         _draftEnsured = true;
         ensureDraftRequest(session, user.email);
       }
@@ -766,9 +772,11 @@
       document.getElementById('password-group').style.display = 'none';
     }
 
-    sb.auth.getSession().then(({ data }) => applySession(data.session));
+    // Existing session on page load → set up the UI but DON'T create a draft.
+    sb.auth.getSession().then(({ data }) => applySession(data.session, false));
+    // A genuine new sign-in (Discord OAuth return) → fresh, so the draft fires.
     sb.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN') applySession(session);
+      if (event === 'SIGNED_IN') applySession(session, true);
     });
 
     let currentRating = 0;
