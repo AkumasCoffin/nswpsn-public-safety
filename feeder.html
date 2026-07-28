@@ -655,7 +655,7 @@
       } catch (e) { return []; }
     }
     function _zoneOptionsHtml(selected) {
-      let out = `<option value="" ${selected ? '' : 'selected'} disabled>Select your RFS zone…</option>`;
+      let out = `<option value="" ${selected ? '' : 'selected'} disabled>Select your region…</option>`;
       for (const g of (_zoneGroups || [])) {
         out += `<optgroup label="${escapeHtml(g.areaCommand)}">`;
         for (const z of (g.zones || [])) {
@@ -776,7 +776,7 @@
       const locStr = located ? ' · <i class="fas fa-location-dot"></i> exact pin' : '';
       const zoneStr = node.zone
         ? ` · <i class="fas fa-map"></i> ${escapeHtml(node.zone)}`
-        : ` · <span style="color:#fbbf24">no zone set</span>`;
+        : ` · <span style="color:#fbbf24">no region set</span>`;
       const _dlBtn = {
         windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>`,
         linux: `<button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`,
@@ -785,7 +785,7 @@
       const actions = `
         <div class="node-actions">
           ${dl}
-          <button class="mini-btn" title="Set zone / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${node.zone ? 'Location' : 'Set zone'}</button>
+          <button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${node.zone ? 'Location' : 'Set region'}</button>
           <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
           <button class="mini-btn danger" title="Delete node (cuts it off)" onclick="deleteFeederNode('${node.id}',this)"><i class="fas fa-trash"></i></button>
         </div>`;
@@ -928,7 +928,7 @@
       const zones = await loadZones();
       if (!zones.length) {
         // No zones = can't pick one = can't create/save. Don't open a dead modal.
-        showToast('Could not load the RFS zone list. Check your connection and try again.', 'error');
+        showToast('Could not load the region list. Check your connection and try again.', 'error');
         return;
       }
       const overlay = document.createElement('div');
@@ -937,11 +937,11 @@
       overlay.innerHTML = `
         <div class="modal loc-modal">
           <h3><i class="fas fa-location-dot"></i> Node location</h3>
-          <p>Every node needs a <b>zone</b> (your NSW RFS area). Optionally drop an
+          <p>Every node needs a <b>region</b> (its NSW RFS area). Optionally drop an
              <b>exact antenna pin</b> — it improves <b>coverage</b> estimates and
-             <b>channel tuning</b>. The pin and zone are staff/owner only, never public.</p>
+             <b>channel tuning</b>. The pin and region are staff/owner only, never public.</p>
           <label class="loc-field">
-            <span>RFS zone <span style="color:#f87171">*</span></span>
+            <span>Region <span style="color:#f87171">*</span></span>
             <select id="loc-zone">${_zoneOptionsHtml(curZone)}</select>
           </label>
           <label class="loc-pin-toggle">
@@ -1016,7 +1016,7 @@
     async function saveLocation(btn) {
       const zoneSel = document.getElementById('loc-zone');
       const zone = zoneSel ? zoneSel.value : '';
-      if (!zone) { showToast('Please select your RFS zone.', 'error'); return; }
+      if (!zone) { showToast('Please select your region.', 'error'); return; }
       const pinOn = document.getElementById('loc-pin-on');
       let lat = null, lon = null;
       if (pinOn && pinOn.checked) {
@@ -1066,7 +1066,7 @@
     async function clearLocation(btn) {
       const zoneSel = document.getElementById('loc-zone');
       const zone = zoneSel ? zoneSel.value : ((_loc.node && _loc.node.zone) || '');
-      if (!zone) { showToast('Select a zone first.', 'error'); return; }
+      if (!zone) { showToast('Select a region first.', 'error'); return; }
       btn.disabled = true;
       try {
         await putLocation(_loc.nodeId, { zone, lat: null, lon: null });
