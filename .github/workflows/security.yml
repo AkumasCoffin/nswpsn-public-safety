@@ -34,7 +34,9 @@ jobs:
           cache-dependency-path: backends/node/package-lock.json
       - run: npm ci
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        # Fails on any high/critical prod advisory except documented
+        # false-positives allowlisted in scripts/audit-check.mjs.
+        run: node scripts/audit-check.mjs
 
   secrets:
     name: Secret hygiene
