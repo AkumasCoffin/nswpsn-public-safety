@@ -63,6 +63,93 @@ describe('pager.parsePagerIncidentId', () => {
   });
 });
 
+describe('pager.parsePagerIncidentId (FRNSW)', () => {
+  it('extracts an FRNSW FRINC turnout id', async () => {
+    const { parsePagerIncidentId } = await import('../../../src/sources/pager.js');
+    expect(parsePagerIncidentId('FRINC TYPE: AFA TURNOUT: 405 INC: 146685-28072026')).toBe(
+      '146685-28072026',
+    );
+  });
+});
+
+describe('pager.parsePagerType', () => {
+  it('parses type + call class from a standard RFS detail line', async () => {
+    const { parsePagerType } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerType(
+        'CVCOUCR7 - 26-122002 - Bush Fire - FIRECALL - 526 MIDDLE CREEK RD,KANGAROO CREEK,CLARENCE VALLEY (NSW),2460 - [152.91203,-29.926772]',
+      ),
+    ).toEqual({ type: 'Bush Fire', callClass: 'FIRECALL' });
+  });
+
+  it('parses type when the call class is absent', async () => {
+    const { parsePagerType } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerType('ISDO - 26-121910 - MVA - 6 LARKINS LANE,YALLAH,WOLLONGONG CITY (NSW),2530 - [150.77867,-34.53929]'),
+    ).toEqual({ type: 'MVA', callClass: '' });
+  });
+
+  it('skips a VRA service tag to find the real type', async () => {
+    const { parsePagerType } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerType('VRCENTR414 - 26-121994 - VRA - ROAD CRASH RESCUE - AML SOUTHBOUND M1'),
+    ).toEqual({ type: 'ROAD CRASH RESCUE', callClass: '' });
+  });
+
+  it('parses an FRNSW FRINC header type with a TURNOUT class', async () => {
+    const { parsePagerType } = await import('../../../src/sources/pager.js');
+    expect(parsePagerType('FRINC TYPE: HOUSE FIRE TURNOUT: 405 INC: 146685-28072026')).toEqual({
+      type: 'HOUSE FIRE',
+      callClass: 'TURNOUT',
+    });
+  });
+
+  it('returns no type for a Stop Message (no bogus free-text type)', async () => {
+    const { parsePagerType } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerType('26-121998 CVGRACI1 Stop Message // SWALLOW RD SOUTH GRAFTON - NO NEED TO ATTEND THANKS.'),
+    ).toEqual({ type: '', callClass: '' });
+    expect(
+      parsePagerType('HKHORNS - 26-119173 - STOP -STAND DOWN - NNTA THANKS FOR YOUR TURNOUT.'),
+    ).toEqual({ type: '', callClass: '' });
+  });
+});
+
+describe('pager.parsePagerStop', () => {
+  it('detects the Stop Message variants', async () => {
+    const { parsePagerStop } = await import('../../../src/sources/pager.js');
+    expect(parsePagerStop('26-121998 CVGRACI1 Stop Message // no need to attend')).toBe(true);
+    expect(parsePagerStop('HKHORNS - 26-119173 - STOP -STAND DOWN - NNTA THANKS')).toBe(true);
+    expect(parsePagerStop('STOP MESSAGE - STAND DOWN NNTA THANKS')).toBe(true);
+    expect(parsePagerStop('CVCOUCR7 - 26-122002 - Bush Fire - FIRECALL - x')).toBe(false);
+  });
+});
+
+describe('pager.inferPagerAgency', () => {
+  it('infers FRNSW / NSWRFS / VRA / SES from the body', async () => {
+    const { inferPagerAgency } = await import('../../../src/sources/pager.js');
+    expect(inferPagerAgency('FRINC TYPE: AFA TURNOUT: 405 INC: 146685-28072026', '')).toBe('FRNSW');
+    expect(inferPagerAgency('CVCOUCR7 - 26-122002 - Bush Fire - FIRECALL - x', '')).toBe('NSWRFS');
+    expect(inferPagerAgency('VRCENTR414 - 26-121994 - VRA - ROAD CRASH RESCUE - x', '')).toBe('VRA');
+    expect(inferPagerAgency('SEZWCB GLR at ASCOT ROAD, BOWRAL', '')).toBe('SES');
+  });
+
+  it('respects an explicit upstream tag over body guessing', async () => {
+    const { inferPagerAgency } = await import('../../../src/sources/pager.js');
+    expect(inferPagerAgency('26-122002 Bush Fire', 'Rural Fire Service')).toBe('NSWRFS');
+    expect(inferPagerAgency('plain text', 'Ambulance')).toBe('NSWAS');
+  });
+});
+
+describe('pager.parsePagerAddress', () => {
+  it('returns the address after type/call class', async () => {
+    const { parsePagerAddress } = await import('../../../src/sources/pager.js');
+    expect(
+      parsePagerAddress('CVCOUCR7 - 26-122002 - Bush Fire - FIRECALL - 526 MIDDLE CREEK RD,KANGAROO CREEK - [152.9,-29.9]'),
+    ).toBe('526 MIDDLE CREEK RD,KANGAROO CREEK');
+  });
+});
+
 describe('pager.fetchPager', () => {
   beforeEach(() => {
     fetchJsonMock.mockReset();

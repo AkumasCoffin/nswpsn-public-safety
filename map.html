@@ -4852,6 +4852,10 @@ function initPagerHoursFromStorage() {
           alias: f.properties.alias,
           agency: f.properties.agency,
           message: f.properties.message,
+          // Structured fields from the backend parser (fall back to '' / false).
+          type: f.properties.type || '',
+          call_class: f.properties.call_class || '',
+          is_stop: f.properties.is_stop === true,
           incident_time: f.properties.incident_time,
           lat: f.properties.lat,
           lon: f.properties.lon
@@ -5838,6 +5842,13 @@ function initPagerHoursFromStorage() {
           : '';
 
       const isStop = /stop message/i.test(typeDisplay);
+      // Stop received across the cluster — prefer the backend's structured
+      // is_stop flag, fall back to message text for older cached hits.
+      const anyStop = hits.some(h => h && (h.is_stop === true ||
+        /\bstop\s*(?:message|msg)\b|\bstand\s*down\b|\bnnta\b/i.test(h.message || h.raw_message || '')));
+      const stopPill = anyStop
+        ? `<span class="pager-chip pager-chip-stop"><i class="fa-solid fa-hand" style="margin-right:3px;"></i>Stop message received</span>`
+        : '';
       const summaryTimeStr = enriched[0].ms !== null ? new Date(enriched[0].ms).toLocaleString() : '';
 
       const idChips = incidentIds
@@ -5858,6 +5869,7 @@ function initPagerHoursFromStorage() {
         ${withHeading ? '<div class="pager-section-h">Pager activity</div>' : ''}
         <div class="pager-summary-card">
           <div class="pager-chip-row">
+            ${stopPill}
             ${typeDisplay ? `<span class="pager-chip ${isStop ? 'pager-chip-stop' : 'pager-chip-type'}">${escapeHtml(typeDisplay)}</span>` : ''}
             ${idChips}
           </div>
@@ -6219,14 +6231,21 @@ function initPagerHoursFromStorage() {
       } catch (e) {}
 
       const hitCount = hits.length;
+      // Stop received if the backend flagged any hit (is_stop), with a text
+      // fallback for older cached rows without the structured field.
+      const anyStop = hits.some(h => h && (h.is_stop === true ||
+        /\bstop\s*(?:message|msg)\b|\bstand\s*down\b|\bnnta\b/i.test(h.message || '')));
       let html = `<div style="max-width:320px; font-family:'Inter', system-ui, -apple-system, sans-serif; line-height:1.4;">`;
-      
+
       // Compact header row
       html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap;">`;
       html += `<span style="color:#22c55e; font-size:13px; font-weight:600;"><i class="fa-solid fa-pager" style="margin-right:4px;"></i>PSN Pager</span>`;
       html += `<span style="background:#f97316; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">${escapeHtml(firstParsed.typeDisplay || 'Incident')}</span>`;
       if (hitCount > 1) {
         html += `<span style="background:#22c55e; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600;">${hitCount} hits</span>`;
+      }
+      if (anyStop) {
+        html += `<span style="background:#ef4444; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;"><i class="fa-solid fa-hand" style="margin-right:3px;"></i>Stop message received</span>`;
       }
       html += `</div>`;
       

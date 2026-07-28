@@ -29,8 +29,20 @@ export interface PagerMessage {
   agency: string;
   source: string;
   message: string;
-  lat: number;
-  lon: number;
+  /** Incident TYPE parsed from the body (e.g. "Bush Fire", "AFA", "MVA"). */
+  type: string;
+  /** Call class token following the type ("FIRECALL", "INCIDENT CALL",
+   *  "CFR CALL", "TURNOUT" for FRNSW headers). Empty when absent. */
+  call_class: string;
+  /** Address / location segment of the body, coords + decorations removed. */
+  address_text: string;
+  /** True when this page is a Stop Message / Stand Down / NNTA. Flag only —
+   *  the incident keeps its pin (per the product decision). */
+  is_stop: boolean;
+  /** null when the incident has no coordinates (e.g. FRNSW FRINC turnouts).
+   *  Coordless messages are archived (logs page) but never mapped. */
+  lat: number | null;
+  lon: number | null;
   /** Naive Sydney-local datetime string (YYYY-MM-DDTHH:mm:ss) built
    *  from upstream `timestamp` (unix seconds). Matches python's
    *  `datetime.fromtimestamp(ts).isoformat()` output exactly. */
@@ -79,11 +91,144 @@ export function parsePagerIncidentId(message: string): string | null {
   text = text.replace(/[‎‏‪‬­]/g, '');
   // Normalise dash variants to plain ASCII hyphen.
   text = text.replace(/[‐-―−⁃]/g, '-');
+  // FRNSW turnout id: `INC: 146685-28072026` (6 digits - ddmmyyyy). Distinct
+  // format from the RFS ids below, so no collision; keep it whole so every
+  // FRINC page for the same turnout groups together.
+  const frinc = text.match(/\bINC:\s*(\d{5,6}-\d{8})\b/i);
+  if (frinc?.[1]) return frinc[1];
   const long = text.match(/\b(\d{2}-\d{6})\b/);
   if (long?.[1]) return long[1];
   const short = text.match(/\b(\d{4}-\d{4})\b/);
   if (short?.[1]) return short[1];
   return null;
+}
+
+// --- Structured body parsing ----------------------------------------------
+// The pager body carries far more than an id + coords. NSW RFS/FRNSW detail
+// lines look like:
+//   [date] CAP - 26-121910 - MVA - INCIDENT CALL - <address> - [lon,lat]
+//   CAP - 26-121910 - MVA - <address> - [lon,lat]        (no call class)
+// and FRNSW turnout headers like:
+//   FRINC TYPE: AFA TURNOUT: 405 INC: 146685-28072026    (no coords)
+// The helpers below extract TYPE / call class / address / stop-intent /
+// agency so the map, logs and API all share one canonical parse.
+
+/** Stop Message / Stand Down / NNTA detector across every variant seen in the
+ *  feed (`... Stop Message // ...`, `STOP MESSAGE - ...`, `STOP MSG`,
+ *  inline `- STOP MESSAGE -`, `STAND DOWN`, `NNTA`, "no need to attend"). */
+const STOP_RE =
+  /\bstop\s*(?:message|msg)\b|\bstand\s*down\b|\bnnta\b|\bno need to attend\b/i;
+
+/** Call-class tokens that can follow the incident TYPE in a detail line. */
+const CALL_CLASS_RE =
+  /^(FIRECALL|INCIDENT CALL|CFR CALL|STRUCTURE CALL|MEDICAL|RESCUE|[A-Z]{2,}(?: [A-Z]{2,})? CALL)$/i;
+
+/** Remove zero-width chars, trailing `[lon,lat]` (even if truncated) and a
+ *  leading `DD Month YYYY HH:MM:SS` / `HH:MM:SS` timestamp, so the remainder
+ *  is just the `CAP - ID - TYPE - ...` payload. */
+function stripBodyDecorations(message: string): string {
+  let t = (message || '').replace(/[‎‏‪‬­]/g, '');
+  t = t.replace(/[‐-―−⁃]/g, '-');
+  t = t.trim();
+  t = t.replace(/\s*\[[\d.,\-\s]*\]?\s*$/, '').trim(); // trailing coords
+  t = t.replace(/\s*-\s*$/, '').trim(); // dangling `-` separator left by coord removal
+  t = t.replace(/^\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+/, '');
+  t = t.replace(/^\d{1,2}:\d{2}:\d{2}\s+/, '');
+  return t.trim();
+}
+
+export function parsePagerStop(message: string): boolean {
+  return STOP_RE.test(message || '');
+}
+
+/** A service tag that can sit in the TYPE slot ahead of the real type, e.g.
+ *  `... - 26-121994 - VRA - ROAD CRASH RESCUE - addr` (VRA rescue units). When
+ *  present it's the agency marker, not the incident type — skip it. */
+const SERVICE_TAG_RE = /^(VRA|RFS|NSWRFS|FRNSW|SES|NSWAS|POLICE|NSWPF)$/i;
+
+/** Locate the body parts and the index of the incident TYPE segment. The id
+ *  must be its OWN segment (not embedded in stop free-text); the type sits one
+ *  segment later, unless a service tag (VRA/…) occupies that slot first. */
+function locateBody(message: string): { parts: string[]; typeIdx: number } {
+  const parts = stripBodyDecorations(message)
+    .split(/\s+-\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Only treat a segment that IS the id (not one that merely contains it) as
+  // the split point. In the standard detail line the id is its own ` - `
+  // segment; in a Stop Message the id is embedded in a larger segment
+  // (`26-121998 CVGRACI1 Stop Message // ...`), which must NOT yield a bogus
+  // "type" from the trailing free text.
+  const idIdx = parts.findIndex(
+    (p) => /^\d{2}-\d{6}$/.test(p) || /^\d{4}-\d{4}$/.test(p),
+  );
+  if (idIdx < 0) return { parts, typeIdx: -1 };
+  let typeIdx = idIdx + 1;
+  if (SERVICE_TAG_RE.test(parts[typeIdx] ?? '')) typeIdx += 1;
+  return { parts, typeIdx };
+}
+
+/** Extract incident TYPE + call class from a body. Returns empty strings when
+ *  the body has no recognisable `- ID - TYPE -` structure (stop-only pages,
+ *  free text). FRNSW `FRINC TYPE: X TURNOUT:` headers yield the type with a
+ *  synthetic "TURNOUT" call class. */
+export function parsePagerType(message: string): { type: string; callClass: string } {
+  const raw = message || '';
+  const frinc = raw.match(/\bFRINC\b.*?TYPE:\s*(.+?)\s+TURNOUT:/i);
+  if (frinc?.[1]) return { type: frinc[1].replace(/\s+/g, ' ').trim(), callClass: 'TURNOUT' };
+
+  const { parts, typeIdx } = locateBody(raw);
+  const type = typeIdx >= 0 ? (parts[typeIdx] ?? '') : '';
+  // A "type" that is itself stop language (`STOP -STAND DOWN`) is not a real
+  // incident type — the page is a stop notice, not a dispatch.
+  if (!type || STOP_RE.test(type)) return { type: '', callClass: '' };
+  const next = parts[typeIdx + 1] ?? '';
+  const callClass = CALL_CLASS_RE.test(next) ? next.toUpperCase() : '';
+  return { type, callClass };
+}
+
+/** Extract the address/location segment(s): everything after the TYPE (and the
+ *  optional call class), with the trailing coords already removed. */
+export function parsePagerAddress(message: string): string {
+  const { parts, typeIdx } = locateBody(message);
+  if (typeIdx < 0) return '';
+  let addrIdx = typeIdx + 1; // skip the type
+  if (CALL_CLASS_RE.test(parts[addrIdx] ?? '')) addrIdx += 1; // skip call class
+  return parts.slice(addrIdx).join(' - ').trim();
+}
+
+/** Normalise a free-form agency string to a canonical NSW service code. */
+function normaliseAgency(a: string): string {
+  const s = (a || '').trim();
+  if (!s) return '';
+  const u = s.toUpperCase();
+  if (/RFS|RURAL FIRE/.test(u)) return 'NSWRFS';
+  if (/FRNSW|FIRE\s*(?:&|AND)?\s*RESCUE|^FIRE$/.test(u)) return 'FRNSW';
+  if (/AMBUL|NSWAS|PARAMED/.test(u)) return 'NSWAS';
+  if (/\bSES\b|STATE EMERGENCY/.test(u)) return 'SES';
+  if (/POLICE|NSWPF/.test(u)) return 'POLICE';
+  return s;
+}
+
+/** Infer the responding agency from the body's format when Pagermon hasn't
+ *  tagged it. FRNSW turnout headers → FRNSW; an RFS incident id → NSWRFS;
+ *  otherwise fall back to a normalised upstream tag. */
+export function inferPagerAgency(message: string, upstream: string): string {
+  const raw = message || '';
+  if (/\bFRINC\b|\bTURNOUT:/i.test(raw)) return 'FRNSW';
+  // Respect an explicit upstream (Pagermon) tag before guessing from the body.
+  const up = normaliseAgency(upstream);
+  if (up) return up;
+  // SES Zone rescue callouts use `SEZ<area>` capcodes and rescue mnemonics
+  // (GLR/RCR/VRA). Detect them before the RFS id check — some carry a short
+  // `0055-xxxx` id but are not RFS jobs.
+  if (/\bSEZ[A-Z]{2,}\b|\bSES\b|\bSES\d/.test(raw)) return 'SES';
+  if (/\bVRA\b/.test(raw)) return 'VRA';
+  // An RFS incident id (26-xxxxxx) is the strongest RFS signal.
+  if (/\b\d{2}-\d{6}\b/.test(raw)) return 'NSWRFS';
+  // A police assistance callout with no rescue-service signal above.
+  if (/\bNSWPF\b|\bNSW POLICE\b/.test(raw)) return 'POLICE';
+  return '';
 }
 
 interface RawPagerMsg {
@@ -157,6 +302,10 @@ export async function fetchPager(): Promise<PagerSnapshot> {
 
   const out: PagerMessage[] = [];
   for (const [incId, items] of groups) {
+    // Canonical coords = first coord-bearing message in the group; may stay
+    // null (e.g. an FRNSW FRINC turnout group has no coords at all). Coordless
+    // groups are still emitted so they reach the archive/logs — the map paths
+    // skip null coords, so they never draw a pin.
     let canonLat: number | null = null;
     let canonLon: number | null = null;
     for (const it of items) {
@@ -166,7 +315,6 @@ export async function fetchPager(): Promise<PagerSnapshot> {
         break;
       }
     }
-    if (canonLat === null || canonLon === null) continue;
 
     for (const it of items) {
       const m = it.msg;
@@ -188,14 +336,20 @@ export async function fetchPager(): Promise<PagerSnapshot> {
           incidentTime = null;
         }
       }
+      const body = asString(m.message);
+      const { type, callClass } = parsePagerType(body);
       out.push({
         id: typeof pagerMsgId === 'string' || typeof pagerMsgId === 'number' ? pagerMsgId : String(pagerMsgId),
         incident_id: incId,
         capcode: asString(m.address),
         alias: asString(m.alias),
-        agency: asString(m.agency),
+        agency: inferPagerAgency(body, asString(m.agency)),
         source: asString(m.source),
-        message: asString(m.message),
+        message: body,
+        type,
+        call_class: callClass,
+        address_text: parsePagerAddress(body),
+        is_stop: parsePagerStop(body),
         lat: canonLat,
         lon: canonLon,
         incident_time: incidentTime,
@@ -238,8 +392,9 @@ function pagerArchiveItems(
       subcategory: msg.capcode || null,
       // `data->>'title'` projects to the row's title in /api/data/history;
       // alias is the human-readable brigade/unit name. Without this the
-      // logs page renders every pager row as "Unknown".
-      data: { ...msg, title: msg.alias || msg.agency || '' },
+      // logs page renders every pager row as "Unknown". Fall back to the
+      // parsed type (e.g. FRNSW FRINC turnouts have no alias) then agency.
+      data: { ...msg, title: msg.alias || msg.type || msg.agency || '' },
     });
   }
   return out;
