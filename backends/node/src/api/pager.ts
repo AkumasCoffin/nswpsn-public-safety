@@ -62,6 +62,12 @@ interface PagerFeature {
     alias: string | null;
     agency: string | null;
     message: string;
+    /** Parsed incident type (e.g. "Bush Fire", "MVA"); '' when not parseable. */
+    type: string;
+    /** Call class ("FIRECALL"/"INCIDENT CALL"/…); '' when absent. */
+    call_class: string;
+    /** True when this page is a Stop Message / Stand Down (flag only). */
+    is_stop: boolean;
     incident_time: string | null;
     fetched_at: number;
     timestamp: number | null;
@@ -94,6 +100,8 @@ function snapshotFallback(
   const out: PagerFeature[] = [];
   const snap = pagerSnapshot();
   for (const m of snap.messages as PagerMessage[]) {
+    // Coordless rows (FRNSW FRINC turnouts) are logs-only — never mapped.
+    if (m.lat === null || m.lon === null) continue;
     if (m.timestamp !== null && m.timestamp < cutoff) continue;
     if (capcode && m.capcode !== capcode) continue;
     if (incidentId && m.incident_id !== incidentId) continue;
@@ -108,6 +116,9 @@ function snapshotFallback(
         alias: m.alias,
         agency: m.agency,
         message: m.message,
+        type: m.type ?? '',
+        call_class: m.call_class ?? '',
+        is_stop: m.is_stop === true,
         incident_time: m.incident_time,
         fetched_at: m.timestamp ?? Math.floor(Date.now() / 1000),
         timestamp: m.timestamp,
@@ -156,6 +167,10 @@ async function fetchPagerHitsFromDb(opts: {
   // narrows the result beyond the incident-time filter).
   const where: string[] = [
     "source = 'pager'",
+    // Coordless pager rows (FRNSW FRINC turnouts) are archived for the logs
+    // page but must never draw a map pin — exclude them from the hits query.
+    'lat IS NOT NULL',
+    'lng IS NOT NULL',
     `fetched_at >= to_timestamp($1)`,
     `(data->>'timestamp')::bigint >= $2`,
   ];
@@ -233,6 +248,9 @@ async function fetchPagerHitsFromDb(opts: {
         alias: typeof data['alias'] === 'string' ? data['alias'] : null,
         agency: r.category ?? (typeof data['agency'] === 'string' ? data['agency'] : null),
         message: typeof data['message'] === 'string' ? data['message'] : '',
+        type: typeof data['type'] === 'string' ? data['type'] : '',
+        call_class: typeof data['call_class'] === 'string' ? data['call_class'] : '',
+        is_stop: data['is_stop'] === true,
         incident_time:
           typeof data['incident_time'] === 'string' ? data['incident_time'] : null,
         fetched_at: fetchedAtSecs,
