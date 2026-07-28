@@ -4866,28 +4866,37 @@ function initPagerHoursFromStorage() {
           incidentGroups.set(key, []);
         }
         incidentGroups.get(key).push(hit);
-        processedHitIds.add(hit.id);
+        // NOTE: processedHitIds is set only when the group is actually KEPT (see
+        // the cluster builder below), so a coordless-group hit isn't also excluded
+        // from the distance-cluster fallback.
       });
 
       // Build clusters from incident_id groups
       incidentGroups.forEach((hits, incidentId) => {
+        // Pick coords from the NEWEST hit that has valid coords — deterministic
+        // regardless of API order, so widening the time window can't shift the pin
+        // between members and flip its clustering/merge outcome.
         let lat = null;
         let lng = null;
-
+        let bestMs = -Infinity;
         for (const h of hits) {
           if (h.lat == null || h.lon == null) continue;
           const hLat = Number(h.lat);
           const hLon = Number(h.lon);
           if (!Number.isFinite(hLat) || !Number.isFinite(hLon)) continue;
-          lat = hLat;
-          lng = hLon;
-          break;
+          const ms = getPagerHitTimestampMs(h);
+          const key = ms == null ? -Infinity : ms;
+          if (lat == null || key > bestMs) { lat = hLat; lng = hLon; bestMs = key; }
         }
 
         if (lat == null || lng == null) {
           // No usable coords for this incident_id group; skip it entirely.
           return;
         }
+
+        // Group is kept → mark its hits processed so they aren't re-clustered by
+        // the distance fallback below.
+        hits.forEach(h => processedHitIds.add(h.id));
 
         pagerClusters.push({
           incidentId,
@@ -5059,9 +5068,17 @@ function initPagerHoursFromStorage() {
           }
         }
 
+        // A pager pin — standalone, or merged onto a co-located RFS/user incident
+        // — must stay visible whenever the Pager layer is on. It must NOT inherit
+        // the agency / type / alert-level filters of an incident it happened to
+        // land within ~20m of, else enabled pager hits vanish when that host
+        // incident is filtered out.
+        const pagerVisible = showPager && (item.source === 'pager'
+          || !!(item.pagerDetails && item.pagerDetails.hits && item.pagerDetails.hits.length));
+
         // RFS-specific filters (alert level + parsed incident type)
         // from the floating RFS filter panel.
-        if (item.source === 'rfs' && !_rfsPassesFilters(item)) return false;
+        if (!pagerVisible && item.source === 'rfs' && !_rfsPassesFilters(item)) return false;
 
         if (item.source !== 'pager') {
           item.agenciesList.forEach(a => counts.agency[a] = (counts.agency[a] || 0) + 1);
@@ -5075,16 +5092,37 @@ function initPagerHoursFromStorage() {
           if (!titleMatch && !locationMatch && !typeMatch) return false;
         }
         
-        if (item.source !== 'pager') {
+        if (!pagerVisible && item.source !== 'pager') {
           if (!item.agenciesList.some(a => filterState.agency[a] === true)) return false;
         }
         // Typeless items always pass: a freshly created user incident
         // has type [] until its first save, and .some() over an empty
         // array is false — the brand-new pin was invisible while the
         // editor filled in its details.
-        if (item.typesList.length && !item.typesList.some(t => filterState.type[t] === true)) return false;
+        if (!pagerVisible && item.typesList.length && !item.typesList.some(t => filterState.type[t] === true)) return false;
         return true;
       });
+
+      // TEMP DIAGNOSTIC (pager map-drop bug): warn about any coord-bearing pager
+      // incident_id the API returned that is NOT represented in the rendered set,
+      // so we can confirm the clustering/merge/filter no longer drops them.
+      try {
+        const renderedPagerIds = new Set();
+        const collectHits = (arr) => { if (Array.isArray(arr)) arr.forEach(h => { if (h && h.incident_id) renderedPagerIds.add(String(h.incident_id)); }); };
+        filteredItems.forEach(it => {
+          if (it.rawDetails) { if (it.rawDetails.incidentId) renderedPagerIds.add(String(it.rawDetails.incidentId)); collectHits(it.rawDetails.hits); }
+          if (it.pagerDetails) { (it.pagerDetails.incidentIds || []).forEach(id => renderedPagerIds.add(String(id))); collectHits(it.pagerDetails.hits); }
+        });
+        const dropped = [];
+        const seen = new Set();
+        pagerHitsRaw.forEach(h => {
+          const id = h.incident_id ? String(h.incident_id) : null;
+          if (!id || seen.has(id) || h.lat == null || h.lon == null) return;
+          seen.add(id);
+          if (!renderedPagerIds.has(id)) dropped.push({ incident_id: id, incident_time: h.incident_time });
+        });
+        if (dropped.length) console.warn('[pager] API returned but NOT rendered on map:', dropped);
+      } catch (e) { /* diagnostic only */ }
 
       renderFilterButtons('agency', counts.agency);
       renderFilterButtons('type', counts.type);
