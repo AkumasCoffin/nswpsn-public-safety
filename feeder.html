@@ -318,6 +318,36 @@
     @keyframes nodePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .node-stat { font-size: 0.78rem; color: var(--text-soft); margin-top: 0.45rem; }
     .node-stat b { color: var(--text-primary); font-weight: 700; }
+    /* Card header: name (+ kind) on the left, agent version chip on the right. */
+    .node-head { display: flex; align-items: center; gap: 0.5rem; }
+    .node-head .node-name { flex: 1; }
+    .node-sub .st-on { color: #86efac; font-weight: 600; }
+    .node-sub .st-off { color: var(--text-soft); font-weight: 600; }
+    .node-sub .st-upd { color: #c084fc; font-weight: 600; }
+    /* Location / key meta line — icon+label items, comfortably spaced + wrapping. */
+    .node-loc { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; margin-top: 0.3rem; font-size: 0.75rem; color: var(--text-soft); }
+    .node-loc .nl-item { display: inline-flex; align-items: center; gap: 0.3rem; }
+    .node-loc .nl-item i { opacity: 0.7; }
+    .node-loc .nl-warn { color: #fbbf24; }
+    .node-loc .nl-key code { background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.02rem 0.32rem; font-size: 0.7rem; color: var(--text-soft); }
+    /* Recent-messages modal (owner view of decoded pager pages). */
+    .msg-modal { max-width: 700px; }
+    .msg-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+    .msg-head h3 { margin: 0; }
+    .msg-sub { font-size: 0.75rem; color: var(--text-soft); margin: 0.35rem 0 0.7rem; }
+    .msg-list { max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 0.3rem; }
+    .msg-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.6rem; align-items: baseline;
+      padding: 0.42rem 0.6rem; border-radius: 8px; background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border-subtle); font-size: 0.82rem; }
+    .msg-row.msg-filtered { opacity: 0.5; }
+    .msg-time { color: var(--text-soft); font-size: 0.72rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .msg-body { min-width: 0; word-break: break-word; line-height: 1.4; }
+    .msg-addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #7dd3fc; }
+    .msg-src { color: var(--text-soft); font-size: 0.72rem; white-space: nowrap; }
+    .msg-badge { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+      color: #fcd34d; background: rgba(234,179,8,0.14); border: 1px solid rgba(234,179,8,0.4);
+      padding: 0.02rem 0.32rem; border-radius: 4px; margin-right: 0.25rem; }
+    .msg-empty { color: var(--text-soft); text-align: center; padding: 1.6rem 1rem; font-size: 0.85rem; }
     /* Add-node form */
     .add-node { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.25rem 0 0.5rem; }
     .add-node input, .add-node select {
@@ -772,18 +802,25 @@
       }
 
       const located = typeof node.lat === 'number' && typeof node.lon === 'number';
-      const keyStr = node.tokenPrefix ? ` · key <code>${escapeHtml(node.tokenPrefix)}…</code>` : '';
-      const locStr = located ? ' · <i class="fas fa-location-dot"></i> exact pin' : '';
-      const zoneStr = node.zone
-        ? ` · <i class="fas fa-map"></i> ${escapeHtml(node.zone)}`
-        : ` · <span style="color:#fbbf24">no region set</span>`;
+      const statusText = updating ? 'Updating…' : (online ? 'Online' : 'Offline');
+      const statusCls = updating ? 'st-upd' : (online ? 'st-on' : 'st-off');
+      const regionItem = node.zone
+        ? `<span class="nl-item"><i class="fas fa-map"></i> ${escapeHtml(node.zone)}</span>`
+        : `<span class="nl-item nl-warn"><i class="fas fa-map"></i> no region set</span>`;
+      const pinItem = located ? `<span class="nl-item"><i class="fas fa-location-dot"></i> exact pin</span>` : '';
+      const keyItem = node.tokenPrefix ? `<span class="nl-item nl-key">key <code>${escapeHtml(node.tokenPrefix)}…</code></span>` : '';
       const _dlBtn = {
-        windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i></button>`,
-        linux: `<button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i></button>`,
+        windows: `<button class="mini-btn" title="Download Windows installer" onclick="downloadInstaller('windows','${node.id}',this)"><i class="fab fa-windows"></i> Windows</button>`,
+        linux: `<button class="mini-btn" title="Download Linux installer" onclick="downloadInstaller('linux','${node.id}',this)"><i class="fab fa-linux"></i> Linux</button>`,
       };
       const dl = agentCfg ? agentCfg.platforms.map((p) => _dlBtn[p]).join('\n           ') : '';
+      // Owners can view their pager node's recent decoded pages (rolling).
+      const msgsBtn = isPager
+        ? `<button class="mini-btn" title="Show recent decoded pages" onclick="showNodeMessages('${node.id}')"><i class="fas fa-envelope"></i> Messages</button>`
+        : '';
       const actions = `
         <div class="node-actions">
+          ${msgsBtn}
           ${dl}
           <button class="mini-btn" title="Set region / exact pin" onclick="openLocationPicker('${node.id}')"><i class="fas fa-location-dot"></i> ${node.zone ? 'Location' : 'Set region'}</button>
           <button class="mini-btn" title="Re-issue key (invalidates the old installer)" onclick="rotateNode('${node.id}',this)"><i class="fas fa-key"></i></button>
@@ -792,16 +829,84 @@
 
       return `
         <div class="node-row">
-          <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${updating ? 'Updating…' : (online ? 'Online' : 'Offline')}"></span>
+          <span class="node-dot ${updating ? 'updating' : (online ? 'online' : '')}" title="${statusText}"></span>
           <div class="node-meta">
-            <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
-            <div class="node-sub">${updating ? 'Updating…' : (online ? 'Online' : 'Offline')} · last seen ${escapeHtml(lastSeen)}${zoneStr}${locStr}${keyStr}</div>
+            <div class="node-head">
+              <div class="node-name">${escapeHtml(name)} <span class="node-kind">${escapeHtml(_kindLabel[kind] || kind)}</span></div>
+              ${agentHtml}
+            </div>
+            <div class="node-sub"><span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(lastSeen)}</div>
+            <div class="node-loc">${regionItem}${pinItem}${keyItem}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
             ${actions}
           </div>
-          ${agentHtml}
         </div>`;
+    }
+
+    // Owner view of a pager node's recent decoded pages (the rolling buffer the
+    // backend keeps, same data staff see in the drawer). Polls every 5s while open.
+    let _msgPoll = null;
+    async function showNodeMessages(nodeId) {
+      closeNodeMessages();
+      const overlay = document.createElement('div');
+      overlay.id = 'msg-modal';
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal msg-modal">
+          <div class="msg-head">
+            <h3><i class="fas fa-envelope-open-text"></i> Recent messages</h3>
+            <button class="mini-btn" onclick="closeNodeMessages()">Close</button>
+          </div>
+          <div class="msg-sub" id="msg-sub">loading…</div>
+          <div id="msg-list" class="msg-list"></div>
+        </div>`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeMessages(); });
+      document.body.appendChild(overlay);
+      const load = async () => {
+        try {
+          const jwt = await getToken();
+          const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/messages`, {
+            headers: { 'Authorization': 'Bearer ' + jwt },
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          if (document.getElementById('msg-modal')) _renderNodeMessages(data.messages || []);
+        } catch (e) {
+          const sub = document.getElementById('msg-sub');
+          if (sub) sub.textContent = 'Could not load messages — try again shortly.';
+        }
+      };
+      await load();
+      _msgPoll = setInterval(load, 5000);
+    }
+    function _renderNodeMessages(msgs) {
+      const list = document.getElementById('msg-list');
+      const sub = document.getElementById('msg-sub');
+      if (!list) return;
+      const filteredN = msgs.filter(m => m.filtered).length;
+      if (sub) sub.textContent = msgs.length
+        ? `newest first · ${msgs.length} buffered${filteredN ? ` · ${filteredN} filtered (dimmed)` : ''}`
+        : 'No messages decoded yet.';
+      if (!msgs.length) {
+        list.innerHTML = `<div class="msg-empty">Decoded pages will appear here as they come in.</div>`;
+        return;
+      }
+      list.innerHTML = msgs.slice().reverse().map(m => {
+        const at = m.at != null ? new Date(m.at) : null;
+        const time = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString() : '—';
+        const filt = m.filtered ? ' msg-filtered' : '';
+        const badge = m.filtered ? `<span class="msg-badge" title="Not forwarded (${escapeHtml(m.filtered)})">filtered</span>` : '';
+        return `<div class="msg-row${filt}">
+          <span class="msg-time">${escapeHtml(time)}</span>
+          <span class="msg-body">${badge}<span class="msg-addr">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>
+          <span class="msg-src">${escapeHtml(m.source || '')}</span>
+        </div>`;
+      }).join('');
+    }
+    function closeNodeMessages() {
+      if (_msgPoll) { clearInterval(_msgPoll); _msgPoll = null; }
+      const m = document.getElementById('msg-modal'); if (m) m.remove();
     }
 
     // Create a node. A zone is REQUIRED, so we collect it (plus an optional exact
