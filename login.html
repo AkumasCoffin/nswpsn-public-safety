@@ -528,6 +528,11 @@
         const d = await r.json();
         if (d.has_access) return 'map.html';
         if (d.is_team_member) return 'staff.html';
+        // No roles at all → a new/incomplete signup (e.g. someone who used
+        // "Continue with Discord" without an existing account). Send them to the
+        // signup form to finish — a request is only created when they submit it,
+        // so this is the only way they end up in the approval queue.
+        if (Array.isArray(d.roles) && d.roles.length === 0) return 'signup.html';
         return 'map.html';
       } catch (e) {
         return 'map.html';

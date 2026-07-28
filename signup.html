@@ -671,42 +671,11 @@
     // Numeric Discord user ID captured from the OAuth identity (Discord signups
     // only). Sent with the request instead of a typed-in field.
     let _discordId = '';
-    // Fire the "draft request" once per page load so a Discord signup shows up
-    // in the admin queue even if they never finish the form.
-    let _draftEnsured = false;
 
-    // Create a placeholder pending request for a Discord signup so admins always
-    // see the account. Idempotent server-side; best-effort (never blocks the UI).
-    async function ensureDraftRequest(session, email) {
-      const token = session && session.access_token;
-      // The JWT links the draft to this account — that's what makes it appear in
-      // the admin queue and lets approval grant roles. Email is optional: a
-      // Discord account may not share a (verified) one, and bailing here left the
-      // account with NO signup request. Send whatever email we have (or '').
-      if (!token) return;
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const res = await fetch(`${API_BASE_URL}/api/editor-requests`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ draft: true, email: email || '', discord_id: _discordId || '' }),
-          });
-          if (res.ok) return;
-          // 4xx won't fix itself on retry — log and stop; 5xx gets one retry.
-          const body = await res.text().catch(() => '');
-          console.error(`[signup] draft request failed (${res.status})`, body);
-          if (res.status < 500) return;
-        } catch (e) {
-          console.error('[signup] draft request error', e);
-        }
-      }
-    }
-
-    // `fresh` is true only for a genuine new sign-in (Discord OAuth return),
-    // false when an already-logged-in session merely loads the page. The draft
-    // request is created only when fresh, so visiting the page while already
-    // signed in no longer auto-creates a signup request without pressing Submit.
-    async function applySession(session, fresh) {
+    // A signup request is created ONLY when the user submits the form
+    // (submitRequest). Signing in here just prepares the form — no request is
+    // created on OAuth return, so no drafts and nothing without pressing Submit.
+    async function applySession(session) {
       if (!session) return;
       const user = session.user || {};
       const meta = user.user_metadata || {};
@@ -748,15 +717,6 @@
         || '',
       );
 
-      // Record the signup in the admin queue immediately (Discord signups only —
-      // they have a Discord identity; email signups submit the full form anyway).
-      // Only on a FRESH sign-in — an already-logged-in user re-visiting the page
-      // must not silently create a request.
-      if (discordIdentity && fresh && !_draftEnsured) {
-        _draftEnsured = true;
-        ensureDraftRequest(session, user.email);
-      }
-
       const nameEl = document.getElementById('discord-linked-name');
       if (nameEl) {
         nameEl.textContent = meta.full_name || meta.name || meta.user_name || user.email || 'your account';
@@ -772,11 +732,12 @@
       document.getElementById('password-group').style.display = 'none';
     }
 
-    // Existing session on page load → set up the UI but DON'T create a draft.
-    sb.auth.getSession().then(({ data }) => applySession(data.session, false));
-    // A genuine new sign-in (Discord OAuth return) → fresh, so the draft fires.
+    // Prepare the form for a signed-in user, whether the session is restored on
+    // load or established by a fresh Discord OAuth return. No request is created
+    // here — only submitRequest() does that.
+    sb.auth.getSession().then(({ data }) => applySession(data.session));
     sb.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN') applySession(session, true);
+      if (event === 'SIGNED_IN') applySession(session);
     });
 
     let currentRating = 0;

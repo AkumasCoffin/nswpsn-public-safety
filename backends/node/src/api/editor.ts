@@ -160,17 +160,13 @@ editorRouter.post('/api/editor-requests', async (c) => {
   // automatically (from the linked identity), and email signups don't collect
   // one. Stored as '' when absent (column is NOT NULL).
 
-  // A "draft" is created the moment a Discord OAuth signup returns, so the
-  // account always shows in the admin queue even if they never finish the form.
-  // Drafts skip the about/request-type validation (they get filled in later).
-  const isDraft = data['draft'] === true;
-  if (!isDraft) {
-    if (!about) {
-      return c.json({ error: 'Please tell us about yourself' }, 400);
-    }
-    if (requestType.length === 0) {
-      return c.json({ error: 'Please select at least one request type' }, 400);
-    }
+  // A request is created only when the user submits the full form, so the
+  // "about" text and at least one request type are always required.
+  if (!about) {
+    return c.json({ error: 'Please tell us about yourself' }, 400);
+  }
+  if (requestType.length === 0) {
+    return c.json({ error: 'Please select at least one request type' }, 400);
   }
 
   try {
@@ -182,8 +178,8 @@ editorRouter.post('/api/editor-requests', async (c) => {
     const createdAt = Math.floor(Date.now() / 1000);
 
     // Find this person's existing request — their linked account first, then
-    // email — preferring a pending one. This lets a Discord draft (created on
-    // OAuth return) upgrade to the full request rather than erroring/duplicating.
+    // email — preferring a pending one, so a re-submit updates it in place
+    // rather than erroring/duplicating.
     const existing = await pool.query<{ id: number; status: string }>(
       `SELECT id, status FROM editor_requests
         WHERE ($1::text IS NOT NULL AND supabase_user_id = $1) OR email = $2
@@ -193,26 +189,7 @@ editorRouter.post('/api/editor-requests', async (c) => {
     );
     const existingRow = existing.rows[0];
 
-    // Draft: ensure a pending request exists (so the account is visible to
-    // admins) but never overwrite a real one.
-    if (isDraft) {
-      if (existingRow) {
-        return c.json({ success: true, message: 'request already exists', request_id: existingRow.id }, 200);
-      }
-      const draft = await pool.query<{ id: number }>(
-        `INSERT INTO editor_requests
-          (email, discord_id, about, request_type, status, created_at, supabase_user_id)
-         VALUES ($1, $2, '', NULL, 'pending', $3, $4)
-         RETURNING id`,
-        [email, discordId, createdAt, linkedUserId],
-      );
-      const draftId = draft.rows[0]?.id;
-      log.info({ draftId, email, linkedUserId }, 'Editor request draft created (Discord signup)');
-      return c.json({ success: true, message: 'draft created', request_id: draftId }, 201);
-    }
-
-    // Full submit: update an existing pending request (e.g. upgrade a draft),
-    // otherwise insert a new one.
+    // Update an existing pending request (re-submit), otherwise insert a new one.
     if (existingRow && existingRow.status === 'pending') {
       await pool.query(
         `UPDATE editor_requests SET
