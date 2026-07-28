@@ -138,7 +138,10 @@
     }
     async function loadStubUnits(stub) {
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}`);
+        // ?soft=1 → the backend returns an empty 200 (not a 404) when this
+        // RFS/pager pin has no stub row yet, so clicking a fresh pin doesn't
+        // spam the console with red "Incident not found" errors.
+        const res = await apiFetch(`${PROXY_BASE}/api/incidents/${stub.id}?soft=1`);
         if (!res.ok) return;
         const j = await res.json();
         if (_unitsStub && _unitsStub.id === stub.id) {

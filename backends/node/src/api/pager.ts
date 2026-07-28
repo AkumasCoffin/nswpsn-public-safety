@@ -116,9 +116,11 @@ function snapshotFallback(
         lon: m.lon,
       },
     });
-    if (out.length >= limit) break;
   }
-  return out;
+  // Truncate by INCIDENT time (matching the DB path + the window filter), not by
+  // iteration order, so the same `limit` keeps the newest hits and stays monotonic.
+  out.sort((a, b) => (b.properties.timestamp ?? -Infinity) - (a.properties.timestamp ?? -Infinity));
+  return out.slice(0, limit);
 }
 
 /**
@@ -135,19 +137,29 @@ async function fetchPagerHitsFromDb(opts: {
 }): Promise<PagerHitsBody> {
   const { hours, limit, capcode, incidentId } = opts;
   const cutoff = Math.floor(Date.now() / 1000) - hours * 3600;
+  // archive_misc is PARTITION BY RANGE(fetched_at). Filtering only on the
+  // incident time `(data->>'timestamp')` can't prune partitions, so the query
+  // Seq-scans ALL history and reliably hits the statement timeout on a busy host
+  // → the route falls back to the tiny LiveStore snapshot (~3 incidents). Add a
+  // fetched_at lower bound so Postgres prunes old partitions. We always archive a
+  // page AFTER it arrives, so fetched_at >= incident_time — any row with
+  // timestamp >= cutoff therefore has fetched_at >= cutoff too; the 1-day buffer
+  // absorbs clock skew so no valid (in-window) row is ever excluded.
+  const fetchedCutoff = cutoff - 86400;
 
   const pool = await getPool();
   if (!pool) throw new Error('no DB pool');
 
-  // Build the WHERE clause incrementally so optional filters slot in
-  // with stable parameter indexes. Filter on `data->>'timestamp'`
-  // (the upstream pager incident-time unix int) rather than fetched_at
-  // — fetched_at is when WE polled, which lags the actual incident.
+  // Build the WHERE clause incrementally so optional filters slot in with stable
+  // parameter indexes. Visibility is decided by `data->>'timestamp'` (incident
+  // time); the fetched_at bound is purely a partition-pruning aid (it never
+  // narrows the result beyond the incident-time filter).
   const where: string[] = [
     "source = 'pager'",
-    `(data->>'timestamp')::bigint >= $1`,
+    `fetched_at >= to_timestamp($1)`,
+    `(data->>'timestamp')::bigint >= $2`,
   ];
-  const params: unknown[] = [cutoff];
+  const params: unknown[] = [fetchedCutoff, cutoff];
   if (capcode) {
     params.push(capcode);
     where.push(`subcategory = $${params.length}`);
@@ -159,9 +171,15 @@ async function fetchPagerHitsFromDb(opts: {
   params.push(limit);
   const limitIdx = params.length;
 
-  // DISTINCT ON (source_id) keeps the newest row per upstream message
-  // id; outer ORDER BY then re-sorts by fetched_at DESC. Mirrors
-  // python's MAX(fetched_at) self-join trick at external_api_proxy.py:12495.
+  // DISTINCT ON (source_id) keeps the newest row per upstream message id (dedup;
+  // fetched_at DESC picks the most-recently-polled copy of the same id). The
+  // OUTER order + LIMIT must truncate by the SAME column the window filters on —
+  // incident time (data->>'timestamp'), NOT fetched_at. Ordering the 500-cap by
+  // fetched_at while filtering by incident time made a late-polled/backfilled row
+  // (old incident, recent fetched_at) evict genuinely-newer hits non-monotonically
+  // as `hours` widened, so some hits flickered in/out at specific slider values.
+  // Ordering by incident time makes visibility monotonic: a hit shown at N hours
+  // stays shown at every larger N. NULLS LAST so a null-timestamp row can't win.
   const sql = `
     SELECT * FROM (
       SELECT DISTINCT ON (source_id)
@@ -176,7 +194,7 @@ async function fetchPagerHitsFromDb(opts: {
       WHERE ${where.join(' AND ')}
       ORDER BY source_id, fetched_at DESC
     ) x
-    ORDER BY fetched_at DESC
+    ORDER BY (data->>'timestamp')::bigint DESC NULLS LAST
     LIMIT $${limitIdx}
   `;
 
@@ -265,15 +283,47 @@ pagerRouter.get('/api/pager/hits', async (c) => {
       ),
   };
 
-  // Cold path: cache empty. Serve the live snapshot immediately. Only
-  // attempt a DB refresh if we're not in the post-failure backoff
-  // window — otherwise the bot's per-minute polls would each kick off
-  // a doomed 30 s query.
+  // Diagnostic: tag every response with the branch that served it and the row
+  // count, so "why does the map show N pins at this window" is answerable from
+  // the server log alone. `snapshot-*` lines are the degraded paths to watch for.
+  const served = (src: string, count: number, extra?: Record<string, unknown>) =>
+    log.info({ src, hours, count, key, ...extra }, `pager/hits served (${src})`);
+
+  // Cold path: no cached value for this window yet. The query is now
+  // partition-pruned and typically a few ms (was 30 s+, which is why this used
+  // to return the tiny LiveStore snapshot and only warm the cache in the
+  // background — that made the FIRST request for every slider value show ~3
+  // incidents until a second pass warmed the key). Now we AWAIT the DB and serve
+  // real data, guarded by a short timeout: if the DB is genuinely slow we fall
+  // back to the snapshot for THIS request while the background refresh (still in
+  // flight inside .get, since SwrCache coalesces + keeps running) warms the key.
+  // Skip the DB entirely during the post-failure backoff window.
   if (!pagerHitsCache.has(key)) {
     if (!inDbBackoff) {
-      pagerHitsCache.refresh(key, tryRefresh, swrOpts).catch(() => {});
+      const COLD_DB_WAIT_MS = 4000;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // .catch → null so a late rejection (after the timeout already won the
+      // race) can't surface as an unhandled rejection; backoff is set by
+      // tryRefresh either way.
+      const dbPromise = pagerHitsCache
+        .get(key, tryRefresh, swrOpts)
+        .then((r) => r.value)
+        .catch(() => null);
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), COLD_DB_WAIT_MS);
+      });
+      try {
+        const body = await Promise.race([dbPromise, timeout]);
+        if (body) {
+          served('db-cold', body.count);
+          return c.json(body);
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
     const features = snapshotFallback(hours, limit, capcode, incidentId);
+    served(inDbBackoff ? 'snapshot-backoff' : 'snapshot-cold-slow', features.length);
     return c.json({
       type: 'FeatureCollection',
       features,
@@ -288,10 +338,16 @@ pagerRouter.get('/api/pager/hits', async (c) => {
   // do its normal stale-while-revalidate dance.
   if (inDbBackoff) {
     const peeked = pagerHitsCache._peek(key);
-    if (peeked) return c.json(peeked.value);
+    if (peeked) {
+      served('cache-backoff', peeked.value.count);
+      return c.json(peeked.value);
+    }
   }
   try {
-    const { value } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
+    const { value, warming } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
+    // Only log the interesting warm case (a stale-while-revalidate refresh);
+    // plain fresh hits fire ~1/s from the map poll and would bury the log.
+    if (warming) served('cache-stale-revalidate', value.count);
     return c.json(value);
   } catch (err) {
     log.warn(
@@ -299,6 +355,7 @@ pagerRouter.get('/api/pager/hits', async (c) => {
       'pager/hits: cache miss + DB refetch failed; falling back to snapshot',
     );
     const features = snapshotFallback(hours, limit, capcode, incidentId);
+    served('snapshot-error', features.length);
     return c.json({
       type: 'FeatureCollection',
       features,

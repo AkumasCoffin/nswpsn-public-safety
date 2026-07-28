@@ -2800,7 +2800,7 @@
             <span>install <span class="node-mono">${installShort}</span></span>
           </div>
           <div class="dev-card-secondary">
-            <span><i class="fas fa-map"></i> zone ${node.zone ? `<strong>${escapeHtml(node.zone)}</strong>` : '<span style="color:#fbbf24">not set</span>'}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
+            <span><i class="fas fa-map"></i> region ${node.zone ? `<strong>${escapeHtml(node.zone)}</strong>` : '<span style="color:#fbbf24">not set</span>'}${(typeof node.lat === 'number') ? ' · <i class="fas fa-location-dot" title="Exact pin set"></i> pin' : ''}</span>
           </div>
           ${statusRow}
         </div>`;
@@ -2914,8 +2914,8 @@
       if (!node) return;
       const hasPin = typeof node.lat === 'number' && typeof node.lon === 'number';
       const zoneLine = node.zone
-        ? `<div class="loc-view-note"><i class="fas fa-map"></i> RFS zone: <b>${escapeHtml(node.zone)}</b></div>`
-        : `<div class="loc-view-note" style="color:#fbbf24">No zone set for this node.</div>`;
+        ? `<div class="loc-view-note"><i class="fas fa-map"></i> Region: <b>${escapeHtml(node.zone)}</b></div>`
+        : `<div class="loc-view-note" style="color:#fbbf24">No region set for this node.</div>`;
       // Zone-only node (no exact pin) — show the zone, no map.
       if (!hasPin) {
         const overlay = document.createElement('div');
@@ -2928,7 +2928,7 @@
               <button class="btn btn-secondary btn-sm" onclick="closeNodeLocation()">Close</button>
             </div>
             ${zoneLine}
-            <div class="loc-view-note">No exact antenna pin set (zone only). Staff/owner only, never public.</div>
+            <div class="loc-view-note">No exact antenna pin set (region only). Staff/owner only, never public.</div>
           </div>`;
         overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNodeLocation(); });
         document.body.appendChild(overlay);
@@ -3695,7 +3695,7 @@
       const located = typeof n.lat === 'number';
       const hasLoc = located || !!n.zone;
       const locTitle = n.zone
-        ? `Zone: ${escapeHtml(n.zone)}${located ? ' · exact pin set' : ' · no exact pin'}`
+        ? `Region: ${escapeHtml(n.zone)}${located ? ' · exact pin set' : ' · no exact pin'}`
         : 'No location set';
       const feedTitle = isPager
         ? 'Forward decoded pages to central Pagermon. Off keeps the node decoding (reception still counts) but stops uploading.'
