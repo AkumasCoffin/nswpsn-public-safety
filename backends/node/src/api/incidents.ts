@@ -489,6 +489,13 @@ incidentsRouter.get('/api/incidents/:id', async (c) => {
   // collision is theoretical (Hono routes longer paths first) but cheap
   // to defend against.
   if (id === 'updates') return c.notFound();
+  // `?soft=1`: stub-context probe. RFS/pager pins attach units/photos to a
+  // lazily-created shared "stub" row keyed on a deterministic id; on every pin
+  // click the editor probes this route to load any PREVIOUSLY-saved units. When
+  // nobody has attached anything yet the row doesn't exist — with a hard 404 the
+  // browser logs a red error on every fresh pin click. Soft mode returns an empty
+  // 200 body instead so the probe stays quiet. All non-stub callers keep the 404.
+  const soft = new URL(c.req.url).searchParams.get('soft') === '1';
   try {
     const result = await withPool(async (pool) => {
       const r = await pool.query<IncidentRow>(
@@ -498,7 +505,10 @@ incidentsRouter.get('/api/incidents/:id', async (c) => {
       return r.rows[0] ? normaliseIncident(r.rows[0]) : null;
     });
     if (isUnavailable(result)) return c.json(DB_UNAVAILABLE, 503);
-    if (!result) return c.json({ error: 'Incident not found' }, 404);
+    if (!result) {
+      if (soft) return c.json({ id, exists: false, units: [], images: [] });
+      return c.json({ error: 'Incident not found' }, 404);
+    }
     return c.json(result);
   } catch (err) {
     log.error({ err, id }, 'Error fetching incident');
