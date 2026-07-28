@@ -283,15 +283,47 @@ pagerRouter.get('/api/pager/hits', async (c) => {
       ),
   };
 
-  // Cold path: cache empty. Serve the live snapshot immediately. Only
-  // attempt a DB refresh if we're not in the post-failure backoff
-  // window — otherwise the bot's per-minute polls would each kick off
-  // a doomed 30 s query.
+  // Diagnostic: tag every response with the branch that served it and the row
+  // count, so "why does the map show N pins at this window" is answerable from
+  // the server log alone. `snapshot-*` lines are the degraded paths to watch for.
+  const served = (src: string, count: number, extra?: Record<string, unknown>) =>
+    log.info({ src, hours, count, key, ...extra }, `pager/hits served (${src})`);
+
+  // Cold path: no cached value for this window yet. The query is now
+  // partition-pruned and typically a few ms (was 30 s+, which is why this used
+  // to return the tiny LiveStore snapshot and only warm the cache in the
+  // background — that made the FIRST request for every slider value show ~3
+  // incidents until a second pass warmed the key). Now we AWAIT the DB and serve
+  // real data, guarded by a short timeout: if the DB is genuinely slow we fall
+  // back to the snapshot for THIS request while the background refresh (still in
+  // flight inside .get, since SwrCache coalesces + keeps running) warms the key.
+  // Skip the DB entirely during the post-failure backoff window.
   if (!pagerHitsCache.has(key)) {
     if (!inDbBackoff) {
-      pagerHitsCache.refresh(key, tryRefresh, swrOpts).catch(() => {});
+      const COLD_DB_WAIT_MS = 4000;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // .catch → null so a late rejection (after the timeout already won the
+      // race) can't surface as an unhandled rejection; backoff is set by
+      // tryRefresh either way.
+      const dbPromise = pagerHitsCache
+        .get(key, tryRefresh, swrOpts)
+        .then((r) => r.value)
+        .catch(() => null);
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), COLD_DB_WAIT_MS);
+      });
+      try {
+        const body = await Promise.race([dbPromise, timeout]);
+        if (body) {
+          served('db-cold', body.count);
+          return c.json(body);
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
     const features = snapshotFallback(hours, limit, capcode, incidentId);
+    served(inDbBackoff ? 'snapshot-backoff' : 'snapshot-cold-slow', features.length);
     return c.json({
       type: 'FeatureCollection',
       features,
@@ -306,10 +338,16 @@ pagerRouter.get('/api/pager/hits', async (c) => {
   // do its normal stale-while-revalidate dance.
   if (inDbBackoff) {
     const peeked = pagerHitsCache._peek(key);
-    if (peeked) return c.json(peeked.value);
+    if (peeked) {
+      served('cache-backoff', peeked.value.count);
+      return c.json(peeked.value);
+    }
   }
   try {
-    const { value } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
+    const { value, warming } = await pagerHitsCache.get(key, tryRefresh, swrOpts);
+    // Only log the interesting warm case (a stale-while-revalidate refresh);
+    // plain fresh hits fire ~1/s from the map poll and would bury the log.
+    if (warming) served('cache-stale-revalidate', value.count);
     return c.json(value);
   } catch (err) {
     log.warn(
@@ -317,6 +355,7 @@ pagerRouter.get('/api/pager/hits', async (c) => {
       'pager/hits: cache miss + DB refetch failed; falling back to snapshot',
     );
     const features = snapshotFallback(hours, limit, capcode, incidentId);
+    served('snapshot-error', features.length);
     return c.json({
       type: 'FeatureCollection',
       features,
