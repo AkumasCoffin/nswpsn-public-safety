@@ -137,19 +137,29 @@ async function fetchPagerHitsFromDb(opts: {
 }): Promise<PagerHitsBody> {
   const { hours, limit, capcode, incidentId } = opts;
   const cutoff = Math.floor(Date.now() / 1000) - hours * 3600;
+  // archive_misc is PARTITION BY RANGE(fetched_at). Filtering only on the
+  // incident time `(data->>'timestamp')` can't prune partitions, so the query
+  // Seq-scans ALL history and reliably hits the statement timeout on a busy host
+  // → the route falls back to the tiny LiveStore snapshot (~3 incidents). Add a
+  // fetched_at lower bound so Postgres prunes old partitions. We always archive a
+  // page AFTER it arrives, so fetched_at >= incident_time — any row with
+  // timestamp >= cutoff therefore has fetched_at >= cutoff too; the 1-day buffer
+  // absorbs clock skew so no valid (in-window) row is ever excluded.
+  const fetchedCutoff = cutoff - 86400;
 
   const pool = await getPool();
   if (!pool) throw new Error('no DB pool');
 
-  // Build the WHERE clause incrementally so optional filters slot in
-  // with stable parameter indexes. Filter on `data->>'timestamp'`
-  // (the upstream pager incident-time unix int) rather than fetched_at
-  // — fetched_at is when WE polled, which lags the actual incident.
+  // Build the WHERE clause incrementally so optional filters slot in with stable
+  // parameter indexes. Visibility is decided by `data->>'timestamp'` (incident
+  // time); the fetched_at bound is purely a partition-pruning aid (it never
+  // narrows the result beyond the incident-time filter).
   const where: string[] = [
     "source = 'pager'",
-    `(data->>'timestamp')::bigint >= $1`,
+    `fetched_at >= to_timestamp($1)`,
+    `(data->>'timestamp')::bigint >= $2`,
   ];
-  const params: unknown[] = [cutoff];
+  const params: unknown[] = [fetchedCutoff, cutoff];
   if (capcode) {
     params.push(capcode);
     where.push(`subcategory = $${params.length}`);
