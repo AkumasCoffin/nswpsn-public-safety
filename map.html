@@ -5030,6 +5030,17 @@ function initPagerHoursFromStorage() {
         }
         item.typesList.forEach(t => { if (!(t in filterState.type)) filterState.type[t] = true; });
       });
+
+      // TEMP DIAGNOSTIC — pager funnel: shows where hits are lost between the API
+      // response and the rendered pins (API → coords → clusters → pins).
+      try {
+        const withCoords = pagerHitsRaw.filter(h => h.lat != null && h.lon != null).length;
+        const incidentIds = new Set(pagerHitsRaw.map(h => h.incident_id).filter(Boolean)).size;
+        const standalone = unifiedIncidents.filter(i => i.source === 'pager').length;
+        const mergedInto = unifiedIncidents.filter(i => i.source !== 'pager' && i.pagerDetails && i.pagerDetails.hits && i.pagerDetails.hits.length).length;
+        console.warn(`[pager funnel] hours=${pagerHours} apiHits=${pagerHitsRaw.length} withCoords=${withCoords} incidentIds=${incidentIds} clusters=${pagerClusters.length} standalonePins=${standalone} mergedOntoIncidents=${mergedInto}`);
+      } catch (e) { /* diag */ }
+
       refreshMapAndList();
     }
 
