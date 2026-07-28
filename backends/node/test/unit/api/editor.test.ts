@@ -62,7 +62,7 @@ beforeEach(() => {
 describe('POST /api/editor-requests (public submit)', () => {
   it('400 when email missing on an ANONYMOUS submission', async () => {
     // Email is only required when there's no linked account to identify the
-    // requester (see the linked-draft test below).
+    // requester (a JWT-linked request is identified by its account instead).
     const app = makeApp({ authed: false });
     const res = await app.request('/api/editor-requests', {
       method: 'POST',
@@ -73,16 +73,15 @@ describe('POST /api/editor-requests (public submit)', () => {
     expect(await res.json()).toEqual({ error: 'Valid email is required' });
   });
 
-  it('draft with a linked (JWT) account but NO email still creates the request', async () => {
+  it('a JWT-linked submission may omit email (Discord account identifies it)', async () => {
     // Discord OAuth accounts may not share a verified email; the JWT link is
-    // enough to identify them, so the draft must still land in the admin queue.
-    // Regression: bailing on the missing email left an account with no request.
+    // enough, so a full submit with no email still creates the request.
     resultQueue = [{ rows: [] }, { rows: [{ id: 101 }] }];
     const app = makeApp(); // userId 'owner-1' (linked)
     const res = await app.request('/api/editor-requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draft: true, discord_id: '123' }), // no email
+      body: JSON.stringify({ discord_id: '123', about: 'hi', request_type: ['editor'] }), // no email
     });
     expect(res.status).toBe(201);
     expect((await res.json()).request_id).toBe(101);
@@ -106,31 +105,6 @@ describe('POST /api/editor-requests (public submit)', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).request_id).toBe(7);
     expect(calls[1]?.sql).toContain('UPDATE editor_requests');
-  });
-
-  it('draft creates a pending placeholder when the account has no request', async () => {
-    resultQueue = [{ rows: [] }, { rows: [{ id: 99 }] }];
-    const app = makeApp();
-    const res = await app.request('/api/editor-requests', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'a@b.com', discord_id: 'd', draft: true }),
-    });
-    expect(res.status).toBe(201);
-    expect((await res.json()).request_id).toBe(99);
-    expect(calls[1]?.sql).toContain('INSERT INTO editor_requests');
-  });
-
-  it('draft is a no-op (200) when a request already exists', async () => {
-    resultQueue = [{ rows: [{ id: 7, status: 'pending' }] }];
-    const app = makeApp();
-    const res = await app.request('/api/editor-requests', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'a@b.com', draft: true }),
-    });
-    expect(res.status).toBe(200);
-    expect((await res.json()).request_id).toBe(7);
   });
 
   it('201 with request_id and stores comma-joined arrays', async () => {
