@@ -4079,6 +4079,11 @@
     
     let radarLayer = null;  // Rain radar tile layer
     let unifiedIncidents = [], filterState = { agency: {}, type: {} };
+    // Monotonic token so overlapping loadAllData() calls (rapid slider + 60s
+    // reload) can't interleave-mutate the shared unifiedIncidents (which doubled
+    // pager pins). Each run captures the token; if a newer run started, the older
+    // one bails out at its next checkpoint instead of pushing/rendering stale data.
+    let _loadAllSeq = 0;
     let pagerHours = 12; // Pager hits lookback window in hours (controlled by slider)
     const PAGER_HOURS_STORAGE_KEY = 'pager_hours_window';
     const AGENCY_COLORS = { 'RFS': '#ff6600', 'FRNSW': '#ef4444', 'NSWAS': '#3b82f6', 'SES': '#eab308', 'POLICE': '#3b82f6', 'VRA': '#000000', 'AVIATION': '#a855f7' };
@@ -4702,6 +4707,7 @@ function initPagerHoursFromStorage() {
 
 
     async function loadAllData() {
+      const mySeq = ++_loadAllSeq;
       let userIncidents = [];
       try {
         const incRes = await apiFetch(`${PROXY_BASE}/api/incidents?active=true`);
@@ -4804,6 +4810,9 @@ function initPagerHoursFromStorage() {
         });
       } catch (e) { console.error("RFS API Error", e); }
 
+      // A newer loadAllData started while we fetched user/RFS data — bail before
+      // resetting the shared array so we don't stomp the newer run's build.
+      if (mySeq !== _loadAllSeq) return;
       unifiedIncidents = [];
       if (userIncidents) {
         const now = new Date();
@@ -4850,6 +4859,10 @@ function initPagerHoursFromStorage() {
       } catch (e) {
         console.error('Pager hits load error', e);
       }
+
+      // A newer loadAllData started while we awaited the pager fetch — bail before
+      // clustering + pushing, so we don't double the pager pins in unifiedIncidents.
+      if (mySeq !== _loadAllSeq) return;
 
       const PAGER_CLUSTER_THRESHOLD_METRES = 20;
       const pagerClusters = [];
