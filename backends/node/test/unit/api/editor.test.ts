@@ -60,8 +60,10 @@ beforeEach(() => {
 });
 
 describe('POST /api/editor-requests (public submit)', () => {
-  it('400 when email missing', async () => {
-    const app = makeApp();
+  it('400 when email missing on an ANONYMOUS submission', async () => {
+    // Email is only required when there's no linked account to identify the
+    // requester (see the linked-draft test below).
+    const app = makeApp({ authed: false });
     const res = await app.request('/api/editor-requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -69,6 +71,22 @@ describe('POST /api/editor-requests (public submit)', () => {
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Valid email is required' });
+  });
+
+  it('draft with a linked (JWT) account but NO email still creates the request', async () => {
+    // Discord OAuth accounts may not share a verified email; the JWT link is
+    // enough to identify them, so the draft must still land in the admin queue.
+    // Regression: bailing on the missing email left an account with no request.
+    resultQueue = [{ rows: [] }, { rows: [{ id: 101 }] }];
+    const app = makeApp(); // userId 'owner-1' (linked)
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft: true, discord_id: '123' }), // no email
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).request_id).toBe(101);
+    expect(calls[1]?.sql).toContain('INSERT INTO editor_requests');
   });
 
   it('updates (upserts) an existing pending request instead of erroring', async () => {
