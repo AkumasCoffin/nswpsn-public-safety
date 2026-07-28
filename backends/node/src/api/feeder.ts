@@ -558,6 +558,19 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/feeder/nodes/:id/messages — the owner views their pager node's recent
+// decoded pages (the same rolling buffer staff see in the drawer). Owner-gated;
+// pager nodes only (radio nodes have no decoded-message buffer).
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/nodes/:id/messages', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  if (node.kind !== 'pager') return c.json({ messages: [] });
+  c.header('Cache-Control', 'no-store');
+  return c.json({ messages: hub.recentPagerMessages(node.id) });
+});
+
+// ---------------------------------------------------------------------------
 // DELETE /api/feeder/nodes/:id — the owner removes (hard-revokes) their node.
 // ---------------------------------------------------------------------------
 feederRouter.delete('/api/feeder/nodes/:id', async (c) => {

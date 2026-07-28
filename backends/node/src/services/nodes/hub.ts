@@ -100,6 +100,13 @@ class NodeHub {
       .map(([k]) => k.replace(/^reader:?/, '') || k);
   }
 
+  /** The recent decoded-pager buffer for a node (newest last), for the owner's
+   *  "recent messages" view on the feeder page (which is REST, not on the staff
+   *  WS). Empty when nothing buffered. */
+  recentPagerMessages(nodeId: string): PagerMessageView[] {
+    return this.recentPager.get(nodeId) ?? [];
+  }
+
   /** Record a decoded pager message: keep it in the ring + push live to staff. */
   recordPagerMessage(nodeId: string, msg: PagerMessageView): void {
     const arr = this.recentPager.get(nodeId) ?? [];
