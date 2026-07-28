@@ -139,7 +139,21 @@ editorRouter.post('/api/editor-requests', async (c) => {
     if (Number.isFinite(n) && n >= 1 && n <= 5) experienceLevel = n;
   }
 
-  if (!email || !email.includes('@')) {
+  // Link the request to an existing account (Discord OAuth signup, or an email
+  // signup's just-created account). ONLY from the verified JWT — never from the
+  // body, or a submitter could bind someone else's account and have roles
+  // granted to it on approval.
+  const linkedUserIdRaw = c.get('userId');
+  const linkedUserId =
+    typeof linkedUserIdRaw === 'string' && linkedUserIdRaw.length > 0
+      ? linkedUserIdRaw
+      : null;
+
+  // Email identifies an ANONYMOUS request. A JWT-linked signup is identified by
+  // its account instead, so email is optional there — Discord OAuth accounts
+  // don't always share a (verified) email, and without this the draft was
+  // silently dropped, leaving an account with no signup request in the queue.
+  if (!linkedUserId && (!email || !email.includes('@'))) {
     return c.json({ error: 'Valid email is required' }, 400);
   }
   // discord_id is no longer required: Discord OAuth signups carry the numeric id
@@ -166,16 +180,6 @@ editorRouter.post('/api/editor-requests', async (c) => {
     const requestTypeStr = requestType.length > 0 ? requestType.join(',') : null;
     const techExperienceStr = techExperience.length > 0 ? techExperience.join(',') : null;
     const createdAt = Math.floor(Date.now() / 1000);
-
-    // Link the request to an existing account (Discord OAuth signup, or an email
-    // signup's just-created account). ONLY from the verified JWT — never from the
-    // body, or a submitter could bind someone else's account and have roles
-    // granted to it on approval.
-    const linkedUserIdRaw = c.get('userId');
-    const linkedUserId =
-      typeof linkedUserIdRaw === 'string' && linkedUserIdRaw.length > 0
-        ? linkedUserIdRaw
-        : null;
 
     // Find this person's existing request — their linked account first, then
     // email — preferring a pending one. This lets a Discord draft (created on
