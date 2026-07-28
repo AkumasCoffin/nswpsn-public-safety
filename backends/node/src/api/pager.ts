@@ -116,9 +116,11 @@ function snapshotFallback(
         lon: m.lon,
       },
     });
-    if (out.length >= limit) break;
   }
-  return out;
+  // Truncate by INCIDENT time (matching the DB path + the window filter), not by
+  // iteration order, so the same `limit` keeps the newest hits and stays monotonic.
+  out.sort((a, b) => (b.properties.timestamp ?? -Infinity) - (a.properties.timestamp ?? -Infinity));
+  return out.slice(0, limit);
 }
 
 /**
@@ -159,9 +161,15 @@ async function fetchPagerHitsFromDb(opts: {
   params.push(limit);
   const limitIdx = params.length;
 
-  // DISTINCT ON (source_id) keeps the newest row per upstream message
-  // id; outer ORDER BY then re-sorts by fetched_at DESC. Mirrors
-  // python's MAX(fetched_at) self-join trick at external_api_proxy.py:12495.
+  // DISTINCT ON (source_id) keeps the newest row per upstream message id (dedup;
+  // fetched_at DESC picks the most-recently-polled copy of the same id). The
+  // OUTER order + LIMIT must truncate by the SAME column the window filters on —
+  // incident time (data->>'timestamp'), NOT fetched_at. Ordering the 500-cap by
+  // fetched_at while filtering by incident time made a late-polled/backfilled row
+  // (old incident, recent fetched_at) evict genuinely-newer hits non-monotonically
+  // as `hours` widened, so some hits flickered in/out at specific slider values.
+  // Ordering by incident time makes visibility monotonic: a hit shown at N hours
+  // stays shown at every larger N. NULLS LAST so a null-timestamp row can't win.
   const sql = `
     SELECT * FROM (
       SELECT DISTINCT ON (source_id)
@@ -176,7 +184,7 @@ async function fetchPagerHitsFromDb(opts: {
       WHERE ${where.join(' AND ')}
       ORDER BY source_id, fetched_at DESC
     ) x
-    ORDER BY fetched_at DESC
+    ORDER BY (data->>'timestamp')::bigint DESC NULLS LAST
     LIMIT $${limitIdx}
   `;
 
