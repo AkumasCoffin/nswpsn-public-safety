@@ -1496,6 +1496,11 @@
       .tab-btn { flex-shrink: 0; }
 
       .requests-table { display: block; overflow-x: auto; }
+      /* Same horizontal-scroll treatment for the node-config tables so they
+         scroll inside their box instead of pushing the page sideways. */
+      .nd-readers-table, .nd-table, .nd-ch-table, .nd-dc-ts-table, .gc-table {
+        display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
+      }
 
       .search-box { min-width: 0; flex: 1 1 100%; }
       .filter-spacer { display: none; }
