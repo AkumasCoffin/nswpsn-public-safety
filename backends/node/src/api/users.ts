@@ -415,15 +415,15 @@ usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
       return c.json({ error: `Failed to delete account (status ${res.status})` }, 502);
     }
 
-    // Remove our own records for the user (roles, feeder token, nodes) in a
-    // single transaction so a mid-way failure can't leave a half-cleaned account
-    // (previously the feeder_tokens / nodes deletes swallowed errors, orphaning
-    // rows for a user that no longer exists).
+    // Remove our own records for the user (roles + nodes) in a single
+    // transaction so a mid-way failure can't leave a half-cleaned account.
+    // Per-node tokens live on the node row (token_hash/token_prefix, migration
+    // 039 dropped the old per-user feeder_tokens table), so deleting the nodes
+    // removes them too — no separate token delete.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
-      await client.query('DELETE FROM feeder_tokens WHERE user_id = $1', [userId]);
       await client.query('DELETE FROM nodes WHERE user_id = $1', [userId]);
       await client.query('COMMIT');
     } catch (err) {
