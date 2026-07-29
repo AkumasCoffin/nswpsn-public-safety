@@ -339,12 +339,12 @@
           <p style="color: var(--text-soft); font-size: 0.85rem; margin-bottom: 1rem;">
             First, choose how you'd like to create your account — then fill out the request form.
           </p>
-          <button type="button" id="discord-signup-btn" onclick="signUpWithDiscord()" style="width:100%; padding:0.9rem 1.5rem; background:#5865F2; color:#fff; border:none; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
+          <button type="button" id="discord-signup-btn" onclick="chooseDiscordSignup()" style="width:100%; padding:0.9rem 1.5rem; background:#5865F2; color:#fff; border:none; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
             <i class="fab fa-discord"></i>
             Sign up with Discord
           </button>
           <p style="color:#64748b; font-size:0.78rem; margin-top:0.5rem; text-align:center;">
-            No separate password to remember — your username, email and Discord details are filled in automatically.
+            Fill out the form first — you'll link Discord when you submit, and no account is created until then.
           </p>
           <button type="button" id="email-signup-btn" onclick="chooseEmailSignup()" style="width:100%; margin-top:0.9rem; padding:0.9rem 1.5rem; background:rgba(255,255,255,0.07); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
             <i class="fas fa-envelope"></i>
@@ -629,6 +629,7 @@
     // Step-1 chooser → email path: reveal the form with the account
     // fields (username + password) visible.
     function chooseEmailSignup() {
+      _signupMode = 'email';
       document.getElementById('signup-method-chooser').style.display = 'none';
       document.getElementById('signup-form').style.display = 'block';
       document.getElementById('password-group').style.display = 'block';
@@ -636,6 +637,8 @@
       const eg = document.getElementById('email-group');
       if (eg) eg.style.display = 'block';
       document.getElementById('choose-method-back').style.display = 'inline-flex';
+      const btn = document.getElementById('submit-btn');
+      if (btn) btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
       document.getElementById('email').focus();
     }
 
@@ -644,24 +647,107 @@
       document.getElementById('signup-method-chooser').style.display = 'block';
     }
 
-    async function signUpWithDiscord() {
-      const btn = document.getElementById('discord-signup-btn');
-      btn.disabled = true;
-      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…';
-      const { error } = await sb.auth.signInWithOAuth({
+    // Which signup method the user picked. 'discord' defers account creation
+    // until the form is submitted (OAuth runs on submit); 'email' creates the
+    // account inline with a typed password.
+    let _signupMode = 'email';
+    // Where the completed form is stashed across the Discord OAuth redirect, so
+    // it can be auto-submitted on return.
+    const PENDING_DISCORD_KEY = 'nswpsn:pendingDiscordSignup';
+
+    // Step-1 chooser → Discord path: reveal the form WITHOUT signing in. The
+    // Discord account is created only when the user submits (see submitRequest),
+    // so people who never finish the form never create an account.
+    function chooseDiscordSignup() {
+      _signupMode = 'discord';
+      document.getElementById('signup-method-chooser').style.display = 'none';
+      document.getElementById('signup-form').style.display = 'block';
+      // Discord accounts carry their own email + no typed password.
+      document.getElementById('password-group').style.display = 'none';
+      const eg = document.getElementById('email-group');
+      if (eg) eg.style.display = 'none';
+      document.getElementById('choose-method-back').style.display = 'inline-flex';
+      const btn = document.getElementById('submit-btn');
+      if (btn) btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord';
+      const about = document.getElementById('about');
+      if (about) about.focus();
+    }
+
+    // Kick off Discord OAuth after the form is validated + stashed. On success
+    // the browser navigates to Discord and returns to this page (handled by
+    // maybeSubmitPendingDiscordSignup in applySession).
+    async function startDiscordOAuth() {
+      return sb.auth.signInWithOAuth({
         provider: 'discord',
         // Ask Discord for the email so the request/account carry it when the
         // user has a verified email; the signup still works without one.
         options: { scopes: 'identify email', redirectTo: window.location.origin + window.location.pathname },
       });
-      if (error) {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fab fa-discord"></i> Sign up with Discord';
-        const messageEl = document.getElementById('message');
-        messageEl.textContent = error.message;
-        messageEl.className = 'message error';
+    }
+
+    // Put a previously-collected form body back into the fields (used when the
+    // post-OAuth auto-submit fails, so the user can retry without re-typing).
+    function restoreSignupForm(b) {
+      if (!b || typeof b !== 'object') return;
+      document.querySelectorAll('input[name="request-type"]').forEach(cb => {
+        cb.checked = Array.isArray(b.request_type) && b.request_type.includes(cb.value);
+      });
+      if (typeof toggleFeederSetup === 'function') toggleFeederSetup();
+      const setVal = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+      setVal('region', b.region || '');
+      setVal('background', b.background || '');
+      setVal('background-details', b.background_details || '');
+      setVal('website', b.website || '');
+      setVal('about', b.about || '');
+      if (b.has_existing_setup) {
+        const r = document.querySelector(`input[name="has-setup"][value="${b.has_existing_setup}"]`);
+        if (r) r.checked = true;
       }
-      // On success the browser navigates away to Discord.
+      if (typeof toggleSetupDetails === 'function') toggleSetupDetails();
+      setVal('setup-details', b.setup_details || '');
+      document.querySelectorAll('input[name="tech-experience"]').forEach(cb => {
+        cb.checked = Array.isArray(b.tech_experience) && b.tech_experience.includes(cb.value);
+      });
+      if (b.experience_level && typeof setRating === 'function') setRating(parseInt(b.experience_level, 10));
+    }
+
+    // On Discord OAuth return, submit the form the user completed before the
+    // redirect. The Supabase account now exists (created during OAuth), so this
+    // is the moment the request is created — linked to that account via the JWT.
+    async function maybeSubmitPendingDiscordSignup(session) {
+      const raw = sessionStorage.getItem(PENDING_DISCORD_KEY);
+      if (!raw || !session || !session.access_token) return;
+      // Claim the stash immediately so the two applySession callers (getSession +
+      // SIGNED_IN) can't both submit it. Restored below only if the POST fails.
+      sessionStorage.removeItem(PENDING_DISCORD_KEY);
+      let body;
+      try { body = JSON.parse(raw); } catch { return; }
+      // Identity comes from the now-signed-in account, not the (hidden) form.
+      body.email = (session.user && session.user.email) || body.email || '';
+      body.discord_id = _discordId || body.discord_id || '';
+      const messageEl = document.getElementById('message');
+      const submitBtn = document.getElementById('submit-btn');
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting…'; }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/editor-requests`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Failed to submit request');
+        if (typeof umami !== 'undefined') umami.track('editor-signup-submit', { types: (body.request_type || []).join(','), region: body.region, method: 'discord' });
+        document.getElementById('form-container').style.display = 'none';
+        document.getElementById('success-container').style.display = 'block';
+      } catch (e) {
+        // Put the stash back and restore the form so the user can just press Submit
+        // again (they're signed in now, so the retry posts directly).
+        console.error('[signup] auto-submit after Discord failed', e);
+        try { sessionStorage.setItem(PENDING_DISCORD_KEY, raw); } catch (_) { /* ignore */ }
+        restoreSignupForm(body);
+        if (messageEl) { messageEl.textContent = (e.message || 'Failed to submit request') + ' — please press Submit again.'; messageEl.className = 'message error'; }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord'; }
+      }
     }
 
     // When signed in (fresh OAuth return or existing session), swap the
@@ -716,6 +802,9 @@
         || meta.provider_id || meta.sub
         || '',
       );
+      // Signed in via Discord → this is a Discord signup (email is the account's
+      // own, so don't require a typed one on submit).
+      if (discordIdentity) _signupMode = 'discord';
 
       const nameEl = document.getElementById('discord-linked-name');
       if (nameEl) {
@@ -730,6 +819,9 @@
       document.getElementById('choose-method-back').style.display = 'none';
       // Already signed in — no password to create.
       document.getElementById('password-group').style.display = 'none';
+
+      // If the user completed the form before the Discord redirect, submit it now.
+      maybeSubmitPendingDiscordSignup(session);
     }
 
     // Prepare the form for a signed-in user, whether the session is restored on
@@ -863,12 +955,18 @@
         return;
       }
       
-      if (!email || !about) {
+      if (!about) {
         messageEl.textContent = 'Please fill in all required fields.';
         messageEl.className = 'message error';
         return;
       }
-      
+      // Email is typed only in the email-signup path; Discord provides it.
+      if (_signupMode === 'email' && !email) {
+        messageEl.textContent = 'Please fill in all required fields.';
+        messageEl.className = 'message error';
+        return;
+      }
+
       if (!region) {
         messageEl.textContent = 'Please select your region.';
         messageEl.className = 'message error';
@@ -891,7 +989,40 @@
         existingSession = sess0?.session || null;
       } catch (e) { /* treat as signed out */ }
 
-      if (!existingSession) {
+      // Discord mode, not yet signed in: the account doesn't exist yet. Stash the
+      // completed form and hand off to Discord OAuth — the account is created only
+      // now, and this form is auto-submitted when we return (see applySession →
+      // maybeSubmitPendingDiscordSignup). So abandoning the form never makes an account.
+      if (_signupMode === 'discord' && !existingSession) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…';
+        messageEl.textContent = '';
+        try {
+          sessionStorage.setItem(PENDING_DISCORD_KEY, JSON.stringify({
+            website: website || null,
+            about,
+            request_type: requestTypes,
+            region: region || null,
+            background: background || null,
+            background_details: backgroundDetails || null,
+            has_existing_setup: hasSetup,
+            setup_details: setupDetails || null,
+            tech_experience: techExperienceChecked.length > 0 ? techExperienceChecked : null,
+            experience_level: experienceLevel ? parseInt(experienceLevel) : null,
+          }));
+        } catch (e) { /* sessionStorage blocked — OAuth still links the account, user re-submits */ }
+        const { error: oauthErr } = await startDiscordOAuth();
+        if (oauthErr) {
+          sessionStorage.removeItem(PENDING_DISCORD_KEY);
+          messageEl.textContent = oauthErr.message || 'Could not start Discord sign-in.';
+          messageEl.className = 'message error';
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord';
+        }
+        return; // navigating to Discord on success
+      }
+
+      if (_signupMode === 'email' && !existingSession) {
         const username = document.getElementById('signup-username').value.trim();
         if (username.length < 2) {
           messageEl.textContent = 'Please choose a username (at least 2 characters).';
@@ -989,10 +1120,11 @@
         }
         
         // Show success state
+        try { sessionStorage.removeItem(PENDING_DISCORD_KEY); } catch (e) { /* ignore */ }
         if (typeof umami !== 'undefined') umami.track('editor-signup-submit', { types: requestTypes.join(','), region: region });
         document.getElementById('form-container').style.display = 'none';
         document.getElementById('success-container').style.display = 'block';
-        
+
       } catch (error) {
         messageEl.textContent = error.message || 'Failed to submit request. Please try again.';
         messageEl.className = 'message error';
