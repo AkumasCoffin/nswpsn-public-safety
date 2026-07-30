@@ -46,7 +46,4 @@
     var label = link.textContent.trim().substring(0, 50);
     track('outbound-link', { url: href, label: label });
   });
-
-  // Expose helper globally for page-specific tracking
-  window.umamiTrack = track;
 })();
