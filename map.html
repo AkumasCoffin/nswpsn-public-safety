@@ -1768,6 +1768,9 @@
        bottom card (#mobile-tip-card) instead. Gated on body.is-touch (set in JS
        from pointer:coarse) so a narrow desktop window keeps normal tooltips. */
     body.is-touch .leaflet-tooltip { display: none !important; }
+    /* Repeaters use a Leaflet popup (.repeater-popup); on touch hide the anchored
+       popup — its content is mirrored into the bottom card instead. */
+    body.is-touch .repeater-popup { display: none !important; }
 
     #mobile-tip-card {
       position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1200;
@@ -1899,6 +1902,22 @@
       justify-content: center;
       transition: all 0.2s;
       flex-shrink: 0;
+    }
+    /* "Add to grid" toggle in the single-camera fullscreen — the touch-friendly
+       way to build a multi-cam selection (desktop uses Ctrl+Click on pins). */
+    .camera-fs-add {
+      background: rgba(139, 92, 246, 0.85); color: #fff; border: none;
+      border-radius: 10px; padding: 10px 16px; min-height: 40px;
+      font-size: 0.85rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; flex-shrink: 0;
+    }
+    .camera-fs-add.active { background: rgba(34, 197, 94, 0.85); }
+    .camera-fullscreen-overlay.grid-mode #camera-fs-add { display: none; }
+    /* ✕ on a grid tile to drop it from the selection (mobile, no Ctrl+Click). */
+    .camera-grid-item-remove {
+      background: rgba(239, 68, 68, 0.85); color: #fff; border: none; border-radius: 6px;
+      width: 32px; height: 32px; min-width: 32px; cursor: pointer; margin-left: 6px;
+      display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     .camera-fullscreen-close:hover {
       background: rgba(239, 68, 68, 0.8);
@@ -2271,7 +2290,7 @@
   <div class="camera-selection-badge" id="camera-selection-badge" onclick="openCameraGrid()">
     <span class="camera-selection-count" id="camera-selection-count">0</span>
     <span>cameras selected</span>
-    <span style="color:#c4b5fd; font-size:0.75rem;">(Enter to view)</span>
+    <span style="color:#c4b5fd; font-size:0.75rem;">(tap to view)</span>
     <button class="camera-selection-clear" onclick="event.stopPropagation(); clearCameraSelection();" title="Clear selection">
       <i class="fa-solid fa-xmark"></i>
     </button>
@@ -2288,6 +2307,9 @@
           <span id="camera-fs-region"></span>
         </div>
       </div>
+      <button class="camera-fs-add" id="camera-fs-add" onclick="toggleCurrentCameraInGrid()">
+        <i class="fa-solid fa-plus"></i> Add to grid
+      </button>
       <button class="camera-fullscreen-close" onclick="closeCameraFullscreen()" title="Close (Esc)">
         <i class="fa-solid fa-xmark"></i>
       </button>
@@ -3065,7 +3087,26 @@
       // Map-level tooltipopen carries { tooltip } only (no { layer }); the marker
       // is on tooltip._source.
       const layer = tt._source || e.layer;
-      showMobileTipCard(typeof tt.getContent === 'function' ? tt.getContent() : '');
+      const content = typeof tt.getContent === 'function' ? tt.getContent() : '';
+      // Defer so any same-tap click handler (e.g. a camera opening fullscreen)
+      // has run first — if a camera fullscreen just opened, don't ALSO card it.
+      setTimeout(() => {
+        const cam = document.getElementById('camera-fullscreen');
+        if (cam && cam.classList.contains('open')) return;
+        showMobileTipCard(content);
+        if (layer && typeof layer.getLatLng === 'function') panMarkerAboveCard(layer);
+      }, 0);
+    });
+
+    // Repeaters (and any .repeater-popup) use a Leaflet POPUP, not a tooltip.
+    // On touch the anchored popup is hidden (CSS) and mirrored into the same
+    // bottom card so it matches the tooltip treatment.
+    map.on('popupopen', (e) => {
+      if (!isMobile) return;
+      const popup = e.popup;
+      if (!popup || !popup.options || popup.options.className !== 'repeater-popup') return;
+      const layer = popup._source;
+      showMobileTipCard(typeof popup.getContent === 'function' ? popup.getContent() : '');
       if (layer && typeof layer.getLatLng === 'function') {
         requestAnimationFrame(() => panMarkerAboveCard(layer));
       }
@@ -3633,7 +3674,9 @@
       // Show overlay
       overlay.classList.add('open');
       document.body.style.overflow = 'hidden';
-      
+      // Reflect whether this camera is already in the grid selection.
+      updateGridAddButton();
+
       // Start fullscreen refresh interval
       startFullscreenRefresh();
     }
@@ -3656,7 +3699,9 @@
       title.textContent = `${selectedCameras.length} Cameras`;
       view.innerHTML = '<i class="fa-solid fa-grip"></i> Grid View';
       direction.innerHTML = '';
-      region.innerHTML = '<span style="color:#22c55e;">Ctrl+Click pins to modify selection</span>';
+      region.innerHTML = isMobile
+        ? '<span style="color:#22c55e;">Tap ✕ on a tile to remove</span>'
+        : '<span style="color:#22c55e;">Ctrl+Click pins to modify selection</span>';
       
       // Determine grid class based on count
       let gridClass = 'camera-grid-content';
@@ -3678,6 +3723,9 @@
               </div>
               <button class="camera-grid-item-expand" onclick="openCameraFullscreen(selectedCameras[${idx}])">
                 <i class="fa-solid fa-expand"></i>
+              </button>
+              <button class="camera-grid-item-remove" onclick="removeCameraFromGrid(${idx})" title="Remove from grid">
+                <i class="fa-solid fa-xmark"></i>
               </button>
             </div>
             <div class="camera-grid-item-img-wrapper" onclick="openCameraFullscreen(selectedCameras[${idx}])">
@@ -4131,20 +4179,42 @@
     function toggleCameraSelection(cameraProps, marker) {
       const camId = cameraProps.imageUrl; // Use imageUrl as unique ID
       const idx = selectedCameras.findIndex(c => c.imageUrl === camId);
-      
-      if (idx >= 0) {
-        // Deselect
-        selectedCameras.splice(idx, 1);
-        const el = marker.getElement();
-        if (el) el.querySelector('div').classList.remove('camera-pin-selected');
-      } else {
-        // Select
-        selectedCameras.push(cameraProps);
-        const el = marker.getElement();
-        if (el) el.querySelector('div').classList.add('camera-pin-selected');
-      }
-      
+      const selected = idx < 0;
+      if (idx >= 0) selectedCameras.splice(idx, 1);
+      else selectedCameras.push(cameraProps);
+      // Update the pin outline only when we have the marker — desktop Ctrl+Click
+      // passes it; the mobile fullscreen "Add to grid" button does not.
+      const el = marker && marker.getElement && marker.getElement();
+      const dot = el && el.querySelector('div');
+      if (dot) dot.classList.toggle('camera-pin-selected', selected);
       updateSelectionBadge();
+      return selected;
+    }
+
+    // Mobile-friendly multi-select: toggle the camera shown in the single
+    // fullscreen into/out of the grid selection (replaces desktop Ctrl+Click).
+    function toggleCurrentCameraInGrid() {
+      if (!currentCameraData) return;
+      toggleCameraSelection(currentCameraData, null);
+      updateGridAddButton();
+    }
+    function updateGridAddButton() {
+      const btn = document.getElementById('camera-fs-add');
+      if (!btn) return;
+      const inGrid = !!currentCameraData &&
+        selectedCameras.some(c => c.imageUrl === currentCameraData.imageUrl);
+      btn.classList.toggle('active', inGrid);
+      btn.innerHTML = inGrid
+        ? '<i class="fa-solid fa-check"></i> In grid'
+        : '<i class="fa-solid fa-plus"></i> Add to grid';
+    }
+    // Remove one camera from the grid (mobile ✕ on a grid tile).
+    function removeCameraFromGrid(idx) {
+      const cam = selectedCameras[idx];
+      if (!cam) return;
+      toggleCameraSelection(cam, null);
+      if (selectedCameras.length === 0) { closeCameraFullscreen(); return; }
+      openCameraGrid();
     }
     
     function clearCameraSelection() {
