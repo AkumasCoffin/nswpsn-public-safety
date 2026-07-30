@@ -61,17 +61,24 @@ DirectoryIndex index.html
   # Legacy standalone agency pages — retired in favour of the data-driven
   # agency template. 301 old bookmarks/search results to agency?slug=….
   # These must run before the clean-URL rules below.
-  RewriteRule ^ambulance(\.html)?$ /agency?slug=nsw-ambulance [R=301,L]
-  RewriteRule ^aviation(\.html)?$ /agency?slug=nsw-aviation [R=301,L]
-  RewriteRule ^fire-and-rescue(\.html)?$ /agency?slug=fire-and-rescue-nsw [R=301,L]
-  RewriteRule ^rural-fire-service(\.html)?$ /agency?slug=nsw-rural-fire-service [R=301,L]
+  RewriteRule ^ambulance(\.html)?$ https://%{HTTP_HOST}/agency?slug=nsw-ambulance [R=301,L]
+  RewriteRule ^aviation(\.html)?$ https://%{HTTP_HOST}/agency?slug=nsw-aviation [R=301,L]
+  RewriteRule ^fire-and-rescue(\.html)?$ https://%{HTTP_HOST}/agency?slug=fire-and-rescue-nsw [R=301,L]
+  RewriteRule ^rural-fire-service(\.html)?$ https://%{HTTP_HOST}/agency?slug=nsw-rural-fire-service [R=301,L]
 
   # Skip /index.html (DirectoryIndex already handles the site root) so
   # links to "/" don't bounce. The negative lookahead matches anything
   # but index.html. The character class blocks dots/queries inside the
   # captured slug so /api/foo.json never matches.
+  #
+  # Emit an absolute https:// URL (not a bare "/%1"). Behind Cloudflare the
+  # origin connection is plain HTTP, so a relative target made Apache build an
+  # http:// Location — the .html→clean redirect then downgraded to HTTP and
+  # Cloudflare's Always-Use-HTTPS added a second hop back (https→http→https),
+  # which Google Search Console reports as a "Redirect error". Forcing https
+  # makes it a single clean hop.
   RewriteCond %{THE_REQUEST} \s/+(?!index\.html)([^./?\s]+)\.html[\s?] [NC]
-  RewriteRule ^ /%1 [R=301,L]
+  RewriteRule ^ https://%{HTTP_HOST}/%1 [R=301,L]
 
   # Internally rewrite /page → /page.html — but only when that .html file
   # actually exists on disk. Real files (config.js, styles.css, /assets/*)
