@@ -49,7 +49,14 @@
     }
 
     @media (max-width: 900px) {
-      #map-layout-root { left: 0; top: 60px; height: calc(100% - 60px); }
+      #map-layout-root {
+        left: 0; top: 60px; bottom: auto;
+        height: calc(100% - 60px);   /* fallback for old browsers */
+        /* Fit the VISIBLE viewport so bottom-anchored controls (map-type,
+           status bar) aren't hidden behind the mobile browser's toolbar,
+           which 100%/100vh sit behind. dvh tracks the toolbar show/hide. */
+        height: calc(100dvh - 60px);
+      }
     }
 
     .map-container { width: 100%; height: 100%; position: relative; overflow: hidden; }
@@ -134,15 +141,15 @@
       .layer-toggles::-webkit-scrollbar { display: none; }
       .btn-toggle { flex-shrink: 0; font-size: 0.68rem; padding: 5px 8px; }
       .dot-indicator { width: 6px; height: 6px; min-width: 6px; min-height: 6px; }
-      .map-type-controls { bottom: 20px; left: 10px; }
+      .map-type-controls { bottom: calc(16px + env(safe-area-inset-bottom)); left: 10px; }
       .map-type-controls .btn-toggle { font-size: 0.7rem; padding: 5px 10px; }
       
       /* Zoom control is top-RIGHT (added with position:'topright'), so push
          the right column — not the empty left one — below the full-width
-         layer-toggles bar on mobile. */
+         layer-toggles bar on mobile (bar is ~60px tall from top:10px). */
       .leaflet-top.leaflet-left,
       .leaflet-top.leaflet-right {
-        top: 55px !important;
+        top: 68px !important;
       }
     }
 
@@ -154,7 +161,7 @@
       /* Smaller screens: the toggles bar is a touch shorter. */
       .leaflet-top.leaflet-left,
       .leaflet-top.leaflet-right {
-        top: 50px !important;
+        top: 62px !important;
       }
     }
 
@@ -547,7 +554,7 @@
     .api-status-value.error { color: #ef4444; }
     
     @media (max-width: 900px) {
-      .status-bar { bottom: 20px; right: 10px; font-size: 10px; }
+      .status-bar { bottom: calc(16px + env(safe-area-inset-bottom)); right: 10px; font-size: 10px; }
       .status-bar-refresh { padding: 5px 8px 5px 10px; gap: 4px; }
       .status-bar-api { padding: 5px 10px 5px 8px; gap: 5px; }
       .api-status-dot { width: 6px; height: 6px; }
