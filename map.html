@@ -1762,12 +1762,28 @@
     .leaflet-tooltip-left.ais-tooltip::before { border-left-color: rgba(15, 23, 42, 0.96) !important; }
     .leaflet-tooltip-right.ais-tooltip::before { border-right-color: rgba(15, 23, 42, 0.96) !important; }
 
-    /* Mobile: the fixed 350/320px min-width tooltips run off-screen when a pin
-       near the edge is tapped (Leaflet doesn't auto-pan tooltips). Cap them to
-       the viewport so they stay readable. */
-    @media (max-width: 480px) {
-      .leaflet-tooltip { min-width: min(88vw, 350px); max-width: 92vw; }
-      .leaflet-tooltip.ais-tooltip { min-width: min(88vw, 320px) !important; max-width: 92vw !important; }
+    /* Touch devices: don't render the map-anchored tooltip at all — its fixed
+       320/350px min-width covered most of a phone screen and often opened under
+       the top bars or off the edge. Its content is mirrored into the fixed
+       bottom card (#mobile-tip-card) instead. Gated on body.is-touch (set in JS
+       from pointer:coarse) so a narrow desktop window keeps normal tooltips. */
+    body.is-touch .leaflet-tooltip { display: none !important; }
+
+    #mobile-tip-card {
+      position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1200;
+      background: rgba(15, 23, 42, 0.97); border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 14px; box-shadow: 0 -6px 30px rgba(0,0,0,0.55);
+      backdrop-filter: blur(10px); padding: 14px 16px;
+      max-height: 45vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      color: #e2e8f0; font-size: 13px; line-height: 1.4;
+      transform: translateY(130%); transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    #mobile-tip-card.open { transform: translateY(0); }
+    #mobile-tip-card .mtc-close {
+      position: sticky; top: 0; float: right; width: 30px; height: 30px;
+      margin: -6px -6px 0 8px; display: flex; align-items: center; justify-content: center;
+      font-size: 18px; line-height: 1; background: rgba(255,255,255,0.08);
+      border: none; border-radius: 50%; color: #cbd5e1; cursor: pointer;
     }
 
     /* Compact tooltip for police-heatmap hex cells. Override the
@@ -2866,6 +2882,9 @@
     // Use pointer:coarse to detect if PRIMARY input is touch (finger) vs fine (mouse/trackpad)
     // This correctly excludes touch-enabled Windows laptops when a mouse is being used
     const isMobile = window.matchMedia("(pointer: coarse)").matches;
+    // Mark touch devices so CSS can hide map-anchored tooltips (shown in the
+    // bottom card instead). Matches the isMobile condition exactly.
+    if (isMobile) document.body.classList.add('is-touch');
     let lastTappedMarker = null;
     let lastTapTime = 0;
     const DOUBLE_TAP_THRESHOLD = 3000; // 3 seconds to second-tap for sidebar
@@ -2916,7 +2935,9 @@
       const withinThreshold = (now - lastTapTime) < DOUBLE_TAP_THRESHOLD;
 
       if (isSameMarker && withinThreshold) {
-        // Second tap on same marker within threshold - open sidebar
+        // Second tap on same marker within threshold - open sidebar (full
+        // details), and dismiss the overview card so they don't stack.
+        hideMobileTipCard();
         if (selectionAction) selectionAction();
         sidebarAction();
         lastTappedMarker = null;
@@ -2988,6 +3009,8 @@
       document.getElementById('incident-sidebar').classList.remove('open');
       const infoPanel = document.getElementById('incident-info-panel');
       if (infoPanel) infoPanel.classList.remove('open');
+      // Dismiss the mobile overview card too.
+      hideMobileTipCard();
 
       // Remove selection indicator from pager pins (but keep pulse for recent items)
       document.querySelectorAll('.pager-pin-dot.pin-selected')
@@ -2998,17 +3021,53 @@
       lastTapTime = 0;
     });
 
-    // Mobile: whenever ANY tooltip opens, pan so it lands centred and clear of
-    // the top chrome (layer-toggle + search bars) instead of opening under them
-    // or off-screen. Wired globally here so it covers every tooltip (incidents,
-    // pager, vessels, aircraft, cameras, transport …), not just marker taps.
-    // Desktop opens tooltips on hover, so skip it there — we don't want a pan on
-    // every mouseover. rAF lets the tooltip render so it can be measured.
+    // Mobile: mirror ANY tooltip's content into a fixed bottom card instead of
+    // the map-anchored tooltip (which is hidden on touch via CSS). Covers every
+    // tooltip — incidents, pager, vessels, aircraft, cameras, transport — so
+    // nothing opens a huge box over the map. Desktop keeps normal hover tooltips.
+    let _mobileTipCard = null;
+    function getMobileTipCard() {
+      if (_mobileTipCard) return _mobileTipCard;
+      _mobileTipCard = document.createElement('div');
+      _mobileTipCard.id = 'mobile-tip-card';
+      document.body.appendChild(_mobileTipCard);
+      return _mobileTipCard;
+    }
+    function hideMobileTipCard() {
+      if (_mobileTipCard) _mobileTipCard.classList.remove('open');
+    }
+    function showMobileTipCard(content) {
+      const card = getMobileTipCard();
+      const html = typeof content === 'string'
+        ? content
+        : (content && content.outerHTML) || '';
+      card.innerHTML =
+        '<button type="button" class="mtc-close" aria-label="Close" onclick="hideMobileTipCard()">×</button>' +
+        '<div class="mtc-body">' + html + '</div>';
+      card.classList.add('open');
+    }
+    // Pan the tapped marker into the upper part of the map so the bottom card
+    // doesn't cover it.
+    function panMarkerAboveCard(marker) {
+      try {
+        const z = map.getZoom();
+        const p = map.project(marker.getLatLng(), z);
+        const target = map.unproject(p.add([0, map.getSize().y * 0.20]), z);
+        map.panTo(target, { animate: true, duration: 0.35 });
+      } catch (e) {
+        try { map.panTo(marker.getLatLng()); } catch (_) { /* ignore */ }
+      }
+    }
     map.on('tooltipopen', (e) => {
       if (!isMobile) return;
-      const layer = e && e.layer;
-      if (layer && typeof layer.getLatLng === 'function' && typeof layer.getTooltip === 'function') {
-        requestAnimationFrame(() => panToMarkerClearingUi(layer, 0.4));
+      const tt = e.tooltip;
+      if (!tt) return;
+      // Map-level tooltipopen carries { tooltip } only (no { layer }); the marker
+      // is on tooltip._source.
+      const layer = tt._source || e.layer;
+      showMobileTipCard(typeof tt.getContent === 'function' ? tt.getContent() : '');
+      if (layer && typeof layer.getLatLng === 'function') {
+        requestAnimationFrame(() => panMarkerAboveCard(layer));
       }
     });
     document.getElementById('map').classList.add('map-dark-mode');
