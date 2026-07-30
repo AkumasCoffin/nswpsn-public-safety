@@ -712,15 +712,17 @@
     .map-search-bar .search-result-item:last-child { border-bottom: none; }
 
     @media (max-width: 900px) {
+      /* Sit clearly BELOW the full-width mobile layer-toggle bar (top:10px,
+         ~50px tall → ~60px bottom) instead of overlapping it. */
       .map-search-bar {
-        top: 60px;
+        top: 70px;
         width: 300px;
         max-width: calc(100% - 80px);
       }
     }
     @media (max-width: 480px) {
       .map-search-bar {
-        top: 55px;
+        top: 66px;
         width: 260px;
         max-width: calc(100% - 60px);
       }
@@ -2994,6 +2996,20 @@
       // Reset mobile tap tracking when clicking on map background
       lastTappedMarker = null;
       lastTapTime = 0;
+    });
+
+    // Mobile: whenever ANY tooltip opens, pan so it lands centred and clear of
+    // the top chrome (layer-toggle + search bars) instead of opening under them
+    // or off-screen. Wired globally here so it covers every tooltip (incidents,
+    // pager, vessels, aircraft, cameras, transport …), not just marker taps.
+    // Desktop opens tooltips on hover, so skip it there — we don't want a pan on
+    // every mouseover. rAF lets the tooltip render so it can be measured.
+    map.on('tooltipopen', (e) => {
+      if (!isMobile) return;
+      const layer = e && e.layer;
+      if (layer && typeof layer.getLatLng === 'function' && typeof layer.getTooltip === 'function') {
+        requestAnimationFrame(() => panToMarkerClearingUi(layer, 0.4));
+      }
     });
     document.getElementById('map').classList.add('map-dark-mode');
     L.control.zoom({ position: 'topright' }).addTo(map);
