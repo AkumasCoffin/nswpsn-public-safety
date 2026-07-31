@@ -2042,7 +2042,15 @@
         <label>User ID</label>
         <div class="value" id="edit-user-id" style="font-size: 0.75rem;">-</div>
       </div>
-      
+      <div class="credential-box" id="edit-user-region-box" style="display: none;">
+        <label>Location / Region</label>
+        <div class="value" id="edit-user-region" style="font-family: inherit;">-</div>
+      </div>
+      <div class="credential-box" id="edit-user-background-box" style="display: none;">
+        <label>Emergency Services Background</label>
+        <div class="value" id="edit-user-background" style="white-space: pre-wrap; font-family: inherit; font-size: 0.95rem; color: var(--text-primary);">-</div>
+      </div>
+
       <div style="margin: 1.5rem 0; padding: 1rem; background: rgba(249, 115, 22, 0.1); border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 8px;">
         <label style="display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 0.75rem; font-weight: 600;">
           <i class="fas fa-user-tag"></i> Assign Roles
@@ -2248,6 +2256,48 @@
 
     let allRequests = [];
     let allUsers = [];
+
+    // Shared label maps for the signup region + emergency-services background,
+    // used by both the request-details modal and the user (edit-roles) modal.
+    const REGION_LABELS = {
+      sydney_metro: 'Sydney Metro',
+      greater_sydney: 'Greater Sydney',
+      hunter: 'Hunter Region',
+      central_coast: 'Central Coast',
+      illawarra: 'Illawarra / South Coast',
+      blue_mountains: 'Blue Mountains',
+      central_west: 'Central West',
+      new_england: 'New England / North West',
+      north_coast: 'North Coast',
+      riverina: 'Riverina / Murray',
+      south_east: 'South East / Snowy',
+      far_west: 'Far West',
+      interstate: 'Interstate / Other',
+    };
+    const BG_LABELS = {
+      rfs: 'RFS (Rural Fire Service)',
+      frnsw: 'Fire & Rescue NSW',
+      ses: 'SES (State Emergency Service)',
+      ambulance: 'NSW Ambulance',
+      police: 'NSW Police',
+      vra: 'Volunteer Rescue Association',
+      marine_rescue: 'Marine Rescue NSW',
+      scanner_hobbyist: 'Radio Scanner Hobbyist',
+      other_emergency: 'Other Emergency Services',
+      none: 'General Interest / None',
+    };
+
+    // Find the signup request that belongs to a Supabase user (linked by id when
+    // available, else by email — Supabase emails are unique).
+    function requestForUser(user) {
+      if (!user) return null;
+      const email = (user.email || '').toLowerCase();
+      return allRequests.find(r =>
+        (r.supabase_user_id && r.supabase_user_id === user.id) ||
+        (email && (r.email || '').toLowerCase() === email)
+      ) || null;
+    }
+
     let currentFilter = 'all';
     let currentApproval = null;
     let currentEditUserId = null;
@@ -6214,7 +6264,27 @@
       document.getElementById('edit-user-email').textContent =
         user.username ? `${user.username} (${user.email})` : user.email;
       document.getElementById('edit-user-id').textContent = userId;
-      
+
+      // Pull Location / Region + Emergency Services Background from the user's
+      // signup request (the roles list itself doesn't carry them).
+      const req = requestForUser(user);
+      const regionBox = document.getElementById('edit-user-region-box');
+      if (req && req.region) {
+        document.getElementById('edit-user-region').textContent = REGION_LABELS[req.region] || req.region;
+        regionBox.style.display = 'block';
+      } else {
+        regionBox.style.display = 'none';
+      }
+      const bgBox = document.getElementById('edit-user-background-box');
+      if (req && req.background) {
+        let bgText = BG_LABELS[req.background] || req.background;
+        if (req.background_details) bgText += '\n\n' + req.background_details;
+        document.getElementById('edit-user-background').textContent = bgText;
+        bgBox.style.display = 'block';
+      } else {
+        bgBox.style.display = 'none';
+      }
+
       // Set checkbox states based on current roles
       const userRoles = (user.roles || []).map(r => r.role);
       document.getElementById('edit-role-map-editor').checked = userRoles.includes('map_editor');
@@ -6680,37 +6750,9 @@
       };
       const typesFormatted = (req.request_type || []).map(t => typeLabels[t] || t).join(', ') || 'Not specified';
       
-      // Format region
-      const regionLabels = {
-        'sydney_metro': 'Sydney Metro',
-        'greater_sydney': 'Greater Sydney',
-        'hunter': 'Hunter Region',
-        'central_coast': 'Central Coast',
-        'illawarra': 'Illawarra / South Coast',
-        'blue_mountains': 'Blue Mountains',
-        'central_west': 'Central West',
-        'new_england': 'New England / North West',
-        'north_coast': 'North Coast',
-        'riverina': 'Riverina / Murray',
-        'south_east': 'South East / Snowy',
-        'far_west': 'Far West',
-        'interstate': 'Interstate / Other'
-      };
-      
-      // Format background
-      const bgLabels = {
-        'rfs': 'RFS (Rural Fire Service)',
-        'frnsw': 'Fire & Rescue NSW',
-        'ses': 'SES',
-        'ambulance': 'NSW Ambulance',
-        'police': 'NSW Police',
-        'vra': 'Volunteer Rescue Association',
-        'marine_rescue': 'Marine Rescue NSW',
-        'scanner_hobbyist': 'Radio Scanner Hobbyist',
-        'other_emergency': 'Other Emergency Services',
-        'none': 'General Interest'
-      };
-      
+      const regionLabels = REGION_LABELS;
+      const bgLabels = BG_LABELS;
+
       document.getElementById('detail-type').textContent = typesFormatted;
       document.getElementById('detail-email').textContent = req.email;
       document.getElementById('detail-discord').textContent = req.discord_id;
@@ -6720,7 +6762,7 @@
       const setupGroup = document.getElementById('detail-setup-group');
       if (req.has_existing_setup) {
         setupGroup.style.display = 'block';
-        let setupText = req.has_existing_setup === 'yes' ? '✅ Has existing setup' : '🆕 No setup yet (interested)';
+        let setupText = req.has_existing_setup === 'yes' ? '✅ Has / can acquire the equipment' : '⚠️ Cannot acquire the equipment';
         if (req.setup_details) {
           setupText += '\n\n' + req.setup_details;
         }
