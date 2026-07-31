@@ -557,7 +557,10 @@
         if (r.ok) {
           const d = await r.json();
           const noRoles = Array.isArray(d.roles) ? d.roles.length === 0 : (!d.has_access && !d.is_team_member);
-          if (noRoles && !d.has_request) {
+          // Require an EXPLICIT has_request:false — during a deploy window the
+          // frontend can be live before the backend adds this field, and an
+          // `undefined` here would wrongly sign out a pending (no-roles-yet) user.
+          if (noRoles && d.has_request === false) {
             try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
             window.location.href = 'signup.html?welcome=1';
             return;

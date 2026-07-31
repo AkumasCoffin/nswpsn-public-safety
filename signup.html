@@ -718,7 +718,6 @@
     // is the moment the request is created — linked to that account via the JWT.
     async function maybeSubmitPendingDiscordSignup(session) {
       const raw = localStorage.getItem(PENDING_DISCORD_KEY);
-      console.log('[signup] maybeSubmit: pending=' + !!raw + ' session=' + !!(session && session.access_token));
       if (!raw || !session || !session.access_token) return;
       // Claim the stash immediately so the two applySession callers (getSession +
       // SIGNED_IN) can't both submit it. Restored below only if the POST fails.
@@ -727,7 +726,10 @@
       try { body = JSON.parse(raw); } catch { return; }
       // Ignore a stale stash (an old abandoned attempt) so it can't auto-submit
       // on an unrelated later visit — durable localStorage would otherwise keep it.
-      if (body._ts && (Date.now() - body._ts) > 60 * 60 * 1000) { return; }
+      // Kept short (30 min): the OAuth round-trip takes seconds, so a legit return
+      // is well within it, while bounding the window in which an abandoned form on a
+      // shared browser could attach to a different person's later sign-in.
+      if (body._ts && (Date.now() - body._ts) > 30 * 60 * 1000) { return; }
       delete body._ts;
       // Identity comes from the now-signed-in account, not the (hidden) form.
       body.email = (session.user && session.user.email) || body.email || '';
@@ -741,7 +743,6 @@
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify(body),
         });
-        console.log('[signup] POST /api/editor-requests →', res.status);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'Failed to submit request');
         if (typeof umami !== 'undefined') umami.track('editor-signup-submit', { types: (body.request_type || []).join(','), region: body.region, method: 'discord' });
@@ -829,7 +830,6 @@
       document.getElementById('password-group').style.display = 'none';
 
       // If the user completed the form before the Discord redirect, submit it now.
-      console.log('[signup] applySession: signedIn=true discord=' + !!discordIdentity + ' pending=' + !!localStorage.getItem(PENDING_DISCORD_KEY));
       maybeSubmitPendingDiscordSignup(session);
     }
 
@@ -1018,7 +1018,6 @@
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…';
         messageEl.textContent = '';
-        console.log('[signup] discord submit → persisting form + starting OAuth');
         try {
           localStorage.setItem(PENDING_DISCORD_KEY, JSON.stringify({
             _ts: Date.now(),
