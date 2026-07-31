@@ -76,28 +76,44 @@ beforeEach(() => {
 });
 
 describe('discordInfo', () => {
-  it('reports an OAuth-linked Discord identity with its provider id', () => {
+  it('reports an OAuth-linked Discord identity with its provider id + handle', () => {
     expect(
       discordInfo({
         identities: [
           { provider: 'email', identity_data: {} },
-          { provider: 'discord', identity_data: { provider_id: '123456789', sub: '123456789' } },
+          { provider: 'discord', identity_data: { provider_id: '123456789', sub: '123456789', full_name: 'markt334' } },
         ],
       }),
-    ).toEqual({ discord_linked: true, discord_id: '123456789' });
+    ).toEqual({ discord_linked: true, discord_id: '123456789', discord_username: 'markt334' });
   });
 
-  it('falls back to sub, then to the metadata discord_id (unlinked)', () => {
+  it('derives linkage/id/handle from user_metadata when identities is absent (admin list case)', () => {
+    // The admin LIST endpoint frequently omits `identities`; the Discord fields
+    // are mirrored into user_metadata, and we must still detect the account.
+    expect(
+      discordInfo({
+        user_metadata: {
+          iss: 'https://discord.com/api',
+          provider_id: '555',
+          sub: '555',
+          full_name: 'cjbaker23',
+          custom_claims: { global_name: 'CJ' },
+        },
+      }),
+    ).toEqual({ discord_linked: true, discord_id: '555', discord_username: 'CJ' });
+  });
+
+  it('falls back to sub, then to the metadata discord_id (unlinked form handle)', () => {
     expect(
       discordInfo({ identities: [{ provider: 'discord', identity_data: { sub: '42' } }] }),
-    ).toEqual({ discord_linked: true, discord_id: '42' });
+    ).toEqual({ discord_linked: true, discord_id: '42', discord_username: null });
     expect(
       discordInfo({ identities: [], user_metadata: { discord_id: ' 987 ' } }),
-    ).toEqual({ discord_linked: false, discord_id: '987' });
+    ).toEqual({ discord_linked: false, discord_id: '987', discord_username: null });
   });
 
-  it('returns null id when nothing is recorded', () => {
-    expect(discordInfo({})).toEqual({ discord_linked: false, discord_id: null });
+  it('returns nulls when nothing is recorded', () => {
+    expect(discordInfo({})).toEqual({ discord_linked: false, discord_id: null, discord_username: null });
   });
 });
 
