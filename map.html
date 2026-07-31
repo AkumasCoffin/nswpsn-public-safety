@@ -143,7 +143,13 @@
       .btn-toggle { flex-shrink: 0; font-size: 0.68rem; padding: 5px 8px; }
       .dot-indicator { width: 6px; height: 6px; min-width: 6px; min-height: 6px; }
       .map-type-controls {
-        bottom: calc(16px + env(safe-area-inset-bottom)); left: 10px;
+        /* Anchor to the visual viewport, not the map container — the container's
+           dvh height (with a 100% fallback) can sit behind the mobile browser
+           toolbar, which hid this bar entirely on some phones. Fixed + safe-area
+           keeps it above the toolbar like the desktop rule does. */
+        position: fixed;
+        bottom: calc(14px + env(safe-area-inset-bottom)); left: 10px;
+        z-index: 900;
         flex-wrap: wrap; max-width: calc(100vw - 20px); border-radius: 16px; row-gap: 4px;
       }
       .map-type-controls .btn-toggle { font-size: 0.7rem; padding: 5px 10px; }
@@ -756,6 +762,21 @@
     .w3w-popup .w3w-copy-msg {
       font-size: 10px; color: #22c55e; margin-top: 2px; display: none;
     }
+
+    /* Region / LGA boundary click popup (desktop) — dark theme */
+    .boundary-popup .leaflet-popup-content-wrapper {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(148, 163, 184, 0.4) !important;
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.55) !important;
+      color: #e2e8f0 !important;
+    }
+    .boundary-popup .leaflet-popup-content { margin: 9px 12px !important; }
+    .boundary-popup .leaflet-popup-tip {
+      background: rgba(15, 23, 42, 0.97) !important;
+      border: 1px solid rgba(148, 163, 184, 0.4) !important;
+    }
+    .boundary-popup .leaflet-popup-close-button { color: #cbd5e1 !important; }
 
     .btn-toggle {
       background: transparent; border: none; color: #cbd5e1; padding: 6px 10px; border-radius: 20px;
@@ -2926,10 +2947,9 @@
     map.getPane('w3wPane').style.opacity = 0;
 
     // Region / LGA border overlays: above the transport network (300), below the
-    // w3w grid (350) and markers (600). Non-interactive so they never eat clicks.
+    // w3w grid (350) and markers (600). Interactive (click a shape for its name).
     map.createPane('boundaryPane');
     map.getPane('boundaryPane').style.zIndex = 340;
-    map.getPane('boundaryPane').style.pointerEvents = 'none';
 
     // Mobile detection for two-tap behavior on markers
     // Use pointer:coarse to detect if PRIMARY input is touch (finger) vs fine (mouse/trackpad)
@@ -15996,12 +16016,53 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
         if (!_boundaryRenderer) _boundaryRenderer = L.canvas({ pane: 'boundaryPane' });
-        const layer = L.geoJSON(geo, { pane: 'boundaryPane', renderer: _boundaryRenderer, interactive: false, style: cfg.style });
+        const layer = L.geoJSON(geo, {
+          pane: 'boundaryPane',
+          renderer: _boundaryRenderer,
+          interactive: true,
+          style: cfg.style,
+          onEachFeature: (feature, lyr) => { lyr.on('click', (e) => _onBoundaryClick(kind, e)); },
+        });
         _boundaryLayers[kind] = layer;
         _boundaryPending[kind] = null;
         return layer;
       })();
       return _boundaryPending[kind];
+    }
+
+    // Click a region / LGA: highlight it and show its name (bottom card on
+    // touch, popup on desktop). LGA names come UPPERCASE, so title-case them.
+    let _boundaryHi = null;
+    function _clearBoundaryHi() {
+      if (_boundaryHi && _boundaryHi.layer) {
+        try { _boundaryHi.layer.setStyle(_boundaryCfg[_boundaryHi.kind].style); } catch (_) { /* ignore */ }
+      }
+      _boundaryHi = null;
+    }
+    function _titleCaseName(s) {
+      return String(s).toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+    function _onBoundaryClick(kind, e) {
+      const lyr = e.target;
+      const props = (lyr && lyr.feature && lyr.feature.properties) || {};
+      const raw = props.name || '';
+      if (!raw) return;
+      const name = kind === 'lga' ? _titleCaseName(raw) : raw;
+      const sub = kind === 'lga' ? 'Local Government Area' : 'NSW planning region';
+      _clearBoundaryHi();
+      const hi = kind === 'lga'
+        ? { weight: 2.5, color: '#7dd3fc', opacity: 1, fill: true, fillColor: '#38bdf8', fillOpacity: 0.12 }
+        : { weight: 3, color: '#fbbf24', opacity: 1, fill: true, fillColor: '#f59e0b', fillOpacity: 0.10 };
+      try { lyr.setStyle(hi); } catch (_) { /* ignore */ }
+      _boundaryHi = { kind, layer: lyr };
+      const html =
+        '<div style="font-weight:600; font-size:0.98em;">' + escapeHtml(name) + '</div>' +
+        '<div style="font-size:0.78em; color:#94a3b8; margin-top:2px;">' + sub + '</div>';
+      if (isMobile) {
+        showMobileTipCard(html);
+      } else {
+        L.popup({ className: 'boundary-popup', autoPan: false }).setLatLng(e.latlng).setContent(html).openOn(map);
+      }
     }
 
     async function toggleBoundary(kind) {
@@ -16024,6 +16085,7 @@ function initPagerHoursFromStorage() {
       } else {
         if (label) label.classList.remove('active');
         if (_boundaryLayers[kind]) map.removeLayer(_boundaryLayers[kind]);
+        if (_boundaryHi && _boundaryHi.kind === kind) _clearBoundaryHi();
       }
     }
 
