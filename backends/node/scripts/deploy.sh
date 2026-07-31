@@ -39,6 +39,16 @@ cd "$NODE_DIR"
 # any node_modules drift, which is too brittle for a one-shot deploy.
 echo "[deploy] npm install…"
 npm install --no-audit --no-fund
+
+# Playwright pins a specific Chromium revision per release. When the playwright
+# package is bumped (e.g. a dependabot update), the OLD browser stays on disk,
+# so chromium.launch() fails and the headless-browser workers go not-ready —
+# /api/marinetraffic/vessels then returns 503 (and centralwatch breaks too).
+# Reinstall the matching Chromium on every deploy; idempotent + fast when it's
+# already current. Non-fatal so a browser hiccup doesn't abort the whole deploy.
+echo "[deploy] playwright install chromium…"
+npx playwright install chromium || echo "[deploy] WARNING: playwright chromium install failed — marinetraffic/centralwatch browser may not start"
+
 echo "[deploy] npm run build…"
 npm run build
 
