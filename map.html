@@ -10498,7 +10498,7 @@ function initPagerHoursFromStorage() {
           (it.agenciesList || []).forEach((a) => { agencyCounts[a] = (agencyCounts[a] || 0) + 1; });
           (it.typesList || []).forEach((t) => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
         }
-        const esc = (s) => s.replace(/'/g, "\\'");
+        const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         const pillFor = (t) =>
           _ffPill(filterState.type[t] !== false, `${escapeHtml(t)} (${typeCounts[t] || 0})`, `toggleUserTypePill('${esc(t)}')`);
         const agencyPills = USER_AGENCIES.map((a) =>

@@ -3057,7 +3057,7 @@
     let _ndAudioCtx = null;        // Web Audio context for the monitor
     let _ndAudioPlayhead = 0;      // scheduled playback time cursor (ctx clock)
     let _ndReqSeq = 0;
-    const _ndReqMeta = {};         // reqId -> { label } for cmdResult feedback
+    const _ndReqMeta = Object.create(null);         // reqId -> { label } for cmdResult feedback
     const _ndWf = {
       wf: null, wfCtx: null, wfW: 0, wfH: 0,   // waterfall canvas + device-pixel buffer size
       tr: null, trCtx: null, trW: 0, trH: 0,   // FFT trace canvas + device-pixel buffer size
@@ -3074,7 +3074,7 @@
     let _ndCfgLoading = false;
     let _ndLog = [];               // combined live event log (newest pushed to end)
     const _ndSeenEv = new Set();   // dedupe keys for ingested backend events
-    let _ndPrevChan = {};          // channelId -> {type, state} snapshot for transition diff
+    let _ndPrevChan = Object.create(null);          // channelId -> {type, state} snapshot for transition diff
     let _ndCallStart = {};         // channelId -> epoch ms when the current call started
     let _ndNpTimer = null;         // 1s ticker for "now playing" elapsed clocks
 
@@ -3110,7 +3110,7 @@
       try { if (_ndAudioCtx) _ndAudioCtx.close(); } catch (e) {}
       _ndAudioCtx = null;
       _ndConfig = null; _ndLog = []; _ndSeenEv.clear();
-      _ndPrevChan = {}; _ndCallStart = {};
+      _ndPrevChan = Object.create(null); _ndCallStart = {};
       _ndWf.lastCenter = null; _ndWf.lastSr = null; _ndWf.lastBins = null;
       _ndWf.agcLo = -100; _ndWf.agcHi = -20; _ndWf.agcInit = false;
       _ndSetView('live');
@@ -4498,7 +4498,7 @@
     // Compare the latest channels against the previous snapshot and log
     // meaningful transitions (control-channel lock, call start/end).
     function _ndDiffChannels() {
-      const next = {};
+      const next = Object.create(null);
       _ndChannels.forEach(c => {
         const cid = String(c.id != null ? c.id : (c.name || ''));
         if (!cid) return;
