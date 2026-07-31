@@ -66,7 +66,10 @@ async function listAllSupabaseUsers(): Promise<SupaUser[]> {
     const body = (await res.json()) as { users?: SupaUser[] };
     const users = body.users ?? [];
     out.push(...users);
-    if (users.length < perPage) break;
+    // GoTrue caps per_page server-side (often 50), so a short page does NOT mean
+    // the end — keep paging until a page comes back empty, else we'd silently
+    // miss (and never clean up) everyone past the first page.
+    if (users.length === 0) break;
   }
   return out;
 }
@@ -176,8 +179,22 @@ export async function sweepOrphanSignups(
   if (opts.dryRun || orphans.length === 0) {
     return { found: orphans.length, deleted: 0, orphans };
   }
+  // Re-read requests immediately before deleting: if someone finally submitted
+  // the signup form between the scan and now, they now have a request and must
+  // be kept. Closes the scan→delete race (and avoids a dangling request row).
+  const reqNow = await pool.query<{ supabase_user_id: string | null; email: string | null }>(
+    'SELECT supabase_user_id, email FROM editor_requests',
+  );
+  const reqIdsNow = new Set<string>();
+  const reqEmailsNow = new Set<string>();
+  for (const r of reqNow.rows) {
+    if (r.supabase_user_id) reqIdsNow.add(r.supabase_user_id);
+    if (r.email) reqEmailsNow.add(r.email.trim().toLowerCase());
+  }
   let deleted = 0;
   for (const o of orphans) {
+    const email = (o.email ?? '').trim().toLowerCase();
+    if (reqIdsNow.has(o.id) || (email && reqEmailsNow.has(email))) continue; // signed up since the scan — keep
     if (await deleteAccount(pool, o.id)) deleted++;
   }
   log.info({ found: orphans.length, deleted }, 'orphanCleanup: swept incomplete signups');
