@@ -129,27 +129,58 @@ export async function getUsernameMap(): Promise<Map<string, string>> {
   return map;
 }
 
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+
+/** The Discord id (snowflake) out of an identity_data / user_metadata bag. */
+function discordIdFrom(bag: Record<string, unknown>): string | null {
+  return str(bag['provider_id']) ?? str(bag['sub']);
+}
+
+/** The Discord display/handle out of an identity_data / user_metadata bag.
+ *  Uses only Discord-provided fields — NOT the generic `username`, which can be
+ *  an app-set alias unrelated to the Discord account. */
+function discordNameFrom(bag: Record<string, unknown>): string | null {
+  const cc = bag['custom_claims'];
+  const globalName = cc && typeof cc === 'object' ? (cc as Record<string, unknown>)['global_name'] : undefined;
+  return (
+    str(globalName) ?? str(bag['full_name']) ?? str(bag['name']) ?? str(bag['user_name']) ?? str(bag['preferred_username'])
+  );
+}
+
 /**
  * Discord linkage for the admin panel:
- *   discord_linked — the account has a Discord OAuth identity attached.
- *   discord_id     — the Discord user id (identity provider_id/sub), or
- *                    the discord_id stored in user_metadata by the
- *                    approval flow / signup form when there's no OAuth
- *                    identity. Used by the frontend to spot the same
- *                    person signing up under multiple accounts.
- * Exported for tests.
+ *   discord_linked   — the account is a Discord OAuth account.
+ *   discord_id       — the Discord user id (snowflake), or the discord_id a user
+ *                      typed into the signup form. Used to spot the same person
+ *                      signing up under multiple accounts.
+ *   discord_username — the Discord handle, resolved from metadata directly.
+ *
+ * The admin LIST endpoint does not reliably populate `identities`, so we also
+ * read the Discord fields Supabase copies into `user_metadata` (iss/provider_id/
+ * sub/full_name…) — otherwise every OAuth account shows blank. Exported for tests.
  */
-export function discordInfo(u: SupabaseUser): { discord_linked: boolean; discord_id: string | null } {
+export function discordInfo(u: SupabaseUser): {
+  discord_linked: boolean;
+  discord_id: string | null;
+  discord_username: string | null;
+} {
   const identity = (u.identities ?? []).find((i) => i.provider === 'discord');
   const idData = identity?.identity_data ?? {};
-  const fromIdentity = [idData['provider_id'], idData['sub']].find(
-    (v): v is string => typeof v === 'string' && v.trim() !== '',
-  );
-  const metaId = u.user_metadata?.['discord_id'];
-  const fromMeta = typeof metaId === 'string' && metaId.trim() !== '' ? metaId.trim() : null;
+  const meta = u.user_metadata ?? {};
+  // A Discord OAuth login stamps its issuer into user_metadata even when the
+  // identities array is absent from the list response.
+  const metaIsDiscord = /discord/i.test(str(meta['iss']) ?? '');
+
+  const linked = identity !== undefined || metaIsDiscord;
+  const oauthId = discordIdFrom(idData) ?? (metaIsDiscord ? discordIdFrom(meta) : null);
+  // Legacy: the form/approval flow stores a typed handle here (not an OAuth id).
+  const legacyId = str(meta['discord_id']);
+  const username = discordNameFrom(idData) ?? (metaIsDiscord ? discordNameFrom(meta) : null);
+
   return {
-    discord_linked: identity !== undefined,
-    discord_id: fromIdentity ?? fromMeta,
+    discord_linked: linked,
+    discord_id: oauthId ?? legacyId,
+    discord_username: username,
   };
 }
 interface SupabaseUsersResponse {
@@ -220,16 +251,17 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
 
     const result = usersList.map((u) => {
       const d = discordInfo(u);
-      // Resolve the Discord display name from the id (cached; background-fetched
-      // via the Discord API so the next load fills it in). Prefer any explicit
-      // metadata username; fall back to the resolved Discord name.
-      if (d.discord_id) queueDiscordResolve(d.discord_id);
+      // Prefer the handle we read straight from metadata. Only when we have a
+      // snowflake id but no name do we background-resolve it via the Discord API
+      // (cached; fills in on the next load).
+      const isSnowflake = d.discord_id !== null && /^\d+$/.test(d.discord_id);
+      if (isSnowflake && !d.discord_username) queueDiscordResolve(d.discord_id!);
       return {
         id: u.id,
         email: u.email,
         username: usernameFromMetadata(u.user_metadata),
         ...d,
-        discord_username: getCachedDiscordName(d.discord_id),
+        discord_username: d.discord_username ?? (isSnowflake ? getCachedDiscordName(d.discord_id) : null),
         created_at: u.created_at,
         last_sign_in: u.last_sign_in_at,
         email_confirmed: u.email_confirmed_at !== null && u.email_confirmed_at !== undefined,
