@@ -142,7 +142,10 @@
       .layer-toggles::-webkit-scrollbar { display: none; }
       .btn-toggle { flex-shrink: 0; font-size: 0.68rem; padding: 5px 8px; }
       .dot-indicator { width: 6px; height: 6px; min-width: 6px; min-height: 6px; }
-      .map-type-controls { bottom: calc(16px + env(safe-area-inset-bottom)); left: 10px; }
+      .map-type-controls {
+        bottom: calc(16px + env(safe-area-inset-bottom)); left: 10px;
+        flex-wrap: wrap; max-width: calc(100vw - 20px); border-radius: 16px; row-gap: 4px;
+      }
       .map-type-controls .btn-toggle { font-size: 0.7rem; padding: 5px 10px; }
       
       /* Zoom control is top-RIGHT (added with position:'topright'), so push
@@ -2661,6 +2664,20 @@
           </label>
           <span class="w3w-switch-label">W3W</span>
         </div>
+        <div class="w3w-switch-wrap" onclick="document.getElementById('region-toggle').click()" title="Show NSW planning region borders">
+          <label class="w3w-switch" onclick="event.stopPropagation()">
+            <input type="checkbox" id="region-toggle" onchange="toggleBoundary('region')">
+            <span class="w3w-switch-slider"></span>
+          </label>
+          <span class="w3w-switch-label" id="region-toggle-label">Region</span>
+        </div>
+        <div class="w3w-switch-wrap" onclick="document.getElementById('lga-toggle').click()" title="Show Local Government Area borders">
+          <label class="w3w-switch" onclick="event.stopPropagation()">
+            <input type="checkbox" id="lga-toggle" onchange="toggleBoundary('lga')">
+            <span class="w3w-switch-slider"></span>
+          </label>
+          <span class="w3w-switch-label" id="lga-toggle-label">LGA</span>
+        </div>
       </div>
       
       <!-- Combined Status Bar -->
@@ -2907,6 +2924,12 @@
     map.getPane('w3wPane').style.zIndex = 350;
     map.getPane('w3wPane').style.transition = 'opacity 0.6s ease';
     map.getPane('w3wPane').style.opacity = 0;
+
+    // Region / LGA border overlays: above the transport network (300), below the
+    // w3w grid (350) and markers (600). Non-interactive so they never eat clicks.
+    map.createPane('boundaryPane');
+    map.getPane('boundaryPane').style.zIndex = 340;
+    map.getPane('boundaryPane').style.pointerEvents = 'none';
 
     // Mobile detection for two-tap behavior on markers
     // Use pointer:coarse to detect if PRIMARY input is touch (finger) vs fine (mouse/trackpad)
@@ -15941,6 +15964,67 @@ function initPagerHoursFromStorage() {
         dismissW3WToast();
       }
       updateW3WCursor();
+    }
+
+    // ---- Region / LGA boundary overlays -------------------------------------
+    // Two independent toggles next to W3W. The GeoJSON is fetched lazily the
+    // first time a toggle is switched on (kept in the repo under
+    // data/boundaries/), simplified so the payload is small, then cached.
+    const _boundaryCfg = {
+      region: {
+        url: 'data/boundaries/nsw-regions.geojson',
+        labelId: 'region-toggle-label',
+        style: { color: '#f59e0b', weight: 2, opacity: 0.9, fill: false, lineJoin: 'round' },
+      },
+      lga: {
+        url: 'data/boundaries/nsw-lga.geojson',
+        labelId: 'lga-toggle-label',
+        style: { color: '#38bdf8', weight: 1, opacity: 0.7, fill: false, lineJoin: 'round' },
+      },
+    };
+    const _boundaryLayers = { region: null, lga: null };
+    const _boundaryPending = { region: null, lga: null };
+    // Canvas renderer — far smoother than SVG for the 132 LGA polygons on mobile.
+    let _boundaryRenderer = null;
+
+    async function _ensureBoundaryLayer(kind) {
+      if (_boundaryLayers[kind]) return _boundaryLayers[kind];
+      if (_boundaryPending[kind]) return _boundaryPending[kind];
+      const cfg = _boundaryCfg[kind];
+      _boundaryPending[kind] = (async () => {
+        const res = await fetch(cfg.url, { cache: 'force-cache' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const geo = await res.json();
+        if (!_boundaryRenderer) _boundaryRenderer = L.canvas({ pane: 'boundaryPane' });
+        const layer = L.geoJSON(geo, { pane: 'boundaryPane', renderer: _boundaryRenderer, interactive: false, style: cfg.style });
+        _boundaryLayers[kind] = layer;
+        _boundaryPending[kind] = null;
+        return layer;
+      })();
+      return _boundaryPending[kind];
+    }
+
+    async function toggleBoundary(kind) {
+      const cfg = _boundaryCfg[kind];
+      const checkbox = document.getElementById(kind + '-toggle');
+      const label = cfg ? document.getElementById(cfg.labelId) : null;
+      if (!cfg || !checkbox) return;
+      if (checkbox.checked) {
+        if (label) label.classList.add('active');
+        try {
+          const layer = await _ensureBoundaryLayer(kind);
+          // The user may have toggled off again while the file was loading.
+          if (document.getElementById(kind + '-toggle').checked) map.addLayer(layer);
+        } catch (e) {
+          console.warn('[boundary] failed to load', kind, e);
+          checkbox.checked = false;
+          if (label) label.classList.remove('active');
+          if (typeof showW3WToast === 'function') showW3WToast('Could not load ' + (kind === 'lga' ? 'LGA' : 'region') + ' borders');
+        }
+      } else {
+        if (label) label.classList.remove('active');
+        if (_boundaryLayers[kind]) map.removeLayer(_boundaryLayers[kind]);
+      }
     }
 
     function onW3WZoomStart() {
