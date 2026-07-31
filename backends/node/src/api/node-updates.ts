@@ -13,7 +13,7 @@
  * node authenticates with its feeder token, exactly like /api/node-ingest/.
  */
 import { Hono } from 'hono';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, openSync, fstatSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,17 +68,25 @@ function loadBaseManifest(): Manifest {
 const shaCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
 function sha256OfDownload(filename: string): string {
   const p = path.join(DOWNLOADS_DIR, filename);
-  let st: import('node:fs').Stats;
+  let fd: number;
   try {
-    st = statSync(p);
+    fd = openSync(p, 'r');
   } catch {
     return ''; // not present → empty sha means "no update available"
   }
-  const cached = shaCache.get(p);
-  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.hash;
-  const hash = createHash('sha256').update(readFileSync(p)).digest('hex');
-  shaCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, hash });
-  return hash;
+  try {
+    // Stat AND read through the SAME file descriptor so the file can't be
+    // swapped between the check and the read (no TOCTOU): the cache key and the
+    // hash always describe the exact same bytes.
+    const st = fstatSync(fd);
+    const cached = shaCache.get(p);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.hash;
+    const hash = createHash('sha256').update(readFileSync(fd)).digest('hex');
+    shaCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, hash });
+    return hash;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
