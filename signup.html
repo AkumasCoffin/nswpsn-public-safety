@@ -392,21 +392,30 @@
           <!-- Feeder Setup (shown when pager or radio feeder selected) -->
           <div class="form-group" id="feeder-setup-group" style="display: none; background: rgba(249, 115, 22, 0.1); border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 8px; padding: 1rem; margin-top: -0.5rem;">
             <label class="form-label" style="margin-bottom: 0.5rem;">
-              Do you have an existing setup? <span class="required">*</span>
+              Can you acquire the equipment needed? <span class="required">*</span>
             </label>
+            <div style="background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-subtle, #334155); border-radius: 8px; padding: 0.75rem 0.9rem; margin-bottom: 1rem;">
+              <p style="color: #94a3b8; font-size: 0.8rem; margin: 0 0 0.5rem;">To feed data you'll need:</p>
+              <ul style="margin: 0; padding-left: 1.2rem; color: #cbd5e1; font-size: 0.85rem; line-height: 1.65;">
+                <li>RTL-SDR (1× or more)</li>
+                <li>Raspberry Pi or other server/PC that can run 24/7</li>
+                <li>Antenna</li>
+                <li>Coax — PL259 male-to-male + PL259 female to SMA male (length depending on setup)</li>
+              </ul>
+            </div>
             <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem;">
               <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                 <input type="radio" name="has-setup" value="yes" onchange="toggleSetupDetails()" style="width: 18px; height: 18px; accent-color: var(--accent);">
-                <span>Yes, I already have equipment/setup</span>
+                <span>Yes — I have or can get this equipment</span>
               </label>
               <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                 <input type="radio" name="has-setup" value="no" onchange="toggleSetupDetails()" style="width: 18px; height: 18px; accent-color: var(--accent);">
-                <span>No, but I'm interested in setting one up</span>
+                <span>No — I can't source this equipment</span>
               </label>
             </div>
             <div id="setup-details-group" style="display: none;">
-              <label class="form-label">Tell us about your current setup</label>
-              <textarea id="setup-details" class="form-input" style="min-height: 80px;" placeholder="What equipment do you have? (e.g., SDR type, antenna, frequencies monitored, software used)"></textarea>
+              <label class="form-label">Tell us about your setup <span class="optional">(optional)</span></label>
+              <textarea id="setup-details" class="form-input" style="min-height: 80px;" placeholder="What do you have or plan to get? (e.g. SDR type, antenna, server/Pi, frequencies you're near)"></textarea>
             </div>
             <div style="margin-top: 0.75rem;">
               <label class="form-label">Technical Experience <span class="required">*</span></label>
@@ -950,18 +959,11 @@
       // If pager or radio feeder is selected, require setup info and tech experience
       const isFeeder = requestTypes.includes('pager_feeder') || requestTypes.includes('radio_feeder');
       if (isFeeder && !hasSetup) {
-        messageEl.textContent = 'Please indicate if you have an existing setup.';
+        messageEl.textContent = 'Please let us know if you can acquire the equipment needed.';
         messageEl.className = 'message error';
         return;
       }
-      
-      // If they have a setup, require details
-      if (hasSetup === 'yes' && !setupDetails) {
-        messageEl.textContent = 'Please describe your existing setup.';
-        messageEl.className = 'message error';
-        return;
-      }
-      
+
       // Require at least one tech experience selection for feeders
       if (isFeeder && techExperienceChecked.length === 0) {
         messageEl.textContent = 'Please select at least one technical experience option.';
