@@ -3131,6 +3131,9 @@
     }
     function hideMobileTipCard() {
       if (_mobileTipCard) _mobileTipCard.classList.remove('open');
+      // If the card was showing a region/LGA, drop its highlight too. No-op
+      // otherwise (defined later; hoisted). Guarded so it can't run too early.
+      if (typeof _clearBoundaryHi === 'function') _clearBoundaryHi();
     }
     function showMobileTipCard(content) {
       const card = getMobileTipCard();
@@ -16056,6 +16059,9 @@ function initPagerHoursFromStorage() {
     // Click a region / LGA: highlight it and show its name (bottom card on
     // touch, popup on desktop). LGA names come UPPERCASE, so title-case them.
     let _boundaryHi = null;
+    // A boundary click also bubbles to a map 'click'; this guards that one echo
+    // so it doesn't immediately clear the highlight we just set.
+    let _suppressBoundaryClear = false;
     function _clearBoundaryHi() {
       if (_boundaryHi && _boundaryHi.layer) {
         try { _boundaryHi.layer.setStyle(_boundaryCfg[_boundaryHi.kind].style); } catch (_) { /* ignore */ }
@@ -16078,6 +16084,9 @@ function initPagerHoursFromStorage() {
         : { weight: 3, color: '#fbbf24', opacity: 1, fill: true, fillColor: '#f59e0b', fillOpacity: 0.10 };
       try { lyr.setStyle(hi); } catch (_) { /* ignore */ }
       _boundaryHi = { kind, layer: lyr };
+      // Swallow the map 'click' that this same tap fires next, then re-arm.
+      _suppressBoundaryClear = true;
+      setTimeout(() => { _suppressBoundaryClear = false; }, 0);
       const html =
         '<div style="font-weight:600; font-size:0.98em;">' + escapeHtml(name) + '</div>' +
         '<div style="font-size:0.78em; color:#94a3b8; margin-top:2px;">' + sub + '</div>';
@@ -16087,6 +16096,16 @@ function initPagerHoursFromStorage() {
         L.popup({ className: 'boundary-popup', autoPan: false }).setLatLng(e.latlng).setContent(html).openOn(map);
       }
     }
+
+    // Clicking off a shape (empty map / anywhere that isn't a boundary) clears
+    // the highlight — and closes the mobile card that goes with it.
+    map.on('click', () => {
+      if (_suppressBoundaryClear) return;
+      if (_boundaryHi) {
+        _clearBoundaryHi();
+        if (isMobile) hideMobileTipCard();
+      }
+    });
 
     async function toggleBoundary(kind) {
       const cfg = _boundaryCfg[kind];
