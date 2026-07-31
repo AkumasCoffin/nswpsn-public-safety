@@ -104,6 +104,41 @@ export async function deleteAccount(pool: Pool, userId: string): Promise<boolean
   return true;
 }
 
+/**
+ * The safety-critical rule, pure + exported for tests: which accounts are
+ * "incomplete signups". An account is selected for removal ONLY when it has
+ * NONE of:
+ *   - a role (approved user), OR
+ *   - an editor request linked by its id (signed up), OR
+ *   - an editor request linked by its email (signed up), OR
+ *   - a created_at newer than the race guard (an in-flight signup).
+ *
+ * So anyone who submitted the signup form is ALWAYS kept, even before an owner
+ * assigns them roles — the pending request protects them.
+ */
+export function selectOrphans(
+  users: ReadonlyArray<OrphanUser>,
+  opts: {
+    roleIds: ReadonlySet<string>;
+    reqIds: ReadonlySet<string>;
+    reqEmails: ReadonlySet<string>;
+    nowMs: number;
+    raceGuardMs: number;
+  },
+): OrphanUser[] {
+  const cutoff = opts.nowMs - opts.raceGuardMs;
+  const orphans: OrphanUser[] = [];
+  for (const u of users) {
+    if (opts.roleIds.has(u.id)) continue; // approved user — keep
+    if (opts.reqIds.has(u.id)) continue; // signed up (request linked by id) — keep
+    const email = (u.email ?? '').trim().toLowerCase();
+    if (email && opts.reqEmails.has(email)) continue; // signed up (by email) — keep
+    if (u.created_at && new Date(u.created_at).getTime() > cutoff) continue; // too fresh — keep
+    orphans.push({ id: u.id, email: u.email, created_at: u.created_at });
+  }
+  return orphans;
+}
+
 /** Accounts with no roles AND no editor request. `respectRaceGuard` skips very
  *  recently created accounts (an in-flight signup). */
 export async function findOrphanSignups(pool: Pool, respectRaceGuard = true): Promise<OrphanUser[]> {
@@ -111,7 +146,7 @@ export async function findOrphanSignups(pool: Pool, respectRaceGuard = true): Pr
   if (!users.length) return [];
 
   const roleRows = await pool.query<{ user_id: string }>('SELECT DISTINCT user_id FROM user_roles');
-  const withRole = new Set(roleRows.rows.map((r) => r.user_id));
+  const roleIds = new Set(roleRows.rows.map((r) => r.user_id));
 
   const reqRows = await pool.query<{ supabase_user_id: string | null; email: string | null }>(
     'SELECT supabase_user_id, email FROM editor_requests',
@@ -123,17 +158,13 @@ export async function findOrphanSignups(pool: Pool, respectRaceGuard = true): Pr
     if (r.email) reqEmails.add(r.email.trim().toLowerCase());
   }
 
-  const cutoff = Date.now() - RACE_GUARD_MS;
-  const orphans: OrphanUser[] = [];
-  for (const u of users) {
-    if (withRole.has(u.id)) continue;
-    if (reqIds.has(u.id)) continue;
-    const email = (u.email ?? '').trim().toLowerCase();
-    if (email && reqEmails.has(email)) continue;
-    if (respectRaceGuard && u.created_at && new Date(u.created_at).getTime() > cutoff) continue;
-    orphans.push({ id: u.id, email: u.email, created_at: u.created_at });
-  }
-  return orphans;
+  return selectOrphans(users, {
+    roleIds,
+    reqIds,
+    reqEmails,
+    nowMs: Date.now(),
+    raceGuardMs: respectRaceGuard ? RACE_GUARD_MS : 0,
+  });
 }
 
 /** Find + delete incomplete signups. `dryRun` lists only. */
