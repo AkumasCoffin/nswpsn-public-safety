@@ -554,12 +554,20 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
     const isTeamMember = userRoles.includes('team_member');
     const isMapEditor = userRoles.includes('map_editor');
     const hasAccess = isMapEditor || isOwner;
+    // Whether this account has ever submitted an editor request (linked by id).
+    // The login guard uses no-roles + no-request to spot an "incomplete signup".
+    const reqRes = await pool.query(
+      'SELECT 1 FROM editor_requests WHERE supabase_user_id = $1 LIMIT 1',
+      [userId],
+    );
+    const hasRequest = (reqRes.rowCount ?? 0) > 0;
     return c.json({
       user_id: userId,
       has_access: hasAccess,
       is_owner: isOwner,
       is_team_member: isTeamMember,
       is_map_editor: isMapEditor,
+      has_request: hasRequest,
       roles: userRoles,
     });
   } catch (err) {

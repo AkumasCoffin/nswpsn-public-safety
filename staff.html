@@ -1657,6 +1657,9 @@
           <button class="filter-btn" id="dupes-filter-btn" onclick="toggleDupesFilter()" title="Show only accounts that share a Discord ID with another account">
             <i class="fas fa-clone"></i> Duplicates only
           </button>
+          <button class="filter-btn" id="cleanup-orphans-btn" onclick="cleanupIncompleteSignups()" title="Remove accounts that have no roles and never submitted a signup request (Discord OAuth from the login page that never completed the form)">
+            <i class="fas fa-user-slash"></i> Remove incomplete signups
+          </button>
           <div class="filter-spacer"></div>
           <span class="result-count" id="user-count"></span>
         </div>
@@ -6153,6 +6156,34 @@
     
     // Owner-only: permanently delete a user account (Supabase user + roles +
     // feeder token + nodes). The backend re-checks owner and blocks self-delete.
+    // Owner action: remove "incomplete signups" — accounts with no roles and no
+    // editor request (created by Discord OAuth from the login page but never
+    // finished the signup form). Previews the count, confirms, then deletes.
+    async function cleanupIncompleteSignups() {
+      if (!userPermissions.is_owner) { showToast('Only owners can do this.', 'warn'); return; }
+      const btn = document.getElementById('cleanup-orphans-btn');
+      let preview;
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/users/incomplete`, { headers: { 'Authorization': await authHeader() } });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'preview failed');
+        preview = await r.json();
+      } catch (e) { showToast('Could not check incomplete signups: ' + (e.message || 'error'), 'error'); return; }
+      if (!preview.count) { showToast('No incomplete signups to remove.', 'success'); return; }
+      if (!await uiConfirm(`Remove ${preview.count} incomplete signup${preview.count === 1 ? '' : 's'}? These accounts have no roles and never submitted a request. Deleted permanently.`, { danger: true, okText: 'Remove them' })) return;
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removing…'; }
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/users/cleanup-incomplete`, { method: 'POST', headers: { 'Authorization': await authHeader() } });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'cleanup failed');
+        showToast(`Removed ${d.deleted} incomplete signup${d.deleted === 1 ? '' : 's'}.`, 'success');
+        await loadUsers();
+      } catch (e) {
+        showToast('Cleanup failed: ' + (e.message || 'error'), 'error');
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-user-slash"></i> Remove incomplete signups'; }
+      }
+    }
+
     async function deleteUser(userId) {
       if (!userPermissions.is_owner) { showToast('Only owners can delete users.', 'warn'); return; }
       const user = allUsers.find(u => u.id === userId);
