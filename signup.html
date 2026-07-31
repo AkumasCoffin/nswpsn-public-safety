@@ -841,6 +841,18 @@
       if (event === 'SIGNED_IN') applySession(session);
     });
 
+    // Sent here from the login page's orphan guard (tried to log in without an
+    // account) — explain they need to sign up.
+    if (new URLSearchParams(location.search).get('welcome') === '1') {
+      const fc = document.getElementById('form-container');
+      if (fc) {
+        const b = document.createElement('div');
+        b.style.cssText = 'background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.4); border-radius:8px; padding:0.75rem 1rem; margin-bottom:1rem; color:#bae6fd; font-size:0.9rem;';
+        b.textContent = "You don't have an account yet — fill out this form to request access.";
+        fc.insertBefore(b, fc.firstChild);
+      }
+    }
+
     let currentRating = 0;
     const ratingLabels = {
       1: '⭐ Beginner - Little to no experience',

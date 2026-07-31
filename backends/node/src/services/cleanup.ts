@@ -26,6 +26,7 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
+import { sweepOrphanSignups, orphanAutoSweepEnabled } from './orphanCleanup.js';
 import {
   removeIncidentImageDir,
   sweepStaleUploadParts,
@@ -476,6 +477,18 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
     // column carries "we still see this in polls" semantics. No
     // tombstone INSERTs to maintain.
     const staleSwept = 0;
+
+    // 5. Remove incomplete signups (accounts with no roles + no editor
+    // request). Opt-in via ORPHAN_SIGNUP_CLEANUP=true; the owner button runs
+    // this on demand regardless.
+    if (orphanAutoSweepEnabled()) {
+      try {
+        const r = await sweepOrphanSignups(pool);
+        if (r.deleted > 0) log.info({ found: r.found, deleted: r.deleted }, 'cleanup: removed incomplete signups');
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: incomplete-signup sweep failed');
+      }
+    }
 
     stats.lastRunAt = Math.floor(Date.now() / 1000);
     stats.lastHistoryDeleted = rowsDeleted;

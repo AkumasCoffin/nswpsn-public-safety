@@ -546,6 +546,24 @@
     async function redirectSignedIn(userId) {
       const urlParams = new URLSearchParams(window.location.search);
       const explicit = safeRedirect(urlParams.get('redirect'), '');
+      // Orphan guard: Discord OAuth from this login page mints an account even
+      // for someone who's never signed up. If they have NO roles AND NO editor
+      // request, they don't really have an account here — sign them back out and
+      // send them to the signup form (the empty account is cleaned up server-
+      // side). Runs before any explicit ?redirect so an orphan can't be pushed
+      // onto a protected page.
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`);
+        if (r.ok) {
+          const d = await r.json();
+          const noRoles = Array.isArray(d.roles) ? d.roles.length === 0 : (!d.has_access && !d.is_team_member);
+          if (noRoles && !d.has_request) {
+            try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
+            window.location.href = 'signup.html?welcome=1';
+            return;
+          }
+        }
+      } catch (e) { /* fall through to normal routing */ }
       window.location.href = explicit || await roleLandingPage(userId);
     }
 

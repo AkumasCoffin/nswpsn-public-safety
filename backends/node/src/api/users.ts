@@ -31,6 +31,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { getCachedDiscordName, queueDiscordResolve } from '../services/discordUsers.js';
+import { findOrphanSignups, sweepOrphanSignups } from '../services/orphanCleanup.js';
 import {
   invalidateUserRolesCache,
   isPrivilegedRole,
@@ -246,6 +247,39 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
   } catch (err) {
     log.error({ err }, 'Error listing users');
     return c.json({ error: 'Failed to list users' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Incomplete signups — accounts with no roles AND no editor request (created by
+// Discord OAuth from the login page but never completed). Registered before the
+// /:userId routes so "incomplete" isn't captured as a user id.
+// ---------------------------------------------------------------------------
+usersRouter.get('/api/users/incomplete', requireRole(isOwner), async (c) => {
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+    const orphans = await findOrphanSignups(pool);
+    return c.json({ count: orphans.length, users: orphans });
+  } catch (err) {
+    log.error({ err }, 'Error listing incomplete signups');
+    return c.json({ error: 'Failed to list incomplete signups' }, 500);
+  }
+});
+
+usersRouter.post('/api/users/cleanup-incomplete', requireRole(isOwner), async (c) => {
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+    const result = await sweepOrphanSignups(pool);
+    log.info(
+      { by: c.get('userId'), found: result.found, deleted: result.deleted },
+      'Owner cleaned up incomplete signups',
+    );
+    return c.json({ success: true, found: result.found, deleted: result.deleted });
+  } catch (err) {
+    log.error({ err }, 'Error cleaning up incomplete signups');
+    return c.json({ error: 'Failed to clean up incomplete signups' }, 500);
   }
 });
 
