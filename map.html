@@ -142,10 +142,10 @@
       .layer-toggles::-webkit-scrollbar { display: none; }
       .btn-toggle { flex-shrink: 0; font-size: 0.68rem; padding: 5px 8px; }
       .dot-indicator { width: 6px; height: 6px; min-width: 6px; min-height: 6px; }
-      /* NOTE: the mobile .map-type-controls override lives AFTER the base rule
-         below (search "mobile map-type override") — placing it here failed
-         because the later base rule wins at equal specificity. */
-      .map-type-controls .btn-toggle { font-size: 0.7rem; padding: 5px 10px; }
+      /* NOTE: the mobile .map-type-controls styling (incl. compacting the buttons
+         and toggles) lives AFTER the base rule below (search "mobile map-type
+         override") — placing it here failed because the later base rule wins at
+         equal specificity. */
       
       /* Zoom control is top-RIGHT (added with position:'topright'), so push
          the right column — not the empty left one — below the full-width
@@ -487,14 +487,27 @@
     @media (max-width: 900px) {
       .map-type-controls {
         position: fixed;
-        bottom: calc(14px + env(safe-area-inset-bottom));
+        bottom: calc(10px + env(safe-area-inset-bottom));
         left: 10px;
         z-index: 900;
+        gap: 2px;
+        padding: 4px 6px;
         flex-wrap: wrap;
         max-width: calc(100vw - 20px);
-        border-radius: 16px;
-        row-gap: 4px;
+        border-radius: 14px;
+        row-gap: 2px;
       }
+      /* Compact everything inside so the 6 controls sit tidily in two short rows. */
+      .map-type-controls .btn-toggle {
+        font-size: 0.6rem; padding: 3px 7px; letter-spacing: 0.02em; border-radius: 14px;
+      }
+      .map-type-controls .w3w-switch-wrap { gap: 4px; padding: 1px 4px 1px 2px; }
+      .map-type-controls .w3w-switch { width: 24px; height: 14px; }
+      .map-type-controls .w3w-switch-slider { border-radius: 14px; }
+      .map-type-controls .w3w-switch-slider:before { height: 9px; width: 9px; left: 2px; bottom: 1.5px; }
+      .map-type-controls .w3w-switch input:checked + .w3w-switch-slider:before { transform: translateX(10px); }
+      .map-type-controls .w3w-switch-label { font-size: 0.58rem; letter-spacing: 0.02em; }
+      .map-type-controls .w3w-switch-divider { height: 13px; margin: 0 1px; }
     }
 
     /* Combined Status Bar (Refresh + API) */
