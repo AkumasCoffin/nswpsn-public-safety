@@ -30,7 +30,13 @@ import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { getPool } from '../db/pool.js';
-import { getRdioPool, isRdioConfigured, resolveLabels } from './rdio.js';
+import {
+  getRdioPool,
+  isRdioConfigured,
+  resolveLabels,
+  RDIO_CALLS_FROM,
+  RDIO_TRANSCRIPT,
+} from './rdio.js';
 
 // NO hardcoded keyword lists. Both the incident (trigger) list and the
 // urgent (priority-only) list come exclusively from the .env —
@@ -215,14 +221,14 @@ export async function detectBursts(
       COUNT(*)::int  AS n,
       MAX("id")::int AS latest_id,
       json_agg(
-        json_build_object('id', "id", 'transcript', "transcript", 'dt', "dateTime")
+        json_build_object('id', "id", 'transcript', ${RDIO_TRANSCRIPT}, 'dt', "dateTime")
         ORDER BY "dateTime"
       ) AS calls,
-      lower(string_agg("transcript", ' | ')) AS all_text
-    FROM "rdioScannerCalls"
+      lower(string_agg(${RDIO_TRANSCRIPT}, ' | ')) AS all_text
+    FROM ${RDIO_CALLS_FROM}
     WHERE "dateTime" > (now() AT TIME ZONE 'UTC') - ($1 || ' minutes')::interval
-      AND "transcript" IS NOT NULL
-      AND "transcript" <> ''
+      AND ${RDIO_TRANSCRIPT} IS NOT NULL
+      AND ${RDIO_TRANSCRIPT} <> ''
       AND "talkgroup" IS NOT NULL
       ${tgClause}
     GROUP BY "system", "talkgroup"

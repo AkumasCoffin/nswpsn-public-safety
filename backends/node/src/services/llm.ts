@@ -28,7 +28,14 @@ import { fetch } from 'undici';
 import type { Pool } from 'pg';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
-import { getRdioPool, resolveLabels, getUnitLabel, ensureUnitLabelsLoaded } from './rdio.js';
+import {
+  getRdioPool,
+  resolveLabels,
+  getUnitLabel,
+  ensureUnitLabelsLoaded,
+  RDIO_CALLS_FROM,
+  RDIO_TRANSCRIPT,
+} from './rdio.js';
 import { getPool } from '../db/pool.js';
 import { polishStructuredIncidents } from './rdioValidator.js';
 import {
@@ -1193,12 +1200,12 @@ async function fetchCallsBetween(
   // regardless of session timezone.
   const res = await rdio.query<RdioCallRow>(
     `SELECT "id" AS call_id, "dateTime" AS date_time, "system", "talkgroup",
-            "transcript", "source", "sources"
-       FROM "rdioScannerCalls"
+            ${RDIO_TRANSCRIPT} AS transcript, "source", "sources"
+       FROM ${RDIO_CALLS_FROM}
       WHERE "dateTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND "dateTime" <  ($2::timestamptz AT TIME ZONE 'UTC')
-        AND "transcript" IS NOT NULL
-        AND length(btrim("transcript")) >= $3
+        AND ${RDIO_TRANSCRIPT} IS NOT NULL
+        AND length(btrim(${RDIO_TRANSCRIPT})) >= $3
       ORDER BY "dateTime" ASC`,
     [startUtc, endUtc, minTranscriptLen],
   );
@@ -1210,10 +1217,10 @@ async function fetchLastNCalls(n: number): Promise<RdioCallRow[]> {
   if (!rdio) throw new Error('RDIO_DATABASE_URL not configured');
   const res = await rdio.query<RdioCallRow>(
     `SELECT "id" AS call_id, "dateTime" AS date_time, "system", "talkgroup",
-            "transcript", "source", "sources"
-       FROM "rdioScannerCalls"
-      WHERE "transcript" IS NOT NULL
-        AND length(btrim("transcript")) >= 2
+            ${RDIO_TRANSCRIPT} AS transcript, "source", "sources"
+       FROM ${RDIO_CALLS_FROM}
+      WHERE ${RDIO_TRANSCRIPT} IS NOT NULL
+        AND length(btrim(${RDIO_TRANSCRIPT})) >= 2
       ORDER BY "dateTime" DESC
       LIMIT $1`,
     [n],

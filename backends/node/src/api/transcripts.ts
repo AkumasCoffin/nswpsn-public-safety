@@ -18,6 +18,8 @@ import {
   resolveLabels,
   getUnitLabel,
   ensureUnitLabelsLoaded,
+  RDIO_CALLS_FROM,
+  RDIO_TRANSCRIPT,
 } from '../services/rdio.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
@@ -153,7 +155,7 @@ transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
       clauses.push(`"id" = ${next()}`);
       params.push(callId);
     } else {
-      clauses.push('"transcript" IS NOT NULL');
+      clauses.push(`${RDIO_TRANSCRIPT} IS NOT NULL`);
       // Comma-separated terms = OR of ILIKE; matches python's behaviour.
       const terms = q
         .split(',')
@@ -166,16 +168,16 @@ transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
         );
       }
       if (terms.length === 1) {
-        clauses.push(`"transcript" ILIKE ${next()}`);
+        clauses.push(`${RDIO_TRANSCRIPT} ILIKE ${next()}`);
         params.push(`%${terms[0]}%`);
       } else {
-        const placeholders = terms.map(() => `"transcript" ILIKE ${next()}`);
+        const placeholders = terms.map(() => `${RDIO_TRANSCRIPT} ILIKE ${next()}`);
         // Re-emit placeholders but only after pushing each param; the
         // simple loop above mutates params, so use a separate builder:
         clauses.pop(); // drop the simple ILIKE we tentatively pushed
         const parts: string[] = [];
         for (const t of terms) {
-          parts.push(`"transcript" ILIKE ${next()}`);
+          parts.push(`${RDIO_TRANSCRIPT} ILIKE ${next()}`);
           params.push(`%${t}%`);
         }
         // Strip the unused single placeholders we just generated:
@@ -246,12 +248,12 @@ transcriptsRouter.get('/api/rdio/transcripts/search', async (c) => {
     const pool = await getRdioPool();
     if (!pool) return c.json({ error: 'RDIO_DATABASE_URL not configured' }, 503);
 
-    const countSql = `SELECT COUNT(*)::int AS n FROM "rdioScannerCalls" ${where}`;
+    const countSql = `SELECT COUNT(*)::int AS n FROM ${RDIO_CALLS_FROM} ${where}`;
     const limitParam = `$${params.length + 1}`;
     const offsetParam = `$${params.length + 2}`;
     const dataSql =
       `SELECT "id", "dateTime" AS date_time, "system", "talkgroup", ` +
-      `"transcript", "source", "sources" FROM "rdioScannerCalls" ${where} ` +
+      `${RDIO_TRANSCRIPT} AS transcript, "source", "sources" FROM ${RDIO_CALLS_FROM} ${where} ` +
       `ORDER BY "dateTime" ${order} LIMIT ${limitParam} OFFSET ${offsetParam}`;
 
     const [countRes, dataRes] = await Promise.all([
@@ -290,7 +292,7 @@ transcriptsRouter.get('/api/rdio/calls/:callId', async (c) => {
     }
     const res = await pool.query<RdioCallRow>(
       'SELECT "id", "dateTime" AS date_time, "system", "talkgroup", ' +
-        '"transcript", "source", "sources" FROM "rdioScannerCalls" ' +
+        `${RDIO_TRANSCRIPT} AS transcript, "source", "sources" FROM ${RDIO_CALLS_FROM} ` +
         'WHERE "id" = $1',
       [callId],
     );
