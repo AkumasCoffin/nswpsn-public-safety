@@ -1372,18 +1372,30 @@ export async function generateRdioHourlySummary(
   const start = p.hourStartUtc;
   const end = p.hourEndUtc ?? new Date(start.getTime() + 60 * 60_000);
   const calls = dedupeCalls(await fetchCallsBetween(start, end));
-  if (calls.length === 0 && !p.force && !p.releaseAt) {
-    log.info({ start: start.toISOString() }, 'hourly: no transcripts, skipping');
-    return null;
-  }
   const periodLabel = formatPeriodLabel(start, end);
   const { prompt, totalChars, inputMap } = await formatRdioPrompt(
     calls,
     periodLabel,
   );
+  // Only calls whose transcripts SURVIVED filtering are worth summarising —
+  // junk (URLs / garbled / non-English) and empty transcripts are dropped
+  // inside formatRdioPrompt, so the raw `calls.length` can be > 0 while nothing
+  // usable remains (an hour of pure noise). Gate the LLM on this count, never
+  // the raw one, or we pay for a request on an empty prompt.
+  const usableCalls = inputMap.size;
   let summaryText: string;
   let structured: Record<string, unknown> | null = null;
-  if (calls.length === 0) {
+  if (usableCalls === 0) {
+    // Nothing worth summarising. Ad-hoc callers write nothing; the scheduler
+    // and boot catch-up (force / releaseAt) write a preset stub so a completed
+    // hour is never a gap on /api/summaries/latest. Either way, no LLM call.
+    if (!p.force && !p.releaseAt) {
+      log.info(
+        { start: start.toISOString() },
+        'hourly: no usable transcripts, skipping',
+      );
+      return null;
+    }
     summaryText =
       'No radio traffic with transcripts was recorded during this hour.';
   } else {
@@ -1454,13 +1466,15 @@ export async function generateRdioHourlySummary(
     dayDate: localDayString(start),
     hourSlot: localHourSlot(end),
     summary: summaryText,
-    callCount: calls.length,
+    // The count that informed the summary — usable transcripts, junk excluded —
+    // so a noise-only hour reads as 0 alongside its "no traffic" preset.
+    callCount: usableCalls,
     transcriptChars: totalChars,
     model,
     details,
     releaseAt: p.releaseAt ?? null,
   });
-  return { hour_slot: localHourSlot(end), call_count: calls.length };
+  return { hour_slot: localHourSlot(end), call_count: usableCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -1559,46 +1573,58 @@ async function rdioSummaryRowExists(periodStart: Date): Promise<boolean> {
   return res.rowCount !== null && res.rowCount > 0;
 }
 
+// How many recent COMPLETED hours boot catch-up will backfill. 1 = just the
+// previous hour (old behaviour); a few covers a short outage across an hour
+// boundary. Every hour is existence-checked first and quiet/junk hours cost a
+// preset (no LLM), so a normal restart does little or no work. Bounded [1,24].
+const CATCHUP_LOOKBACK_HOURS = (() => {
+  const n = Number(process.env['RDIO_CATCHUP_HOURS']);
+  return Number.isFinite(n) && n >= 1 && n <= 24 ? Math.floor(n) : 3;
+})();
+
 /**
  * On boot:
- *  - Always try the previous local-clock hour. force=true so an empty
- *    hour writes a "no traffic" stub instead of silently skipping —
- *    /api/summaries/latest must never show a gap for a completed hour.
- *  - If `now` is past HH:55 in SUMMARY_TZ, also kick off the current
- *    hour with the same release_at gating the scheduler would have used,
- *    so a restart inside the prefetch window doesn't lose the prefetch.
+ *  - Backfill any COMPLETED hour in the last CATCHUP_LOOKBACK_HOURS that has no
+ *    summary row (oldest first, so /api/summaries/latest ends on the newest).
+ *    force=true so an empty/noise-only hour writes a "no traffic" stub instead
+ *    of silently skipping — a completed hour must never be a gap.
+ *  - If `now` is past HH:55 in SUMMARY_TZ, also kick off the current hour with
+ *    the same release_at gating the scheduler would have used, so a restart
+ *    inside the prefetch window doesn't lose the prefetch.
  *
- * Both calls swallow errors so a transient LLM/DB failure can't block
- * the scheduler from arming. The unique constraint on
- * (summary_type, period_start) keeps this idempotent against a race
- * with a normal scheduled fire.
+ * Every call swallows errors so a transient LLM/DB failure can't block the
+ * scheduler from arming, and each is existence-checked so a genuine gap is
+ * filled but present hours cost nothing. The unique constraint on
+ * (summary_type, period_start) keeps this idempotent against a race with a
+ * normal scheduled fire.
  */
 export async function runRdioSummaryCatchup(): Promise<void> {
   const now = new Date();
   const tz = config.SUMMARY_TZ;
   const currentHourStart = localHourStartUtc(now, tz);
-  // Previous closed window: always the single hour before the current one.
-  const prevWindowStart = new Date(currentHourStart.getTime() - 60 * 60_000);
-  try {
-    if (!(await rdioSummaryRowExists(prevWindowStart))) {
+  // Oldest → newest so the most recent completed hour lands last and becomes
+  // "latest". i = lookback … 1; the current (in-progress) hour is i = 0 and is
+  // handled separately below.
+  for (let i = CATCHUP_LOOKBACK_HOURS; i >= 1; i--) {
+    const hourStart = new Date(currentHourStart.getTime() - i * 60 * 60_000);
+    const hourEnd = new Date(hourStart.getTime() + 60 * 60_000);
+    try {
+      if (await rdioSummaryRowExists(hourStart)) continue;
       log.info(
-        {
-          hour_start: prevWindowStart.toISOString(),
-          hour_end: currentHourStart.toISOString(),
-        },
-        'rdio catchup: filling missing previous hour',
+        { hour_start: hourStart.toISOString(), hour_end: hourEnd.toISOString() },
+        'rdio catchup: filling missing hour',
       );
       await generateRdioHourlySummary({
-        hourStartUtc: prevWindowStart,
-        hourEndUtc: currentHourStart,
+        hourStartUtc: hourStart,
+        hourEndUtc: hourEnd,
         force: true,
       });
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message, hour_start: hourStart.toISOString() },
+        'rdio catchup hour error',
+      );
     }
-  } catch (err) {
-    log.warn(
-      { err: (err as Error).message },
-      'rdio catchup prev-window error',
-    );
   }
   if (localMinute(now) >= 55) {
     // Re-use the scheduler's window resolver so the prefetch matches what
