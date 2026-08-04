@@ -134,9 +134,35 @@ describe('formatRdioPrompt', () => {
         sources: null,
       },
     ];
-    const { prompt, totalChars } = await formatRdioPrompt(calls, 'p');
+    const { prompt, totalChars, inputMap } = await formatRdioPrompt(calls, 'p');
     expect(totalChars).toBe(0);
     expect(prompt).not.toContain('===');
+    // Empty inputMap is the signal generateRdioHourlySummary gates on to write
+    // the "no traffic" preset instead of calling the LLM.
+    expect(inputMap.size).toBe(0);
+  });
+
+  it('yields an empty inputMap when every transcript is junk (no LLM would fire)', async () => {
+    const { formatRdioPrompt } = await import('../../../src/services/llm.js');
+    const mk = (call_id: number, transcript: string) => ({
+      call_id,
+      date_time: new Date('2026-04-25T01:00:00Z'),
+      system: 1,
+      talkgroup: 50,
+      transcript,
+      source: null,
+      sources: null,
+    });
+    // A noise-only hour: raw calls.length is 3, but nothing survives filtering,
+    // so inputMap.size is 0 and the summary path uses a preset (no AI request).
+    const calls = [
+      mk(1, 'Subtitles by the Amara.org community'), // url
+      mk(2, 'you you you you you'), // garbled
+      mk(3, '请订阅我的频道'), // non-english
+    ];
+    const { inputMap, totalChars } = await formatRdioPrompt(calls, 'p');
+    expect(inputMap.size).toBe(0);
+    expect(totalChars).toBe(0);
   });
 
   it('drops junk transcripts (url / garbled / non-english) before grouping', async () => {
