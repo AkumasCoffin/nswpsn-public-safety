@@ -65,6 +65,25 @@ export async function getRdioPool(): Promise<Pool | null> {
   return _poolPromise;
 }
 
+// ---------------------------------------------------------------------------
+// Transcript storage (rdio-scanner fork schema change, 2026-08).
+//
+// Transcripts moved OUT of `rdioScannerCalls.transcript` and into the
+// transcripts plugin's own table, `plugin_transcripts_calls` (columns
+// `callId`, `transcript`), keyed by `callId` = `rdioScannerCalls.id`. The
+// server migration copies the old data across, indexes the new table, then
+// DROPS the legacy `rdioScannerCalls.transcript` column (automatically for
+// small tables, or on `-drop_legacy_columns`).
+//
+// Read transcripts through this LEFT JOIN so it works whether or not the legacy
+// column still exists. Always reference the transcript via RDIO_TRANSCRIPT: if
+// the legacy column is still present, an unqualified "transcript" is ambiguous.
+// The join is 1:1 (callId is the plugin table's primary key), so it never
+// multiplies rows; a call with no transcript yields NULL (same as before).
+export const RDIO_CALLS_FROM =
+  '"rdioScannerCalls" LEFT JOIN "plugin_transcripts_calls" "pt" ON "pt"."callId" = "rdioScannerCalls"."id"';
+export const RDIO_TRANSCRIPT = '"pt"."transcript"';
+
 export async function closeRdioPool(): Promise<void> {
   // If an init is in flight, `_pool` may still be null while a live pool is
   // being built inside `_poolPromise`. Await it and end the resulting pool so
