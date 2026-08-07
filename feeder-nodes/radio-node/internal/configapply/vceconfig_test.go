@@ -222,8 +222,10 @@ func TestBuildVceConfigAliasSplit(t *testing.T) {
 }
 
 // TestBuildVceConfigDropsRetiredProtocols — a matcher using a protocol vce
-// retired (the preset's AM airband talkgroup) is dropped rather than risking a
-// failed import; the alias's non-matcher attributes still survive.
+// retired (the preset's AM airband talkgroup) is dropped, and an alias left
+// with NO matchers is skipped entirely: vce's /config/import requires exactly
+// one matchIdentifier per alias and rejects the whole payload otherwise
+// ("Alias [...] must have exactly one match identifier").
 func TestBuildVceConfigDropsRetiredProtocols(t *testing.T) {
 	payload := ConfigPayload{
 		Aliases: []Alias{{
@@ -236,15 +238,8 @@ func TestBuildVceConfigDropsRetiredProtocols(t *testing.T) {
 	}
 	doc := marshalState(t, payload, nil)
 	aliases := arr(t, doc, "aliases")
-	if len(aliases) != 1 {
-		t.Fatalf("expected 1 alias (AM matcher dropped), got %d", len(aliases))
-	}
-	a := aliases[0].(map[string]any)
-	if _, hasMatcher := a["matchIdentifier"]; hasMatcher {
-		t.Errorf("AM matcher should have been dropped, got %v", a["matchIdentifier"])
-	}
-	if bc := a["broadcastChannels"].([]any); len(bc) != 1 {
-		t.Errorf("broadcastChannels should survive the dropped matcher")
+	if len(aliases) != 0 {
+		t.Fatalf("expected 0 aliases (matcher-less alias skipped), got %d", len(aliases))
 	}
 }
 
@@ -252,11 +247,14 @@ func TestBuildVceConfigDropsRetiredProtocols(t *testing.T) {
 // emitted as a streamAsTalkgroup identifier, and the 0/blank guard holds (a 0
 // here would upload every matching call as talkgroup 0).
 func TestBuildVceConfigStreamTalkgroupAlias(t *testing.T) {
+	tg := func(v string) []AliasID {
+		return []AliasID{{Type: "talkgroup", Attrs: map[string]string{"protocol": "APCO25", "value": v}}}
+	}
 	payload := ConfigPayload{
 		Aliases: []Alias{
-			{Name: "A", StreamTalkgroupAlias: "1400"},
-			{Name: "B", StreamTalkgroupAlias: "0"},
-			{Name: "C"},
+			{Name: "A", StreamTalkgroupAlias: "1400", IDs: tg("101")},
+			{Name: "B", StreamTalkgroupAlias: "0", IDs: tg("102")},
+			{Name: "C", IDs: tg("103")},
 		},
 	}
 	doc := marshalState(t, payload, nil)

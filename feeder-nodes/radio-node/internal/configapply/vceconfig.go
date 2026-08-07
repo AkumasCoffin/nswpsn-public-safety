@@ -331,7 +331,11 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 			rememberFamily(listFamilies, listName, "") // ensure the list exists even without matchers
 		}
 		if len(matchers) == 0 {
-			state.Aliases = append(state.Aliases, tmpl)
+			// vce requires exactly one matchIdentifier per alias; an alias whose
+			// matcher ids were all dropped (or that only carried broadcast/priority/
+			// record entries) can never match anything, and emitting it matcher-less
+			// 400s the whole /config/import. Skip it.
+			log.Printf("configapply: alias %q: no usable match identifiers - skipping", a.Name)
 			continue
 		}
 		for i := range matchers {
