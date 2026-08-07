@@ -141,11 +141,29 @@ export async function bindInstallId(nodeId: string, installId: string): Promise<
     );
   } catch (e: unknown) {
     // 23505 on nodes_user_id_install_id_key: this machine is already TOFU-bound
-    // to a DIFFERENT node row of the same user (e.g. a stale row from a
-    // re-provisioned node). Reject this connect instead of throwing — rotate the
-    // old node's token (which clears its binding) or delete the stale row to
-    // let this node claim the machine.
-    if ((e as { code?: string })?.code === '23505') return 'mismatch';
+    // to a DIFFERENT node row of the SAME user (the unique key is per-user, so
+    // only own-account rows can conflict). That means this exact agent install
+    // previously enrolled as another node (re-provisioned / re-created node) —
+    // migrate the binding to the row this token belongs to. The copied-token
+    // case (a different machine presenting a bound node's token) never lands
+    // here: it fails the NULL-guarded claim without a constraint error and
+    // falls through to the mismatch check below.
+    if ((e as { code?: string })?.code === '23505') {
+      const moved = await pool.query(
+        `WITH freed AS (
+           UPDATE nodes SET install_id = NULL
+           WHERE install_id = $2
+             AND user_id = (SELECT user_id FROM nodes WHERE id = $1)
+             AND id <> $1
+           RETURNING id
+         )
+         UPDATE nodes SET install_id = $2
+         WHERE id = $1 AND install_id IS NULL AND EXISTS (SELECT 1 FROM freed)`,
+        [nodeId, installId],
+      );
+      if ((moved.rowCount ?? 0) > 0) return 'bound';
+      return 'mismatch';
+    }
     throw e;
   }
   if ((claim.rowCount ?? 0) > 0) return 'bound';
