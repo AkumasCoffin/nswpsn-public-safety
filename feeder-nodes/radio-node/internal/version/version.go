@@ -11,7 +11,7 @@ import (
 // Version is the semantic version of this agent build. Override with:
 //
 //	go build -ldflags "-X github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version.Version=1.2.3"
-var Version = "0.0.0-dev"
+var Version = "0.2.0-dev"
 
 // String returns a human-readable version line including OS/arch and Go version.
 func String() string {

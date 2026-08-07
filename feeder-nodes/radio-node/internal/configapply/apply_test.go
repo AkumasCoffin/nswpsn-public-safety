@@ -1,52 +1,64 @@
 package configapply
 
 import (
+	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 )
 
-// A disabled channel (AutoStart=false) must render enabled="false" and land on
-// disk via the pre-launch WritePlaylistOnly path (no SDR-Trunk / rdio needed).
-// This is the authoritative playlist the agent writes BEFORE launching SDR-Trunk.
-func TestWritePlaylistOnlyDisabledChannel(t *testing.T) {
-	dir := t.TempDir()
-	deps := Deps{DataDir: dir, SDRTrunkAppRoot: dir}
+// TestAliasStreamTalkgroupUnmarshal — streamTalkgroupAlias round-trips from
+// either a JSON number or a JSON string into the same string form.
+func TestAliasStreamTalkgroupUnmarshal(t *testing.T) {
+	var n Alias
+	if err := json.Unmarshal([]byte(`{"name":"x","streamTalkgroupAlias":1400}`), &n); err != nil {
+		t.Fatalf("unmarshal number: %v", err)
+	}
+	if n.StreamTalkgroupAlias != "1400" {
+		t.Errorf("number form: want 1400, got %q", n.StreamTalkgroupAlias)
+	}
+	var s Alias
+	if err := json.Unmarshal([]byte(`{"name":"x","streamTalkgroupAlias":"1401"}`), &s); err != nil {
+		t.Fatalf("unmarshal string: %v", err)
+	}
+	if s.StreamTalkgroupAlias != "1401" {
+		t.Errorf("string form: want 1401, got %q", s.StreamTalkgroupAlias)
+	}
+	var z Alias
+	if err := json.Unmarshal([]byte(`{"name":"x"}`), &z); err != nil {
+		t.Fatalf("unmarshal absent: %v", err)
+	}
+	if z.StreamTalkgroupAlias != "" {
+		t.Errorf("absent form: want empty, got %q", z.StreamTalkgroupAlias)
+	}
+}
+
+// A disabled channel (AutoStart=false) must carry autoStart=false into the vce
+// import body while keeping its full config (name/frequency/decoder), so it
+// decodes correctly the moment it is (re)started.
+func TestBuildVceConfigDisabledChannel(t *testing.T) {
 	payload := ConfigPayload{
 		Channels: []ChannelPlan{
 			{Name: "test", Frequency: 142658000, Decoder: "p25p2", System: "NSW PSN", Site: "test", Order: 2, AutoStart: false},
 		},
 	}
-	if err := WritePlaylistOnly(payload, deps); err != nil {
-		t.Fatalf("WritePlaylistOnly: %v", err)
+	state := buildVceConfig(payload, nil, "catch all PSN")
+	if len(state.Channels) != 1 {
+		t.Fatalf("expected 1 channel, got %d", len(state.Channels))
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "playlist", "default.xml"))
-	if err != nil {
-		t.Fatalf("read playlist: %v", err)
+	ch := state.Channels[0]
+	if ch.AutoStart {
+		t.Errorf("disabled channel must have autoStart=false")
 	}
-	out := string(b)
-	// The <channel> tag for "test" must be enabled="false".
-	chTag := regexp.MustCompile(`<channel\b[^>]*>`).FindString(out)
-	if chTag == "" {
-		t.Fatalf("no <channel> rendered:\n%s", out)
-	}
-	if !strings.Contains(chTag, `name="test"`) {
-		t.Errorf("channel name not rendered: %s", chTag)
-	}
-	if !strings.Contains(chTag, `enabled="false"`) {
-		t.Errorf("disabled channel not rendered enabled=\"false\": %s", chTag)
+	if ch.Name != "test" || ch.SourceConfiguration.Frequency != 142658000 ||
+		ch.DecodeConfiguration.Type != "decodeConfigP25Phase2" {
+		t.Errorf("disabled channel lost its config: %+v", ch)
 	}
 }
 
-// Node OFF (captureEnabled=false) must render EVERY channel enabled="false",
-// even ones whose config says auto-start on — so SDR-Trunk decodes nothing while
-// the agent stays connected.
-func TestWritePlaylistCaptureOff(t *testing.T) {
-	dir := t.TempDir()
-	deps := Deps{DataDir: dir, SDRTrunkAppRoot: dir}
+// Node OFF (captureEnabled=false) must force EVERY channel autoStart=false in
+// the import body, even ones whose config says auto-start on — so sdrtrunk-vce
+// decodes nothing while the agent stays connected.
+func TestBuildVceConfigCaptureOff(t *testing.T) {
 	off := false
 	payload := ConfigPayload{
 		CaptureEnabled: &off,
@@ -54,13 +66,19 @@ func TestWritePlaylistCaptureOff(t *testing.T) {
 			{Name: "on-ch", Frequency: 142658000, Decoder: "p25p2", System: "NSW PSN", Site: "s", Order: 1, AutoStart: true},
 		},
 	}
-	if err := WritePlaylistOnly(payload, deps); err != nil {
-		t.Fatalf("WritePlaylistOnly: %v", err)
+	state := buildVceConfig(payload, nil, "catch all PSN")
+	for _, ch := range state.Channels {
+		if ch.AutoStart {
+			t.Errorf("capture off should force autoStart=false on %q", ch.Name)
+		}
 	}
-	b, _ := os.ReadFile(filepath.Join(dir, "playlist", "default.xml"))
-	chTag := regexp.MustCompile(`<channel\b[^>]*>`).FindString(string(b))
-	if !strings.Contains(chTag, `enabled="false"`) {
-		t.Errorf("capture off should force enabled=\"false\": %s", chTag)
+}
+
+// The preset playlist's alias-list name is extracted from the embedded preset
+// (channels + P25 aliases reference it in the import body).
+func TestPresetAliasListName(t *testing.T) {
+	if got := (Deps{}).presetAliasListName(); got != "catch all PSN" {
+		t.Errorf("presetAliasListName = %q, want %q", got, "catch all PSN")
 	}
 }
 

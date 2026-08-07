@@ -247,12 +247,10 @@ func writeCurrentVersion(dataDir, name, ver string) error {
 func execName(name string) string {
 	switch name {
 	case "sdrtrunk":
-		// The jlink app-image launcher script (sets classpath + the required
-		// --enable-preview / incubator-vector / javafx JVM args). NOT bin/java.
-		if runtime.GOOS == "windows" {
-			return "sdr-trunk.bat"
-		}
-		return "sdr-trunk"
+		// Default (preferred) launcher basename; execPathFor probes the full
+		// candidate list. NOT bin/java — the jlink app-image launcher script sets
+		// the classpath + required JVM args.
+		return sdrtrunkExecNames()[0]
 	case "rdio":
 		if runtime.GOOS == "windows" {
 			return "rdio-scanner.exe"
@@ -266,12 +264,32 @@ func execName(name string) string {
 	}
 }
 
+// sdrtrunkExecNames lists the launcher basenames to probe inside <dir>/bin, in
+// preference order. The sdrtrunk-vce fork's app image may ship the launcher as
+// either bin/sdr-trunk or bin/sdrtrunk-vce (+ .bat on Windows).
+func sdrtrunkExecNames() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"sdr-trunk.bat", "sdrtrunk-vce.bat"}
+	}
+	return []string{"sdr-trunk", "sdrtrunk-vce"}
+}
+
 // execPathFor resolves a component's primary executable inside its version dir.
-// sdrtrunk (a jlink runtime zip) launches via <dir>/bin/java; rdio is the single
-// binary sitting directly in <dir>.
+// sdrtrunk (a jlink runtime zip) launches via its <dir>/bin launcher script —
+// probed across the known basenames, first existing wins, preferring sdr-trunk;
+// rdio is the single binary sitting directly in <dir>.
 func execPathFor(name, versionDir string) string {
 	if name == "sdrtrunk" {
-		return filepath.Join(versionDir, "bin", execName(name))
+		names := sdrtrunkExecNames()
+		for _, n := range names {
+			p := filepath.Join(versionDir, "bin", n)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+		// Nothing on disk (yet): return the preferred default so callers that
+		// stat it (resolveInstalled) still fail cleanly / reinstall.
+		return filepath.Join(versionDir, "bin", names[0])
 	}
 	return filepath.Join(versionDir, execName(name))
 }
