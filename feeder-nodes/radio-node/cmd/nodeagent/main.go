@@ -34,6 +34,7 @@ import (
 
 	"github.com/kardianos/service"
 
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/activityship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/configapply"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
@@ -311,6 +312,22 @@ func runAgent(ctx context.Context, configPath string) error {
 	// The queue sender POSTs each buffered call to the backend relay, enriching
 	// each with P25 site headers from the control server when available.
 	sender := newSender(cfg, sdr)
+
+	// Activity-event shipper (radio kind only): polls the control server's
+	// /activity/events and forwards decode metadata to the backend. Runs
+	// regardless of feedEnabled — the metadata is wanted even when the audio
+	// feed is off.
+	if cfg.Kind == "radio" {
+		shipper := activityship.New(activityship.Options{
+			DataDir:   cfg.DataDir,
+			DBPath:    filepath.Join(cfg.SDRTrunkAppRoot, "database", "sdrtrunk.sqlite"),
+			Fetch:     sdr.ActivityEvents,
+			ServerURL: cfg.ServerURL,
+			NodeToken: cfg.NodeToken,
+			InstallID: cfg.InstallID,
+		})
+		go shipper.Run(ctx)
+	}
 
 	// Launch the long-lived goroutines.
 	errCh := make(chan error, 1)

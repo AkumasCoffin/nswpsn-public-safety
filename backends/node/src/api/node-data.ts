@@ -2,8 +2,15 @@
  * Staff "Data" tab — feeder-node event analytics (owner|dev only).
  *
  * Reads the per-event capture written by services/nodeEvents.ts:
- *   - node_radio_events / node_pager_events   (30-day detail, migration 043)
+ *   - node_radio_events / node_pager_events   (30-day detail, migrations 043/044)
  *   - node_radio_hourly / node_radio_hourly_sys / node_pager_hourly (forever)
+ *
+ * Radio rows are vce ACTIVITY events (migration 044): `system` is the P25
+ * systemId, and each event carries action/event_type/encrypted plus a
+ * `recorded` flag set when the matching rdio call upload landed (audio
+ * exists). talkgroup_label/system_label are no longer populated by ingest —
+ * labels stay null for now (planned: resolve from the global agencies
+ * config at read time).
  *
  *   GET /api/node-data/overview  — totals, per-node volume, top lists, series
  *   GET /api/node-data/events    — logical-call event browser (grouped)
@@ -133,13 +140,12 @@ nodeDataRouter.get(
                   logical: unknown;
                   label: string | null;
                 }>(
+                  // label deliberately NULL: activity-event ingest stores no
+                  // labels (they'll resolve from the agencies config later).
                   `SELECT h.system, h.talkgroup,
                           SUM(h.calls)::bigint AS calls,
                           SUM(h.logical_calls)::bigint AS logical,
-                          (SELECT e.talkgroup_label FROM node_radio_events e
-                            WHERE e.system = h.system AND e.talkgroup = h.talkgroup
-                              AND e.talkgroup_label IS NOT NULL
-                            ORDER BY e.received_at DESC LIMIT 1) AS label
+                          NULL::text AS label
                      FROM node_radio_hourly_sys h
                     GROUP BY h.system, h.talkgroup
                     ORDER BY calls DESC LIMIT 15`,
@@ -230,14 +236,12 @@ nodeDataRouter.get(
                 logical: unknown;
                 label: string | null;
               }>(
+                // label deliberately NULL: activity-event ingest stores no
+                // labels (they'll resolve from the agencies config later).
                 `SELECT e.system, e.talkgroup,
                         COUNT(*)::int AS calls,
                         COUNT(DISTINCT e.logical_call_id)::int AS logical,
-                        (SELECT e2.talkgroup_label FROM node_radio_events e2
-                          WHERE e2.system IS NOT DISTINCT FROM e.system
-                            AND e2.talkgroup IS NOT DISTINCT FROM e.talkgroup
-                            AND e2.talkgroup_label IS NOT NULL
-                          ORDER BY e2.received_at DESC LIMIT 1) AS label
+                        NULL::text AS label
                    FROM node_radio_events e WHERE ${cond}
                   GROUP BY e.system, e.talkgroup
                   ORDER BY calls DESC LIMIT 15`,
@@ -382,8 +386,8 @@ nodeDataRouter.get(
 
 // ---------------------------------------------------------------------------
 // GET /api/node-data/events
-//   ?type=all|radio|pager&talkgroup=&unit=&node=&site=&system=&q=&from=&to=
-//   &limit=50&offset=0
+//   ?type=all|radio|pager&talkgroup=&unit=&node=&site=&system=&encrypted=
+//   &q=&from=&to=&limit=50&offset=0
 //
 // Newest first, GROUPED into logical calls/pages. Pagination is over the
 // merged logical-event stream: a WITH-union of both grouped id/at sets is
@@ -406,6 +410,16 @@ nodeDataRouter.get(
       const system = qpInt(url, 'system');
       const nodeId = (url.searchParams.get('node') ?? '').trim() || null;
       const q = (url.searchParams.get('q') ?? '').trim() || null;
+
+      // encrypted=true|false (radio-only filter; absent = both).
+      const encRaw = (url.searchParams.get('encrypted') ?? '').trim().toLowerCase();
+      let encrypted: boolean | null = null;
+      if (encRaw) {
+        if (encRaw !== 'true' && encRaw !== 'false') {
+          return c.json({ error: 'encrypted must be true or false' }, 400);
+        }
+        encrypted = encRaw === 'true';
+      }
 
       // site = "rfss-site" (e.g. "1-12").
       const siteRaw = (url.searchParams.get('site') ?? '').trim();
@@ -441,7 +455,11 @@ nodeDataRouter.get(
       // Radio-only filters silently exclude the pager stream (a page has no
       // talkgroup/unit/site/system to match).
       const radioOnlyFilter =
-        talkgroup !== null || unit !== null || system !== null || siteRfss !== null;
+        talkgroup !== null ||
+        unit !== null ||
+        system !== null ||
+        siteRfss !== null ||
+        encrypted !== null;
       const includeRadio = type !== 'pager';
       const includePager = type !== 'radio' && !radioOnlyFilter;
       if (!includeRadio && !includePager) {
@@ -467,6 +485,7 @@ nodeDataRouter.get(
           rConds.push(`site_rfss = ${add(siteRfss)}`);
           rConds.push(`site_id = ${add(siteId)}`);
         }
+        if (encrypted !== null) rConds.push(`encrypted = ${add(encrypted)}`);
         if (q !== null) {
           const like = add(`%${q}%`);
           rConds.push(`(talkgroup_label ILIKE ${like} OR system_label ILIKE ${like})`);
@@ -534,6 +553,10 @@ nodeDataRouter.get(
               system_label: string | null;
               source_unit: number | null;
               frequency: string | null;
+              action: string | null;
+              event_type: string | null;
+              encrypted: boolean;
+              recorded: boolean;
               receptions: number;
               sites: Array<{ rfss: number; site: number }>;
               nodes: Array<{ id: string; name: string }>;
@@ -546,6 +569,10 @@ nodeDataRouter.get(
                       MAX(e.system_label) AS system_label,
                       MIN(e.source_unit) AS source_unit,
                       MIN(e.frequency)::bigint AS frequency,
+                      MIN(e.action) AS action,
+                      MIN(e.event_type) AS event_type,
+                      bool_or(e.encrypted) AS encrypted,
+                      bool_or(e.recorded) AS recorded,
                       COUNT(*)::int AS receptions,
                       COALESCE(
                         jsonb_agg(DISTINCT jsonb_build_object('rfss', e.site_rfss, 'site', e.site_id))
@@ -603,6 +630,11 @@ nodeDataRouter.get(
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
               frequency: d.frequency !== null ? Number(d.frequency) : null,
+              action: d.action,
+              eventType: d.event_type,
+              // A logical call is "encrypted"/"recorded" if ANY reception was.
+              encrypted: d.encrypted === true,
+              recorded: d.recorded === true,
               sites: d.sites,
               nodes: d.nodes,
               receptions: d.receptions,

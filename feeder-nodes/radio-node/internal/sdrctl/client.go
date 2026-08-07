@@ -371,6 +371,44 @@ func (c *Client) CallSite(tgid, src int, freqHz, tsMs int64, windowMs int) (Call
 	return out, nil
 }
 
+// ActivityEvent mirrors one element of GET /activity/events. Nullable numeric
+// fields are pointers so a server null round-trips as null when the agent
+// re-serializes the event for the backend.
+type ActivityEvent struct {
+	ID          int64   `json:"id"`
+	AtMs        int64   `json:"atMs"`
+	Action      string  `json:"action"`
+	EventType   string  `json:"eventType"`
+	Source      *int    `json:"source"`
+	Target      *int    `json:"target"`
+	FrequencyHz *int64  `json:"frequencyHz"`
+	Timeslot    *int    `json:"timeslot"`
+	Encrypted   bool    `json:"encrypted"`
+	Rfss        *int    `json:"rfss"`
+	Site        *int    `json:"site"`
+	Nac         *int    `json:"nac"`
+	Wacn        *int    `json:"wacn"`
+	SystemID    *int    `json:"systemId"`
+	ChannelName *string `json:"channelName"`
+}
+
+// ActivityEvents GETs /activity/events?sinceId=..&limit=..&kinds=calls: the
+// decode-activity rows with id > sinceID (oldest first, up to limit). The
+// second return is the response envelope's lastId; empty events with
+// lastId == sinceID means nothing new, while lastId < sinceID signals the
+// server's database was recreated and its ids restarted.
+func (c *Client) ActivityEvents(sinceID int64, limit int) ([]ActivityEvent, int64, error) {
+	var r struct {
+		Events []ActivityEvent `json:"events"`
+		LastID int64           `json:"lastId"`
+	}
+	path := fmt.Sprintf("/activity/events?sinceId=%d&limit=%d&kinds=calls", sinceID, limit)
+	if err := c.get(path, &r); err != nil {
+		return nil, 0, err
+	}
+	return r.Events, r.LastID, nil
+}
+
 // SpectrumConn is a single shared WebSocket to the control server's spectrum
 // endpoint (ws://127.0.0.1:P+1). It ref-counts active tuner streams: the
 // connection opens on the first Start and closes when the last Stop leaves no

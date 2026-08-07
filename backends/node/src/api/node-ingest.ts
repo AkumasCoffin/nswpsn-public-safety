@@ -15,6 +15,9 @@
  * token auth.
  *
  *   POST /api/node-ingest/call-upload   — relay one call into central rdio
+ *   POST /api/node-ingest/activity      — vce activity event batches (radio
+ *                                         Data-tab row source, migration 044)
+ *   POST /api/node-ingest/pager-upload  — relay one page into central Pagermon
  *   GET  /api/node-ingest/capabilities  — downstream probe target
  */
 import { Hono } from 'hono';
@@ -26,9 +29,33 @@ import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
-import { recordRadioEvent, recordPagerEvent, safeInt } from '../services/nodeEvents.js';
+import {
+  recordActivityEvents,
+  markRecorded,
+  recordPagerEvent,
+  safeInt,
+} from '../services/nodeEvents.js';
 
 export const nodeIngestRouter = new Hono();
+
+/** Per-node rolling-window rate limiter (in-memory, ephemeral — same
+ *  lifetime model as hub upload signals). Returns an `ok(nodeId)` check
+ *  allowing at most `max` hits per `windowMs`. */
+function makeNodeRateLimiter(max: number, windowMs: number): (nodeId: string) => boolean {
+  const hits = new Map<string, number[]>();
+  return (nodeId: string): boolean => {
+    const now = Date.now();
+    const cutoff = now - windowMs;
+    const arr = (hits.get(nodeId) ?? []).filter((t) => t >= cutoff);
+    if (arr.length >= max) {
+      hits.set(nodeId, arr);
+      return false;
+    }
+    arr.push(now);
+    hits.set(nodeId, arr);
+    return true;
+  };
+}
 
 // Hard cap on a relayed call body. Calls are small (~100KB MP3s); anything
 // over this is almost certainly a bug or abuse, so reject before buffering.
@@ -102,11 +129,14 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
-  // 6a. Per-event capture (migration 043) — record the reception with node
-  //     attribution + optional P25 site headers BEFORE the feed gate, so
-  //     feed-off nodes still show what they hear. Fire-safe: recordRadioEvent
+  // 6a. Recorded-flag stamp (migration 044) — Data-tab rows come from the
+  //     /activity event stream, NOT from call uploads. Here we only mark the
+  //     closest matching activity event row (same node + talkgroup, ±6s)
+  //     recorded=true with its audio size, meaning "audio exists in central
+  //     rdio for this call". Runs BEFORE the feed gate so feed-off nodes'
+  //     events still get their recorded flag. Fire-safe: markRecorded
   //     swallows its own errors and the outer try/catch is belt-and-braces —
-  //     capture must NEVER affect the relay. bumpNodeCallStat is untouched.
+  //     this must NEVER affect the relay. bumpNodeCallStat is untouched.
   if (r.kind === 'radio') {
     try {
       const epoch = Number(formFirstString(form, 'dateTime') ?? '');
@@ -115,26 +145,14 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
       const audioFile = Array.isArray(audioField)
         ? audioField.find((x) => x instanceof File)
         : audioField;
-      const siteSourceRaw = c.req.header('X-Call-Site-Source') ?? '';
-      await recordRadioEvent({
-        nodeId: node.id,
+      await markRecorded(
+        node.id,
+        safeInt(formFirstString(form, 'talkgroup')),
         receivedAt,
-        system: safeInt(formFirstString(form, 'system')),
-        talkgroup: safeInt(formFirstString(form, 'talkgroup')),
-        sourceUnit: safeInt(formFirstString(form, 'source')),
-        frequency: safeInt(formFirstString(form, 'frequency')),
-        siteRfss: safeInt(c.req.header('X-Call-Site-Rfss')),
-        siteId: safeInt(c.req.header('X-Call-Site-Id')),
-        siteNac: safeInt(c.req.header('X-Call-Site-Nac')),
-        siteSource: ['event', 'channel', 'context'].includes(siteSourceRaw)
-          ? siteSourceRaw
-          : null,
-        talkgroupLabel: formFirstString(form, 'talkgroupLabel'),
-        systemLabel: formFirstString(form, 'systemLabel'),
-        audioBytes: audioFile instanceof File ? audioFile.size : 0,
-      });
+        audioFile instanceof File ? audioFile.size : 0,
+      );
     } catch (err) {
-      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: event capture failed');
+      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');
     }
   }
 
@@ -213,6 +231,137 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/node-ingest/activity
+//
+// Batches of vce ACTIVITY events from a RADIO node's agent. These are the
+// ONLY source of node_radio_events rows (migration 044): they carry the real
+// P25 identity (wacn/systemId) + per-event site/action/encryption that rdio
+// call uploads don't. Nothing is forwarded anywhere — this is pure capture,
+// so neither the relay config nor the feed gate applies. Re-sent batches
+// dedupe on (node, streamId, event id) and are NOT errors: `accepted` counts
+// newly-inserted events only.
+// ---------------------------------------------------------------------------
+
+// JSON body cap. 500 events × ~200 bytes is well under this; anything bigger
+// is a bug or abuse. Manual Content-Length guard like the other routes (NEVER
+// hono bodyLimit — it fully buffers chunked bodies in RAM).
+const MAX_ACTIVITY_BYTES = 256 * 1024;
+
+// Per-node rate limit: the agent batches (≤500 events/post), so even a busy
+// network needs a handful of posts per minute. 30/min bounds a hostile node.
+const activityRateOk = makeNodeRateLimiter(30, 60_000);
+
+const ActivityEventSchema = z.object({
+  // Agent-side event id, unique per stream (dedupe key with streamId).
+  id: z.number().int().min(0),
+  // Event time, unix milliseconds (server clamps to now±48h).
+  atMs: z.number().int(),
+  action: z.string().min(1).max(32),
+  eventType: z.string().min(1).max(48),
+  source: z.number().int().nullish(),
+  target: z.number().int().nullish(),
+  frequencyHz: z.number().int().nullish(),
+  timeslot: z.number().int().nullish(),
+  encrypted: z.boolean().default(false),
+  rfss: z.number().int().nullish(),
+  site: z.number().int().nullish(),
+  nac: z.number().int().nullish(),
+  wacn: z.number().int().nullish(),
+  systemId: z.number().int().nullish(),
+  // Validated but not stored — labels resolve from the global agencies
+  // config at read time (see services/nodeEvents.ts).
+  channelName: z.string().max(128).nullish(),
+});
+
+const ActivityBodySchema = z.object({
+  // The agent's decoder-session id: event ids restart per stream, so the
+  // pair (streamId, id) is the idempotency key.
+  streamId: z.string().min(8).max(64),
+  events: z.array(ActivityEventSchema).max(500),
+});
+
+nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
+  // 1-2. Node credentials + per-node token resolve (role gated), TOFU install
+  //      match — identical to call-upload.
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') {
+      return c.json({ error: 'contributor role removed' }, 403);
+    }
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  // Only radio-kind nodes decode P25 activity. Hard-reject the rest.
+  if (r.kind !== 'radio') {
+    return c.json({ error: 'not a radio node' }, 403);
+  }
+  const node = { id: r.nodeId };
+
+  // 3. Per-node rate limit. Must be a NON-2xx: the shipper advances its cursor
+  //    on any 2xx, so an ack here would silently lose the batch. 429 keeps the
+  //    cursor in place and the agent retries the same events next tick.
+  if (!activityRateOk(node.id)) {
+    log.warn(`activity ingest: RATE-LIMITED node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: false, error: 'rate limit' }, 429);
+  }
+
+  // 4. Size guard — require Content-Length and cap it (closes the
+  //    chunked-body bypass, same rationale as the other routes).
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > MAX_ACTIVITY_BYTES) {
+    return c.json({ error: 'batch too large' }, 413);
+  }
+
+  // 5. Parse + validate.
+  let parsed: z.infer<typeof ActivityBodySchema>;
+  try {
+    parsed = ActivityBodySchema.parse(await c.req.json());
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+
+  // 6. Record. Fire-safe by contract (never throws); returns how many events
+  //    were NEWLY inserted — deduped re-sends yield a smaller `accepted` and
+  //    that is success, not an error.
+  const accepted = await recordActivityEvents(
+    node.id,
+    parsed.streamId,
+    parsed.events.map((ev) => ({
+      id: ev.id,
+      atMs: ev.atMs,
+      action: ev.action,
+      eventType: ev.eventType,
+      source: ev.source ?? null,
+      target: ev.target ?? null,
+      frequencyHz: ev.frequencyHz ?? null,
+      timeslot: ev.timeslot ?? null,
+      encrypted: ev.encrypted,
+      rfss: ev.rfss ?? null,
+      site: ev.site ?? null,
+      nac: ev.nac ?? null,
+      wacn: ev.wacn ?? null,
+      systemId: ev.systemId ?? null,
+      channelName: ev.channelName ?? null,
+    })),
+  );
+  log.info(
+    `activity ingest node=${node.id.slice(0, 8)} stream=${parsed.streamId.slice(0, 12)} events=${parsed.events.length} accepted=${accepted}`,
+  );
+  return c.json({ ok: true, accepted });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/node-ingest/pager-upload
 //
 // A PAGER feeder node decodes POCSAG locally (rtl_fm | multimon-ng) and relays
@@ -236,24 +385,9 @@ const BLOCKED_CAPCODES = new Set(
     .filter(Boolean),
 );
 
-// Per-node rate limit: at most PAGER_RATE_MAX messages per PAGER_RATE_WINDOW_MS.
-// Real paging is a few/min; this bounds a compromised node's flood into Pagermon
-// + the DB. In-memory rolling window (ephemeral, like hub uploads).
-const PAGER_RATE_MAX = 120;
-const PAGER_RATE_WINDOW_MS = 60_000;
-const pagerRate = new Map<string, number[]>();
-function pagerRateOk(nodeId: string): boolean {
-  const now = Date.now();
-  const cutoff = now - PAGER_RATE_WINDOW_MS;
-  const arr = (pagerRate.get(nodeId) ?? []).filter((t) => t >= cutoff);
-  if (arr.length >= PAGER_RATE_MAX) {
-    pagerRate.set(nodeId, arr);
-    return false;
-  }
-  arr.push(now);
-  pagerRate.set(nodeId, arr);
-  return true;
-}
+// Per-node rate limit: at most 120 messages/min. Real paging is a few/min;
+// this bounds a compromised node's flood into Pagermon + the DB.
+const pagerRateOk = makeNodeRateLimiter(120, 60_000);
 
 const PagerMsgSchema = z.object({
   // POCSAG capcode / address (digits). Kept as a string — Pagermon treats it as text.
