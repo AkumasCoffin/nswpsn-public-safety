@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -37,6 +39,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/relay"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/supervise"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/update"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version"
@@ -251,8 +254,9 @@ func runAgent(ctx context.Context, configPath string) error {
 		manifest = &update.Manifest{}
 	}
 
-	// --app-root MUST match where configapply writes the rendered playlist
-	// (<app-root>/playlist/default.xml), so sdrtrunk loads the pushed config.
+	// --app-root is where sdrtrunk-vce keeps its state, including its config
+	// database at <app-root>/database/sdrtrunk.sqlite (which also drives the
+	// --fresh / --upgrade-current bootstrap flag below).
 	if err := os.MkdirAll(cfg.SDRTrunkAppRoot, 0o755); err != nil {
 		return fmt.Errorf("create sdrtrunk app-root %q: %w", cfg.SDRTrunkAppRoot, err)
 	}
@@ -269,18 +273,24 @@ func runAgent(ctx context.Context, configPath string) error {
 		log.Printf("startup: reaped %d stale sdrtrunk process(es) before launch", n)
 	}
 
-	// Write an authoritative playlist from the last-applied config BEFORE launching
-	// SDR-Trunk, so it boots from the current config (not a stale last-session /
-	// clobbered file) and never auto-starts a channel the operator disabled. No-op
-	// on first ever boot (no persisted config yet → SDR-Trunk uses the preset).
-	writeBootPlaylist(cfg)
-
 	// Supervisor for external children.
 	sup := supervise.New(cfg.DataDir, map[string]agentcfg.ComponentCfg{
 		"sdrtrunk": sdrCfg,
 		"rdio":     rdioCfg,
 	})
 	sup.Start(ctx)
+
+	// Control-server REST client on the same port/token sdrtrunk was launched
+	// with, shared by the boot config re-import and the sender's site enrichment
+	// (the WS client builds its own equivalent client internally).
+	sdr := sdrctl.New(cfg.SDRTrunkControlPort, controlToken)
+
+	// Re-import the last-applied config into the freshly-launched sdrtrunk-vce
+	// once its control server answers, so it always runs the agent's current
+	// config (not whatever its SQLite database held from the last session) and
+	// never auto-starts a channel the operator disabled. No-op on first ever
+	// boot (no persisted config yet → sdrtrunk-vce runs its imported/preset DB).
+	go bootImportConfig(ctx, cfg, sdr)
 
 	// Localhost listener impersonating rdio call-upload.
 	listener := relay.New(cfg.RelayAddr, q)
@@ -298,8 +308,9 @@ func runAgent(ctx context.Context, configPath string) error {
 	// port/token used to launch sdrtrunk).
 	ws := wsclient.New(cfg, sup, q, cfg.SDRTrunkControlPort, controlToken, rdio, rdioPassword)
 
-	// The queue sender POSTs each buffered call to the backend relay.
-	sender := newSender(cfg)
+	// The queue sender POSTs each buffered call to the backend relay, enriching
+	// each with P25 site headers from the control server when available.
+	sender := newSender(cfg, sdr)
 
 	// Launch the long-lived goroutines.
 	errCh := make(chan error, 1)
@@ -326,34 +337,58 @@ func runAgent(ctx context.Context, configPath string) error {
 	return nil
 }
 
-// writeBootPlaylist renders the SDR-Trunk playlist from the last-applied config
-// payload (persisted by the WS client on each successful playlist apply) and writes
-// it to disk BEFORE SDR-Trunk launches. This guarantees SDR-Trunk boots from the
-// agent's current config rather than a stale/clobbered last-session file — closing
-// the window where it would auto-start a just-disabled channel on every reboot.
-func writeBootPlaylist(cfg *agentcfg.Config) {
+// bootImportConfig re-imports the last-applied config payload (persisted by the
+// WS client on each successful apply) into a freshly-launched sdrtrunk-vce. It
+// waits for the control server to answer /status (polling with backoff up to
+// ~90s — JVM start + calibration can be slow on a cold node), then POSTs the
+// rebuilt ConfigurationState to /config/import (idempotent full overwrite).
+// This guarantees sdrtrunk-vce runs the agent's current config rather than a
+// stale last-session database — closing the window where it would auto-start a
+// just-disabled channel on every reboot.
+func bootImportConfig(ctx context.Context, cfg *agentcfg.Config, sdr *sdrctl.Client) {
 	raw, err := os.ReadFile(cfg.AppliedConfigPath())
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("startup: read last-applied config failed: %v", err)
 		}
-		return // first boot / nothing applied yet — SDR-Trunk uses the preset
+		return // first boot / nothing applied yet — sdrtrunk-vce uses its own DB
 	}
 	var payload configapply.ConfigPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		log.Printf("startup: last-applied config unreadable (%v); skipping pre-launch playlist", err)
+		log.Printf("startup: last-applied config unreadable (%v); skipping boot config import", err)
 		return
 	}
+
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, serr := sdr.Status(); serr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Printf("startup: sdrtrunk control server not ready after 90s; skipping boot config import")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+
 	deps := configapply.Deps{
 		DataDir:         cfg.DataDir,
 		PresetsDir:      cfg.PresetsDir,
 		SDRTrunkAppRoot: cfg.SDRTrunkAppRoot,
+		SDR:             sdr,
 	}
-	if err := configapply.WritePlaylistOnly(payload, deps); err != nil {
-		log.Printf("startup: pre-launch playlist write failed: %v", err)
+	if err := configapply.ImportOnBoot(payload, deps); err != nil {
+		log.Printf("startup: boot config import failed: %v", err)
 		return
 	}
-	log.Printf("startup: wrote authoritative playlist from last-applied config before sdrtrunk launch")
+	log.Printf("startup: re-imported last-applied config into sdrtrunk-vce")
 }
 
 // resolveSDRTrunk builds the sdrtrunk supervisor component. SDR-Trunk is core to
@@ -382,11 +417,25 @@ func resolveSDRTrunk(cfg *agentcfg.Config, spec update.ComponentSpec, controlTok
 		}
 	}
 
-	// P3 launch wiring: headless control server + app-root, per-boot token env.
+	// Launch wiring: headless control server + app-root, per-boot token env,
+	// plus the sdrtrunk-vce stats flags and its database bootstrap flag.
+	//
+	// vce requires exactly ONE bootstrap flag and errors on the wrong one:
+	// --fresh when its SQLite DB (<appRoot>/database/sdrtrunk.sqlite) does not
+	// exist yet, --upgrade-current when it does. Computed at launch time so a
+	// wiped app-root self-heals on the next start.
+	bootstrapFlag := "--fresh"
+	if _, err := os.Stat(filepath.Join(cfg.SDRTrunkAppRoot, "database", "sdrtrunk.sqlite")); err == nil {
+		bootstrapFlag = "--upgrade-current"
+	}
 	c.Args = append(append([]string{}, c.Args...),
 		"--headless",
 		"--control-port", strconv.Itoa(cfg.SDRTrunkControlPort),
-		"--app-root", cfg.SDRTrunkAppRoot)
+		"--app-root", cfg.SDRTrunkAppRoot,
+		bootstrapFlag,
+		"--stats-logging", "on",
+		"--stats-detailed-history", "on",
+		"--stats-retention-days", "7")
 	// SDR-Trunk's SettingsManager (SystemProperties -> ~/SDRTrunk) and Java's
 	// user-preferences store (~/.java, where the calibration "done" flag and the
 	// JMBE library path persist) both derive from the JVM's user.home. The service
@@ -488,13 +537,15 @@ type sender struct {
 	token      string
 	installID  string
 	httpClient *http.Client
+	sdr        *sdrctl.Client // control server, for call-site enrichment (may be nil)
 }
 
-func newSender(cfg *agentcfg.Config) *sender {
+func newSender(cfg *agentcfg.Config, sdr *sdrctl.Client) *sender {
 	return &sender{
 		url:       cfg.ServerURL + "/api/node-ingest/call-upload",
 		token:     cfg.NodeToken,
 		installID: cfg.InstallID,
+		sdr:       sdr,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -514,6 +565,10 @@ func (s *sender) send(contentType string, body []byte) queue.SendResult {
 	req.Header.Set("X-Node-Token", s.token)
 	req.Header.Set("X-Node-Install", s.installID)
 	req.Header.Set("User-Agent", version.UserAgent())
+
+	// Best-effort P25 site enrichment: never delays a failed lookup into an
+	// upload failure, and never touches the forwarded body bytes.
+	s.addSiteHeaders(req, contentType, body)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -537,4 +592,129 @@ func (s *sender) send(contentType string, body []byte) queue.SendResult {
 		log.Printf("sender: server returned %d (will retry)", resp.StatusCode)
 		return queue.SendRetry
 	}
+}
+
+// ---- P25 call-site enrichment ----------------------------------------------
+
+// enrichDebug gates the (per-call, potentially chatty) enrichment failure logs.
+var enrichDebug = os.Getenv("NODEAGENT_DEBUG") != ""
+
+func debugf(format string, args ...any) {
+	if enrichDebug {
+		log.Printf(format, args...)
+	}
+}
+
+// callMeta is the metadata parsed from a queued rdio call-upload body.
+type callMeta struct {
+	talkgroup int
+	source    int
+	frequency int64 // Hz
+	tsMs      int64 // call start, epoch millis
+}
+
+// addSiteHeaders best-effort resolves the P25 RFSS/site the call was heard on
+// (via the sdrtrunk-vce control server's /activity/call-site) and attaches it
+// as X-Call-Site-* headers on the backend upload. The stored multipart body is
+// parsed from a read-only view — the forwarded bytes stay byte-identical. ANY
+// failure (parse error, control server down, not found) leaves the request
+// untouched; enrichment can never fail or retry an upload.
+func (s *sender) addSiteHeaders(req *http.Request, contentType string, body []byte) {
+	if s.sdr == nil {
+		return
+	}
+	meta, err := extractCallMeta(contentType, body)
+	if err != nil {
+		debugf("sender: call meta parse failed (no site enrichment): %v", err)
+		return
+	}
+	if meta.talkgroup <= 0 {
+		return
+	}
+
+	cs, err := s.sdr.CallSite(meta.talkgroup, meta.source, meta.frequency, meta.tsMs, 4000)
+	if err != nil {
+		debugf("sender: call-site lookup failed (no site enrichment): %v", err)
+		return
+	}
+	// Fresh call not matched yet (the activity log can lag the upload by a
+	// beat): wait once briefly and retry.
+	if !cs.Found && meta.tsMs > 0 && time.Since(time.UnixMilli(meta.tsMs)) < 30*time.Second {
+		time.Sleep(2 * time.Second)
+		cs2, err2 := s.sdr.CallSite(meta.talkgroup, meta.source, meta.frequency, meta.tsMs, 4000)
+		if err2 != nil {
+			debugf("sender: call-site retry failed (no site enrichment): %v", err2)
+			return
+		}
+		cs = cs2
+	}
+	if !cs.Found {
+		return
+	}
+
+	if cs.Rfss != nil {
+		req.Header.Set("X-Call-Site-Rfss", strconv.Itoa(*cs.Rfss))
+	}
+	if cs.Site != nil {
+		req.Header.Set("X-Call-Site-Id", strconv.Itoa(*cs.Site))
+	}
+	if cs.Nac != nil {
+		req.Header.Set("X-Call-Site-Nac", strconv.Itoa(*cs.Nac))
+	}
+	if cs.Source != "" {
+		req.Header.Set("X-Call-Site-Source", cs.Source)
+	}
+}
+
+// extractCallMeta parses the rdio call-upload form fields the enrichment needs
+// (dateTime / talkgroup / source / frequency) out of a stored multipart body.
+// It reads from a fresh reader over the stored bytes — the body itself is
+// never modified or re-serialized. Missing/unparseable numeric fields stay 0.
+func extractCallMeta(contentType string, body []byte) (callMeta, error) {
+	var meta callMeta
+
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return meta, fmt.Errorf("parse content-type: %w", err)
+	}
+	if !strings.HasPrefix(mediaType, "multipart/") {
+		return meta, fmt.Errorf("not a multipart body: %s", mediaType)
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return meta, fmt.Errorf("multipart content-type without boundary")
+	}
+
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return meta, fmt.Errorf("read multipart: %w", err)
+		}
+		name := part.FormName()
+		switch name {
+		case "dateTime", "talkgroup", "source", "frequency":
+			raw, _ := io.ReadAll(io.LimitReader(part, 64))
+			v := strings.TrimSpace(string(raw))
+			switch name {
+			case "dateTime":
+				// rdio sends the call start as epoch SECONDS (occasionally
+				// fractional); the control server wants millis.
+				if f, ferr := strconv.ParseFloat(v, 64); ferr == nil {
+					meta.tsMs = int64(f * 1000)
+				}
+			case "talkgroup":
+				meta.talkgroup, _ = strconv.Atoi(v)
+			case "source":
+				meta.source, _ = strconv.Atoi(v)
+			case "frequency":
+				meta.frequency, _ = strconv.ParseInt(v, 10, 64)
+			}
+		}
+		_ = part.Close()
+	}
+	return meta, nil
 }

@@ -21,6 +21,11 @@ import (
 
 const restTimeout = 4 * time.Second
 
+// importTimeout bounds POST /config/import: a full-overwrite config import
+// (re)starts channels inside sdrtrunk-vce, which can take far longer than the
+// default REST timeout on a loaded node.
+const importTimeout = 60 * time.Second
+
 // Status mirrors GET /status.
 type Status struct {
 	Version    string  `json:"version"`
@@ -290,9 +295,80 @@ func (c *Client) StopChannel(id int) error {
 	return c.post(fmt.Sprintf("/channels/%d/stop", id), nil)
 }
 
-// ReloadPlaylist POSTs /playlist/reload.
+// ReloadPlaylist POSTs /playlist/reload. Kept by sdrtrunk-vce as an alias of
+// /config/reload for backward compatibility.
 func (c *Client) ReloadPlaylist() error {
 	return c.post("/playlist/reload", nil)
+}
+
+// ReloadConfig POSTs /config/reload: sdrtrunk-vce reloads its configuration
+// from its SQLite database and restarts auto-start channels.
+func (c *Client) ReloadConfig() error {
+	return c.post("/config/reload", nil)
+}
+
+// ImportResult mirrors the POST /config/import response envelope:
+// {ok:true, channels:N, aliases:N, streams:N} or {ok:false, error}.
+type ImportResult struct {
+	OK       bool   `json:"ok"`
+	Channels int    `json:"channels"`
+	Aliases  int    `json:"aliases"`
+	Streams  int    `json:"streams"`
+	Error    string `json:"error"`
+}
+
+// ImportConfig POSTs a vce ConfigurationState JSON document to /config/import
+// (full-overwrite, idempotent). body must already be the serialized JSON. It
+// uses a dedicated 60s timeout because the import (re)starts channels.
+func (c *Client) ImportConfig(body []byte) (ImportResult, error) {
+	var out ImportResult
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/config/import", bytes.NewReader(body))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	hc := &http.Client{Timeout: importTimeout}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = json.Unmarshal(raw, &out)
+
+	if resp.StatusCode != http.StatusOK || !out.OK {
+		if out.Error != "" {
+			return out, fmt.Errorf("control POST /config/import: %s", out.Error)
+		}
+		return out, fmt.Errorf("control POST /config/import: status %d", resp.StatusCode)
+	}
+	return out, nil
+}
+
+// CallSite mirrors GET /activity/call-site: the P25 RFSS/site (and NAC) the
+// control server observed for a talkgroup/source around a timestamp. Numeric
+// fields are pointers because the server may return null for any of them.
+type CallSite struct {
+	Found  bool   `json:"found"`
+	Rfss   *int   `json:"rfss"`
+	Site   *int   `json:"site"`
+	Nac    *int   `json:"nac"`
+	Source string `json:"source"` // "event" | "channel" | "context"
+}
+
+// CallSite GETs /activity/call-site for the given call parameters. tsMs is the
+// call start in epoch millis; windowMs is the match window around it.
+func (c *Client) CallSite(tgid, src int, freqHz, tsMs int64, windowMs int) (CallSite, error) {
+	var out CallSite
+	path := fmt.Sprintf("/activity/call-site?tgid=%d&src=%d&freqHz=%d&tsMs=%d&windowMs=%d",
+		tgid, src, freqHz, tsMs, windowMs)
+	if err := c.get(path, &out); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
 // SpectrumConn is a single shared WebSocket to the control server's spectrum

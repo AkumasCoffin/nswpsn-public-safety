@@ -1,24 +1,14 @@
 // Package configapply turns a backend configPush payload into concrete local
 // state on the node: stable per-agency API keys, a full rdio-scanner config PUT
-// (apiKeys + a single downstream pointing at the agent's relay), and a rendered
-// SDR-Trunk playlist, followed by a playlist reload.
+// (apiKeys + a single downstream pointing at the agent's relay), and a full
+// sdrtrunk-vce configuration import.
 //
-// PLAYLIST FIDELITY WARNING
-// -------------------------
-// SDR-Trunk loads its playlist with Jackson's XmlMapper (PlaylistV2), which is
-// intolerant of structural drift: attribute-order changes, dropped/renamed
-// xmlns:wstxnsN prefixes on <stream>, collapsed self-closing tags, or altered
-// entity encoding can make it silently reject channels/streams. For that reason
-// this package NEVER regenerates the playlist from a Go struct. It performs
-// narrow, attribute-level string edits against the known preset structure
-// (default.xml), touching ONLY: the channel enabled flag + system/site labels,
-// the channel source frequency(ies), and each stream's api_key + host. Every
-// byte outside those edits is preserved verbatim from the preset.
-//
-// This still MUST be load-tested in real SDR-Trunk on an operator machine —
-// especially the multi-control-frequency path (sourceConfigTunerMultiple), whose
-// exact element shape is a best-effort match to SDR-Trunk's schema and has NOT
-// been round-tripped through the real decoder here.
+// The supervised SDR-Trunk build is the sdrtrunk-vce fork, whose configuration
+// lives in a SQLite database rather than a playlist XML file. The agent
+// therefore never writes a playlist: it builds the vce ConfigurationState JSON
+// document (see vceconfig.go for the ground-truthed shapes) and POSTs it to the
+// control server's /config/import — a full-overwrite, idempotent operation that
+// also (re)starts auto-start channels itself.
 package configapply
 
 import (
@@ -28,7 +18,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,8 +49,8 @@ type ChannelPlan struct {
 	Order     int    `json:"order"`
 	SDR       string `json:"sdr"` // device serial to pin to; "" = any tuner
 	// DecoderConfig carries decoder-specific settings; nil = all defaults. The
-	// renderer emits the matching <decode_configuration> and fills SDR-Trunk
-	// defaults for any unset field.
+	// vce config builder emits the matching decodeConfiguration and fills
+	// SDR-Trunk defaults for any unset field.
 	DecoderConfig *DecoderConfig `json:"decoderConfig"`
 }
 
@@ -210,7 +199,8 @@ func (p ConfigPayload) effectiveChannels() []ChannelPlan {
 }
 
 // Restarter is the slice of the supervisor configapply needs (best-effort
-// sdrtrunk restart when a live playlist reload fails).
+// sdrtrunk restart; retained for the WS-client wiring even though the vce
+// import path no longer restarts sdrtrunk itself).
 type Restarter interface {
 	Restart(name string) error
 }
@@ -219,7 +209,7 @@ type Restarter interface {
 type Deps struct {
 	DataDir         string          // agent data dir (holds keys.json, rdio-admin.secret)
 	PresetsDir      string          // on-disk preset dir; falls back to embedded presets
-	SDRTrunkAppRoot string          // playlist written to <root>/playlist/default.xml
+	SDRTrunkAppRoot string          // sdrtrunk-vce app root (--app-root; DB at <root>/database/sdrtrunk.sqlite)
 	Rdio            *rdioctl.Client // local rdio admin client (127.0.0.1:17391)
 	SDR             *sdrctl.Client  // SDR-Trunk control server client
 	Supervisor      Restarter       // for best-effort sdrtrunk restart
@@ -267,19 +257,16 @@ func rdioLoginReady(c *rdioctl.Client, password string) error {
 	return err
 }
 
-// Apply runs the config-apply pipeline for one payload. The SDR-Trunk playlist and
-// the rdio-scanner config are applied INDEPENDENTLY, and the playlist is applied
-// FIRST: the playlist governs channel auto-start, so it MUST be written to disk
-// even if the rdio config PUT fails (e.g. the local rdio admin API times out on a
-// large config). Otherwise a flaky rdio would abort the whole apply before the
-// playlist is written, leaving a stale playlist on disk that re-auto-starts a
-// disabled channel on every SDR-Trunk boot (the confirmed root cause of that bug).
-// Returns a combined error carrying each failed stage's *StageError, but only after
-// BOTH stages were attempted.
+// Apply runs the config-apply pipeline for one payload. The sdrtrunk-vce config
+// import and the rdio-scanner config are applied INDEPENDENTLY, and sdrtrunk is
+// applied FIRST: the imported config governs channel auto-start, so it must be
+// attempted even if the rdio config PUT fails (e.g. the local rdio admin API
+// times out on a large config). Returns a combined error carrying each failed
+// stage's *StageError, but only after BOTH stages were attempted.
 func Apply(payload ConfigPayload, d Deps) error {
-	// ---- stage: keys (hard requirement — both playlist streams and rdio need them)
+	// ---- stage: keys (hard requirement — both the vce streams and rdio need them)
 	// Seed from the stream targets, then widen to every system id referenced by
-	// the rdio apiKeys and the playlist streams so nothing ends up keyless.
+	// the rdio apiKeys so nothing ends up keyless.
 	sysIDs := systemIDsFrom(payload)
 	localKeys, err := keys.EnsureKeys(d.DataDir, sysIDs)
 	if err != nil {
@@ -288,14 +275,14 @@ func Apply(payload ConfigPayload, d Deps) error {
 
 	var errs []error
 
-	// SDR-Trunk playlist FIRST — this must land on disk regardless of the rdio
-	// outcome below so a disabled channel never re-auto-starts from a stale file.
-	if perr := d.applyPlaylist(payload, localKeys); perr != nil {
+	// sdrtrunk-vce config FIRST — a flaky rdio must not prevent the channel/
+	// alias/stream import (which governs what actually decodes).
+	if perr := d.applySdrtrunkConfig(payload, localKeys); perr != nil {
 		errs = append(errs, perr)
 	}
 
 	// rdio config is independent: a PutConfig timeout here must NOT prevent the
-	// playlist write above.
+	// sdrtrunk import above.
 	if rerr := d.applyRdio(payload, localKeys); rerr != nil {
 		errs = append(errs, rerr)
 	}
@@ -303,25 +290,24 @@ func Apply(payload ConfigPayload, d Deps) error {
 	return errors.Join(errs...)
 }
 
-// WritePlaylistOnly renders the playlist from a payload and writes it to disk
-// WITHOUT touching a running SDR-Trunk or rdio. Called at agent startup to write an
-// authoritative playlist BEFORE SDR-Trunk is launched, so SDR-Trunk always boots
-// from the agent's current config (never a stale last-session file) and can't
-// auto-start a channel the operator disabled. Needs only DataDir/PresetsDir/
-// SDRTrunkAppRoot on Deps.
-func WritePlaylistOnly(payload ConfigPayload, d Deps) error {
+// ImportOnBoot re-imports the last-applied payload into a freshly-launched
+// sdrtrunk-vce. Called at agent startup AFTER the control server answers
+// /status, so sdrtrunk always runs the agent's current config regardless of
+// what its SQLite database held from the last session. Idempotent (the import
+// is a full overwrite). Needs only DataDir/PresetsDir/SDR on Deps.
+func ImportOnBoot(payload ConfigPayload, d Deps) error {
 	sysIDs := systemIDsFrom(payload)
 	localKeys, err := keys.EnsureKeys(d.DataDir, sysIDs)
 	if err != nil {
 		return stageErr("keys", "ensure local api keys", err)
 	}
-	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, payload.effectiveChannels(), payload.Aliases, payload.StreamTargets, localKeys)
+	state := buildVceConfig(payload, localKeys, d.presetAliasListName())
+	body, err := json.Marshal(state)
 	if err != nil {
-		return stageErr("playlist", "render", err)
+		return stageErr("playlist", "encode vce config", err)
 	}
-	if err := d.writePlaylist(rendered); err != nil {
-		return stageErr("playlist", "write", err)
+	if err := d.importWithRetry(body); err != nil {
+		return stageErr("playlist", "import config", err)
 	}
 	return nil
 }
@@ -353,62 +339,63 @@ func flatten(err error) []error {
 	return []error{err}
 }
 
-// applyPlaylist renders + writes the SDR-Trunk playlist, then reloads/reconciles a
-// running SDR-Trunk and applies tuner settings. Independent of the rdio stage.
-func (d Deps) applyPlaylist(payload ConfigPayload, localKeys map[int]string) error {
+// applySdrtrunkConfig builds the vce ConfigurationState from the payload and
+// POSTs it to the control server's /config/import (full overwrite). The import
+// itself (re)starts auto-start channels and stops removed ones, so no explicit
+// reload/bounce pass is needed. Independent of the rdio stage.
+//
+// The stage name stays "playlist" so the backend's configError acks and the
+// WS client's persist-on-partial-failure logic keep working unchanged.
+func (d Deps) applySdrtrunkConfig(payload ConfigPayload, localKeys map[int]string) error {
 	// Effective channels honour Node on/off: capture-off forces every channel
-	// auto-start=false so it renders disabled AND the reconcile stops them all.
+	// auto-start=false so the import brings nothing up AND the backstop below
+	// stops anything still running.
 	chans := payload.effectiveChannels()
-	tmpl := d.loadPlaylistTemplate()
-	rendered, err := renderPlaylist(tmpl, chans, payload.Aliases, payload.StreamTargets, localKeys)
+	state := buildVceConfig(payload, localKeys, d.presetAliasListName())
+	body, err := json.Marshal(state)
 	if err != nil {
-		return stageErr("playlist", "render", err)
+		return stageErr("playlist", "encode vce config", err)
 	}
-	if err := d.writePlaylist(rendered); err != nil {
-		return stageErr("playlist", "write", err)
-	}
-
-	// ---- reload ----
-	liveReloaded := false
-	if err := d.SDR.ReloadPlaylist(); err != nil {
-		// Live reload failed. The new playlist file is already on disk, so a
-		// process restart will pick it up on boot — request one best-effort.
-		if d.Supervisor != nil {
-			if rerr := d.Supervisor.Restart("sdrtrunk"); rerr != nil {
-				return stageErr("reload", "playlist reload failed and sdrtrunk restart request failed", rerr)
-			}
-			// Restart requested; sdrtrunk will load the new playlist on startup.
-		} else {
-			return stageErr("reload", "playlist reload failed and no supervisor to restart sdrtrunk", err)
-		}
-	} else {
-		liveReloaded = true
+	if err := d.importWithRetry(body); err != nil {
+		return stageErr("playlist", "import config", err)
 	}
 
-	// A live playlist reload swaps the playlist model but does NOT re-apply the
-	// new config to channels that were already running — they keep decoding with
-	// their previous settings until bounced. So restart every started channel so
-	// the edit actually takes effect. Skipped when we fell back to a process
-	// restart above (that already loads everything fresh from the new playlist).
-	if liveReloaded {
-		log.Printf("configapply: live playlist reload OK (capture=%v); reconciling running channels", payload.captureOn())
-		d.restartRunningChannels(chans)
-	} else {
-		log.Printf("configapply: live reload unavailable; requested sdrtrunk restart")
-	}
-
-	// AUTHORITATIVE BACKSTOP: no matter what the running SDR-Trunk build's reload
-	// does (or whether a fallback restart fully took effect), guarantee that a
-	// channel the config marks auto-start=off (incl. ALL channels when capture is
-	// off) is not left decoding. Runs on BOTH paths.
+	// AUTHORITATIVE BACKSTOP: regardless of what the import's own channel
+	// reconciliation does, guarantee that a channel the config marks
+	// auto-start=off (incl. ALL channels when capture is off) is not left
+	// decoding.
 	d.enforceDisabledChannels(chans)
 
-	// Tuner gain/ppm live in SDR-Trunk's tuner config, not the playlist, so they
-	// are applied via the control API against the live tuners. Best-effort only:
-	// failures here never fail the apply (the tuner may still be spinning up).
+	// Tuner gain/ppm live in the tuner config, not the imported channel config,
+	// so they are applied via the control API against the live tuners.
+	// Best-effort only: failures here never fail the apply.
 	d.applyTuners(payload.Tuners)
 
 	return nil
+}
+
+// importWithRetry POSTs the ConfigurationState body to /config/import, retrying
+// a couple of times with backoff: right after a (re)launch the control server
+// may not be listening yet, and the import is idempotent so re-sending is safe.
+func (d Deps) importWithRetry(body []byte) error {
+	if d.SDR == nil {
+		return fmt.Errorf("no sdrtrunk control client")
+	}
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
+		var res sdrctl.ImportResult
+		res, err = d.SDR.ImportConfig(body)
+		if err == nil {
+			log.Printf("configapply: vce config imported (channels=%d aliases=%d streams=%d)",
+				res.Channels, res.Aliases, res.Streams)
+			return nil
+		}
+		log.Printf("configapply: config import attempt %d failed: %v", attempt+1, err)
+	}
+	return err
 }
 
 // applyRdio pushes the rdio-scanner config (systems/talkgroups + injected local api
@@ -549,24 +536,6 @@ func (d Deps) loadPlaylistTemplate() []byte {
 	return presets.DefaultPlaylistXML
 }
 
-// writePlaylist writes the rendered playlist to <appRoot>/playlist/default.xml
-// atomically (temp + rename), creating the playlist dir if needed.
-func (d Deps) writePlaylist(data []byte) error {
-	dir := filepath.Join(d.SDRTrunkAppRoot, "playlist")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create playlist dir: %w", err)
-	}
-	path := filepath.Join(dir, "default.xml")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write temp playlist: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace playlist: %w", err)
-	}
-	return nil
-}
-
 // applyTuners pushes per-SDR gain/ppm to the live tuners via the control API.
 // Settings are keyed by device serial; a "*" entry applies to every SDR. Live
 // tuners are matched by serial when the control server reports one, else by the
@@ -622,84 +591,6 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 	}
 }
 
-// restartRunningChannels bounces (stop → start) every channel SDR-Trunk currently
-// reports as processing, so a freshly-reloaded playlist's config takes effect on
-// channels that were already running (a live reload leaves running channels on
-// their old settings). Best-effort: failures are logged but never fail the apply.
-// A short settle between stop and start lets the decode chain tear down before it
-// is rebuilt, avoiding an "already processing" bounce.
-func (d Deps) restartRunningChannels(want []ChannelPlan) {
-	if d.SDR == nil {
-		return
-	}
-	// Config auto-start flag by channel name (stable across reloads). A running
-	// channel the operator just DISABLED must be stopped, not bounced.
-	// Key by TRIMMED name: the operator-typed name is stored untrimmed while
-	// SDR-Trunk's getName() may differ by surrounding whitespace, and a mismatch
-	// here would send a disabled channel down the restart (start) path below.
-	autoByName := make(map[string]bool, len(want))
-	for _, ch := range want {
-		if n := strings.TrimSpace(ch.Name); n != "" {
-			autoByName[n] = ch.AutoStart
-		}
-	}
-	// A live playlist reload rebuilds the channel model asynchronously, so an
-	// immediate Channels() can catch a transient moment where the list is empty or
-	// channels momentarily report Processing=false — which would make us bounce
-	// nothing and leave them on the old config. Retry briefly until we see at least
-	// one processing channel (or give up after a short window).
-	var channels []sdrctl.Channel
-	for attempt := 0; attempt < 6; attempt++ {
-		var err error
-		channels, _, err = d.SDR.Channels()
-		if err != nil {
-			log.Printf("configapply: list channels for restart failed: %v", err)
-			return
-		}
-		anyProcessing := false
-		for _, ch := range channels {
-			if ch.Processing {
-				anyProcessing = true
-				break
-			}
-		}
-		if anyProcessing {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	for _, ch := range channels {
-		if !ch.Processing {
-			continue
-		}
-		auto, known := autoByName[strings.TrimSpace(ch.Name)]
-		// A running channel whose config now disables auto-start is STOPPED, not
-		// bounced — otherwise disabling a channel leaves it decoding.
-		if known && !auto {
-			if err := d.SDR.StopChannel(ch.ID); err != nil {
-				log.Printf("configapply: stop disabled channel %d (%s) failed: %v", ch.ID, ch.Name, err)
-			}
-			continue
-		}
-		// Not a configured channel we can match (unknown/whitespace-mismatch, or a
-		// transient traffic channel): do NOT start it — starting an unmatched
-		// channel is exactly how a disabled channel used to get (re)started here.
-		// Only channels the config marks auto-start=on are bounced to apply config.
-		if !known {
-			continue
-		}
-		// known && auto → restart to apply the new config.
-		if err := d.SDR.StopChannel(ch.ID); err != nil {
-			log.Printf("configapply: stop channel %d (%s) for restart failed: %v", ch.ID, ch.Name, err)
-			continue
-		}
-		time.Sleep(250 * time.Millisecond)
-		if err := d.SDR.StartChannel(ch.ID); err != nil {
-			log.Printf("configapply: restart channel %d (%s) failed: %v", ch.ID, ch.Name, err)
-		}
-	}
-}
-
 // enforceDisabledChannels guarantees no channel whose config sets AutoStart=false
 // is left processing after an apply. It is the authoritative backstop that makes
 // "disable" independent of the running SDR-Trunk build: regardless of what that
@@ -717,7 +608,7 @@ func (d Deps) enforceDisabledChannels(want []ChannelPlan) {
 	}
 	disabled := make(map[string]bool, len(want))
 	for _, ch := range want {
-		// TRIMMED name (see restartRunningChannels) so a whitespace mismatch with
+		// TRIMMED name so a whitespace mismatch with
 		// SDR-Trunk's getName() can't blind this backstop.
 		if n := strings.TrimSpace(ch.Name); n != "" && !ch.AutoStart {
 			disabled[n] = true
@@ -754,370 +645,6 @@ func (d Deps) enforceDisabledChannels(want []ChannelPlan) {
 	}
 }
 
-// --- playlist rendering (targeted string edits; see package doc) -------------
-
-var (
-	reAliasRegion  = regexp.MustCompile(`(?s)<alias\b.*</alias>`)
-	reChannelBlock = regexp.MustCompile(`(?s)<channel\b.*?</channel>`)
-	reChannelTag   = regexp.MustCompile(`(?s)<channel\b[^>]*>`)
-	reSourceCfg    = regexp.MustCompile(`(?s)<source_configuration\b[^>]*?/>`)
-	reStreamTag    = regexp.MustCompile(`(?s)<stream\b[^>]*>`)
-	reStreamBlock  = regexp.MustCompile(`(?s)<stream\b.*</stream>`)  // whole contiguous run of <stream> elements
-	reStreamFirst  = regexp.MustCompile(`(?s)<stream\b.*?</stream>`) // first <stream> element (generation template)
-	reEnabled      = regexp.MustCompile(`enabled="[^"]*"`)
-	reSystemAttr   = regexp.MustCompile(`system="[^"]*"`)
-	reSiteAttr     = regexp.MustCompile(`site="[^"]*"`)
-	reNameAttr     = regexp.MustCompile(`name="[^"]*"`)
-	reOrderAttr    = regexp.MustCompile(`order="[^"]*"`)
-	// Matches the whole <decode_configuration> element — self-closing (`.../>`)
-	// OR with children (`...>…</decode_configuration>`) — so it can be swapped
-	// wholesale for the per-decoder rendering.
-	reDecodeConfig = regexp.MustCompile(`(?s)<decode_configuration\b[^>]*?(?:/>|>.*?</decode_configuration>)`)
-	reSystemID     = regexp.MustCompile(`system_id="([^"]*)"`)
-	reApiKey       = regexp.MustCompile(`api_key="[^"]*"`)
-	reHost         = regexp.MustCompile(`host="[^"]*"`)
-)
-
-// renderPlaylist clones the preset's single <channel> block once per configured
-// channel (each with its own frequency / decoder / labels / order), then points
-// every <stream>'s api_key + host at the local rdio. With no channels it keeps
-// the template channel but disabled, so SDR-Trunk still loads a valid playlist.
-// It never regenerates XML from scratch — see the package fidelity warning.
-func renderPlaylist(template []byte, channels []ChannelPlan, aliases []Alias, targets []StreamTarget, localKeys map[int]string) ([]byte, error) {
-	out := string(template)
-
-	tmplBlock := reChannelBlock.FindString(out)
-	if tmplBlock == "" {
-		return nil, fmt.Errorf("preset has no <channel> element")
-	}
-
-	// Global aliases: replace the preset's contiguous <alias>…</alias> region
-	// with the fleet-wide aliases. Only when some are provided — an empty global
-	// alias set leaves the preset's aliases untouched. NOTE: aliases are
-	// regenerated from structured data (not edited in place); attribute order/
-	// whitespace may differ from the preset. SDR-Trunk (Jackson) reads attributes
-	// by name so this is safe, but per the fidelity warning it should be spot-
-	// checked on real SDR-Trunk.
-	if len(aliases) > 0 && reAliasRegion.MatchString(out) {
-		rendered := renderAliases(aliases)
-		out = reAliasRegion.ReplaceAllStringFunc(out, func(string) string { return rendered })
-	}
-
-	// With no configured channels, emit NO <channel> element at all — an empty
-	// channel set is a valid SDR-Trunk playlist, and this avoids surfacing a
-	// non-removable "preset" channel in the UI. The template block is still the
-	// clone source when channels ARE present.
-	var rendered string
-	if len(channels) > 0 {
-		var b strings.Builder
-		for i, ch := range channels {
-			if i > 0 {
-				b.WriteString("\n  ")
-			}
-			// enabled == the channel's auto-start flag: a channel with autoStart
-			// off is written disabled so it doesn't come up on load.
-			b.WriteString(renderChannelBlock(tmplBlock, ch, ch.AutoStart))
-		}
-		rendered = b.String()
-	}
-	// Replace the single template block with the rendered block(s) (or "" to drop
-	// it). Use a literal replacement (not ReplaceAllString) so `$` in the rendered
-	// XML isn't treated as a capture reference.
-	out = reChannelBlock.ReplaceAllStringFunc(out, func(string) string { return rendered })
-
-	// Streams: GENERATE one <stream> per stream target (system), cloning the
-	// preset's first <stream> as the template and replacing the entire preset
-	// stream block. Each stream gets its system_id, name, the local key for that
-	// system (so it matches the rdio apiKey the backend generated for the same
-	// system), and the local rdio host. This is what makes an operator-created
-	// system automatically get its own stream. With no targets, fall back to the
-	// old in-place edit so a degenerate 0-system config still loads.
-	if len(targets) > 0 {
-		if streamTmpl := reStreamFirst.FindString(out); streamTmpl != "" {
-			generated := renderStreams(streamTmpl, targets, localKeys)
-			out = reStreamBlock.ReplaceAllStringFunc(out, func(string) string { return generated })
-		}
-	} else {
-		out = reStreamTag.ReplaceAllStringFunc(out, func(tag string) string {
-			m := reSystemID.FindStringSubmatch(tag)
-			key := ""
-			if len(m) == 2 {
-				if id, err := strconv.Atoi(strings.TrimSpace(m[1])); err == nil {
-					key = localKeys[id]
-				}
-			}
-			tag = reApiKey.ReplaceAllString(tag, `api_key="`+xmlAttr(key)+`"`)
-			tag = reHost.ReplaceAllString(tag, `host="`+localRdioUploadURL+`"`)
-			return tag
-		})
-	}
-
-	return []byte(out), nil
-}
-
-// renderStreams builds one <stream> element per target by cloning tmpl (the
-// preset's first stream) and stamping the per-system fields: system_id, name,
-// the local key for that system (which matches the rdio apiKey the backend
-// generated for the same system), and the local rdio host. Literal replacements
-// so a `$` in a name/key can't be treated as a capture reference.
-func renderStreams(tmpl string, targets []StreamTarget, localKeys map[int]string) string {
-	var b strings.Builder
-	for i, t := range targets {
-		if i > 0 {
-			b.WriteString("\n  ")
-		}
-		s := tmpl
-		s = reSystemID.ReplaceAllLiteralString(s, `system_id="`+strconv.Itoa(t.SystemId)+`"`)
-		s = reApiKey.ReplaceAllLiteralString(s, `api_key="`+xmlAttr(localKeys[t.SystemId])+`"`)
-		s = reHost.ReplaceAllLiteralString(s, `host="`+xmlAttr(localRdioUploadURL)+`"`)
-		s = reNameAttr.ReplaceAllLiteralString(s, `name="`+xmlAttr(t.Name)+`"`)
-		b.WriteString(s)
-	}
-	return b.String()
-}
-
-// renderChannelBlock stamps one channel's fields onto a clone of the preset's
-// <channel> block: enabled flag, name/system/site/order attributes, decoder
-// type, and the source frequency. `enabled` is the auto-start flag ONLY — every
-// other field is rendered regardless, so a disabled channel keeps its full,
-// correct config (and decodes correctly the moment it's (re)started).
-func renderChannelBlock(tmpl string, ch ChannelPlan, enabled bool) string {
-	blk := reChannelTag.ReplaceAllStringFunc(tmpl, func(tag string) string {
-		if enabled {
-			tag = reEnabled.ReplaceAllString(tag, `enabled="true"`)
-		} else {
-			tag = reEnabled.ReplaceAllString(tag, `enabled="false"`)
-		}
-		if ch.Name != "" {
-			tag = setOrAddChannelAttr(tag, reNameAttr, "name", ch.Name)
-		}
-		if ch.System != "" {
-			tag = setOrAddChannelAttr(tag, reSystemAttr, "system", ch.System)
-		}
-		if ch.Site != "" {
-			tag = setOrAddChannelAttr(tag, reSiteAttr, "site", ch.Site)
-		}
-		if ch.Order > 0 {
-			tag = setOrAddChannelAttr(tag, reOrderAttr, "order", strconv.Itoa(ch.Order))
-		}
-		return tag
-	})
-
-	// Decoder config. Render the FULL <decode_configuration> element for this
-	// decoder (correct @type + attributes + child elements), filling SDR-Trunk
-	// defaults for any unset field, and swap the preset's element wholesale.
-	if dc := renderDecodeConfig(ch.Decoder, ch.DecoderConfig); dc != "" {
-		blk = reDecodeConfig.ReplaceAllStringFunc(blk, func(string) string { return dc })
-	}
-
-	if ch.Frequency > 0 {
-		blk = reSourceCfg.ReplaceAllStringFunc(blk, func(string) string {
-			return renderSource(ch.Frequency)
-		})
-	}
-	return blk
-}
-
-// setOrAddChannelAttr replaces an attribute on the <channel> opening tag, or
-// inserts it right after the element name when the preset omits it.
-func setOrAddChannelAttr(tag string, re *regexp.Regexp, name, val string) string {
-	attr := name + `="` + xmlAttr(val) + `"`
-	if re.MatchString(tag) {
-		// Literal: a `$` in a channel name/system/site label must not be treated
-		// as a capture reference (matches the stream/decoder render paths).
-		return re.ReplaceAllLiteralString(tag, attr)
-	}
-	return strings.Replace(tag, "<channel", "<channel "+attr, 1)
-}
-
-// renderDecodeConfig builds the full <decode_configuration> element for a
-// decoder from its (optional) DecoderConfig, filling SDR-Trunk defaults (per the
-// config reference) for any unset field. Returns "" for an unknown decoder so
-// the preset's element is left untouched.
-func renderDecodeConfig(decoder string, cfg *DecoderConfig) string {
-	if cfg == nil {
-		cfg = &DecoderConfig{}
-	}
-	switch decoder {
-	case "p25p1":
-		mod := cfg.Modulation
-		if mod == "" {
-			mod = "C4FM"
-		}
-		return fmt.Sprintf(
-			`<decode_configuration type="decodeConfigP25Phase1" modulation="%s" ignore_data_calls="%s" traffic_channel_pool_size="%d"/>`,
-			xmlAttr(mod), boolOr(cfg.IgnoreDataCalls, false), intOr(cfg.TrafficPoolSize, 20))
-
-	case "p25p2":
-		// auto-detect defaults to true when no manual scramble is supplied.
-		auto := cfg.Scramble == nil
-		if cfg.AutoDetectScramble != nil {
-			auto = *cfg.AutoDetectScramble
-		}
-		head := fmt.Sprintf(
-			`<decode_configuration type="decodeConfigP25Phase2" auto_detect_scramble_parameters="%s" ignore_data_calls="%s" traffic_channel_pool_size="%d"`,
-			strconv.FormatBool(auto), boolOr(cfg.IgnoreDataCalls, false), intOr(cfg.TrafficPoolSize, 20))
-		if cfg.Scramble != nil {
-			return head + ">" +
-				fmt.Sprintf("\n    <scramble_parameters wacn=\"%d\" system=\"%d\" nac=\"%d\"/>",
-					cfg.Scramble.Wacn, cfg.Scramble.System, cfg.Scramble.Nac) +
-				"\n  </decode_configuration>"
-		}
-		return head + "/>"
-
-	case "dmr":
-		head := fmt.Sprintf(
-			`<decode_configuration type="decodeConfigDMR" ignore_crc="%s" use_compressed_talkgroups="%s" ignore_data_calls="%s" traffic_channel_pool_size="%d"`,
-			boolOr(cfg.IgnoreCrc, false), boolOr(cfg.UseCompressedTalkgroups, false),
-			boolOr(cfg.IgnoreDataCalls, true), intOr(cfg.TrafficPoolSize, 20))
-		if len(cfg.Timeslots) == 0 {
-			return head + "/>"
-		}
-		var b strings.Builder
-		b.WriteString(head)
-		b.WriteString(">")
-		for _, ts := range cfg.Timeslots {
-			b.WriteString(fmt.Sprintf("\n    <timeslot lsn=\"%d\" downlink=\"%d\" uplink=\"%d\"/>",
-				ts.Lcn, ts.Downlink, ts.Uplink))
-		}
-		b.WriteString("\n  </decode_configuration>")
-		return b.String()
-
-	case "nbfm":
-		bw := cfg.Bandwidth
-		if bw == "" {
-			bw = "BW_12_5"
-		}
-		// The 4 squelch* fields are not user-facing; emit the doc defaults.
-		return fmt.Sprintf(
-			`<decode_configuration type="decodeConfigNBFM" bandwidth="%s" talkgroup="%d" audioFilter="%s" squelchNoiseOpenThreshold="0.1" squelchNoiseCloseThreshold="0.19" squelchHysteresisOpenThreshold="4" squelchHysteresisCloseThreshold="6"/>`,
-			xmlAttr(bw), intOr(cfg.Talkgroup, 1), boolOr(cfg.AudioFilter, true))
-
-	case "am":
-		bw := cfg.Bandwidth
-		if bw == "" {
-			bw = "BW_15_0"
-		}
-		return fmt.Sprintf(
-			`<decode_configuration type="decodeConfigAM" bandwidth="%s" talkgroup="%d" autoTrack="%s" squelch="%d"/>`,
-			xmlAttr(bw), intOr(cfg.Talkgroup, 1), boolOr(cfg.AutoTrack, true), intOr(cfg.Squelch, -78))
-
-	default:
-		return ""
-	}
-}
-
-// boolOr formats *p as an XML bool, using def when p is nil (unset).
-func boolOr(p *bool, def bool) string {
-	v := def
-	if p != nil {
-		v = *p
-	}
-	return strconv.FormatBool(v)
-}
-
-// intOr returns *p, or def when p is nil (unset).
-func intOr(p *int, def int) int {
-	if p != nil {
-		return *p
-	}
-	return def
-}
-
-// renderSource builds the channel's <source_configuration> for a single tuner
-// frequency, preserving the preset's sourceConfigTuner shape.
-func renderSource(freq int64) string {
-	return fmt.Sprintf(`<source_configuration type="sourceConfigTuner" source_type="TUNER" frequency="%d"/>`, freq)
-}
-
-// renderAliases renders the global aliases into the playlist's <alias> region.
-// Attributes are emitted in SDR-Trunk's conventional order; extra <id>
-// attributes are sorted for deterministic output (Jackson reads by name).
-func renderAliases(aliases []Alias) string {
-	var b strings.Builder
-	for i, a := range aliases {
-		if i > 0 {
-			b.WriteString("\n  ")
-		}
-		b.WriteString(renderAlias(a))
-	}
-	return b.String()
-}
-
-func renderAlias(a Alias) string {
-	var b strings.Builder
-	b.WriteString("<alias")
-	writeXMLAttr(&b, "color", a.Color)
-	writeXMLAttr(&b, "list", a.List)
-	writeXMLAttr(&b, "group", a.Group)
-	writeXMLAttr(&b, "name", a.Name)
-	writeXMLAttr(&b, "iconName", a.IconName)
-	// "Stream As Talkgroup" OVERRIDES the decoded talkgroup in SDR-Trunk's
-	// RdioScanner uploader (getTo() returns this value verbatim). A 0/blank here
-	// would force every matching call to upload as talkgroup 0, which rdio drops
-	// as "Incomplete call data: no talkgroup". Only emit a real, positive value.
-	if sta := strings.TrimSpace(string(a.StreamTalkgroupAlias)); sta != "" && sta != "0" {
-		writeXMLAttr(&b, "stream_talkgroup_alias", sta)
-	}
-	if len(a.IDs) == 0 {
-		b.WriteString("/>")
-		return b.String()
-	}
-	b.WriteString(">")
-	for _, id := range a.IDs {
-		b.WriteString("\n    <id")
-		writeXMLAttr(&b, "type", id.Type)
-		keys := make([]string, 0, len(id.Attrs))
-		for k := range id.Attrs {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			writeXMLAttr(&b, k, id.Attrs[k])
-		}
-		b.WriteString("/>")
-	}
-	b.WriteString("\n  </alias>")
-	return b.String()
-}
-
-// safeXMLName matches a conservative XML attribute name (NCName-ish). Anything
-// else is rejected rather than written — the attribute *value* is escaped, but
-// the *name* is emitted verbatim, so an unconstrained name (e.g. a config attr
-// key like `x"/><stream ...`) could otherwise break out of the element and
-// inject arbitrary playlist XML. The backend also constrains these keys; this is
-// the belt-and-suspenders check at the point of emission.
-var safeXMLName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.:-]*$`)
-
-// writeXMLAttr appends ` name="escaped-value"` when value is non-empty and the
-// attribute name is a safe XML token; an unsafe name is skipped (and logged).
-func writeXMLAttr(b *strings.Builder, name, val string) {
-	if val == "" {
-		return
-	}
-	if !safeXMLName.MatchString(name) {
-		log.Printf("configapply: dropping unsafe XML attribute name %q", name)
-		return
-	}
-	b.WriteString(" ")
-	b.WriteString(name)
-	b.WriteString(`="`)
-	b.WriteString(xmlAttr(val))
-	b.WriteString(`"`)
-}
-
-// xmlAttr escapes a string for use inside a double-quoted XML attribute,
-// matching the entity style SDR-Trunk's writer emits (e.g. & -> &amp;).
-func xmlAttr(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-	)
-	return r.Replace(s)
-}
-
 // toInt coerces a JSON-decoded numeric/string value to int.
 func toInt(v any) (int, bool) {
 	switch n := v.(type) {
@@ -1133,26 +660,6 @@ func toInt(v any) (int, bool) {
 	case string:
 		i, err := strconv.Atoi(strings.TrimSpace(n))
 		return i, err == nil
-	default:
-		return 0, false
-	}
-}
-
-// toFloat coerces a JSON-decoded numeric/string value to float64.
-func toFloat(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	case json.Number:
-		f, err := n.Float64()
-		return f, err == nil
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
-		return f, err == nil
 	default:
 		return 0, false
 	}
