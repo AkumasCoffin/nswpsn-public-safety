@@ -58,6 +58,7 @@ import { nodesRouter } from './api/nodes.js';
 import { nodeUpdatesRouter } from './api/node-updates.js';
 import { feederRouter } from './api/feeder.js';
 import { nodeIngestRouter } from './api/node-ingest.js';
+import { nodeDataRouter } from './api/node-data.js';
 import { requireApiKey } from './services/auth/apiKey.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
 import { log } from './lib/log.js';
@@ -343,6 +344,8 @@ export function createApp() {
   app.route('/', feederRouter);
   // Feeder node call relay
   app.route('/', nodeIngestRouter);
+  // Feeder node event analytics (staff Data tab, owner|dev only)
+  app.route('/', nodeDataRouter);
 
   // Root route — endpoint catalogue. Mirrors python's `/` response at
   // external_api_proxy.py:11431 so any monitoring / smoke-test relying

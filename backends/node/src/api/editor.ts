@@ -621,6 +621,7 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
         users: canViewUsers,
         dev: canViewDev,
         nodes: canViewDev,
+        data: canViewDev,
       },
       roles: userRoles,
     });
