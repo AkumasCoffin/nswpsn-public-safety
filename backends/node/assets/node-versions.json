@@ -1,7 +1,7 @@
 {
   "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry — the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
   "agent": {
-    "version": "0.1.23",
+    "version": "0.2.0",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
@@ -26,14 +26,15 @@
     }
   },
   "sdrtrunk": {
-    "version": "0.6.10",
+    "_comment": "0.7.x = the sdrtrunk-vce node-runtime line (feature/node-control branch of sdrtrunk-vce). The manifest version is deliberately independent of vce's own 0.6.2-alpha-N version string: the agent's 3-part numeric compare ignores pre-release suffixes, so 0.6.2-alpha-9 would LOSE to the old fork's 0.6.10 and never install. sha256 left empty (entry disabled) until the vce node-runtime release is published — run the build-node-runtime workflow in sdrtrunk-vce, then paste the .sha256 values here.",
+    "version": "0.7.0",
     "urls": {
-      "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
-      "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
+      "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
+      "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
     },
     "sha256": {
-      "windows-amd64": "66301a3425cf67441b32b58296fc085152cc3784aaeef3843c6bebe5c5f76816",
-      "linux-amd64": "85ac03b2e715c2a60862b3dc253b56b06d50157761cab4a14ecd65f5673b6224"
+      "windows-amd64": "",
+      "linux-amd64": ""
     }
   },
   "rdio": {

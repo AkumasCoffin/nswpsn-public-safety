@@ -26,6 +26,7 @@ import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { bumpNodeCallStat, getNode } from '../services/nodes/registry.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
+import { recordRadioEvent, recordPagerEvent, safeInt } from '../services/nodeEvents.js';
 
 export const nodeIngestRouter = new Hono();
 
@@ -34,6 +35,14 @@ export const nodeIngestRouter = new Hono();
 // We check Content-Length manually rather than using hono's bodyLimit
 // middleware, which fully buffers chunked (no Content-Length) bodies in RAM.
 const MAX_CALL_BYTES = 20 * 1024 * 1024;
+
+/** First STRING value of a multipart field parsed with { all: true }
+ *  (repeated keys arrive as arrays; files are skipped). */
+function formFirstString(form: BodyData<{ all: true }>, name: string): string | null {
+  const v = form[name];
+  const first = Array.isArray(v) ? v.find((x) => typeof x === 'string') : v;
+  return typeof first === 'string' ? first : null;
+}
 
 // ---------------------------------------------------------------------------
 // POST /api/node-ingest/call-upload
@@ -91,6 +100,42 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     form = await c.req.parseBody({ all: true });
   } catch {
     return c.json({ error: 'bad body' }, 400);
+  }
+
+  // 6a. Per-event capture (migration 043) — record the reception with node
+  //     attribution + optional P25 site headers BEFORE the feed gate, so
+  //     feed-off nodes still show what they hear. Fire-safe: recordRadioEvent
+  //     swallows its own errors and the outer try/catch is belt-and-braces —
+  //     capture must NEVER affect the relay. bumpNodeCallStat is untouched.
+  if (r.kind === 'radio') {
+    try {
+      const epoch = Number(formFirstString(form, 'dateTime') ?? '');
+      const receivedAt = Number.isFinite(epoch) ? new Date(epoch * 1000) : new Date();
+      const audioField = form['audio'];
+      const audioFile = Array.isArray(audioField)
+        ? audioField.find((x) => x instanceof File)
+        : audioField;
+      const siteSourceRaw = c.req.header('X-Call-Site-Source') ?? '';
+      await recordRadioEvent({
+        nodeId: node.id,
+        receivedAt,
+        system: safeInt(formFirstString(form, 'system')),
+        talkgroup: safeInt(formFirstString(form, 'talkgroup')),
+        sourceUnit: safeInt(formFirstString(form, 'source')),
+        frequency: safeInt(formFirstString(form, 'frequency')),
+        siteRfss: safeInt(c.req.header('X-Call-Site-Rfss')),
+        siteId: safeInt(c.req.header('X-Call-Site-Id')),
+        siteNac: safeInt(c.req.header('X-Call-Site-Nac')),
+        siteSource: ['event', 'channel', 'context'].includes(siteSourceRaw)
+          ? siteSourceRaw
+          : null,
+        talkgroupLabel: formFirstString(form, 'talkgroupLabel'),
+        systemLabel: formFirstString(form, 'systemLabel'),
+        audioBytes: audioFile instanceof File ? audioFile.size : 0,
+      });
+    } catch (err) {
+      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: event capture failed');
+    }
   }
 
   // 6b. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
@@ -304,6 +349,24 @@ nodeIngestRouter.post('/api/node-ingest/pager-upload', async (c) => {
   // missing page can be traced to where it dropped: reception (never logged),
   // blocklist, feed-off, or forwarded. Grep the backend log for "pager rx".
   log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
+
+  // 5·6. Per-event capture (migration 043) — record every reception (even
+  //      blocked capcodes / feed-off) BEFORE the gates below, so the Data
+  //      tab reflects what nodes actually hear. Fire-safe: recordPagerEvent
+  //      swallows its own errors; belt-and-braces catch here too.
+  try {
+    const tsMs = parsed.timestamp ? new Date(parsed.timestamp).getTime() : NaN;
+    await recordPagerEvent({
+      nodeId: node.id,
+      receivedAt: Number.isFinite(tsMs) ? new Date(tsMs) : new Date(),
+      capcode: parsed.address,
+      function: safeInt(parsed.function),
+      freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+      message: parsed.message,
+    });
+  } catch (err) {
+    log.warn({ err, node: node.id.slice(0, 8) }, 'pager relay: event capture failed');
+  }
 
   const view = {
     address: parsed.address,
