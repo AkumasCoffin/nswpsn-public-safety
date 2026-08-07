@@ -1,22 +1,32 @@
 /**
- * Per-event feeder-node capture + logical-call grouping (migration 043).
+ * Per-event feeder-node capture + logical-call grouping (migrations 043/044).
  *
- * Every call/page relayed through /api/node-ingest/* is recorded here as a
- * DETAIL row (node_radio_events / node_pager_events, 30-day retention — see
- * nodeEventsPruner.ts) and rolled into the hourly FOREVER buckets
- * (node_radio_hourly / node_radio_hourly_sys / node_pager_hourly) in the
- * same transaction.
+ * RADIO (migration 044): rows in node_radio_events come ONLY from vce
+ * ACTIVITY events posted by the Go agent (/api/node-ingest/activity →
+ * recordActivityEvents). Activity events carry the real P25 identity — the
+ * `system` column stores the P25 systemId — plus per-event action/site/
+ * encryption. The rdio call-upload relay no longer inserts rows; it calls
+ * markRecorded() to flag the closest matching event row recorded=true
+ * (audio exists in central rdio) with its audio size.
+ *
+ * PAGER (unchanged from 043): every relayed page is recorded via
+ * recordPagerEvent.
+ *
+ * Both paths write a DETAIL row (30-day retention — see nodeEventsPruner.ts)
+ * and roll into the hourly FOREVER buckets (node_radio_hourly /
+ * node_radio_hourly_sys / node_pager_hourly) in the same transaction.
  *
  * Logical grouping: the same over-the-air transmission heard by N nodes
- * arrives as N uploads. Rows within ±4s on the same (system, talkgroup)
- * [radio] or (capcode, sha256(message)) [pager] share one logical id — the
- * detail-row id of the FIRST member of the group. Group assignment is
- * serialised per key with pg_advisory_xact_lock(hashtext(key)) so two
- * concurrent uploads of the same call can't each start their own group.
+ * arrives as N events. Rows within ±4s on the same (system, talkgroup)
+ * [radio: (systemId, target)] or (capcode, sha256(message)) [pager] share
+ * one logical id — the detail-row id of the FIRST member of the group.
+ * Group assignment is serialised per key with
+ * pg_advisory_xact_lock(hashtext(key)) so two concurrent receptions of the
+ * same call can't each start their own group.
  *
- * CONTRACT: both record* functions are fire-safe — any failure is logged
- * and swallowed; they never throw to the caller. Capture must never affect
- * the relay path.
+ * CONTRACT: every exported record- and mark- function is fire-safe — any
+ * failure is logged and swallowed; they never throw to the caller. Capture
+ * must never affect the relay path.
  */
 import { createHash } from 'node:crypto';
 import { getWriterPool } from '../db/pool.js';
@@ -26,6 +36,12 @@ import { log } from '../lib/log.js';
  *  apart (queueing on the node, clock skew). ±4s matches the shortest
  *  realistic gap between two DISTINCT calls on one talkgroup. */
 const GROUP_WINDOW_SECONDS = 4;
+
+/** markRecorded's match window between an rdio call upload's dateTime and
+ *  the activity event's atMs. Wider than the grouping window: the rdio
+ *  call timestamp is stamped by a different pipeline (recorder finalise)
+ *  than the vce event stream. */
+const RECORDED_WINDOW_SECONDS = 6;
 
 /** A node with a wildly wrong clock must not scatter rows across the
  *  timeline (they'd never prune / group). Anything outside now±48h is
@@ -47,126 +63,263 @@ function clampReceivedAt(d: Date): Date {
   return d;
 }
 
-export interface RadioEventInput {
-  nodeId: string;
-  receivedAt: Date;
-  system: number | null;
-  talkgroup: number | null;
-  sourceUnit: number | null;
-  frequency: number | null;
-  siteRfss: number | null;
-  siteId: number | null;
-  siteNac: number | null;
-  siteSource: string | null; // 'event' | 'channel' | 'context'
-  talkgroupLabel: string | null;
-  systemLabel: string | null;
-  audioBytes: number;
+// ---------------------------------------------------------------------------
+// Radio: vce activity events
+// ---------------------------------------------------------------------------
+
+/** One decoded activity event as shipped by the agent (already zod-validated
+ *  by the /activity route). All shipped events are call-ish by contract, so
+ *  every inserted event participates in logical grouping. */
+export interface ActivityEventInput {
+  /** Agent-side monotonically increasing event id, unique per stream. */
+  id: number;
+  /** Event time, unix ms (clamped to now±48h like all capture times). */
+  atMs: number;
+  action: string;
+  eventType: string;
+  /** Source radio unit id. */
+  source: number | null;
+  /** Target talkgroup. */
+  target: number | null;
+  frequencyHz: number | null;
+  timeslot: number | null;
+  encrypted: boolean;
+  rfss: number | null;
+  site: number | null;
+  nac: number | null;
+  wacn: number | null;
+  /** P25 systemId — stored in the `system` column. */
+  systemId: number | null;
+  /** Decoder channel label. Validated but NOT stored: talkgroup labels are
+   *  planned to resolve from the global agencies config at read time. */
+  channelName: string | null;
 }
 
 /**
- * Record one radio call reception. One transaction: advisory-lock the
- * (system, talkgroup) grouping key, find an existing logical group within
- * ±4s, insert the detail row, stamp its logical_call_id (found group or
- * its own id = new group), and bump both hourly rollups.
+ * Record a batch of activity events for one node/stream. Returns how many
+ * were NEWLY inserted (deduped re-sends are skipped silently — the unique
+ * (node_id, stream_id, source_event_id) index + ON CONFLICT DO NOTHING
+ * makes re-posting a batch idempotent).
+ *
+ * Batching choice: ONE pooled connection for the whole batch, but a
+ * SEPARATE transaction per event. Rationale: the advisory xact lock that
+ * serialises logical grouping is per (systemId, target) key and releases
+ * at COMMIT — per-event transactions keep each lock held only for its own
+ * event's group-find + insert instead of pinning up to 500 keys for the
+ * whole batch (deadlock-prone across concurrent nodes), and one bad event
+ * can't roll back its siblings. Correctness over batch throughput.
+ *
+ * Fire-safe: never throws; on per-event failure that event is rolled back,
+ * logged once at the end, and the rest of the batch continues.
  */
-export async function recordRadioEvent(ev: RadioEventInput): Promise<void> {
+export async function recordActivityEvents(
+  nodeId: string,
+  streamId: string,
+  events: ActivityEventInput[],
+): Promise<number> {
+  let accepted = 0;
+  try {
+    const pool = await getWriterPool();
+    if (!pool || events.length === 0) return 0;
+
+    const client = await pool.connect();
+    let failures = 0;
+    let lastErr: unknown = null;
+    try {
+      for (const ev of events) {
+        const receivedAt = clampReceivedAt(new Date(ev.atMs));
+        const system = safeInt(ev.systemId);
+        const talkgroup = safeInt(ev.target);
+        const sourceUnit = safeInt(ev.source);
+        const lockKey = `nrc:${system ?? -1}:${talkgroup ?? -1}`;
+        try {
+          await client.query('BEGIN');
+          // Serialise grouping per (systemId, target) so two nodes shipping
+          // the same call concurrently can't both "find no group" and fork.
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+
+          // Existing logical group within the ±4s window (closest first).
+          // The unit check tolerates rows with unknown source_unit on either
+          // side; a DIFFERENT known unit means a different call.
+          const found = await client.query<{ logical_call_id: string }>(
+            `SELECT logical_call_id FROM node_radio_events
+              WHERE system IS NOT DISTINCT FROM $1
+                AND talkgroup IS NOT DISTINCT FROM $2
+                AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
+                                   AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
+                AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
+                AND logical_call_id IS NOT NULL
+              ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
+              LIMIT 1`,
+            [system, talkgroup, receivedAt.toISOString(), sourceUnit],
+          );
+          const existingGroup = found.rows[0]?.logical_call_id ?? null;
+
+          // Dedupe: a re-sent event hits the unique (node_id, stream_id,
+          // source_event_id) index → no row returned → skip stamps/buckets.
+          const ins = await client.query<{ id: string }>(
+            `INSERT INTO node_radio_events
+               (node_id, received_at, stream_id, source_event_id,
+                action, event_type, system, talkgroup, source_unit,
+                frequency, timeslot, encrypted,
+                site_rfss, site_id, site_nac, wacn)
+             VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9,
+                     $10, $11, $12, $13, $14, $15, $16)
+             ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
+             RETURNING id`,
+            [
+              nodeId,
+              receivedAt.toISOString(),
+              streamId,
+              safeInt(ev.id),
+              ev.action,
+              ev.eventType,
+              system,
+              talkgroup,
+              sourceUnit,
+              safeInt(ev.frequencyHz),
+              safeInt(ev.timeslot),
+              ev.encrypted === true,
+              safeInt(ev.rfss),
+              safeInt(ev.site),
+              safeInt(ev.nac),
+              safeInt(ev.wacn),
+            ],
+          );
+          const rowId = ins.rows[0]?.id;
+          if (rowId === undefined) {
+            // Duplicate re-send — nothing changed, but commit to release
+            // the advisory lock cleanly.
+            await client.query('COMMIT');
+            continue;
+          }
+          await client.query(
+            `UPDATE node_radio_events SET logical_call_id = $1 WHERE id = $2`,
+            [existingGroup ?? rowId, rowId],
+          );
+
+          const isNewGroup = existingGroup === null;
+          // Per-node forever bucket (raw receptions; bytes arrive later via
+          // markRecorded when/if the rdio call upload lands).
+          await client.query(
+            `INSERT INTO node_radio_hourly (hour, node_id, system, talkgroup, calls, audio_bytes)
+             VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, 1, 0)
+             ON CONFLICT (hour, node_id, system, talkgroup) DO UPDATE
+               SET calls = node_radio_hourly.calls + 1`,
+            [receivedAt.toISOString(), nodeId, system ?? 0, talkgroup ?? 0],
+          );
+          // Network-wide forever bucket. logical_calls +1 only when this row
+          // STARTED a group (each over-the-air call counted once).
+          await client.query(
+            `INSERT INTO node_radio_hourly_sys
+               (hour, system, talkgroup, site_rfss, site_id, calls, logical_calls)
+             VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, $5, 1, $6)
+             ON CONFLICT (hour, system, talkgroup, site_rfss, site_id) DO UPDATE
+               SET calls = node_radio_hourly_sys.calls + 1,
+                   logical_calls = node_radio_hourly_sys.logical_calls + EXCLUDED.logical_calls`,
+            [
+              receivedAt.toISOString(),
+              system ?? 0,
+              talkgroup ?? 0,
+              safeInt(ev.rfss) ?? -1,
+              safeInt(ev.site) ?? -1,
+              isNewGroup ? 1 : 0,
+            ],
+          );
+
+          await client.query('COMMIT');
+          accepted += 1;
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          failures += 1;
+          lastErr = err;
+        }
+      }
+    } finally {
+      client.release();
+    }
+    if (failures > 0) {
+      log.warn(
+        {
+          err: (lastErr as Error)?.message,
+          failures,
+          node: nodeId.slice(0, 8),
+        },
+        'nodeEvents: recordActivityEvents partial failure',
+      );
+    }
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message, node: nodeId.slice(0, 8) },
+      'nodeEvents: recordActivityEvents failed',
+    );
+  }
+  return accepted;
+}
+
+/**
+ * Mark the closest activity-event row for (node, talkgroup) within ±6s of
+ * the rdio call upload's timestamp as recorded (audio exists in central
+ * rdio) and stamp its audio size. Only rows with recorded=false are
+ * eligible, so N uploads consume N distinct event rows. No-op (silently)
+ * when nothing matches — e.g. the agent hasn't shipped that event yet or
+ * the call predates the activity stream.
+ *
+ * Also folds the audio bytes into the matched row's node_radio_hourly
+ * bucket (the event insert bucketed 0 bytes since audio size is only known
+ * at upload time) so the forever per-node byte rollup stays truthful.
+ */
+export async function markRecorded(
+  nodeId: string,
+  talkgroup: number | null,
+  atDate: Date,
+  audioBytes: number,
+): Promise<void> {
   try {
     const pool = await getWriterPool();
     if (!pool) return;
-
-    const receivedAt = clampReceivedAt(ev.receivedAt);
-    const system = safeInt(ev.system);
-    const talkgroup = safeInt(ev.talkgroup);
-    const sourceUnit = safeInt(ev.sourceUnit);
-    const frequency = safeInt(ev.frequency);
-    const siteRfss = safeInt(ev.siteRfss);
-    const siteId = safeInt(ev.siteId);
-    const siteNac = safeInt(ev.siteNac);
-    const audioBytes = safeInt(ev.audioBytes) ?? 0;
-    const lockKey = `nrc:${system}:${talkgroup}`;
+    const at = clampReceivedAt(atDate);
+    const tg = safeInt(talkgroup);
+    const bytes = Math.max(0, safeInt(audioBytes) ?? 0);
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // Serialise grouping per (system, talkgroup) so two nodes uploading
-      // the same call concurrently can't both "find no group" and fork.
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
-
-      // Existing logical group within the ±4s window (closest first).
-      // The unit check tolerates rows with unknown source_unit on either
-      // side; a DIFFERENT known unit means a different call.
-      const found = await client.query<{ logical_call_id: string }>(
-        `SELECT logical_call_id FROM node_radio_events
-          WHERE system IS NOT DISTINCT FROM $1
-            AND talkgroup IS NOT DISTINCT FROM $2
-            AND received_at BETWEEN $3::timestamptz - interval '${GROUP_WINDOW_SECONDS} seconds'
-                               AND $3::timestamptz + interval '${GROUP_WINDOW_SECONDS} seconds'
-            AND ($4::integer IS NULL OR source_unit IS NULL OR source_unit = $4::integer)
-            AND logical_call_id IS NOT NULL
-          ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
-          LIMIT 1`,
-        [system, talkgroup, receivedAt.toISOString(), sourceUnit],
+      const upd = await client.query<{
+        received_at: Date;
+        system: number | null;
+        talkgroup: number | null;
+      }>(
+        `UPDATE node_radio_events SET recorded = true, audio_bytes = $4
+          WHERE id = (
+            SELECT id FROM node_radio_events
+             WHERE node_id = $1
+               AND talkgroup IS NOT DISTINCT FROM $2
+               AND recorded = false
+               AND received_at BETWEEN $3::timestamptz - interval '${RECORDED_WINDOW_SECONDS} seconds'
+                                  AND $3::timestamptz + interval '${RECORDED_WINDOW_SECONDS} seconds'
+             ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
+             LIMIT 1
+          )
+          RETURNING received_at, system, talkgroup`,
+        [nodeId, tg, at.toISOString(), bytes],
       );
-      const existingGroup = found.rows[0]?.logical_call_id ?? null;
-
-      const ins = await client.query<{ id: string }>(
-        `INSERT INTO node_radio_events
-           (node_id, received_at, system, talkgroup, source_unit, frequency,
-            site_rfss, site_id, site_nac, site_source,
-            talkgroup_label, system_label, audio_bytes)
-         VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         RETURNING id`,
-        [
-          ev.nodeId,
-          receivedAt.toISOString(),
-          system,
-          talkgroup,
-          sourceUnit,
-          frequency,
-          siteRfss,
-          siteId,
-          siteNac,
-          ev.siteSource,
-          ev.talkgroupLabel,
-          ev.systemLabel,
-          audioBytes,
-        ],
-      );
-      const rowId = ins.rows[0]!.id;
-      await client.query(
-        `UPDATE node_radio_events SET logical_call_id = $1 WHERE id = $2`,
-        [existingGroup ?? rowId, rowId],
-      );
-
-      const isNewGroup = existingGroup === null;
-      // Per-node forever bucket (raw receptions + bytes).
-      await client.query(
-        `INSERT INTO node_radio_hourly (hour, node_id, system, talkgroup, calls, audio_bytes)
-         VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, 1, $5)
-         ON CONFLICT (hour, node_id, system, talkgroup) DO UPDATE
-           SET calls = node_radio_hourly.calls + 1,
-               audio_bytes = node_radio_hourly.audio_bytes + EXCLUDED.audio_bytes`,
-        [receivedAt.toISOString(), ev.nodeId, system ?? 0, talkgroup ?? 0, audioBytes],
-      );
-      // Network-wide forever bucket. logical_calls +1 only when this row
-      // STARTED a group (each over-the-air call counted once).
-      await client.query(
-        `INSERT INTO node_radio_hourly_sys
-           (hour, system, talkgroup, site_rfss, site_id, calls, logical_calls)
-         VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, $5, 1, $6)
-         ON CONFLICT (hour, system, talkgroup, site_rfss, site_id) DO UPDATE
-           SET calls = node_radio_hourly_sys.calls + 1,
-               logical_calls = node_radio_hourly_sys.logical_calls + EXCLUDED.logical_calls`,
-        [
-          receivedAt.toISOString(),
-          system ?? 0,
-          talkgroup ?? 0,
-          siteRfss ?? -1,
-          siteId ?? -1,
-          isNewGroup ? 1 : 0,
-        ],
-      );
-
+      const row = upd.rows[0];
+      if (row && bytes > 0) {
+        await client.query(
+          `INSERT INTO node_radio_hourly (hour, node_id, system, talkgroup, calls, audio_bytes)
+           VALUES (date_trunc('hour', $1::timestamptz), $2, $3, $4, 0, $5)
+           ON CONFLICT (hour, node_id, system, talkgroup) DO UPDATE
+             SET audio_bytes = node_radio_hourly.audio_bytes + EXCLUDED.audio_bytes`,
+          [
+            row.received_at instanceof Date ? row.received_at.toISOString() : row.received_at,
+            nodeId,
+            row.system ?? 0,
+            row.talkgroup ?? 0,
+            bytes,
+          ],
+        );
+      }
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -176,11 +329,15 @@ export async function recordRadioEvent(ev: RadioEventInput): Promise<void> {
     }
   } catch (err) {
     log.warn(
-      { err: (err as Error).message, node: ev.nodeId.slice(0, 8) },
-      'nodeEvents: recordRadioEvent failed',
+      { err: (err as Error).message, node: nodeId.slice(0, 8) },
+      'nodeEvents: markRecorded failed',
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Pager (unchanged)
+// ---------------------------------------------------------------------------
 
 export interface PagerEventInput {
   nodeId: string;
@@ -192,9 +349,9 @@ export interface PagerEventInput {
 }
 
 /**
- * Record one pager message reception. Same shape as recordRadioEvent:
- * advisory-lock the (capcode, message_hash) key, find a ±4s group, insert,
- * stamp logical_id, bump node_pager_hourly.
+ * Record one pager message reception: advisory-lock the (capcode,
+ * message_hash) key, find a ±4s group, insert, stamp logical_id, bump
+ * node_pager_hourly.
  */
 export async function recordPagerEvent(ev: PagerEventInput): Promise<void> {
   try {
