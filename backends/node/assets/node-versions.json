@@ -1,7 +1,7 @@
 {
   "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry — the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
   "agent": {
-    "version": "0.2.0",
+    "version": "0.2.1",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
@@ -27,14 +27,14 @@
   },
   "sdrtrunk": {
     "_comment": "0.7.x = the sdrtrunk-vce node-runtime line (feature/node-control branch of sdrtrunk-vce). The manifest version is deliberately independent of vce's own 0.6.2-alpha-N version string: the agent's 3-part numeric compare ignores pre-release suffixes, so 0.6.2-alpha-9 would LOSE to the old fork's 0.6.10 and never install. After rebuilding the node-runtime release (build-node-runtime workflow), bump this version and refresh the sha256 values from the published .sha256 assets.",
-    "version": "0.7.1",
+    "version": "0.7.2",
     "urls": {
       "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
       "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
     },
     "sha256": {
-      "windows-amd64": "49eca4cbbf3ca00f5b537c28340b829be7d421fd9fe050b9e329ac676cb6dbe4",
-      "linux-amd64": "b31dbb51bef038af06a66eb2f04781ba58481c04b804c25be3d18e4760e9c967"
+      "windows-amd64": "0a3bcda8ac2a8341a5e0ab7dc16aee746cc80729787a80a2b029f5a7181d3acb",
+      "linux-amd64": "27537e46da4483ccec74c7804acb2ad25ee6bb26562d73ee17a72166908bd444"
     }
   },
   "rdio": {

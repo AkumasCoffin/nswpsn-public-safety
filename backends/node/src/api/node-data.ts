@@ -12,15 +12,24 @@
  * labels stay null for now (planned: resolve from the global agencies
  * config at read time).
  *
- *   GET /api/node-data/overview  — totals, per-node volume, top lists, series
- *   GET /api/node-data/events    — logical-call event browser (grouped)
+ *   GET /api/node-data/overview   — totals, per-node volume, top lists, series
+ *   GET /api/node-data/events     — logical-call event browser (grouped)
+ *   GET /api/node-data/systems    — one row per observed (wacn, system)
+ *   GET /api/node-data/system     — drill-down for one P25 system
+ *   GET /api/node-data/site       — drill-down for one site of a system
+ *   GET /api/node-data/talkgroups — paged talkgroup monitor (per-TG rollup)
+ *   GET /api/node-data/radios     — paged radio (source unit) monitor
  *
- * Windows ≤30d compute from the detail tables (logical counts via
- * COUNT(DISTINCT logical_*)); window=all uses the hourly forever buckets,
- * except topUnits which only exists in detail (capped to 30d and flagged
- * with unitsWindowCapped: true).
+ * overview/events: windows ≤30d compute from the detail tables (logical
+ * counts via COUNT(DISTINCT logical_*)); window=all uses the hourly forever
+ * buckets, except topUnits which only exists in detail (capped to 30d and
+ * flagged with unitsWindowCapped: true).
+ *
+ * The monitoring endpoints (systems/system/site/talkgroups/radios) read the
+ * 30-day detail table only — window is 24h|7d|30d (default 7d), no 'all'.
  */
 import { Hono } from 'hono';
+import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes } from '../services/auth/roles.js';
@@ -659,6 +668,780 @@ nodeDataRouter.get(
     } catch (err) {
       log.error({ err }, '/api/node-data/events error');
       return c.json({ error: 'failed to load events' }, 500);
+    }
+  },
+);
+
+// ===========================================================================
+// System / site / talkgroup / radio monitoring.
+//
+// All of these read node_radio_events (30-day detail) only, so the window
+// is 24h|7d|30d with a 7d default — there is no 'all'. The P25 identity of
+// a network is the (wacn, system) pair; wacn can be NULL on rows from
+// agents that don't decode it, and NULL is kept as its own group (matched
+// with IS NOT DISTINCT FROM in drill-down laterals).
+// ===========================================================================
+
+type DetailWindow = Exclude<Windows, 'all'>;
+
+/** Detail-endpoint window: 24h|7d|30d, default (and fallback) 7d. */
+function detailWindow(url: URL): DetailWindow {
+  const raw = (url.searchParams.get('window') ?? '7d').toLowerCase();
+  return (['24h', '7d', '30d'] as const).find((w) => w === raw) ?? '7d';
+}
+
+/** Optional strict int param: absent → null, present-but-non-numeric → error. */
+function qpIntOpt(url: URL, name: string): { value: number | null; error?: string } {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw === '') return { value: null };
+  if (!/^\d+$/.test(raw)) return { value: null, error: `${name} must be a non-negative integer` };
+  return { value: Number.parseInt(raw, 10) };
+}
+
+interface ScopedDetail {
+  totals: {
+    calls: number;
+    logicalCalls: number;
+    encryptedCalls: number;
+    talkgroups: number;
+    radios: number;
+    sites: number;
+  };
+  topTalkgroups: Array<{
+    talkgroup: number;
+    calls: number;
+    logicalCalls: number;
+    encryptedCalls: number;
+    lastSeen: string;
+  }>;
+  topRadios: Array<{ radio: number; calls: number; lastSeen: string }>;
+  series: Array<{ hour: string; calls: number }>;
+}
+
+/**
+ * Shared drill-down aggregates for a scoped slice of node_radio_events
+ * (one system, or one site of a system). `where` renders the full WHERE
+ * clause with a column prefix ('' or 'e.') so it can be reused inside
+ * correlated subqueries; `params` are its bind values.
+ */
+async function scopedRadioDetail(
+  pool: Pool,
+  where: (prefix: string) => string,
+  params: unknown[],
+): Promise<ScopedDetail> {
+  const [totQ, tgQ, unQ, srQ] = await Promise.all([
+    pool.query<{
+      calls: unknown;
+      logical: unknown;
+      enc: unknown;
+      talkgroups: unknown;
+      radios: unknown;
+      sites: unknown;
+    }>(
+      `SELECT COUNT(*)::int AS calls,
+              COUNT(DISTINCT logical_call_id)::int AS logical,
+              (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+              COUNT(DISTINCT talkgroup)::int AS talkgroups,
+              COUNT(DISTINCT source_unit)::int AS radios,
+              (COUNT(DISTINCT (site_rfss, site_id))
+                 FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites
+         FROM node_radio_events
+        WHERE ${where('')}`,
+      params,
+    ),
+    pool.query<{
+      talkgroup: number;
+      calls: unknown;
+      logical: unknown;
+      enc: unknown;
+      last_seen: Date;
+    }>(
+      `SELECT talkgroup,
+              COUNT(*)::int AS calls,
+              COUNT(DISTINCT logical_call_id)::int AS logical,
+              (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+              MAX(received_at) AS last_seen
+         FROM node_radio_events
+        WHERE ${where('')} AND talkgroup IS NOT NULL
+        GROUP BY talkgroup
+        ORDER BY calls DESC, talkgroup ASC
+        LIMIT 20`,
+      params,
+    ),
+    pool.query<{ radio: number; calls: unknown; last_seen: Date }>(
+      `SELECT source_unit AS radio,
+              COUNT(*)::int AS calls,
+              MAX(received_at) AS last_seen
+         FROM node_radio_events
+        WHERE ${where('')} AND source_unit IS NOT NULL
+        GROUP BY source_unit
+        ORDER BY calls DESC, radio ASC
+        LIMIT 20`,
+      params,
+    ),
+    pool.query<{ hour: Date; calls: unknown }>(
+      `SELECT date_trunc('hour', received_at) AS hour, COUNT(*)::int AS calls
+         FROM node_radio_events
+        WHERE ${where('')}
+        GROUP BY 1 ORDER BY 1`,
+      params,
+    ),
+  ]);
+  const t = totQ.rows[0];
+  return {
+    totals: {
+      calls: num(t?.calls),
+      logicalCalls: num(t?.logical),
+      encryptedCalls: num(t?.enc),
+      talkgroups: num(t?.talkgroups),
+      radios: num(t?.radios),
+      sites: num(t?.sites),
+    },
+    topTalkgroups: tgQ.rows.map((r) => ({
+      talkgroup: r.talkgroup,
+      calls: num(r.calls),
+      logicalCalls: num(r.logical),
+      encryptedCalls: num(r.enc),
+      lastSeen: iso(r.last_seen),
+    })),
+    topRadios: unQ.rows.map((r) => ({
+      radio: r.radio,
+      calls: num(r.calls),
+      lastSeen: iso(r.last_seen),
+    })),
+    series: srQ.rows.map((r) => ({ hour: iso(r.hour), calls: num(r.calls) })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/systems?window=24h|7d|30d
+// One row per distinct (wacn, system) observed in-window, incl. NULLs.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/systems',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+
+      const res = await pool.query<{
+        wacn: number | null;
+        system: number | null;
+        calls: unknown;
+        logical: unknown;
+        enc: unknown;
+        sites: unknown;
+        talkgroups: unknown;
+        radios: unknown;
+        first_seen: Date;
+        last_seen: Date;
+      }>(
+        `SELECT wacn, system,
+                COUNT(*)::int AS calls,
+                COUNT(DISTINCT logical_call_id)::int AS logical,
+                (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+                (COUNT(DISTINCT (site_rfss, site_id))
+                   FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
+                COUNT(DISTINCT talkgroup)::int AS talkgroups,
+                COUNT(DISTINCT source_unit)::int AS radios,
+                MIN(received_at) AS first_seen,
+                MAX(received_at) AS last_seen
+           FROM node_radio_events
+          WHERE received_at >= now() - $1::interval
+          GROUP BY wacn, system
+          ORDER BY calls DESC, system ASC NULLS LAST
+          LIMIT 50`,
+        [WINDOW_INTERVAL[window]],
+      );
+
+      return c.json({
+        window,
+        systems: res.rows.map((r) => ({
+          wacn: r.wacn,
+          system: r.system,
+          calls: num(r.calls),
+          logicalCalls: num(r.logical),
+          encryptedCalls: num(r.enc),
+          sites: num(r.sites),
+          talkgroups: num(r.talkgroups),
+          radios: num(r.radios),
+          firstSeen: iso(r.first_seen),
+          lastSeen: iso(r.last_seen),
+        })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/systems error');
+      return c.json({ error: 'failed to load systems' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/system?system=<int>&wacn=<int optional>&window=
+// Drill-down for one P25 system: totals, per-site rollup (NULL-site events
+// count in totals but not the sites array), top talkgroups/radios, series.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/system',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const system = qpInt(url, 'system');
+      if (system === null) {
+        return c.json({ error: 'system must be a non-negative integer' }, 400);
+      }
+      const wacnP = qpIntOpt(url, 'wacn');
+      if (wacnP.error) return c.json({ error: wacnP.error }, 400);
+      const wacn = wacnP.value;
+
+      const params: unknown[] = [WINDOW_INTERVAL[window], system];
+      if (wacn !== null) params.push(wacn);
+      const scope = (p: string) =>
+        `${p}received_at >= now() - $1::interval AND ${p}system = $2` +
+        (wacn !== null ? ` AND ${p}wacn = $3` : '');
+
+      const [detail, sitesQ] = await Promise.all([
+        scopedRadioDetail(pool, scope, params),
+        pool.query<{
+          rfss: number;
+          site: number;
+          nac: number | null;
+          calls: unknown;
+          logical: unknown;
+          last_seen: Date;
+          top_tg: number | null;
+          top_tg_calls: unknown;
+        }>(
+          `SELECT s.rfss, s.site, s.nac, s.calls, s.logical, s.last_seen,
+                  tt.talkgroup AS top_tg, tt.calls AS top_tg_calls
+             FROM (
+               SELECT site_rfss AS rfss, site_id AS site,
+                      MAX(site_nac) AS nac,
+                      COUNT(*)::int AS calls,
+                      COUNT(DISTINCT logical_call_id)::int AS logical,
+                      MAX(received_at) AS last_seen
+                 FROM node_radio_events
+                WHERE ${scope('')} AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                GROUP BY site_rfss, site_id
+             ) s
+             LEFT JOIN LATERAL (
+               SELECT e.talkgroup, COUNT(*)::int AS calls
+                 FROM node_radio_events e
+                WHERE ${scope('e.')} AND e.site_rfss = s.rfss AND e.site_id = s.site
+                  AND e.talkgroup IS NOT NULL
+                GROUP BY e.talkgroup
+                ORDER BY calls DESC, e.talkgroup ASC
+                LIMIT 1
+             ) tt ON true
+            ORDER BY s.calls DESC, s.rfss ASC, s.site ASC`,
+          params,
+        ),
+      ]);
+
+      return c.json({
+        window,
+        system,
+        wacn,
+        totals: detail.totals,
+        sites: sitesQ.rows.map((r) => ({
+          rfss: r.rfss,
+          site: r.site,
+          nac: r.nac,
+          calls: num(r.calls),
+          logicalCalls: num(r.logical),
+          lastSeen: iso(r.last_seen),
+          topTalkgroup:
+            r.top_tg !== null
+              ? { talkgroup: r.top_tg, calls: num(r.top_tg_calls) }
+              : null,
+        })),
+        topTalkgroups: detail.topTalkgroups,
+        topRadios: detail.topRadios,
+        series: detail.series,
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/system error');
+      return c.json({ error: 'failed to load system' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/site?system=<int>&rfss=<int>&site=<int>&window=
+// Same shape as /system minus the sites array, plus nodes[] — which feeder
+// nodes receive this site and how much.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/site',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const system = qpInt(url, 'system');
+      const rfss = qpInt(url, 'rfss');
+      const site = qpInt(url, 'site');
+      if (system === null || rfss === null || site === null) {
+        return c.json(
+          { error: 'system, rfss and site must be non-negative integers' },
+          400,
+        );
+      }
+
+      const params: unknown[] = [WINDOW_INTERVAL[window], system, rfss, site];
+      const scope = (p: string) =>
+        `${p}received_at >= now() - $1::interval AND ${p}system = $2` +
+        ` AND ${p}site_rfss = $3 AND ${p}site_id = $4`;
+
+      const [detail, nodesQ] = await Promise.all([
+        scopedRadioDetail(pool, scope, params),
+        pool.query<{ id: string; name: string | null; calls: unknown; last_seen: Date }>(
+          `SELECT e.node_id AS id, n.name, COUNT(*)::int AS calls,
+                  MAX(e.received_at) AS last_seen
+             FROM node_radio_events e
+             LEFT JOIN nodes n ON n.id = e.node_id
+            WHERE ${scope('e.')}
+            GROUP BY e.node_id, n.name
+            ORDER BY calls DESC, e.node_id ASC`,
+          params,
+        ),
+      ]);
+
+      return c.json({
+        window,
+        system,
+        rfss,
+        site,
+        totals: detail.totals,
+        topTalkgroups: detail.topTalkgroups,
+        topRadios: detail.topRadios,
+        series: detail.series,
+        nodes: nodesQ.rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          calls: num(r.calls),
+          lastSeen: iso(r.last_seen),
+        })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/site error');
+      return c.json({ error: 'failed to load site' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/talkgroups
+//   ?window=&system=<opt>&q=<opt numeric prefix>&sort=calls|lastSeen
+//   &limit=50(≤100)&offset=0
+//
+// Paged per-talkgroup rollup keyed on (wacn, system, talkgroup). Grouping +
+// pagination happen FIRST (cheap grouped scan over the window); lastSite /
+// topSite / topNode then resolve via lateral subqueries for the returned
+// page's keys only.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/talkgroups',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const systemP = qpIntOpt(url, 'system');
+      if (systemP.error) return c.json({ error: systemP.error }, 400);
+      const system = systemP.value;
+      const qRaw = (url.searchParams.get('q') ?? '').trim();
+      if (qRaw && !/^\d+$/.test(qRaw)) {
+        return c.json({ error: 'q must be a numeric talkgroup prefix' }, 400);
+      }
+      const sortRaw = url.searchParams.get('sort') ?? 'calls';
+      const sort = (['calls', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'calls';
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
+      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
+      const params: unknown[] = [WINDOW_INTERVAL[window]];
+      const conds = ['received_at >= now() - $1::interval', 'talkgroup IS NOT NULL'];
+      if (system !== null) {
+        params.push(system);
+        conds.push(`system = $${params.length}`);
+      }
+      if (qRaw) {
+        params.push(`${qRaw}%`);
+        conds.push(`talkgroup::text LIKE $${params.length}`);
+      }
+      const where = conds.join(' AND ');
+      const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
+
+      const pageParams = [...params];
+      pageParams.push(limit);
+      const limIdx = pageParams.length;
+      pageParams.push(offset);
+      const offIdx = pageParams.length;
+
+      const [countQ, pageQ] = await Promise.all([
+        pool.query<{ n: unknown }>(
+          `SELECT COUNT(DISTINCT (wacn, system, talkgroup))::int AS n
+             FROM node_radio_events WHERE ${where}`,
+          params,
+        ),
+        pool.query<{
+          wacn: number | null;
+          system: number | null;
+          talkgroup: number;
+          calls: unknown;
+          logical: unknown;
+          enc: unknown;
+          last_seen: Date;
+        }>(
+          `SELECT wacn, system, talkgroup,
+                  COUNT(*)::int AS calls,
+                  COUNT(DISTINCT logical_call_id)::int AS logical,
+                  (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+                  MAX(received_at) AS last_seen
+             FROM node_radio_events
+            WHERE ${where}
+            GROUP BY wacn, system, talkgroup
+            ORDER BY ${orderCol} DESC, talkgroup ASC
+            LIMIT $${limIdx} OFFSET $${offIdx}`,
+          pageParams,
+        ),
+      ]);
+      const total = num(countQ.rows[0]?.n);
+      const page = pageQ.rows;
+
+      // Resolve lastSite/topSite/topNode for the page's keys only (lateral
+      // per key; the (system, talkgroup, received_at) index carries these).
+      const extras = new Map<
+        number,
+        {
+          lastSite: { rfss: number; site: number } | null;
+          topSite: { rfss: number; site: number; calls: number } | null;
+          topNode: { id: string; name: string | null; calls: number } | null;
+        }
+      >();
+      if (page.length > 0) {
+        const enrich = await pool.query<{
+          ord: number;
+          last_rfss: number | null;
+          last_site: number | null;
+          top_rfss: number | null;
+          top_site: number | null;
+          top_site_calls: unknown;
+          top_node_id: string | null;
+          top_node_name: string | null;
+          top_node_calls: unknown;
+        }>(
+          `SELECT k.ord::int AS ord,
+                  ls.rfss AS last_rfss, ls.site AS last_site,
+                  ts.rfss AS top_rfss, ts.site AS top_site, ts.calls AS top_site_calls,
+                  tn.node_id AS top_node_id, n.name AS top_node_name, tn.calls AS top_node_calls
+             FROM unnest($2::int[], $3::int[], $4::int[])
+                  WITH ORDINALITY AS k(wacn, system, talkgroup, ord)
+             LEFT JOIN LATERAL (
+               SELECT e.site_rfss AS rfss, e.site_id AS site
+                 FROM node_radio_events e
+                WHERE e.received_at >= now() - $1::interval
+                  AND e.wacn IS NOT DISTINCT FROM k.wacn
+                  AND e.system IS NOT DISTINCT FROM k.system
+                  AND e.talkgroup = k.talkgroup
+                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
+                ORDER BY e.received_at DESC
+                LIMIT 1
+             ) ls ON true
+             LEFT JOIN LATERAL (
+               SELECT e.site_rfss AS rfss, e.site_id AS site, COUNT(*)::int AS calls
+                 FROM node_radio_events e
+                WHERE e.received_at >= now() - $1::interval
+                  AND e.wacn IS NOT DISTINCT FROM k.wacn
+                  AND e.system IS NOT DISTINCT FROM k.system
+                  AND e.talkgroup = k.talkgroup
+                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
+                GROUP BY e.site_rfss, e.site_id
+                ORDER BY calls DESC, rfss ASC, site ASC
+                LIMIT 1
+             ) ts ON true
+             LEFT JOIN LATERAL (
+               SELECT e.node_id, COUNT(*)::int AS calls
+                 FROM node_radio_events e
+                WHERE e.received_at >= now() - $1::interval
+                  AND e.wacn IS NOT DISTINCT FROM k.wacn
+                  AND e.system IS NOT DISTINCT FROM k.system
+                  AND e.talkgroup = k.talkgroup
+                GROUP BY e.node_id
+                ORDER BY calls DESC, e.node_id ASC
+                LIMIT 1
+             ) tn ON true
+             LEFT JOIN nodes n ON n.id = tn.node_id`,
+          [
+            WINDOW_INTERVAL[window],
+            page.map((r) => r.wacn),
+            page.map((r) => r.system),
+            page.map((r) => r.talkgroup),
+          ],
+        );
+        for (const r of enrich.rows) {
+          extras.set(num(r.ord), {
+            lastSite:
+              r.last_rfss !== null && r.last_site !== null
+                ? { rfss: r.last_rfss, site: r.last_site }
+                : null,
+            topSite:
+              r.top_rfss !== null && r.top_site !== null
+                ? { rfss: r.top_rfss, site: r.top_site, calls: num(r.top_site_calls) }
+                : null,
+            topNode:
+              r.top_node_id !== null
+                ? { id: r.top_node_id, name: r.top_node_name, calls: num(r.top_node_calls) }
+                : null,
+          });
+        }
+      }
+
+      return c.json({
+        window,
+        total,
+        limit,
+        offset,
+        talkgroups: page.map((r, i) => {
+          const ex = extras.get(i + 1); // unnest ordinality is 1-based
+          return {
+            wacn: r.wacn,
+            system: r.system,
+            talkgroup: r.talkgroup,
+            calls: num(r.calls),
+            logicalCalls: num(r.logical),
+            encryptedCalls: num(r.enc),
+            lastSeen: iso(r.last_seen),
+            lastSite: ex?.lastSite ?? null,
+            topSite: ex?.topSite ?? null,
+            topNode: ex?.topNode ?? null,
+          };
+        }),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/talkgroups error');
+      return c.json({ error: 'failed to load talkgroups' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/radios
+//   ?window=&system=<opt>&q=<opt numeric prefix>&sort=calls|lastSeen
+//   &limit=50(≤100)&offset=0
+//
+// Same pattern as /talkgroups, keyed on (wacn, system, source_unit) with
+// NULL source_unit excluded; each row also carries its top 3 talkgroups.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/radios',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const systemP = qpIntOpt(url, 'system');
+      if (systemP.error) return c.json({ error: systemP.error }, 400);
+      const system = systemP.value;
+      const qRaw = (url.searchParams.get('q') ?? '').trim();
+      if (qRaw && !/^\d+$/.test(qRaw)) {
+        return c.json({ error: 'q must be a numeric radio-id prefix' }, 400);
+      }
+      const sortRaw = url.searchParams.get('sort') ?? 'calls';
+      const sort = (['calls', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'calls';
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
+      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
+      const params: unknown[] = [WINDOW_INTERVAL[window]];
+      const conds = ['received_at >= now() - $1::interval', 'source_unit IS NOT NULL'];
+      if (system !== null) {
+        params.push(system);
+        conds.push(`system = $${params.length}`);
+      }
+      if (qRaw) {
+        params.push(`${qRaw}%`);
+        conds.push(`source_unit::text LIKE $${params.length}`);
+      }
+      const where = conds.join(' AND ');
+      const orderCol = sort === 'lastSeen' ? 'last_seen' : 'calls';
+
+      const pageParams = [...params];
+      pageParams.push(limit);
+      const limIdx = pageParams.length;
+      pageParams.push(offset);
+      const offIdx = pageParams.length;
+
+      const [countQ, pageQ] = await Promise.all([
+        pool.query<{ n: unknown }>(
+          `SELECT COUNT(DISTINCT (wacn, system, source_unit))::int AS n
+             FROM node_radio_events WHERE ${where}`,
+          params,
+        ),
+        pool.query<{
+          wacn: number | null;
+          system: number | null;
+          radio: number;
+          calls: unknown;
+          last_seen: Date;
+        }>(
+          `SELECT wacn, system, source_unit AS radio,
+                  COUNT(*)::int AS calls,
+                  MAX(received_at) AS last_seen
+             FROM node_radio_events
+            WHERE ${where}
+            GROUP BY wacn, system, source_unit
+            ORDER BY ${orderCol} DESC, radio ASC
+            LIMIT $${limIdx} OFFSET $${offIdx}`,
+          pageParams,
+        ),
+      ]);
+      const total = num(countQ.rows[0]?.n);
+      const page = pageQ.rows;
+
+      const extras = new Map<
+        number,
+        {
+          lastSite: { rfss: number; site: number } | null;
+          topSite: { rfss: number; site: number; calls: number } | null;
+          topNode: { id: string; name: string | null; calls: number } | null;
+          topTalkgroups: Array<{ talkgroup: number; calls: number }>;
+        }
+      >();
+      if (page.length > 0) {
+        const enrich = await pool.query<{
+          ord: number;
+          last_rfss: number | null;
+          last_site: number | null;
+          top_rfss: number | null;
+          top_site: number | null;
+          top_site_calls: unknown;
+          top_node_id: string | null;
+          top_node_name: string | null;
+          top_node_calls: unknown;
+          top_tgs: Array<{ talkgroup: number; calls: number }>;
+        }>(
+          `SELECT k.ord::int AS ord,
+                  ls.rfss AS last_rfss, ls.site AS last_site,
+                  ts.rfss AS top_rfss, ts.site AS top_site, ts.calls AS top_site_calls,
+                  tn.node_id AS top_node_id, n.name AS top_node_name, tn.calls AS top_node_calls,
+                  tg.tgs AS top_tgs
+             FROM unnest($2::int[], $3::int[], $4::int[])
+                  WITH ORDINALITY AS k(wacn, system, radio, ord)
+             LEFT JOIN LATERAL (
+               SELECT e.site_rfss AS rfss, e.site_id AS site
+                 FROM node_radio_events e
+                WHERE e.received_at >= now() - $1::interval
+                  AND e.wacn IS NOT DISTINCT FROM k.wacn
+                  AND e.system IS NOT DISTINCT FROM k.system
+                  AND e.source_unit = k.radio
+                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
+                ORDER BY e.received_at DESC
+                LIMIT 1
+             ) ls ON true
+             LEFT JOIN LATERAL (
+               SELECT e.site_rfss AS rfss, e.site_id AS site, COUNT(*)::int AS calls
+                 FROM node_radio_events e
+                WHERE e.received_at >= now() - $1::interval
+                  AND e.wacn IS NOT DISTINCT FROM k.wacn
+                  AND e.system IS NOT DISTINCT FROM k.system
+                  AND e.source_unit = k.radio
+                  AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
+                GROUP BY e.site_rfss, e.site_id
+                ORDER BY calls DESC, rfss ASC, site ASC
+                LIMIT 1
+             ) ts ON true
+             LEFT JOIN LATERAL (
+               SELECT e.node_id, COUNT(*)::int AS calls
+                 FROM node_radio_events e
+                WHERE e.received_at >= now() - $1::interval
+                  AND e.wacn IS NOT DISTINCT FROM k.wacn
+                  AND e.system IS NOT DISTINCT FROM k.system
+                  AND e.source_unit = k.radio
+                GROUP BY e.node_id
+                ORDER BY calls DESC, e.node_id ASC
+                LIMIT 1
+             ) tn ON true
+             LEFT JOIN LATERAL (
+               SELECT COALESCE(
+                        jsonb_agg(jsonb_build_object('talkgroup', t.talkgroup, 'calls', t.calls)
+                                  ORDER BY t.calls DESC, t.talkgroup ASC),
+                        '[]'::jsonb) AS tgs
+                 FROM (
+                   SELECT e.talkgroup, COUNT(*)::int AS calls
+                     FROM node_radio_events e
+                    WHERE e.received_at >= now() - $1::interval
+                      AND e.wacn IS NOT DISTINCT FROM k.wacn
+                      AND e.system IS NOT DISTINCT FROM k.system
+                      AND e.source_unit = k.radio
+                      AND e.talkgroup IS NOT NULL
+                    GROUP BY e.talkgroup
+                    ORDER BY calls DESC, e.talkgroup ASC
+                    LIMIT 3
+                 ) t
+             ) tg ON true
+             LEFT JOIN nodes n ON n.id = tn.node_id`,
+          [
+            WINDOW_INTERVAL[window],
+            page.map((r) => r.wacn),
+            page.map((r) => r.system),
+            page.map((r) => r.radio),
+          ],
+        );
+        for (const r of enrich.rows) {
+          extras.set(num(r.ord), {
+            lastSite:
+              r.last_rfss !== null && r.last_site !== null
+                ? { rfss: r.last_rfss, site: r.last_site }
+                : null,
+            topSite:
+              r.top_rfss !== null && r.top_site !== null
+                ? { rfss: r.top_rfss, site: r.top_site, calls: num(r.top_site_calls) }
+                : null,
+            topNode:
+              r.top_node_id !== null
+                ? { id: r.top_node_id, name: r.top_node_name, calls: num(r.top_node_calls) }
+                : null,
+            topTalkgroups: Array.isArray(r.top_tgs) ? r.top_tgs : [],
+          });
+        }
+      }
+
+      return c.json({
+        window,
+        total,
+        limit,
+        offset,
+        radios: page.map((r, i) => {
+          const ex = extras.get(i + 1);
+          return {
+            wacn: r.wacn,
+            system: r.system,
+            radio: r.radio,
+            calls: num(r.calls),
+            lastSeen: iso(r.last_seen),
+            lastSite: ex?.lastSite ?? null,
+            topSite: ex?.topSite ?? null,
+            topNode: ex?.topNode ?? null,
+            topTalkgroups: ex?.topTalkgroups ?? [],
+          };
+        }),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/radios error');
+      return c.json({ error: 'failed to load radios' }, 500);
     }
   },
 );
