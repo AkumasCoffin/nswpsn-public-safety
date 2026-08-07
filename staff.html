@@ -27,6 +27,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1478,6 +1479,169 @@
       to   { opacity: 1; transform: none; }
     }
 
+    /* === Data tab (nd2-) — combined radio + pager activity ============ */
+    .nd2-controls {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    /* Segmented pill group — reuses .filter-btn inside a joined capsule. */
+    .nd2-seg {
+      display: inline-flex;
+      gap: 0.25rem;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      padding: 0.2rem;
+    }
+    .nd2-seg .filter-btn { border: none; padding: 0.35rem 0.95rem; font-size: 0.78rem; }
+    .nd2-seg .filter-btn:not(.active) { background: transparent; }
+
+    /* Inline soft error / not-deployed-yet banner (mirrors .nd-banner). */
+    .nd2-error {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: var(--warning);
+      border-radius: 10px;
+      padding: 0.7rem 1rem;
+      font-size: 0.82rem;
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* Small secondary line inside a stat tile ("N receptions"). */
+    .nd2-stat-sub { font-size: 0.7rem; color: var(--text-soft); margin-top: 0.3rem; }
+    .nd2-stat-tg .stat-value {
+      font-size: 1.15rem;
+      line-height: 1.25;
+      padding-top: 0.35rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Card shell shared by the chart + "top" tables. */
+    .nd2-card {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 55%),
+        var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .nd2-card-h {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.8rem 1rem 0.6rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .nd2-card-h i { color: var(--accent); font-size: 0.75rem; }
+    .nd2-card-h .nd2-note {
+      margin-left: auto;
+      font-size: 0.64rem;
+      font-weight: 400;
+      letter-spacing: 0.02em;
+      text-transform: none;
+      color: var(--text-soft);
+      opacity: 0.85;
+    }
+
+    .nd2-chart-card { margin-bottom: 1.75rem; }
+    .nd2-chart-wrap {
+      position: relative;
+      height: 220px;
+      width: 100%;
+      padding: 0.25rem 0.75rem 0.75rem;
+      overflow: hidden;
+    }
+
+    .nd2-top-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      align-items: start;
+    }
+    .nd2-top-grid .nd-table td { font-size: 0.74rem; }
+    .nd2-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .nd2-empty { padding: 0.9rem 1rem 1rem; color: var(--text-soft); font-size: 0.78rem; }
+
+    /* Events table shell — table scrolls inside the card, never the page. */
+    .nd2-table-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .nd2-table-wrap .nd-table { min-width: 760px; font-size: 0.74rem; }
+    .nd2-table-wrap .nd-table th { padding: 0.5rem 0.65rem; }
+    .nd2-table-wrap .nd-table td { padding: 0.45rem 0.65rem; }
+
+    .nd2-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .nd2-time-rel { display: block; font-size: 0.64rem; color: var(--text-soft); }
+
+    .nd2-type-chip {
+      display: inline-block;
+      padding: 0.12rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+    }
+    .nd2-type-chip.radio { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
+    .nd2-type-chip.pager { background: rgba(249, 115, 22, 0.14); color: #fdba74; }
+
+    /* Site / node mini-chips; ×N marker for multi-receiver logical calls. */
+    .nd2-chip {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 0.06rem 0.4rem;
+      font-size: 0.64rem;
+      color: var(--text-soft);
+      margin: 0.06rem 0.2rem 0.06rem 0;
+      white-space: nowrap;
+    }
+    .nd2-rx {
+      font-size: 0.62rem;
+      color: var(--text-soft);
+      opacity: 0.85;
+      white-space: nowrap;
+    }
+    .nd2-msg {
+      display: block;
+      max-width: 340px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .nd2-pgr {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.8rem 0.25rem 0;
+      color: var(--text-soft);
+      font-size: 0.78rem;
+    }
+    .nd2-pgr .filter-spacer { flex: 1; }
+
+    @media (max-width: 768px) {
+      .nd2-top-grid { grid-template-columns: 1fr; }
+      .nd2-msg { max-width: 200px; }
+      .nd2-chart-wrap { height: 190px; }
+    }
+
     /* === Responsive ==================================================== */
     @media (max-width: 768px) {
       .container { padding: 1rem 1rem 2rem; }
@@ -1574,6 +1738,9 @@
         <button class="tab-btn" data-tab="dev" onclick="switchTab('dev')">
           <i class="fas fa-server"></i> Dev
           <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
+        </button>
+        <button class="tab-btn" data-tab="data" onclick="switchTab('data')">
+          <i class="fas fa-chart-line"></i> Data
         </button>
         <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
           <i class="fas fa-satellite-dish"></i> Nodes
@@ -1706,6 +1873,126 @@
           <div class="loading" style="grid-column: 1 / -1;">
             <i class="fas fa-spinner"></i>
           </div>
+        </div>
+      </div>
+
+      <!-- Data Tab — combined radio + pager activity dashboard -->
+      <div id="data-tab" class="tab-content">
+        <div class="nd2-controls">
+          <div class="nd2-seg" role="group" aria-label="Data scope">
+            <button class="filter-btn active" data-nd2-scope="all" onclick="nd2SetScope('all')">All</button>
+            <button class="filter-btn" data-nd2-scope="radio" onclick="nd2SetScope('radio')">Radio</button>
+            <button class="filter-btn" data-nd2-scope="pager" onclick="nd2SetScope('pager')">Pager</button>
+          </div>
+          <div class="filter-spacer"></div>
+          <div class="nd2-seg" role="group" aria-label="Time window">
+            <button class="filter-btn active" data-nd2-window="24h" onclick="nd2SetWindow('24h')">24h</button>
+            <button class="filter-btn" data-nd2-window="7d" onclick="nd2SetWindow('7d')">7d</button>
+            <button class="filter-btn" data-nd2-window="30d" onclick="nd2SetWindow('30d')">30d</button>
+            <button class="filter-btn" data-nd2-window="all" onclick="nd2SetWindow('all')">All</button>
+          </div>
+        </div>
+
+        <div class="nd2-error" id="nd2-error" style="display: none;"></div>
+
+        <div class="stats-bar">
+          <div class="stat-card" id="nd2-tile-calls">
+            <div class="stat-value" id="nd2-stat-calls">—</div>
+            <div class="stat-label">Radio Calls</div>
+            <div class="nd2-stat-sub" id="nd2-stat-calls-sub"></div>
+          </div>
+          <div class="stat-card" id="nd2-tile-pages" style="border-color: rgba(249, 115, 22, 0.3);">
+            <div class="stat-value" id="nd2-stat-pages" style="color: #fb923c;">—</div>
+            <div class="stat-label">Pages</div>
+            <div class="nd2-stat-sub" id="nd2-stat-pages-sub"></div>
+          </div>
+          <div class="stat-card" id="nd2-tile-nodes">
+            <div class="stat-value" id="nd2-stat-nodes" style="color: var(--success);">—</div>
+            <div class="stat-label">Active Nodes</div>
+            <div class="nd2-stat-sub" id="nd2-stat-nodes-sub"></div>
+          </div>
+          <div class="stat-card nd2-stat-tg" id="nd2-tile-tg">
+            <div class="stat-value" id="nd2-stat-tg" style="color: var(--text-primary);" title="">—</div>
+            <div class="stat-label">Busiest Talkgroup</div>
+            <div class="nd2-stat-sub" id="nd2-stat-tg-sub"></div>
+          </div>
+        </div>
+
+        <div class="nd2-card nd2-chart-card">
+          <div class="nd2-card-h">
+            <i class="fas fa-chart-line"></i>
+            <span id="nd2-chart-title">Activity</span>
+            <span class="nd2-note" id="nd2-chart-note"></span>
+          </div>
+          <div class="nd2-chart-wrap">
+            <canvas id="nd2-chart" aria-label="Radio and pager activity over time" role="img"></canvas>
+          </div>
+          <div class="nd2-empty" id="nd2-chart-empty" style="display: none;">No activity in this window yet.</div>
+        </div>
+
+        <div class="nd2-top-grid">
+          <div class="nd2-card" id="nd2-top-tg-card">
+            <div class="nd2-card-h"><i class="fas fa-walkie-talkie"></i> Top Talkgroups</div>
+            <div id="nd2-top-tg"><div class="nd2-empty">—</div></div>
+          </div>
+          <div class="nd2-card" id="nd2-top-units-card">
+            <div class="nd2-card-h"><i class="fas fa-user-astronaut"></i> Top Units
+              <span class="nd2-note" id="nd2-units-note" style="display: none;">last 30d</span>
+            </div>
+            <div id="nd2-top-units"><div class="nd2-empty">—</div></div>
+          </div>
+          <div class="nd2-card" id="nd2-top-sites-card">
+            <div class="nd2-card-h"><i class="fas fa-tower-cell"></i> Top Sites</div>
+            <div id="nd2-top-sites"><div class="nd2-empty">—</div></div>
+          </div>
+        </div>
+
+        <h3 class="dev-section-h">Recent Events</h3>
+        <div class="filter-bar">
+          <div class="search-box" style="min-width: 200px; flex: 1 1 200px;">
+            <i class="fas fa-search"></i>
+            <input type="text" id="nd2-ev-q" placeholder="Search messages, labels..." oninput="nd2EvInputChanged()">
+          </div>
+          <div class="search-box" style="min-width: 110px;">
+            <input type="text" id="nd2-ev-tg" placeholder="Talkgroup" oninput="nd2EvInputChanged()">
+          </div>
+          <div class="search-box" style="min-width: 100px;">
+            <input type="text" id="nd2-ev-unit" placeholder="Unit" oninput="nd2EvInputChanged()">
+          </div>
+          <div class="search-box" style="min-width: 100px;">
+            <input type="text" id="nd2-ev-site" placeholder="rfss-site" oninput="nd2EvInputChanged()">
+          </div>
+          <select id="nd2-ev-node" class="nd-input" style="width: auto; min-width: 120px; font-size: 0.82rem; padding: 0.45rem 0.5rem;" onchange="nd2EvFilterChanged()">
+            <option value="">All nodes</option>
+          </select>
+        </div>
+        <div class="nd2-table-wrap">
+          <table class="nd-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>System</th>
+                <th>Talkgroup / Capcode</th>
+                <th>Unit / Message</th>
+                <th>Sites</th>
+                <th>Nodes</th>
+              </tr>
+            </thead>
+            <tbody id="nd2-ev-body">
+              <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="nd2-pgr">
+          <button class="btn btn-secondary btn-sm" id="nd2-ev-prev" onclick="nd2EvPage(-1)" disabled>
+            <i class="fas fa-chevron-left"></i> Prev
+          </button>
+          <button class="btn btn-secondary btn-sm" id="nd2-ev-next" onclick="nd2EvPage(1)" disabled>
+            Next <i class="fas fa-chevron-right"></i>
+          </button>
+          <div class="filter-spacer"></div>
+          <span id="nd2-ev-count"></span>
         </div>
       </div>
     </div>
@@ -2313,7 +2600,7 @@
       is_map_editor: false,
       can_manage_users: false,
       can_assign_privileged_roles: false,
-      tabs: { requests: false, users: false, dev: false, nodes: false }
+      tabs: { requests: false, users: false, dev: false, nodes: false, data: false }
     };
 
     // Dev-tab status polling state. We refresh /api/status while the Dev
@@ -2369,6 +2656,14 @@
       } else {
         stopNodesPolling();
       }
+
+      // Data tab: lazy first load + 30s refresh while active, stopped on
+      // leave — same pattern as the Dev/Nodes polling above.
+      if (tab === 'data') {
+        nd2StartPolling();
+      } else {
+        nd2StopPolling();
+      }
     }
 
     async function refreshAll() {
@@ -2380,6 +2675,477 @@
         await refreshDevStatus();
       } else if (currentTab === 'nodes') {
         await loadNodes();
+      } else if (currentTab === 'data') {
+        await nd2Refresh();
+      }
+    }
+
+    // === Data tab (nd2-) — radio + pager activity dashboard =============
+    // Reads the backend's node-data rollups:
+    //   GET /api/node-data/overview?window=&scope=   (stats, tops, series)
+    //   GET /api/node-data/events?type=&...&limit=&offset=  (recent events)
+    // A radio event heard by several receivers arrives as ONE logical event
+    // with nodes[]/receptions — the UI surfaces that grouping explicitly.
+    const nd2 = {
+      scope: 'all',        // all | radio | pager
+      window: '24h',       // 24h | 7d | 30d | all
+      overview: null,
+      evOffset: 0,
+      evLimit: 50,
+      evTotal: 0,
+      loadedOnce: false,
+    };
+    let _nd2Timer = null;
+    const _nd2IntervalMs = 30_000;
+    let _nd2Chart = null;        // live Chart.js instance (destroyed on re-render)
+    let _nd2EvDebounce = null;   // debounce handle for the text filter inputs
+
+    function nd2StartPolling() {
+      nd2Refresh();
+      if (_nd2Timer) return;
+      _nd2Timer = setInterval(() => {
+        nd2LoadOverview();
+        // Don't yank the events list out from under someone who has paged
+        // deeper in — only auto-refresh while they're on the first page.
+        if (nd2.evOffset === 0) nd2LoadEvents();
+      }, _nd2IntervalMs);
+    }
+
+    function nd2StopPolling() {
+      if (_nd2Timer) {
+        clearInterval(_nd2Timer);
+        _nd2Timer = null;
+      }
+    }
+
+    async function nd2Refresh() {
+      await Promise.all([nd2LoadOverview(), nd2LoadEvents()]);
+    }
+
+    function nd2SetScope(scope) {
+      if (nd2.scope === scope) return;
+      nd2.scope = scope;
+      nd2.evOffset = 0;
+      document.querySelectorAll('[data-nd2-scope]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Scope === scope));
+      nd2Refresh();
+    }
+
+    function nd2SetWindow(win) {
+      if (nd2.window === win) return;
+      nd2.window = win;
+      document.querySelectorAll('[data-nd2-window]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Window === win));
+      nd2LoadOverview();
+    }
+
+    // Map fetch failures to one soft inline message; never a broken layout.
+    function nd2ShowError(status, message) {
+      const el = document.getElementById('nd2-error');
+      if (!el) return;
+      let text;
+      if (status === 404) {
+        text = 'The node-data API is not available yet — this dashboard will light up once the backend deploys.';
+      } else if (status === 401 || status === 403) {
+        text = 'You are not authorised to view node data.';
+      } else {
+        text = `Could not load node data: ${message || 'network error'}`;
+      }
+      el.innerHTML = `<i class="fas fa-circle-info"></i> ${escapeHtml(text)}`;
+      el.style.display = '';
+    }
+
+    function nd2ClearError() {
+      const el = document.getElementById('nd2-error');
+      if (el) el.style.display = 'none';
+    }
+
+    async function nd2LoadOverview() {
+      try {
+        const params = new URLSearchParams({ window: nd2.window, scope: nd2.scope });
+        const res = await fetch(`${API_BASE_URL}/api/node-data/overview?${params}`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+        nd2.overview = await res.json();
+        nd2.loadedOnce = true;
+        nd2ClearError();
+      } catch (e) {
+        console.error('Error loading node-data overview:', e);
+        nd2.overview = null;
+        nd2ShowError(e.status, e.message);
+      }
+      nd2RenderStats();
+      nd2RenderChart();
+      nd2RenderTops();
+      nd2PopulateNodeSelect();
+    }
+
+    const nd2Num = (v) => (v == null ? '—' : Number(v).toLocaleString());
+
+    function nd2RenderStats() {
+      const t = (nd2.overview && nd2.overview.totals) || {};
+      const scope = nd2.scope;
+      const set = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+      const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+      };
+
+      // Tiles adapt to scope: pager scope has no radio tiles and vice versa.
+      show('nd2-tile-calls', scope !== 'pager');
+      show('nd2-tile-pages', scope !== 'radio');
+      show('nd2-tile-tg', scope !== 'pager');
+
+      set('nd2-stat-calls', nd2Num(t.radioLogical));
+      set('nd2-stat-calls-sub', t.radioRaw != null ? `${nd2Num(t.radioRaw)} receptions` : '');
+      set('nd2-stat-pages', nd2Num(t.pagesLogical));
+      set('nd2-stat-pages-sub', t.pages != null ? `${nd2Num(t.pages)} receptions` : '');
+      set('nd2-stat-nodes', nd2Num(t.activeNodes));
+      set('nd2-stat-nodes-sub', 'reporting in window');
+
+      const tg = ((nd2.overview && nd2.overview.topTalkgroups) || [])[0];
+      const tgEl = document.getElementById('nd2-stat-tg');
+      if (tgEl) {
+        const label = tg ? (tg.label || `TG ${tg.talkgroup}`) : '—';
+        tgEl.textContent = label;
+        tgEl.title = label;
+      }
+      set('nd2-stat-tg-sub', tg ? `${nd2Num(tg.logicalCalls != null ? tg.logicalCalls : tg.calls)} calls` : '');
+    }
+
+    // Activity chart. Series colors are validated darker steps of the site
+    // hues (sky-600 / orange-600) so the strokes sit in the dark-surface
+    // lightness band while UI chrome keeps the brighter tokens.
+    const ND2_RADIO_COLOR = '#0284c7';
+    const ND2_PAGER_COLOR = '#ea580c';
+
+    function nd2RenderChart() {
+      const canvas = document.getElementById('nd2-chart');
+      const emptyEl = document.getElementById('nd2-chart-empty');
+      const titleEl = document.getElementById('nd2-chart-title');
+      const noteEl = document.getElementById('nd2-chart-note');
+      if (!canvas || typeof Chart === 'undefined') return;
+
+      const series = (nd2.overview && nd2.overview.series) || [];
+      // Buckets may be hourly or (window=all) daily — label accordingly.
+      let daily = false;
+      if (series.length >= 2) {
+        const step = new Date(series[1].hour) - new Date(series[0].hour);
+        daily = step >= 20 * 3600 * 1000;
+      }
+      const labels = series.map(p => {
+        const d = new Date(p.hour);
+        if (isNaN(d)) return '';
+        return daily
+          ? d.toLocaleDateString([], { day: 'numeric', month: 'short' })
+          : (nd2.window === '24h'
+              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+      });
+
+      if (titleEl) {
+        titleEl.textContent =
+          nd2.scope === 'radio' ? 'Radio activity' :
+          nd2.scope === 'pager' ? 'Pager activity' : 'Activity';
+      }
+      if (noteEl) noteEl.textContent = series.length ? (daily ? 'per day' : 'per hour') : '';
+
+      const hasData = series.some(p => (p.radio || 0) > 0 || (p.pager || 0) > 0);
+      if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
+
+      const mkDs = (label, key, color) => ({
+        label,
+        data: series.map(p => p[key] || 0),
+        borderColor: color,
+        backgroundColor: color + '14',   // ~8% fill under the line
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHitRadius: 12,
+        fill: true,
+        tension: 0.3,
+      });
+      const datasets = [];
+      if (nd2.scope !== 'pager') datasets.push(mkDs('Radio calls', 'radio', ND2_RADIO_COLOR));
+      if (nd2.scope !== 'radio') datasets.push(mkDs('Pages', 'pager', ND2_PAGER_COLOR));
+
+      // Destroy + recreate: dataset count changes with scope and this keeps
+      // us from leaking Chart instances across refreshes.
+      if (_nd2Chart) {
+        _nd2Chart.destroy();
+        _nd2Chart = null;
+      }
+      _nd2Chart = new Chart(canvas, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              display: datasets.length > 1,   // single series is named by the card title
+              position: 'top',
+              align: 'end',
+              labels: {
+                color: '#94a3b8',
+                usePointStyle: true,
+                pointStyle: 'line',
+                boxWidth: 18,
+                font: { family: "'Space Grotesk', sans-serif", size: 11 },
+              },
+            },
+            tooltip: {
+              backgroundColor: '#121e33',
+              borderColor: 'rgba(148, 163, 184, 0.25)',
+              borderWidth: 1,
+              titleColor: '#f1f5f9',
+              bodyColor: '#94a3b8',
+              padding: 10,
+              displayColors: true,
+              boxWidth: 8,
+              boxHeight: 8,
+              usePointStyle: true,
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              border: { color: 'rgba(148, 163, 184, 0.16)' },
+              ticks: {
+                color: '#64748b',
+                maxTicksLimit: 8,
+                maxRotation: 0,
+                font: { family: "'Space Grotesk', sans-serif", size: 10 },
+              },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(148, 163, 184, 0.07)' },
+              border: { display: false },
+              ticks: {
+                color: '#64748b',
+                precision: 0,
+                maxTicksLimit: 5,
+                font: { family: "'Space Grotesk', sans-serif", size: 10 },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    // The three compact "top" tables. Sites/units are radio concepts, so
+    // those cards disappear entirely in pager scope.
+    function nd2RenderTops() {
+      const ov = nd2.overview;
+      const showCard = (id, on) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+      };
+      const isPager = nd2.scope === 'pager';
+      showCard('nd2-top-tg-card', !isPager);
+      showCard('nd2-top-units-card', !isPager);
+      showCard('nd2-top-sites-card', !isPager);
+
+      const table = (headers, rows) => rows.length
+        ? `<table class="nd-table"><thead><tr>${headers.map(h =>
+            `<th${h.num ? ' class="nd2-num"' : ''}>${h.t}</th>`).join('')}</tr></thead><tbody>${
+            rows.map(r => `<tr>${r.map((c, i) =>
+              `<td${headers[i] && headers[i].num ? ' class="nd2-num"' : ''}>${c}</td>`).join('')}</tr>`).join('')
+          }</tbody></table>`
+        : `<div class="nd2-empty">Nothing in this window.</div>`;
+
+      const tgEl = document.getElementById('nd2-top-tg');
+      if (tgEl && !isPager) {
+        const rows = ((ov && ov.topTalkgroups) || []).slice(0, 10).map(t => [
+          `<span class="nd-strong">${escapeHtml(t.label || `TG ${t.talkgroup}`)}</span>` +
+            (t.label ? ` <span class="nd-sub">${escapeHtml(String(t.talkgroup))}</span>` : ''),
+          `<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`,
+          nd2Num(t.logicalCalls != null ? t.logicalCalls : t.calls),
+          nd2Num(t.calls),
+        ]);
+        tgEl.innerHTML = table(
+          [{ t: 'Talkgroup' }, { t: 'Sys' }, { t: 'Calls', num: true }, { t: 'Rx', num: true }], rows);
+      }
+
+      const unitsEl = document.getElementById('nd2-top-units');
+      if (unitsEl && !isPager) {
+        const rows = ((ov && ov.topUnits) || []).slice(0, 10).map(u => [
+          `<span class="nd-strong">${escapeHtml(String(u.unit))}</span>`,
+          nd2Num(u.calls),
+        ]);
+        unitsEl.innerHTML = table([{ t: 'Unit' }, { t: 'Calls', num: true }], rows);
+      }
+      const unitsNote = document.getElementById('nd2-units-note');
+      if (unitsNote) unitsNote.style.display = (ov && ov.unitsWindowCapped) ? '' : 'none';
+
+      const sitesEl = document.getElementById('nd2-top-sites');
+      if (sitesEl && !isPager) {
+        const rows = ((ov && ov.topSites) || []).slice(0, 10).map(s => [
+          `<span class="nd-strong">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`,
+          nd2Num(s.calls),
+        ]);
+        sitesEl.innerHTML = table([{ t: 'Site' }, { t: 'Calls', num: true }], rows);
+      }
+    }
+
+    // Keep the events node-filter <select> in sync with overview.perNode,
+    // preserving the current selection across refreshes.
+    function nd2PopulateNodeSelect() {
+      const sel = document.getElementById('nd2-ev-node');
+      if (!sel) return;
+      const prev = sel.value;
+      const nodes = (nd2.overview && nd2.overview.perNode) || [];
+      sel.innerHTML = '<option value="">All nodes</option>' + nodes.map(n =>
+        `<option value="${escapeHtml(String(n.nodeId))}">${escapeHtml(n.name || String(n.nodeId))}</option>`
+      ).join('');
+      if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+    }
+
+    // --- Recent events ---------------------------------------------------
+
+    // Text inputs debounce 400ms; selects apply immediately.
+    function nd2EvInputChanged() {
+      clearTimeout(_nd2EvDebounce);
+      _nd2EvDebounce = setTimeout(nd2EvFilterChanged, 400);
+    }
+
+    function nd2EvFilterChanged() {
+      nd2.evOffset = 0;
+      nd2LoadEvents();
+    }
+
+    function nd2EvPage(dir) {
+      const next = nd2.evOffset + dir * nd2.evLimit;
+      if (next < 0 || next >= nd2.evTotal) return;
+      nd2.evOffset = next;
+      nd2LoadEvents();
+    }
+
+    function nd2EvVal(id) {
+      const el = document.getElementById(id);
+      return el ? el.value.trim() : '';
+    }
+
+    async function nd2LoadEvents() {
+      const body = document.getElementById('nd2-ev-body');
+      try {
+        const params = new URLSearchParams({
+          type: nd2.scope,
+          limit: String(nd2.evLimit),
+          offset: String(nd2.evOffset),
+        });
+        const q = nd2EvVal('nd2-ev-q');
+        const tg = nd2EvVal('nd2-ev-tg');
+        const unit = nd2EvVal('nd2-ev-unit');
+        const site = nd2EvVal('nd2-ev-site');
+        const node = nd2EvVal('nd2-ev-node');
+        if (q) params.set('q', q);
+        if (tg) params.set('talkgroup', tg);
+        if (unit) params.set('unit', unit);
+        if (site) params.set('site', site);
+        if (node) params.set('node', node);
+
+        const res = await fetch(`${API_BASE_URL}/api/node-data/events?${params}`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+        const data = await res.json();
+        nd2.evTotal = data.total || 0;
+        nd2RenderEvents(data.events || []);
+      } catch (e) {
+        console.error('Error loading node-data events:', e);
+        nd2.evTotal = 0;
+        if (body) {
+          const msg = e.status === 404 ? 'Events API not available yet.'
+            : (e.status === 401 || e.status === 403) ? 'Not authorised to view events.'
+            : `Could not load events: ${e.message}`;
+          body.innerHTML = `<tr><td colspan="7" class="nd2-empty">${escapeHtml(msg)}</td></tr>`;
+        }
+        nd2UpdatePager(0);
+      }
+    }
+
+    function nd2RelTime(iso) {
+      const d = new Date(iso);
+      if (isNaN(d)) return '';
+      const s = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+      if (s < 60) return `${s}s ago`;
+      if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+      return `${Math.floor(s / 86400)}d ago`;
+    }
+
+    function nd2RenderEvents(events) {
+      const body = document.getElementById('nd2-ev-body');
+      if (!body) return;
+      if (!events.length) {
+        body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No events match.</td></tr>';
+        nd2UpdatePager(0);
+        return;
+      }
+      body.innerHTML = events.map(ev => {
+        const d = new Date(ev.at);
+        const timeCell = `<span class="nd2-time">${isNaN(d) ? '—' : d.toLocaleTimeString([], { hour12: false })}` +
+          `<span class="nd2-time-rel">${nd2RelTime(ev.at)}</span></span>`;
+
+        // Node chips + a ×N receptions marker: one row = one over-the-air
+        // event; several node chips = the same call heard by several receivers.
+        const nodes = ev.nodes || [];
+        const rx = ev.receptions || nodes.length || 1;
+        const nodeCell = nodes.map(n =>
+          `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('') +
+          (rx > 1 ? ` <span class="nd2-rx" title="Heard by ${rx} receivers (grouped as one call)">×${rx}</span>` : '');
+
+        if (ev.type === 'pager') {
+          const freq = (ev.freqMhz != null && isFinite(ev.freqMhz))
+            ? `${Number(ev.freqMhz).toFixed(4)} MHz` : '—';
+          const msg = ev.message || '';
+          return `<tr>
+            <td>${timeCell}</td>
+            <td><span class="nd2-type-chip pager">PAGER</span></td>
+            <td><span class="nd-sub">${escapeHtml(freq)}</span></td>
+            <td><span class="nd-strong">${escapeHtml(String(ev.capcode != null ? ev.capcode : '—'))}</span></td>
+            <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
+            <td>—</td>
+            <td>${nodeCell || '—'}</td>
+          </tr>`;
+        }
+
+        const tgLabel = ev.talkgroupLabel
+          ? `<span class="nd-strong">${escapeHtml(ev.talkgroupLabel)}</span> <span class="nd-sub">${escapeHtml(String(ev.talkgroup))}</span>`
+          : `<span class="nd-strong">TG ${escapeHtml(String(ev.talkgroup != null ? ev.talkgroup : '—'))}</span>`;
+        const sites = (ev.sites || []).map(s =>
+          `<span class="nd2-chip">R${escapeHtml(String(s.rfss))} S${escapeHtml(String(s.site))}</span>`).join('');
+        return `<tr>
+          <td>${timeCell}</td>
+          <td><span class="nd2-type-chip radio">RADIO</span></td>
+          <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
+          <td>${tgLabel}</td>
+          <td>${ev.sourceUnit != null ? escapeHtml(String(ev.sourceUnit)) : '—'}</td>
+          <td>${sites || '—'}</td>
+          <td>${nodeCell || '—'}</td>
+        </tr>`;
+      }).join('');
+      nd2UpdatePager(events.length);
+    }
+
+    function nd2UpdatePager(shown) {
+      const prevBtn = document.getElementById('nd2-ev-prev');
+      const nextBtn = document.getElementById('nd2-ev-next');
+      const countEl = document.getElementById('nd2-ev-count');
+      if (prevBtn) prevBtn.disabled = nd2.evOffset <= 0;
+      if (nextBtn) nextBtn.disabled = nd2.evOffset + nd2.evLimit >= nd2.evTotal;
+      if (countEl) {
+        countEl.textContent = nd2.evTotal
+          ? `${(nd2.evOffset + 1).toLocaleString()}–${(nd2.evOffset + shown).toLocaleString()} of ${nd2.evTotal.toLocaleString()}`
+          : '';
       }
     }
 
@@ -5884,7 +6650,11 @@
           users:    !!result.can_manage_users,
           dev:      !!result.is_owner,  // legacy: only owners had dev-equivalent access
           nodes:    !!(result.is_owner || result.is_dev),  // legacy: owner|dev see nodes
+          data:     !!(result.is_owner || result.is_dev),  // same visibility as nodes
         };
+        // Backends that predate the Data tab return a `tabs` block without
+        // `data` — mirror the Nodes visibility until the server catches up.
+        if (tabs.data === undefined) tabs.data = !!tabs.nodes;
         userPermissions = {
           is_owner: !!result.is_owner,
           is_team_member: !!result.is_team_member,
@@ -5926,10 +6696,12 @@
       const reqBtn = document.querySelector('[data-tab="requests"]');
       const usrBtn = document.querySelector('[data-tab="users"]');
       const devBtn = document.querySelector('[data-tab="dev"]');
+      const datBtn = document.querySelector('[data-tab="data"]');
       const nodBtn = document.querySelector('[data-tab="nodes"]');
       if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
       if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
+      if (datBtn) datBtn.style.display = tabs.data     ? '' : 'none';
       if (nodBtn) nodBtn.style.display = tabs.nodes    ? '' : 'none';
 
       // Pick a default tab the user can actually see. Without this a
@@ -5938,6 +6710,7 @@
       const defaultTab = tabs.requests ? 'requests' :
                          tabs.users    ? 'users' :
                          tabs.dev      ? 'dev' :
+                         tabs.data     ? 'data' :
                          tabs.nodes    ? 'nodes' : null;
       if (defaultTab && defaultTab !== currentTab) {
         switchTab(defaultTab);
