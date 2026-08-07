@@ -47,7 +47,13 @@ interface Alive extends WebSocket {
 }
 
 function rejectUpgrade(socket: Socket, code: number, msg: string): void {
-  socket.write(`HTTP/1.1 ${code} ${msg}\r\nConnection: close\r\n\r\n`);
+  try {
+    if (!socket.destroyed) {
+      socket.write(`HTTP/1.1 ${code} ${msg}\r\nConnection: close\r\n\r\n`);
+    }
+  } catch {
+    // best effort — the socket may already be gone
+  }
   socket.destroy();
 }
 
@@ -65,7 +71,12 @@ export function attachNodeWebSockets(server: Server): void {
     }
 
     if (pathname === AGENT_PATH) {
-      void handleAgentUpgrade(agentWss, req, socket as Socket, head);
+      // Never let a failed hello (DB error, constraint violation, ...) escape as
+      // an unhandledRejection — that takes down the whole API process.
+      handleAgentUpgrade(agentWss, req, socket as Socket, head).catch((e) => {
+        log.error({ err: e }, 'agent WS upgrade failed');
+        rejectUpgrade(socket as Socket, 500, 'Internal Error');
+      });
     } else if (pathname === STAFF_PATH) {
       staffWss.handleUpgrade(req, socket as Socket, head, (ws) => {
         staffWss.emit('connection', ws, req);

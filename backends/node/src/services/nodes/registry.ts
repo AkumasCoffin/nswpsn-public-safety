@@ -133,10 +133,21 @@ export async function bindInstallId(nodeId: string, installId: string): Promise<
   const pool = await getPool();
   if (!pool) return 'mismatch';
   // Atomic claim: only sets install_id when it's currently NULL.
-  const claim = await pool.query(
-    `UPDATE nodes SET install_id = $2 WHERE id = $1 AND install_id IS NULL`,
-    [nodeId, installId],
-  );
+  let claim;
+  try {
+    claim = await pool.query(
+      `UPDATE nodes SET install_id = $2 WHERE id = $1 AND install_id IS NULL`,
+      [nodeId, installId],
+    );
+  } catch (e: unknown) {
+    // 23505 on nodes_user_id_install_id_key: this machine is already TOFU-bound
+    // to a DIFFERENT node row of the same user (e.g. a stale row from a
+    // re-provisioned node). Reject this connect instead of throwing — rotate the
+    // old node's token (which clears its binding) or delete the stale row to
+    // let this node claim the machine.
+    if ((e as { code?: string })?.code === '23505') return 'mismatch';
+    throw e;
+  }
   if ((claim.rowCount ?? 0) > 0) return 'bound';
   const cur = await pool.query<{ install_id: string | null }>(
     `SELECT install_id FROM nodes WHERE id = $1`,
