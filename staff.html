@@ -3468,11 +3468,15 @@
           const freq = (ev.freqMhz != null && isFinite(ev.freqMhz))
             ? `${Number(ev.freqMhz).toFixed(4)} MHz` : '—';
           const msg = ev.message || '';
+          const capStr = ev.capcode != null ? String(ev.capcode) : '—';
+          const capCell = ev.capcodeAlias
+            ? `<span class="nd-strong">${escapeHtml(String(ev.capcodeAlias))}</span> <span class="nd-sub">${escapeHtml(capStr)}</span>`
+            : `<span class="nd-strong">${escapeHtml(capStr)}</span>`;
           return `<tr>
             <td>${timeCell}</td>
             <td><span class="nd2-type-chip pager">PAGER</span></td>
             <td><span class="nd-sub">${escapeHtml(freq)}</span></td>
-            <td><span class="nd-strong">${escapeHtml(String(ev.capcode != null ? ev.capcode : '—'))}</span></td>
+            <td>${capCell}</td>
             <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
             <td>—</td>
             <td>${nodeCell || '—'}</td>

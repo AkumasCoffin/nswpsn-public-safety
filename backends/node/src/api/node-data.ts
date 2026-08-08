@@ -28,6 +28,9 @@
  * The monitoring endpoints (systems/system/site/talkgroups/radios) read the
  * 30-day detail table only — window is 24h|7d|30d (default 7d), no 'all'.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
@@ -62,6 +65,147 @@ async function talkgroupLabels(): Promise<Map<number, string>> {
     log.warn({ err: e }, 'talkgroupLabels: failed to load global config');
   }
   _tgLabelCache = { at: Date.now(), map };
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Pager capcode → alias resolution.
+//
+// The operator's Pagermon server owns the capcode↔alias mapping; we read its
+// exported reference CSV (data/pager/Capcode-Aliases.csv at the repo root)
+// purely to LABEL bare capcodes in the Data views — same display-only pattern
+// as talkgroupLabels above. Nothing is imported into the feeder config.
+// ---------------------------------------------------------------------------
+
+/** Normalise a capcode for matching: trim + strip leading zeros. '000'→'0'. */
+export function normalizeCapcode(v: unknown): string {
+  const s = String(v ?? '').trim();
+  const stripped = s.replace(/^0+/, '');
+  return stripped === '' ? (s === '' ? '' : '0') : stripped;
+}
+
+/**
+ * Minimal RFC-4180-ish CSV splitter: handles quoted fields containing commas,
+ * newlines and escaped quotes (""). Strips a leading UTF-8 BOM. Returns rows
+ * of string cells. Not a general CSV lib — just enough for the alias export.
+ */
+export function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  // Strip BOM if present.
+  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const pushField = () => {
+    row.push(field);
+    field = '';
+  };
+  const pushRow = () => {
+    pushField();
+    rows.push(row);
+    row = [];
+  };
+  for (; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      pushField();
+    } else if (ch === '\n') {
+      pushRow();
+    } else if (ch === '\r') {
+      // swallow — the following \n (if any) triggers the row push
+    } else {
+      field += ch;
+    }
+  }
+  // Trailing field/row (file without a final newline).
+  if (field !== '' || row.length > 0) pushRow();
+  return rows;
+}
+
+/**
+ * Build the capcode→{alias, agency} map from CSV text. Header-driven so the
+ * column order can drift; requires at least an `address` and `alias` column.
+ */
+export function parseCapcodeAliasCsv(
+  text: string,
+): Map<string, { alias: string; agency: string | null }> {
+  const map = new Map<string, { alias: string; agency: string | null }>();
+  const rows = parseCsvRows(text);
+  if (rows.length === 0) return map;
+  const header = rows[0]!.map((h) => h.trim().toLowerCase());
+  const iAddr = header.indexOf('address');
+  const iAlias = header.indexOf('alias');
+  const iAgency = header.indexOf('agency');
+  if (iAddr === -1 || iAlias === -1) return map;
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r]!;
+    const key = normalizeCapcode(cells[iAddr]);
+    const alias = (cells[iAlias] ?? '').trim();
+    if (key === '' || alias === '') continue;
+    if (map.has(key)) continue; // first alias wins
+    const agency = iAgency !== -1 ? (cells[iAgency] ?? '').trim() || null : null;
+    map.set(key, { alias, agency });
+  }
+  return map;
+}
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Backend runs from backends/node; the data folder is at the repo root
+// (../../data/pager/... from the backend dir). Resolve from both the module
+// anchor (dist/api or src/api → repo root) and process.cwd() so it works in
+// prod build, dev via tsx, and tests regardless of the launch directory.
+function capcodeCsvCandidates(): string[] {
+  const env = (process.env['PAGER_CAPCODE_CSV'] ?? '').trim();
+  const rel = 'data/pager/Capcode-Aliases.csv';
+  return [
+    ...(env ? [env] : []),
+    path.resolve(HERE, '../../../..', rel), // dist/api|src/api → repo root
+    path.resolve(process.cwd(), '../..', rel), // cwd = backends/node
+    path.resolve(process.cwd(), rel), // cwd = repo root
+  ];
+}
+
+let _capcodeCache: {
+  at: number;
+  map: Map<string, { alias: string; agency: string | null }>;
+} | null = null;
+let _capcodeMissingWarned = false;
+
+/** capcode (normalised) → {alias, agency}. Cached ~5 min (static file). */
+export function capcodeAliases(): Map<string, { alias: string; agency: string | null }> {
+  if (_capcodeCache && Date.now() - _capcodeCache.at < 5 * 60_000) return _capcodeCache.map;
+  let map = new Map<string, { alias: string; agency: string | null }>();
+  const candidates = capcodeCsvCandidates();
+  let loaded = false;
+  for (const p of candidates) {
+    try {
+      const text = readFileSync(p, 'utf8');
+      map = parseCapcodeAliasCsv(text);
+      loaded = true;
+      log.info({ path: p, aliases: map.size }, 'loaded pager capcode aliases');
+      break;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  if (!loaded && !_capcodeMissingWarned) {
+    _capcodeMissingWarned = true;
+    log.warn({ candidates }, 'pager capcode alias CSV not found — capcodes shown unlabelled');
+  }
+  _capcodeCache = { at: Date.now(), map };
   return map;
 }
 
@@ -656,6 +800,7 @@ nodeDataRouter.get(
       const radioMap = new Map((radioDetail?.rows ?? []).map((r) => [r.id, r]));
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
       const labels = await talkgroupLabels();
+      const capAliases = pagerIds.length > 0 ? capcodeAliases() : null;
 
       const events = page
         .map((row) => {
@@ -684,11 +829,14 @@ nodeDataRouter.get(
           }
           const d = pagerMap.get(row.id);
           if (!d) return null;
+          const alias = capAliases?.get(normalizeCapcode(d.capcode)) ?? null;
           return {
             type: 'pager' as const,
             id: Number(d.id),
             at: iso(d.at),
             capcode: d.capcode,
+            capcodeAlias: alias?.alias ?? null,
+            agency: alias?.agency ?? null,
             message: d.message,
             freqMhz: d.freq_mhz,
             nodes: d.nodes,
