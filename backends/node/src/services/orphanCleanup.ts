@@ -142,6 +142,43 @@ export function selectOrphans(
   return orphans;
 }
 
+/**
+ * Authoritative "is this ONE account an incomplete signup?" check, by the SAME
+ * structural rule findOrphanSignups / selectOrphans use: an account is
+ * incomplete ONLY when it has NO role AND NO editor request (linked by its id OR
+ * by its email). Any role → keep; any request → keep.
+ *
+ * Queries the DB directly (not the cached getUserRoles) so the decision is never
+ * stale. No race guard: the caller is the account owner acting on their own
+ * just-abandoned login, so there's no in-flight-signup ambiguity to protect
+ * against — and the by-request check still keeps anyone who did submit the form.
+ *
+ * This is the ultimate safety net for the self-service discard endpoint: even a
+ * mis-triggered call returns false (keep) for any account that has a role or a
+ * request, so a real pending user can never be deleted.
+ */
+export async function accountIsIncomplete(
+  pool: Pool,
+  userId: string,
+  email: string | null,
+): Promise<boolean> {
+  const roleRes = await pool.query(
+    'SELECT 1 FROM user_roles WHERE user_id = $1 LIMIT 1',
+    [userId],
+  );
+  if ((roleRes.rowCount ?? 0) > 0) return false; // approved user — keep
+
+  const normEmail = (email ?? '').trim().toLowerCase();
+  const reqRes = await pool.query(
+    `SELECT 1 FROM editor_requests
+      WHERE supabase_user_id = $1
+         OR ($2 <> '' AND lower(email) = $2)
+      LIMIT 1`,
+    [userId, normEmail],
+  );
+  return (reqRes.rowCount ?? 0) === 0; // no request at all → incomplete
+}
+
 /** Accounts with no roles AND no editor request. `respectRaceGuard` skips very
  *  recently created accounts (an in-flight signup). */
 export async function findOrphanSignups(pool: Pool, respectRaceGuard = true): Promise<OrphanUser[]> {

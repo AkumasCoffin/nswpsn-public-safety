@@ -50,6 +50,44 @@
       margin: 0;
       padding: 0;
     }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.8);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      z-index: 1000;
+    }
+    .modal-overlay[hidden] { display: none; }
+    .modal-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+    .modal-icon {
+      font-size: 2rem;
+      color: var(--accent);
+      margin-bottom: 1rem;
+    }
+    .modal-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+    }
+    .modal-body {
+      color: var(--text-soft);
+      font-size: 0.95rem;
+      line-height: 1.5;
+      margin-bottom: 1.5rem;
+    }
     
     body {
       font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -476,6 +514,27 @@
     </div>
   </div>
 
+  <!-- Sign-up-first modal: shown when someone uses "Continue with Discord" on
+       this login page WITHOUT ever having signed up. Their empty account is
+       discarded server-side; they must go through the signup form instead. -->
+  <div id="signup-first-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="signup-first-title" hidden>
+    <div class="modal-card">
+      <div class="modal-icon"><i class="fas fa-user-plus"></i></div>
+      <h2 id="signup-first-title" class="modal-title">Sign up first</h2>
+      <p class="modal-body">
+        There's no access request on this account yet. Please sign up to request
+        access — that's what puts you in the approval queue.
+      </p>
+      <a href="signup.html" class="btn" style="margin-bottom: 0.75rem;">
+        <i class="fas fa-user-plus"></i>
+        Go to sign up
+      </a>
+      <button type="button" class="btn btn-outline" onclick="document.getElementById('signup-first-modal').hidden = true;">
+        Close
+      </button>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
   <script>
@@ -561,6 +620,44 @@
           // frontend can be live before the backend adds this field, and an
           // `undefined` here would wrongly sign out a pending (no-roles-yet) user.
           if (noRoles && d.has_request === false) {
+            // Was this a signup-FORM Discord flow? Those stash the completed
+            // form under this key BEFORE the OAuth redirect and auto-submit it
+            // on signup.html — they must NEVER be discarded. A bare login-page
+            // "Continue with Discord" for a brand-new user has NO stash: the
+            // OAuth already minted an empty orphan account, so discard it
+            // server-side and steer them to the signup form.
+            const PENDING_DISCORD_KEY = 'nswpsn:pendingDiscordSignup';
+            const cameFromSignupForm = localStorage.getItem(PENDING_DISCORD_KEY) !== null;
+            if (!cameFromSignupForm) {
+              try {
+                const { data: sess } = await sb.auth.getSession();
+                const token = sess && sess.session && sess.session.access_token;
+                if (token) {
+                  const resp = await fetch(`${API_BASE_URL}/api/account/discard-incomplete`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token },
+                  });
+                  if (resp.ok) {
+                    const body = await resp.json();
+                    if (body && body.deleted === true) {
+                      // Account removed. Do NOT auto-redirect — bouncing them
+                      // back through OAuth would just recreate the account.
+                      // Show the "sign up first" modal and let them click
+                      // through so a real signup goes via the form.
+                      try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
+                      const modal = document.getElementById('signup-first-modal');
+                      if (modal) modal.hidden = false;
+                      return;
+                    }
+                    // deleted:false → they actually have a request; fall through
+                    // to the normal signup routing below.
+                  }
+                }
+              } catch (e) { /* network error — fall through to the safe redirect */ }
+            }
+            // Signup-form user (stash present) OR the account wasn't discarded:
+            // keep the original behaviour — sign out and send them to finish
+            // signing up.
             try { await sb.auth.signOut(); } catch (e) { /* ignore */ }
             window.location.href = 'signup.html?welcome=1';
             return;

@@ -46,6 +46,7 @@ import {
   isPrivilegedRole,
   isOwner,
 } from '../services/auth/roles.js';
+import { accountIsIncomplete, deleteAccount } from '../services/orphanCleanup.js';
 
 export const editorRouter = new Hono();
 
@@ -537,6 +538,56 @@ editorRouter.delete('/api/editor-requests/:id', requireRole(isOwner), async (c) 
   } catch (err) {
     log.error({ err }, 'Error deleting editor request');
     return c.json({ error: 'Failed to delete request' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/account/discard-incomplete  — SELF-SERVICE. Deletes the CALLER's
+// OWN account, and ONLY when it's an incomplete signup (no roles AND no editor
+// request). This exists for the login-page "Continue with Discord" flow: any
+// first OAuth mints a Supabase account, so a brand-new user who authorizes on
+// the LOGIN page (never the signup form) ends up with an empty orphan account.
+// The frontend calls this to discard that account and steer them to signup.
+//
+// SAFETY: no requireRole — it's gated by the caller's own verified JWT and can
+// only ever touch c.get('userId'). It AUTHORITATIVELY re-checks (server-side,
+// uncached, by the same rule as cleanup-incomplete) that the account is truly
+// incomplete before deleting; a real pending user (any role OR any request) is
+// returned deleted:false and never touched.
+// ---------------------------------------------------------------------------
+editorRouter.post('/api/account/discard-incomplete', async (c) => {
+  const userId = c.get('userId');
+  if (!userId) return c.json({ error: 'authentication required' }, 401);
+
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json(DB_UNAVAILABLE, 503);
+
+    // Ultimate safety net: only delete when the account has NO role AND NO
+    // request (by id OR email). If it has either, keep it — return deleted:false.
+    const email = c.get('userEmail') ?? null;
+    const incomplete = await accountIsIncomplete(pool, userId, email);
+    if (!incomplete) {
+      return c.json({ deleted: false, reason: 'has_roles_or_request' });
+    }
+
+    // Deletion needs the service-role admin API, like the other admin-delete
+    // paths. Report 503 (not a silent no-op) when it isn't configured.
+    if (!(config.SUPABASE_URL && config.SUPABASE_SERVICE_ROLE_KEY)) {
+      return c.json({ error: 'Supabase not configured' }, 503);
+    }
+
+    // Reuse the exact delete helper the owner cleanup + DELETE /api/users use:
+    // Supabase auth user + user_roles + nodes, then roles-cache invalidation.
+    const ok = await deleteAccount(pool, userId);
+    if (!ok) {
+      return c.json({ error: 'Failed to delete account' }, 502);
+    }
+    log.info({ userId }, 'Self-service discard of incomplete signup');
+    return c.json({ deleted: true });
+  } catch (err) {
+    log.error({ err, userId }, 'Error discarding incomplete signup');
+    return c.json({ error: 'Failed to discard account' }, 500);
   }
 });
 

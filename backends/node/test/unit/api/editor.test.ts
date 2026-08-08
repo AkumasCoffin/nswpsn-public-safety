@@ -33,8 +33,20 @@ vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   };
 });
 
+// Keep accountIsIncomplete REAL (it's the safety-critical rule, driven here by
+// the mocked pool's resultQueue), but stub deleteAccount so the discard tests
+// never touch the real Supabase admin API — we only assert it's invoked.
+vi.mock('../../../src/services/orphanCleanup.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/services/orphanCleanup.js')>();
+  return {
+    ...actual,
+    deleteAccount: vi.fn(async () => true),
+  };
+});
+
 const { editorRouter } = await import('../../../src/api/editor.js');
 const roles = await import('../../../src/services/auth/roles.js');
+const orphan = await import('../../../src/services/orphanCleanup.js');
 const { _resetRolesCacheForTests } = roles;
 
 // Injects a verified user id by default (POST /api/editor-requests is public
@@ -56,6 +68,8 @@ beforeEach(() => {
   resultQueue = [];
   getPoolReturn = 'pool';
   fakePool.query.mockClear();
+  vi.mocked(orphan.deleteAccount).mockClear();
+  vi.mocked(orphan.deleteAccount).mockResolvedValue(true);
   _resetRolesCacheForTests();
 });
 
@@ -600,6 +614,123 @@ describe('503 when DB is unavailable', () => {
     const res = await app.request('/api/check-admin/u');
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'database unavailable' });
+  });
+});
+
+describe('POST /api/account/discard-incomplete (self-service)', () => {
+  // Configure Supabase so the delete branch isn't short-circuited to 503.
+  // Restored after each test.
+  let cfgMod: typeof import('../../../src/config.js');
+  let origUrl: string | undefined;
+  let origKey: string | undefined;
+  async function withSupabaseConfigured() {
+    cfgMod = await import('../../../src/config.js');
+    origUrl = cfgMod.config.SUPABASE_URL;
+    origKey = cfgMod.config.SUPABASE_SERVICE_ROLE_KEY;
+    (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = 'https://test.supabase.co';
+    (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY = 'srv-test-key';
+  }
+  function restoreConfig() {
+    if (!cfgMod) return;
+    (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = origUrl;
+    (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY = origKey;
+  }
+
+  it('401 when no verified user (no JWT)', async () => {
+    const app = makeApp({ authed: false });
+    const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
+    expect(res.status).toBe(401);
+    // The safety-critical delete helper is never even reached.
+    expect(orphan.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('deletes an incomplete account (no roles, no request) → deleted:true', async () => {
+    await withSupabaseConfigured();
+    try {
+      // accountIsIncomplete runs 2 queries: user_roles (none) then editor_requests (none).
+      resultQueue = [
+        { rows: [] },              // SELECT 1 FROM user_roles → no role
+        { rows: [], rowCount: 0 }, // SELECT 1 FROM editor_requests → no request
+      ];
+      const app = makeApp(); // userId 'owner-1'
+      const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ deleted: true });
+      // The reused delete path was invoked for the CALLER's own id only.
+      expect(orphan.deleteAccount).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(orphan.deleteAccount).mock.calls[0]?.[1]).toBe('owner-1');
+    } finally {
+      restoreConfig();
+    }
+  });
+
+  it('does NOT delete an account WITH a pending request → deleted:false', async () => {
+    await withSupabaseConfigured();
+    try {
+      resultQueue = [
+        { rows: [] },                    // no role
+        { rows: [{ x: 1 }], rowCount: 1 }, // HAS an editor_request → keep
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ deleted: false, reason: 'has_roles_or_request' });
+      // A real pending user is NEVER deleted.
+      expect(orphan.deleteAccount).not.toHaveBeenCalled();
+    } finally {
+      restoreConfig();
+    }
+  });
+
+  it('does NOT delete an account that already has a role → deleted:false', async () => {
+    await withSupabaseConfigured();
+    try {
+      // First query (user_roles) returns a row → short-circuits as "has role".
+      resultQueue = [{ rows: [{ role: 'map_editor' }], rowCount: 1 }];
+      const app = makeApp();
+      const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ deleted: false, reason: 'has_roles_or_request' });
+      expect(orphan.deleteAccount).not.toHaveBeenCalled();
+    } finally {
+      restoreConfig();
+    }
+  });
+
+  it('503 when incomplete but Supabase is not configured (no silent no-op)', async () => {
+    cfgMod = await import('../../../src/config.js');
+    origUrl = cfgMod.config.SUPABASE_URL;
+    origKey = cfgMod.config.SUPABASE_SERVICE_ROLE_KEY;
+    (cfgMod.config as { SUPABASE_URL?: string }).SUPABASE_URL = undefined;
+    (cfgMod.config as { SUPABASE_SERVICE_ROLE_KEY?: string }).SUPABASE_SERVICE_ROLE_KEY = undefined;
+    try {
+      resultQueue = [
+        { rows: [] },              // no role
+        { rows: [], rowCount: 0 }, // no request → incomplete
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
+      expect(res.status).toBe(503);
+      expect(orphan.deleteAccount).not.toHaveBeenCalled();
+    } finally {
+      restoreConfig();
+    }
+  });
+
+  it('502 when the delete helper fails', async () => {
+    await withSupabaseConfigured();
+    vi.mocked(orphan.deleteAccount).mockResolvedValueOnce(false);
+    try {
+      resultQueue = [
+        { rows: [] },
+        { rows: [], rowCount: 0 },
+      ];
+      const app = makeApp();
+      const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
+      expect(res.status).toBe(502);
+    } finally {
+      restoreConfig();
+    }
   });
 });
 
