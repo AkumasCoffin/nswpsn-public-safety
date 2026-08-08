@@ -213,6 +213,19 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 		BroadcastConfigurations: []vceBroadcast{},
 	}
 
+	// The alias list P25 channels reference MUST be the same list the pushed
+	// aliases use (the backend is the source of truth for the name, e.g.
+	// "NSWPSN") — otherwise vce rejects the channel as referencing an
+	// incompatible/empty list. Fall back to the preset's name when no alias
+	// carries one.
+	p25ListName := presetList
+	for _, a := range payload.Aliases {
+		if l := strings.TrimSpace(a.List); l != "" {
+			p25ListName = l
+			break
+		}
+	}
+
 	// ---- channels -----------------------------------------------------------
 	// effectiveChannels honours Node on/off: capture-off forces every channel
 	// autoStart=false so the import brings up nothing.
@@ -239,11 +252,11 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 			order := ch.Order
 			vch.AutoStartOrder = &order
 		}
-		// Alias lists are protocol-family-owned in vce; the preset list is a P25
+		// Alias lists are protocol-family-owned in vce; the alias list is a P25
 		// list, so only P25 channels may reference it (a family mismatch would be
 		// rejected/nulled by vce's channel-compatibility policy).
 		if ch.Decoder == "p25p1" || ch.Decoder == "p25p2" {
-			vch.AliasListName = presetList
+			vch.AliasListName = p25ListName
 		}
 		state.Channels = append(state.Channels, vch)
 	}

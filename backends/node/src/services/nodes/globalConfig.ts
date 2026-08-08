@@ -63,7 +63,7 @@ const LooseObj = z.record(z.string(), z.unknown());
 /** The single SDR-Trunk alias list every generated alias belongs to. Auto-set —
  *  there is one playlist, so operators never pick a list. The channel's
  *  alias_list_name must match this (preset ships it). */
-export const ALIAS_LIST_NAME = 'catch all PSN';
+export const ALIAS_LIST_NAME = 'NSWPSN';
 
 /**
  * An Agency: the unified entity that owns its SDR-Trunk alias + stream AND its
@@ -167,7 +167,10 @@ function agencyToAlias(a: Agency): Alias | null {
   if (!a.aliasIds || a.aliasIds.length === 0) return null;
   const ids: AliasId[] = [
     { type: 'priority', attrs: { priority: String(a.priority ?? 100) } },
-    { type: 'broadcastChannel', attrs: { channel: a.name } },
+    // Route to the agency's stream. The stream name is the TRIMMED agency name
+    // (see streamTargets/agenciesToSystems), so the broadcastChannel must be
+    // trimmed too or a stray space (e.g. "NPWS ") silently breaks routing.
+    { type: 'broadcastChannel', attrs: { channel: a.name.trim() } },
     ...a.aliasIds,
   ];
   return {
@@ -236,7 +239,8 @@ export function agenciesToTalkgroupAliases(agencies: Agency[]): Alias[] {
         list: ALIAS_LIST_NAME,
         group: agency.name,
         ids: [
-          { type: 'broadcastChannel', attrs: { channel: agency.name } },
+          // Trimmed to match the stream name (see agencyToAlias note).
+          { type: 'broadcastChannel', attrs: { channel: agency.name.trim() } },
           { type: 'talkgroup', attrs: { protocol: 'APCO25', value: String(id) } },
         ],
       });
