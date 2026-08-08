@@ -13,6 +13,7 @@
  *                    assign privileged roles (team_member / dev / owner).
  *   - dev          : Dev tab visibility only.
  *   - map_editor   : Map editor page access.
+ *   - node_monitor : view-only Data + Nodes pages (reads, no editing).
  *   - pager_contributor / radio_contributor : feature roles, no admin.
  */
 import type { MiddlewareHandler } from 'hono';
@@ -97,6 +98,17 @@ export async function canManageUsers(userId: string): Promise<boolean> {
  */
 export async function canManageNodes(userId: string): Promise<boolean> {
   return hasRole(userId, ['owner', 'dev']);
+}
+
+/**
+ * Owner, dev, OR node_monitor — gates READ access to the staff Data page and
+ * the Nodes-page views (GET /api/node-data/* and the GET /api/nodes/*
+ * endpoints). node_monitor is a view-only feature role: it can see this data
+ * but every mutating node route stays on canManageNodes (owner|dev). Mirrors
+ * the check-admin `can_view_node_data` flag (isOwner || isDev || isNodeMonitor).
+ */
+export async function canViewNodeData(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'dev', 'node_monitor']);
 }
 
 /**

@@ -20,10 +20,11 @@ vi.mock('../../../src/db/pool.js', () => ({
   closePool: vi.fn(),
 }));
 
-// requireRole stays real; canManageNodes is stubbed true so the routes run.
+// requireRole stays real; the node-data reads are gated on canViewNodeData —
+// stub it true so the routes run.
 vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
-  return { ...actual, canManageNodes: vi.fn(() => Promise.resolve(true)) };
+  return { ...actual, canViewNodeData: vi.fn(() => Promise.resolve(true)) };
 });
 
 beforeAll(() => {
