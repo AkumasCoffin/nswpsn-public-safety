@@ -33,6 +33,7 @@ import {
   recordActivityEvents,
   markRecorded,
   recordPagerEvent,
+  upsertSiteSnapshots,
   safeInt,
 } from '../services/nodeEvents.js';
 
@@ -366,6 +367,143 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
     `activity ingest node=${node.id.slice(0, 8)} stream=${parsed.streamId.slice(0, 12)} events=${parsed.events.length} accepted=${accepted}`,
   );
   return c.json({ ok: true, accepted });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/node-ingest/site-snapshots
+//
+// Deep P25 site metadata (migration 047) from a RADIO node's agent — the
+// sdrtrunk-vce GET /site/snapshots feed (control channel, channel plan,
+// neighbors, frequency bands, decode quality). Pure capture like /activity:
+// nothing forwarded, no relay config / feed gate. Idempotent — re-POSTing a
+// batch UPSERTs on (node, system, rfss, site), never duplicates. Same node
+// auth + guards as /activity.
+// ---------------------------------------------------------------------------
+
+// JSON body cap. A node monitors a handful of sites, each ~a few KB of
+// nested channels/neighbors/bands, so 512KB is generous. Manual
+// Content-Length guard (NEVER hono bodyLimit — buffers chunked bodies).
+const MAX_SITE_BYTES = 512 * 1024;
+
+// Per-node rate limit. Sites change rarely; the agent re-posts its full set
+// on a slow cadence, so a few posts/min is plenty. 20/min bounds abuse.
+const siteRateOk = makeNodeRateLimiter(20, 60_000);
+
+// Nested facts are stored verbatim as JSONB (read whole, never queried
+// column-wise), so they are passthrough-validated as arrays/records rather
+// than field-by-field — keeps the ingest tolerant of vce contract additions.
+const SiteChannelSchema = z.record(z.string(), z.unknown());
+const SiteSnapshotSchema = z.object({
+  systemId: z.number().int().nullish(),
+  rfss: z.number().int().nullish(),
+  siteId: z.number().int().nullish(),
+  guid: z.string().max(128).nullish(),
+  systemName: z.string().max(128).nullish(),
+  wacn: z.number().int().nullish(),
+  nac: z.number().int().nullish(),
+  lra: z.number().int().nullish(),
+  channelName: z.string().max(128).nullish(),
+  controlFrequencyMhz: z.number().nullish(),
+  controlLcn: z.string().max(32).nullish(),
+  affiliatedRadioCount: z.number().int().nullish(),
+  observationCount: z.number().int().nullish(),
+  firstSeenMs: z.number().int().nullish(),
+  lastSeenMs: z.number().int().nullish(),
+  status: z.record(z.string(), z.unknown()).nullish(),
+  channels: z.array(SiteChannelSchema).max(512).nullish(),
+  neighbors: z.array(SiteChannelSchema).max(512).nullish(),
+  bands: z.array(SiteChannelSchema).max(64).nullish(),
+  quality: z.record(z.string(), z.unknown()).nullish(),
+});
+
+// The vce endpoint returns {sites:[...]}; the agent may forward either that
+// wrapper or the bare array. Accept both, nullish-tolerant.
+const SiteBodySchema = z.union([
+  z.array(SiteSnapshotSchema).max(256),
+  z.object({ sites: z.array(SiteSnapshotSchema).max(256) }),
+]);
+
+nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
+  // 1-2. Node credentials + per-node token resolve (role gated), TOFU install
+  //      match — identical to /activity.
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') {
+      return c.json({ error: 'contributor role removed' }, 403);
+    }
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  // Only radio-kind nodes decode P25 sites. Hard-reject the rest.
+  if (r.kind !== 'radio') {
+    return c.json({ error: 'not a radio node' }, 403);
+  }
+  const node = { id: r.nodeId };
+
+  // 3. Per-node rate limit. NON-2xx so the agent retries the same set next
+  //    tick (a 2xx would advance its cursor and lose the batch).
+  if (!siteRateOk(node.id)) {
+    log.warn(`site ingest: RATE-LIMITED node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: false, error: 'rate limit' }, 429);
+  }
+
+  // 4. Size guard — require Content-Length and cap it (closes the
+  //    chunked-body bypass, same rationale as the other routes).
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > MAX_SITE_BYTES) {
+    return c.json({ error: 'batch too large' }, 413);
+  }
+
+  // 5. Parse + validate.
+  let parsed: z.infer<typeof SiteBodySchema>;
+  try {
+    parsed = SiteBodySchema.parse(await c.req.json());
+  } catch {
+    return c.json({ error: 'bad body' }, 400);
+  }
+  const sites = Array.isArray(parsed) ? parsed : parsed.sites;
+
+  // 6. Upsert. Fire-safe by contract (never throws); returns rows written.
+  const written = await upsertSiteSnapshots(
+    node.id,
+    sites.map((s) => ({
+      systemId: s.systemId ?? null,
+      rfss: s.rfss ?? null,
+      siteId: s.siteId ?? null,
+      guid: s.guid ?? null,
+      systemName: s.systemName ?? null,
+      wacn: s.wacn ?? null,
+      nac: s.nac ?? null,
+      lra: s.lra ?? null,
+      channelName: s.channelName ?? null,
+      controlFrequencyMhz: s.controlFrequencyMhz ?? null,
+      controlLcn: s.controlLcn ?? null,
+      affiliatedRadioCount: s.affiliatedRadioCount ?? null,
+      observationCount: s.observationCount ?? null,
+      firstSeenMs: s.firstSeenMs ?? null,
+      lastSeenMs: s.lastSeenMs ?? null,
+      status: s.status ?? null,
+      channels: s.channels ?? [],
+      neighbors: s.neighbors ?? [],
+      bands: s.bands ?? [],
+      quality: s.quality ?? null,
+    })),
+  );
+  log.info(
+    `site ingest node=${node.id.slice(0, 8)} sites=${sites.length} written=${written}`,
+  );
+  return c.json({ ok: true, written });
 });
 
 // ---------------------------------------------------------------------------

@@ -1116,9 +1116,18 @@ nodeDataRouter.get(
           last_seen: Date;
           top_tg: number | null;
           top_tg_calls: unknown;
+          control_frequency_mhz: number | null;
+          channel_count: number | null;
+          neighbor_count: number | null;
         }>(
+          // meta: deep-metadata enrichment (migration 047) — the latest
+          // node_site_snapshots row for this (system, rfss, site) across
+          // nodes, so each site in the drill-down carries its control freq +
+          // channel/neighbor counts alongside the event-derived call rollup.
           `SELECT s.rfss, s.site, s.nac, s.calls, s.logical, s.last_seen,
-                  tt.talkgroup AS top_tg, tt.calls AS top_tg_calls
+                  tt.talkgroup AS top_tg, tt.calls AS top_tg_calls,
+                  meta.control_frequency_mhz,
+                  meta.channel_count, meta.neighbor_count
              FROM (
                SELECT site_rfss AS rfss, site_id AS site,
                       MAX(site_nac) AS nac,
@@ -1138,6 +1147,15 @@ nodeDataRouter.get(
                 ORDER BY calls DESC, e.talkgroup ASC
                 LIMIT 1
              ) tt ON true
+             LEFT JOIN LATERAL (
+               SELECT m.control_frequency_mhz,
+                      jsonb_array_length(m.channels) AS channel_count,
+                      jsonb_array_length(m.neighbors) AS neighbor_count
+                 FROM node_site_snapshots m
+                WHERE m.system_id = $2 AND m.rfss = s.rfss AND m.site_id = s.site
+                ORDER BY m.received_at DESC
+                LIMIT 1
+             ) meta ON true
             ORDER BY s.calls DESC, s.rfss ASC, s.site ASC`,
           params,
         ),
@@ -1169,6 +1187,11 @@ nodeDataRouter.get(
             r.top_tg !== null
               ? { talkgroup: r.top_tg, calls: num(r.top_tg_calls) }
               : null,
+          // Deep-metadata enrichment (null until a node forwards site
+          // snapshots — see migration 047 / node_site_snapshots).
+          controlFrequencyMhz: r.control_frequency_mhz ?? null,
+          channelCount: r.channel_count ?? null,
+          neighborCount: r.neighbor_count ?? null,
         })),
         topTalkgroups: detail.topTalkgroups,
         topRadios: detail.topRadios,
@@ -1210,7 +1233,7 @@ nodeDataRouter.get(
         `${p}received_at >= now() - $1::interval AND ${p}system = $2` +
         ` AND ${p}site_rfss = $3 AND ${p}site_id = $4`;
 
-      const [detail, nodesQ] = await Promise.all([
+      const [detail, nodesQ, metaQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
         pool.query<{ id: string; name: string | null; calls: unknown; last_seen: Date }>(
           `SELECT e.node_id AS id, n.name, COUNT(*)::int AS calls,
@@ -1222,7 +1245,64 @@ nodeDataRouter.get(
             ORDER BY calls DESC, e.node_id ASC`,
           params,
         ),
+        // Deep P25 site metadata (migration 047): the latest node_site_snapshots
+        // row for this (systemId, rfss, site) across nodes. Null until a node
+        // forwards site snapshots — the drill-down renders an empty state then.
+        pool.query<{
+          guid: string | null;
+          system_name: string | null;
+          wacn: number | null;
+          nac: number | null;
+          lra: number | null;
+          channel_name: string | null;
+          control_frequency_mhz: number | null;
+          control_lcn: string | null;
+          affiliated_radio_count: number | null;
+          observation_count: number | null;
+          site_first_seen_ms: string | null;
+          site_last_seen_ms: string | null;
+          status: unknown;
+          channels: unknown;
+          neighbors: unknown;
+          bands: unknown;
+          quality: unknown;
+          received_at: Date;
+        }>(
+          `SELECT guid, system_name, wacn, nac, lra, channel_name,
+                  control_frequency_mhz, control_lcn, affiliated_radio_count,
+                  observation_count, site_first_seen_ms, site_last_seen_ms,
+                  status, channels, neighbors, bands, quality, received_at
+             FROM node_site_snapshots
+            WHERE system_id = $2 AND rfss = $3 AND site_id = $4
+            ORDER BY received_at DESC
+            LIMIT 1`,
+          params,
+        ),
       ]);
+
+      const m = metaQ.rows[0] ?? null;
+      const meta = m
+        ? {
+            guid: m.guid,
+            systemName: m.system_name,
+            wacn: m.wacn,
+            nac: m.nac,
+            lra: m.lra,
+            channelName: m.channel_name,
+            controlFrequencyMhz: m.control_frequency_mhz ?? null,
+            controlLcn: m.control_lcn,
+            affiliatedRadioCount: m.affiliated_radio_count ?? null,
+            observationCount: m.observation_count ?? null,
+            firstSeenMs: m.site_first_seen_ms !== null ? Number(m.site_first_seen_ms) : null,
+            lastSeenMs: m.site_last_seen_ms !== null ? Number(m.site_last_seen_ms) : null,
+            status: m.status ?? null,
+            channels: Array.isArray(m.channels) ? m.channels : [],
+            neighbors: Array.isArray(m.neighbors) ? m.neighbors : [],
+            bands: Array.isArray(m.bands) ? m.bands : [],
+            quality: m.quality ?? null,
+            updatedAt: iso(m.received_at),
+          }
+        : null;
 
       return c.json({
         window,
@@ -1230,6 +1310,8 @@ nodeDataRouter.get(
         rfss,
         site,
         totals: detail.totals,
+        // Deep P25 site metadata (null when no node has forwarded it yet).
+        meta,
         topTalkgroups: detail.topTalkgroups,
         topRadios: detail.topRadios,
         series: detail.series,
