@@ -37,6 +37,8 @@ import {
 import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
+import { getPool } from '../db/pool.js';
+import { feederRadioStats } from './node-data.js';
 
 export const feederRouter = new Hono();
 
@@ -520,6 +522,33 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error rotating feeder node token');
     return c.json({ error: 'Failed to rotate token' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/feeder/nodes/:id/stats?window=24h|7d|30d — a LIGHT per-node summary
+// (calls / receptions + top talkgroup / unit / site + a short recent-activity
+// feed) so a contributor can see what their OWN radio node is hearing, without
+// the staff Data page's full drill-downs. Owner-scoped (radio_contributor), NOT
+// gated on any staff/team role.
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/nodes/:id/stats', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  // Radio-only concepts (talkgroups/units/sites). Pager nodes have their own
+  // Messages view instead.
+  if (node.kind !== 'radio') return c.json({ error: 'stats are radio-only' }, 400);
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const url = new URL(c.req.url);
+    const wRaw = (url.searchParams.get('window') ?? '24h').toLowerCase();
+    const window = (['24h', '7d', '30d'] as const).find((w) => w === wRaw) ?? '24h';
+    const stats = await feederRadioStats(pool, node.id, window);
+    return c.json(stats);
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder node stats');
+    return c.json({ error: 'Failed to load stats' }, 500);
   }
 });
 

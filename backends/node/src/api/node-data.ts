@@ -1195,6 +1195,145 @@ async function scopedRadioDetail(
 }
 
 // ---------------------------------------------------------------------------
+// Feeder-facing per-node summary — a LIGHT slice of the Data page, scoped to
+// one node the contributor owns. Backs GET /api/feeder/nodes/:id/stats so a
+// volunteer can see their own node's calls/receptions + top talkgroup / unit /
+// site + a short recent-activity feed, WITHOUT the staff Data page's full
+// drill-downs. Reads node_radio_events scoped to one node_id + window only.
+// ---------------------------------------------------------------------------
+export interface FeederRadioStats {
+  window: DetailWindow;
+  totals: ScopedDetail['totals'];
+  topTalkgroups: ScopedDetail['topTalkgroups'];
+  topRadios: ScopedDetail['topRadios'];
+  topSites: Array<{
+    rfss: number;
+    site: number;
+    name: string | null;
+    calls: number;
+    receptions: number;
+    lastSeen: string;
+  }>;
+  activity: Array<{
+    id: number;
+    at: string;
+    talkgroup: number | null;
+    talkgroupLabel: string | null;
+    system: number | null;
+    sourceUnit: number | null;
+    sourceAlias: string | null;
+    rfss: number | null;
+    site: number | null;
+    siteName: string | null;
+    encrypted: boolean;
+    receptions: number;
+  }>;
+}
+
+export async function feederRadioStats(
+  pool: Pool,
+  nodeId: string,
+  window: DetailWindow,
+): Promise<FeederRadioStats> {
+  const params: unknown[] = [WINDOW_INTERVAL[window], nodeId];
+  // $2 = node id, $1 = window interval. Shared by every query below.
+  const where = () => `node_id = $2 AND received_at >= now() - $1::interval`;
+  const [detail, siteMap, labels, siteQ, actQ] = await Promise.all([
+    scopedRadioDetail(pool, where, params),
+    siteNames(pool),
+    talkgroupLabels(),
+    pool.query<{
+      rfss: number;
+      site: number;
+      system: number | null;
+      calls: unknown;
+      receptions: unknown;
+      last_seen: Date;
+    }>(
+      `SELECT site_rfss AS rfss, site_id AS site,
+              (array_agg(system ORDER BY received_at DESC)
+                 FILTER (WHERE system IS NOT NULL))[1] AS system,
+              COUNT(DISTINCT logical_call_id)::int AS calls,
+              COUNT(*)::int AS receptions,
+              MAX(received_at) AS last_seen
+         FROM node_radio_events
+        WHERE ${where()} AND ${CALL_GROUP}
+          AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+        GROUP BY site_rfss, site_id
+        ORDER BY calls DESC, receptions DESC
+        LIMIT 5`,
+      params,
+    ),
+    pool.query<{
+      id: string;
+      at: Date;
+      talkgroup: number | null;
+      system: number | null;
+      source_unit: number | null;
+      source_alias: string | null;
+      rfss: number | null;
+      site: number | null;
+      encrypted: boolean;
+      receptions: unknown;
+    }>(
+      // One row per logical call (deduped receptions), newest first — the
+      // per-field array_agg prefers the ACTION='CALL' reception for the
+      // identity fields, mirroring the Data page's events list.
+      `SELECT logical_call_id::text AS id,
+              MAX(received_at) AS at,
+              (array_agg(talkgroup ORDER BY (action = 'CALL') DESC, received_at DESC)
+                 FILTER (WHERE talkgroup IS NOT NULL))[1] AS talkgroup,
+              (array_agg(system ORDER BY received_at DESC)
+                 FILTER (WHERE system IS NOT NULL))[1] AS system,
+              (array_agg(source_unit ORDER BY (action = 'CALL') DESC, received_at DESC)
+                 FILTER (WHERE source_unit IS NOT NULL))[1] AS source_unit,
+              (array_agg(source_alias ORDER BY received_at DESC)
+                 FILTER (WHERE source_alias IS NOT NULL))[1] AS source_alias,
+              (array_agg(site_rfss ORDER BY received_at DESC)
+                 FILTER (WHERE site_rfss IS NOT NULL))[1] AS rfss,
+              (array_agg(site_id ORDER BY received_at DESC)
+                 FILTER (WHERE site_id IS NOT NULL))[1] AS site,
+              bool_or(encrypted) AS encrypted,
+              COUNT(*)::int AS receptions
+         FROM node_radio_events
+        WHERE ${where()} AND ${CALL_GROUP}
+        GROUP BY logical_call_id
+        ORDER BY at DESC
+        LIMIT 15`,
+      params,
+    ),
+  ]);
+  return {
+    window,
+    totals: detail.totals,
+    topTalkgroups: detail.topTalkgroups.slice(0, 5),
+    topRadios: detail.topRadios.slice(0, 5),
+    topSites: siteQ.rows.map((r) => ({
+      rfss: r.rfss,
+      site: r.site,
+      name: siteNameFor(siteMap, r.system, r.rfss, r.site),
+      calls: num(r.calls),
+      receptions: num(r.receptions),
+      lastSeen: iso(r.last_seen),
+    })),
+    activity: actQ.rows.map((r) => ({
+      id: Number(r.id),
+      at: iso(r.at),
+      talkgroup: r.talkgroup,
+      talkgroupLabel: r.talkgroup != null ? labels.get(r.talkgroup) ?? null : null,
+      system: r.system,
+      sourceUnit: r.source_unit,
+      sourceAlias: r.source_alias,
+      rfss: r.rfss,
+      site: r.site,
+      siteName: siteNameFor(siteMap, r.system, r.rfss, r.site),
+      encrypted: r.encrypted === true,
+      receptions: num(r.receptions),
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/node-data/systems?window=24h|7d|30d&node=<id opt>
 // One row per distinct (wacn, system) observed in-window, incl. NULLs. Each
 // row EAGER-LOADS its per-site rollup as `sites: [{rfss, site, name, calls,
