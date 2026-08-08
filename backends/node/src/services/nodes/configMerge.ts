@@ -327,7 +327,17 @@ export async function buildConfigPayload(
   // all labels + ranges + routes. Primary list = the first imported list, else a
   // default. Empty when no sdrtrunk config has been imported yet.
   const sdr = globalCfg.sdrtrunkConfig ?? { aliasLists: [], aliases: [], streams: [] };
-  const primaryList = sdr.aliasLists[0]?.name ?? 'NSWPSN';
+  // Primary list = the one the MOST aliases belong to (the comprehensive list,
+  // e.g. NSWPSN with ~1,500 vs the 27-entry range list), falling back to the
+  // first declared list, then a default.
+  const listCounts = new Map<string, number>();
+  for (const a of sdr.aliases) {
+    if (a.list) listCounts.set(a.list, (listCounts.get(a.list) ?? 0) + 1);
+  }
+  const primaryList =
+    [...listCounts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ??
+    sdr.aliasLists[0]?.name ??
+    'NSWPSN';
   const aliases = sdr.aliases.map((a) => ({ ...a, list: primaryList }));
   const derivedSystems = agenciesToSystems(globalCfg.agencies);
 
