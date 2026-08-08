@@ -415,6 +415,23 @@ func (c *Client) ActivityEvents(sinceID int64, limit int) ([]ActivityEvent, int6
 	return r.Events, r.LastID, nil
 }
 
+// SiteSnapshots GETs /site/snapshots and returns the control server's "sites"
+// array. Each element is forwarded to the backend verbatim, so the deep P25
+// site metadata (control channel, channel plan, neighbors, bands, quality) is
+// deliberately NOT modelled here — every object is kept as a raw JSON message
+// and re-serialized unchanged, keeping the agent tolerant of vce contract
+// additions. An older control server without the endpoint returns an error
+// (non-200), which the caller treats as "nothing to ship this tick".
+func (c *Client) SiteSnapshots() ([]json.RawMessage, error) {
+	var r struct {
+		Sites []json.RawMessage `json:"sites"`
+	}
+	if err := c.get("/site/snapshots", &r); err != nil {
+		return nil, err
+	}
+	return r.Sites, nil
+}
+
 // SpectrumConn is a single shared WebSocket to the control server's spectrum
 // endpoint (ws://127.0.0.1:P+1). It ref-counts active tuner streams: the
 // connection opens on the first Start and closes when the last Stop leaves no

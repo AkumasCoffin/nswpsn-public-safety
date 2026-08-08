@@ -104,6 +104,178 @@ const twoSystemCfg = `{
   ]
 }`
 
+// forkSchemaWithTranscribe is the fork schema that STILL carries the transcribe
+// columns (rdioScannerSystems.transcribe + .transcriptionPrompt,
+// rdioScannerTalkgroups.transcribe) — the shape the operator's DB actually has —
+// plus the transcripts plugin's own tables. Used to exercise the transcription
+// sync writes.
+var forkSchemaWithTranscribe = []string{
+	"create table `rdioScannerSystems` (`_id` integer primary key autoincrement, `autoPopulate` tinyint(1) default 0, `blacklists` text not null, `id` integer not null unique, `label` varchar(255) not null, `led` varchar(255), `order` integer, `delay` integer not null default 0, `alert` varchar(64) not null default '', `transcribe` tinyint(1) not null default 1, `transcriptionPrompt` text not null default '')",
+	"create table `rdioScannerTalkgroups` (`_id` integer primary key autoincrement, `frequency` integer, `groupId` integer not null, `id` integer not null, `label` varchar(255) not null, `led` varchar(255), `name` varchar(255) not null, `order` integer, `systemId` integer not null, `tagId` integer not null, `delay` integer not null default 0, `alert` varchar(64) not null default '', `transcribe` tinyint(1) not null default 1)",
+	"create unique index `rdio_scanner_talkgroups_system_id_id` on `rdioScannerTalkgroups` (`systemId`, `id`)",
+	"create table `rdioScannerUnits` (`_id` integer primary key autoincrement, `id` integer not null, `label` varchar(255) not null, `order` integer, `systemId` integer not null)",
+	"create unique index `rdio_scanner_units_system_id_id` on `rdioScannerUnits` (`systemId`, `id`)",
+	"create table `rdioScannerApiKeys` (`_id` integer primary key autoincrement, `disabled` tinyint(1) default 0, `ident` varchar(255), `key` varchar(255) not null unique, `order` integer, `systems` text not null)",
+	"create table `rdioScannerGroups` (`_id` integer primary key autoincrement, `label` varchar(255) not null)",
+	"create table `rdioScannerTags` (`_id` integer primary key autoincrement, `label` varchar(255) not null)",
+	"create table `rdioScannerDownstreams` (`_id` integer primary key autoincrement, `apiKey` varchar(255) not null, `disabled` tinyint(1) default 0, `order` integer, `systems` text not null, `url` varchar(255) not null)",
+	// The transcripts plugin's own tables (this code never creates them; it only
+	// writes when present).
+	"create table `plugin_transcripts_systems` (`systemId` integer not null, `transcribe` boolean default 1, `prompt` text, primary key (`systemId`))",
+	"create table `plugin_transcripts_talkgroups` (`systemId` integer not null, `talkgroupId` integer not null, `transcribe` boolean default 1, primary key (`systemId`, `talkgroupId`))",
+}
+
+func newRdioDBFromSchema(t *testing.T, schema []string) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "rdio-scanner.db")
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	for _, q := range schema {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("ddl %q: %v", q, err)
+		}
+	}
+	return dbPath
+}
+
+// transcribeCfg carries system-level transcribe+transcriptionPrompt and
+// per-talkgroup transcribe, exactly as resolveRdioConfig/the agency editor emit
+// them.
+const transcribeCfg = `{
+  "groups": [{"_id": 10, "label": "Fire"}],
+  "tags": [{"_id": 13, "label": "Dispatch"}],
+  "systems": [
+    {
+      "_id": 1, "id": 1, "label": "RFS", "led": "orange", "order": 1,
+      "autoPopulate": false, "blacklists": "", "delay": 0, "alert": "",
+      "transcribe": true, "transcriptionPrompt": "NSW RFS radio traffic",
+      "talkgroups": [
+        {"id": 30015, "groupId": 10, "tagId": 13, "label": "SWS A", "name": "SWS A", "order": 1, "transcribe": true},
+        {"id": 30016, "groupId": 10, "tagId": 13, "label": "SWS B", "name": "SWS B", "order": 2, "transcribe": false}
+      ],
+      "units": [{"id": 2014294, "label": "State Mitigation", "order": 1}]
+    },
+    {
+      "_id": 2, "id": 2, "label": "ASNSW", "led": "red", "order": 2,
+      "autoPopulate": false, "blacklists": "", "delay": 0, "alert": "",
+      "transcribe": false,
+      "talkgroups": [
+        {"id": 5001, "groupId": 10, "tagId": 13, "label": "AMB 1", "name": "AMB 1", "order": 1}
+      ],
+      "units": [{"id": 700, "label": "Control", "order": 1}]
+    }
+  ],
+  "apiKeys": [{"_id": 1, "disabled": false, "ident": "RFS", "key": "key-aaa", "order": 1, "systems": "*"}],
+  "downstreams": [{"_id": 1, "apiKey": "key-aaa", "disabled": false, "order": null, "systems": "*", "url": "http://127.0.0.1:17390"}]
+}`
+
+// TestWriteConfigDB_TranscriptionSync verifies transcribe/transcriptionPrompt
+// land on the core systems/talkgroups columns AND the plugin_transcripts tables,
+// with the correct defaults, and that a re-apply is idempotent.
+func TestWriteConfigDB_TranscriptionSync(t *testing.T) {
+	dbPath := newRdioDBFromSchema(t, forkSchemaWithTranscribe)
+	cfg := cfgFromJSON(t, transcribeCfg)
+
+	if err := WriteConfigDB(dbPath, cfg); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if err := WriteConfigDB(dbPath, cfg); err != nil {
+		t.Fatalf("second apply (idempotency): %v", err)
+	}
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open verify: %v", err)
+	}
+	defer db.Close()
+
+	// System core columns.
+	var sysTranscribe int
+	var sysPrompt string
+	if err := db.QueryRow(
+		"select `transcribe`, `transcriptionPrompt` from `rdioScannerSystems` where `id` = 1",
+	).Scan(&sysTranscribe, &sysPrompt); err != nil {
+		t.Fatalf("system 1 transcribe cols: %v", err)
+	}
+	if sysTranscribe != 1 || sysPrompt != "NSW RFS radio traffic" {
+		t.Errorf("system 1 core = transcribe %d / prompt %q, want 1 / \"NSW RFS radio traffic\"", sysTranscribe, sysPrompt)
+	}
+	// System 2 transcribe=false, prompt unset → '' default.
+	if err := db.QueryRow(
+		"select `transcribe`, `transcriptionPrompt` from `rdioScannerSystems` where `id` = 2",
+	).Scan(&sysTranscribe, &sysPrompt); err != nil {
+		t.Fatalf("system 2 transcribe cols: %v", err)
+	}
+	if sysTranscribe != 0 || sysPrompt != "" {
+		t.Errorf("system 2 core = transcribe %d / prompt %q, want 0 / \"\"", sysTranscribe, sysPrompt)
+	}
+
+	// System plugin rows mirror the core values.
+	if n := count(t, db, "select `transcribe` from `plugin_transcripts_systems` where `systemId` = 1"); n != 1 {
+		t.Errorf("plugin_transcripts_systems[1].transcribe = %d, want 1", n)
+	}
+	var pluginPrompt string
+	if err := db.QueryRow("select `prompt` from `plugin_transcripts_systems` where `systemId` = 1").Scan(&pluginPrompt); err != nil {
+		t.Fatalf("plugin system prompt: %v", err)
+	}
+	if pluginPrompt != "NSW RFS radio traffic" {
+		t.Errorf("plugin_transcripts_systems[1].prompt = %q, want \"NSW RFS radio traffic\"", pluginPrompt)
+	}
+	if n := count(t, db, "select `transcribe` from `plugin_transcripts_systems` where `systemId` = 2"); n != 0 {
+		t.Errorf("plugin_transcripts_systems[2].transcribe = %d, want 0", n)
+	}
+
+	// Talkgroup core column: 30015 true, 30016 false, 5001 unset → default 1.
+	if n := count(t, db, "select `transcribe` from `rdioScannerTalkgroups` where `systemId` = 1 and `id` = 30015"); n != 1 {
+		t.Errorf("talkgroup 30015.transcribe = %d, want 1", n)
+	}
+	if n := count(t, db, "select `transcribe` from `rdioScannerTalkgroups` where `systemId` = 1 and `id` = 30016"); n != 0 {
+		t.Errorf("talkgroup 30016.transcribe = %d, want 0", n)
+	}
+	if n := count(t, db, "select `transcribe` from `rdioScannerTalkgroups` where `systemId` = 2 and `id` = 5001"); n != 1 {
+		t.Errorf("talkgroup 5001.transcribe (unset) = %d, want 1 (default)", n)
+	}
+	// Talkgroup plugin rows mirror the core column.
+	if n := count(t, db, "select `transcribe` from `plugin_transcripts_talkgroups` where `systemId` = 1 and `talkgroupId` = 30016"); n != 0 {
+		t.Errorf("plugin talkgroup 30016.transcribe = %d, want 0", n)
+	}
+	if n := count(t, db, "select `transcribe` from `plugin_transcripts_talkgroups` where `systemId` = 2 and `talkgroupId` = 5001"); n != 1 {
+		t.Errorf("plugin talkgroup 5001.transcribe = %d, want 1", n)
+	}
+	if n := count(t, db, "select count(*) from `plugin_transcripts_talkgroups`"); n != 3 {
+		t.Errorf("plugin_transcripts_talkgroups rows = %d, want 3", n)
+	}
+}
+
+// TestWriteConfigDB_TranscriptionAbsentColumns verifies a DB WITHOUT the
+// transcribe columns / plugin tables still applies a config that carries
+// transcribe fields, without error (the guards silently skip).
+func TestWriteConfigDB_TranscriptionAbsentColumns(t *testing.T) {
+	dbPath := newRdioDBFromSchema(t, forkSchema) // no transcribe cols, no plugin tables
+	// Seed the groups/tags the config references (newRdioDB does this; here we
+	// use the bare schema, so add them so orphan deletion has a clean baseline).
+	if err := WriteConfigDB(dbPath, cfgFromJSON(t, transcribeCfg)); err != nil {
+		t.Fatalf("apply on DB lacking transcribe cols must not error: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open verify: %v", err)
+	}
+	defer db.Close()
+
+	// Core config still landed.
+	if n := count(t, db, "select count(*) from `rdioScannerSystems`"); n != 2 {
+		t.Errorf("systems = %d, want 2", n)
+	}
+	if n := count(t, db, "select count(*) from `rdioScannerTalkgroups`"); n != 3 {
+		t.Errorf("talkgroups = %d, want 3", n)
+	}
+}
+
 func count(t *testing.T, db *sql.DB, q string, args ...any) int {
 	t.Helper()
 	var n int

@@ -41,6 +41,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/relay"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/siteship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/supervise"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/update"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/version"
@@ -327,6 +328,17 @@ func runAgent(ctx context.Context, configPath string) error {
 			InstallID: cfg.InstallID,
 		})
 		go shipper.Run(ctx)
+
+		// Site-snapshot shipper (radio kind only): polls the control server's
+		// /site/snapshots and forwards the full P25 site metadata set to the
+		// backend on a slow cadence (~60s, full-snapshot replace, no cursor).
+		siteShipper := siteship.New(siteship.Options{
+			Fetch:     sdr.SiteSnapshots,
+			ServerURL: cfg.ServerURL,
+			NodeToken: cfg.NodeToken,
+			InstallID: cfg.InstallID,
+		})
+		go siteShipper.Run(ctx)
 	}
 
 	// Launch the long-lived goroutines.
