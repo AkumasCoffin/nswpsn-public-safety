@@ -1350,15 +1350,18 @@ nodeDataRouter.get(
           quality: unknown;
           received_at: Date;
         }>(
+          // NOTE: its own params — this query never references the $1 window
+          // interval, and Postgres rejects a statement with an unused untyped
+          // parameter ("could not determine data type of parameter $1", 42P18).
           `SELECT guid, system_name, wacn, nac, lra, channel_name,
                   control_frequency_mhz, control_lcn, affiliated_radio_count,
                   observation_count, site_first_seen_ms, site_last_seen_ms,
                   status, channels, neighbors, bands, quality, received_at
              FROM node_site_snapshots
-            WHERE system_id = $2 AND rfss = $3 AND site_id = $4
+            WHERE system_id = $1 AND rfss = $2 AND site_id = $3
             ORDER BY received_at DESC
             LIMIT 1`,
-          params,
+          [system, rfss, site],
         ),
       ]);
 
