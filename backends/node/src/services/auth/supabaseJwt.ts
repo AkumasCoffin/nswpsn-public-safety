@@ -29,6 +29,9 @@ declare module 'hono' {
   interface ContextVariableMap {
     /** Supabase user id (sub claim) when a valid JWT was presented. */
     userId?: string;
+    /** Verified account email (email claim) when present on the JWT. Used by
+     *  self-service routes to mirror the by-email "no request" check. */
+    userEmail?: string;
   }
 }
 
@@ -124,6 +127,9 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
       c.set('userId', payload.sub);
       const name = displayNameFromClaims(payload as Record<string, unknown>);
       if (name) c.set('userName', name);
+      if (typeof payload['email'] === 'string' && payload['email']) {
+        c.set('userEmail', payload['email']);
+      }
     }
   } catch (err) {
     // Verification failed — log at debug because clients legitimately
@@ -181,6 +187,9 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
     c.set('userId', payload.sub);
     const name = displayNameFromClaims(payload as Record<string, unknown>);
     if (name) c.set('userName', name);
+    if (typeof payload['email'] === 'string' && payload['email']) {
+      c.set('userEmail', payload['email']);
+    }
   } catch {
     return c.json({ error: 'invalid token' }, 401);
   }
