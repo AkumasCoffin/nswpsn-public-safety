@@ -2544,7 +2544,6 @@
             <thead>
               <tr>
                 <th>Time</th>
-                <th>Type</th>
                 <th>System</th>
                 <th>Talkgroup / Capcode</th>
                 <th>Unit / Message</th>
@@ -4001,7 +4000,7 @@
       const body = document.getElementById('nd2-ev-body');
       if (!body) return;
       if (!events.length) {
-        body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No events match.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" class="nd2-empty">No events match.</td></tr>';
         nd2UpdatePager(0);
         return;
       }
@@ -4027,7 +4026,6 @@
             : `<span class="nd-strong">${escapeHtml(capStr)}</span>`;
           return `<tr>
             <td>${timeCell}</td>
-            <td><span class="nd2-type-chip pager">PAGER</span></td>
             <td><span class="nd-sub">${escapeHtml(freq)}</span></td>
             <td>${capCell}</td>
             <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
@@ -4046,7 +4044,6 @@
         const sites = (ev.sites || []).map(s => nd2SiteChip(s)).join('');
         return `<tr>
           <td>${timeCell}</td>
-          <td><span class="nd2-type-chip radio">RADIO</span></td>
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
           <td>${tgLabel}${badges}</td>
           <td>${ev.sourceAlias
