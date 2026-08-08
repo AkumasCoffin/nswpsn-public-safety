@@ -1637,6 +1637,9 @@
     }
     .nd2-top-grid .nd-table td { font-size: 0.74rem; }
     .nd2-num { text-align: right; font-variant-numeric: tabular-nums; }
+    /* num HEADER must right-align too, or it won't line up over its right-aligned
+       values (.nd-table th's left-align otherwise outranks .nd2-num). */
+    .nd-table th.nd2-num { text-align: right; }
     .nd2-empty { padding: 0.9rem 1rem 1rem; color: var(--text-soft); font-size: 0.78rem; }
 
     /* Events table shell — table scrolls inside the card, never the page. */
@@ -7455,8 +7458,16 @@
         seen.add(v);
         opts.push({ value: v, label: (label != null && String(label).trim()) ? String(label) : v });
       };
-      // Live tuners: value = getPreferredName (t.name); full name is the label.
-      _ndTuners.forEach(t => { if (t) add(t.name, t.name); });
+      // Live tuners: value = getPreferredName (t.name), which vce matches for
+      // preferredTuner. Fall back to the serial/id (what the Tuners table + the
+      // per-tuner settings already use) when name is empty, so the dropdown never
+      // goes blank — e.g. unflashed dongles whose getPreferredName is empty.
+      _ndTuners.forEach(t => {
+        if (!t) return;
+        const nm = t.name != null ? String(t.name).trim() : '';
+        const fb = _ndTunerSerial(t);
+        add(nm || fb, nm || (fb ? ('Tuner ' + fb) : ''));
+      });
       // Existing per-channel pins (may be legacy ids that no longer match a tuner).
       if (_ndConfig && Array.isArray(_ndConfig.channels)) {
         _ndConfig.channels.forEach(c => { if (c && c.sdr) add(c.sdr, c.sdr); });
