@@ -6,6 +6,7 @@
  * came up.
  */
 import { setDefaultResultOrder } from 'node:dns';
+import { Agent, setGlobalDispatcher } from 'undici';
 // Prefer IPv4 DNS results. Node 17+ defaults to 'verbatim' (IPv6 first
 // when the OS returns it), but several upstream sources are US-hosted
 // (RainViewer, NASA FIRMS) and the IPv6 route from this AU host has
@@ -13,6 +14,15 @@ import { setDefaultResultOrder } from 'node:dns';
 // Forcing IPv4 makes those endpoints reachable. Has no effect on
 // IPv4-only or AU-local upstreams.
 setDefaultResultOrder('ipv4first');
+// setDefaultResultOrder only reorders dns.lookup() results — undici's fetch()
+// connector does its OWN address handling and STILL probed the (dead) IPv6
+// address first, hanging to ETIMEDOUT on every US-host poll (confirmed: curl -6
+// to firms.modaps.eosdis.nasa.gov fails instantly, curl -4 returns in ~1.8s,
+// yet undici fetch timed out). Force the global undici dispatcher to resolve
+// IPv4-only so every outbound fetch (FIRMS, RainViewer, LLM, rdio alerts) skips
+// the broken IPv6 path entirely. This host has no working IPv6 route at all, so
+// there is no downside to pinning the family.
+setGlobalDispatcher(new Agent({ connect: { family: 4 } }));
 
 import { serve } from '@hono/node-server';
 import { config } from './config.js';
