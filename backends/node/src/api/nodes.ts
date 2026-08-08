@@ -46,7 +46,7 @@ import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/config
 import {
   getGlobalConfig,
   saveGlobalConfig,
-  GlobalConfigSchema,
+  GlobalConfigPatchSchema,
   getAutoUpdate,
   setAutoUpdate,
 } from '../services/nodes/globalConfig.js';
@@ -146,11 +146,22 @@ nodesRouter.get('/api/nodes/global-config', requireRole(canManageNodes), async (
 nodesRouter.put('/api/nodes/global-config', requireRole(canManageNodes), async (c) => {
   try {
     const body = await c.req.json().catch(() => null);
-    const parsed = GlobalConfigSchema.safeParse(body);
+    // PATCH-style: the rdio side (agencies/rdioGroups/rdioTags) and the sdrtrunk
+    // side (sdrtrunkConfig) are imported independently, so a body may carry only
+    // one of them and must leave the other untouched. Fields present replace;
+    // fields absent are kept from the current stored config.
+    const parsed = GlobalConfigPatchSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid global config', issues: parsed.error.issues }, 400);
     }
-    const config = await saveGlobalConfig(parsed.data, c.get('userId') ?? null);
+    const current = await getGlobalConfig();
+    const merged = {
+      agencies: parsed.data.agencies ?? current.agencies,
+      rdioGroups: parsed.data.rdioGroups ?? current.rdioGroups,
+      rdioTags: parsed.data.rdioTags ?? current.rdioTags,
+      sdrtrunkConfig: parsed.data.sdrtrunkConfig ?? current.sdrtrunkConfig,
+    };
+    const config = await saveGlobalConfig(merged, c.get('userId') ?? null);
     // Fan the new config out to every online node so the fleet re-syncs.
     const fanout = await pushConfigToAllNodes();
     return c.json({ config, fanout });

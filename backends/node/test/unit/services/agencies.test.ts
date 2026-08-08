@@ -8,7 +8,6 @@ import { describe, it, expect } from 'vitest';
 import {
   buildAgencies,
   agenciesToAliases,
-  agenciesToTalkgroupAliases,
   agenciesToSystems,
   ALIAS_LIST_NAME,
   type Alias,
@@ -89,27 +88,6 @@ describe('agencies model', () => {
     ] as unknown as Parameters<typeof agenciesToSystems>[0];
     const out = agenciesToSystems(agencies);
     expect(out.map((s) => s['id'])).toEqual([1, 2, 7]);
-  });
-
-  it('expands every agency talkgroup into a labelled, routed alias (deduped by value)', () => {
-    const agencies = [
-      {
-        systemId: 2, name: 'Fire and Rescue', aliasIds: [],
-        talkgroups: [
-          { id: 20101, label: 'ALPHA STK', name: 'Strike Team Alpha' },
-          { id: 20102, label: '', name: 'Bravo' },      // falls back to name
-          { id: 20101, label: 'dup' },                   // duplicate value → dropped
-          { id: 0 },                                     // invalid → skipped
-        ],
-      },
-    ] as unknown as Parameters<typeof agenciesToTalkgroupAliases>[0];
-    const out = agenciesToTalkgroupAliases(agencies);
-    expect(out.map((a) => a.name)).toEqual(['ALPHA STK', 'Bravo']);
-    const a0 = out[0]!;
-    expect(a0.group).toBe('Fire and Rescue');
-    expect(a0.ids.find((i) => i.type === 'talkgroup')?.attrs).toEqual({ protocol: 'APCO25', value: '20101' });
-    // routed to the agency's stream so calls upload under its systemId
-    expect(a0.ids.find((i) => i.type === 'broadcastChannel')?.attrs['channel']).toBe('Fire and Rescue');
   });
 
   it('drops a duplicate systemId (first wins) so rdio-scanner never gets a colliding id', () => {

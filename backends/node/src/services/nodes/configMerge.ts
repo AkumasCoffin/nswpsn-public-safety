@@ -32,8 +32,6 @@ import {
 } from './configSchema.js';
 import {
   getGlobalConfig,
-  agenciesToAliases,
-  agenciesToTalkgroupAliases,
   agenciesToSystems,
   type Alias,
   type GlobalConfig,
@@ -323,10 +321,14 @@ export async function buildConfigPayload(
   // agency-level aliases carry the streaming ranges + routing; the per-talkgroup
   // aliases give every talkgroup its own label and route (so all talkgroups get
   // imported into sdrtrunk-vce and show individually in the activity view).
-  const aliases = [
-    ...agenciesToAliases(globalCfg.agencies),
-    ...agenciesToTalkgroupAliases(globalCfg.agencies),
-  ];
+  // sdrtrunk-vce aliases come from the IMPORTED sdrtrunk config (not generated
+  // from the rdio talkgroups). P25 channels reference a single alias list, so
+  // collapse every imported alias into one list — a channel's list then carries
+  // all labels + ranges + routes. Primary list = the first imported list, else a
+  // default. Empty when no sdrtrunk config has been imported yet.
+  const sdr = globalCfg.sdrtrunkConfig ?? { aliasLists: [], aliases: [], streams: [] };
+  const primaryList = sdr.aliasLists[0]?.name ?? 'NSWPSN';
+  const aliases = sdr.aliases.map((a) => ({ ...a, list: primaryList }));
   const derivedSystems = agenciesToSystems(globalCfg.agencies);
 
   // The rdio document: preset as the base (options/apiKeys/downstreams/etc.),
@@ -336,16 +338,25 @@ export async function buildConfigPayload(
   if (globalCfg.rdioGroups.length > 0) rdioConfig['groups'] = globalCfg.rdioGroups;
   if (globalCfg.rdioTags.length > 0) rdioConfig['tags'] = globalCfg.rdioTags;
 
-  // Stream targets follow the (possibly-edited) rdio systems so the agent knows
-  // which per-agency local keys to generate.
-  const systemsForTargets = (rdioConfig['systems'] as RdioSystem[] | undefined) ?? presets.systems;
-  const streamTargets: StreamTarget[] = systemsForTargets
-    .map((s): StreamTarget | null => {
-      const systemId = s.id ?? s._id;
-      if (typeof systemId !== 'number') return null;
-      return { systemId, name: (s.label ?? `System ${systemId}`).trim() };
-    })
-    .filter((t): t is StreamTarget => t !== null);
+  // Stream targets come from the IMPORTED sdrtrunk streams: each carries the
+  // systemId (links a call to its rdio system + apiKey) and the name (= the
+  // broadcastChannel the aliases route to). The agent mints one local key per
+  // systemId and writes it onto both the stream and the matching rdio apiKey.
+  // Fall back to deriving from the rdio systems only when no streams were
+  // imported yet (keeps a pre-import / rdio-only config from having zero streams).
+  let streamTargets: StreamTarget[];
+  if (sdr.streams.length > 0) {
+    streamTargets = sdr.streams.map((s) => ({ systemId: s.systemId, name: s.name.trim() }));
+  } else {
+    const systemsForTargets = (rdioConfig['systems'] as RdioSystem[] | undefined) ?? presets.systems;
+    streamTargets = systemsForTargets
+      .map((s): StreamTarget | null => {
+        const systemId = s.id ?? s._id;
+        if (typeof systemId !== 'number') return null;
+        return { systemId, name: (s.label ?? `System ${systemId}`).trim() };
+      })
+      .filter((t): t is StreamTarget => t !== null);
+  }
 
   // Generate one rdio apiKey per system from the SAME systems list, so a system
   // the operator creates automatically gets its own upload key (1:1). The `key`
