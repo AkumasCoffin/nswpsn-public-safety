@@ -350,7 +350,9 @@
       padding: 0.02rem 0.32rem; border-radius: 4px; margin-right: 0.25rem; }
     .msg-empty { color: var(--text-soft); text-align: center; padding: 1.6rem 1rem; font-size: 0.85rem; }
     /* Per-node activity & stats modal (radio nodes). */
-    .fs-modal { max-width: 940px; width: 100%; }
+    /* Higher specificity than the base `.modal` (which sets max-width:520px and
+       is defined later in source) so this wins regardless of source order. */
+    .modal.fs-modal { max-width: 940px; width: 100%; }
     .fs-wins { display: flex; gap: 0.35rem; margin: 0.2rem 0 0.9rem; }
     .fs-win {
       background: rgba(255,255,255,0.04); border: 1px solid var(--border-subtle);
