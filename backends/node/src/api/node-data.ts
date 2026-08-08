@@ -280,6 +280,15 @@ function qpInt(url: URL, name: string): number | null {
   return Number.parseInt(raw, 10);
 }
 
+/**
+ * Optional per-node scope (Radio mode). `?node=<id>` restricts every
+ * node_radio_events query to that one feeder node; absent/empty = fleet-wide
+ * (all nodes). Parameterised at the call site so the raw id never touches SQL.
+ */
+function qpNode(url: URL): string | null {
+  return (url.searchParams.get('node') ?? '').trim() || null;
+}
+
 /** pg returns BIGINT/SUM() as strings — normalise to JS number. */
 function num(v: unknown): number {
   const n = Number(v);
@@ -309,6 +318,11 @@ nodeDataRouter.get(
       const scope = (['all', 'radio', 'pager'] as const).find((s) => s === scopeRaw) ?? 'all';
       const wantRadio = scope !== 'pager';
       const wantPager = scope !== 'radio';
+      // Optional per-node scope (Radio mode). Applied to node_radio_events and
+      // node_radio_hourly (both carry node_id); node_radio_hourly_sys has no
+      // node_id, so window=all's radioLogical + topSites stay fleet-wide. Pager
+      // queries are never node-filtered (the selector is radio-only).
+      const nodeId = qpNode(url);
 
       // Node metadata for perNode name/kind (small table, one read).
       const nodesRes = await pool.query<{ id: string; name: string; kind: string }>(
@@ -337,11 +351,18 @@ nodeDataRouter.get(
       if (window === 'all') {
         // Forever path: hourly bucket tables (topUnits only exists in
         // detail, so it stays capped to the last 30 days).
+        // Optional node scope ($1) for the node_id-bearing tables (radio
+        // hourly + radio events). node_radio_hourly_sys has no node_id, so
+        // radioLogical + topSites below remain fleet-wide even with a filter.
+        const nAllWhere = nodeId !== null ? ` WHERE node_id = $1` : '';
+        const nAllAnd = nodeId !== null ? ` AND node_id = $1` : '';
+        const nAllParams: unknown[] = nodeId !== null ? [nodeId] : [];
         const [radioRawQ, radioLogQ, pagerTotQ, pnR, pnP, tg, un, si, sr, sp] =
           await Promise.all([
             wantRadio
               ? pool.query<{ raw: unknown }>(
-                  `SELECT COALESCE(SUM(calls), 0)::bigint AS raw FROM node_radio_hourly`,
+                  `SELECT COALESCE(SUM(calls), 0)::bigint AS raw FROM node_radio_hourly${nAllWhere}`,
+                  nAllParams,
                 )
               : null,
             wantRadio
@@ -361,7 +382,8 @@ nodeDataRouter.get(
               ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
                   `SELECT node_id, SUM(calls)::bigint AS calls,
                           SUM(audio_bytes)::bigint AS bytes
-                     FROM node_radio_hourly GROUP BY node_id`,
+                     FROM node_radio_hourly${nAllWhere} GROUP BY node_id`,
+                  nAllParams,
                 )
               : null,
             wantPager
@@ -390,9 +412,10 @@ nodeDataRouter.get(
                             COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS calls,
                           COUNT(DISTINCT logical_call_id)::int AS logical,
                           NULL::text AS label
-                     FROM node_radio_events
+                     FROM node_radio_events${nAllWhere}
                     GROUP BY system, talkgroup
                     ORDER BY calls DESC LIMIT 15`,
+                  nAllParams,
                 )
               : null,
             wantRadio
@@ -403,8 +426,9 @@ nodeDataRouter.get(
                           COUNT(*)::int AS calls
                      FROM node_radio_events
                     WHERE received_at >= now() - interval '30 days'
-                      AND source_unit IS NOT NULL
+                      AND source_unit IS NOT NULL${nAllAnd}
                     GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
+                  nAllParams,
                 )
               : null,
             wantRadio
@@ -418,7 +442,8 @@ nodeDataRouter.get(
             wantRadio
               ? pool.query<{ bucket: Date; n: unknown }>(
                   `SELECT date_trunc('day', hour) AS bucket, SUM(calls)::bigint AS n
-                     FROM node_radio_hourly GROUP BY 1 ORDER BY 1`,
+                     FROM node_radio_hourly${nAllWhere} GROUP BY 1 ORDER BY 1`,
+                  nAllParams,
                 )
               : null,
             wantPager
@@ -443,13 +468,17 @@ nodeDataRouter.get(
         // Detail path: exact logical counts via COUNT(DISTINCT logical_*).
         const iv = WINDOW_INTERVAL[window];
         const cond = `received_at >= now() - $1::interval`;
+        // Radio queries additionally scope to the selected node ($2) when set;
+        // pager queries keep the fleet-wide `cond`/`[iv]`.
+        const radioCond = nodeId !== null ? `${cond} AND node_id = $2` : cond;
+        const radioParams: unknown[] = nodeId !== null ? [iv, nodeId] : [iv];
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await Promise.all([
           wantRadio
             ? pool.query<{ raw: unknown; logical: unknown }>(
                 `SELECT COUNT(*)::int AS raw,
                         COUNT(DISTINCT logical_call_id)::int AS logical
-                   FROM node_radio_events WHERE ${cond}`,
-                [iv],
+                   FROM node_radio_events WHERE ${radioCond}`,
+                radioParams,
               )
             : null,
           wantPager
@@ -464,8 +493,8 @@ nodeDataRouter.get(
             ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
                 `SELECT node_id, COUNT(*)::int AS calls,
                         COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
-                   FROM node_radio_events WHERE ${cond} GROUP BY node_id`,
-                [iv],
+                   FROM node_radio_events WHERE ${radioCond} GROUP BY node_id`,
+                radioParams,
               )
             : null,
           wantPager
@@ -493,10 +522,10 @@ nodeDataRouter.get(
                           COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS calls,
                         COUNT(DISTINCT e.logical_call_id)::int AS logical,
                         NULL::text AS label
-                   FROM node_radio_events e WHERE ${cond}
+                   FROM node_radio_events e WHERE ${radioCond}
                   GROUP BY e.system, e.talkgroup
                   ORDER BY calls DESC LIMIT 15`,
-                [iv],
+                radioParams,
               )
             : null,
           wantRadio
@@ -506,25 +535,25 @@ nodeDataRouter.get(
                            FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
                         COUNT(*)::int AS calls
                    FROM node_radio_events
-                  WHERE ${cond} AND source_unit IS NOT NULL
+                  WHERE ${radioCond} AND source_unit IS NOT NULL
                   GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
-                [iv],
+                radioParams,
               )
             : null,
           wantRadio
             ? pool.query<{ site_rfss: number; site_id: number; calls: unknown }>(
                 `SELECT site_rfss, site_id, COUNT(*)::int AS calls
                    FROM node_radio_events
-                  WHERE ${cond} AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                  WHERE ${radioCond} AND site_rfss IS NOT NULL AND site_id IS NOT NULL
                   GROUP BY site_rfss, site_id ORDER BY calls DESC LIMIT 15`,
-                [iv],
+                radioParams,
               )
             : null,
           wantRadio
             ? pool.query<{ bucket: Date; n: unknown }>(
                 `SELECT date_trunc('hour', received_at) AS bucket, COUNT(*)::int AS n
-                   FROM node_radio_events WHERE ${cond} GROUP BY 1 ORDER BY 1`,
-                [iv],
+                   FROM node_radio_events WHERE ${radioCond} GROUP BY 1 ORDER BY 1`,
+                radioParams,
               )
             : null,
           wantPager
@@ -606,6 +635,7 @@ nodeDataRouter.get(
       const body: Record<string, unknown> = {
         window,
         scope,
+        node: nodeId,
         totals: {
           radioRaw,
           radioLogical,
@@ -1087,8 +1117,13 @@ async function scopedRadioDetail(
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/node-data/systems?window=24h|7d|30d
-// One row per distinct (wacn, system) observed in-window, incl. NULLs.
+// GET /api/node-data/systems?window=24h|7d|30d&node=<id opt>
+// One row per distinct (wacn, system) observed in-window, incl. NULLs. Each
+// row EAGER-LOADS its per-site rollup as `sites: [{rfss, site, name, calls,
+// logicalCalls, lastSeen}]` so the Systems folder-tree can show a system and
+// its sites together without a per-system round-trip (few systems/sites).
+// `siteCount` keeps the DISTINCT site tally for the folder counts.
+// ?node scopes both queries to a single feeder node (fleet-wide when absent).
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/systems',
@@ -1099,45 +1134,100 @@ nodeDataRouter.get(
       if (!pool) return c.json({ error: 'database unavailable' }, 503);
       const url = new URL(c.req.url);
       const window = detailWindow(url);
+      const nodeId = qpNode(url);
 
-      const res = await pool.query<{
-        wacn: number | null;
-        system: number | null;
-        name: string | null;
-        calls: unknown;
-        logical: unknown;
-        enc: unknown;
-        sites: unknown;
-        talkgroups: unknown;
-        radios: unknown;
-        first_seen: Date;
-        last_seen: Date;
-      }>(
-        // name: the most-recent non-null friendly system label (system_name
-        // from vce, e.g. "NSWPSN"); null when no reception carried one.
-        `SELECT wacn, system,
-                (array_agg(system_label ORDER BY received_at DESC)
-                   FILTER (WHERE system_label IS NOT NULL))[1] AS name,
-                COUNT(*)::int AS calls,
-                COUNT(DISTINCT logical_call_id)::int AS logical,
-                (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
-                (COUNT(DISTINCT (site_rfss, site_id))
-                   FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
-                COUNT(DISTINCT talkgroup)::int AS talkgroups,
-                COUNT(DISTINCT source_unit)::int AS radios,
-                MIN(received_at) AS first_seen,
-                MAX(received_at) AS last_seen
-           FROM node_radio_events
-          WHERE received_at >= now() - $1::interval
-            AND system IS NOT NULL
-          GROUP BY wacn, system
-          ORDER BY calls DESC, system ASC NULLS LAST
-          LIMIT 50`,
-        [WINDOW_INTERVAL[window]],
-      );
+      // Shared params: $1 window interval, optional $2 node id. `nodeCond` is
+      // spliced into both the system rollup and the per-site rollup below.
+      const params: unknown[] = [WINDOW_INTERVAL[window]];
+      let nodeCond = '';
+      if (nodeId !== null) {
+        params.push(nodeId);
+        nodeCond = ` AND node_id = $${params.length}`;
+      }
+
+      const [res, sitesRes, siteMap] = await Promise.all([
+        pool.query<{
+          wacn: number | null;
+          system: number | null;
+          name: string | null;
+          calls: unknown;
+          logical: unknown;
+          enc: unknown;
+          sites: unknown;
+          talkgroups: unknown;
+          radios: unknown;
+          first_seen: Date;
+          last_seen: Date;
+        }>(
+          // name: the most-recent non-null friendly system label (system_name
+          // from vce, e.g. "NSWPSN"); null when no reception carried one.
+          `SELECT wacn, system,
+                  (array_agg(system_label ORDER BY received_at DESC)
+                     FILTER (WHERE system_label IS NOT NULL))[1] AS name,
+                  COUNT(*)::int AS calls,
+                  COUNT(DISTINCT logical_call_id)::int AS logical,
+                  (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
+                  (COUNT(DISTINCT (site_rfss, site_id))
+                     FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
+                  COUNT(DISTINCT talkgroup)::int AS talkgroups,
+                  COUNT(DISTINCT source_unit)::int AS radios,
+                  MIN(received_at) AS first_seen,
+                  MAX(received_at) AS last_seen
+             FROM node_radio_events
+            WHERE received_at >= now() - $1::interval
+              AND system IS NOT NULL${nodeCond}
+            GROUP BY wacn, system
+            ORDER BY calls DESC, system ASC NULLS LAST
+            LIMIT 50`,
+          params,
+        ),
+        // Per-site rollup for every system in one scan (grouped by system so we
+        // can bucket the rows client-side); attribution-bearing sites only.
+        pool.query<{
+          system: number;
+          rfss: number;
+          site: number;
+          calls: unknown;
+          logical: unknown;
+          last_seen: Date;
+        }>(
+          `SELECT system, site_rfss AS rfss, site_id AS site,
+                  COUNT(*)::int AS calls,
+                  COUNT(DISTINCT logical_call_id)::int AS logical,
+                  MAX(received_at) AS last_seen
+             FROM node_radio_events
+            WHERE received_at >= now() - $1::interval
+              AND system IS NOT NULL
+              AND site_rfss IS NOT NULL AND site_id IS NOT NULL${nodeCond}
+            GROUP BY system, site_rfss, site_id
+            ORDER BY system, calls DESC, rfss ASC, site ASC`,
+          params,
+        ),
+        siteNames(pool),
+      ]);
+
+      // Bucket the per-site rows under their system id (reusing the shared
+      // siteNames() resolver for the friendly channel name).
+      const sitesBySystem = new Map<
+        number,
+        Array<{ rfss: number; site: number; name: string | null; calls: number; logicalCalls: number; lastSeen: string }>
+      >();
+      for (const r of sitesRes.rows) {
+        const arr = sitesBySystem.get(r.system) ?? [];
+        arr.push({
+          rfss: r.rfss,
+          site: r.site,
+          name: siteNameFor(siteMap, r.system, r.rfss, r.site),
+          calls: num(r.calls),
+          logicalCalls: num(r.logical),
+          lastSeen: iso(r.last_seen),
+        });
+        sitesBySystem.set(r.system, arr);
+      }
 
       return c.json({
         window,
+        node: nodeId,
         systems: res.rows.map((r) => ({
           wacn: r.wacn,
           system: r.system,
@@ -1145,11 +1235,14 @@ nodeDataRouter.get(
           calls: num(r.calls),
           logicalCalls: num(r.logical),
           encryptedCalls: num(r.enc),
-          sites: num(r.sites),
+          // Numeric DISTINCT-site tally for the folder counts …
+          siteCount: num(r.sites),
           talkgroups: num(r.talkgroups),
           radios: num(r.radios),
           firstSeen: iso(r.first_seen),
           lastSeen: iso(r.last_seen),
+          // … and the eager-loaded per-site rows for the folder's children.
+          sites: r.system != null ? sitesBySystem.get(r.system) ?? [] : [],
         })),
       });
     } catch (err) {
@@ -1180,12 +1273,20 @@ nodeDataRouter.get(
       const wacnP = qpIntOpt(url, 'wacn');
       if (wacnP.error) return c.json({ error: wacnP.error }, 400);
       const wacn = wacnP.value;
+      const nodeId = qpNode(url);
 
       const params: unknown[] = [WINDOW_INTERVAL[window], system];
       if (wacn !== null) params.push(wacn);
+      const wacnIdx = wacn !== null ? 3 : null;
+      let nodeIdx: number | null = null;
+      if (nodeId !== null) {
+        params.push(nodeId);
+        nodeIdx = params.length;
+      }
       const scope = (p: string) =>
         `${p}received_at >= now() - $1::interval AND ${p}system = $2` +
-        (wacn !== null ? ` AND ${p}wacn = $3` : '');
+        (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
+        (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
       const [detail, sitesQ, nameQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
@@ -1320,10 +1421,17 @@ nodeDataRouter.get(
         );
       }
 
+      const nodeId = qpNode(url);
       const params: unknown[] = [WINDOW_INTERVAL[window], system, rfss, site];
+      let nodeIdx: number | null = null;
+      if (nodeId !== null) {
+        params.push(nodeId);
+        nodeIdx = params.length;
+      }
       const scope = (p: string) =>
         `${p}received_at >= now() - $1::interval AND ${p}system = $2` +
-        ` AND ${p}site_rfss = $3 AND ${p}site_id = $4`;
+        ` AND ${p}site_rfss = $3 AND ${p}site_id = $4` +
+        (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
       const [detail, nodesQ, metaQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
@@ -1459,12 +1567,17 @@ nodeDataRouter.get(
       const sort = (['calls', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'calls';
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+      const nodeId = qpNode(url);
 
       const params: unknown[] = [WINDOW_INTERVAL[window]];
       const conds = ['received_at >= now() - $1::interval', 'talkgroup IS NOT NULL'];
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
+      }
+      if (nodeId !== null) {
+        params.push(nodeId);
+        conds.push(`node_id = $${params.length}`);
       }
       if (qRaw) {
         params.push(`${qRaw}%`);
@@ -1520,6 +1633,8 @@ nodeDataRouter.get(
           topNode: { id: string; name: string | null; calls: number } | null;
         }
       >();
+      // Node scope for the per-key laterals below ($5 when set).
+      const nodeLat = nodeId !== null ? ` AND e.node_id = $5` : '';
       if (page.length > 0) {
         const enrich = await pool.query<{
           ord: number;
@@ -1544,7 +1659,7 @@ nodeDataRouter.get(
                 WHERE e.received_at >= now() - $1::interval
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.talkgroup = k.talkgroup
+                  AND e.talkgroup = k.talkgroup${nodeLat}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 ORDER BY e.received_at DESC
                 LIMIT 1
@@ -1555,7 +1670,7 @@ nodeDataRouter.get(
                 WHERE e.received_at >= now() - $1::interval
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.talkgroup = k.talkgroup
+                  AND e.talkgroup = k.talkgroup${nodeLat}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 GROUP BY e.site_rfss, e.site_id
                 ORDER BY calls DESC, rfss ASC, site ASC
@@ -1567,7 +1682,7 @@ nodeDataRouter.get(
                 WHERE e.received_at >= now() - $1::interval
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.talkgroup = k.talkgroup
+                  AND e.talkgroup = k.talkgroup${nodeLat}
                 GROUP BY e.node_id
                 ORDER BY calls DESC, e.node_id ASC
                 LIMIT 1
@@ -1578,6 +1693,7 @@ nodeDataRouter.get(
             page.map((r) => r.wacn),
             page.map((r) => r.system),
             page.map((r) => r.talkgroup),
+            ...(nodeId !== null ? [nodeId] : []),
           ],
         );
         for (const r of enrich.rows) {
@@ -1662,11 +1778,16 @@ nodeDataRouter.get(
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
       const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
+      const nodeId = qpNode(url);
       const params: unknown[] = [WINDOW_INTERVAL[window]];
       const conds = ['received_at >= now() - $1::interval', 'source_unit IS NOT NULL'];
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
+      }
+      if (nodeId !== null) {
+        params.push(nodeId);
+        conds.push(`node_id = $${params.length}`);
       }
       if (qRaw) {
         params.push(`${qRaw}%`);
@@ -1722,6 +1843,8 @@ nodeDataRouter.get(
           topTalkgroups: Array<{ talkgroup: number; calls: number }>;
         }
       >();
+      // Node scope for the per-key laterals below ($5 when set).
+      const nodeLat = nodeId !== null ? ` AND e.node_id = $5` : '';
       if (page.length > 0) {
         const enrich = await pool.query<{
           ord: number;
@@ -1748,7 +1871,7 @@ nodeDataRouter.get(
                 WHERE e.received_at >= now() - $1::interval
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.source_unit = k.radio
+                  AND e.source_unit = k.radio${nodeLat}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 ORDER BY e.received_at DESC
                 LIMIT 1
@@ -1759,7 +1882,7 @@ nodeDataRouter.get(
                 WHERE e.received_at >= now() - $1::interval
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.source_unit = k.radio
+                  AND e.source_unit = k.radio${nodeLat}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 GROUP BY e.site_rfss, e.site_id
                 ORDER BY calls DESC, rfss ASC, site ASC
@@ -1771,7 +1894,7 @@ nodeDataRouter.get(
                 WHERE e.received_at >= now() - $1::interval
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
-                  AND e.source_unit = k.radio
+                  AND e.source_unit = k.radio${nodeLat}
                 GROUP BY e.node_id
                 ORDER BY calls DESC, e.node_id ASC
                 LIMIT 1
@@ -1787,7 +1910,7 @@ nodeDataRouter.get(
                     WHERE e.received_at >= now() - $1::interval
                       AND e.wacn IS NOT DISTINCT FROM k.wacn
                       AND e.system IS NOT DISTINCT FROM k.system
-                      AND e.source_unit = k.radio
+                      AND e.source_unit = k.radio${nodeLat}
                       AND e.talkgroup IS NOT NULL
                     GROUP BY e.talkgroup
                     ORDER BY calls DESC, e.talkgroup ASC
@@ -1800,6 +1923,7 @@ nodeDataRouter.get(
             page.map((r) => r.wacn),
             page.map((r) => r.system),
             page.map((r) => r.radio),
+            ...(nodeId !== null ? [nodeId] : []),
           ],
         );
         for (const r of enrich.rows) {

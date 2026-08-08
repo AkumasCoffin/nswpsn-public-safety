@@ -1808,6 +1808,89 @@
     .nd2-badge-rec { background: rgba(148, 163, 184, 0.12); color: #94a3b8; }
     .nd2-detail-gap { margin-bottom: 1.75rem; }
 
+    /* Per-node scope selector (sits at the right of the window pill row). */
+    .nd2-node-ctl {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-left: auto;
+      color: var(--text-soft);
+      font-size: 0.78rem;
+    }
+    .nd2-node-ctl i { font-size: 0.72rem; }
+    .nd2-node-ctl select {
+      width: auto;
+      min-width: 130px;
+      font-size: 0.8rem;
+      padding: 0.4rem 0.55rem;
+    }
+
+    /* Systems folder tree (system = folder, site = nested file row). */
+    .nd2-tree {
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.015);
+    }
+    .nd2-tree-group + .nd2-tree-group { border-top: 1px solid var(--border-subtle); }
+    .nd2-tree-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 0.85rem;
+    }
+    .nd2-tree-chevron {
+      flex: 0 0 auto;
+      width: 1.7rem;
+      height: 1.7rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      background: transparent;
+      color: var(--text-soft);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .nd2-tree-chevron:hover { background: rgba(56, 189, 248, 0.12); color: var(--text-primary); }
+    .nd2-tree-chevron i { transition: transform 0.15s; font-size: 0.72rem; }
+    .nd2-tree-sys.expanded .nd2-tree-chevron i { transform: rotate(90deg); }
+    .nd2-tree-ico { color: var(--accent); font-size: 0.82rem; flex: 0 0 auto; }
+    .nd2-tree-site .nd2-tree-ico { color: #34d399; }
+    .nd2-tree-main {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex: 1 1 auto;
+      min-width: 0;
+      cursor: pointer;
+      border-radius: 6px;
+      padding: 0.15rem 0.35rem;
+      margin: -0.15rem -0.35rem;
+    }
+    .nd2-tree-main:hover { background: rgba(56, 189, 248, 0.06); }
+    .nd2-tree-site { cursor: pointer; padding-left: 2.6rem; }
+    .nd2-tree-site:hover { background: rgba(52, 211, 153, 0.06); }
+    .nd2-tree-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nd2-tree-counts {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 0.9rem;
+      font-size: 0.74rem;
+      color: var(--text-soft);
+      font-variant-numeric: tabular-nums;
+    }
+    .nd2-tree-counts i { color: var(--text-soft); opacity: 0.7; margin-right: 0.15rem; font-size: 0.68rem; }
+    .nd2-tree-seen { color: var(--text-soft); }
+    .nd2-tree-children { background: rgba(0, 0, 0, 0.12); border-top: 1px solid var(--border-subtle); }
+    .nd2-tree-children .nd2-tree-site + .nd2-tree-site { border-top: 1px solid rgba(148, 163, 184, 0.06); }
+    @media (max-width: 768px) {
+      .nd2-tree-counts { gap: 0.55rem; font-size: 0.68rem; }
+      .nd2-node-ctl { margin-left: 0; }
+    }
+
     /* === Responsive ==================================================== */
     @media (max-width: 768px) {
       .container { padding: 1rem 1rem 2rem; }
@@ -2057,6 +2140,14 @@
             <button class="filter-btn" data-nd2-window="30d" onclick="nd2SetWindow('30d')">30d</button>
             <button class="filter-btn" data-nd2-window="all" onclick="nd2SetWindow('all')">All</button>
           </div>
+          <!-- Per-node scope (Radio mode only): "All nodes" or a single feeder
+               node. Hidden in Pager mode by nd2SetMode. -->
+          <label class="nd2-node-ctl" id="nd2-node-ctl">
+            <i class="fas fa-server"></i>
+            <select id="nd2-node" class="nd-input" onchange="nd2SetNode(this.value)" aria-label="Scope to node">
+              <option value="">All nodes</option>
+            </select>
+          </label>
         </div>
 
         <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-radio">
@@ -2137,24 +2228,13 @@
                site is open so it's unmistakable which level you're looking at. -->
           <div id="nd2-sys-ctx" class="nd2-ctx" style="display: none;"></div>
 
+          <!-- Folder tree: each system is a folder row (chevron toggles its
+               sites; the label opens the system detail); each site is a nested
+               file row that opens the site detail. Rendered by
+               nd2RenderSystemsTree; a single system auto-expands. -->
           <div id="nd2-sys-list">
-            <div class="nd2-table-wrap">
-              <table class="nd-table">
-                <thead>
-                  <tr>
-                    <th>System</th>
-                    <th class="nd2-num">Calls</th>
-                    <th class="nd2-num">Enc</th>
-                    <th class="nd2-num">Sites</th>
-                    <th class="nd2-num">Talkgroups</th>
-                    <th class="nd2-num">Radios</th>
-                    <th>Last seen</th>
-                  </tr>
-                </thead>
-                <tbody id="nd2-sys-body">
-                  <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
-                </tbody>
-              </table>
+            <div class="nd2-tree" id="nd2-sys-tree">
+              <div class="nd2-empty">Loading…</div>
             </div>
           </div>
 
@@ -3221,6 +3301,8 @@
       mode: 'radio',       // radio | pager — the top-level view-set switch
       scope: 'radio',      // radio mode is radio-only (no 'all'/pager mixing)
       window: '24h',       // 24h | 7d | 30d | all
+      node: '',            // '' = all nodes; else a feeder node_id (Radio mode)
+      nodeList: null,      // cached [{id,name,kind}] for the node selector
       view: 'overview',    // radio: overview|systems|talkgroups|radios|events; pager: poverview|capcodes
       overview: null,
       evOffset: 0,
@@ -3230,6 +3312,7 @@
       // Systems view navigation: list → one system → one site of that system.
       // Within a system, `tab` selects the sub-view (sites | talkgroups | radios).
       sys: { level: 'list', tab: 'sites', system: null, wacn: null, rfss: null, site: null, siteName: null },
+      sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
       rad: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
@@ -3257,6 +3340,7 @@
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
     function nd2StartPolling() {
+      nd2LoadNodeList();
       nd2Refresh();
       if (_nd2Timer) return;
       _nd2Timer = setInterval(() => {
@@ -3355,6 +3439,10 @@
       const pBar = document.getElementById('nd2-viewbar-pager');
       if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
       if (pBar) pBar.style.display = mode === 'pager' ? '' : 'none';
+      // The per-node scope selector is a Radio-mode control (pager stays
+      // fleet-wide); hide it entirely in Pager mode.
+      const nodeCtl = document.getElementById('nd2-node-ctl');
+      if (nodeCtl) nodeCtl.style.display = mode === 'radio' ? '' : 'none';
       // Reset to the mode's first view; force nd2SetView past its equality guard.
       const first = mode === 'radio' ? 'overview' : 'poverview';
       nd2.view = null;
@@ -3405,6 +3493,41 @@
       nd2Refresh();
     }
 
+    // --- Per-node scope selector (Radio mode) ----------------------------
+    // Fetch the registered node list once per Data-tab entry and fill the
+    // global #nd2-node <select> (radio nodes). Failures leave it at "All nodes".
+    async function nd2LoadNodeList() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) return;
+        const data = await res.json();
+        nd2.nodeList = data.nodes || [];
+        nd2PopulateNodeScope();
+      } catch (e) { /* selector stays "All nodes" */ }
+    }
+    function nd2PopulateNodeScope() {
+      const sel = document.getElementById('nd2-node');
+      if (!sel) return;
+      const nodes = (nd2.nodeList || []).filter(n => n.kind === 'radio');
+      sel.innerHTML = '<option value="">All nodes</option>' + nodes.map(n =>
+        `<option value="${escapeHtml(String(n.id))}">${escapeHtml(n.name || String(n.id))}</option>`).join('');
+      // Preserve the current scope if that node still exists; else reset to All.
+      if (nd2.node && [...sel.options].some(o => o.value === nd2.node)) sel.value = nd2.node;
+      else { sel.value = ''; nd2.node = ''; }
+    }
+    function nd2SetNode(val) {
+      const v = val || '';
+      if (nd2.node === v) return;
+      nd2.node = v;
+      // Node scope changes every count/list — reset paging + the systems cache.
+      nd2.tg.offset = 0; nd2.rad.offset = 0; nd2.evOffset = 0;
+      nd2.systemsCache = null;
+      // Mirror into the Events-specific node <select> so the two never disagree.
+      const evSel = document.getElementById('nd2-ev-node');
+      if (evSel && [...evSel.options].some(o => o.value === v)) evSel.value = v;
+      nd2Refresh();
+    }
+
     // Map fetch failures to one soft inline message; never a broken layout.
     function nd2ShowError(status, message) {
       const el = document.getElementById('nd2-error');
@@ -3429,6 +3552,7 @@
     async function nd2LoadOverview() {
       try {
         const params = new URLSearchParams({ window: nd2.window, scope: nd2.scope });
+        if (nd2.node) params.set('node', nd2.node);
         const res = await fetch(`${API_BASE_URL}/api/node-data/overview?${params}`, {
           headers: { 'Authorization': await authHeader() }
         });
@@ -3716,7 +3840,9 @@
         const tg = nd2EvVal('nd2-ev-tg');
         const unit = nd2EvVal('nd2-ev-unit');
         const site = nd2EvVal('nd2-ev-site');
-        const node = nd2EvVal('nd2-ev-node');
+        // Events has its own node <select>; when it is "All nodes" fall back to
+        // the global Data-tab node scope so the filter carries across views.
+        const node = nd2EvVal('nd2-ev-node') || nd2.node;
         if (q) params.set('q', q);
         if (tg) params.set('talkgroup', tg);
         if (unit) params.set('unit', unit);
@@ -4032,24 +4158,103 @@
     async function nd2LoadSystems() {
       const view = nd2.view;
       try {
-        const data = await nd2Fetch(`/api/node-data/systems?window=${nd2.window}`);
+        const params = new URLSearchParams({ window: nd2.window });
+        if (nd2.node) params.set('node', nd2.node);
+        const data = await nd2Fetch(`/api/node-data/systems?${params}`);
         if (nd2.view !== view) return;
-        nd2.systemsCache = data.systems || [];
-        const body = document.getElementById('nd2-sys-body');
-        if (!body) return;
         const rows = data.systems || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No systems seen in this window.</td></tr>'; return; }
-        body.innerHTML = rows.map(s => `
-          <tr class="nd2-rowlink" onclick="nd2OpenSystem(${s.system}, ${s.wacn == null ? 'null' : s.wacn})">
-            <td>${nd2SysCell(s.name, s.system)}${s.wacn != null ? `<div class="nd-sub">WACN ${escapeHtml(String(s.wacn))}</div>` : ''}</td>
-            <td class="nd2-num">${nd2Num(s.logicalCalls)}<span class="nd-sub" title="total receptions"> /${nd2Num(s.calls)}</span></td>
-            <td class="nd2-num">${nd2Num(s.encryptedCalls)}</td>
-            <td class="nd2-num">${nd2Num(s.sites)}</td>
-            <td class="nd2-num">${nd2Num(s.talkgroups)}</td>
-            <td class="nd2-num">${nd2Num(s.radios)}</td>
-            <td>${nd2LastSeen(s.lastSeen)}</td>
-          </tr>`).join('');
-      } catch (e) { nd2TableMsg('nd2-sys-body', 7, e); }
+        nd2.systemsCache = rows;
+        // Auto-expand a lone system so its sites show immediately (only when the
+        // operator hasn't already toggled that folder).
+        if (rows.length === 1 && rows[0].system != null &&
+            nd2.sysExpanded[rows[0].system] === undefined) {
+          nd2.sysExpanded[rows[0].system] = true;
+        }
+        nd2RenderSystemsTree(rows);
+      } catch (e) {
+        const host = document.getElementById('nd2-sys-tree');
+        if (host) {
+          const msg = e && e.status === 404 ? 'API not available yet.'
+            : e && (e.status === 401 || e.status === 403) ? 'Not authorised.'
+            : `Could not load systems: ${e ? e.message : ''}`;
+          host.innerHTML = `<div class="nd2-empty">${escapeHtml(msg)}</div>`;
+        }
+      }
+    }
+
+    // Render the systems folder tree. Each system is a folder row: the chevron
+    // toggles its sites in place; the label opens the system detail. Its sites
+    // render as nested file rows (when expanded) that open the site detail.
+    function nd2RenderSystemsTree(systems) {
+      const host = document.getElementById('nd2-sys-tree');
+      if (!host) return;
+      if (!systems.length) {
+        host.innerHTML = '<div class="nd2-empty">No systems seen in this window.</div>';
+        return;
+      }
+      host.innerHTML = systems.map(s => {
+        const sid = s.system;
+        const wacnArg = s.wacn == null ? 'null' : s.wacn;
+        const expanded = !!nd2.sysExpanded[sid];
+        const sites = s.sites || [];
+        const folder = `
+          <div class="nd2-tree-row nd2-tree-sys${expanded ? ' expanded' : ''}">
+            <button type="button" class="nd2-tree-chevron" aria-expanded="${expanded}"
+              aria-label="${expanded ? 'Collapse' : 'Expand'} sites"
+              onclick="nd2ToggleSystem(event, ${sid})"><i class="fas fa-chevron-right"></i></button>
+            <div class="nd2-tree-main" role="button" tabindex="0"
+              onclick="nd2OpenSystem(${sid}, ${wacnArg})"
+              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();nd2OpenSystem(${sid}, ${wacnArg});}">
+              <i class="fas fa-folder${expanded ? '-open' : ''} nd2-tree-ico"></i>
+              <span class="nd2-tree-name">${nd2SysCell(s.name, sid)}${s.wacn != null ? ` <span class="nd-sub">WACN ${escapeHtml(String(s.wacn))}</span>` : ''}</span>
+              <span class="nd2-tree-counts">
+                <span title="calls / receptions"><i class="fas fa-phone-volume"></i>${nd2Num(s.logicalCalls)}<span class="nd-sub">/${nd2Num(s.calls)}</span></span>
+                <span title="sites"><i class="fas fa-tower-cell"></i>${nd2Num(s.siteCount)}</span>
+                <span title="talkgroups"><i class="fas fa-walkie-talkie"></i>${nd2Num(s.talkgroups)}</span>
+                <span title="radios"><i class="fas fa-user-astronaut"></i>${nd2Num(s.radios)}</span>
+                <span class="nd2-tree-seen">${nd2LastSeen(s.lastSeen)}</span>
+              </span>
+            </div>
+          </div>`;
+        let children = '';
+        if (expanded) {
+          const inner = sites.length ? sites.map(st => {
+            const nameArg = encodeURIComponent(st.name || '');
+            const label = st.name
+              ? `<span class="nd-strong">${escapeHtml(String(st.name))}</span> <span class="nd-sub">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`
+              : `<span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`;
+            return `
+            <div class="nd2-tree-row nd2-tree-site" role="button" tabindex="0"
+              onclick="nd2TreeOpenSite(${sid}, ${wacnArg}, ${st.rfss}, ${st.site}, '${nameArg}')"
+              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();nd2TreeOpenSite(${sid}, ${wacnArg}, ${st.rfss}, ${st.site}, '${nameArg}');}">
+              <i class="fas fa-tower-cell nd2-tree-ico"></i>
+              <span class="nd2-tree-name">${label}</span>
+              <span class="nd2-tree-counts">
+                <span title="calls / receptions"><i class="fas fa-phone-volume"></i>${nd2Num(st.logicalCalls)}<span class="nd-sub">/${nd2Num(st.calls)}</span></span>
+                <span class="nd2-tree-seen">${nd2LastSeen(st.lastSeen)}</span>
+              </span>
+            </div>`;
+          }).join('') : '<div class="nd2-empty">No sites with attribution in this window.</div>';
+          children = `<div class="nd2-tree-children">${inner}</div>`;
+        }
+        return `<div class="nd2-tree-group">${folder}${children}</div>`;
+      }).join('');
+    }
+
+    // Chevron: toggle one system's expanded state without navigating away.
+    function nd2ToggleSystem(event, system) {
+      if (event) { event.preventDefault(); event.stopPropagation(); }
+      nd2.sysExpanded[system] = !nd2.sysExpanded[system];
+      nd2RenderSystemsTree(nd2.systemsCache || []);
+    }
+
+    // Open a site straight from the tree: seed the parent system first (the
+    // site-detail fetch + crumbs need nd2.sys.system), then reuse nd2OpenSite.
+    function nd2TreeOpenSite(system, wacn, rfss, site, name) {
+      nd2.sys.system = system;
+      nd2.sys.wacn = wacn;
+      nd2.sys.name = (nd2.systemsCache || []).find(s => s.system === system)?.name || null;
+      nd2OpenSite(rfss, site, name);
     }
 
     function nd2OpenSystem(system, wacn) {
@@ -4111,6 +4316,7 @@
       const s = nd2.sys;
       const params = new URLSearchParams({ window: nd2.window, system: String(s.system) });
       if (s.wacn != null) params.set('wacn', String(s.wacn));
+      if (nd2.node) params.set('node', nd2.node);
       const msgEl = document.getElementById('nd2-sys-msg');
       try {
         const data = await nd2Fetch(`/api/node-data/system?${params}`);
@@ -4157,6 +4363,7 @@
       const params = new URLSearchParams({
         window: nd2.window, system: String(s.system), rfss: String(s.rfss), site: String(s.site),
       });
+      if (nd2.node) params.set('node', nd2.node);
       const msgEl = document.getElementById('nd2-site-msg');
       try {
         const data = await nd2Fetch(`/api/node-data/site?${params}`);
@@ -4344,6 +4551,7 @@
       if (q) params.set('q', q);
       // Scoped to the open system's drill-down.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
+      if (nd2.node) params.set('node', nd2.node);
       try {
         const data = await nd2Fetch(`/api/node-data/talkgroups?${params}`);
         if (nd2.view !== view || nd2.sys.level !== 'system') return;
@@ -4389,6 +4597,7 @@
       if (q) params.set('q', q);
       // Scoped to the open system's drill-down.
       if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
+      if (nd2.node) params.set('node', nd2.node);
       try {
         const data = await nd2Fetch(`/api/node-data/radios?${params}`);
         if (nd2.view !== view || nd2.sys.level !== 'system') return;
