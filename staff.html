@@ -1993,8 +1993,6 @@
           <div class="nd2-seg" role="group" aria-label="Radio data view">
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
-            <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
-            <button class="filter-btn" data-nd2-view="radios" onclick="nd2SetView('radios')">Radios</button>
             <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
           </div>
         </div>
@@ -2094,41 +2092,145 @@
               <h3 class="nd2-detail-title" id="nd2-sys-title">System</h3>
             </div>
             <div class="nd2-empty" id="nd2-sys-msg" style="display: none;"></div>
-            <div class="stats-bar" id="nd2-sys-tiles"></div>
-            <div class="nd2-card nd2-chart-card">
-              <div class="nd2-card-h">
-                <i class="fas fa-chart-line"></i> System activity
-                <span class="nd2-note" id="nd2-sys-chart-note"></span>
+
+            <!-- System-detail sub-tabs (vce hierarchy: System → Sites/Talkgroups/Radios).
+                 Sites = system overview + sites list → per-site P25 drill-down.
+                 Talkgroups / Radios = the paged rollups scoped to THIS system via
+                 ?system=<id>. Default tab = Sites. -->
+            <div class="nd2-controls nd2-systab-bar">
+              <div class="nd2-seg" role="group" aria-label="System detail view">
+                <button class="filter-btn active" data-nd2-systab="sites" onclick="nd2SysSetTab('sites')">Sites</button>
+                <button class="filter-btn" data-nd2-systab="talkgroups" onclick="nd2SysSetTab('talkgroups')">Talkgroups</button>
+                <button class="filter-btn" data-nd2-systab="radios" onclick="nd2SysSetTab('radios')">Radios</button>
               </div>
-              <div class="nd2-chart-wrap">
-                <canvas id="nd2-sys-chart" aria-label="System calls over time" role="img"></canvas>
-              </div>
-              <div class="nd2-empty" id="nd2-sys-chart-empty" style="display: none;">No activity in this window.</div>
             </div>
-            <div class="nd2-table-wrap nd2-detail-gap">
-              <table class="nd-table">
-                <thead>
-                  <tr>
-                    <th>Site</th>
-                    <th>NAC</th>
-                    <th class="nd2-num">Calls</th>
-                    <th>Top talkgroup</th>
-                    <th>Last seen</th>
-                  </tr>
-                </thead>
-                <tbody id="nd2-sys-sites-body">
-                  <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="nd2-top-grid">
-              <div class="nd2-card">
-                <div class="nd2-card-h"><i class="fas fa-walkie-talkie"></i> Top Talkgroups</div>
-                <div id="nd2-sys-top-tg"><div class="nd2-empty">—</div></div>
+
+            <!-- Sites tab (system overview + sites list → site drill-down) -->
+            <div id="nd2-systab-sites">
+              <div class="stats-bar" id="nd2-sys-tiles"></div>
+              <div class="nd2-card nd2-chart-card">
+                <div class="nd2-card-h">
+                  <i class="fas fa-chart-line"></i> System activity
+                  <span class="nd2-note" id="nd2-sys-chart-note"></span>
+                </div>
+                <div class="nd2-chart-wrap">
+                  <canvas id="nd2-sys-chart" aria-label="System calls over time" role="img"></canvas>
+                </div>
+                <div class="nd2-empty" id="nd2-sys-chart-empty" style="display: none;">No activity in this window.</div>
               </div>
-              <div class="nd2-card">
-                <div class="nd2-card-h"><i class="fas fa-user-astronaut"></i> Top Radios</div>
-                <div id="nd2-sys-top-radios"><div class="nd2-empty">—</div></div>
+              <div class="nd2-table-wrap nd2-detail-gap">
+                <table class="nd-table">
+                  <thead>
+                    <tr>
+                      <th>Site</th>
+                      <th>NAC</th>
+                      <th class="nd2-num">Calls</th>
+                      <th>Top talkgroup</th>
+                      <th>Last seen</th>
+                    </tr>
+                  </thead>
+                  <tbody id="nd2-sys-sites-body">
+                    <tr><td colspan="5" class="nd2-empty">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="nd2-top-grid">
+                <div class="nd2-card">
+                  <div class="nd2-card-h"><i class="fas fa-walkie-talkie"></i> Top Talkgroups</div>
+                  <div id="nd2-sys-top-tg"><div class="nd2-empty">—</div></div>
+                </div>
+                <div class="nd2-card">
+                  <div class="nd2-card-h"><i class="fas fa-user-astronaut"></i> Top Radios</div>
+                  <div id="nd2-sys-top-radios"><div class="nd2-empty">—</div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Talkgroups tab (scoped to this system) -->
+            <div id="nd2-systab-talkgroups" style="display: none;">
+              <div class="filter-bar">
+                <div class="search-box" style="min-width: 150px;">
+                  <i class="fas fa-search"></i>
+                  <input type="text" id="nd2-tg-q" placeholder="Talkgroup #" inputmode="numeric" oninput="nd2TgInputChanged()">
+                </div>
+                <div class="filter-spacer"></div>
+                <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
+                  <button class="filter-btn active" data-nd2-tgsort="calls" onclick="nd2TgSetSort('calls')">Calls</button>
+                  <button class="filter-btn" data-nd2-tgsort="lastSeen" onclick="nd2TgSetSort('lastSeen')">Last seen</button>
+                </div>
+              </div>
+              <div class="nd2-table-wrap">
+                <table class="nd-table">
+                  <thead>
+                    <tr>
+                      <th>Talkgroup</th>
+                      <th>System</th>
+                      <th class="nd2-num">Calls</th>
+                      <th class="nd2-num">Enc</th>
+                      <th>Last seen</th>
+                      <th>Last site</th>
+                      <th>Top site</th>
+                      <th>Top node</th>
+                    </tr>
+                  </thead>
+                  <tbody id="nd2-tg-body">
+                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="nd2-pgr">
+                <button class="btn btn-secondary btn-sm" id="nd2-tg-prev" onclick="nd2TgPage(-1)" disabled>
+                  <i class="fas fa-chevron-left"></i> Prev
+                </button>
+                <button class="btn btn-secondary btn-sm" id="nd2-tg-next" onclick="nd2TgPage(1)" disabled>
+                  Next <i class="fas fa-chevron-right"></i>
+                </button>
+                <div class="filter-spacer"></div>
+                <span id="nd2-tg-count"></span>
+              </div>
+            </div>
+
+            <!-- Radios tab (scoped to this system) -->
+            <div id="nd2-systab-radios" style="display: none;">
+              <div class="filter-bar">
+                <div class="search-box" style="min-width: 150px;">
+                  <i class="fas fa-search"></i>
+                  <input type="text" id="nd2-rad-q" placeholder="Radio ID" inputmode="numeric" oninput="nd2RadInputChanged()">
+                </div>
+                <div class="filter-spacer"></div>
+                <div class="nd2-seg" role="group" aria-label="Sort radios by">
+                  <button class="filter-btn active" data-nd2-radsort="calls" onclick="nd2RadSetSort('calls')">Calls</button>
+                  <button class="filter-btn" data-nd2-radsort="lastSeen" onclick="nd2RadSetSort('lastSeen')">Last seen</button>
+                </div>
+              </div>
+              <div class="nd2-table-wrap">
+                <table class="nd-table">
+                  <thead>
+                    <tr>
+                      <th>Radio</th>
+                      <th>System</th>
+                      <th class="nd2-num">Calls</th>
+                      <th>Last seen</th>
+                      <th>Last site</th>
+                      <th>Top site</th>
+                      <th>Top node</th>
+                      <th>Top talkgroups</th>
+                    </tr>
+                  </thead>
+                  <tbody id="nd2-rad-body">
+                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="nd2-pgr">
+                <button class="btn btn-secondary btn-sm" id="nd2-rad-prev" onclick="nd2RadPage(-1)" disabled>
+                  <i class="fas fa-chevron-left"></i> Prev
+                </button>
+                <button class="btn btn-secondary btn-sm" id="nd2-rad-next" onclick="nd2RadPage(1)" disabled>
+                  Next <i class="fas fa-chevron-right"></i>
+                </button>
+                <div class="filter-spacer"></div>
+                <span id="nd2-rad-count"></span>
               </div>
             </div>
           </div>
@@ -2168,100 +2270,6 @@
                 <div id="nd2-site-nodes"><div class="nd2-empty">—</div></div>
               </div>
             </div>
-          </div>
-        </div>
-
-        <!-- ===== Talkgroups view ===== -->
-        <div id="nd2-view-talkgroups" style="display: none;">
-          <div class="filter-bar">
-            <div class="search-box" style="min-width: 150px;">
-              <i class="fas fa-search"></i>
-              <input type="text" id="nd2-tg-q" placeholder="Talkgroup #" inputmode="numeric" oninput="nd2TgInputChanged()">
-            </div>
-            <select id="nd2-tg-system" class="nd-input" style="width: auto; min-width: 130px; font-size: 0.82rem; padding: 0.45rem 0.5rem;" onchange="nd2TgFilterChanged()">
-              <option value="">All systems</option>
-            </select>
-            <div class="filter-spacer"></div>
-            <div class="nd2-seg" role="group" aria-label="Sort talkgroups by">
-              <button class="filter-btn active" data-nd2-tgsort="calls" onclick="nd2TgSetSort('calls')">Calls</button>
-              <button class="filter-btn" data-nd2-tgsort="lastSeen" onclick="nd2TgSetSort('lastSeen')">Last seen</button>
-            </div>
-          </div>
-          <div class="nd2-table-wrap">
-            <table class="nd-table">
-              <thead>
-                <tr>
-                  <th>Talkgroup</th>
-                  <th>System</th>
-                  <th class="nd2-num">Calls</th>
-                  <th class="nd2-num">Enc</th>
-                  <th>Last seen</th>
-                  <th>Last site</th>
-                  <th>Top site</th>
-                  <th>Top node</th>
-                </tr>
-              </thead>
-              <tbody id="nd2-tg-body">
-                <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="nd2-pgr">
-            <button class="btn btn-secondary btn-sm" id="nd2-tg-prev" onclick="nd2TgPage(-1)" disabled>
-              <i class="fas fa-chevron-left"></i> Prev
-            </button>
-            <button class="btn btn-secondary btn-sm" id="nd2-tg-next" onclick="nd2TgPage(1)" disabled>
-              Next <i class="fas fa-chevron-right"></i>
-            </button>
-            <div class="filter-spacer"></div>
-            <span id="nd2-tg-count"></span>
-          </div>
-        </div>
-
-        <!-- ===== Radios view ===== -->
-        <div id="nd2-view-radios" style="display: none;">
-          <div class="filter-bar">
-            <div class="search-box" style="min-width: 150px;">
-              <i class="fas fa-search"></i>
-              <input type="text" id="nd2-rad-q" placeholder="Radio ID" inputmode="numeric" oninput="nd2RadInputChanged()">
-            </div>
-            <select id="nd2-rad-system" class="nd-input" style="width: auto; min-width: 130px; font-size: 0.82rem; padding: 0.45rem 0.5rem;" onchange="nd2RadFilterChanged()">
-              <option value="">All systems</option>
-            </select>
-            <div class="filter-spacer"></div>
-            <div class="nd2-seg" role="group" aria-label="Sort radios by">
-              <button class="filter-btn active" data-nd2-radsort="calls" onclick="nd2RadSetSort('calls')">Calls</button>
-              <button class="filter-btn" data-nd2-radsort="lastSeen" onclick="nd2RadSetSort('lastSeen')">Last seen</button>
-            </div>
-          </div>
-          <div class="nd2-table-wrap">
-            <table class="nd-table">
-              <thead>
-                <tr>
-                  <th>Radio</th>
-                  <th>System</th>
-                  <th class="nd2-num">Calls</th>
-                  <th>Last seen</th>
-                  <th>Last site</th>
-                  <th>Top site</th>
-                  <th>Top node</th>
-                  <th>Top talkgroups</th>
-                </tr>
-              </thead>
-              <tbody id="nd2-rad-body">
-                <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="nd2-pgr">
-            <button class="btn btn-secondary btn-sm" id="nd2-rad-prev" onclick="nd2RadPage(-1)" disabled>
-              <i class="fas fa-chevron-left"></i> Prev
-            </button>
-            <button class="btn btn-secondary btn-sm" id="nd2-rad-next" onclick="nd2RadPage(1)" disabled>
-              Next <i class="fas fa-chevron-right"></i>
-            </button>
-            <div class="filter-spacer"></div>
-            <span id="nd2-rad-count"></span>
           </div>
         </div>
 
@@ -3150,11 +3158,12 @@
       evTotal: 0,
       loadedOnce: false,
       // Systems view navigation: list → one system → one site of that system.
-      sys: { level: 'list', system: null, wacn: null, rfss: null, site: null },
-      // Talkgroups / Radios views: filters + offset pagination.
-      tg: { q: '', system: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
-      rad: { q: '', system: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
-      systemsCache: null,  // for the TG/Radio system-filter dropdowns
+      // Within a system, `tab` selects the sub-view (sites | talkgroups | radios).
+      sys: { level: 'list', tab: 'sites', system: null, wacn: null, rfss: null, site: null },
+      // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
+      tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
+      rad: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
+      systemsCache: null,  // list-row cache (drives the open-system name lookup)
       // Pager mode: overview payload + capcodes list/messages drill-down.
       pov: null,
       cap: { q: '', sort: 'pages', offset: 0, limit: 50, total: 0, rows: [] },
@@ -3173,7 +3182,7 @@
     let _nd2RadDebounce = null;
     let _nd2CapDebounce = null;
     // Which views belong to each mode (drives the panel show/hide sweep).
-    const ND2_RADIO_VIEWS = ['overview', 'systems', 'talkgroups', 'radios', 'events'];
+    const ND2_RADIO_VIEWS = ['overview', 'systems', 'events'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
@@ -3185,9 +3194,15 @@
         // someone who has paged deeper in (only auto-refresh on the first page).
         switch (nd2.view) {
           case 'overview': nd2LoadOverview(); break;
-          case 'systems': if (nd2.sys.level === 'list') nd2LoadSystems(); break;
-          case 'talkgroups': if (nd2.tg.offset === 0) nd2LoadTalkgroups(); break;
-          case 'radios': if (nd2.rad.offset === 0) nd2LoadRadios(); break;
+          case 'systems':
+            if (nd2.sys.level === 'list') nd2LoadSystems();
+            else if (nd2.sys.level === 'system') {
+              // Refresh only the active sub-tab; guard paged tabs to page 0.
+              if (nd2.sys.tab === 'talkgroups') { if (nd2.tg.offset === 0) nd2LoadTalkgroups(); }
+              else if (nd2.sys.tab === 'radios') { if (nd2.rad.offset === 0) nd2LoadRadios(); }
+              else nd2LoadSystem();
+            }
+            break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
           case 'poverview': nd2LoadPagerOverview(); break;
           case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
@@ -3208,8 +3223,6 @@
       switch (nd2.view) {
         case 'overview': await nd2LoadOverview(); break;
         case 'systems': await nd2LoadSystemsView(); break;
-        case 'talkgroups': await Promise.all([nd2EnsureSystemSelect('nd2-tg-system'), nd2LoadTalkgroups()]); break;
-        case 'radios': await Promise.all([nd2EnsureSystemSelect('nd2-rad-system'), nd2LoadRadios()]); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
         case 'capcodes': await nd2LoadCapcodesView(); break;
@@ -3244,8 +3257,9 @@
         if (el) el.style.display = v === view ? '' : 'none';
       });
       nd2ApplyWindowChrome(view);
-      // Systems / Capcodes always re-enter at their list level.
-      if (view === 'systems') { nd2SysShow('list'); nd2SysCrumbs(); }
+      // Systems / Capcodes always re-enter at their list level. Reset the
+      // system-detail sub-tab so a stale Talkgroups/Radios tab never lingers.
+      if (view === 'systems') { nd2.sys.tab = 'sites'; nd2SysShow('list'); nd2SysCrumbs(); }
       if (view === 'capcodes') { nd2CapShow('list'); }
       nd2Refresh();
     }
@@ -3803,29 +3817,34 @@
       if (which === 'sys') _nd2SysChart = chart; else _nd2SiteChart = chart;
     }
 
-    // Populate a system-filter <select> from /systems (cached per refresh).
-    async function nd2EnsureSystemSelect(selId) {
-      const sel = document.getElementById(selId);
-      if (!sel) return;
-      try {
-        if (!nd2.systemsCache) {
-          const data = await nd2Fetch(`/api/node-data/systems?window=${nd2.window}`);
-          nd2.systemsCache = data.systems || [];
-        }
-        const prev = sel.value;
-        sel.innerHTML = '<option value="">All systems</option>' + nd2.systemsCache.map(s =>
-          `<option value="${escapeHtml(String(s.system))}">` +
-          escapeHtml(s.name ? `${s.name} (${s.system})` : `System ${s.system}`) +
-          (s.wacn != null ? ` · WACN ${escapeHtml(String(s.wacn))}` : '') + `</option>`).join('');
-        if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
-      } catch (e) { /* leave the "All systems" default in place */ }
+    // --- Systems view (list → system → site) -----------------------------
+    // The system level splits into three sub-tabs (sites | talkgroups | radios);
+    // refresh/window-change reloads whichever tab is active.
+    async function nd2LoadSystemsView() {
+      if (nd2.sys.level === 'site') return nd2LoadSite();
+      if (nd2.sys.level === 'system') {
+        if (nd2.sys.tab === 'talkgroups') return nd2LoadTalkgroups();
+        if (nd2.sys.tab === 'radios') return nd2LoadRadios();
+        return nd2LoadSystem();
+      }
+      return nd2LoadSystems();
     }
 
-    // --- Systems view (list → system → site) -----------------------------
-    async function nd2LoadSystemsView() {
-      if (nd2.sys.level === 'system') return nd2LoadSystem();
-      if (nd2.sys.level === 'site') return nd2LoadSite();
-      return nd2LoadSystems();
+    // Switch the system-detail sub-tab and load its data (each tab is scoped to
+    // the open system). Sites reloads the system overview; the paged tabs reset
+    // to page 0 on (re)entry.
+    function nd2SysSetTab(tab) {
+      if (tab !== 'sites' && tab !== 'talkgroups' && tab !== 'radios') return;
+      nd2.sys.tab = tab;
+      document.querySelectorAll('[data-nd2-systab]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Systab === tab));
+      ['sites', 'talkgroups', 'radios'].forEach(t => {
+        const el = document.getElementById('nd2-systab-' + t);
+        if (el) el.style.display = t === tab ? '' : 'none';
+      });
+      if (tab === 'talkgroups') { nd2.tg.offset = 0; nd2LoadTalkgroups(); }
+      else if (tab === 'radios') { nd2.rad.offset = 0; nd2LoadRadios(); }
+      else nd2LoadSystem();
     }
 
     function nd2SysShow(level) {
@@ -3857,7 +3876,8 @@
       }
     }
     function nd2SysGoList() { nd2SysShow('list'); nd2SysCrumbs(); nd2LoadSystems(); }
-    function nd2SysGoSystem() { nd2SysShow('system'); nd2SysCrumbs(); nd2LoadSystem(); }
+    // Back from a site → the system detail, restoring whichever sub-tab was open.
+    function nd2SysGoSystem() { nd2SysShow('system'); nd2SysCrumbs(); nd2LoadSystemsView(); }
 
     async function nd2LoadSystems() {
       const view = nd2.view;
@@ -3889,9 +3909,13 @@
       // Seed the heading from the cached list row (the /system fetch confirms
       // it); avoids passing a free-text name through the inline onclick.
       nd2.sys.name = (nd2.systemsCache || []).find(s => s.system === system)?.name || null;
+      // Fresh drill-down: reset the scoped Talkgroups/Radios filters + paging.
+      nd2.tg.offset = 0; nd2.rad.offset = 0;
+      const tq = document.getElementById('nd2-tg-q'); if (tq) tq.value = '';
+      const rq = document.getElementById('nd2-rad-q'); if (rq) rq.value = '';
       nd2SysShow('system');
       nd2SysCrumbs();
-      nd2LoadSystem();
+      nd2SysSetTab('sites');   // default tab; also loads the system overview
     }
 
     // Friendly P25 system label: name primary + numeric id secondary (e.g.
@@ -4137,7 +4161,6 @@
 
     // --- Talkgroups view -------------------------------------------------
     function nd2TgInputChanged() { clearTimeout(_nd2TgDebounce); _nd2TgDebounce = setTimeout(() => { nd2.tg.offset = 0; nd2LoadTalkgroups(); }, 400); }
-    function nd2TgFilterChanged() { nd2.tg.offset = 0; nd2LoadTalkgroups(); }
     function nd2TgSetSort(sort) {
       if (nd2.tg.sort === sort) return;
       nd2.tg.sort = sort; nd2.tg.offset = 0;
@@ -4153,16 +4176,16 @@
     async function nd2LoadTalkgroups() {
       const view = nd2.view;
       const q = (document.getElementById('nd2-tg-q')?.value || '').trim();
-      const system = (document.getElementById('nd2-tg-system')?.value || '').trim();
       const params = new URLSearchParams({
         window: nd2.window, sort: nd2.tg.sort,
         limit: String(nd2.tg.limit), offset: String(nd2.tg.offset),
       });
       if (q) params.set('q', q);
-      if (system) params.set('system', system);
+      // Scoped to the open system's drill-down.
+      if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       try {
         const data = await nd2Fetch(`/api/node-data/talkgroups?${params}`);
-        if (nd2.view !== view) return;
+        if (nd2.view !== view || nd2.sys.level !== 'system') return;
         nd2.tg.total = data.total || 0;
         const body = document.getElementById('nd2-tg-body');
         const rows = data.talkgroups || [];
@@ -4184,7 +4207,6 @@
 
     // --- Radios view -----------------------------------------------------
     function nd2RadInputChanged() { clearTimeout(_nd2RadDebounce); _nd2RadDebounce = setTimeout(() => { nd2.rad.offset = 0; nd2LoadRadios(); }, 400); }
-    function nd2RadFilterChanged() { nd2.rad.offset = 0; nd2LoadRadios(); }
     function nd2RadSetSort(sort) {
       if (nd2.rad.sort === sort) return;
       nd2.rad.sort = sort; nd2.rad.offset = 0;
@@ -4200,16 +4222,16 @@
     async function nd2LoadRadios() {
       const view = nd2.view;
       const q = (document.getElementById('nd2-rad-q')?.value || '').trim();
-      const system = (document.getElementById('nd2-rad-system')?.value || '').trim();
       const params = new URLSearchParams({
         window: nd2.window, sort: nd2.rad.sort,
         limit: String(nd2.rad.limit), offset: String(nd2.rad.offset),
       });
       if (q) params.set('q', q);
-      if (system) params.set('system', system);
+      // Scoped to the open system's drill-down.
+      if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
       try {
         const data = await nd2Fetch(`/api/node-data/radios?${params}`);
-        if (nd2.view !== view) return;
+        if (nd2.view !== view || nd2.sys.level !== 'system') return;
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
