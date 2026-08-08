@@ -7365,12 +7365,17 @@
       // Data calls (state DATA) are hidden from Now Playing — they carry no voice
       // and just take up space.
       const isData = (c) => String(c.state || '').toUpperCase() === 'DATA';
+      // Control channels are decoding the control frequency 24/7 — they are NOT
+      // calls. vce emits them in activeCalls with control:true / state CONTROL;
+      // strip them here so Now Playing shows only real voice traffic (otherwise
+      // every control channel shows up as a call with an ever-climbing timer).
+      const isControl = (c) => c.control === true || String(c.state || '').toUpperCase() === 'CONTROL';
       // Encrypted calls are hidden unless the "Show encrypted" toggle is on.
       const encHidden = (c) => !_ndShowEnc && _ndIsEnc(c);
       // Prefer the dedicated activeCalls array (includes dynamically-allocated
       // P25 traffic channels not present in the channels list). Fall back to
       // channels in a live state only when activeCalls is absent.
-      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c) && !encHidden(c));
+      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c) && !isControl(c) && !encHidden(c));
       const ACTIVE = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
       return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && !encHidden(c) && (c.from || c.to || c.frequency != null));
     }
