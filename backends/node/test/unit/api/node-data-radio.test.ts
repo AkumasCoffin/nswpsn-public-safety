@@ -101,6 +101,16 @@ describe('GET /api/node-data/talkgroups', () => {
     const res = await app.request('/api/node-data/talkgroups?system=abc');
     expect(res.status).toBe(400);
   });
+
+  it('adds the node_id filter when ?node= is set', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/talkgroups?window=7d&system=721&node=n1');
+    expect(res.status).toBe(200);
+    const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, talkgroup'));
+    expect(grouped?.sql).toContain('node_id = $');
+    expect(grouped?.params).toContain('n1');
+  });
 });
 
 describe('GET /api/node-data/radios', () => {
@@ -122,6 +132,60 @@ describe('GET /api/node-data/radios', () => {
     expect(res.status).toBe(200);
     const grouped = calls.find((c) => c.sql.includes('GROUP BY wacn, system, source_unit'));
     expect(grouped?.sql).not.toContain('system = $');
+  });
+});
+
+describe('GET /api/node-data/systems (folder tree + node filter)', () => {
+  it('eager-loads each system\'s sites[] with resolved names', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
+      // System rollup row (the folder).
+      if (sql.includes('MIN(received_at) AS first_seen')) {
+        return {
+          rows: [{
+            wacn: null, system: 721, name: 'NSWPSN', calls: 10, logical: 6, enc: 0,
+            sites: 1, talkgroups: 2, radios: 3, first_seen: LAST_SEEN, last_seen: LAST_SEEN,
+          }],
+        };
+      }
+      // Per-site rollup (the folder's children).
+      if (sql.includes('GROUP BY system, site_rfss, site_id')) {
+        return { rows: [{ system: 721, rfss: 4, site: 85, calls: 5, logical: 3, last_seen: LAST_SEEN }] };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/systems?window=7d');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.systems[0].siteCount).toBe(1);
+    expect(Array.isArray(body.systems[0].sites)).toBe(true);
+    expect(body.systems[0].sites[0]).toEqual({
+      rfss: 4, site: 85, name: 'Cambewarra MT', calls: 5, logicalCalls: 3,
+      lastSeen: LAST_SEEN.toISOString(),
+    });
+  });
+
+  it('adds the node_id filter to both rollups when ?node= is set', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/systems?window=7d&node=n1');
+    expect(res.status).toBe(200);
+    const sys = calls.find((c) => c.sql.includes('MIN(received_at) AS first_seen'));
+    const sites = calls.find((c) => c.sql.includes('GROUP BY system, site_rfss, site_id'));
+    expect(sys?.sql).toContain('node_id = $2');
+    expect(sys?.params).toContain('n1');
+    expect(sites?.sql).toContain('node_id = $2');
+    expect(sites?.params).toContain('n1');
+  });
+
+  it('stays fleet-wide with no node param', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/systems?window=7d');
+    expect(res.status).toBe(200);
+    const sys = calls.find((c) => c.sql.includes('MIN(received_at) AS first_seen'));
+    expect(sys?.sql).not.toContain('node_id = $');
   });
 });
 
