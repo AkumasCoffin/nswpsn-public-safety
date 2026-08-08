@@ -1434,6 +1434,49 @@
       to   { opacity: 1; transform: none; }
     }
 
+    /* Data nav item = a Radio/Pager mode dropdown (see toggleDataMenu). */
+    .tab-dd { position: relative; display: inline-flex; }
+    .tab-dd-caret { font-size: 0.68rem; opacity: 0.7; margin-left: 0.05rem; }
+    .tab-dd-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 60;
+      min-width: 148px;
+      display: none;
+      flex-direction: column;
+      gap: 0.15rem;
+      padding: 0.3rem;
+      background: var(--bg-card-2);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    }
+    .tab-dd-menu.open { display: flex; }
+    .tab-dd-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.8rem;
+      background: transparent;
+      border: none;
+      border-radius: 7px;
+      color: var(--text-soft);
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .tab-dd-item i { width: 1rem; text-align: center; }
+    .tab-dd-item:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.05); }
+    .tab-dd-item.active {
+      color: #7dd3fc;
+      background: var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--accent-border);
+    }
+
     /* === Role badges =================================================== */
     .role-badge {
       display: inline-flex;
@@ -1513,17 +1556,6 @@
     }
     .nd2-seg .filter-btn { border: none; padding: 0.35rem 0.95rem; font-size: 0.78rem; }
     .nd2-seg .filter-btn:not(.active) { background: transparent; }
-
-    /* Radio/Pager mode selector — the top-level view-set switch. */
-    .nd2-mode-wrap { display: inline-flex; align-items: center; gap: 0.5rem; }
-    .nd2-mode-label {
-      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
-      text-transform: uppercase; color: var(--text-soft);
-    }
-    .nd2-mode-select {
-      width: auto; min-width: 110px; font-size: 0.85rem; font-weight: 600;
-      padding: 0.4rem 0.6rem;
-    }
 
     /* Inline soft error / not-deployed-yet banner (mirrors .nd-banner). */
     .nd2-error {
@@ -1873,9 +1905,15 @@
           <i class="fas fa-server"></i> Dev
           <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
         </button>
-        <button class="tab-btn" data-tab="data" onclick="switchTab('data')">
-          <i class="fas fa-chart-line"></i> Data
-        </button>
+        <div class="tab-dd" id="data-dd">
+          <button class="tab-btn" data-tab="data" id="data-tab-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleDataMenu(event)">
+            <i class="fas fa-chart-line"></i> Data <i class="fas fa-caret-down tab-dd-caret"></i>
+          </button>
+          <div class="tab-dd-menu" id="data-dd-menu" role="menu" aria-label="Data mode">
+            <button class="tab-dd-item" role="menuitem" data-mode="radio" onclick="openDataMode('radio')"><i class="fas fa-walkie-talkie"></i> Radio</button>
+            <button class="tab-dd-item" role="menuitem" data-mode="pager" onclick="openDataMode('pager')"><i class="fas fa-tower-broadcast"></i> Pager</button>
+          </div>
+        </div>
         <button class="tab-btn" data-tab="nodes" onclick="switchTab('nodes')">
           <i class="fas fa-satellite-dish"></i> Nodes
         </button>
@@ -2013,14 +2051,6 @@
       <!-- Data Tab — combined radio + pager activity dashboard -->
       <div id="data-tab" class="tab-content">
         <div class="nd2-controls">
-          <label class="nd2-mode-wrap">
-            <span class="nd2-mode-label">Mode</span>
-            <select id="nd2-mode" class="nd-input nd2-mode-select" aria-label="Data mode" onchange="nd2SetMode(this.value)">
-              <option value="radio">Radio</option>
-              <option value="pager">Pager</option>
-            </select>
-          </label>
-          <div class="filter-spacer"></div>
           <div class="nd2-seg" role="group" aria-label="Time window">
             <button class="filter-btn active" data-nd2-window="24h" onclick="nd2SetWindow('24h')">24h</button>
             <button class="filter-btn" data-nd2-window="7d" onclick="nd2SetWindow('7d')">7d</button>
@@ -2566,14 +2596,12 @@
           <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h">
               <i class="fas fa-broadcast-tower"></i> Channels
-              <span class="nd-warn-chip" id="nd-cfg-dist-warn" style="display: none;" onclick="_ndCfgDistribute()"></span>
               <span class="nd-h-spacer"></span>
               <span class="nd-sync-hint" id="nd-cfg-sync"></span>
             </div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
             <div class="nd-cfg-actions">
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
-              <button class="btn btn-secondary btn-sm" onclick="_ndCfgDistribute()" title="Sort channels by frequency and spread contiguous frequency clusters across the node's SDRs — review the assignments, then Save &amp; sync"><i class="fas fa-shuffle"></i> Distribute across SDRs</button>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
               <span class="nd-spacer"></span>
               <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
@@ -3271,13 +3299,58 @@
       }
     }
 
+    // Last-used Data mode — the nav "Data" dropdown reopens here (defaults Radio).
+    let nd2LastMode = 'radio';
+
+    // Nav "Data" item behaves as a Radio/Pager dropdown. Clicking it toggles a
+    // small menu; picking an option activates the Data tab in that mode.
+    function toggleDataMenu(event) {
+      if (event) { event.preventDefault(); event.stopPropagation(); }
+      const menu = document.getElementById('data-dd-menu');
+      if (!menu) return;
+      const open = !menu.classList.contains('open');
+      _nd2SetDataMenu(open);
+    }
+    function _nd2SetDataMenu(open) {
+      const menu = document.getElementById('data-dd-menu');
+      const btn = document.getElementById('data-tab-btn');
+      if (!menu) return;
+      menu.classList.toggle('open', open);
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) _nd2MarkDataMenu();
+    }
+    function closeDataMenu() { _nd2SetDataMenu(false); }
+    // Highlight whichever mode is currently showing (or last-used before entry).
+    function _nd2MarkDataMenu() {
+      const cur = currentTab === 'data' ? nd2.mode : nd2LastMode;
+      document.querySelectorAll('#data-dd-menu .tab-dd-item').forEach(it =>
+        it.classList.toggle('active', it.dataset.mode === cur));
+    }
+    // Menu pick: remember the mode, activate the Data tab, switch mode.
+    function openDataMode(mode) {
+      if (mode !== 'radio' && mode !== 'pager') return;
+      nd2LastMode = mode;
+      closeDataMenu();
+      if (currentTab !== 'data') switchTab('data');
+      nd2SetMode(mode);   // no-op guard if already in this mode (tab load still runs)
+      _nd2MarkDataMenu();
+    }
+    // Close the Data menu on outside-click or Esc.
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('data-dd');
+      if (dd && !dd.contains(e.target)) closeDataMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeDataMenu();
+    });
+
     // Radio ⇄ Pager: swap the view-pill row and reset to the mode's first view.
     function nd2SetMode(mode) {
       if (mode !== 'radio' && mode !== 'pager') return;
-      if (nd2.mode === mode) return;
+      nd2LastMode = mode;
+      if (nd2.mode === mode) { _nd2MarkDataMenu(); return; }
       nd2.mode = mode;
-      const sel = document.getElementById('nd2-mode');
-      if (sel && sel.value !== mode) sel.value = mode;
+      _nd2MarkDataMenu();
       const rBar = document.getElementById('nd2-viewbar-radio');
       const pBar = document.getElementById('nd2-viewbar-pager');
       if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
@@ -3565,7 +3638,7 @@
         ]);
         tgEl.innerHTML = table(
           [{ t: 'Talkgroup' }, { t: 'Sys' }, { t: 'Calls', num: true },
-           { t: 'Receptions', num: true, title: 'Total times this talkgroup was heard across all feeder nodes and sites — one call is usually received several times' }], rows);
+           { t: 'Receptions', num: true, title: 'Distinct node + site receptions of this talkgroup — each call counted once per receiving node and site (de-duped, not raw event rows)' }], rows);
       }
 
       const unitsEl = document.getElementById('nd2-top-units');
@@ -3693,17 +3766,12 @@
         const timeCell = `<span class="nd2-time">${isNaN(d) ? '—' : d.toLocaleTimeString([], { hour12: false })}` +
           `<span class="nd2-time-rel">${nd2RelTime(ev.at)}</span></span>`;
 
-        // De-duped node chips + a separate receptions badge: one row = one
-        // over-the-air event; the badge counts how many times it was received
-        // in total (several nodes and/or several sites hear the same call).
+        // One row = one over-the-air event; render only the de-duped node
+        // chips that received it. The SITES and NODES columns already convey
+        // reach, so no separate reception-count badge.
         const nodes = ev.nodes || [];
-        const rx = ev.receptions || nodes.length || 1;
-        const siteN = (ev.sites || []).length;
-        const rxTitle = `${rx} receptions across ${nodes.length} node(s)` +
-          (siteN ? ` / ${siteN} site(s)` : '');
         const nodeCell = nodes.map(n =>
-          `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('') +
-          (rx > 1 ? ` <span class="nd2-rx" title="${escapeHtml(rxTitle)}">${rx} rx</span>` : '');
+          `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('');
 
         if (ev.type === 'pager') {
           const freq = (ev.freqMhz != null && isFinite(ev.freqMhz))
@@ -4624,10 +4692,8 @@
           const timeCell = `<span class="nd2-time">${isNaN(d) ? '—' : d.toLocaleTimeString([], { hour12: false })}` +
             `<span class="nd2-time-rel">${nd2RelTime(m.at)}</span></span>`;
           const msgNodes = m.nodes || [];
-          const rx = m.receptions || msgNodes.length || 0;
           const nodeChips = msgNodes.map(n =>
-            `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('') +
-            (rx > 1 ? ` <span class="nd2-rx" title="${escapeHtml(`${rx} receptions across ${msgNodes.length} node(s)`)}">${rx} rx</span>` : '');
+            `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('');
           const msg = m.message || '';
           const freq = m.freqMhz != null ? `${Number(m.freqMhz).toFixed(4)} MHz` : '—';
           return `<tr>
@@ -5561,7 +5627,6 @@
       _ndRenderReaders();      // pager: reader running/stopped + msg count live (no-op for radio)
       _ndRenderNowPlaying();
       _ndRenderCfgSync();
-      _ndCfgDistWarn();        // channels-piled-on-one-SDR hint (needs live tuner set)
       _ndRenderVersions();     // reflect a just-completed component update live
       _ndRenderTunerSelector();
       // Spectrum is opt-in: staff press "Start spectrum" (see _ndToggleSpectrum).
@@ -7289,7 +7354,6 @@
         el.innerHTML = _ndEmpty('No channels configured', 'Use “Add channel” to create one') +
           `<div id="nd-ch-unmatched"></div>`;
         _ndRenderChannels(); // still surface any live-only channels below
-        _ndCfgDistWarn();
         return;
       }
       const serials = _ndCfgSerials();
@@ -7322,7 +7386,6 @@
       </table>
       <div id="nd-ch-unmatched"></div>`;
       _ndRenderChannels(); // paint live-state cells + any unmatched-live rows now
-      _ndCfgDistWarn();
     }
 
     function _ndCfgAddChannel() {
@@ -7344,73 +7407,6 @@
       _ndCfgReadDom();
       _ndConfig.channels.splice(i, 1);
       _ndCfgRender();
-    }
-
-    // "Distribute across SDRs": sort the configured channels by frequency and
-    // split them at the largest frequency gaps into as many CONTIGUOUS clusters
-    // as there are live tuner serials, then pin each cluster's channels to one
-    // SDR (round-robin if there are ever more clusters than tuners). Only
-    // updates the in-memory config + table — the operator reviews the
-    // assignments and hits Save & sync to apply.
-    function _ndCfgDistribute() {
-      if (!_ndConfig) { showToast('Config still loading…', 'warn'); return; }
-      _ndCfgReadDom();
-      const chans = Array.isArray(_ndConfig.channels) ? _ndConfig.channels : [];
-      const withFreq = chans.filter(c => c.frequency != null && !Number.isNaN(Number(c.frequency)));
-      if (!withFreq.length) { showToast('No channels with a frequency to distribute.', 'warn'); return; }
-      const serials = [];
-      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s && serials.indexOf(s) === -1) serials.push(s); });
-      if (!serials.length) { showToast('No live SDRs reported — cannot distribute.', 'warn'); return; }
-      const sorted = withFreq.slice().sort((a, b) => Number(a.frequency) - Number(b.frequency));
-      const nClusters = Math.min(serials.length, sorted.length);
-      // Cut the sorted list at the (nClusters-1) largest gaps.
-      const gaps = [];
-      for (let k = 1; k < sorted.length; k++) {
-        gaps.push({ idx: k, gap: Number(sorted[k].frequency) - Number(sorted[k - 1].frequency) });
-      }
-      gaps.sort((a, b) => b.gap - a.gap);
-      const cuts = gaps.slice(0, nClusters - 1).map(g => g.idx).sort((a, b) => a - b);
-      const clusters = [];
-      let start = 0;
-      cuts.concat([sorted.length]).forEach(end => { clusters.push(sorted.slice(start, end)); start = end; });
-      const counts = [];
-      clusters.forEach((cluster, ci) => {
-        const serial = serials[ci % serials.length];
-        cluster.forEach(c => { c.sdr = serial; });
-        counts.push(cluster.length);
-      });
-      _ndCfgRender();
-      showToast(
-        `${sorted.length} channel${sorted.length === 1 ? '' : 's'} → ${clusters.length} SDR${clusters.length === 1 ? '' : 's'} ` +
-        `(${counts.join('/')}). Review + Save & sync.`, 'success', 5000);
-    }
-
-    // Warning chip in the Channels panel header: multiple tuners exist but >2
-    // channels are piled onto (or defaulting to) one SDR. Cheap config-side
-    // heuristic — blank sdr counts as one "Auto" bucket, since auto-assigned
-    // channels can all land on the same tuner.
-    function _ndCfgDistWarn() {
-      const el = document.getElementById('nd-cfg-dist-warn');
-      if (!el) return;
-      const chans = (_ndConfig && Array.isArray(_ndConfig.channels)) ? _ndConfig.channels : [];
-      const serialSet = new Set();
-      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s) serialSet.add(s); });
-      let worst = 0;
-      if (serialSet.size > 1 && chans.length > 2) {
-        const bySdr = {};
-        chans.forEach(c => {
-          const k = c.sdr != null && String(c.sdr) !== '' ? String(c.sdr) : '';
-          bySdr[k] = (bySdr[k] || 0) + 1;
-          if (bySdr[k] > worst) worst = bySdr[k];
-        });
-      }
-      if (worst > 2) {
-        el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> ${worst} channels on 1 SDR — click Distribute`;
-        el.style.display = 'inline-flex';
-        el.title = 'More than two channels share one SDR (or all default to Auto) while this node has multiple tuners. Click to spread them across SDRs by frequency.';
-      } else {
-        el.style.display = 'none';
-      }
     }
 
     // PATCH the full merged config_override back to the node.
@@ -8631,7 +8627,7 @@
       if (reqBtn) reqBtn.style.display = tabs.requests ? '' : 'none';
       if (usrBtn) usrBtn.style.display = tabs.users    ? '' : 'none';
       if (devBtn) devBtn.style.display = tabs.dev      ? '' : 'none';
-      if (datBtn) datBtn.style.display = tabs.data     ? '' : 'none';
+      if (datBtn) (datBtn.closest('.tab-dd') || datBtn).style.display = tabs.data ? '' : 'none';
       if (nodBtn) nodBtn.style.display = tabs.nodes    ? '' : 'none';
 
       // Pick a default tab the user can actually see. Without this a
