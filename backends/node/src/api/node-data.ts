@@ -1116,6 +1116,7 @@ nodeDataRouter.get(
           last_seen: Date;
           top_tg: number | null;
           top_tg_calls: unknown;
+          channel_name: string | null;
           control_frequency_mhz: number | null;
           channel_count: number | null;
           neighbor_count: number | null;
@@ -1126,6 +1127,7 @@ nodeDataRouter.get(
           // channel/neighbor counts alongside the event-derived call rollup.
           `SELECT s.rfss, s.site, s.nac, s.calls, s.logical, s.last_seen,
                   tt.talkgroup AS top_tg, tt.calls AS top_tg_calls,
+                  meta.channel_name,
                   meta.control_frequency_mhz,
                   meta.channel_count, meta.neighbor_count
              FROM (
@@ -1148,7 +1150,8 @@ nodeDataRouter.get(
                 LIMIT 1
              ) tt ON true
              LEFT JOIN LATERAL (
-               SELECT m.control_frequency_mhz,
+               SELECT m.channel_name,
+                      m.control_frequency_mhz,
                       jsonb_array_length(m.channels) AS channel_count,
                       jsonb_array_length(m.neighbors) AS neighbor_count
                  FROM node_site_snapshots m
@@ -1179,6 +1182,7 @@ nodeDataRouter.get(
         sites: sitesQ.rows.map((r) => ({
           rfss: r.rfss,
           site: r.site,
+          name: r.channel_name ?? null,
           nac: r.nac,
           calls: num(r.calls),
           logicalCalls: num(r.logical),

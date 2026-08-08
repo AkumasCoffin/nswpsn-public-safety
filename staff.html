@@ -3159,7 +3159,7 @@
       loadedOnce: false,
       // Systems view navigation: list → one system → one site of that system.
       // Within a system, `tab` selects the sub-view (sites | talkgroups | radios).
-      sys: { level: 'list', tab: 'sites', system: null, wacn: null, rfss: null, site: null },
+      sys: { level: 'list', tab: 'sites', system: null, wacn: null, rfss: null, site: null, siteName: null },
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
       tg: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
       rad: { q: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
@@ -3854,6 +3854,12 @@
       document.getElementById('nd2-site-detail').style.display = level === 'site' ? '' : 'none';
     }
 
+    // Site label: friendly name (e.g. "Cambewarra MT") with its id, or just the id.
+    function nd2SiteText(name, rfss, site) {
+      const id = `R${rfss} S${site}`;
+      const nm = (name == null ? '' : String(name)).trim();
+      return nm ? `${nm} · ${id}` : id;
+    }
     function nd2SysCrumbs() {
       const el = document.getElementById('nd2-sys-crumbs');
       if (!el) return;
@@ -3862,7 +3868,7 @@
       const sysTitle = document.getElementById('nd2-sys-title');
       if (sysTitle && s.system != null) sysTitle.textContent = nd2SysText(s.name, s.system);
       const siteTitle = document.getElementById('nd2-site-title');
-      if (siteTitle && s.rfss != null && s.site != null) siteTitle.textContent = `R${s.rfss} · S${s.site}`;
+      if (siteTitle && s.rfss != null && s.site != null) siteTitle.textContent = nd2SiteText(s.siteName, s.rfss, s.site);
       const sysCrumb = nd2SysText(s.name, s.system);
       if (s.level === 'list') {
         el.innerHTML = '<span class="nd2-crumb-cur">Systems</span>';
@@ -3872,7 +3878,7 @@
       } else {
         el.innerHTML = `<a onclick="nd2SysGoList()">Systems</a><span class="nd2-crumb-sep">›</span>` +
           `<a onclick="nd2SysGoSystem()">${escapeHtml(sysCrumb)}</a>` +
-          `<span class="nd2-crumb-sep">›</span><span class="nd2-crumb-cur">R${escapeHtml(String(s.rfss))} S${escapeHtml(String(s.site))}</span>`;
+          `<span class="nd2-crumb-sep">›</span><span class="nd2-crumb-cur">${escapeHtml(nd2SiteText(s.siteName, s.rfss, s.site))}</span>`;
       }
     }
     function nd2SysGoList() { nd2SysShow('list'); nd2SysCrumbs(); nd2LoadSystems(); }
@@ -3972,8 +3978,10 @@
         const sites = data.sites || [];
         if (sitesBody) {
           sitesBody.innerHTML = sites.length ? sites.map(st => `
-            <tr class="nd2-rowlink" onclick="nd2OpenSite(${st.rfss}, ${st.site})">
-              <td><span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span></td>
+            <tr class="nd2-rowlink" onclick="nd2OpenSite(${st.rfss}, ${st.site}, '${encodeURIComponent(st.name || '')}')">
+              <td>${st.name
+                ? `<span class="nd-strong">${escapeHtml(String(st.name))}</span> <span class="nd-sub">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`
+                : `<span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span>`}</td>
               <td><span class="nd-sub">${st.nac != null ? escapeHtml(String(st.nac)) : '—'}</span></td>
               <td class="nd2-num">${nd2Num(st.calls)}</td>
               <td>${st.topTalkgroup ? `${nd2TgCell(st.topTalkgroup)} <span class="nd-sub">${nd2Num(st.topTalkgroup.calls)}</span>` : '—'}</td>
@@ -3987,9 +3995,10 @@
       }
     }
 
-    function nd2OpenSite(rfss, site) {
+    function nd2OpenSite(rfss, site, name) {
       nd2.sys.rfss = rfss;
       nd2.sys.site = site;
+      nd2.sys.siteName = name ? decodeURIComponent(name) : null;
       nd2SysShow('site');
       nd2SysCrumbs();
       nd2LoadSite();
@@ -4006,6 +4015,11 @@
         const data = await nd2Fetch(`/api/node-data/site?${params}`);
         if (nd2.view !== view || nd2.sys.level !== 'site') return;
         if (msgEl) msgEl.style.display = 'none';
+        // Backfill the site name from the snapshot if the list row didn't carry one.
+        if (data.meta && data.meta.channelName && !nd2.sys.siteName) {
+          nd2.sys.siteName = String(data.meta.channelName);
+          nd2SysCrumbs();
+        }
         nd2ScopedTiles('nd2-site-tiles', data.totals || {}, false);
         nd2RenderSiteMeta(data.meta);
         nd2DrawDetailChart('nd2-site-chart', 'nd2-site-chart-empty', 'nd2-site-chart-note', data.series, 'site');
