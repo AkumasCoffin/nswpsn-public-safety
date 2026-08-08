@@ -41,6 +41,20 @@ import {
 export interface StreamTarget {
   systemId: number;
   name: string;
+  /** The rdio apiKey for this system, set on BOTH the sdrtrunk stream and the
+   *  matching rdio apiKey so a call uploads under the right systemId. Generated
+   *  server-side (deterministic per systemId) — non-empty + unique so the local
+   *  rdio never rejects the config on a UNIQUE(key) collision. */
+  key: string;
+}
+
+/** Deterministic, stable rdio apiKey for a system. Not a secret (localhost only)
+ *  — its job is to be a non-empty value unique per systemId and identical on the
+ *  sdrtrunk stream and the rdio apiKey so uploads route. Stable across re-applies
+ *  so the config version doesn't churn. */
+function rdioKeyForSystem(systemId: number): string {
+  const h = createHash('sha256').update(`nswpsn-rdio-apikey:${systemId}`).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 }
 
 /** One SDR-Trunk channel the agent renders into the playlist. */
@@ -356,16 +370,26 @@ export async function buildConfigPayload(
   // imported yet (keeps a pre-import / rdio-only config from having zero streams).
   let streamTargets: StreamTarget[];
   if (sdr.streams.length > 0) {
-    streamTargets = sdr.streams.map((s) => ({ systemId: s.systemId, name: s.name.trim() }));
+    streamTargets = sdr.streams.map((s) => ({
+      systemId: s.systemId,
+      name: s.name.trim(),
+      key: rdioKeyForSystem(s.systemId),
+    }));
   } else {
     const systemsForTargets = (rdioConfig['systems'] as RdioSystem[] | undefined) ?? presets.systems;
     streamTargets = systemsForTargets
       .map((s): StreamTarget | null => {
         const systemId = s.id ?? s._id;
         if (typeof systemId !== 'number') return null;
-        return { systemId, name: (s.label ?? `System ${systemId}`).trim() };
+        return { systemId, name: (s.label ?? `System ${systemId}`).trim(), key: rdioKeyForSystem(systemId) };
       })
       .filter((t): t is StreamTarget => t !== null);
+  }
+  // De-dup stream targets by systemId (a single systemId must map to ONE rdio
+  // apiKey, else the local rdio 500s on UNIQUE(key)/UNIQUE(system id)).
+  {
+    const seen = new Set<number>();
+    streamTargets = streamTargets.filter((t) => (seen.has(t.systemId) ? false : (seen.add(t.systemId), true)));
   }
 
   // Generate one rdio apiKey per system from the SAME systems list, so a system
@@ -379,7 +403,10 @@ export async function buildConfigPayload(
       _id: i + 1,
       disabled: false,
       ident: t.name,
-      key: '',
+      // Real per-system key (non-empty, unique) — the agent keeps it (it only
+      // fills EMPTY keys), so the rdio apiKey and the sdrtrunk stream that
+      // uploads to this systemId carry the same key.
+      key: t.key,
       order: i + 1,
       systems: [{ id: t.systemId, talkgroups: '*' }],
     }));

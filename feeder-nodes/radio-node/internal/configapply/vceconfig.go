@@ -377,12 +377,18 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 	// streams disabled (paired with the disabled rdio downstream).
 	feed := payload.feedOn()
 	for _, t := range payload.StreamTargets {
+		// Prefer the server-provided key (kept identical on the rdio apiKey); fall
+		// back to the locally-minted key for older servers that send no key.
+		apiKey := t.Key
+		if apiKey == "" {
+			apiKey = localKeys[t.SystemId]
+		}
 		state.BroadcastConfigurations = append(state.BroadcastConfigurations, vceBroadcast{
 			Type:     "RdioScannerConfiguration",
 			Name:     t.Name,
 			Host:     localRdioUploadURL,
 			Port:     localRdioPort,
-			ApiKey:   localKeys[t.SystemId],
+			ApiKey:   apiKey,
 			SystemID: t.SystemId,
 			Enabled:  feed,
 		})

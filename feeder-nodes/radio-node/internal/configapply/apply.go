@@ -118,6 +118,10 @@ type TunerSettings struct {
 type StreamTarget struct {
 	SystemId int    `json:"systemId"`
 	Name     string `json:"name"`
+	// The rdio apiKey for this system, generated server-side. Used on BOTH the
+	// sdrtrunk stream and the matching rdio apiKey so uploads route. When empty
+	// (older server), the agent falls back to a locally-minted key.
+	Key string `json:"key"`
 }
 
 // AliasID is one <id> inside an SDR-Trunk alias. Type is the id type; Attrs
@@ -467,27 +471,42 @@ func applyRdioKeys(cfg map[string]any, localKeys map[int]string, feed bool) erro
 	if !ok {
 		return fmt.Errorf("rdio config has no apiKeys array")
 	}
+	// Only FILL empty keys from the locally-minted set — a non-empty key set by
+	// the server is authoritative (it's identical to the sdrtrunk stream's key),
+	// so overwriting it would break the stream↔rdio match. downstreamKey tracks a
+	// valid non-empty apiKey to authenticate the relay POST.
+	downstreamKey := ""
 	for _, e := range aks {
 		m, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		if id, ok := apiKeySystemID(e); ok {
-			if k, ok := localKeys[id]; ok {
-				m["key"] = k
+		if cur, _ := m["key"].(string); cur == "" {
+			if id, ok := apiKeySystemID(e); ok {
+				if k, ok := localKeys[id]; ok {
+					m["key"] = k
+				}
 			}
 		}
+		if downstreamKey == "" {
+			if cur, _ := m["key"].(string); cur != "" {
+				downstreamKey = cur
+			}
+		}
+	}
+	if downstreamKey == "" {
+		downstreamKey = anyLocalKey(localKeys)
 	}
 
 	// Single downstream -> the agent's relay listener. Shape mirrors the preset
 	// downstream object (rdio-scanner.json): _id / apiKey / disabled / order /
 	// systems / url. "systems":"*" is rdio's wildcard for "all systems".
 	// Feed off → downstream disabled: rdio keeps running + keeps its config but
-	// stops uploading to the agent relay.
+	// stops uploading to the agent relay. The apiKey must be a VALID rdio apiKey.
 	cfg["downstreams"] = []any{
 		map[string]any{
 			"_id":      1,
-			"apiKey":   anyLocalKey(localKeys),
+			"apiKey":   downstreamKey,
 			"disabled": !feed,
 			"order":    nil,
 			"systems":  "*",
