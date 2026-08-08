@@ -33,6 +33,37 @@ import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes } from '../services/auth/roles.js';
+import { getGlobalConfig } from '../services/nodes/globalConfig.js';
+
+/**
+ * Talkgroup id → label, resolved from the imported sdrtrunk-vce alias list (the
+ * single source of truth already pushed to nodes). Ingest stores no labels, so
+ * the Data views resolve them here. Cached briefly to avoid re-reading the global
+ * config on every request. Only individual talkgroup matchers are mapped (ranges
+ * label a span, not a single id).
+ */
+let _tgLabelCache: { at: number; map: Map<number, string> } | null = null;
+async function talkgroupLabels(): Promise<Map<number, string>> {
+  if (_tgLabelCache && Date.now() - _tgLabelCache.at < 60_000) return _tgLabelCache.map;
+  const map = new Map<number, string>();
+  try {
+    const cfg = await getGlobalConfig();
+    for (const a of cfg.sdrtrunkConfig?.aliases ?? []) {
+      const name = (a.name ?? '').trim();
+      if (!name) continue;
+      for (const id of a.ids ?? []) {
+        if (id.type === 'talkgroup') {
+          const v = Number(id.attrs?.['value']);
+          if (Number.isInteger(v) && !map.has(v)) map.set(v, name);
+        }
+      }
+    }
+  } catch (e) {
+    log.warn({ err: e }, 'talkgroupLabels: failed to load global config');
+  }
+  _tgLabelCache = { at: Date.now(), map };
+  return map;
+}
 
 export const nodeDataRouter = new Hono();
 
@@ -356,6 +387,7 @@ nodeDataRouter.get(
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([k, v]) => ({ [bucketField]: k, radio: v.radio, pager: v.pager }));
 
+      const tgLabels = await talkgroupLabels();
       const body: Record<string, unknown> = {
         window,
         scope,
@@ -370,7 +402,7 @@ nodeDataRouter.get(
         topTalkgroups: topTgRows.map((r) => ({
           system: r.system,
           talkgroup: r.talkgroup,
-          label: r.label ?? null,
+          label: r.label ?? (r.talkgroup !== null ? tgLabels.get(r.talkgroup) ?? null : null),
           calls: num(r.calls),
           logicalCalls: num(r.logical),
         })),
@@ -623,6 +655,7 @@ nodeDataRouter.get(
 
       const radioMap = new Map((radioDetail?.rows ?? []).map((r) => [r.id, r]));
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
+      const labels = await talkgroupLabels();
 
       const events = page
         .map((row) => {
@@ -635,7 +668,7 @@ nodeDataRouter.get(
               at: iso(d.at),
               system: d.system,
               talkgroup: d.talkgroup,
-              talkgroupLabel: d.talkgroup_label,
+              talkgroupLabel: d.talkgroup_label ?? (d.talkgroup !== null ? labels.get(d.talkgroup) ?? null : null),
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
               frequency: d.frequency !== null ? Number(d.frequency) : null,
@@ -709,6 +742,7 @@ interface ScopedDetail {
   };
   topTalkgroups: Array<{
     talkgroup: number;
+    label: string | null;
     calls: number;
     logicalCalls: number;
     encryptedCalls: number;
@@ -729,6 +763,7 @@ async function scopedRadioDetail(
   where: (prefix: string) => string,
   params: unknown[],
 ): Promise<ScopedDetail> {
+  const _scopedTgLabels = await talkgroupLabels();
   const [totQ, tgQ, unQ, srQ] = await Promise.all([
     pool.query<{
       calls: unknown;
@@ -799,6 +834,7 @@ async function scopedRadioDetail(
     },
     topTalkgroups: tgQ.rows.map((r) => ({
       talkgroup: r.talkgroup,
+      label: _scopedTgLabels.get(r.talkgroup) ?? null,
       calls: num(r.calls),
       logicalCalls: num(r.logical),
       encryptedCalls: num(r.enc),
@@ -851,6 +887,7 @@ nodeDataRouter.get(
                 MAX(received_at) AS last_seen
            FROM node_radio_events
           WHERE received_at >= now() - $1::interval
+            AND system IS NOT NULL
           GROUP BY wacn, system
           ORDER BY calls DESC, system ASC NULLS LAST
           LIMIT 50`,
@@ -1208,6 +1245,7 @@ nodeDataRouter.get(
         }
       }
 
+      const labels = await talkgroupLabels();
       return c.json({
         window,
         total,
@@ -1219,6 +1257,7 @@ nodeDataRouter.get(
             wacn: r.wacn,
             system: r.system,
             talkgroup: r.talkgroup,
+            label: labels.get(r.talkgroup) ?? null,
             calls: num(r.calls),
             logicalCalls: num(r.logical),
             encryptedCalls: num(r.enc),
