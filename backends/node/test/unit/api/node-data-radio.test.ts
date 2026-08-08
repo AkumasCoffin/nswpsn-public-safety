@@ -114,6 +114,63 @@ describe('GET /api/node-data/talkgroups', () => {
   });
 });
 
+// A real P25 talkgroup is 16-bit (1..65535); the ingest drops 7-digit RADIO
+// IDs into the same column, so every talkgroup list/count must gate on
+// `talkgroup BETWEEN 1 AND 65535`. The pg pool is mocked, so we emulate the DB
+// filter in the mock: it only drops the out-of-range row when the executed SQL
+// actually carries the predicate — proving BOTH the list query and the
+// distinct-talkgroup COUNT wire it in (a missing predicate keeps the bogus row
+// and fails the test).
+describe('talkgroup range filter (radio ids excluded)', () => {
+  // 10101 = a valid 5-digit TG; 2315291 = a 7-digit radio id masquerading.
+  const CANDIDATE_TGS = [
+    { wacn: null, system: 721, talkgroup: 10101, calls: 5, logical: 3, enc: 0, last_seen: LAST_SEEN },
+    { wacn: null, system: 721, talkgroup: 2315291, calls: 2, logical: 1, enc: 0, last_seen: LAST_SEEN },
+  ];
+  const TG_PREDICATE = 'talkgroup BETWEEN 1 AND 65535';
+  const applyRange = (sql: string, rows: typeof CANDIDATE_TGS) =>
+    sql.includes(TG_PREDICATE)
+      ? rows.filter((r) => r.talkgroup >= 1 && r.talkgroup <= 65535)
+      : rows;
+
+  it('/talkgroups drops a >65535 tg from the list AND the distinct count, keeps a 5-digit tg', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
+      // Distinct-talkgroup COUNT for pagination total.
+      if (sql.includes('AS n')) return { rows: [{ n: applyRange(sql, CANDIDATE_TGS).length }] };
+      // Grouped per-talkgroup page (the list).
+      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+        return { rows: applyRange(sql, CANDIDATE_TGS) };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/talkgroups?window=7d&system=721');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // List: only the valid 5-digit TG survives.
+    expect(body.talkgroups.map((t: { talkgroup: number }) => t.talkgroup)).toEqual([10101]);
+    expect(body.talkgroups.some((t: { talkgroup: number }) => t.talkgroup === 2315291)).toBe(false);
+    // Distinct-talkgroup count: the radio id is excluded from the tally too.
+    expect(body.total).toBe(1);
+  });
+
+  it('/system totals gate the distinct-talkgroup tile on the same range predicate', async () => {
+    const calls = captureCalls();
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/system?window=7d&system=721');
+    expect(res.status).toBe(200);
+    // The TALKGROUPS tile count must exclude out-of-range ids via FILTER.
+    const totals = calls.find((c) => c.sql.includes('AS talkgroups'));
+    expect(totals?.sql).toContain('FILTER (WHERE talkgroup BETWEEN 1 AND 65535)');
+    // The scoped top-talkgroups list is gated too.
+    const tgList = calls.find(
+      (c) => c.sql.includes('GROUP BY talkgroup') && c.sql.includes('ORDER BY calls DESC, talkgroup ASC'),
+    );
+    expect(tgList?.sql).toContain('talkgroup BETWEEN 1 AND 65535');
+  });
+});
+
 describe('GET /api/node-data/radios', () => {
   it('scopes the rollup to ?system=<id>', async () => {
     const calls = captureCalls();
@@ -194,7 +251,7 @@ describe('display enrichment (labels, site names, aliases)', () => {
   it('/system attaches topTalkgroup labels, radio aliases and per-site tg labels', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
-      if (sql.includes('COUNT(DISTINCT talkgroup)::int AS talkgroups')) {
+      if (sql.includes('AS talkgroups')) {
         return { rows: [{ calls: 5, logical: 3, enc: 0, talkgroups: 1, radios: 1, sites: 1 }] };
       }
       if (sql.includes('GROUP BY talkgroup')) {

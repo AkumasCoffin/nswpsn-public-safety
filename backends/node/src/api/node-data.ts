@@ -274,6 +274,19 @@ const WINDOW_INTERVAL: Record<Exclude<Windows, 'all'>, string> = {
   '30d': '30 days',
 };
 
+/**
+ * A real P25 talkgroup id is 16-bit (1..65535). Ingest stores every event's
+ * `target` in the talkgroup column regardless of kind (nodeEvents.ts), so
+ * unit/data calls drop 7-digit RADIO IDs there and they masquerade as bogus
+ * "TG 2315291" talkgroups. Gate EVERY talkgroup list/count on this predicate
+ * so radio ids stop showing up as talkgroups. (The general call/radio counts
+ * are NOT filtered — unit/data calls are still real calls.) Prefixable ('' or
+ * 'e.') to match queries that alias the events table, mirroring the scope
+ * helpers. `TG_VALID` is the bare (unprefixed) form.
+ */
+const tgValid = (prefix = ''): string => `${prefix}talkgroup BETWEEN 1 AND 65535`;
+const TG_VALID = tgValid();
+
 /** Parse a query param as a non-negative int, else null. */
 function qpInt(url: URL, name: string): number | null {
   const raw = url.searchParams.get(name);
@@ -413,7 +426,8 @@ nodeDataRouter.get(
                             COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS calls,
                           COUNT(DISTINCT logical_call_id)::int AS logical,
                           NULL::text AS label
-                     FROM node_radio_events${nAllWhere}
+                     FROM node_radio_events
+                    WHERE ${TG_VALID}${nAllAnd}
                     GROUP BY system, talkgroup
                     ORDER BY calls DESC LIMIT 15`,
                   nAllParams,
@@ -523,7 +537,7 @@ nodeDataRouter.get(
                           COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS calls,
                         COUNT(DISTINCT e.logical_call_id)::int AS logical,
                         NULL::text AS label
-                   FROM node_radio_events e WHERE ${radioCond}
+                   FROM node_radio_events e WHERE ${radioCond} AND ${tgValid('e.')}
                   GROUP BY e.system, e.talkgroup
                   ORDER BY calls DESC LIMIT 15`,
                 radioParams,
@@ -1041,7 +1055,7 @@ async function scopedRadioDetail(
       `SELECT COUNT(*)::int AS calls,
               COUNT(DISTINCT logical_call_id)::int AS logical,
               (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
-              COUNT(DISTINCT talkgroup)::int AS talkgroups,
+              (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
               COUNT(DISTINCT source_unit)::int AS radios,
               (COUNT(DISTINCT (site_rfss, site_id))
                  FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites
@@ -1062,7 +1076,7 @@ async function scopedRadioDetail(
               (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
               MAX(received_at) AS last_seen
          FROM node_radio_events
-        WHERE ${where('')} AND talkgroup IS NOT NULL
+        WHERE ${where('')} AND ${TG_VALID}
         GROUP BY talkgroup
         ORDER BY calls DESC, talkgroup ASC
         LIMIT 20`,
@@ -1170,7 +1184,7 @@ nodeDataRouter.get(
                   (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
                   (COUNT(DISTINCT (site_rfss, site_id))
                      FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites,
-                  COUNT(DISTINCT talkgroup)::int AS talkgroups,
+                  (COUNT(DISTINCT talkgroup) FILTER (WHERE ${TG_VALID}))::int AS talkgroups,
                   COUNT(DISTINCT source_unit)::int AS radios,
                   MIN(received_at) AS first_seen,
                   MAX(received_at) AS last_seen
@@ -1328,7 +1342,7 @@ nodeDataRouter.get(
                SELECT e.talkgroup, COUNT(*)::int AS calls
                  FROM node_radio_events e
                 WHERE ${scope('e.')} AND e.site_rfss = s.rfss AND e.site_id = s.site
-                  AND e.talkgroup IS NOT NULL
+                  AND ${tgValid('e.')}
                 GROUP BY e.talkgroup
                 ORDER BY calls DESC, e.talkgroup ASC
                 LIMIT 1
@@ -1571,7 +1585,8 @@ nodeDataRouter.get(
       const nodeId = qpNode(url);
 
       const params: unknown[] = [WINDOW_INTERVAL[window]];
-      const conds = ['received_at >= now() - $1::interval', 'talkgroup IS NOT NULL'];
+      // TG_VALID both drops NULL talkgroups and excludes out-of-range radio ids.
+      const conds = ['received_at >= now() - $1::interval', TG_VALID];
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
@@ -1912,7 +1927,7 @@ nodeDataRouter.get(
                       AND e.wacn IS NOT DISTINCT FROM k.wacn
                       AND e.system IS NOT DISTINCT FROM k.system
                       AND e.source_unit = k.radio${nodeLat}
-                      AND e.talkgroup IS NOT NULL
+                      AND ${tgValid('e.')}
                     GROUP BY e.talkgroup
                     ORDER BY calls DESC, e.talkgroup ASC
                     LIMIT 3

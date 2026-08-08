@@ -1678,8 +1678,47 @@
       white-space: nowrap;
     }
     /* Deep P25 site metadata (site-view parity). */
-    .nd2-meta-head { font-size: 1rem; margin: 0.15rem 0 0.5rem; }
-    .nd2-chip-row { display: flex; flex-wrap: wrap; gap: 0.15rem; }
+    .nd2-meta-head { font-size: 1rem; margin: 0.15rem 0 0.6rem; }
+    /* Identity chip row: a touch more breathing room + roomier chips so the
+       RFSS/Site/NAC/WACN/LRA/GUID/Channel set doesn't read as cramped. */
+    .nd2-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem 0.4rem; }
+    .nd2-chip-row .nd2-chip { margin: 0; padding: 0.14rem 0.5rem; font-size: 0.66rem; }
+    /* Channel TYPE badge — makes Control / Alt-control / Traffic / Data scannable
+       at a glance instead of a wall of identical text. Reuses the accent hues. */
+    .nd2-chtype {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .nd2-chtype-ctrl    { background: var(--accent-soft);          color: #7dd3fc; }
+    .nd2-chtype-alt     { background: rgba(34, 211, 238, 0.14);    color: #67e8f9; }
+    .nd2-chtype-traffic { background: rgba(34, 197, 94, 0.16);     color: #4ade80; }
+    .nd2-chtype-data    { background: rgba(148, 163, 184, 0.14);   color: #94a3b8; }
+    .nd2-chtype-other   { background: rgba(148, 163, 184, 0.08);   color: var(--text-soft); }
+    /* Left row-accent by type reinforces the badge colour down the Type column.
+       A transparent border on every first cell keeps header/body aligned; the
+       colour is only filled in on typed channel rows. */
+    #nd2-site-meta .nd-table th:first-child,
+    #nd2-site-meta .nd-table td:first-child { border-left: 2px solid transparent; }
+    #nd2-site-meta .nd2-chrow-ctrl    td:first-child { border-left-color: var(--accent); }
+    #nd2-site-meta .nd2-chrow-alt     td:first-child { border-left-color: #22d3ee; }
+    #nd2-site-meta .nd2-chrow-traffic td:first-child { border-left-color: var(--success); }
+    #nd2-site-meta .nd2-chrow-data    td:first-child { border-left-color: rgba(148, 163, 184, 0.45); }
+    /* Site-meta mini tables: comfortable padding aligned to the card header, a
+       cleaner last row, and a slightly heavier header so they read as tidily as
+       the paged tables elsewhere in the nd2 tab. */
+    #nd2-site-meta .nd-table th { padding: 0.5rem 1rem; font-weight: 700; color: var(--text-soft); }
+    #nd2-site-meta .nd-table td { padding: 0.5rem 1rem; }
+    #nd2-site-meta .nd-table tr:last-child td { border-bottom: none; }
+    #nd2-site-meta .nd-table { margin-bottom: 0.4rem; }
+    /* Control-channel stat tiles are a supporting row, not the page KPIs —
+       trim them so six read cleanly without dominating the site detail. */
+    #nd2-site-meta .stat-card { padding: 0.85rem 1rem; }
+    #nd2-site-meta .stat-card .stat-value { font-size: 1.45rem; }
     .nd2-stat-unit { font-size: 0.6rem; color: var(--text-soft); font-weight: 400; }
     .nd2-rx {
       font-size: 0.62rem;
@@ -1728,6 +1767,22 @@
     .nd2-crumbs a:hover { text-decoration: underline; }
     .nd2-crumb-sep { opacity: 0.5; font-size: 1.05rem; }
     .nd2-crumb-cur { color: var(--text-primary); font-weight: 700; }
+    /* Drill-down crumb + context strip dock right under the sticky page header
+       so they stay fully visible while scrolling a long site detail (instead of
+       sliding up under the glass header). --nd2-header-h tracks the real header
+       height (set in JS); the blurred backdrop keeps scrolled rows from bleeding
+       through, and z-index sits below the header (50) but above page content. */
+    .nd2-crumbbar {
+      position: sticky;
+      top: var(--nd2-header-h, 68px);
+      z-index: 30;
+      padding-top: 0.7rem;
+      background: rgba(6, 10, 21, 0.9);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+    .nd2-crumbbar > .nd2-crumbs { margin-bottom: 0.8rem; }
+    .nd2-crumbbar > .nd2-ctx:last-child { margin-bottom: 0.9rem; }
     /* Drill-down context strip under the Systems breadcrumb: a slim colored
        bar that names the current level ("SYSTEM — NSWPSN · 721" / "SITE — …")
        so it's unmistakable where you are. */
@@ -2256,10 +2311,14 @@
 
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
         <div id="nd2-view-systems" style="display: none;">
-          <div class="nd2-crumbs" id="nd2-sys-crumbs"><span class="nd2-crumb-cur">Systems</span></div>
-          <!-- Drill-down context strip: filled by nd2SysCrumbs when a system or
-               site is open so it's unmistakable which level you're looking at. -->
-          <div id="nd2-sys-ctx" class="nd2-ctx" style="display: none;"></div>
+          <!-- Sticky crumb bar: docks the breadcrumb + context strip under the
+               page header so they stay visible while scrolling a site detail. -->
+          <div class="nd2-crumbbar">
+            <div class="nd2-crumbs" id="nd2-sys-crumbs"><span class="nd2-crumb-cur">Systems</span></div>
+            <!-- Drill-down context strip: filled by nd2SysCrumbs when a system or
+                 site is open so it's unmistakable which level you're looking at. -->
+            <div id="nd2-sys-ctx" class="nd2-ctx" style="display: none;"></div>
+          </div>
 
           <!-- Folder tree: each system is a folder row (chevron toggles its
                sites; the label opens the system detail); each site is a nested
@@ -4063,12 +4122,16 @@
         `<div class="stat-label">${escapeHtml(t.label)}</div>` +
         (t.sub ? `<div class="nd2-stat-sub">${escapeHtml(t.sub)}</div>` : '') + `</div>`).join('');
     }
-    function nd2MiniTable(headers, rows) {
+    // rowClass(rowIndex) → optional per-<tr> class (e.g. the channel type accent).
+    function nd2MiniTable(headers, rows, rowClass) {
       if (!rows.length) return '<div class="nd2-empty">—</div>';
       return `<table class="nd-table"><thead><tr>${headers.map(h =>
         `<th${h.num ? ' class="nd2-num"' : ''}>${escapeHtml(h.label)}</th>`).join('')}</tr></thead><tbody>` +
-        rows.map(r => `<tr>${r.map((c, i) =>
-          `<td${headers[i].num ? ' class="nd2-num"' : ''}>${c}</td>`).join('')}</tr>`).join('') +
+        rows.map((r, ri) => {
+          const cls = rowClass ? rowClass(ri) : '';
+          return `<tr${cls ? ` class="${cls}"` : ''}>${r.map((c, i) =>
+            `<td${headers[i].num ? ' class="nd2-num"' : ''}>${c}</td>`).join('')}</tr>`;
+        }).join('') +
         '</tbody></table>';
     }
     // Shared line chart for the system/site detail panels (single "calls" series).
@@ -4471,9 +4534,29 @@
         : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })}<span class="nd2-stat-unit"> %</span>`;
     }
     // Chip: label + value, value escaped; skipped entirely when value is null.
-    function nd2MetaChip(label, value) {
+    // opts.truncate: cap the shown value at N chars (+ "…") and stash the full
+    // value in title — used for the very long site GUID.
+    function nd2MetaChip(label, value, opts) {
       if (value == null || value === '') return '';
-      return `<span class="nd2-chip"><span class="nd-sub">${escapeHtml(label)}</span> ${escapeHtml(String(value))}</span>`;
+      const full = String(value);
+      const cap = opts && opts.truncate;
+      const clipped = cap && full.length > cap;
+      const shown = clipped ? full.slice(0, cap) + '…' : full;
+      const titleAttr = clipped ? ` title="${escapeHtml(full)}"` : '';
+      return `<span class="nd2-chip"${titleAttr}><span class="nd-sub">${escapeHtml(label)}</span> ${escapeHtml(shown)}</span>`;
+    }
+    // Channel type → display label + colour key (drives the TYPE badge + the
+    // left row-accent). Control = blue, Alt-control = cyan, Traffic = green,
+    // Data = grey; anything else falls back to a neutral tint.
+    function nd2ChTypeInfo(type) {
+      const label = ND2_CH_TYPE[type] || type || '—';
+      const key = ({
+        primary_control: 'ctrl', control: 'ctrl',
+        alternate_control: 'alt',
+        traffic: 'traffic',
+        data: 'data',
+      })[type] || 'other';
+      return { label, key };
     }
 
     function nd2RenderSiteMeta(meta) {
@@ -4498,7 +4581,7 @@
         nd2MetaChip('NAC', meta.nac),
         nd2MetaChip('WACN', meta.wacn),
         nd2MetaChip('LRA', meta.lra),
-        nd2MetaChip('GUID', meta.guid),
+        nd2MetaChip('GUID', meta.guid, { truncate: 8 }),
         meta.channelName ? nd2MetaChip('Channel', meta.channelName) : '',
       ].filter(Boolean).join('');
       const header = `<div class="nd2-card">
@@ -4533,16 +4616,20 @@
           (t.sub ? `<div class="nd2-stat-sub">${escapeHtml(t.sub)}</div>` : '') + `</div>`).join('')}</div>
       </div>`;
 
-      // Channels table.
+      // Channels table — TYPE rendered as a colour-coded badge + left row-accent
+      // so Control / Alt-control / Traffic / Data are scannable, not a wall of
+      // identical text. Columns + frequency order are unchanged.
       const channels = Array.isArray(meta.channels) ? meta.channels : [];
+      const chInfo = channels.map(ch => nd2ChTypeInfo(ch.type));
       const chTable = nd2MiniTable(
         [{ label: 'Type' }, { label: 'Frequency', num: true }, { label: 'LCN' }, { label: 'Slot', num: true }],
-        channels.map(ch => [
-          escapeHtml(ND2_CH_TYPE[ch.type] || ch.type || '—'),
+        channels.map((ch, i) => [
+          `<span class="nd2-chtype nd2-chtype-${chInfo[i].key}">${escapeHtml(String(chInfo[i].label))}</span>`,
           nd2Mhz(ch.frequencyMhz),
           ch.lcn != null ? escapeHtml(String(ch.lcn)) : '—',
           ch.slot != null ? nd2Num(ch.slot) : '—',
-        ]));
+        ]),
+        i => `nd2-chrow nd2-chrow-${chInfo[i].key}`);
       const channelsCard = `<div class="nd2-card nd2-detail-gap">
         <div class="nd2-card-h"><i class="fas fa-list"></i> Channels
           <span class="nd2-note">${channels.length ? nd2Num(channels.length) : ''}</span></div>
@@ -9994,6 +10081,17 @@
       }
     });
     
+    // Keep the drill-down crumb bar docked right under the sticky page header:
+    // publish the header's measured height as --nd2-header-h so its sticky
+    // offset tracks the real header size across wraps/resizes.
+    function nd2SyncHeaderH() {
+      const h = document.querySelector('.header');
+      if (h) document.documentElement.style.setProperty('--nd2-header-h', h.offsetHeight + 'px');
+    }
+    window.addEventListener('resize', nd2SyncHeaderH);
+    window.addEventListener('load', nd2SyncHeaderH);
+    nd2SyncHeaderH();
+
     // Initialize
     checkAuth();
   </script>
