@@ -287,6 +287,26 @@ const WINDOW_INTERVAL: Record<Exclude<Windows, 'all'>, string> = {
 const tgValid = (prefix = ''): string => `${prefix}talkgroup BETWEEN 1 AND 65535`;
 const TG_VALID = tgValid();
 
+/**
+ * "This row is a talkgroup VOICE call." node_radio_events stores EVERY P25
+ * activity event the vce feed emits — voice AND data/signaling — and each
+ * event's `target` lands in the `talkgroup` column regardless of kind
+ * (nodeEvents.ts). Only CALL_GROUP / CALL_GROUP_ENCRYPTED events are real
+ * talkgroup voice calls (their target is a TALKGROUP); DATA_CALL / RESPONSE /
+ * QUERY / PAGE etc. target a RADIO id and masquerade as bogus "TG 2315291"
+ * talkgroups. This is the PRIMARY call filter for the Data page's radio side:
+ * a "call" on this page = a CALL_GROUP% event, so data/signaling stops being
+ * counted as calls or talkgroups (mirrors vce, which lists Calls separately
+ * from signaling observations). TG_VALID stays as a secondary guard wherever a
+ * talkgroup is grouped/counted. event_type is stored UPPERCASE by the vce feed
+ * (the Go agent forwards it verbatim); upper() is a zero-cost guard against
+ * case drift. Prefixable ('' or 'e.') to match queries that alias the events
+ * table; `CALL_GROUP` is the bare (unprefixed) form. NULL event_type (none post
+ * migration 044) is treated as not-a-call — LIKE over NULL is not true.
+ */
+const callGroup = (prefix = ''): string => `upper(${prefix}event_type) LIKE 'CALL_GROUP%'`;
+const CALL_GROUP = callGroup();
+
 /** Parse a query param as a non-negative int, else null. */
 function qpInt(url: URL, name: string): number | null {
   const raw = url.searchParams.get(name);
@@ -365,24 +385,32 @@ nodeDataRouter.get(
       if (window === 'all') {
         // Forever path: hourly bucket tables (topUnits only exists in
         // detail, so it stays capped to the last 30 days).
-        // Optional node scope ($1) for the node_id-bearing tables (radio
-        // hourly + radio events). node_radio_hourly_sys has no node_id, so
-        // radioLogical + topSites below remain fleet-wide even with a filter.
-        const nAllWhere = nodeId !== null ? ` WHERE node_id = $1` : '';
+        // window=all RADIO metrics are re-sourced from node_radio_events with
+        // the CALL_GROUP filter — NOT the hourly rollups. The rollups
+        // (node_radio_hourly / node_radio_hourly_sys) have no event_type column
+        // and bucket EVERY ingested event (data/signaling included), so reading
+        // them counts non-calls as calls. node_radio_events is 30-day retained,
+        // so `all` radio is effectively capped to 30 days (radioWindowCapped is
+        // set on the response) — the same tradeoff already accepted for
+        // topUnits and the receptions top-list. Pager `all` still reads its
+        // forever rollup (node_pager_hourly), which is unaffected by P25
+        // signaling. Optional node scope ($1) applies via nAllAnd.
         const nAllAnd = nodeId !== null ? ` AND node_id = $1` : '';
         const nAllParams: unknown[] = nodeId !== null ? [nodeId] : [];
         const [radioRawQ, radioLogQ, pagerTotQ, pnR, pnP, tg, un, si, sr, sp] =
           await Promise.all([
             wantRadio
               ? pool.query<{ raw: unknown }>(
-                  `SELECT COALESCE(SUM(calls), 0)::bigint AS raw FROM node_radio_hourly${nAllWhere}`,
+                  `SELECT COUNT(*)::int AS raw FROM node_radio_events
+                    WHERE ${CALL_GROUP}${nAllAnd}`,
                   nAllParams,
                 )
               : null,
             wantRadio
               ? pool.query<{ logical: unknown }>(
-                  `SELECT COALESCE(SUM(logical_calls), 0)::bigint AS logical
-                     FROM node_radio_hourly_sys`,
+                  `SELECT COUNT(DISTINCT logical_call_id)::int AS logical
+                     FROM node_radio_events WHERE ${CALL_GROUP}${nAllAnd}`,
+                  nAllParams,
                 )
               : null,
             wantPager
@@ -394,9 +422,10 @@ nodeDataRouter.get(
               : null,
             wantRadio
               ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
-                  `SELECT node_id, SUM(calls)::bigint AS calls,
-                          SUM(audio_bytes)::bigint AS bytes
-                     FROM node_radio_hourly${nAllWhere} GROUP BY node_id`,
+                  `SELECT node_id, COUNT(*)::int AS calls,
+                          COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
+                     FROM node_radio_events
+                    WHERE ${CALL_GROUP}${nAllAnd} GROUP BY node_id`,
                   nAllParams,
                 )
               : null,
@@ -427,7 +456,7 @@ nodeDataRouter.get(
                           COUNT(DISTINCT logical_call_id)::int AS logical,
                           NULL::text AS label
                      FROM node_radio_events
-                    WHERE ${TG_VALID}${nAllAnd}
+                    WHERE ${CALL_GROUP} AND ${TG_VALID}${nAllAnd}
                     GROUP BY system, talkgroup
                     ORDER BY calls DESC LIMIT 15`,
                   nAllParams,
@@ -441,6 +470,7 @@ nodeDataRouter.get(
                           COUNT(*)::int AS calls
                      FROM node_radio_events
                     WHERE received_at >= now() - interval '30 days'
+                      AND ${CALL_GROUP}
                       AND source_unit IS NOT NULL${nAllAnd}
                     GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
                   nAllParams,
@@ -448,16 +478,19 @@ nodeDataRouter.get(
               : null,
             wantRadio
               ? pool.query<{ site_rfss: number; site_id: number; calls: unknown }>(
-                  `SELECT site_rfss, site_id, SUM(calls)::bigint AS calls
-                     FROM node_radio_hourly_sys
-                    WHERE site_rfss <> -1 AND site_id <> -1
+                  `SELECT site_rfss, site_id, COUNT(*)::int AS calls
+                     FROM node_radio_events
+                    WHERE ${CALL_GROUP}
+                      AND site_rfss IS NOT NULL AND site_id IS NOT NULL${nAllAnd}
                     GROUP BY site_rfss, site_id ORDER BY calls DESC LIMIT 15`,
+                  nAllParams,
                 )
               : null,
             wantRadio
               ? pool.query<{ bucket: Date; n: unknown }>(
-                  `SELECT date_trunc('day', hour) AS bucket, SUM(calls)::bigint AS n
-                     FROM node_radio_hourly${nAllWhere} GROUP BY 1 ORDER BY 1`,
+                  `SELECT date_trunc('day', received_at) AS bucket, COUNT(*)::int AS n
+                     FROM node_radio_events
+                    WHERE ${CALL_GROUP}${nAllAnd} GROUP BY 1 ORDER BY 1`,
                   nAllParams,
                 )
               : null,
@@ -490,9 +523,11 @@ nodeDataRouter.get(
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await Promise.all([
           wantRadio
             ? pool.query<{ raw: unknown; logical: unknown }>(
+                // raw = call-group receptions, logical = distinct calls. Both
+                // gated on CALL_GROUP so data/signaling isn't counted as calls.
                 `SELECT COUNT(*)::int AS raw,
                         COUNT(DISTINCT logical_call_id)::int AS logical
-                   FROM node_radio_events WHERE ${radioCond}`,
+                   FROM node_radio_events WHERE ${radioCond} AND ${CALL_GROUP}`,
                 radioParams,
               )
             : null,
@@ -508,7 +543,8 @@ nodeDataRouter.get(
             ? pool.query<{ node_id: string; calls: unknown; bytes: unknown }>(
                 `SELECT node_id, COUNT(*)::int AS calls,
                         COALESCE(SUM(audio_bytes), 0)::bigint AS bytes
-                   FROM node_radio_events WHERE ${radioCond} GROUP BY node_id`,
+                   FROM node_radio_events
+                  WHERE ${radioCond} AND ${CALL_GROUP} GROUP BY node_id`,
                 radioParams,
               )
             : null,
@@ -537,7 +573,8 @@ nodeDataRouter.get(
                           COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS calls,
                         COUNT(DISTINCT e.logical_call_id)::int AS logical,
                         NULL::text AS label
-                   FROM node_radio_events e WHERE ${radioCond} AND ${tgValid('e.')}
+                   FROM node_radio_events e
+                  WHERE ${radioCond} AND ${callGroup('e.')} AND ${tgValid('e.')}
                   GROUP BY e.system, e.talkgroup
                   ORDER BY calls DESC LIMIT 15`,
                 radioParams,
@@ -550,7 +587,7 @@ nodeDataRouter.get(
                            FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
                         COUNT(*)::int AS calls
                    FROM node_radio_events
-                  WHERE ${radioCond} AND source_unit IS NOT NULL
+                  WHERE ${radioCond} AND ${CALL_GROUP} AND source_unit IS NOT NULL
                   GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
                 radioParams,
               )
@@ -559,7 +596,8 @@ nodeDataRouter.get(
             ? pool.query<{ site_rfss: number; site_id: number; calls: unknown }>(
                 `SELECT site_rfss, site_id, COUNT(*)::int AS calls
                    FROM node_radio_events
-                  WHERE ${radioCond} AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                  WHERE ${radioCond} AND ${CALL_GROUP}
+                    AND site_rfss IS NOT NULL AND site_id IS NOT NULL
                   GROUP BY site_rfss, site_id ORDER BY calls DESC LIMIT 15`,
                 radioParams,
               )
@@ -567,7 +605,8 @@ nodeDataRouter.get(
           wantRadio
             ? pool.query<{ bucket: Date; n: unknown }>(
                 `SELECT date_trunc('hour', received_at) AS bucket, COUNT(*)::int AS n
-                   FROM node_radio_events WHERE ${radioCond} GROUP BY 1 ORDER BY 1`,
+                   FROM node_radio_events
+                  WHERE ${radioCond} AND ${CALL_GROUP} GROUP BY 1 ORDER BY 1`,
                 radioParams,
               )
             : null,
@@ -683,7 +722,16 @@ nodeDataRouter.get(
       };
       // topUnits can only come from the 30-day detail window — flag the cap
       // so the UI can annotate it when the rest of the page shows all-time.
-      if (window === 'all') body['unitsWindowCapped'] = true;
+      // radioWindowCapped: on window=all the ENTIRE radio side (totals,
+      // perNode, top-lists, series) is now sourced from the 30-day detail
+      // table with the CALL_GROUP filter rather than the forever rollups
+      // (which have no event_type column and can't exclude data/signaling), so
+      // radio all-time is likewise capped to 30 days. Pager all-time stays
+      // forever.
+      if (window === 'all') {
+        body['unitsWindowCapped'] = true;
+        body['radioWindowCapped'] = true;
+      }
       return c.json(body);
     } catch (err) {
       log.error({ err }, '/api/node-data/overview error');
@@ -782,7 +830,10 @@ nodeDataRouter.get(
 
       // Row-level filter sets. Group membership: a logical call matches when
       // ANY of its receptions matches (node/site are per-reception fields).
-      const rConds: string[] = ['logical_call_id IS NOT NULL'];
+      // CALL_GROUP: the events list shows only real talkgroup voice calls —
+      // never DATA_CALL/RESPONSE/QUERY/PAGE signaling (which would render as
+      // bogus "TG —" rows targeting a radio id).
+      const rConds: string[] = ['logical_call_id IS NOT NULL', CALL_GROUP];
       const pConds: string[] = ['logical_id IS NOT NULL'];
       if (includeRadio) {
         if (system !== null) rConds.push(`system = ${add(system)}`);
@@ -870,18 +921,30 @@ nodeDataRouter.get(
               sites: Array<{ rfss: number; site: number }>;
               nodes: Array<{ id: string; name: string }>;
             }>(
+              // ONE row per logical_call_id (a group call emits GRANT + CALL/
+              // ACTIVE receptions sharing the id). Scalar identity fields come
+              // from a REPRESENTATIVE reception — the action='CALL' row if any,
+              // else the most recent — via array_agg(... ORDER BY
+              // (action='CALL') DESC, received_at DESC)[1]; sites/nodes/
+              // receptions/encrypted/recorded still aggregate across ALL
+              // receptions. CALL_GROUP guards the hydrate too so only call-group
+              // receptions contribute (the page ids are already call-group).
               `SELECT e.logical_call_id::text AS id,
                       MIN(e.received_at) AS at,
-                      MIN(e.system) AS system,
-                      MIN(e.talkgroup) AS talkgroup,
+                      (array_agg(e.system ORDER BY (e.action = 'CALL') DESC, e.received_at DESC)
+                         FILTER (WHERE e.system IS NOT NULL))[1] AS system,
+                      (array_agg(e.talkgroup ORDER BY (e.action = 'CALL') DESC, e.received_at DESC)
+                         FILTER (WHERE e.talkgroup IS NOT NULL))[1] AS talkgroup,
                       MAX(e.talkgroup_label) AS talkgroup_label,
                       MAX(e.system_label) AS system_label,
-                      MIN(e.source_unit) AS source_unit,
+                      (array_agg(e.source_unit ORDER BY (e.action = 'CALL') DESC, e.received_at DESC)
+                         FILTER (WHERE e.source_unit IS NOT NULL))[1] AS source_unit,
                       (array_agg(e.source_alias ORDER BY e.received_at DESC)
                          FILTER (WHERE e.source_alias IS NOT NULL))[1] AS source_alias,
-                      MIN(e.frequency)::bigint AS frequency,
-                      MIN(e.action) AS action,
-                      MIN(e.event_type) AS event_type,
+                      (array_agg(e.frequency ORDER BY (e.action = 'CALL') DESC, e.received_at DESC)
+                         FILTER (WHERE e.frequency IS NOT NULL))[1]::bigint AS frequency,
+                      (array_agg(e.action ORDER BY (e.action = 'CALL') DESC, e.received_at DESC))[1] AS action,
+                      (array_agg(e.event_type ORDER BY (e.action = 'CALL') DESC, e.received_at DESC))[1] AS event_type,
                       bool_or(e.encrypted) AS encrypted,
                       bool_or(e.recorded) AS recorded,
                       COUNT(*)::int AS receptions,
@@ -892,7 +955,7 @@ nodeDataRouter.get(
                       jsonb_agg(DISTINCT jsonb_build_object('id', e.node_id, 'name', n.name)) AS nodes
                  FROM node_radio_events e
                  JOIN nodes n ON n.id = e.node_id
-                WHERE e.logical_call_id = ANY(${'$1'}::bigint[])
+                WHERE e.logical_call_id = ANY(${'$1'}::bigint[]) AND ${callGroup('e.')}
                 GROUP BY e.logical_call_id`,
               [radioIds],
             )
@@ -1060,7 +1123,7 @@ async function scopedRadioDetail(
               (COUNT(DISTINCT (site_rfss, site_id))
                  FILTER (WHERE site_rfss IS NOT NULL AND site_id IS NOT NULL))::int AS sites
          FROM node_radio_events
-        WHERE ${where('')}`,
+        WHERE ${where('')} AND ${CALL_GROUP}`,
       params,
     ),
     pool.query<{
@@ -1076,7 +1139,7 @@ async function scopedRadioDetail(
               (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
               MAX(received_at) AS last_seen
          FROM node_radio_events
-        WHERE ${where('')} AND ${TG_VALID}
+        WHERE ${where('')} AND ${CALL_GROUP} AND ${TG_VALID}
         GROUP BY talkgroup
         ORDER BY calls DESC, talkgroup ASC
         LIMIT 20`,
@@ -1089,7 +1152,7 @@ async function scopedRadioDetail(
               COUNT(*)::int AS calls,
               MAX(received_at) AS last_seen
          FROM node_radio_events
-        WHERE ${where('')} AND source_unit IS NOT NULL
+        WHERE ${where('')} AND ${CALL_GROUP} AND source_unit IS NOT NULL
         GROUP BY source_unit
         ORDER BY calls DESC, radio ASC
         LIMIT 20`,
@@ -1098,7 +1161,7 @@ async function scopedRadioDetail(
     pool.query<{ hour: Date; calls: unknown }>(
       `SELECT date_trunc('hour', received_at) AS hour, COUNT(*)::int AS calls
          FROM node_radio_events
-        WHERE ${where('')}
+        WHERE ${where('')} AND ${CALL_GROUP}
         GROUP BY 1 ORDER BY 1`,
       params,
     ),
@@ -1190,6 +1253,7 @@ nodeDataRouter.get(
                   MAX(received_at) AS last_seen
              FROM node_radio_events
             WHERE received_at >= now() - $1::interval
+              AND ${CALL_GROUP}
               AND system IS NOT NULL${nodeCond}
             GROUP BY wacn, system
             ORDER BY calls DESC, system ASC NULLS LAST
@@ -1212,6 +1276,7 @@ nodeDataRouter.get(
                   MAX(received_at) AS last_seen
              FROM node_radio_events
             WHERE received_at >= now() - $1::interval
+              AND ${CALL_GROUP}
               AND system IS NOT NULL
               AND site_rfss IS NOT NULL AND site_id IS NOT NULL${nodeCond}
             GROUP BY system, site_rfss, site_id
@@ -1335,14 +1400,15 @@ nodeDataRouter.get(
                       COUNT(DISTINCT logical_call_id)::int AS logical,
                       MAX(received_at) AS last_seen
                  FROM node_radio_events
-                WHERE ${scope('')} AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                WHERE ${scope('')} AND ${CALL_GROUP}
+                  AND site_rfss IS NOT NULL AND site_id IS NOT NULL
                 GROUP BY site_rfss, site_id
              ) s
              LEFT JOIN LATERAL (
                SELECT e.talkgroup, COUNT(*)::int AS calls
                  FROM node_radio_events e
                 WHERE ${scope('e.')} AND e.site_rfss = s.rfss AND e.site_id = s.site
-                  AND ${tgValid('e.')}
+                  AND ${callGroup('e.')} AND ${tgValid('e.')}
                 GROUP BY e.talkgroup
                 ORDER BY calls DESC, e.talkgroup ASC
                 LIMIT 1
@@ -1366,7 +1432,7 @@ nodeDataRouter.get(
           `SELECT (array_agg(system_label ORDER BY received_at DESC)
                      FILTER (WHERE system_label IS NOT NULL))[1] AS name
              FROM node_radio_events
-            WHERE ${scope('')}`,
+            WHERE ${scope('')} AND ${CALL_GROUP}`,
           params,
         ),
       ]);
@@ -1455,7 +1521,7 @@ nodeDataRouter.get(
                   MAX(e.received_at) AS last_seen
              FROM node_radio_events e
              LEFT JOIN nodes n ON n.id = e.node_id
-            WHERE ${scope('e.')}
+            WHERE ${scope('e.')} AND ${callGroup('e.')}
             GROUP BY e.node_id, n.name
             ORDER BY calls DESC, e.node_id ASC`,
           params,
@@ -1585,8 +1651,9 @@ nodeDataRouter.get(
       const nodeId = qpNode(url);
 
       const params: unknown[] = [WINDOW_INTERVAL[window]];
-      // TG_VALID both drops NULL talkgroups and excludes out-of-range radio ids.
-      const conds = ['received_at >= now() - $1::interval', TG_VALID];
+      // CALL_GROUP restricts to talkgroup voice calls; TG_VALID additionally
+      // drops NULL talkgroups and excludes out-of-range radio ids.
+      const conds = ['received_at >= now() - $1::interval', CALL_GROUP, TG_VALID];
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
@@ -1676,6 +1743,7 @@ nodeDataRouter.get(
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
                   AND e.talkgroup = k.talkgroup${nodeLat}
+                  AND ${callGroup('e.')}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 ORDER BY e.received_at DESC
                 LIMIT 1
@@ -1687,6 +1755,7 @@ nodeDataRouter.get(
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
                   AND e.talkgroup = k.talkgroup${nodeLat}
+                  AND ${callGroup('e.')}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 GROUP BY e.site_rfss, e.site_id
                 ORDER BY calls DESC, rfss ASC, site ASC
@@ -1699,6 +1768,7 @@ nodeDataRouter.get(
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
                   AND e.talkgroup = k.talkgroup${nodeLat}
+                  AND ${callGroup('e.')}
                 GROUP BY e.node_id
                 ORDER BY calls DESC, e.node_id ASC
                 LIMIT 1
@@ -1796,7 +1866,9 @@ nodeDataRouter.get(
 
       const nodeId = qpNode(url);
       const params: unknown[] = [WINDOW_INTERVAL[window]];
-      const conds = ['received_at >= now() - $1::interval', 'source_unit IS NOT NULL'];
+      // CALL_GROUP: a radio here = a unit that made talkgroup voice calls
+      // (source_unit of CALL_GROUP% events), not one merely seen in signaling.
+      const conds = ['received_at >= now() - $1::interval', CALL_GROUP, 'source_unit IS NOT NULL'];
       if (system !== null) {
         params.push(system);
         conds.push(`system = $${params.length}`);
@@ -1888,6 +1960,7 @@ nodeDataRouter.get(
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
                   AND e.source_unit = k.radio${nodeLat}
+                  AND ${callGroup('e.')}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 ORDER BY e.received_at DESC
                 LIMIT 1
@@ -1899,6 +1972,7 @@ nodeDataRouter.get(
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
                   AND e.source_unit = k.radio${nodeLat}
+                  AND ${callGroup('e.')}
                   AND e.site_rfss IS NOT NULL AND e.site_id IS NOT NULL
                 GROUP BY e.site_rfss, e.site_id
                 ORDER BY calls DESC, rfss ASC, site ASC
@@ -1911,6 +1985,7 @@ nodeDataRouter.get(
                   AND e.wacn IS NOT DISTINCT FROM k.wacn
                   AND e.system IS NOT DISTINCT FROM k.system
                   AND e.source_unit = k.radio${nodeLat}
+                  AND ${callGroup('e.')}
                 GROUP BY e.node_id
                 ORDER BY calls DESC, e.node_id ASC
                 LIMIT 1
@@ -1927,6 +2002,7 @@ nodeDataRouter.get(
                       AND e.wacn IS NOT DISTINCT FROM k.wacn
                       AND e.system IS NOT DISTINCT FROM k.system
                       AND e.source_unit = k.radio${nodeLat}
+                  AND ${callGroup('e.')}
                       AND ${tgValid('e.')}
                     GROUP BY e.talkgroup
                     ORDER BY calls DESC, e.talkgroup ASC

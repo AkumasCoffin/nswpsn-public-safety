@@ -357,3 +357,140 @@ describe('display enrichment (labels, site names, aliases)', () => {
     expect(body.topUnits[0]).toEqual({ unit: 999, alias: 'CAR 1', calls: 9 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// CALL_GROUP filter: the Data page's radio side must reflect ONLY talkgroup
+// VOICE calls (event_type CALL_GROUP / CALL_GROUP_ENCRYPTED), never P25 data/
+// signaling (DATA_CALL / RESPONSE / QUERY / PAGE, whose `target` is a RADIO id
+// stored in the talkgroup column). The pg pool is mocked, so — mirroring the
+// TG-range tests above — the mock EMULATES the DB predicate: it drops the
+// DATA_CALL row only when the executed SQL actually carries
+// `upper(event_type) LIKE 'CALL_GROUP%'`. A missing predicate keeps the bogus
+// row and fails the test, proving each query wires the filter in.
+// ---------------------------------------------------------------------------
+describe('CALL_GROUP filter (talkgroup voice calls only)', () => {
+  const CG_PREDICATE = "LIKE 'CALL_GROUP%'";
+  // event_type carried on each candidate so the mock can emulate the WHERE.
+  // The DATA_CALL row uses an IN-RANGE talkgroup (5000) so ONLY the CALL_GROUP
+  // predicate — not the TG range guard — can exclude it.
+  const CANDIDATES = [
+    { logical: '100', event_type: 'CALL_GROUP', talkgroup: 10101, enc: false },
+    { logical: '200', event_type: 'CALL_GROUP_ENCRYPTED', talkgroup: 20202, enc: true },
+    { logical: '300', event_type: 'DATA_CALL', talkgroup: 5000, enc: false },
+  ];
+  const onlyCalls = (sql: string) =>
+    sql.includes(CG_PREDICATE)
+      ? CANDIDATES.filter((r) => r.event_type.toUpperCase().startsWith('CALL_GROUP'))
+      : CANDIDATES;
+
+  it('/talkgroups drops a DATA_CALL row (in-range tg) from the list AND the count, keeps CALL_GROUP + CALL_GROUP_ENCRYPTED', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
+      const kept = onlyCalls(sql);
+      if (sql.includes('AS n')) return { rows: [{ n: kept.length }] };
+      if (sql.includes('GROUP BY wacn, system, talkgroup')) {
+        return {
+          rows: kept.map((r) => ({
+            wacn: null, system: 721, talkgroup: r.talkgroup,
+            calls: 5, logical: 3, enc: r.enc ? 5 : 0, last_seen: LAST_SEEN,
+          })),
+        };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/talkgroups?window=7d&system=721');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // List: both call-group talkgroups survive; the DATA_CALL id (5000) is gone
+    // even though it is a valid 16-bit value.
+    expect(body.talkgroups.map((t: { talkgroup: number }) => t.talkgroup)).toEqual([10101, 20202]);
+    expect(body.talkgroups.some((t: { talkgroup: number }) => t.talkgroup === 5000)).toBe(false);
+    // Distinct-talkgroup pagination count excludes the DATA_CALL too.
+    expect(body.total).toBe(2);
+  });
+
+  it('/events shows one row per call for CALL_GROUP% only, excludes DATA_CALL from the list AND the count', async () => {
+    queryMock.mockImplementation((sql: string, params: unknown[] = []) => {
+      if (sql.includes('DISTINCT ON (system_id, rfss, site_id)')) return { rows: [SNAPSHOT_ROW] };
+      const kept = onlyCalls(sql);
+      // Combined logical-stream count over the WITH union.
+      if (sql.includes('AS n') && sql.includes('FROM u')) {
+        return { rows: [{ n: kept.length }] };
+      }
+      // Page of logical-call ids.
+      if (sql.includes('FROM u') && sql.includes('ORDER BY at DESC')) {
+        return { rows: kept.map((r) => ({ type: 'radio', id: r.logical, at: LAST_SEEN })) };
+      }
+      // Hydration: full group aggregates for the page's ids.
+      if (sql.includes('e.logical_call_id = ANY')) {
+        const ids = (params[0] as unknown[]) ?? [];
+        return {
+          rows: kept
+            .filter((r) => ids.map(String).includes(r.logical))
+            .map((r) => ({
+              id: r.logical, at: LAST_SEEN, system: 721, talkgroup: r.talkgroup,
+              talkgroup_label: null, system_label: null, source_unit: 555, source_alias: null,
+              frequency: null, action: 'CALL', event_type: r.event_type,
+              encrypted: r.enc, recorded: false, receptions: 1,
+              sites: [], nodes: [{ id: 'n1', name: 'Node 1' }],
+            })),
+        };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/events?type=radio');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.total).toBe(2);
+    // Exactly the two call-group calls appear, once each; the DATA_CALL (tg
+    // 5000, a radio-id target) never shows up.
+    expect(body.events.map((e: { talkgroup: number }) => e.talkgroup).sort()).toEqual([10101, 20202]);
+    expect(body.events.some((e: { talkgroup: number }) => e.talkgroup === 5000)).toBe(false);
+    // The CALL_GROUP_ENCRYPTED call is flagged encrypted.
+    const encEvt = body.events.find((e: { talkgroup: number }) => e.talkgroup === 20202);
+    expect(encEvt.encrypted).toBe(true);
+  });
+
+  it('/overview radio calls totals count CALL_GROUP% only (DATA_CALL excluded)', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('FROM nodes')) return { rows: [] };
+      // rTot: the raw + logical calls totals over node_radio_events.
+      if (sql.includes('AS raw') && sql.includes('AS logical') && sql.includes('node_radio_events')) {
+        const n = onlyCalls(sql).length;
+        return { rows: [{ raw: n, logical: n }] };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/overview?window=7d&scope=radio');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.totals.radioRaw).toBe(2);
+    expect(body.totals.radioLogical).toBe(2);
+  });
+
+  it('/overview window=all re-sources radio from detail (CALL_GROUP) and flags radioWindowCapped', async () => {
+    const seen: string[] = [];
+    queryMock.mockImplementation((sql: string) => {
+      seen.push(sql);
+      if (sql.includes('FROM nodes')) return { rows: [] };
+      if (sql.includes('AS raw') && sql.includes('node_radio_events')) return { rows: [{ raw: 2 }] };
+      if (sql.includes('AS logical') && sql.includes('node_radio_events')) return { rows: [{ logical: 2 }] };
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/overview?window=all&scope=radio');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // all-window radio no longer reads the event_type-less hourly rollups.
+    expect(seen.some((s) => s.includes('node_radio_hourly'))).toBe(false);
+    // Every radio all-window query carries the CALL_GROUP predicate.
+    const radioReads = seen.filter((s) => s.includes('node_radio_events'));
+    expect(radioReads.length).toBeGreaterThan(0);
+    expect(radioReads.every((s) => s.includes("LIKE 'CALL_GROUP%'"))).toBe(true);
+    expect(body.radioWindowCapped).toBe(true);
+    expect(body.totals.radioRaw).toBe(2);
+  });
+});
