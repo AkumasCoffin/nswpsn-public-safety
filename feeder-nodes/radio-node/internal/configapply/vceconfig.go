@@ -13,9 +13,9 @@
 //     preferredTuner, sourceType).
 //   - module/decode/config/DecodeConfiguration.java — @JsonTypeInfo property
 //     "type"; subtypes decodeConfigP25Phase1 / decodeConfigP25Phase2 /
-//     decodeConfigDMR / decodeConfigNBFM. decodeConfigAM is RETIRED in vce
-//     (see database/importer/LegacyXmlConfigurationImporter.java
-//     RETIRED_DECODER_CONFIG_TYPES), so "am" channels are skipped.
+//     decodeConfigDMR / decodeConfigNBFM / decodeConfigAM (AM airband support
+//     was restored in the vce fork; DecodeConfigAM carries bandwidth /
+//     talkgroup / squelchThreshold / squelchAutoTrack).
 //   - alias/Alias.java — vce aliases carry exactly ONE matchIdentifier plus
 //     broadcastChannels / callPriority / recordable / streamTalkgroupAlias
 //     attributes. A legacy multi-id alias is split into one vce alias per
@@ -24,7 +24,12 @@
 //     talkgroup / talkgroupRange / radio / radioRange / broadcastChannel /
 //     streamAsTalkgroup.
 //   - alias/AliasListDefinition.java + alias/AliasListFamily.java — each list
-//     needs a name and protocol family (P25/DMR/NXDN/NBFM).
+//     needs a name and protocol family (P25/DMR/NXDN/NBFM). AM aliases belong
+//     to the NBFM (conventional analog) family. A matcher whose family differs
+//     from its list's resolved family is rerouted to a derived
+//     "<list> [<family>]" list, mirroring the naming convention of vce's own
+//     AliasListDefinitionResolver — vce rejects the WHOLE alias snapshot when
+//     any matcher is incompatible with its list's family.
 //   - audio/broadcast/BroadcastConfiguration.java — @JsonTypeInfo property
 //     "type"; subtype "RdioScannerConfiguration" (rdioscanner/
 //     RdioScannerConfiguration.java: name, host, port, apiKey, systemID,
@@ -132,11 +137,16 @@ type vceDecodeConfig struct {
 	IgnoreCRCChecksums      *bool         `json:"ignoreCRCChecksums,omitempty"`
 	UseCompressedTalkgroups *bool         `json:"useCompressedTalkgroups,omitempty"`
 	TimeslotMap             []vceTimeslot `json:"timeslotMap,omitempty"`
-	// nbfm (DecodeConfigNBFM.java / DecodeConfigAnalog.java). The squelch/
+	// nbfm (DecodeConfigNBFM.java / DecodeConfigAnalog.java). The noise-squelch/
 	// enhancement fields are deliberately omitted so vce's own defaults apply.
-	Bandwidth   string `json:"bandwidth,omitempty"` // BW_7_5 | BW_12_5 | BW_25_0
+	// Bandwidth/talkgroup are shared with am.
+	Bandwidth   string `json:"bandwidth,omitempty"` // nbfm: BW_7_5|BW_12_5|BW_25_0; am: BW_3_0|BW_5_0|BW_8_33|BW_15_0|BW_25_0
 	Talkgroup   *int   `json:"talkgroup,omitempty"`
 	AudioFilter *bool  `json:"audioFilter,omitempty"`
+	// am (DecodeConfigAM.java): adaptive power squelch threshold (dB) and
+	// noise-floor auto-track.
+	SquelchThreshold *int  `json:"squelchThreshold,omitempty"`
+	SquelchAutoTrack *bool `json:"squelchAutoTrack,omitempty"`
 }
 
 // vceChannel mirrors controller/channel/Channel.java bean properties.
@@ -170,15 +180,29 @@ const localRdioPort = 17391
 // when the preset can't be read/parsed.
 const defaultAliasListName = "catch all PSN"
 
-// matcherProtocols are the protocols vce still supports for talkgroup/radio
-// alias matchers (protocol/Protocol.java, minus retired entries). A matcher
-// with any other protocol (e.g. the retired "AM") is dropped — an unknown enum
-// value could otherwise fail the whole import.
+// matcherProtocols are the protocols vce supports for talkgroup alias matchers
+// (protocol/Protocol.java, minus retired entries). A matcher with any other
+// protocol (e.g. the retired "MPT1327") is dropped — an unknown enum value
+// could otherwise fail the whole import. AM (airband) rides the NBFM
+// (conventional analog) alias-list family, exactly like vce's
+// AliasListFamily.from(DecoderType.AM).
 var matcherProtocols = map[string]string{ // protocol -> alias-list family
 	"APCO25": "P25",
 	"DMR":    "DMR",
 	"NXDN":   "NXDN",
 	"NBFM":   "NBFM",
+	"AM":     "NBFM",
+}
+
+// radioProtocols are the protocols vce registers radio-id matchers for
+// (alias/AliasMatchRegistry.java: only the P25/DMR/NXDN families own radio-id
+// matchers; NBFM/AM lists accept talkgroup-style matchers only). A radio
+// matcher with any other protocol must be dropped — vce rejects the whole
+// alias snapshot when a matcher is not operational for its list's family.
+var radioProtocols = map[string]bool{
+	"APCO25": true,
+	"DMR":    true,
+	"NXDN":   true,
 }
 
 var reAliasListAttr = regexp.MustCompile(`<alias\b[^>]*\blist="([^"]+)"`)
@@ -213,17 +237,189 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 		BroadcastConfigurations: []vceBroadcast{},
 	}
 
+	// ---- aliases + list definitions ----------------------------------------
+	// Mirror the vce legacy importer (LegacyAlias.toAliases): each legacy
+	// multi-id alias becomes one vce alias per matcher id, with the non-matcher
+	// ids (broadcastChannel / priority / record / nonRecordable /
+	// streamAsTalkgroup) folded into shared alias attributes.
+	//
+	// Two passes: pass 1 parses every alias and resolves each list's family
+	// (first protocol-specific claim wins); pass 2 emits the split aliases,
+	// rerouting any matcher whose family conflicts with its list's resolved
+	// family into a derived "<list> [<family>]" list — vce rejects the WHOLE
+	// alias snapshot when a matcher is not operational for its list's family.
+	listFamilies := map[string]string{} // list name -> family
+	if presetList != "" {
+		listFamilies[presetList] = "P25"
+	}
+
+	type pendingAlias struct {
+		tmpl     vceAlias
+		listName string
+		matchers []vceAliasID
+		families []string // alias-list family per matcher (parallel to matchers)
+	}
+	var pending []pendingAlias
+
+	for _, a := range payload.Aliases {
+		listName := strings.TrimSpace(a.List)
+		tmpl := vceAlias{
+			Name:          a.Name,
+			AliasListName: listName,
+			Group:         a.Group,
+			Color:         atoiOr(a.Color, 0),
+			IconName:      a.IconName,
+		}
+		if sta := strings.TrimSpace(string(a.StreamTalkgroupAlias)); sta != "" && sta != "0" {
+			// Same guard as the legacy playlist render: a 0/blank "stream as
+			// talkgroup" would force every matching call to upload as talkgroup 0.
+			if v, err := strconv.Atoi(sta); err == nil && v > 0 {
+				tmpl.StreamTalkgroupAlias = &vceAliasID{Type: "streamAsTalkgroup", Value: &v}
+			}
+		}
+
+		var matchers []vceAliasID
+		var families []string
+		for _, id := range a.IDs {
+			switch id.Type {
+			case "broadcastChannel":
+				if ch := strings.TrimSpace(id.Attrs["channel"]); ch != "" {
+					tmpl.BroadcastChannels = append(tmpl.BroadcastChannels,
+						vceAliasID{Type: "broadcastChannel", ChannelName: ch})
+				}
+			case "priority":
+				if p, err := strconv.Atoi(strings.TrimSpace(id.Attrs["priority"])); err == nil {
+					pp := p
+					tmpl.CallPriority = &pp
+				}
+			case "record":
+				t := true
+				tmpl.Recordable = &t
+			case "nonRecordable":
+				f := false
+				tmpl.Recordable = &f
+			case "streamAsTalkgroup":
+				if v, err := strconv.Atoi(strings.TrimSpace(id.Attrs["value"])); err == nil && v > 0 {
+					vv := v
+					tmpl.StreamTalkgroupAlias = &vceAliasID{Type: "streamAsTalkgroup", Value: &vv}
+				}
+			case "talkgroup", "radio":
+				proto := strings.TrimSpace(id.Attrs["protocol"])
+				fam, supported := matcherProtocols[proto]
+				if id.Type == "radio" && !radioProtocols[proto] {
+					supported = false // vce has no radio-id matchers for NBFM/AM lists
+				}
+				v, err := strconv.Atoi(strings.TrimSpace(id.Attrs["value"]))
+				if !supported || err != nil {
+					log.Printf("configapply: alias %q: dropping %s id (protocol=%q) not supported by sdrtrunk-vce", a.Name, id.Type, proto)
+					continue
+				}
+				vv := v
+				matchers = append(matchers, vceAliasID{Type: id.Type, Protocol: proto, Value: &vv})
+				families = append(families, fam)
+				rememberFamily(listFamilies, listName, fam)
+			case "talkgroupRange", "radioRange":
+				proto := strings.TrimSpace(id.Attrs["protocol"])
+				fam, supported := matcherProtocols[proto]
+				if id.Type == "radioRange" && !radioProtocols[proto] {
+					supported = false // vce has no radio-id matchers for NBFM/AM lists
+				}
+				lo, errLo := strconv.Atoi(strings.TrimSpace(id.Attrs["min"]))
+				hi, errHi := strconv.Atoi(strings.TrimSpace(id.Attrs["max"]))
+				if !supported || errLo != nil || errHi != nil {
+					log.Printf("configapply: alias %q: dropping %s id (protocol=%q) not supported by sdrtrunk-vce", a.Name, id.Type, proto)
+					continue
+				}
+				m := vceAliasID{Type: id.Type, Protocol: proto}
+				if id.Type == "talkgroupRange" {
+					m.MinTalkgroup, m.MaxTalkgroup = &lo, &hi
+				} else {
+					m.MinRadio, m.MaxRadio = &lo, &hi
+				}
+				matchers = append(matchers, m)
+				families = append(families, fam)
+				rememberFamily(listFamilies, listName, fam)
+			default:
+				// Retired/unsupported alias id type: drop, like the vce importer.
+			}
+		}
+
+		if listName != "" {
+			rememberFamily(listFamilies, listName, "") // ensure the list exists even without matchers
+		}
+		if len(matchers) == 0 {
+			// vce requires exactly one matchIdentifier per alias; an alias whose
+			// matcher ids were all dropped (or that only carried broadcast/priority/
+			// record entries) can never match anything, and emitting it matcher-less
+			// 400s the whole /config/import. Skip it.
+			log.Printf("configapply: alias %q: no usable match identifiers - skipping", a.Name)
+			continue
+		}
+		pending = append(pending, pendingAlias{tmpl: tmpl, listName: listName, matchers: matchers, families: families})
+	}
+
 	// The alias list P25 channels reference MUST be the same list the pushed
-	// aliases use (the backend is the source of truth for the name, e.g.
+	// P25 aliases use (the backend is the source of truth for the name, e.g.
 	// "NSWPSN") — otherwise vce rejects the channel as referencing an
-	// incompatible/empty list. Fall back to the preset's name when no alias
-	// carries one.
+	// incompatible/empty list. Only a P25-family list qualifies (an AM/NBFM
+	// alias may come first in the payload); fall back to the preset's name when
+	// no alias carries one.
 	p25ListName := presetList
 	for _, a := range payload.Aliases {
 		if l := strings.TrimSpace(a.List); l != "" {
-			p25ListName = l
-			break
+			if fam := listFamilies[l]; fam == "P25" || fam == "" {
+				p25ListName = l
+				break
+			}
 		}
+	}
+
+	// Pass 2: emit one vce alias per matcher, rerouting family conflicts.
+	for _, p := range pending {
+		for i := range p.matchers {
+			alias := p.tmpl // copy
+			m := p.matchers[i]
+			alias.MatchIdentifier = &m
+			if fam := p.families[i]; p.listName != "" && fam != "" {
+				finalFam := listFamilies[p.listName]
+				if finalFam == "" {
+					finalFam = "P25" // matches the definitions default below
+				}
+				if fam != finalFam {
+					// Same derived-name convention as vce's AliasListDefinitionResolver.
+					derived := p.listName + " [" + fam + "]"
+					rememberFamily(listFamilies, derived, fam)
+					alias.AliasListName = derived
+					log.Printf("configapply: alias %q: matcher protocol %s conflicts with list %q family %s; moved to list %q",
+						alias.Name, m.Protocol, p.listName, finalFam, derived)
+				}
+			}
+			state.Aliases = append(state.Aliases, alias)
+		}
+	}
+
+	for name, fam := range listFamilies {
+		if fam == "" {
+			fam = "P25"
+		}
+		state.AliasListDefinitions = append(state.AliasListDefinitions, vceAliasListDef{Name: name, Family: fam})
+	}
+	sortAliasListDefs(state.AliasListDefinitions)
+
+	// The analog (NBFM-family) alias list, when unambiguous: nbfm/am channels
+	// reference it so their configured talkgroup matches its aliases (and the
+	// aliases' broadcastChannels route the audio to streams). With zero or
+	// multiple NBFM-family lists the channels reference none.
+	analogListName := ""
+	analogListCount := 0
+	for name, fam := range listFamilies {
+		if fam == "NBFM" {
+			analogListName = name
+			analogListCount++
+		}
+	}
+	if analogListCount != 1 {
+		analogListName = ""
 	}
 
 	// ---- channels -----------------------------------------------------------
@@ -252,124 +448,17 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 			order := ch.Order
 			vch.AutoStartOrder = &order
 		}
-		// Alias lists are protocol-family-owned in vce; the alias list is a P25
-		// list, so only P25 channels may reference it (a family mismatch would be
-		// rejected/nulled by vce's channel-compatibility policy).
+		// Alias lists are protocol-family-owned in vce; a channel may only
+		// reference a list of its own family (a mismatch is rejected by vce's
+		// channel-compatibility policy). P25 channels take the P25 list; analog
+		// (nbfm/am) channels take the single NBFM-family list when one exists.
 		if ch.Decoder == "p25p1" || ch.Decoder == "p25p2" {
 			vch.AliasListName = p25ListName
+		} else if (ch.Decoder == "nbfm" || ch.Decoder == "am") && analogListName != "" {
+			vch.AliasListName = analogListName
 		}
 		state.Channels = append(state.Channels, vch)
 	}
-
-	// ---- aliases + list definitions ----------------------------------------
-	// Mirror the vce legacy importer (LegacyAlias.toAliases): each legacy
-	// multi-id alias becomes one vce alias per matcher id, with the non-matcher
-	// ids (broadcastChannel / priority / record / nonRecordable /
-	// streamAsTalkgroup) folded into shared alias attributes.
-	listFamilies := map[string]string{} // list name -> family
-	if presetList != "" {
-		listFamilies[presetList] = "P25"
-	}
-	for _, a := range payload.Aliases {
-		listName := strings.TrimSpace(a.List)
-		tmpl := vceAlias{
-			Name:          a.Name,
-			AliasListName: listName,
-			Group:         a.Group,
-			Color:         atoiOr(a.Color, 0),
-			IconName:      a.IconName,
-		}
-		if sta := strings.TrimSpace(string(a.StreamTalkgroupAlias)); sta != "" && sta != "0" {
-			// Same guard as the legacy playlist render: a 0/blank "stream as
-			// talkgroup" would force every matching call to upload as talkgroup 0.
-			if v, err := strconv.Atoi(sta); err == nil && v > 0 {
-				tmpl.StreamTalkgroupAlias = &vceAliasID{Type: "streamAsTalkgroup", Value: &v}
-			}
-		}
-
-		var matchers []vceAliasID
-		for _, id := range a.IDs {
-			switch id.Type {
-			case "broadcastChannel":
-				if ch := strings.TrimSpace(id.Attrs["channel"]); ch != "" {
-					tmpl.BroadcastChannels = append(tmpl.BroadcastChannels,
-						vceAliasID{Type: "broadcastChannel", ChannelName: ch})
-				}
-			case "priority":
-				if p, err := strconv.Atoi(strings.TrimSpace(id.Attrs["priority"])); err == nil {
-					pp := p
-					tmpl.CallPriority = &pp
-				}
-			case "record":
-				t := true
-				tmpl.Recordable = &t
-			case "nonRecordable":
-				f := false
-				tmpl.Recordable = &f
-			case "streamAsTalkgroup":
-				if v, err := strconv.Atoi(strings.TrimSpace(id.Attrs["value"])); err == nil && v > 0 {
-					vv := v
-					tmpl.StreamTalkgroupAlias = &vceAliasID{Type: "streamAsTalkgroup", Value: &vv}
-				}
-			case "talkgroup", "radio":
-				proto := strings.TrimSpace(id.Attrs["protocol"])
-				fam, supported := matcherProtocols[proto]
-				v, err := strconv.Atoi(strings.TrimSpace(id.Attrs["value"]))
-				if !supported || err != nil {
-					log.Printf("configapply: alias %q: dropping %s id (protocol=%q) not supported by sdrtrunk-vce", a.Name, id.Type, proto)
-					continue
-				}
-				vv := v
-				matchers = append(matchers, vceAliasID{Type: id.Type, Protocol: proto, Value: &vv})
-				rememberFamily(listFamilies, listName, fam)
-			case "talkgroupRange", "radioRange":
-				proto := strings.TrimSpace(id.Attrs["protocol"])
-				fam, supported := matcherProtocols[proto]
-				lo, errLo := strconv.Atoi(strings.TrimSpace(id.Attrs["min"]))
-				hi, errHi := strconv.Atoi(strings.TrimSpace(id.Attrs["max"]))
-				if !supported || errLo != nil || errHi != nil {
-					log.Printf("configapply: alias %q: dropping %s id (protocol=%q) not supported by sdrtrunk-vce", a.Name, id.Type, proto)
-					continue
-				}
-				m := vceAliasID{Type: id.Type, Protocol: proto}
-				if id.Type == "talkgroupRange" {
-					m.MinTalkgroup, m.MaxTalkgroup = &lo, &hi
-				} else {
-					m.MinRadio, m.MaxRadio = &lo, &hi
-				}
-				matchers = append(matchers, m)
-				rememberFamily(listFamilies, listName, fam)
-			default:
-				// Retired/unsupported alias id type: drop, like the vce importer.
-			}
-		}
-
-		if listName != "" {
-			rememberFamily(listFamilies, listName, "") // ensure the list exists even without matchers
-		}
-		if len(matchers) == 0 {
-			// vce requires exactly one matchIdentifier per alias; an alias whose
-			// matcher ids were all dropped (or that only carried broadcast/priority/
-			// record entries) can never match anything, and emitting it matcher-less
-			// 400s the whole /config/import. Skip it.
-			log.Printf("configapply: alias %q: no usable match identifiers - skipping", a.Name)
-			continue
-		}
-		for i := range matchers {
-			alias := tmpl // copy
-			m := matchers[i]
-			alias.MatchIdentifier = &m
-			state.Aliases = append(state.Aliases, alias)
-		}
-	}
-
-	for name, fam := range listFamilies {
-		if fam == "" {
-			fam = "P25"
-		}
-		state.AliasListDefinitions = append(state.AliasListDefinitions, vceAliasListDef{Name: name, Family: fam})
-	}
-	sortAliasListDefs(state.AliasListDefinitions)
 
 	// ---- streams ------------------------------------------------------------
 	// One RdioScanner broadcast per stream target/system, uploading to the
@@ -418,13 +507,17 @@ func sortAliasListDefs(defs []vceAliasListDef) {
 }
 
 // nbfmBandwidths are the valid vce NBFM bandwidth enum constants
-// (DecodeConfigAnalog.Bandwidth).
+// (DecodeConfigAnalog.Bandwidth.FM_BANDWIDTHS).
 var nbfmBandwidths = map[string]bool{"BW_7_5": true, "BW_12_5": true, "BW_25_0": true}
+
+// amBandwidths are the valid vce AM bandwidth enum constants
+// (DecodeConfigAnalog.Bandwidth.AM_BANDWIDTHS).
+var amBandwidths = map[string]bool{"BW_3_0": true, "BW_5_0": true, "BW_8_33": true, "BW_15_0": true, "BW_25_0": true}
 
 // buildDecodeConfig maps an agent decoder name + optional DecoderConfig onto
 // the vce decode configuration, filling the same defaults the legacy playlist
-// render used. ok=false means the decoder has no vce equivalent (e.g. the
-// retired AM decoder) and the channel must be skipped.
+// render used. ok=false means the decoder has no vce equivalent and the
+// channel must be skipped.
 func buildDecodeConfig(decoder string, cfg *DecoderConfig) (vceDecodeConfig, bool) {
 	if cfg == nil {
 		cfg = &DecoderConfig{}
@@ -490,14 +583,40 @@ func buildDecodeConfig(decoder string, cfg *DecoderConfig) (vceDecodeConfig, boo
 		return vceDecodeConfig{
 			Type:        "decodeConfigNBFM",
 			Bandwidth:   bw,
-			Talkgroup:   intPtrOr(cfg.Talkgroup, 1),
+			Talkgroup:   talkgroupPtrOr(cfg.Talkgroup, 1),
 			AudioFilter: boolPtrOr(cfg.AudioFilter, true),
 		}, true
 
+	case "am":
+		// decodeConfigAM (module/decode/am/DecodeConfigAM.java): airband voice.
+		// Defaults mirror the vce class: BW_15_0, talkgroup 1, squelch -78 dB,
+		// auto-track on — the same values the old fork's playlist render used.
+		bw := cfg.Bandwidth
+		if !amBandwidths[bw] {
+			bw = "BW_15_0"
+		}
+		return vceDecodeConfig{
+			Type:             "decodeConfigAM",
+			Bandwidth:        bw,
+			Talkgroup:        talkgroupPtrOr(cfg.Talkgroup, 1),
+			SquelchThreshold: intPtrOr(cfg.Squelch, -78),
+			SquelchAutoTrack: boolPtrOr(cfg.AutoTrack, true),
+		}, true
+
 	default:
-		// "am" (retired in sdrtrunk-vce) and anything unknown.
+		// Unknown decoder: skip the channel.
 		return vceDecodeConfig{}, false
 	}
+}
+
+// talkgroupPtrOr returns p when it is a valid vce analog talkgroup (1-65535),
+// else a pointer to def — DecodeConfigAnalog.setTalkgroup throws outside that
+// range, which would fail the whole /config/import.
+func talkgroupPtrOr(p *int, def int) *int {
+	if p != nil && *p >= 1 && *p <= 65535 {
+		return p
+	}
+	return &def
 }
 
 // boolPtrOr returns p when set, else a pointer to def.

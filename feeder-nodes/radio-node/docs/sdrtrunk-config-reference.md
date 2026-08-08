@@ -65,10 +65,13 @@ children + optional `frequency_rotation_delay="<ms>"`.
 - User-facing: `bandwidth` (`BW_7_5`|`BW_12_5`|`BW_25_0`, def BW_12_5), `talkgroup` (1–65535, def 1), `audioFilter` (bool, def true).
 - The 4 squelch* fields are NOT in the GUI — emit defaults (0.1 / 0.19 / 4 / 6). (Old `autoTrack`/`squelch` attrs are replaced; reader ignores them if present.)
 
-### am — `decodeConfigAM`
-`<decode_configuration type="decodeConfigAM" bandwidth="BW_15_0" talkgroup="1" autoTrack="true" squelch="-78"/>`
+### am — `decodeConfigAM` (restored in sdrtrunk-vce)
+Legacy playlist XML: `<decode_configuration type="decodeConfigAM" bandwidth="BW_15_0" talkgroup="1" autoTrack="true" squelch="-78"/>`
+vce /config/import JSON: `{"type":"decodeConfigAM","bandwidth":"BW_15_0","talkgroup":1,"squelchThreshold":-78,"squelchAutoTrack":true}`
 - `bandwidth`: `BW_3_0`|`BW_5_0`|`BW_8_33`|`BW_15_0`|`BW_25_0`, def BW_15_0.
-- `talkgroup` int 1–65535 def 1; `squelch` int dB def -78; `autoTrack` bool def true.
+- `talkgroup` int 1–65535 def 1; squelch threshold int dB def -78 (XML attr `squelch`, JSON `squelchThreshold`);
+  noise-floor auto-track bool def true (XML attr `autoTrack`, JSON `squelchAutoTrack`).
+- AM aliases (talkgroup/talkgroupRange, protocol `AM`) live in an NBFM-family alias list; there are no AM radio-id matchers.
 
 ## decoderConfig JSON contract (backend config_override.channels[i].decoderConfig)
 Discriminated by `channel.decoder`. All fields optional (renderer fills SDR-Trunk defaults):

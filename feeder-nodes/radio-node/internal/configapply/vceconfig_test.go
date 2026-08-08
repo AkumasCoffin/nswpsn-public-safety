@@ -92,8 +92,8 @@ func TestBuildVceConfigChannelShape(t *testing.T) {
 	}
 }
 
-// TestBuildVceConfigDecoders — per-decoder discriminators + defaults; the
-// retired AM decoder is skipped entirely.
+// TestBuildVceConfigDecoders — per-decoder discriminators + defaults,
+// including the restored AM (airband) decoder.
 func TestBuildVceConfigDecoders(t *testing.T) {
 	payload := ConfigPayload{
 		Channels: []ChannelPlan{
@@ -102,13 +102,14 @@ func TestBuildVceConfigDecoders(t *testing.T) {
 			{Name: "DMR", Frequency: 2, Decoder: "dmr",
 				DecoderConfig: &DecoderConfig{Timeslots: []DmrTimeslot{{Lcn: 187, Downlink: 166408000, Uplink: 156408000}}}},
 			{Name: "FM", Frequency: 3, Decoder: "nbfm", DecoderConfig: &DecoderConfig{Bandwidth: "BW_25_0", Talkgroup: ptrInt(42)}},
-			{Name: "Air", Frequency: 4, Decoder: "am"}, // retired in vce → skipped
+			{Name: "Air", Frequency: 4, Decoder: "am"},
+			{Name: "Bogus", Frequency: 5, Decoder: "ltr"}, // unknown decoder → skipped
 		},
 	}
 	doc := marshalState(t, payload, nil)
 	channels := arr(t, doc, "channels")
-	if len(channels) != 3 {
-		t.Fatalf("expected 3 channels (am skipped), got %d", len(channels))
+	if len(channels) != 4 {
+		t.Fatalf("expected 4 channels (unknown decoder skipped), got %d", len(channels))
 	}
 
 	p2 := channels[0].(map[string]any)["decodeConfiguration"].(map[string]any)
@@ -152,6 +153,49 @@ func TestBuildVceConfigDecoders(t *testing.T) {
 	// A non-P25 channel must not reference the P25 preset alias list.
 	if al, ok := channels[2].(map[string]any)["aliasListName"]; ok && al != "" {
 		t.Errorf("nbfm channel should not carry the P25 alias list, got %v", al)
+	}
+
+	// AM (airband): decodeConfigAM with the vce DecodeConfigAM defaults.
+	am := channels[3].(map[string]any)["decodeConfiguration"].(map[string]any)
+	for k, want := range map[string]any{
+		"type": "decodeConfigAM", "bandwidth": "BW_15_0", "talkgroup": float64(1),
+		"squelchThreshold": float64(-78), "squelchAutoTrack": true,
+	} {
+		if am[k] != want {
+			t.Errorf("am decodeConfiguration %q = %v, want %v", k, am[k], want)
+		}
+	}
+	if al, ok := channels[3].(map[string]any)["aliasListName"]; ok && al != "" {
+		t.Errorf("am channel should not carry the P25 alias list, got %v", al)
+	}
+}
+
+// TestBuildVceConfigAMSettings — operator-supplied AM settings flow through,
+// and an NBFM-era bandwidth constant invalid for AM falls back to BW_15_0.
+func TestBuildVceConfigAMSettings(t *testing.T) {
+	dc, ok := buildDecodeConfig("am", &DecoderConfig{
+		Bandwidth: "BW_8_33",
+		Talkgroup: ptrInt(7),
+		Squelch:   ptrInt(-65),
+		AutoTrack: ptrBool(false),
+	})
+	if !ok {
+		t.Fatal("am must be supported")
+	}
+	if dc.Type != "decodeConfigAM" || dc.Bandwidth != "BW_8_33" || *dc.Talkgroup != 7 ||
+		*dc.SquelchThreshold != -65 || *dc.SquelchAutoTrack != false {
+		t.Errorf("am decode config mismatch: %+v", dc)
+	}
+
+	dc, ok = buildDecodeConfig("am", &DecoderConfig{Bandwidth: "BW_12_5", Talkgroup: ptrInt(0)})
+	if !ok {
+		t.Fatal("am must be supported")
+	}
+	if dc.Bandwidth != "BW_15_0" {
+		t.Errorf("invalid AM bandwidth should fall back to BW_15_0, got %s", dc.Bandwidth)
+	}
+	if *dc.Talkgroup != 1 {
+		t.Errorf("out-of-range talkgroup should fall back to 1 (vce rejects 0), got %d", *dc.Talkgroup)
 	}
 }
 
@@ -223,13 +267,16 @@ func TestBuildVceConfigAliasSplit(t *testing.T) {
 	}
 }
 
-// TestBuildVceConfigDropsRetiredProtocols — a matcher using a protocol vce
-// retired (the preset's AM airband talkgroup) is dropped, and an alias left
-// with NO matchers is skipped entirely: vce's /config/import requires exactly
-// one matchIdentifier per alias and rejects the whole payload otherwise
-// ("Alias [...] must have exactly one match identifier").
-func TestBuildVceConfigDropsRetiredProtocols(t *testing.T) {
+// TestBuildVceConfigAMAliasKeepsMatcher — an AM airband talkgroup matcher is
+// no longer dropped (AM was restored in the vce fork). Because the preset list
+// is a P25-family list, the AM alias is rerouted to the derived
+// "<list> [NBFM]" list so the import passes vce's family validation, and an
+// "am" channel picks up that NBFM-family list.
+func TestBuildVceConfigAMAliasKeepsMatcher(t *testing.T) {
 	payload := ConfigPayload{
+		Channels: []ChannelPlan{
+			{Name: "TWR", Frequency: 120500000, Decoder: "am", AutoStart: true},
+		},
 		Aliases: []Alias{{
 			Name: "TWR YSNW", List: "catch all PSN",
 			IDs: []AliasID{
@@ -240,8 +287,100 @@ func TestBuildVceConfigDropsRetiredProtocols(t *testing.T) {
 	}
 	doc := marshalState(t, payload, nil)
 	aliases := arr(t, doc, "aliases")
+	if len(aliases) != 1 {
+		t.Fatalf("expected 1 alias (AM matcher kept), got %d", len(aliases))
+	}
+	a := aliases[0].(map[string]any)
+	if a["aliasListName"] != "catch all PSN [NBFM]" {
+		t.Errorf("AM alias should move to the derived NBFM list, got %v", a["aliasListName"])
+	}
+	m := a["matchIdentifier"].(map[string]any)
+	if m["type"] != "talkgroup" || m["protocol"] != "AM" || m["value"] != float64(5) {
+		t.Errorf("AM matcher mismatch: %v", m)
+	}
+	bc := a["broadcastChannels"].([]any)[0].(map[string]any)
+	if bc["channelName"] != "AirBand" {
+		t.Errorf("broadcastChannels mismatch: %v", bc)
+	}
+
+	// Both list definitions exist with the right families.
+	fams := map[string]string{}
+	for _, raw := range arr(t, doc, "aliasListDefinitions") {
+		d := raw.(map[string]any)
+		fams[d["name"].(string)] = d["family"].(string)
+	}
+	if fams["catch all PSN"] != "P25" || fams["catch all PSN [NBFM]"] != "NBFM" {
+		t.Errorf("alias list families mismatch: %v", fams)
+	}
+
+	// The am channel references the single NBFM-family list.
+	ch := arr(t, doc, "channels")[0].(map[string]any)
+	if ch["aliasListName"] != "catch all PSN [NBFM]" {
+		t.Errorf("am channel should reference the NBFM list, got %v", ch["aliasListName"])
+	}
+}
+
+// TestBuildVceConfigAMOnlyListKeepsName — a list containing only AM aliases
+// resolves to the NBFM family under its own name (no derived list needed), and
+// nbfm/am channels reference it.
+func TestBuildVceConfigAMOnlyListKeepsName(t *testing.T) {
+	payload := ConfigPayload{
+		Channels: []ChannelPlan{
+			{Name: "TWR", Frequency: 120500000, Decoder: "am"},
+			{Name: "FM", Frequency: 160000000, Decoder: "nbfm"},
+			{Name: "CC", Frequency: 142000000, Decoder: "p25p1"},
+		},
+		Aliases: []Alias{{
+			Name: "TWR YSSY", List: "AirBand",
+			IDs: []AliasID{{Type: "talkgroup", Attrs: map[string]string{"protocol": "AM", "value": "7"}}},
+		}},
+	}
+	doc := marshalState(t, payload, nil)
+	aliases := arr(t, doc, "aliases")
+	if len(aliases) != 1 {
+		t.Fatalf("expected 1 alias, got %d", len(aliases))
+	}
+	if aliases[0].(map[string]any)["aliasListName"] != "AirBand" {
+		t.Errorf("AM-only list should keep its own name, got %v", aliases[0].(map[string]any)["aliasListName"])
+	}
+	fams := map[string]string{}
+	for _, raw := range arr(t, doc, "aliasListDefinitions") {
+		d := raw.(map[string]any)
+		fams[d["name"].(string)] = d["family"].(string)
+	}
+	if fams["AirBand"] != "NBFM" {
+		t.Errorf("AirBand list family = %v, want NBFM", fams["AirBand"])
+	}
+	channels := arr(t, doc, "channels")
+	if channels[0].(map[string]any)["aliasListName"] != "AirBand" ||
+		channels[1].(map[string]any)["aliasListName"] != "AirBand" {
+		t.Errorf("am/nbfm channels should reference the AirBand list: %v", channels)
+	}
+	// The P25 channel keeps the P25 list (first alias list name is AirBand, but
+	// it is NBFM-family; the P25 channel still takes the payload-derived name).
+	if channels[2].(map[string]any)["aliasListName"] == "AirBand" {
+		t.Errorf("p25 channel must not reference the NBFM-family list")
+	}
+}
+
+// TestBuildVceConfigDropsAnalogRadioIds — vce registers no radio-id matchers
+// for the NBFM/AM (conventional analog) family, so radio/radioRange ids with
+// those protocols are dropped; an alias left with no matchers is skipped
+// (vce's /config/import rejects matcher-less aliases).
+func TestBuildVceConfigDropsAnalogRadioIds(t *testing.T) {
+	payload := ConfigPayload{
+		Aliases: []Alias{{
+			Name: "Analog Radio", List: "AirBand",
+			IDs: []AliasID{
+				{Type: "radio", Attrs: map[string]string{"protocol": "AM", "value": "5"}},
+				{Type: "radioRange", Attrs: map[string]string{"protocol": "NBFM", "min": "1", "max": "9"}},
+			},
+		}},
+	}
+	doc := marshalState(t, payload, nil)
+	aliases := arr(t, doc, "aliases")
 	if len(aliases) != 0 {
-		t.Fatalf("expected 0 aliases (matcher-less alias skipped), got %d", len(aliases))
+		t.Fatalf("expected 0 aliases (analog radio ids dropped, matcher-less alias skipped), got %d", len(aliases))
 	}
 }
 
