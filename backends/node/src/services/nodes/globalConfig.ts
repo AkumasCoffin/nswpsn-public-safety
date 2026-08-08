@@ -107,14 +107,56 @@ export const AgencySchema = z
   .passthrough();
 export type Agency = z.infer<typeof AgencySchema>;
 
+/** The sdrtrunk-vce config, imported from the operator's sdrtrunk SQLite and
+ *  pushed to sdrtrunk-vce verbatim (NOT derived from the rdio talkgroups). Alias
+ *  lists + aliases label/route talkgroups; streams carry the systemId that links
+ *  a call to its rdio system. Aliases reuse the SDR-Trunk `AliasSchema` so they
+ *  flow straight into the config payload the agent already consumes. */
+export const SdrtrunkAliasListSchema = z
+  .object({ name: z.string().max(200), family: z.string().max(20).default('P25') })
+  .strict();
+export const SdrtrunkStreamSchema = z
+  .object({
+    name: z.string().max(200),
+    systemId: z.number().int(),
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+export const SdrtrunkConfigSchema = z
+  .object({
+    aliasLists: z.array(SdrtrunkAliasListSchema).max(256).default([]),
+    // The operator's list is ~1,500 aliases; cap generously.
+    aliases: z.array(AliasSchema).max(20000).default([]),
+    streams: z.array(SdrtrunkStreamSchema).max(4096).default([]),
+  })
+  .strict();
+export type SdrtrunkConfig = z.infer<typeof SdrtrunkConfigSchema>;
+
+const EMPTY_SDRTRUNK: SdrtrunkConfig = { aliasLists: [], aliases: [], streams: [] };
+
 export const GlobalConfigSchema = z
   .object({
     agencies: z.array(AgencySchema).max(4096).default([]),
     rdioGroups: z.array(LooseObj).max(4096).default([]),
     rdioTags: z.array(LooseObj).max(4096).default([]),
+    sdrtrunkConfig: SdrtrunkConfigSchema.default(EMPTY_SDRTRUNK),
   })
   .strict();
 export type GlobalConfigInput = z.infer<typeof GlobalConfigSchema>;
+
+/** Partial form for PATCH-style saves: each program's config is imported
+ *  independently, so a PUT may carry only `agencies` (rdio) or only
+ *  `sdrtrunkConfig` and must leave the other side untouched. */
+export const GlobalConfigPatchSchema = z
+  .object({
+    agencies: z.array(AgencySchema).max(4096),
+    rdioGroups: z.array(LooseObj).max(4096),
+    rdioTags: z.array(LooseObj).max(4096),
+    sdrtrunkConfig: SdrtrunkConfigSchema,
+  })
+  .partial()
+  .strict();
+export type GlobalConfigPatch = z.infer<typeof GlobalConfigPatchSchema>;
 
 export interface GlobalConfig extends GlobalConfigInput {
   version: string;
@@ -144,11 +186,18 @@ function canonicalize(value: unknown): unknown {
 /** sha256 over the content (not the version/metadata) so the version changes iff
  *  the actual config changes. Exposed so configMerge can fold it into a node's
  *  own config version. */
-export function globalConfigVersion(c: GlobalConfigInput): string {
+export function globalConfigVersion(c: {
+  agencies: unknown;
+  rdioGroups: unknown;
+  rdioTags: unknown;
+  sdrtrunkConfig?: unknown;
+}): string {
   const canon = canonicalize({
     agencies: c.agencies,
     rdioGroups: c.rdioGroups,
     rdioTags: c.rdioTags,
+    // Folded in so a sdrtrunk-only import bumps the version and re-syncs the fleet.
+    sdrtrunkConfig: c.sdrtrunkConfig ?? EMPTY_SDRTRUNK,
   });
   return createHash('sha256').update(JSON.stringify(canon)).digest('hex');
 }
@@ -211,45 +260,6 @@ function agencyToSystem(a: Agency): Record<string, unknown> {
 }
 
 /**
- * Expand every agency's talkgroups into one SDR-Trunk alias each, so all
- * talkgroups get imported into the node's sdrtrunk-vce (individually labelled in
- * the activity/Data view) and each routes to its agency's rdio stream. The
- * matcher is a plain P25 talkgroup (value only) — matching how the reference vce
- * config models them — and the alias carries a broadcastChannel = agency name so
- * calls upload under that agency's systemId. Deduped by talkgroup value (a single
- * alias list can't hold two identical talkgroup matchers); the first occurrence
- * wins. Talkgroups with no usable numeric id are skipped.
- */
-export function agenciesToTalkgroupAliases(agencies: Agency[]): Alias[] {
-  const out: Alias[] = [];
-  const seen = new Set<number>();
-
-  for (const agency of agencies) {
-    const rows = Array.isArray(agency.talkgroups) ? agency.talkgroups : [];
-    for (const tg of rows) {
-      const id = Number((tg as Record<string, unknown>)['id']);
-      if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
-      seen.add(id);
-      const label =
-        String((tg as Record<string, unknown>)['label'] ?? '').trim() ||
-        String((tg as Record<string, unknown>)['name'] ?? '').trim() ||
-        `TG ${id}`;
-      out.push({
-        name: label,
-        list: ALIAS_LIST_NAME,
-        group: agency.name,
-        ids: [
-          // Trimmed to match the stream name (see agencyToAlias note).
-          { type: 'broadcastChannel', attrs: { channel: agency.name.trim() } },
-          { type: 'talkgroup', attrs: { protocol: 'APCO25', value: String(id) } },
-        ],
-      });
-    }
-  }
-
-  return out;
-}
-
 /**
  * The rdio systems for all agencies. Each agency owns a unique systemId (RFS=1,
  * FRNSW=2, …), so this is normally a 1:1 map. rdio-scanner requires unique system
@@ -422,6 +432,8 @@ function seedFromPresets(): GlobalConfigInput {
     agencies: buildAgencies(aliases, systems),
     rdioGroups: asArr(rdio['groups']),
     rdioTags: asArr(rdio['tags']),
+    // The sdrtrunk-vce alias lists/streams are imported by the operator, not seeded.
+    sdrtrunkConfig: EMPTY_SDRTRUNK,
   };
 }
 
@@ -435,6 +447,8 @@ interface Row {
   rdio_systems: unknown;
   rdio_groups: unknown;
   rdio_tags: unknown;
+  // The sdrtrunk-vce config (alias lists + aliases + streams), imported separately.
+  sdrtrunk_config: unknown;
   version: string;
   updated_at: string | null;
   updated_by: string | null;
@@ -463,6 +477,8 @@ function salvageConfig(
     // rdioGroups/rdioTags are the loose element type used in GlobalConfigSchema.
     rdioGroups: keepValid(LooseObj, rdioGroups),
     rdioTags: keepValid(LooseObj, rdioTags),
+    // sdrtrunkConfig is salvaged separately by the caller (rowToConfig).
+    sdrtrunkConfig: EMPTY_SDRTRUNK,
   };
 }
 
@@ -480,10 +496,27 @@ function rowToConfig(r: Row): GlobalConfig {
       agencies = buildAgencies(legacyAliases.data, legacySystems);
     }
   }
+  // The sdrtrunk-vce config is independent of the rdio (agencies) side; parse it
+  // on its own so a malformed alias can't wipe the rdio config and vice-versa.
+  const sdrtrunkParsed = SdrtrunkConfigSchema.safeParse(r.sdrtrunk_config ?? EMPTY_SDRTRUNK);
+  const sdrtrunkConfig: SdrtrunkConfig = sdrtrunkParsed.success
+    ? sdrtrunkParsed.data
+    : {
+        aliasLists: keepValid(SdrtrunkAliasListSchema, (r.sdrtrunk_config as { aliasLists?: unknown })?.aliasLists),
+        aliases: keepValid(AliasSchema, (r.sdrtrunk_config as { aliases?: unknown })?.aliases),
+        streams: keepValid(SdrtrunkStreamSchema, (r.sdrtrunk_config as { streams?: unknown })?.streams),
+      };
+  if (!sdrtrunkParsed.success) {
+    log.error(
+      { issues: sdrtrunkParsed.error.issues.slice(0, 20), aliases: sdrtrunkConfig.aliases.length },
+      'sdrtrunk config failed schema on read; salvaged valid elements',
+    );
+  }
   const parsed = GlobalConfigSchema.safeParse({
     agencies: agencies ?? [],
     rdioGroups: r.rdio_groups ?? [],
     rdioTags: r.rdio_tags ?? [],
+    sdrtrunkConfig,
   });
   let content: GlobalConfigInput;
   if (parsed.success) {
@@ -493,7 +526,7 @@ function rowToConfig(r: Row): GlobalConfig {
     // so one malformed agency would otherwise wipe (and then re-persist + fan out)
     // every agency/group/tag fleet-wide. Instead salvage the valid elements and
     // drop only the offenders, logging what was rejected so it's visible.
-    content = salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []);
+    content = { ...salvageConfig(agencies ?? [], r.rdio_groups ?? [], r.rdio_tags ?? []), sdrtrunkConfig };
     log.error(
       { issues: parsed.error.issues.slice(0, 20), kept: content.agencies.length },
       'global config failed schema on read; salvaged valid elements (dropped offenders)',
@@ -512,7 +545,8 @@ const EMPTY: GlobalConfig = {
   agencies: [],
   rdioGroups: [],
   rdioTags: [],
-  version: globalConfigVersion({ agencies: [], rdioGroups: [], rdioTags: [] }),
+  sdrtrunkConfig: EMPTY_SDRTRUNK,
+  version: globalConfigVersion({ agencies: [], rdioGroups: [], rdioTags: [], sdrtrunkConfig: EMPTY_SDRTRUNK }),
   updatedAt: null,
   updatedBy: null,
   streamNames: [],
@@ -527,7 +561,7 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
   const pool = await getPool();
   if (!pool) return { ...EMPTY, streamNames: presetStreamNames() };
   const res = await pool.query<Row>(
-    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by
+    `SELECT agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, version, updated_at, updated_by
        FROM feeder_global_config WHERE id = 1`,
   );
   const row = res.rows[0];
@@ -648,22 +682,24 @@ export async function saveGlobalConfig(
   }
   const res = await pool.query<Row>(
     `INSERT INTO feeder_global_config
-       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by)
-     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, now(), $5)
+       (id, agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, version, updated_at, updated_by)
+     VALUES (1, $1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, $5, now(), $6)
      ON CONFLICT (id) DO UPDATE SET
        agencies         = EXCLUDED.agencies,
        sdrtrunk_aliases = '[]'::jsonb,
        rdio_systems     = '[]'::jsonb,
        rdio_groups      = EXCLUDED.rdio_groups,
        rdio_tags        = EXCLUDED.rdio_tags,
+       sdrtrunk_config  = EXCLUDED.sdrtrunk_config,
        version          = EXCLUDED.version,
        updated_at       = now(),
        updated_by       = EXCLUDED.updated_by
-     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, version, updated_at, updated_by`,
+     RETURNING agencies, sdrtrunk_aliases, rdio_systems, rdio_groups, rdio_tags, sdrtrunk_config, version, updated_at, updated_by`,
     [
       JSON.stringify(input.agencies),
       JSON.stringify(input.rdioGroups),
       JSON.stringify(input.rdioTags),
+      JSON.stringify(input.sdrtrunkConfig ?? EMPTY_SDRTRUNK),
       version,
       updatedBy,
     ],
