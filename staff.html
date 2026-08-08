@@ -6400,7 +6400,7 @@
           <td>${_ndSrCellHtml(i, prof, t)}</td>
           <td class="nd-gain-cell">${_ndGainCellHtml(i, prof, t)}</td>
           <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
-          <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})"></td>
+          <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" disabled title="Auto-PPM isn't available in this sdrtrunk build — set PPM manually and watch Meas. err to zero it"></td>
           <td id="nd-meas-${i}">${measured}</td>
           <td><span class="nd-sub" id="nd-freq-${i}" title="Center frequency the channels are driving — read-only">${freqMhz}</span></td>
           <td id="nd-tstat-${i}">${stat}</td>
