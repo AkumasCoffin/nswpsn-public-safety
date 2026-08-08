@@ -1628,6 +1628,10 @@
       margin: 0.06rem 0.2rem 0.06rem 0;
       white-space: nowrap;
     }
+    /* Deep P25 site metadata (site-view parity). */
+    .nd2-meta-head { font-size: 1rem; margin: 0.15rem 0 0.5rem; }
+    .nd2-chip-row { display: flex; flex-wrap: wrap; gap: 0.15rem; }
+    .nd2-stat-unit { font-size: 0.6rem; color: var(--text-soft); font-weight: 400; }
     .nd2-rx {
       font-size: 0.62rem;
       color: var(--text-soft);
@@ -2136,6 +2140,10 @@
             </div>
             <div class="nd2-empty" id="nd2-site-msg" style="display: none;"></div>
             <div class="stats-bar" id="nd2-site-tiles"></div>
+            <!-- Deep P25 site metadata (control channel, channel plan, neighbours,
+                 frequency bands, decode quality) — filled by nd2RenderSiteMeta from
+                 data.meta; empty state shown inline until a node forwards it. -->
+            <div id="nd2-site-meta"></div>
             <div class="nd2-card nd2-chart-card">
               <div class="nd2-card-h">
                 <i class="fas fa-chart-line"></i> Site activity
@@ -3975,6 +3983,7 @@
         if (nd2.view !== view || nd2.sys.level !== 'site') return;
         if (msgEl) msgEl.style.display = 'none';
         nd2ScopedTiles('nd2-site-tiles', data.totals || {}, false);
+        nd2RenderSiteMeta(data.meta);
         nd2DrawDetailChart('nd2-site-chart', 'nd2-site-chart-empty', 'nd2-site-chart-note', data.series, 'site');
         document.getElementById('nd2-site-top-tg').innerHTML = nd2TopTgHtml(data.topTalkgroups);
         document.getElementById('nd2-site-top-radios').innerHTML = nd2TopRadioHtml(data.topRadios);
@@ -3984,6 +3993,146 @@
       } catch (e) {
         if (msgEl) { msgEl.textContent = e.status === 404 ? 'API not available yet.' : `Could not load site: ${e.message}`; msgEl.style.display = ''; }
       }
+    }
+
+    // --- Deep P25 site metadata (site-view parity) -----------------------
+    // Renders data.meta from /api/node-data/site: a header (system/site +
+    // NAC/RFSS/WACN/GUID), a Control Channel panel (freq + LCN + decode/signal
+    // quality stat tiles), and Channels / Neighbours / Frequency Bands tables.
+    // Everything comes from the sdrtrunk-vce site snapshots forwarded by a
+    // receiving node; until one does, meta is null and a soft note shows.
+    const ND2_CH_TYPE = {
+      primary_control: 'Primary control', alternate_control: 'Alternate control',
+      control: 'Control', data: 'Data', base_station: 'Base station',
+      conventional: 'Conventional', configured: 'Configured', traffic: 'Traffic',
+    };
+    function nd2Mhz(v) {
+      return (v == null || !isFinite(v)) ? '—'
+        : `${Number(v).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 })}<span class="nd-sub"> MHz</span>`;
+    }
+    function nd2Khz(v) {
+      return (v == null || !isFinite(v)) ? '—'
+        : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 3 })}<span class="nd-sub"> kHz</span>`;
+    }
+    function nd2Dbfs(v) {
+      return (v == null || !isFinite(v)) ? '—'
+        : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })}<span class="nd2-stat-unit"> dBFS</span>`;
+    }
+    function nd2Pct(v) {
+      return (v == null || !isFinite(v)) ? '—'
+        : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })}<span class="nd2-stat-unit"> %</span>`;
+    }
+    // Chip: label + value, value escaped; skipped entirely when value is null.
+    function nd2MetaChip(label, value) {
+      if (value == null || value === '') return '';
+      return `<span class="nd2-chip"><span class="nd-sub">${escapeHtml(label)}</span> ${escapeHtml(String(value))}</span>`;
+    }
+
+    function nd2RenderSiteMeta(meta) {
+      const host = document.getElementById('nd2-site-meta');
+      if (!host) return;
+      if (!meta) {
+        host.innerHTML = '<div class="nd2-card"><div class="nd2-empty">' +
+          'No P25 site metadata yet — a receiving node hasn’t reported this site’s ' +
+          'control channel, channel plan or neighbours.</div></div>';
+        return;
+      }
+
+      // Header: friendly system + site id, then identity chips + freshness.
+      const sysName = meta.systemName ? escapeHtml(String(meta.systemName)) : null;
+      const sysId = meta.systemId != null ? String(meta.systemId) : (nd2.sys.system != null ? String(nd2.sys.system) : null);
+      const heading = sysName
+        ? `<span class="nd-strong">${sysName}</span>${sysId ? ` <span class="nd-sub">${escapeHtml(sysId)}</span>` : ''}`
+        : (sysId ? `<span class="nd-strong">System ${escapeHtml(sysId)}</span>` : '<span class="nd-strong">Site</span>');
+      const chips = [
+        nd2MetaChip('RFSS', nd2.sys.rfss),
+        nd2MetaChip('Site', nd2.sys.site),
+        nd2MetaChip('NAC', meta.nac),
+        nd2MetaChip('WACN', meta.wacn),
+        nd2MetaChip('LRA', meta.lra),
+        nd2MetaChip('GUID', meta.guid),
+        meta.channelName ? nd2MetaChip('Channel', meta.channelName) : '',
+      ].filter(Boolean).join('');
+      const header = `<div class="nd2-card">
+        <div class="nd2-card-h"><i class="fas fa-tower-cell"></i> P25 Site
+          <span class="nd2-note">${meta.updatedAt ? 'updated ' + escapeHtml(nd2RelTime(meta.updatedAt)) : ''}</span>
+        </div>
+        <div class="nd2-meta-head">${heading}</div>
+        <div class="nd2-chip-row">${chips || '<span class="nd2-empty">—</span>'}</div>
+      </div>`;
+
+      // Control channel + decode/signal quality as stat tiles (form: headline
+      // numbers, not a plot). Reuses the existing .stat-card styling.
+      const q = meta.quality || {};
+      const ccTiles = [
+        { label: 'Control freq', value: nd2Mhz(meta.controlFrequencyMhz) },
+        { label: 'Control LCN', value: meta.controlLcn != null ? escapeHtml(String(meta.controlLcn)) : '—' },
+        { label: 'Affiliated radios', value: meta.affiliatedRadioCount != null ? nd2Num(meta.affiliatedRadioCount) : '—' },
+      ];
+      if (meta.quality) {
+        ccTiles.push({ label: 'Decode health', value: nd2Pct(q.decodeHealthPct) });
+        ccTiles.push({ label: 'Signal', value: nd2Dbfs(q.signalDbfs != null ? q.signalDbfs : q.averageSignalDbfs) });
+        const vf = q.validFrames, inf = q.invalidFrames;
+        if (vf != null || inf != null) {
+          ccTiles.push({ label: 'Frames', value: nd2Num(vf || 0), sub: `${nd2Num(inf || 0)} invalid` });
+        }
+      }
+      const control = `<div class="nd2-card nd2-detail-gap">
+        <div class="nd2-card-h"><i class="fas fa-broadcast-tower"></i> Control channel</div>
+        <div class="stats-bar">${ccTiles.map(t =>
+          `<div class="stat-card"><div class="stat-value">${t.value}</div>` +
+          `<div class="stat-label">${escapeHtml(t.label)}</div>` +
+          (t.sub ? `<div class="nd2-stat-sub">${escapeHtml(t.sub)}</div>` : '') + `</div>`).join('')}</div>
+      </div>`;
+
+      // Channels table.
+      const channels = Array.isArray(meta.channels) ? meta.channels : [];
+      const chTable = nd2MiniTable(
+        [{ label: 'Type' }, { label: 'Frequency', num: true }, { label: 'LCN' }, { label: 'Slot', num: true }],
+        channels.map(ch => [
+          escapeHtml(ND2_CH_TYPE[ch.type] || ch.type || '—'),
+          nd2Mhz(ch.frequencyMhz),
+          ch.lcn != null ? escapeHtml(String(ch.lcn)) : '—',
+          ch.slot != null ? nd2Num(ch.slot) : '—',
+        ]));
+      const channelsCard = `<div class="nd2-card nd2-detail-gap">
+        <div class="nd2-card-h"><i class="fas fa-list"></i> Channels
+          <span class="nd2-note">${channels.length ? nd2Num(channels.length) : ''}</span></div>
+        ${chTable}</div>`;
+
+      // Neighbours table (no NAC — vce doesn't persist it per neighbour).
+      const neighbors = Array.isArray(meta.neighbors) ? meta.neighbors : [];
+      const nbTable = nd2MiniTable(
+        [{ label: 'Site' }, { label: 'System' }, { label: 'Control freq', num: true }, { label: 'Status' }],
+        neighbors.map(n => [
+          `<span class="nd2-chip">R${escapeHtml(String(n.rfss != null ? n.rfss : '—'))} S${escapeHtml(String(n.siteId != null ? n.siteId : '—'))}</span>`,
+          n.systemId != null ? escapeHtml(String(n.systemId)) : '—',
+          nd2Mhz(n.controlFrequencyMhz),
+          n.status != null && n.status !== '' ? escapeHtml(String(n.status)) : '—',
+        ]));
+      const neighborsCard = `<div class="nd2-card nd2-detail-gap">
+        <div class="nd2-card-h"><i class="fas fa-diagram-project"></i> Neighbours
+          <span class="nd2-note">${neighbors.length ? nd2Num(neighbors.length) : ''}</span></div>
+        ${nbTable}</div>`;
+
+      // Frequency bands table.
+      const bands = Array.isArray(meta.bands) ? meta.bands : [];
+      const bandTable = nd2MiniTable(
+        [{ label: 'Band', num: true }, { label: 'Base', num: true }, { label: 'Spacing', num: true },
+         { label: 'Tx offset', num: true }, { label: 'Bandwidth', num: true }],
+        bands.map(b => [
+          b.bandId != null ? escapeHtml(String(b.bandId)) : '—',
+          nd2Mhz(b.baseMhz),
+          nd2Khz(b.spacingKhz),
+          nd2Mhz(b.txOffsetMhz),
+          nd2Khz(b.bandwidthKhz),
+        ]));
+      const bandsCard = `<div class="nd2-card nd2-detail-gap">
+        <div class="nd2-card-h"><i class="fas fa-wave-square"></i> Frequency bands
+          <span class="nd2-note">${bands.length ? nd2Num(bands.length) : ''}</span></div>
+        ${bandTable}</div>`;
+
+      host.innerHTML = header + control + channelsCard + neighborsCard + bandsCard;
     }
 
     // --- Talkgroups view -------------------------------------------------

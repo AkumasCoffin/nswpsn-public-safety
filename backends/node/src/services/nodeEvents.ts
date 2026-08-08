@@ -347,6 +347,152 @@ export async function markRecorded(
 }
 
 // ---------------------------------------------------------------------------
+// Radio: deep P25 site metadata (migration 047)
+// ---------------------------------------------------------------------------
+
+/** One P25 site's deep metadata, as shipped by the agent from the sdrtrunk-vce
+ *  GET /site/snapshots feed (already zod-validated by the site-snapshots route).
+ *  The nested lists/objects are stored verbatim as JSONB — they are read whole
+ *  by the site drill-down, never queried column-wise. */
+export interface SiteSnapshotInput {
+  /** Numeric P25 systemId (null → -1 "unknown" in the natural key). */
+  systemId: number | null;
+  /** P25 RFSS (null → -1 "unknown" in the natural key). */
+  rfss: number | null;
+  /** P25 site id (always present for a known site). */
+  siteId: number | null;
+  guid: string | null;
+  systemName: string | null;
+  wacn: number | null;
+  nac: number | null;
+  lra: number | null;
+  channelName: string | null;
+  controlFrequencyMhz: number | null;
+  controlLcn: string | null;
+  affiliatedRadioCount: number | null;
+  observationCount: number | null;
+  firstSeenMs: number | null;
+  lastSeenMs: number | null;
+  status: unknown;
+  channels: unknown;
+  neighbors: unknown;
+  bands: unknown;
+  quality: unknown;
+}
+
+/**
+ * Upsert a batch of P25 site snapshots for one node. Idempotent by contract:
+ * re-POSTing the same sites UPSERTs on the natural key
+ * (node_id, system_id, rfss, site_id) — one row per (node, physical site),
+ * never duplicated. Returns how many site rows were written (inserted or
+ * updated).
+ *
+ * Key columns can't be NULL, but vce may not resolve systemId/rfss for a
+ * site, so both are coalesced to -1 ("unknown"), the same sentinel
+ * node_radio_hourly_sys uses. A site with no resolvable site id is skipped
+ * (a "known site" always has one).
+ *
+ * Fire-safe: never throws; a per-site failure is logged and the rest of the
+ * batch continues.
+ */
+export async function upsertSiteSnapshots(
+  nodeId: string,
+  sites: SiteSnapshotInput[],
+): Promise<number> {
+  let written = 0;
+  try {
+    const pool = await getWriterPool();
+    if (!pool || sites.length === 0) return 0;
+
+    const client = await pool.connect();
+    let failures = 0;
+    let lastErr: unknown = null;
+    try {
+      for (const s of sites) {
+        const siteId = safeInt(s.siteId);
+        if (siteId === null) continue; // not a known site — skip
+        const systemId = safeInt(s.systemId) ?? -1;
+        const rfss = safeInt(s.rfss) ?? -1;
+        try {
+          const res = await client.query(
+            `INSERT INTO node_site_snapshots
+               (node_id, system_id, rfss, site_id, guid, system_name, wacn, nac, lra,
+                channel_name, control_frequency_mhz, control_lcn, affiliated_radio_count,
+                observation_count, site_first_seen_ms, site_last_seen_ms,
+                status, channels, neighbors, bands, quality, received_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                     $10, $11, $12, $13, $14, $15, $16,
+                     $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, now())
+             ON CONFLICT (node_id, system_id, rfss, site_id) DO UPDATE SET
+               guid = EXCLUDED.guid,
+               system_name = EXCLUDED.system_name,
+               wacn = EXCLUDED.wacn,
+               nac = EXCLUDED.nac,
+               lra = EXCLUDED.lra,
+               channel_name = EXCLUDED.channel_name,
+               control_frequency_mhz = EXCLUDED.control_frequency_mhz,
+               control_lcn = EXCLUDED.control_lcn,
+               affiliated_radio_count = EXCLUDED.affiliated_radio_count,
+               observation_count = EXCLUDED.observation_count,
+               site_first_seen_ms = EXCLUDED.site_first_seen_ms,
+               site_last_seen_ms = EXCLUDED.site_last_seen_ms,
+               status = EXCLUDED.status,
+               channels = EXCLUDED.channels,
+               neighbors = EXCLUDED.neighbors,
+               bands = EXCLUDED.bands,
+               quality = EXCLUDED.quality,
+               received_at = now()`,
+            [
+              nodeId,
+              systemId,
+              rfss,
+              siteId,
+              s.guid ?? null,
+              s.systemName ?? null,
+              safeInt(s.wacn),
+              safeInt(s.nac),
+              safeInt(s.lra),
+              s.channelName ?? null,
+              typeof s.controlFrequencyMhz === 'number' && Number.isFinite(s.controlFrequencyMhz)
+                ? s.controlFrequencyMhz
+                : null,
+              s.controlLcn ?? null,
+              safeInt(s.affiliatedRadioCount),
+              safeInt(s.observationCount),
+              safeInt(s.firstSeenMs),
+              safeInt(s.lastSeenMs),
+              s.status != null ? JSON.stringify(s.status) : null,
+              JSON.stringify(Array.isArray(s.channels) ? s.channels : []),
+              JSON.stringify(Array.isArray(s.neighbors) ? s.neighbors : []),
+              JSON.stringify(Array.isArray(s.bands) ? s.bands : []),
+              s.quality != null ? JSON.stringify(s.quality) : null,
+            ],
+          );
+          written += res.rowCount ?? 0;
+        } catch (err) {
+          failures += 1;
+          lastErr = err;
+        }
+      }
+    } finally {
+      client.release();
+    }
+    if (failures > 0) {
+      log.warn(
+        { err: (lastErr as Error)?.message, failures, node: nodeId.slice(0, 8) },
+        'nodeEvents: upsertSiteSnapshots partial failure',
+      );
+    }
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message, node: nodeId.slice(0, 8) },
+      'nodeEvents: upsertSiteSnapshots failed',
+    );
+  }
+  return written;
+}
+
+// ---------------------------------------------------------------------------
 // Pager (unchanged)
 // ---------------------------------------------------------------------------
 
