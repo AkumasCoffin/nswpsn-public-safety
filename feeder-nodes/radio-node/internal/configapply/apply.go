@@ -12,6 +12,8 @@
 package configapply
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -429,15 +431,41 @@ func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
 	if err := rdioctl.WriteConfigDB(dbPath, rdioCfg); err != nil {
 		return stageErr("rdio", "write config db", err)
 	}
-	// rdio only reads its config at boot, so a restart is required for the
-	// freshly-written config to take effect. The config is already persisted, so
-	// a restart failure must NOT fail the apply — the next boot loads it anyway.
-	if d.Supervisor != nil {
+	// rdio only reads its config at boot, so a restart is required for a CHANGED
+	// config to take effect. Bounce rdio ONLY when the rdio config actually changed
+	// since the last apply — a channel-only edit (very common while the operator
+	// tunes the node) doesn't touch rdio config, and killing+restarting rdio on
+	// every apply drops in-flight calls and thrashes it. The DB write above is
+	// idempotent and runs every time, so rdio's DB stays correct regardless.
+	if d.rdioConfigChanged(rdioCfg) && d.Supervisor != nil {
 		if rerr := d.Supervisor.Restart("rdio"); rerr != nil {
 			log.Printf("configapply: rdio config written but restart failed (config persisted; loads on next boot): %v", rerr)
 		}
 	}
 	return nil
+}
+
+// rdioConfigChanged reports whether the rdio config differs from the one that last
+// triggered a bounce, recording the new signature when it does. The signature is a
+// sha256 over encoding/json's output — Go sorts map keys, so it's stable across
+// applies — meaning a channel-only edit (identical rdio config) won't bounce rdio.
+// Best-effort: a marshal error or a missing signature file returns true (bounce), so
+// a genuine change is never silently skipped.
+func (d Deps) rdioConfigChanged(rdioCfg map[string]any) bool {
+	body, err := json.Marshal(rdioCfg)
+	if err != nil {
+		return true
+	}
+	sum := sha256.Sum256(body)
+	sig := hex.EncodeToString(sum[:])
+	sigPath := filepath.Join(d.DataDir, "rdio", "rdio-config.sig")
+	if prev, rerr := os.ReadFile(sigPath); rerr == nil && strings.TrimSpace(string(prev)) == sig {
+		return false
+	}
+	// Persist the new signature (the rdio dir already exists — WriteConfigDB opened
+	// the DB there). Ignore write errors: worst case is an extra bounce next time.
+	_ = os.WriteFile(sigPath, []byte(sig), 0o644)
+	return true
 }
 
 // enrichRdioRowIDs copies the `_id` (rowid) of each existing rdio config entry
