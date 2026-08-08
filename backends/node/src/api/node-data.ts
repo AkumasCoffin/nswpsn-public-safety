@@ -378,14 +378,20 @@ nodeDataRouter.get(
                   logical: unknown;
                   label: string | null;
                 }>(
+                  // Receptions = a distinct (logical call, node, site) that
+                  // heard the call — NOT raw rows (the vce feed emits GRANT+CALL
+                  // per site, so COUNT(*) over-counts ~2x and by site). Sourced
+                  // from node_radio_events even for window=all (no interval) so
+                  // the distinct-count is expressible; cheap at LIMIT 15.
                   // label deliberately NULL: activity-event ingest stores no
                   // labels (they'll resolve from the agencies config later).
-                  `SELECT h.system, h.talkgroup,
-                          SUM(h.calls)::bigint AS calls,
-                          SUM(h.logical_calls)::bigint AS logical,
+                  `SELECT system, talkgroup,
+                          COUNT(DISTINCT (logical_call_id, node_id,
+                            COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS calls,
+                          COUNT(DISTINCT logical_call_id)::int AS logical,
                           NULL::text AS label
-                     FROM node_radio_hourly_sys h
-                    GROUP BY h.system, h.talkgroup
+                     FROM node_radio_events
+                    GROUP BY system, talkgroup
                     ORDER BY calls DESC LIMIT 15`,
                 )
               : null,
@@ -477,10 +483,14 @@ nodeDataRouter.get(
                 logical: unknown;
                 label: string | null;
               }>(
+                // Receptions (calls) = distinct (logical call, node, site) that
+                // heard the call — de-dupes the vce GRANT+CALL double-emit and
+                // counts one per receiving node/site. logical = distinct calls.
                 // label deliberately NULL: activity-event ingest stores no
                 // labels (they'll resolve from the agencies config later).
                 `SELECT e.system, e.talkgroup,
-                        COUNT(*)::int AS calls,
+                        COUNT(DISTINCT (e.logical_call_id, e.node_id,
+                          COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS calls,
                         COUNT(DISTINCT e.logical_call_id)::int AS logical,
                         NULL::text AS label
                    FROM node_radio_events e WHERE ${cond}
