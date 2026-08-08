@@ -80,23 +80,27 @@ describe('agencies model', () => {
     expect(bc).toBe(label);
   });
 
-  it('merges agencies that share a systemId into one rdio system (unique ids for rdio-scanner)', () => {
-    // Two agencies on the SAME P25 system (normal for NSW PSN) must not emit two
-    // systems with id 2 — rdio-scanner 500s on the UNIQUE rdioScannerSystems.id.
+  it('keeps one system per unique systemId (each agency owns a unique id)', () => {
     const agencies = [
-      { systemId: 2, name: 'Fire', led: 'red', talkgroups: [{ id: 101 }, { id: 102 }], units: [{ id: 1 }], aliasIds: [] },
-      { systemId: 2, name: 'Police', led: 'blue', talkgroups: [{ id: 102 }, { id: 103 }], units: [{ id: 2 }], aliasIds: [] },
-      { systemId: 7, name: 'Ambulance', talkgroups: [{ id: 700 }], units: [], aliasIds: [] },
+      { systemId: 1, name: 'Rural Fire Service', talkgroups: [{ id: 101 }], units: [], aliasIds: [] },
+      { systemId: 2, name: 'Fire and Rescue', talkgroups: [{ id: 201 }], units: [], aliasIds: [] },
+      { systemId: 7, name: 'TFNSW - Roads', talkgroups: [{ id: 700 }], units: [], aliasIds: [] },
     ] as unknown as Parameters<typeof agenciesToSystems>[0];
     const out = agenciesToSystems(agencies);
-    // One system per unique id.
-    expect(out.map((s) => s['id']).sort()).toEqual([2, 7]);
-    const sys2 = out.find((s) => s['id'] === 2)!;
-    // First agency's scalar fields win; talkgroups are the union, deduped by id (102 once).
-    expect(sys2['label']).toBe('Fire');
-    expect(sys2['led']).toBe('red');
-    expect((sys2['talkgroups'] as { id: number }[]).map((t) => t.id).sort()).toEqual([101, 102, 103]);
-    expect((sys2['units'] as { id: number }[]).map((u) => u.id).sort()).toEqual([1, 2]);
+    expect(out.map((s) => s['id'])).toEqual([1, 2, 7]);
+  });
+
+  it('drops a duplicate systemId (first wins) so rdio-scanner never gets a colliding id', () => {
+    // rdio-scanner 500s on the UNIQUE rdioScannerSystems.id — bad global-config
+    // data with a repeated systemId must not break the whole fleet's rdio apply.
+    const agencies = [
+      { systemId: 1, name: 'Rural Fire Service', talkgroups: [{ id: 101 }], units: [], aliasIds: [] },
+      { systemId: 1, name: 'Rural Fire Service (dup)', talkgroups: [{ id: 999 }], units: [], aliasIds: [] },
+      { systemId: 2, name: 'Fire and Rescue', talkgroups: [{ id: 201 }], units: [], aliasIds: [] },
+    ] as unknown as Parameters<typeof agenciesToSystems>[0];
+    const out = agenciesToSystems(agencies);
+    expect(out.map((s) => s['id'])).toEqual([1, 2]);
+    expect(out.find((s) => s['id'] === 1)!['label']).toBe('Rural Fire Service');
   });
 });
 
