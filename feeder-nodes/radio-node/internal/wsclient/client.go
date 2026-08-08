@@ -62,8 +62,9 @@ type Client struct {
 	rdio         *rdioctl.Client // local rdio-scanner admin client (config apply)
 	rdioPassword string          // resolved local rdio admin password
 
-	applyMu  sync.Mutex // serializes config applies so two pushes can't race
-	updateMu sync.Mutex // serializes update checks (manifest + component ensure + self-update)
+	applyMu     sync.Mutex // serializes config applies so two pushes can't race
+	lastApplyAt time.Time  // when the last apply finished (guarded by applyMu) — burst dedup only
+	updateMu    sync.Mutex // serializes update checks (manifest + component ensure + self-update)
 
 	swapScheduled atomic.Bool // one-shot guard: at most one self-update swap+restart in flight
 
@@ -444,6 +445,12 @@ func (c *Client) handleSpectrumStop(env *protocol.Envelope) {
 	}
 }
 
+// configReapplyDedupWindow is how recently the SAME config version must have been
+// applied for a re-push to be skipped. Long enough to absorb a backend fan-out burst,
+// short enough that a deliberate re-apply (boot, manual Save & sync, a later edit that
+// happens to hash the same) still runs.
+const configReapplyDedupWindow = 15 * time.Second
+
 // handleConfigPush applies a pushed ConfigPayload. The apply runs on a
 // background goroutine so it never blocks the WS read loop, and applies are
 // serialized by applyMu so two overlapping pushes can't race. On success it
@@ -463,13 +470,15 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		c.applyMu.Lock()
 		defer c.applyMu.Unlock()
 
-		// Skip re-applying a version we've already applied successfully. The backend
-		// re-pushes the same config on unrelated node edits / fanouts; re-applying
-		// churns sdrtrunk (channels restart → stuck idle) and bounces rdio for
-		// nothing. A failed apply never records the version, so genuine retries of a
-		// still-unapplied version still go through.
-		if payload.ConfigVersion != "" && payload.ConfigVersion == c.getAppliedVersion() {
-			log.Printf("wsclient: config version %s already applied; skipping re-apply", payload.ConfigVersion)
+		// Drop a rapid RE-PUSH of the version we just applied. The backend can fan the
+		// same config out several times in a burst (e.g. after unrelated node edits),
+		// and re-applying each time churns sdrtrunk + bounces rdio. Only dedup within a
+		// short window so a DELIBERATE re-apply still runs — on boot (to (re)apply tuner
+		// ppm/gain + restart channels), on a manual Save & sync, or any change after a
+		// pause. A failed apply never records the version, so retries always go through.
+		if payload.ConfigVersion != "" && payload.ConfigVersion == c.getAppliedVersion() &&
+			!c.lastApplyAt.IsZero() && time.Since(c.lastApplyAt) < configReapplyDedupWindow {
+			log.Printf("wsclient: config version %s re-pushed within %s; skipping", payload.ConfigVersion, configReapplyDedupWindow)
 			_ = c.sendMessage(protocol.TypeConfigApplied, protocol.ConfigApplied{ConfigVersion: payload.ConfigVersion})
 			return
 		}
@@ -512,6 +521,7 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		}
 
 		c.setAppliedVersion(payload.ConfigVersion)
+		c.lastApplyAt = time.Now() // held under applyMu; gates the burst-dedup window
 		if err := c.persistAppliedVersion(payload.ConfigVersion); err != nil {
 			log.Printf("wsclient: persist applied config version failed: %v", err)
 		}

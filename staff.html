@@ -6898,7 +6898,7 @@
     function _ndStopNpTicker() { if (_ndNpTimer) { clearInterval(_ndNpTimer); _ndNpTimer = null; } }
 
     // === Per-node channel editor (P1) ==================================
-    const _ND_DECODERS = ['p25p2', 'p25p1', 'dmr', 'nbfm', 'am'];
+    const _ND_DECODERS = ['p25p1', 'p25p2', 'dmr', 'nbfm', 'am'];
 
     // Available SDR serials for the per-channel "sdr" picker — merged from the
     // live tuners and any serials already referenced in the saved config.
@@ -6959,7 +6959,7 @@
         // Decoder-specific settings (from the expandable sub-row). Read against
         // the currently selected decoder; drop it when empty so the agent uses
         // SDR-Trunk defaults.
-        const dc = _ndReadDecoderConfig(i, c.decoder || 'p25p2');
+        const dc = _ndReadDecoderConfig(i, c.decoder || 'p25p1');
         if (dc && Object.keys(dc).length > 0) c.decoderConfig = dc;
         else delete c.decoderConfig;
         return c;
@@ -7200,7 +7200,7 @@
       const serials = _ndCfgSerials();
       const rows = chans.map((c, i) => {
         const freqMhz = c.frequency != null ? (c.frequency / 1e6) : '';
-        const decoder = c.decoder || 'p25p2';
+        const decoder = c.decoder || 'p25p1';
         const decOpts = _ND_DECODERS.map(d => `<option value="${d}" ${d === decoder ? 'selected' : ''}>${d}</option>`).join('');
         const sdrCur = c.sdr != null ? String(c.sdr) : '';
         const sdrOpts = [`<option value="" ${sdrCur === '' ? 'selected' : ''}>Auto</option>`]
@@ -7234,7 +7234,7 @@
       _ndCfgReadDom();
       if (!Array.isArray(_ndConfig.channels)) _ndConfig.channels = [];
       _ndConfig.channels.push({
-        name: '', frequency: null, decoder: 'p25p2',
+        name: '', frequency: null, decoder: 'p25p1',
         system: '', site: '', autoStart: true,
         order: _ndConfig.channels.length, sdr: '',
         // p25p2 (NSW PSN) defaults: empty carries the auto-detect-scramble default.
