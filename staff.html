@@ -2363,6 +2363,18 @@
         <button class="modal-close" onclick="closeGlobalConfig()">&times;</button>
       </div>
       <div id="gc-meta" class="dev-card-secondary" style="margin-bottom: 0.4rem;"></div>
+      <div class="gc-import-bar" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem 0.6rem; border: 1px solid var(--border, #2a2a3a); border-radius: 8px;">
+        <span style="opacity: 0.75; font-size: 0.85rem;"><i class="fas fa-file-import"></i> Import config (fleet-wide):</span>
+        <label class="gc-badge-btn" style="cursor: pointer; margin: 0;">
+          <i class="fas fa-upload"></i> rdio-scanner.json
+          <input type="file" accept=".json,application/json" style="display: none;" onchange="_gcImportRdioFile(this)">
+        </label>
+        <label class="gc-badge-btn" style="cursor: pointer; margin: 0;">
+          <i class="fas fa-upload"></i> sdrtrunk .db
+          <input type="file" accept=".db,.sqlite,.sqlite3" style="display: none;" onchange="_gcImportSdrtrunkFile(this)">
+        </label>
+        <span id="gc-import-msg" style="font-size: 0.85rem; flex-basis: 100%;"></span>
+      </div>
       <div class="gc-tabs">
         <button class="gc-tab active" data-gc="agencies" onclick="_gcSetTab('agencies')">Agencies</button>
         <button class="gc-tab" data-gc="grouptags" onclick="_gcSetTab('grouptags')">Groups &amp; Tags</button>
@@ -6821,6 +6833,9 @@
           agencies: Array.isArray(cfg.agencies) ? cfg.agencies : [],
           rdioGroups: Array.isArray(cfg.rdioGroups) ? cfg.rdioGroups : [],
           rdioTags: Array.isArray(cfg.rdioTags) ? cfg.rdioTags : [],
+          // SDR-Trunk side (alias lists + aliases + streams). Edited only via the
+          // .db import; carried through Save so the PATCH-style PUT preserves it.
+          sdrtrunkConfig: (cfg.sdrtrunkConfig && typeof cfg.sdrtrunkConfig === 'object') ? cfg.sdrtrunkConfig : null,
           version: cfg.version, updatedAt: cfg.updatedAt
         };
         _gcRenderMeta();
@@ -6843,6 +6858,184 @@
       _gcRenderAgencies();
       _gcRenderGroups();
       _gcRenderTags();
+    }
+
+    // === Config import (rdio-scanner.json + sdrtrunk .db) ================
+    // Each side imports independently and only replaces its own part of the
+    // config; a normal Save then PUTs all four keys (the backend PUT is
+    // PATCH-style, so the untouched side is preserved). Parsing is entirely
+    // client-side. sql.js is lazily loaded on first .db import (~1 MB).
+    function _gcImportMsg(html, kind) {
+      const el = document.getElementById('gc-import-msg');
+      if (!el) return;
+      const color = kind === 'ok' ? 'var(--success, #22c55e)'
+        : kind === 'err' ? 'var(--danger, #ef4444)'
+        : 'var(--text-muted, #9aa)';
+      el.style.color = color;
+      el.innerHTML = html;
+    }
+
+    // --- rdio-scanner.json → agencies + rdioGroups + rdioTags -----------
+    async function _gcImportRdioFile(input) {
+      const file = input && input.files && input.files[0];
+      if (input) input.value = '';           // allow re-selecting the same file
+      if (!file) return;
+      if (!_gcData) { _gcImportMsg('Config not loaded yet — reopen the modal.', 'err'); return; }
+      _gcImportMsg(`<i class="fas fa-spinner fa-spin"></i> Reading ${escapeHtml(file.name)}…`, 'info');
+      try {
+        const text = await file.text();
+        let json;
+        try { json = JSON.parse(text); } catch (e) { throw new Error('Not valid JSON.'); }
+        if (!json || !Array.isArray(json.systems)) {
+          throw new Error('No "systems" array — is this a rdio-scanner config export?');
+        }
+        // Passthrough every scalar system field (led, autoPopulate, alert, delay,
+        // order, …); remap id→systemId, label→name; keep talkgroups/units verbatim.
+        const agencies = json.systems.map(s => {
+          const a = Object.assign({}, s);
+          delete a.id; delete a.label;
+          a.systemId = s.id;
+          a.name = s.label;
+          a.talkgroups = Array.isArray(s.talkgroups) ? s.talkgroups : [];
+          a.units = Array.isArray(s.units) ? s.units : [];
+          a.aliasIds = [];
+          return a;
+        });
+        _gcData.agencies = agencies;
+        _gcData.rdioGroups = Array.isArray(json.groups) ? json.groups : [];
+        _gcData.rdioTags = Array.isArray(json.tags) ? json.tags : [];
+        _gcRenderAll();
+        _gcSetTab('agencies');
+        const nTg = agencies.reduce((n, a) => n + (a.talkgroups ? a.talkgroups.length : 0), 0);
+        const nU = agencies.reduce((n, a) => n + (a.units ? a.units.length : 0), 0);
+        _gcImportMsg(`<i class="fas fa-check"></i> rdio import: ${agencies.length} systems, ${nTg} talkgroups, ${nU} units, ${_gcData.rdioGroups.length} groups, ${_gcData.rdioTags.length} tags. Review, then Save &amp; sync.`, 'ok');
+      } catch (e) {
+        _gcImportMsg(`rdio import failed: ${escapeHtml(e && e.message ? e.message : String(e))}`, 'err');
+      }
+    }
+
+    // --- lazy sql.js loader (self-hosted under assets/) -----------------
+    let _gcSqlJsPromise = null;
+    function _gcLoadSqlJs() {
+      if (_gcSqlJsPromise) return _gcSqlJsPromise;
+      _gcSqlJsPromise = new Promise((resolve, reject) => {
+        if (window.initSqlJs) { resolve(window.initSqlJs); return; }
+        const s = document.createElement('script');
+        s.src = 'assets/sql-wasm.js';
+        s.onload = () => window.initSqlJs
+          ? resolve(window.initSqlJs)
+          : reject(new Error('sql.js loaded but initSqlJs is missing.'));
+        s.onerror = () => { _gcSqlJsPromise = null; reject(new Error('Failed to load assets/sql-wasm.js')); };
+        document.head.appendChild(s);
+      });
+      return _gcSqlJsPromise;
+    }
+
+    // --- parse a sdrtrunk-vce SQLite DB into sdrtrunkConfig -------------
+    function _gcParseSdrtrunkDb(db) {
+      const q = (sql) => {
+        const res = db.exec(sql);
+        if (!res || !res.length) return [];
+        const { columns, values } = res[0];
+        return values.map(row => { const o = {}; columns.forEach((c, i) => { o[c] = row[i]; }); return o; });
+      };
+      const hasCol = (table, col) => {
+        try { return q(`PRAGMA table_info(${table})`).some(r => r.name === col); }
+        catch (e) { return false; }
+      };
+      const S = v => (v == null ? '' : String(v));
+
+      // alias lists
+      const aliasLists = q('SELECT name, family FROM alias_list')
+        .map(r => ({ name: S(r.name), family: S(r.family) }));
+      const listById = {};
+      q('SELECT id, name FROM alias_list').forEach(r => { listById[r.id] = r.name; });
+
+      // broadcast routes grouped per alias
+      const routesByAlias = {};
+      q('SELECT alias_id, channel_name FROM alias_broadcast_channel').forEach(r => {
+        if (r.channel_name == null || r.channel_name === '') return;
+        (routesByAlias[r.alias_id] = routesByAlias[r.alias_id] || []).push(r.channel_name);
+      });
+
+      const hasP25 = hasCol('alias', 'wacn') && hasCol('alias', 'p25_system_id');
+      const aliases = [];
+      let dropped = 0;
+      const skipped = {};
+      q('SELECT * FROM alias').forEach(r => {
+        const ids = [];
+        (routesByAlias[r.id] || []).forEach(ch => ids.push({ type: 'broadcastChannel', attrs: { channel: S(ch) } }));
+        if (r.record_enabled) ids.push({ type: 'record', attrs: {} });
+        if (r.priority != null) ids.push({ type: 'priority', attrs: { priority: S(r.priority) } });
+        const proto = S(r.protocol);
+        let matcher = null;
+        switch (r.matcher_type) {
+          case 'TALKGROUP':
+            matcher = { type: 'talkgroup', attrs: { protocol: proto, value: S(r.value) } }; break;
+          case 'TALKGROUP_RANGE':
+            matcher = { type: 'talkgroupRange', attrs: { protocol: proto, min: S(r.min_value), max: S(r.max_value) } }; break;
+          case 'RADIO_ID':
+            matcher = { type: 'radio', attrs: { protocol: proto, value: S(r.value) } }; break;
+          case 'RADIO_ID_RANGE':
+            matcher = { type: 'radioRange', attrs: { protocol: proto, min: S(r.min_value), max: S(r.max_value) } }; break;
+          case 'P25_FULLY_QUALIFIED_TALKGROUP':
+            if (hasP25) matcher = { type: 'p25FullyQualifiedTalkgroup', attrs: { protocol: proto, value: S(r.value), wacn: S(r.wacn), system: S(r.p25_system_id) } };
+            break;
+        }
+        if (!matcher) {                 // no supported matcher → drop (vce rejects matcher-less aliases)
+          dropped++;
+          if (r.matcher_type) skipped[r.matcher_type] = (skipped[r.matcher_type] || 0) + 1;
+          return;
+        }
+        ids.push(matcher);
+        const alias = { name: S(r.name), list: S(listById[r.alias_list_id]), ids };
+        if (r.group_name != null && r.group_name !== '') alias.group = S(r.group_name);
+        if (r.color != null && r.color !== '') alias.color = S(r.color);
+        if (r.icon_name != null && r.icon_name !== '') alias.iconName = S(r.icon_name);
+        if (r.stream_as_talkgroup != null && r.stream_as_talkgroup !== '') alias.streamTalkgroupAlias = r.stream_as_talkgroup;
+        aliases.push(alias);
+      });
+
+      // streams: systemID + enabled come from the parsed config_json blob
+      const streams = [];
+      q('SELECT name, config_json FROM configuration_broadcast_stream').forEach(r => {
+        let cfg = null;
+        try { cfg = JSON.parse(r.config_json); } catch (e) { return; }
+        if (!cfg) return;
+        const sid = Number(cfg.systemID);
+        if (!Number.isFinite(sid)) return;          // skip streams with no numeric systemID
+        streams.push({ name: S(r.name), systemId: sid, enabled: !!cfg.enabled });
+      });
+
+      return { aliasLists, aliases, streams, dropped, skipped };
+    }
+
+    async function _gcImportSdrtrunkFile(input) {
+      const file = input && input.files && input.files[0];
+      if (input) input.value = '';
+      if (!file) return;
+      if (!_gcData) { _gcImportMsg('Config not loaded yet — reopen the modal.', 'err'); return; }
+      _gcImportMsg('<i class="fas fa-spinner fa-spin"></i> Loading SQLite engine…', 'info');
+      let db = null;
+      try {
+        const initSqlJs = await _gcLoadSqlJs();
+        const SQL = await initSqlJs({ locateFile: f => 'assets/' + f });
+        _gcImportMsg(`<i class="fas fa-spinner fa-spin"></i> Reading ${escapeHtml(file.name)}…`, 'info');
+        const buf = new Uint8Array(await file.arrayBuffer());
+        db = new SQL.Database(buf);
+        const r = _gcParseSdrtrunkDb(db);
+        _gcData.sdrtrunkConfig = { aliasLists: r.aliasLists, aliases: r.aliases, streams: r.streams };
+        let msg = `sdrtrunk import: ${r.aliasLists.length} lists, ${r.aliases.length} aliases, ${r.streams.length} streams`;
+        if (r.dropped) {
+          const detail = Object.keys(r.skipped).map(t => `${r.skipped[t]}×${t}`).join(', ');
+          msg += `; dropped ${r.dropped} unsupported${detail ? ' (' + detail + ')' : ''}`;
+        }
+        _gcImportMsg(`<i class="fas fa-check"></i> ${escapeHtml(msg)}. Review, then Save &amp; sync.`, 'ok');
+      } catch (e) {
+        _gcImportMsg(`sdrtrunk import failed: ${escapeHtml(e && e.message ? e.message : String(e))}`, 'err');
+      } finally {
+        if (db) { try { db.close(); } catch (e) {} }
+      }
     }
 
     // --- SDR-Trunk aliases ---
@@ -7214,7 +7407,10 @@
           body: JSON.stringify({
             agencies: _gcData.agencies,
             rdioGroups: _gcData.rdioGroups,
-            rdioTags: _gcData.rdioTags
+            rdioTags: _gcData.rdioTags,
+            // PATCH-style backend: sending the stored sdrtrunkConfig back keeps the
+            // SDR-Trunk side intact on a rdio-only edit (and vice-versa on import).
+            sdrtrunkConfig: _gcData.sdrtrunkConfig
           })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -7224,6 +7420,7 @@
           if (Array.isArray(cfg.agencies)) _gcData.agencies = cfg.agencies;
           if (Array.isArray(cfg.rdioGroups)) _gcData.rdioGroups = cfg.rdioGroups;
           if (Array.isArray(cfg.rdioTags)) _gcData.rdioTags = cfg.rdioTags;
+          if (cfg.sdrtrunkConfig && typeof cfg.sdrtrunkConfig === 'object') _gcData.sdrtrunkConfig = cfg.sdrtrunkConfig;
           _gcData.version = cfg.version; _gcData.updatedAt = cfg.updatedAt;
           _gcRenderMeta();
         }
