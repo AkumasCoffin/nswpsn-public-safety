@@ -1499,6 +1499,17 @@
     .nd2-seg .filter-btn { border: none; padding: 0.35rem 0.95rem; font-size: 0.78rem; }
     .nd2-seg .filter-btn:not(.active) { background: transparent; }
 
+    /* Radio/Pager mode selector — the top-level view-set switch. */
+    .nd2-mode-wrap { display: inline-flex; align-items: center; gap: 0.5rem; }
+    .nd2-mode-label {
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; color: var(--text-soft);
+    }
+    .nd2-mode-select {
+      width: auto; min-width: 110px; font-size: 0.85rem; font-weight: 600;
+      padding: 0.4rem 0.6rem;
+    }
+
     /* Inline soft error / not-deployed-yet banner (mirrors .nd-banner). */
     .nd2-error {
       background: rgba(245, 158, 11, 0.1);
@@ -1953,11 +1964,13 @@
       <!-- Data Tab — combined radio + pager activity dashboard -->
       <div id="data-tab" class="tab-content">
         <div class="nd2-controls">
-          <div class="nd2-seg" id="nd2-scope-seg" role="group" aria-label="Data scope">
-            <button class="filter-btn active" data-nd2-scope="all" onclick="nd2SetScope('all')">All</button>
-            <button class="filter-btn" data-nd2-scope="radio" onclick="nd2SetScope('radio')">Radio</button>
-            <button class="filter-btn" data-nd2-scope="pager" onclick="nd2SetScope('pager')">Pager</button>
-          </div>
+          <label class="nd2-mode-wrap">
+            <span class="nd2-mode-label">Mode</span>
+            <select id="nd2-mode" class="nd-input nd2-mode-select" aria-label="Data mode" onchange="nd2SetMode(this.value)">
+              <option value="radio">Radio</option>
+              <option value="pager">Pager</option>
+            </select>
+          </label>
           <div class="filter-spacer"></div>
           <div class="nd2-seg" role="group" aria-label="Time window">
             <button class="filter-btn active" data-nd2-window="24h" onclick="nd2SetWindow('24h')">24h</button>
@@ -1967,13 +1980,19 @@
           </div>
         </div>
 
-        <div class="nd2-controls nd2-viewbar">
-          <div class="nd2-seg" role="group" aria-label="Data view">
+        <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-radio">
+          <div class="nd2-seg" role="group" aria-label="Radio data view">
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
             <button class="filter-btn" data-nd2-view="talkgroups" onclick="nd2SetView('talkgroups')">Talkgroups</button>
             <button class="filter-btn" data-nd2-view="radios" onclick="nd2SetView('radios')">Radios</button>
             <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
+          </div>
+        </div>
+        <div class="nd2-controls nd2-viewbar" id="nd2-viewbar-pager" style="display: none;">
+          <div class="nd2-seg" role="group" aria-label="Pager data view">
+            <button class="filter-btn active" data-nd2-view="poverview" onclick="nd2SetView('poverview')">Overview</button>
+            <button class="filter-btn" data-nd2-view="capcodes" onclick="nd2SetView('capcodes')">Capcodes</button>
           </div>
         </div>
 
@@ -2283,6 +2302,125 @@
           <span id="nd2-ev-count"></span>
         </div>
       </div>
+
+        <!-- ===== Pager Overview view ===== -->
+        <div id="nd2-view-poverview" style="display: none;">
+          <div class="stats-bar">
+            <div class="stat-card" style="border-color: rgba(249, 115, 22, 0.3);">
+              <div class="stat-value" id="nd2-pov-pages" style="color: #fb923c;">—</div>
+              <div class="stat-label">Total Pages</div>
+              <div class="nd2-stat-sub" id="nd2-pov-pages-sub"></div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="nd2-pov-nodes" style="color: var(--success);">—</div>
+              <div class="stat-label">Active Nodes</div>
+              <div class="nd2-stat-sub">reporting in window</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="nd2-pov-caps" style="color: var(--text-primary);">—</div>
+              <div class="stat-label">Distinct Capcodes</div>
+              <div class="nd2-stat-sub" id="nd2-pov-caps-sub"></div>
+            </div>
+          </div>
+
+          <div class="nd2-card nd2-chart-card">
+            <div class="nd2-card-h">
+              <i class="fas fa-chart-line"></i>
+              <span>Pager activity</span>
+              <span class="nd2-note" id="nd2-pov-chart-note"></span>
+            </div>
+            <div class="nd2-chart-wrap">
+              <canvas id="nd2-pov-chart" aria-label="Pages over time" role="img"></canvas>
+            </div>
+            <div class="nd2-empty" id="nd2-pov-chart-empty" style="display: none;">No pages in this window yet.</div>
+          </div>
+
+          <div class="nd2-top-grid">
+            <div class="nd2-card">
+              <div class="nd2-card-h"><i class="fas fa-satellite-dish"></i> Top Capcodes</div>
+              <div id="nd2-pov-top-caps"><div class="nd2-empty">—</div></div>
+            </div>
+            <div class="nd2-card">
+              <div class="nd2-card-h"><i class="fas fa-server"></i> Top Nodes</div>
+              <div id="nd2-pov-top-nodes"><div class="nd2-empty">—</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Pager Capcodes view (list › messages for one capcode) ===== -->
+        <div id="nd2-view-capcodes" style="display: none;">
+          <div id="nd2-cap-list">
+            <div class="filter-bar">
+              <div class="search-box" style="min-width: 150px;">
+                <i class="fas fa-search"></i>
+                <input type="text" id="nd2-cap-q" placeholder="Capcode #" inputmode="numeric" oninput="nd2CapInputChanged()">
+              </div>
+              <div class="filter-spacer"></div>
+              <div class="nd2-seg" role="group" aria-label="Sort capcodes by">
+                <button class="filter-btn active" data-nd2-capsort="pages" onclick="nd2CapSetSort('pages')">Pages</button>
+                <button class="filter-btn" data-nd2-capsort="lastSeen" onclick="nd2CapSetSort('lastSeen')">Last seen</button>
+              </div>
+            </div>
+            <div class="nd2-table-wrap">
+              <table class="nd-table">
+                <thead>
+                  <tr>
+                    <th>Capcode</th>
+                    <th class="nd2-num">Pages</th>
+                    <th>Last seen</th>
+                    <th>Top node</th>
+                  </tr>
+                </thead>
+                <tbody id="nd2-cap-body">
+                  <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="nd2-pgr">
+              <button class="btn btn-secondary btn-sm" id="nd2-cap-prev" onclick="nd2CapPage(-1)" disabled>
+                <i class="fas fa-chevron-left"></i> Prev
+              </button>
+              <button class="btn btn-secondary btn-sm" id="nd2-cap-next" onclick="nd2CapPage(1)" disabled>
+                Next <i class="fas fa-chevron-right"></i>
+              </button>
+              <div class="filter-spacer"></div>
+              <span id="nd2-cap-count"></span>
+            </div>
+          </div>
+
+          <div id="nd2-msg-detail" style="display: none;">
+            <div class="nd2-crumbs" id="nd2-msg-crumbs"><span class="nd2-crumb-cur">Capcodes</span></div>
+            <div class="nd2-detail-head">
+              <button type="button" class="nd2-back" onclick="nd2CapGoList()"><i class="fas fa-arrow-left"></i> Back</button>
+              <h3 class="nd2-detail-title" id="nd2-msg-title">Capcode</h3>
+            </div>
+            <div class="nd2-table-wrap">
+              <table class="nd-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Message</th>
+                    <th>Freq</th>
+                    <th>Nodes</th>
+                  </tr>
+                </thead>
+                <tbody id="nd2-msg-body">
+                  <tr><td colspan="4" class="nd2-empty">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="nd2-pgr">
+              <button class="btn btn-secondary btn-sm" id="nd2-msg-prev" onclick="nd2MsgPage(-1)" disabled>
+                <i class="fas fa-chevron-left"></i> Prev
+              </button>
+              <button class="btn btn-secondary btn-sm" id="nd2-msg-next" onclick="nd2MsgPage(1)" disabled>
+                Next <i class="fas fa-chevron-right"></i>
+              </button>
+              <div class="filter-spacer"></div>
+              <span id="nd2-msg-count"></span>
+            </div>
+          </div>
+        </div>
     </div>
   </div>
 
@@ -2981,15 +3119,18 @@
     }
 
     // === Data tab (nd2-) — radio + pager activity dashboard =============
-    // Reads the backend's node-data rollups:
-    //   GET /api/node-data/overview?window=&scope=   (stats, tops, series)
-    //   GET /api/node-data/events?type=&...&limit=&offset=  (recent events)
+    // A top-level MODE selector (Radio | Pager) swaps the entire view set:
+    //   Radio → GET /api/node-data/overview|events|systems|talkgroups|radios
+    //           (radio-scoped: Overview/Events show radio only)
+    //   Pager → GET /api/node-data/pager-overview|capcodes|capcode
     // A radio event heard by several receivers arrives as ONE logical event
-    // with nodes[]/receptions — the UI surfaces that grouping explicitly.
+    // with nodes[]/receptions; a page heard by N nodes likewise groups by
+    // logical_id — the UI surfaces that grouping explicitly (×N receptions).
     const nd2 = {
-      scope: 'all',        // all | radio | pager
+      mode: 'radio',       // radio | pager — the top-level view-set switch
+      scope: 'radio',      // radio mode is radio-only (no 'all'/pager mixing)
       window: '24h',       // 24h | 7d | 30d | all
-      view: 'overview',    // overview | systems | talkgroups | radios | events
+      view: 'overview',    // radio: overview|systems|talkgroups|radios|events; pager: poverview|capcodes
       overview: null,
       evOffset: 0,
       evLimit: 50,
@@ -3001,6 +3142,11 @@
       tg: { q: '', system: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
       rad: { q: '', system: '', sort: 'calls', offset: 0, limit: 50, total: 0 },
       systemsCache: null,  // for the TG/Radio system-filter dropdowns
+      // Pager mode: overview payload + capcodes list/messages drill-down.
+      pov: null,
+      cap: { q: '', sort: 'pages', offset: 0, limit: 50, total: 0, rows: [] },
+      capLevel: 'list',    // list | messages (within the Capcodes panel)
+      msg: { capcode: null, alias: null, agency: null, offset: 0, limit: 50, total: 0 },
       reqSeq: 0,           // stale-fetch guard across view switches
     };
     let _nd2Timer = null;
@@ -3008,12 +3154,15 @@
     let _nd2Chart = null;        // live Chart.js instance (destroyed on re-render)
     let _nd2SysChart = null;     // system-detail chart
     let _nd2SiteChart = null;    // site-detail chart
+    let _nd2PovChart = null;     // pager-overview chart
     let _nd2EvDebounce = null;   // debounce handle for the text filter inputs
     let _nd2TgDebounce = null;
     let _nd2RadDebounce = null;
-    // Detail-only views (systems/talkgroups/radios) read the 30-day tables and
-    // have no 'all' window; the scope toggle is radio-implicit there.
-    const _nd2DetailViews = new Set(['systems', 'talkgroups', 'radios']);
+    let _nd2CapDebounce = null;
+    // Which views belong to each mode (drives the panel show/hide sweep).
+    const ND2_RADIO_VIEWS = ['overview', 'systems', 'talkgroups', 'radios', 'events'];
+    const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
+    const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
     function nd2StartPolling() {
       nd2Refresh();
@@ -3027,6 +3176,8 @@
           case 'talkgroups': if (nd2.tg.offset === 0) nd2LoadTalkgroups(); break;
           case 'radios': if (nd2.rad.offset === 0) nd2LoadRadios(); break;
           case 'events': if (nd2.evOffset === 0) nd2LoadEvents(); break;
+          case 'poverview': nd2LoadPagerOverview(); break;
+          case 'capcodes': if (nd2.capLevel === 'list' && nd2.cap.offset === 0) nd2LoadCapcodes(); break;
         }
       }, _nd2IntervalMs);
     }
@@ -3047,7 +3198,26 @@
         case 'talkgroups': await Promise.all([nd2EnsureSystemSelect('nd2-tg-system'), nd2LoadTalkgroups()]); break;
         case 'radios': await Promise.all([nd2EnsureSystemSelect('nd2-rad-system'), nd2LoadRadios()]); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
+        case 'poverview': await nd2LoadPagerOverview(); break;
+        case 'capcodes': await nd2LoadCapcodesView(); break;
       }
+    }
+
+    // Radio ⇄ Pager: swap the view-pill row and reset to the mode's first view.
+    function nd2SetMode(mode) {
+      if (mode !== 'radio' && mode !== 'pager') return;
+      if (nd2.mode === mode) return;
+      nd2.mode = mode;
+      const sel = document.getElementById('nd2-mode');
+      if (sel && sel.value !== mode) sel.value = mode;
+      const rBar = document.getElementById('nd2-viewbar-radio');
+      const pBar = document.getElementById('nd2-viewbar-pager');
+      if (rBar) rBar.style.display = mode === 'radio' ? '' : 'none';
+      if (pBar) pBar.style.display = mode === 'pager' ? '' : 'none';
+      // Reset to the mode's first view; force nd2SetView past its equality guard.
+      const first = mode === 'radio' ? 'overview' : 'poverview';
+      nd2.view = null;
+      nd2SetView(first);
     }
 
     function nd2SetView(view) {
@@ -3056,37 +3226,29 @@
       nd2.reqSeq++;   // invalidate any in-flight fetch from the previous view
       document.querySelectorAll('[data-nd2-view]').forEach(b =>
         b.classList.toggle('active', b.dataset.nd2View === view));
-      ['overview', 'systems', 'talkgroups', 'radios', 'events'].forEach(v => {
+      _nd2AllViews.forEach(v => {
         const el = document.getElementById('nd2-view-' + v);
         if (el) el.style.display = v === view ? '' : 'none';
       });
-      // Scope toggle only makes sense for Overview + Events; the detail views
-      // are radio-implicit. The 'All' window pill is hidden for detail views
-      // (they read the 30-day tables), and 'all' is coerced to 30d there.
-      const detail = _nd2DetailViews.has(view);
-      const scopeSeg = document.getElementById('nd2-scope-seg');
-      if (scopeSeg) scopeSeg.style.visibility = detail ? 'hidden' : '';
-      const allWinBtn = document.querySelector('[data-nd2-window="all"]');
-      if (allWinBtn) allWinBtn.style.display = detail ? 'none' : '';
-      if (detail && nd2.window === 'all') {
+      nd2ApplyWindowChrome(view);
+      // Systems / Capcodes always re-enter at their list level.
+      if (view === 'systems') { nd2SysShow('list'); nd2SysCrumbs(); }
+      if (view === 'capcodes') { nd2CapShow('list'); }
+      nd2Refresh();
+    }
+
+    // The 'All' window pill exists only where the backend supports window=all:
+    // radio Overview + Events. Everything else (radio detail views + all pager
+    // views) reads the 30-day detail tables, so hide it and coerce 'all'→30d.
+    function nd2ApplyWindowChrome(view) {
+      const supportsAll = nd2.mode === 'radio' && (view === 'overview' || view === 'events');
+      const allBtn = document.querySelector('[data-nd2-window="all"]');
+      if (allBtn) allBtn.style.display = supportsAll ? '' : 'none';
+      if (!supportsAll && nd2.window === 'all') {
         nd2.window = '30d';
         document.querySelectorAll('[data-nd2-window]').forEach(b =>
           b.classList.toggle('active', b.dataset.nd2Window === '30d'));
       }
-      // Systems always re-enters at the list level (reset any prior drill-down).
-      if (view === 'systems') { nd2SysShow('list'); nd2SysCrumbs(); }
-      nd2Refresh();
-    }
-
-    function nd2SetScope(scope) {
-      if (nd2.scope === scope) return;
-      nd2.scope = scope;
-      nd2.evOffset = 0;
-      document.querySelectorAll('[data-nd2-scope]').forEach(b =>
-        b.classList.toggle('active', b.dataset.nd2Scope === scope));
-      // Scope only affects Overview + Events.
-      if (nd2.view === 'overview') nd2LoadOverview();
-      else if (nd2.view === 'events') { nd2LoadOverview(); nd2LoadEvents(); }
     }
 
     function nd2SetWindow(win) {
@@ -3096,6 +3258,7 @@
         b.classList.toggle('active', b.dataset.nd2Window === win));
       // Window change resets pagination on the paged views, then reloads active.
       nd2.tg.offset = 0; nd2.rad.offset = 0;
+      nd2.cap.offset = 0; nd2.msg.offset = 0;
       nd2.systemsCache = null;   // rebuilt for the new window on next use
       nd2Refresh();
     }
@@ -3934,18 +4097,280 @@
     }
 
     // Row-click from Talkgroups/Radios → Events view, pre-filtered. Set the
-    // filters + scope BEFORE switching so nd2SetView's refresh loads filtered.
+    // filters BEFORE switching so nd2SetView's refresh loads filtered. (Radio
+    // mode is already radio-scoped, so there is no scope toggle to sync.)
     function nd2JumpToEvents(filter) {
       const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : String(v); };
       setVal('nd2-ev-tg', filter.talkgroup);
       setVal('nd2-ev-unit', filter.unit);
       setVal('nd2-ev-q', '');
       setVal('nd2-ev-site', '');
-      nd2.scope = 'radio';
       nd2.evOffset = 0;
-      document.querySelectorAll('[data-nd2-scope]').forEach(b =>
-        b.classList.toggle('active', b.dataset.nd2Scope === 'radio'));
       nd2SetView('events');
+    }
+
+    // === Pager mode (nd2- pager views) ==================================
+    // Overview reads /pager-overview; Capcodes drills list → messages via the
+    // same breadcrumb/back pattern the Systems view uses.
+
+    // Render a capcode as its resolved alias with the raw number secondary,
+    // e.g. "Gresford Brigade RFS 10627"; falls back to the bare capcode.
+    function nd2CapCell(o) {
+      if (!o) return '—';
+      const cap = escapeHtml(String(o.capcode));
+      if (o.alias) {
+        const ag = o.agency ? ` <span class="nd-sub">${escapeHtml(String(o.agency))}</span>` : '';
+        return `<span class="nd-strong">${escapeHtml(String(o.alias))}</span>${ag} <span class="nd-sub">${cap}</span>`;
+      }
+      return `<span class="nd-strong">${cap}</span>`;
+    }
+    function nd2PagerNodeChip(o) {
+      return o ? `<span class="nd2-chip">${escapeHtml(o.name || String(o.id))}</span>` +
+        (o.pages != null ? ` <span class="nd-sub">${nd2Num(o.pages)}</span>` : '') : '—';
+    }
+
+    async function nd2LoadPagerOverview() {
+      try {
+        const data = await nd2Fetch(`/api/node-data/pager-overview?window=${nd2.window}`);
+        nd2.pov = data;
+        nd2ClearError();
+      } catch (e) {
+        console.error('Error loading pager overview:', e);
+        nd2.pov = null;
+        nd2ShowError(e.status, e.message);
+      }
+      nd2RenderPagerOverview();
+    }
+
+    function nd2RenderPagerOverview() {
+      const ov = nd2.pov;
+      const t = (ov && ov.totals) || {};
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+      set('nd2-pov-pages', nd2Num(t.pagesLogical));
+      set('nd2-pov-pages-sub', t.pages != null ? `${nd2Num(t.pages)} receptions` : '');
+      set('nd2-pov-nodes', nd2Num(t.activeNodes));
+      set('nd2-pov-caps', nd2Num(t.capcodes));
+      set('nd2-pov-caps-sub', 'seen in window');
+      nd2RenderPagerChart();
+      const capsEl = document.getElementById('nd2-pov-top-caps');
+      if (capsEl) capsEl.innerHTML = nd2MiniTable(
+        [{ label: 'Capcode' }, { label: 'Pages', num: true }, { label: 'Top node' }],
+        ((ov && ov.topCapcodes) || []).map(c => [
+          nd2CapCell(c), nd2Num(c.pages), nd2PagerNodeChip(c.topNode),
+        ]));
+      const nodesEl = document.getElementById('nd2-pov-top-nodes');
+      if (nodesEl) nodesEl.innerHTML = nd2MiniTable(
+        [{ label: 'Node' }, { label: 'Pages', num: true }],
+        ((ov && ov.topNodes) || []).map(n => [
+          escapeHtml(n.name || String(n.nodeId)), nd2Num(n.pages),
+        ]));
+    }
+
+    // Single-series pages-over-time line — same chart options as the radio
+    // activity chart, reusing the validated ND2_PAGER_COLOR (title names it,
+    // so no legend box).
+    function nd2RenderPagerChart() {
+      const canvas = document.getElementById('nd2-pov-chart');
+      const emptyEl = document.getElementById('nd2-pov-chart-empty');
+      const noteEl = document.getElementById('nd2-pov-chart-note');
+      if (!canvas || typeof Chart === 'undefined') return;
+      const series = (nd2.pov && nd2.pov.series) || [];
+      let daily = false;
+      if (series.length >= 2) {
+        const step = new Date(series[1].hour) - new Date(series[0].hour);
+        daily = step >= 20 * 3600 * 1000;
+      }
+      const labels = series.map(p => {
+        const d = new Date(p.hour);
+        if (isNaN(d)) return '';
+        return daily
+          ? d.toLocaleDateString([], { day: 'numeric', month: 'short' })
+          : (nd2.window === '24h'
+              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+      });
+      if (noteEl) noteEl.textContent = series.length ? (daily ? 'per day' : 'per hour') : '';
+      const hasData = series.some(p => (p.pages || 0) > 0);
+      if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
+      const ds = {
+        label: 'Pages',
+        data: series.map(p => p.pages || 0),
+        borderColor: ND2_PAGER_COLOR,
+        backgroundColor: ND2_PAGER_COLOR + '14',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+        fill: true, tension: 0.3,
+      };
+      if (_nd2PovChart) { _nd2PovChart.destroy(); _nd2PovChart = null; }
+      _nd2PovChart = new Chart(canvas, {
+        type: 'line',
+        data: { labels, datasets: [ds] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#121e33',
+              borderColor: 'rgba(148, 163, 184, 0.25)',
+              borderWidth: 1,
+              titleColor: '#f1f5f9',
+              bodyColor: '#94a3b8',
+              padding: 10,
+              displayColors: true,
+              boxWidth: 8,
+              boxHeight: 8,
+              usePointStyle: true,
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              border: { color: 'rgba(148, 163, 184, 0.16)' },
+              ticks: {
+                color: '#64748b',
+                maxTicksLimit: 8,
+                maxRotation: 0,
+                font: { family: "'Space Grotesk', sans-serif", size: 10 },
+              },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(148, 163, 184, 0.07)' },
+              border: { display: false },
+              ticks: {
+                color: '#64748b',
+                precision: 0,
+                maxTicksLimit: 5,
+                font: { family: "'Space Grotesk', sans-serif", size: 10 },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    // ----- Capcodes list ⇄ Messages drill-down -----
+    function nd2CapShow(level) {
+      nd2.capLevel = level;
+      const list = document.getElementById('nd2-cap-list');
+      const msg = document.getElementById('nd2-msg-detail');
+      if (list) list.style.display = level === 'list' ? '' : 'none';
+      if (msg) msg.style.display = level === 'messages' ? '' : 'none';
+    }
+
+    async function nd2LoadCapcodesView() {
+      if (nd2.capLevel === 'messages') return nd2LoadMessages();
+      return nd2LoadCapcodes();
+    }
+
+    function nd2CapInputChanged() { clearTimeout(_nd2CapDebounce); _nd2CapDebounce = setTimeout(() => { nd2.cap.offset = 0; nd2LoadCapcodes(); }, 400); }
+    function nd2CapSetSort(sort) {
+      if (nd2.cap.sort === sort) return;
+      nd2.cap.sort = sort; nd2.cap.offset = 0;
+      document.querySelectorAll('[data-nd2-capsort]').forEach(b => b.classList.toggle('active', b.dataset.nd2Capsort === sort));
+      nd2LoadCapcodes();
+    }
+    function nd2CapPage(dir) {
+      const next = nd2.cap.offset + dir * nd2.cap.limit;
+      if (next < 0 || next >= nd2.cap.total) return;
+      nd2.cap.offset = next; nd2LoadCapcodes();
+    }
+
+    async function nd2LoadCapcodes() {
+      const view = nd2.view;
+      const q = (document.getElementById('nd2-cap-q')?.value || '').trim();
+      const params = new URLSearchParams({
+        window: nd2.window, sort: nd2.cap.sort,
+        limit: String(nd2.cap.limit), offset: String(nd2.cap.offset),
+      });
+      if (q) params.set('q', q);
+      try {
+        const data = await nd2Fetch(`/api/node-data/capcodes?${params}`);
+        if (nd2.view !== view) return;
+        nd2.cap.total = data.total || 0;
+        const rows = data.capcodes || [];
+        nd2.cap.rows = rows;   // for row-click open (avoids escaping in inline handlers)
+        const body = document.getElementById('nd2-cap-body');
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="nd2-empty">No capcodes match.</td></tr>'; }
+        else body.innerHTML = rows.map((c, i) => `
+          <tr class="nd2-rowlink" onclick="nd2OpenCapcode(${i})" title="View messages for this capcode">
+            <td>${nd2CapCell(c)}</td>
+            <td class="nd2-num">${nd2Num(c.pages)}</td>
+            <td>${nd2LastSeen(c.lastSeen)}</td>
+            <td>${nd2PagerNodeChip(c.topNode)}</td>
+          </tr>`).join('');
+        nd2PageBtns('cap', nd2.cap, rows.length);
+      } catch (e) { nd2TableMsg('nd2-cap-body', 4, e); nd2.cap.total = 0; nd2PageBtns('cap', nd2.cap, 0); }
+    }
+
+    function nd2OpenCapcode(i) {
+      const r = (nd2.cap.rows || [])[i];
+      if (!r) return;
+      nd2.msg.capcode = String(r.capcode);
+      nd2.msg.alias = r.alias || null;
+      nd2.msg.agency = r.agency || null;
+      nd2.msg.offset = 0;
+      nd2.msg.total = 0;
+      nd2CapShow('messages');
+      nd2MsgCrumbs();
+      nd2LoadMessages();
+    }
+
+    function nd2CapGoList() { nd2CapShow('list'); nd2LoadCapcodes(); }
+
+    function nd2MsgCrumbs() {
+      const cap = nd2.msg.capcode != null ? String(nd2.msg.capcode) : '—';
+      const label = nd2.msg.alias ? ` ${nd2.msg.alias}` : '';
+      const crumbs = document.getElementById('nd2-msg-crumbs');
+      if (crumbs) crumbs.innerHTML =
+        `<a onclick="nd2CapGoList()">Capcodes</a><span class="nd2-crumb-sep">›</span>` +
+        `<span class="nd2-crumb-cur">${escapeHtml(cap + label)}</span>`;
+      const title = document.getElementById('nd2-msg-title');
+      if (title) title.textContent = nd2.msg.alias ? `${nd2.msg.alias} (${cap})` : `Capcode ${cap}`;
+    }
+
+    function nd2MsgPage(dir) {
+      const next = nd2.msg.offset + dir * nd2.msg.limit;
+      if (next < 0 || next >= nd2.msg.total) return;
+      nd2.msg.offset = next; nd2LoadMessages();
+    }
+
+    async function nd2LoadMessages() {
+      if (nd2.msg.capcode == null) return;
+      const view = nd2.view;
+      const params = new URLSearchParams({
+        capcode: String(nd2.msg.capcode), window: nd2.window,
+        limit: String(nd2.msg.limit), offset: String(nd2.msg.offset),
+      });
+      try {
+        const data = await nd2Fetch(`/api/node-data/capcode?${params}`);
+        if (nd2.view !== view || nd2.capLevel !== 'messages') return;
+        nd2.msg.total = data.total || 0;
+        if (data.alias !== undefined) { nd2.msg.alias = data.alias; nd2.msg.agency = data.agency; nd2MsgCrumbs(); }
+        const body = document.getElementById('nd2-msg-body');
+        const rows = data.messages || [];
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="nd2-empty">No messages in this window.</td></tr>'; }
+        else body.innerHTML = rows.map(m => {
+          const d = new Date(m.at);
+          const timeCell = `<span class="nd2-time">${isNaN(d) ? '—' : d.toLocaleTimeString([], { hour12: false })}` +
+            `<span class="nd2-time-rel">${nd2RelTime(m.at)}</span></span>`;
+          const rx = m.receptions || (m.nodes || []).length || 0;
+          const nodeChips = (m.nodes || []).map(n =>
+            `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('') +
+            (rx > 1 ? ` <span class="nd2-rx" title="Heard by ${rx} receivers (grouped as one page)">×${rx}</span>` : '');
+          const msg = m.message || '';
+          const freq = m.freqMhz != null ? `${Number(m.freqMhz).toFixed(4)} MHz` : '—';
+          return `<tr>
+            <td>${timeCell}</td>
+            <td><span class="nd2-msg" title="${escapeHtml(msg)}">${escapeHtml(msg) || '—'}</span></td>
+            <td class="nd2-time">${escapeHtml(freq)}</td>
+            <td>${nodeChips || '—'}</td>
+          </tr>`;
+        }).join('');
+        nd2PageBtns('msg', nd2.msg, rows.length);
+      } catch (e) { nd2TableMsg('nd2-msg-body', 4, e); nd2.msg.total = 0; nd2PageBtns('msg', nd2.msg, 0); }
     }
 
     // === Dev tab — backend status panel =================================
