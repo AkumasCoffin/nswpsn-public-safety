@@ -14,7 +14,7 @@ func ptrInt(i int) *int    { return &i }
 // discriminators) rather than Go struct internals.
 func marshalState(t *testing.T, payload ConfigPayload, keys map[int]string) map[string]any {
 	t.Helper()
-	state := buildVceConfig(payload, keys, "catch all PSN", nil)
+	state := buildVceConfig(payload, keys, "catch all PSN")
 	raw, err := json.Marshal(state)
 	if err != nil {
 		t.Fatalf("marshal vce config: %v", err)
