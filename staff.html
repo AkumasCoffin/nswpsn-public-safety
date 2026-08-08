@@ -5977,11 +5977,18 @@
       // open gain dropdowns / in-progress edits are never clobbered. (Mirrors the
       // channel table, where status frames only rewrite the live "State" cell.)
       const sig = _ndTunersSignature();
-      if (sig !== _ndTunersSig || !document.querySelector('#nd-tuners table')) {
+      const tunersChanged = sig !== _ndTunersSig;
+      if (tunersChanged || !document.querySelector('#nd-tuners table')) {
         _ndRenderTuners();     // sets _ndTunersSig
       } else {
         _ndUpdateTunersLive(); // live-only overlay; leaves editable controls intact
       }
+      // The per-channel SDR dropdowns are built once by _ndCfgRender() from
+      // _ndTuners. If the config table rendered BEFORE the first status frame
+      // populated the tuner list, those selects only had "Auto". When the tuner
+      // set first appears / changes, refresh the option lists in place (values
+      // preserved) so the dropdown actually lists the SDRs.
+      if (tunersChanged) _ndCfgRefreshSdrOptions();
       _ndRenderChannels();
       _ndRenderEvents();
       _ndRenderReaders();      // pager: reader running/stopped + msg count live (no-op for radio)
@@ -7291,11 +7298,18 @@
         const fromLbl = c.fromAlias || c.from || '';
         const toLbl = c.toAlias || c.to || '';
         const ft = (fromLbl || toLbl) ? `${fromLbl || '—'} → ${toLbl || '—'}` : '';
-        if (isActive && !wasActive) {
+        // Only log a call edge when the channel actually carries a call identity
+        // (talkgroup/unit). A control channel that momentarily flaps to an ACTIVE
+        // state during a re-lock has no to/from — logging "Call start" for it is
+        // wrong (a control channel is never a call). Require identity + a prior
+        // call-identity to close the pair symmetrically.
+        const hasId = !!(toLbl || fromLbl);
+        if (isActive && !wasActive && hasId) {
           _ndLogPush('callstart', `Call start · ${label}`, Date.now(), ft);
-        } else if (!isActive && wasActive) {
+        } else if (!isActive && wasActive && (prev.hadId || hasId)) {
           _ndLogPush('callend', `Call end · ${label}`, Date.now(), ft);
         }
+        next[cid].hadId = hasId;
       });
       _ndPrevChan = next;
     }
@@ -7373,12 +7387,19 @@
       const isControl = (c) => c.control === true || String(c.state || '').toUpperCase() === 'CONTROL';
       // Encrypted calls are hidden unless the "Show encrypted" toggle is on.
       const encHidden = (c) => !_ndShowEnc && _ndIsEnc(c);
+      // A real call has a destination (talkgroup) or source. A traffic channel
+      // that vce reports as "active" between grants carries NO to/from — those
+      // are not calls and must not show in Now Playing with an ever-climbing
+      // timer. Require some call identity before we treat a row as a live call.
+      const hasCallId = (c) => !!(c.to || c.talkgroup || c.toAlias || c.from || c.fromAlias);
       // Prefer the dedicated activeCalls array (includes dynamically-allocated
       // P25 traffic channels not present in the channels list). Fall back to
       // channels in a live state only when activeCalls is absent.
-      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c) && !isControl(c) && !encHidden(c));
+      if (Array.isArray(_ndCalls) && _ndCalls.length) {
+        return _ndCalls.filter(c => !isData(c) && !isControl(c) && !encHidden(c) && hasCallId(c));
+      }
       const ACTIVE = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
-      return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && !encHidden(c) && (c.from || c.to || c.frequency != null));
+      return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && !encHidden(c) && hasCallId(c));
     }
 
     function _ndRenderNowPlaying() {
@@ -7476,6 +7497,31 @@
         _ndConfig.channels.forEach(c => { if (c && c.sdr) add(c.sdr, c.sdr); });
       }
       return opts;
+    }
+
+    // Rebuild the option list of every already-rendered per-channel SDR <select>
+    // from the current tuner set, preserving each select's current value. Called
+    // when the tuner list first arrives after the config table was built, so the
+    // dropdowns stop showing only "Auto". Rebuilds only the <option>s (never the
+    // table), so in-progress edits to other fields are untouched.
+    function _ndCfgRefreshSdrOptions() {
+      if (!_ndConfig || !Array.isArray(_ndConfig.channels)) return;
+      const optList = _ndCfgSdrOptions();
+      _ndConfig.channels.forEach((_c, i) => {
+        const sel = document.getElementById(`nd-ch-${i}-sdr`);
+        if (!sel) return;
+        const cur = sel.value;
+        const opts = [`<option value="">Auto</option>`];
+        let curPresent = cur === '';
+        optList.forEach(o => {
+          if (o.value === cur) curPresent = true;
+          opts.push(`<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`);
+        });
+        // Keep the saved pin visible even if it no longer matches a live tuner.
+        if (!curPresent && cur) opts.push(`<option value="${escapeHtml(cur)}">${escapeHtml(cur)}</option>`);
+        sel.innerHTML = opts.join('');
+        sel.value = cur;
+      });
     }
 
     async function _ndCfgFetch() {
