@@ -407,6 +407,16 @@ func (d Deps) importWithRetry(body []byte) error {
 
 // applyRdio pushes the rdio-scanner config (systems/talkgroups + injected local api
 // keys + the downstream to the agent relay). Independent of the playlist stage.
+//
+// The config is written DIRECTLY into rdio-scanner's own SQLite database rather
+// than PUT to its HTTP admin endpoint (/api/admin/config), which hangs/EOFs/times
+// out on the operator's node even at a 120s ceiling when applying the ~120KB
+// document. The write is a single reconciling transaction (upsert by natural key
+// + delete orphans), then rdio is bounced via the supervisor so it reloads the
+// config at boot — rdio only reads its config on startup. This mirrors the
+// rock-solid vce side, which also writes its DB directly. The desired document is
+// built exactly as before (resolveRdioConfig + applyRdioKeys); only the SINK
+// changed from HTTP to SQLite.
 func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
 	rdioCfg, err := d.resolveRdioConfig(payload)
 	if err != nil {
@@ -415,21 +425,17 @@ func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
 	if err := applyRdioKeys(rdioCfg, localKeys, payload.feedOn()); err != nil {
 		return stageErr("rdio", "inject api keys", err)
 	}
-	if err := rdioLoginReady(d.Rdio, d.RdioPassword); err != nil {
-		return stageErr("rdio", "admin login", err)
+	dbPath := filepath.Join(d.DataDir, "rdio", "rdio-scanner.db")
+	if err := rdioctl.WriteConfigDB(dbPath, rdioCfg); err != nil {
+		return stageErr("rdio", "write config db", err)
 	}
-	// rdio-scanner's admin write matches existing rows by their `_id` (rowid); an
-	// entry WITHOUT `_id` is treated as new and INSERTed, colliding with the
-	// existing row on UNIQUE(id)/UNIQUE(key) on every re-apply. The admin UI
-	// avoids this by round-tripping `_id`; we do the same — read the current
-	// config and stamp each outgoing system/apiKey/group/tag with its existing
-	// rowid so rdio UPDATES in place. Best-effort: a GET failure (fresh rdio)
-	// just means everything inserts, which is correct for an empty DB.
-	if cur, gerr := d.Rdio.GetConfig(); gerr == nil {
-		enrichRdioRowIDs(rdioCfg, cur)
-	}
-	if err := d.Rdio.PutConfig(rdioCfg); err != nil {
-		return stageErr("rdio", "put config", err)
+	// rdio only reads its config at boot, so a restart is required for the
+	// freshly-written config to take effect. The config is already persisted, so
+	// a restart failure must NOT fail the apply — the next boot loads it anyway.
+	if d.Supervisor != nil {
+		if rerr := d.Supervisor.Restart("rdio"); rerr != nil {
+			log.Printf("configapply: rdio config written but restart failed (config persisted; loads on next boot): %v", rerr)
+		}
 	}
 	return nil
 }
