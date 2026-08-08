@@ -1328,7 +1328,12 @@ nodeDataRouter.get(
       });
     } catch (err) {
       log.error({ err }, '/api/node-data/site error');
-      return c.json({ error: 'failed to load site' }, 500);
+      // Surface the message to staff (this route is canManageNodes-gated) so a
+      // data-triggered failure is diagnosable without server log access.
+      return c.json(
+        { error: 'failed to load site', detail: err instanceof Error ? err.message : String(err) },
+        500,
+      );
     }
   },
 );
