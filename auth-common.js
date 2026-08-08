@@ -517,8 +517,12 @@ async function checkAuthState() {
       // (No Editor chip — the map page enables editor mode automatically
       // for signed-in editors, so the normal Incident Map link covers it.)
 
-      // User Management chip - for team_member or owner
-      if (roleData.is_team_member || roleData.is_owner) {
+      // Staff chip - anyone who can load the staff page. Mirrors the backend
+      // is_admin gate in /api/check-admin: owner, team_member, dev, or the
+      // view-only node_monitor role (reaches the read-only Data + Nodes tabs).
+      const _roles = Array.isArray(roleData.roles) ? roleData.roles : [];
+      if (roleData.is_team_member || roleData.is_owner ||
+          _roles.includes('dev') || _roles.includes('node_monitor')) {
         buttons += `<a href="staff.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
           <i class="fas fa-users-cog"></i> Staff
         </a>`;
