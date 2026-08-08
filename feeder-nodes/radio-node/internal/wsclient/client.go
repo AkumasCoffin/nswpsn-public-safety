@@ -463,6 +463,17 @@ func (c *Client) handleConfigPush(env *protocol.Envelope) {
 		c.applyMu.Lock()
 		defer c.applyMu.Unlock()
 
+		// Skip re-applying a version we've already applied successfully. The backend
+		// re-pushes the same config on unrelated node edits / fanouts; re-applying
+		// churns sdrtrunk (channels restart → stuck idle) and bounces rdio for
+		// nothing. A failed apply never records the version, so genuine retries of a
+		// still-unapplied version still go through.
+		if payload.ConfigVersion != "" && payload.ConfigVersion == c.getAppliedVersion() {
+			log.Printf("wsclient: config version %s already applied; skipping re-apply", payload.ConfigVersion)
+			_ = c.sendMessage(protocol.TypeConfigApplied, protocol.ConfigApplied{ConfigVersion: payload.ConfigVersion})
+			return
+		}
+
 		log.Printf("wsclient: applying config version %s", payload.ConfigVersion)
 		deps := configapply.Deps{
 			DataDir:         c.cfg.DataDir,
