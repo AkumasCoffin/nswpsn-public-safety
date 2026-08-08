@@ -1,5 +1,6 @@
 /**
- * Staff "Data" tab — feeder-node event analytics (owner|dev only).
+ * Staff "Data" tab — feeder-node event analytics (owner|dev|node_monitor).
+ * Every route here is a read, gated with requireRole(canViewNodeData).
  *
  * Reads the per-event capture written by services/nodeEvents.ts:
  *   - node_radio_events / node_pager_events   (30-day detail, migrations 043/044)
@@ -38,7 +39,7 @@ import { Hono } from 'hono';
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
-import { requireRole, canManageNodes } from '../services/auth/roles.js';
+import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { getGlobalConfig } from '../services/nodes/globalConfig.js';
 
 /**
@@ -304,7 +305,7 @@ function iso(v: unknown): string {
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/overview',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -689,7 +690,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/events',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -1127,7 +1128,7 @@ async function scopedRadioDetail(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/systems',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -1259,7 +1260,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/system',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -1404,7 +1405,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/site',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -1527,7 +1528,7 @@ nodeDataRouter.get(
       });
     } catch (err) {
       log.error({ err }, '/api/node-data/site error');
-      // Surface the message to staff (this route is canManageNodes-gated) so a
+      // Surface the message to staff (this route is canViewNodeData-gated) so a
       // data-triggered failure is diagnosable without server log access.
       return c.json(
         { error: 'failed to load site', detail: err instanceof Error ? err.message : String(err) },
@@ -1549,7 +1550,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/talkgroups',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -1759,7 +1760,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/radios',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -2035,7 +2036,7 @@ async function pagerTopNodeByCapcode(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/pager-overview',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -2132,7 +2133,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/capcodes',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();
@@ -2222,7 +2223,7 @@ nodeDataRouter.get(
 // ---------------------------------------------------------------------------
 nodeDataRouter.get(
   '/api/node-data/capcode',
-  requireRole(canManageNodes),
+  requireRole(canViewNodeData),
   async (c) => {
     try {
       const pool = await getPool();

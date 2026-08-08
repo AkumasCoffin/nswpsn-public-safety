@@ -1,10 +1,14 @@
 /**
- * Staff feeder-node management (owner|dev only).
+ * Staff feeder-node management.
  *
  * The DB-persisted node registry (registry.ts) plus live/ephemeral status
- * from the in-memory hub (hub.ts) merged on top. Every route is gated with
- * requireRole(canManageNodes) — the public NSWPSN_API_KEY alone can't reach
- * these, only a logged-in owner or dev.
+ * from the in-memory hub (hub.ts) merged on top. Read/write split:
+ *   - GET reads (list/detail/config/stats/global-config/auto-update) are gated
+ *     with requireRole(canViewNodeData) — owner|dev|node_monitor (view-only).
+ *   - Every mutating route stays requireRole(canManageNodes) — owner|dev only;
+ *     DELETE /:id is owner-only (isOwner).
+ * The public NSWPSN_API_KEY alone can't reach any of these — only a logged-in
+ * user with the right role can.
  *
  *   GET    /api/nodes
  *   GET    /api/nodes/:id
@@ -18,7 +22,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { log } from '../lib/log.js';
-import { requireRole, canManageNodes, isOwner } from '../services/auth/roles.js';
+import { requireRole, canManageNodes, canViewNodeData, isOwner } from '../services/auth/roles.js';
 import {
   listNodes,
   getNode,
@@ -117,7 +121,7 @@ const PatchSchema = z.object({
 // ---------------------------------------------------------------------------
 // GET /api/nodes
 // ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes', requireRole(canManageNodes), async (c) => {
+nodesRouter.get('/api/nodes', requireRole(canViewNodeData), async (c) => {
   try {
     const [nodes, usernames] = await Promise.all([listNodes(), getUsernameMap()]);
     return c.json({ nodes: nodes.map((n) => toApi(n, usernames)) });
@@ -133,7 +137,7 @@ nodesRouter.get('/api/nodes', requireRole(canManageNodes), async (c) => {
 //   GET /api/nodes/global-config  — current global config + version
 //   PUT /api/nodes/global-config  — replace it, then fan out to every node
 // ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes/global-config', requireRole(canManageNodes), async (c) => {
+nodesRouter.get('/api/nodes/global-config', requireRole(canViewNodeData), async (c) => {
   try {
     const config = await getGlobalConfig();
     return c.json({ config });
@@ -180,7 +184,7 @@ nodesRouter.put('/api/nodes/global-config', requireRole(canManageNodes), async (
 //   POST /api/nodes/update-all  — force an update on every online node NOW,
 //                                 regardless of the auto-update flag.
 // ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes/auto-update', requireRole(canManageNodes), async (c) => {
+nodesRouter.get('/api/nodes/auto-update', requireRole(canViewNodeData), async (c) => {
   try {
     return c.json({ enabled: await getAutoUpdate() });
   } catch (err) {
@@ -230,7 +234,7 @@ nodesRouter.post('/api/nodes/update-all', requireRole(canManageNodes), async (c)
 // ---------------------------------------------------------------------------
 // GET /api/nodes/:id
 // ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
+nodesRouter.get('/api/nodes/:id', requireRole(canViewNodeData), async (c) => {
   const id = c.req.param('id');
   try {
     const node = await getNode(id);
@@ -378,7 +382,7 @@ nodesRouter.post('/api/nodes/:id/cmd', requireRole(canManageNodes), async (c) =>
 // ---------------------------------------------------------------------------
 // GET /api/nodes/:id/config
 // ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes/:id/config', requireRole(canManageNodes), async (c) => {
+nodesRouter.get('/api/nodes/:id/config', requireRole(canViewNodeData), async (c) => {
   const id = c.req.param('id');
   try {
     const node = await getNode(id);
@@ -432,7 +436,7 @@ nodesRouter.post('/api/nodes/:id/push-config', requireRole(canManageNodes), asyn
 // ---------------------------------------------------------------------------
 // GET /api/nodes/:id/stats
 // ---------------------------------------------------------------------------
-nodesRouter.get('/api/nodes/:id/stats', requireRole(canManageNodes), async (c) => {
+nodesRouter.get('/api/nodes/:id/stats', requireRole(canViewNodeData), async (c) => {
   const id = c.req.param('id');
   try {
     const raw = parseInt(c.req.query('days') ?? '30', 10);

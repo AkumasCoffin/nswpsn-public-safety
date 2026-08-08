@@ -1928,6 +1928,32 @@
 
       .modal-content { padding: 1.4rem 1.25rem 1.5rem; }
     }
+
+    /* ------------------------------------------------------------------ *
+     * View-only Nodes tab (node_monitor role, can_manage_nodes === false).
+     * The Data tab and every live view / readout stay fully visible; only
+     * mutating affordances are stripped. Backend still enforces 403 — this
+     * is UX so a viewer sees a clean read-only page. Marker-class driven so
+     * it survives the ~10s node-list / ~15s panel re-renders.
+     * ------------------------------------------------------------------ */
+    body.nodes-view-only .nd-write { display: none !important; }
+    /* Editable fields that double as value readouts (pager gain/ppm/primary):
+       keep them visible but non-interactive. */
+    body.nodes-view-only .nd-write-input {
+      pointer-events: none !important; opacity: 0.55;
+    }
+    /* Tuner + channel-config grids are pure edit surfaces. Keep the text
+       readouts, drop every action button and the config-actions bar, and
+       neutralise every input/select (kept visible so current values read out). */
+    body.nodes-view-only #nd-tuners button,
+    body.nodes-view-only #nd-cfg-channels button,
+    body.nodes-view-only .nd-cfg-actions { display: none !important; }
+    body.nodes-view-only #nd-tuners input,
+    body.nodes-view-only #nd-tuners select,
+    body.nodes-view-only #nd-cfg-channels input,
+    body.nodes-view-only #nd-cfg-channels select {
+      pointer-events: none !important; opacity: 0.6;
+    }
   </style>
 </head>
 <body>
@@ -2118,13 +2144,13 @@
       <div id="nodes-tab" class="tab-content">
         <div class="dev-section-h" style="margin-top: 0; flex-wrap: wrap; gap: 0.5rem;">
           Feeder Nodes
-          <label id="auto-update-wrap" style="margin-left:auto; display:inline-flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--text-soft); font-weight:400; cursor:pointer;" title="Pause automatic node self-updates while you push changes. Manual updates (the Update buttons) still work.">
+          <label id="auto-update-wrap" class="nd-write" style="margin-left:auto; display:inline-flex; align-items:center; gap:0.4rem; font-size:0.8rem; color:var(--text-soft); font-weight:400; cursor:pointer;" title="Pause automatic node self-updates while you push changes. Manual updates (the Update buttons) still work.">
             <input type="checkbox" id="auto-update-toggle" onchange="toggleAutoUpdate(this.checked)"> Auto-update
           </label>
-          <button class="btn btn-secondary btn-sm" onclick="updateAllNodes()" title="Update all online nodes now">
+          <button class="btn btn-secondary btn-sm nd-write" onclick="updateAllNodes()" title="Update all online nodes now">
             <i class="fas fa-download"></i> Update all
           </button>
-          <button class="btn btn-secondary btn-sm" onclick="openGlobalConfig()">
+          <button class="btn btn-secondary btn-sm nd-write" onclick="openGlobalConfig()">
             <i class="fas fa-globe"></i> Global settings
           </button>
           <button class="btn btn-secondary btn-sm" onclick="loadNodes()">
@@ -2652,17 +2678,17 @@
             <div class="nd-panel-b" id="nd-node-ctl"></div>
           </div>
 
-          <!-- Controls -->
-          <div class="nd-panel nd-span-all">
+          <!-- Controls (all mutating — hidden entirely for view-only node_monitor) -->
+          <div class="nd-panel nd-span-all nd-write">
             <div class="nd-panel-h"><i class="fas fa-sliders"></i> Controls</div>
             <div class="nd-panel-b">
               <div class="nd-controls">
-                <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
-                <button class="btn btn-secondary btn-sm nd-radio-only" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
-                <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRestartReaders()"><i class="fas fa-rotate"></i> Restart readers</button>
-                <button class="btn btn-secondary btn-sm nd-pager-only" onclick="_ndRescanSdr()"><i class="fas fa-magnifying-glass"></i> Recheck SDRs</button>
-                <button class="btn btn-secondary btn-sm" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
-                <button class="btn btn-danger btn-sm" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
+                <button class="btn btn-secondary btn-sm nd-radio-only nd-write" onclick="_ndRestart('sdrtrunk')"><i class="fas fa-rotate"></i> Restart SDR-Trunk</button>
+                <button class="btn btn-secondary btn-sm nd-radio-only nd-write" onclick="_ndRestart('rdio')"><i class="fas fa-rotate"></i> Restart rdio</button>
+                <button class="btn btn-secondary btn-sm nd-pager-only nd-write" onclick="_ndRestartReaders()"><i class="fas fa-rotate"></i> Restart readers</button>
+                <button class="btn btn-secondary btn-sm nd-pager-only nd-write" onclick="_ndRescanSdr()"><i class="fas fa-magnifying-glass"></i> Recheck SDRs</button>
+                <button class="btn btn-secondary btn-sm nd-write" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
+                <button class="btn btn-danger btn-sm nd-write" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
             </div>
           </div>
@@ -2978,6 +3004,11 @@
             <span>📻 Radio Contributor</span>
             <span style="color: var(--text-soft); font-size: 0.75rem;">- Can stream radio</span>
           </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
+            <input type="checkbox" id="edit-role-node-monitor" style="width: 16px; height: 16px; accent-color: var(--accent);">
+            <span>👁️ Node Monitor</span>
+            <span style="color: var(--text-soft); font-size: 0.75rem;">- View-only Data + Nodes</span>
+          </label>
           <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
               <input type="checkbox" id="edit-role-team-member" style="width: 16px; height: 16px; accent-color: var(--accent);">
@@ -3218,10 +3249,24 @@
       is_team_member: false,
       is_dev: false,
       is_map_editor: false,
+      is_node_monitor: false,
       can_manage_users: false,
+      // Write access to the Nodes tab. node_monitor (view-only) gets the tab
+      // but NOT this — every mutating control is hidden when it's false.
+      can_manage_nodes: false,
       can_assign_privileged_roles: false,
       tabs: { requests: false, users: false, dev: false, nodes: false, data: false }
     };
+
+    // Defense-in-depth guard for the Nodes tab write actions. The mutating
+    // controls are hidden for a view-only node_monitor (CSS), and the backend
+    // enforces 403 regardless — this stops a stray call reaching the network
+    // if a handler is ever invoked some other way. Returns true when blocked.
+    function _nodeWriteBlocked() {
+      if (userPermissions.can_manage_nodes) return false;
+      try { showToast('View-only: you cannot change nodes.', 'error'); } catch (e) {}
+      return true;
+    }
 
     // Dev-tab status polling state. We refresh /api/status while the Dev
     // tab is the active panel; pause when it's not, so we don't burn
@@ -5429,6 +5474,7 @@
     }
 
     async function toggleNode(id, newValue, inputEl) {
+      if (_nodeWriteBlocked()) { if (inputEl) inputEl.checked = !newValue; return; }
       if (inputEl) inputEl.disabled = true;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
@@ -5454,6 +5500,7 @@
     // from the node being on — off lets the operator verify config + reception
     // before feeding the live system.
     async function toggleNodeFeed(id, newValue, inputEl) {
+      if (_nodeWriteBlocked()) { if (inputEl) inputEl.checked = !newValue; return; }
       if (inputEl) inputEl.disabled = true;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/${id}`, {
@@ -5473,6 +5520,7 @@
     // Owner-only: permanently delete a node. If its agent reconnects while the
     // contributor still holds the role, it reappears.
     async function deleteNode(id) {
+      if (_nodeWriteBlocked()) return;
       if (!userPermissions.is_owner) { showToast('Only owners can delete nodes.', 'warn'); return; }
       const node = (allNodes || []).find(n => n.id === id);
       const who = node ? (node.name || id) : id;
@@ -5492,6 +5540,7 @@
     // Re-issue a node's per-node token. The old key stops working immediately; the
     // node must be re-installed with the new one. Reveals the new token once.
     async function rotateNodeToken(id) {
+      if (_nodeWriteBlocked()) return;
       const node = (allNodes || []).find(n => n.id === id);
       const who = node ? (node.name || id) : id;
       if (!await uiConfirm(`Re-issue the key for "${who}"? The old key/installer stops working and the node must be re-installed with the new key.`, { danger: true, okText: 'Re-issue' })) return;
@@ -5588,6 +5637,7 @@
     // Trigger a manual update on every online node. Manual updates always run,
     // even when auto-update is paused.
     async function updateAllNodes() {
+      if (_nodeWriteBlocked()) return;
       if (!await uiConfirm('Trigger an update on all online nodes now?')) return;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/update-all`, {
@@ -5618,6 +5668,7 @@
     // Global toggle: pause/resume automatic node self-updates. Manual updates
     // (Update / Update all) still trigger regardless.
     async function toggleAutoUpdate(enabled) {
+      if (_nodeWriteBlocked()) return;
       try {
         const res = await fetch(`${API_BASE_URL}/api/nodes/auto-update`, {
           method: 'PUT',
@@ -6307,14 +6358,14 @@
       el.innerHTML = `
         <div class="nd-ctl-switches">
           <div class="nd-switch-row">
-            <label class="node-switch" title="Capture on/off. Off stops decoding but the agent stays connected and re-enables live.">
+            <label class="node-switch nd-write" title="Capture on/off. Off stops decoding but the agent stays connected and re-enables live.">
               <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleNode('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
             </label>
             <span>Capture <b>${enabled ? 'on' : 'off'}</b></span>
           </div>
           <div class="nd-switch-row">
-            <label class="node-switch" title="${feedTitle}">
+            <label class="node-switch nd-write" title="${feedTitle}">
               <input type="checkbox" ${feedEnabled ? 'checked' : ''} onchange="toggleNodeFeed('${jsArg(id)}', this.checked, this)">
               <span class="track"></span>
             </label>
@@ -6323,8 +6374,8 @@
         </div>
         <div class="nd-controls" style="margin-top:0.8rem;">
           <button class="btn btn-secondary btn-sm ${hasLoc ? 'has-loc' : ''}" onclick="viewNodeLocation('${jsArg(id)}')" title="${locTitle}"><i class="fas fa-location-dot"></i> Location</button>
-          <button class="btn btn-secondary btn-sm" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)"><i class="fas fa-key"></i> Re-issue key</button>
-          ${userPermissions.is_owner ? `<button class="btn btn-danger btn-sm" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i> Delete</button>` : ''}
+          <button class="btn btn-secondary btn-sm nd-write" onclick="rotateNodeToken('${jsArg(id)}')" title="Re-issue this node's key (cuts it off until re-installed)"><i class="fas fa-key"></i> Re-issue key</button>
+          ${userPermissions.is_owner ? `<button class="btn btn-danger btn-sm nd-write" onclick="deleteNode('${jsArg(id)}')" title="Delete node (owner only)"><i class="fas fa-trash"></i> Delete</button>` : ''}
         </div>`;
     }
 
@@ -6362,7 +6413,7 @@
             <td class="${running ? 'r-run' : 'r-stop'}">${running ? 'running' : 'stopped'}${listening ? ' <span style="color:var(--accent,#38bdf8);font-weight:600;"><i class="fas fa-headphones"></i> monitoring</span>' : ''}</td>
             <td style="text-align:right; white-space:nowrap;">
               <button class="btn ${listening ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="_ndAudioToggle('${jsArg(r.label)}')" title="${listening ? 'Stop audio monitor' : 'Listen to this reader for tuning (restarts it ~2s)'}"><i class="fas fa-${listening ? 'stop' : 'headphones'}"></i></button>
-              <button class="btn btn-secondary btn-sm" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button>
+              <button class="btn btn-secondary btn-sm nd-write" onclick="_ndRestart('${jsArg(r.comp)}')" title="Restart this reader"><i class="fas fa-rotate"></i></button>
             </td>
           </tr>`;
         }).join('');
@@ -6395,15 +6446,15 @@
                      const sel = (!isAuto && gainVal !== '' && Number(gainVal) === Number(g)) ? 'selected' : '';
                      return `<option value="${escapeHtml(gs)}" ${sel}>${escapeHtml(gs)} dB</option>`;
                    }).join('');
-        gainControl = `<select onchange="_ndSetPagerTuning({ gain: this.value }, this)" style="${tuneInput} width:auto; text-align:left;">${opts}</select>`;
+        gainControl = `<select class="nd-write-input" onchange="_ndSetPagerTuning({ gain: this.value }, this)" style="${tuneInput} width:auto; text-align:left;">${opts}</select>`;
       } else {
-        gainControl = `<input type="text" value="${escapeHtml(gainVal)}" placeholder="49.6 / auto" style="${tuneInput}" onchange="_ndSetPagerTuning({ gain: this.value }, this)">`;
+        gainControl = `<input type="text" class="nd-write-input" value="${escapeHtml(gainVal)}" placeholder="49.6 / auto" style="${tuneInput}" onchange="_ndSetPagerTuning({ gain: this.value }, this)">`;
       }
 
       el.innerHTML = `
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span>Single-SDR frequency</span>
-          <select onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
+          <select class="nd-write-input" onchange="_ndSetPagerPrimary(this.value, this)" style="background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;">
             <option value="NSWRFS" ${primary === 'FRNSW' ? '' : 'selected'}>NSW RFS (148.5875)</option>
             <option value="FRNSW" ${primary === 'FRNSW' ? 'selected' : ''}>Fire &amp; Rescue (148.9875)</option>
           </select>
@@ -6414,7 +6465,7 @@
         </div>
         <div class="nd-switch-row" style="margin-bottom:0.7rem;">
           <span title="Sample-clock correction (ppm) forced on all readers. Blank = auto-measure each startup.">PPM</span>
-          <input type="number" step="1" value="${escapeHtml(ppmVal)}" placeholder="auto" style="${tuneInput}"
+          <input type="number" step="1" class="nd-write-input" value="${escapeHtml(ppmVal)}" placeholder="auto" style="${tuneInput}"
             onchange="_ndSetPagerTuning({ ppm: this.value }, this)">
         </div>
         <table class="nd-readers-table">
@@ -7684,6 +7735,7 @@
     }
 
     async function _ndCfgSave() {
+      if (_nodeWriteBlocked()) return;
       if (!_ndConfig) { showToast('Config not loaded yet.', 'warn'); return; }
       _ndCfgReadDom();
       try {
@@ -7913,6 +7965,7 @@
     const GC_ALERTS = ['alert1', 'alert2', 'alert3', 'alert4', 'alert5', 'alert6', 'alert7', 'alert8', 'alert9'];
 
     async function openGlobalConfig() {
+      if (_nodeWriteBlocked()) return;
       const modal = document.getElementById('global-config-modal');
       if (!modal) return;
       modal.style.display = 'flex';
@@ -8834,12 +8887,20 @@
         // Backends that predate the Data tab return a `tabs` block without
         // `data` — mirror the Nodes visibility until the server catches up.
         if (tabs.data === undefined) tabs.data = !!tabs.nodes;
+        // Nodes-tab write access. Newer backends return can_manage_nodes; older
+        // ones (that only ever gated nodes on owner|dev) didn't — fall back to
+        // owner|dev so existing staff keep full control during a partial deploy.
+        const canManageNodes = (result.can_manage_nodes !== undefined)
+          ? !!result.can_manage_nodes
+          : !!(result.is_owner || result.is_dev);
         userPermissions = {
           is_owner: !!result.is_owner,
           is_team_member: !!result.is_team_member,
           is_dev: !!result.is_dev,
           is_map_editor: hasMapEditor,
+          is_node_monitor: !!result.is_node_monitor,
           can_manage_users: !!result.can_manage_users,
+          can_manage_nodes: canManageNodes,
           can_assign_privileged_roles: !!result.can_assign_privileged_roles,
           tabs: tabs,
         };
@@ -8883,6 +8944,11 @@
       if (datBtn) (datBtn.closest('.tab-dd') || datBtn).style.display = tabs.data ? '' : 'none';
       if (nodBtn) nodBtn.style.display = tabs.nodes    ? '' : 'none';
 
+      // View-only Nodes tab: when the viewer can't manage nodes (node_monitor),
+      // flip the body into read-only mode so the CSS strips every mutating
+      // control. Live views, readouts and the whole Data tab stay visible.
+      document.body.classList.toggle('nodes-view-only', !userPermissions.can_manage_nodes);
+
       // Pick a default tab the user can actually see. Without this a
       // dev-only user would open the page on the (now-hidden) Requests
       // tab and stare at an empty container.
@@ -8900,6 +8966,7 @@
       if (userPermissions.is_owner)       roleBits.push('👑 Owner');
       if (userPermissions.is_team_member) roleBits.push('👥 Team Member');
       if (userPermissions.is_dev)         roleBits.push('🛠️ Dev');
+      if (userPermissions.is_node_monitor) roleBits.push('👁️ Node Monitor');
       const chip = document.getElementById('role-chip');
       if (chip) {
         chip.textContent = roleBits.join(' · ') || 'Authenticated';
@@ -9242,6 +9309,7 @@
       document.getElementById('edit-role-map-editor').checked = userRoles.includes('map_editor');
       document.getElementById('edit-role-pager-contributor').checked = userRoles.includes('pager_contributor');
       document.getElementById('edit-role-radio-contributor').checked = userRoles.includes('radio_contributor');
+      document.getElementById('edit-role-node-monitor').checked = userRoles.includes('node_monitor');
       document.getElementById('edit-role-team-member').checked = userRoles.includes('team_member');
       document.getElementById('edit-role-dev').checked = userRoles.includes('dev');
       document.getElementById('edit-role-owner').checked = userRoles.includes('owner');
@@ -9268,6 +9336,7 @@
       if (document.getElementById('edit-role-map-editor').checked) roles.push('map_editor');
       if (document.getElementById('edit-role-pager-contributor').checked) roles.push('pager_contributor');
       if (document.getElementById('edit-role-radio-contributor').checked) roles.push('radio_contributor');
+      if (document.getElementById('edit-role-node-monitor').checked) roles.push('node_monitor');
       if (document.getElementById('edit-role-team-member').checked) roles.push('team_member');
       if (document.getElementById('edit-role-dev').checked) roles.push('dev');
       if (document.getElementById('edit-role-owner').checked) roles.push('owner');

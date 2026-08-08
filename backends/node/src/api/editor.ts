@@ -589,7 +589,10 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
     let isOwner = userRoles.includes('owner');
     const isTeamMember = userRoles.includes('team_member');
     const isDev = userRoles.includes('dev');
-    let isAdmin = isOwner || isTeamMember || isDev;
+    const isNodeMonitor = userRoles.includes('node_monitor');
+    // node_monitor is a view-only feature role: it can load the staff page
+    // (is_admin) purely to reach the read-only Data + Nodes tabs.
+    let isAdmin = isOwner || isTeamMember || isDev || isNodeMonitor;
 
     // First-run lockout-prevention: if no owner exists anywhere, grant
     // owner to the requesting user. Mirrors python at 13941-13955.
@@ -607,6 +610,9 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
     const canViewRequests = isOwner || isTeamMember;
     const canViewUsers = isOwner || isTeamMember;
     const canViewDev = isOwner || isDev;
+    // Read access to the Data + Nodes pages. node_monitor gets the views but
+    // NOT write access (can_manage_nodes stays owner|dev).
+    const canViewNodeData = isOwner || isDev || isNodeMonitor;
 
     return c.json({
       user_id: userId,
@@ -614,14 +620,16 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
       is_owner: isOwner,
       is_team_member: isTeamMember,
       is_dev: isDev,
+      is_node_monitor: isNodeMonitor,
       can_manage_users: canViewUsers,
+      can_manage_nodes: isOwner || isDev,
       can_assign_privileged_roles: isOwner,
       tabs: {
         requests: canViewRequests,
         users: canViewUsers,
         dev: canViewDev,
-        nodes: canViewDev,
-        data: canViewDev,
+        nodes: canViewNodeData,
+        data: canViewNodeData,
       },
       roles: userRoles,
     });

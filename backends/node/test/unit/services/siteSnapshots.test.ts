@@ -26,10 +26,11 @@ vi.mock('../../../src/db/pool.js', () => ({
   closePool: vi.fn(async () => undefined),
 }));
 
-// requireRole stays real; canManageNodes stubbed true so the read route runs.
+// requireRole stays real; the node-data read is gated on canViewNodeData —
+// stub it true so the read route runs.
 vi.mock('../../../src/services/auth/roles.js', async (orig) => {
   const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
-  return { ...actual, canManageNodes: vi.fn(() => Promise.resolve(true)) };
+  return { ...actual, canViewNodeData: vi.fn(() => Promise.resolve(true)) };
 });
 
 // Keep talkgroup-label resolution from touching the global config / DB.

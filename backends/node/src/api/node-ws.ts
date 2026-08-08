@@ -317,12 +317,18 @@ async function handleAgentMessage(
 interface StaffState {
   authed: boolean;
   userId: string | null;
+  // True only for owner|dev — gates the WRITE paths on this socket (cmd + live
+  // stream toggles). A view-only node_monitor authenticates (to read live
+  // status) but cannot mutate, mirroring the REST canViewNodeData/canManageNodes
+  // split. Without this a node_monitor could send 'cmd' over the WS and bypass
+  // the REST 403.
+  canManage: boolean;
 }
 
 function setupStaffConnection(ws: Alive): void {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
-  const state: StaffState = { authed: false, userId: null };
+  const state: StaffState = { authed: false, userId: null, canManage: false };
 
   // Must authenticate within the grace window or get dropped.
   const authTimer = setTimeout(() => {
@@ -356,13 +362,16 @@ async function handleStaffMessage(
   if (t === 'auth') {
     const token = (data as { token?: string } | undefined)?.token ?? '';
     const verified = await verifySupabaseToken(token);
-    if (!verified || !(await hasRole(verified.userId, ['owner', 'dev']))) {
+    // Viewer auth: owner|dev|node_monitor may connect to READ live status.
+    // node_monitor is view-only — canManage (owner|dev) gates the write paths.
+    if (!verified || !(await hasRole(verified.userId, ['owner', 'dev', 'node_monitor']))) {
       ws.send(envelope('authError', { message: 'forbidden' }));
       try { ws.close(4003, 'forbidden'); } catch { /* ignore */ }
       return;
     }
     state.authed = true;
     state.userId = verified.userId;
+    state.canManage = await hasRole(verified.userId, ['owner', 'dev']);
     clearTimeout(authTimer);
     ws.send(envelope('authOk', { userId: verified.userId }));
     return;
@@ -389,6 +398,13 @@ async function handleStaffMessage(
     case 'cmd': {
       const d = (data ?? {}) as { nodeId?: string; action?: string; args?: unknown; id?: string };
       if (!d.nodeId || !d.action) return;
+      // Write path: only owner|dev. A view-only node_monitor is rejected here
+      // (it can subscribe to live status but not command the agent).
+      if (!state.canManage) {
+        log.warn({ nodeId: d.nodeId, action: d.action, by: state.userId }, 'staff cmd rejected: view-only role');
+        ws.send(envelope('cmdResult', { nodeId: d.nodeId, reqId: d.id, ok: false, error: 'forbidden' }));
+        return;
+      }
       if (!isAgentCommandAction(d.action)) {
         log.warn({ nodeId: d.nodeId, action: d.action, by: state.userId }, 'staff cmd rejected: unknown action');
         ws.send(envelope('cmdResult', { nodeId: d.nodeId, reqId: d.id, ok: false, error: 'unknown action' }));
