@@ -1647,18 +1647,58 @@
     .nd2-crumbs {
       display: flex;
       align-items: center;
-      gap: 0.4rem;
+      gap: 0.5rem;
       flex-wrap: wrap;
-      font-size: 0.8rem;
+      font-size: 0.95rem;
       color: var(--text-soft);
       margin-bottom: 1.1rem;
+      padding-bottom: 0.7rem;
+      border-bottom: 1px solid var(--border-subtle);
     }
-    .nd2-crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .nd2-crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; font-weight: 500; }
     .nd2-crumbs a:hover { text-decoration: underline; }
-    .nd2-crumb-sep { opacity: 0.5; }
-    .nd2-crumb-cur { color: var(--text-primary); font-weight: 600; }
+    .nd2-crumb-sep { opacity: 0.5; font-size: 1.05rem; }
+    .nd2-crumb-cur { color: var(--text-primary); font-weight: 700; }
+    /* Detail-panel header: obvious "← Back" + a heading naming where you are. */
+    .nd2-detail-head {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      margin-bottom: 1rem;
+    }
+    .nd2-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-soft);
+      padding: 0.42rem 0.85rem;
+      font-size: 0.8rem;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .nd2-back:hover { background: rgba(56, 189, 248, 0.1); color: var(--text-primary); border-color: var(--accent); }
+    .nd2-detail-title { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary); }
     .nd2-rowlink { cursor: pointer; }
     .nd2-rowlink:hover td { background: rgba(56, 189, 248, 0.06); }
+    /* Chevron affordance: signals a list row opens a detail / drill-down. */
+    .nd2-rowlink td:last-child { position: relative; padding-right: 1.6rem; }
+    .nd2-rowlink td:last-child::after {
+      content: '\203A';
+      position: absolute;
+      right: 0.65rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-soft);
+      opacity: 0.35;
+      font-size: 1.05rem;
+      font-weight: 700;
+      transition: opacity 0.12s, transform 0.12s;
+    }
+    .nd2-rowlink:hover td:last-child::after { opacity: 0.95; transform: translate(3px, -50%); }
     /* Metadata badges on event rows — the icon + title carry the meaning,
        the tint is decorative (status colors stay reserved). */
     .nd2-badge {
@@ -2021,6 +2061,10 @@
           </div>
 
           <div id="nd2-sys-detail" style="display: none;">
+            <div class="nd2-detail-head">
+              <button type="button" class="nd2-back" onclick="nd2SysGoList()"><i class="fas fa-arrow-left"></i> Back</button>
+              <h3 class="nd2-detail-title" id="nd2-sys-title">System</h3>
+            </div>
             <div class="nd2-empty" id="nd2-sys-msg" style="display: none;"></div>
             <div class="stats-bar" id="nd2-sys-tiles"></div>
             <div class="nd2-card nd2-chart-card">
@@ -2062,6 +2106,10 @@
           </div>
 
           <div id="nd2-site-detail" style="display: none;">
+            <div class="nd2-detail-head">
+              <button type="button" class="nd2-back" onclick="nd2SysGoSystem()"><i class="fas fa-arrow-left"></i> Back</button>
+              <h3 class="nd2-detail-title" id="nd2-site-title">Site</h3>
+            </div>
             <div class="nd2-empty" id="nd2-site-msg" style="display: none;"></div>
             <div class="stats-bar" id="nd2-site-tiles"></div>
             <div class="nd2-card nd2-chart-card">
@@ -3494,6 +3542,17 @@
       return o ? `<span class="nd2-chip">${escapeHtml(o.name || String(o.id))}</span>` +
         (o.calls != null ? ` <span class="nd-sub">${nd2Num(o.calls)}</span>` : '') : '—';
     }
+    // Render a talkgroup as its resolved alias with the raw number secondary,
+    // e.g. "101 ME1" + "10101"; falls back to "TG <n>" when no alias resolved.
+    // Accepts a row object {talkgroup, label} (label may be null/absent).
+    function nd2TgCell(o) {
+      if (!o) return '—';
+      const tg = o.talkgroup;
+      const tgStr = tg != null ? String(tg) : '—';
+      return o.label
+        ? `<span class="nd-strong">${escapeHtml(String(o.label))}</span> <span class="nd-sub">${escapeHtml(tgStr)}</span>`
+        : `<span class="nd-strong">TG ${escapeHtml(tgStr)}</span>`;
+    }
     function nd2FillTiles(containerId, tiles) {
       const el = document.getElementById(containerId);
       if (!el) return;
@@ -3597,6 +3656,11 @@
       const el = document.getElementById('nd2-sys-crumbs');
       if (!el) return;
       const s = nd2.sys;
+      // Keep the detail-panel headings in sync with the current drill-down.
+      const sysTitle = document.getElementById('nd2-sys-title');
+      if (sysTitle && s.system != null) sysTitle.textContent = `System ${s.system}`;
+      const siteTitle = document.getElementById('nd2-site-title');
+      if (siteTitle && s.rfss != null && s.site != null) siteTitle.textContent = `R${s.rfss} · S${s.site}`;
       if (s.level === 'list') {
         el.innerHTML = '<span class="nd2-crumb-cur">Systems</span>';
       } else if (s.level === 'system') {
@@ -3656,7 +3720,7 @@
     function nd2TopTgHtml(list) {
       return nd2MiniTable(
         [{ label: 'Talkgroup' }, { label: 'Calls', num: true }, { label: 'Last seen' }],
-        (list || []).map(t => [`TG ${escapeHtml(String(t.talkgroup))}`, nd2Num(t.calls), nd2LastSeen(t.lastSeen)]));
+        (list || []).map(t => [nd2TgCell(t), nd2Num(t.calls), nd2LastSeen(t.lastSeen)]));
     }
     function nd2TopRadioHtml(list) {
       return nd2MiniTable(
@@ -3684,7 +3748,7 @@
               <td><span class="nd-strong">R${escapeHtml(String(st.rfss))} S${escapeHtml(String(st.site))}</span></td>
               <td><span class="nd-sub">${st.nac != null ? escapeHtml(String(st.nac)) : '—'}</span></td>
               <td class="nd2-num">${nd2Num(st.calls)}</td>
-              <td>${st.topTalkgroup ? `TG ${escapeHtml(String(st.topTalkgroup.talkgroup))} <span class="nd-sub">${nd2Num(st.topTalkgroup.calls)}</span>` : '—'}</td>
+              <td>${st.topTalkgroup ? `${nd2TgCell(st.topTalkgroup)} <span class="nd-sub">${nd2Num(st.topTalkgroup.calls)}</span>` : '—'}</td>
               <td>${nd2LastSeen(st.lastSeen)}</td>
             </tr>`).join('') : '<tr><td colspan="5" class="nd2-empty">No sites with attribution in this window.</td></tr>';
         }
@@ -3760,7 +3824,7 @@
         if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No talkgroups match.</td></tr>'; }
         else body.innerHTML = rows.map(t => `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${t.talkgroup}})" title="View events for this talkgroup">
-            <td><span class="nd-strong">TG ${escapeHtml(String(t.talkgroup))}</span></td>
+            <td>${nd2TgCell(t)}</td>
             <td><span class="nd-sub">${t.system != null ? escapeHtml(String(t.system)) : '—'}</span></td>
             <td class="nd2-num">${nd2Num(t.logicalCalls)}<span class="nd-sub" title="receptions"> /${nd2Num(t.calls)}</span></td>
             <td class="nd2-num">${nd2Num(t.encryptedCalls)}</td>
@@ -3806,8 +3870,11 @@
         const rows = data.radios || [];
         if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No radios match.</td></tr>'; }
         else body.innerHTML = rows.map(r => {
-          const topTgs = (r.topTalkgroups || []).map(t =>
-            `<span class="nd2-chip">TG ${escapeHtml(String(t.talkgroup))} <span class="nd-sub">${nd2Num(t.calls)}</span></span>`).join(' ') || '—';
+          const topTgs = (r.topTalkgroups || []).map(t => {
+            const primary = t.label ? escapeHtml(String(t.label)) : `TG ${escapeHtml(String(t.talkgroup))}`;
+            const numSub = t.label ? ` <span class="nd-sub">${escapeHtml(String(t.talkgroup))}</span>` : '';
+            return `<span class="nd2-chip">${primary}${numSub} <span class="nd-sub">${nd2Num(t.calls)}</span></span>`;
+          }).join(' ') || '—';
           return `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
             <td><span class="nd-strong">${escapeHtml(String(r.radio))}</span></td>
