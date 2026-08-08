@@ -207,9 +207,56 @@ function agencyToSystem(a: Agency): Record<string, unknown> {
   return { ...rest, id: systemId, label: name };
 }
 
-/** The rdio systems for all agencies. */
+/**
+ * The rdio systems for all agencies, deduped by system id. rdio-scanner requires
+ * unique system ids (a duplicate 500s the admin config PUT with a UNIQUE
+ * constraint on rdioScannerSystems.id), but many agencies legitimately share one
+ * P25 system (e.g. the whole NSW GRN is one system with many agencies). Agencies
+ * on the same systemId are merged into a single rdio system whose talkgroups/units
+ * are the union of theirs (deduped by their own id); the first agency's scalar
+ * fields (label, led, flags) win. Each agency still becomes its own SDR-Trunk
+ * alias — only the rdio system view is merged.
+ */
 export function agenciesToSystems(agencies: Agency[]): Record<string, unknown>[] {
-  return agencies.map(agencyToSystem);
+  const byId = new Map<number, Record<string, unknown>>();
+  const order: number[] = [];
+  const mergeKeys = ['talkgroups', 'units'] as const;
+
+  for (const agency of agencies) {
+    const sys = agencyToSystem(agency);
+    const id = sys.id;
+    if (typeof id !== 'number') continue;
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, sys);
+      order.push(id);
+      continue;
+    }
+    for (const key of mergeKeys) {
+      const a = Array.isArray(existing[key]) ? (existing[key] as unknown[]) : [];
+      const b = Array.isArray(sys[key]) ? (sys[key] as unknown[]) : [];
+      if (a.length || b.length) existing[key] = [...a, ...b];
+    }
+  }
+
+  // Dedup the merged talkgroups/units by their own id (a repeated agency, or the
+  // same talkgroup listed under two agencies, must not double up).
+  for (const sys of byId.values()) {
+    for (const key of mergeKeys) {
+      const arr = sys[key];
+      if (!Array.isArray(arr)) continue;
+      const seen = new Set<unknown>();
+      sys[key] = arr.filter((row) => {
+        const rid = (row as { id?: unknown })?.id;
+        if (rid === undefined || rid === null) return true;
+        if (seen.has(rid)) return false;
+        seen.add(rid);
+        return true;
+      });
+    }
+  }
+
+  return order.map((id) => byId.get(id)!);
 }
 
 /** Build agencies by merging rdio systems with their matching SDR-Trunk alias.

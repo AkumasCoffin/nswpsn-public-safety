@@ -79,6 +79,25 @@ describe('agencies model', () => {
     const label = agenciesToSystems(agencies)[0]['label'];
     expect(bc).toBe(label);
   });
+
+  it('merges agencies that share a systemId into one rdio system (unique ids for rdio-scanner)', () => {
+    // Two agencies on the SAME P25 system (normal for NSW PSN) must not emit two
+    // systems with id 2 — rdio-scanner 500s on the UNIQUE rdioScannerSystems.id.
+    const agencies = [
+      { systemId: 2, name: 'Fire', led: 'red', talkgroups: [{ id: 101 }, { id: 102 }], units: [{ id: 1 }], aliasIds: [] },
+      { systemId: 2, name: 'Police', led: 'blue', talkgroups: [{ id: 102 }, { id: 103 }], units: [{ id: 2 }], aliasIds: [] },
+      { systemId: 7, name: 'Ambulance', talkgroups: [{ id: 700 }], units: [], aliasIds: [] },
+    ] as unknown as Parameters<typeof agenciesToSystems>[0];
+    const out = agenciesToSystems(agencies);
+    // One system per unique id.
+    expect(out.map((s) => s['id']).sort()).toEqual([2, 7]);
+    const sys2 = out.find((s) => s['id'] === 2)!;
+    // First agency's scalar fields win; talkgroups are the union, deduped by id (102 once).
+    expect(sys2['label']).toBe('Fire');
+    expect(sys2['led']).toBe('red');
+    expect((sys2['talkgroups'] as { id: number }[]).map((t) => t.id).sort()).toEqual([101, 102, 103]);
+    expect((sys2['units'] as { id: number }[]).map((u) => u.id).sort()).toEqual([1, 2]);
+  });
 });
 
 import { loadPresets } from '../../../src/services/nodes/configMerge.js';
