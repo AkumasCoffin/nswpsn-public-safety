@@ -139,6 +139,10 @@ describe('recordActivityEvents', () => {
     expect(ins?.[7]).toBe(12345);
     expect(ins?.[11]).toBe(false);
     expect(ins?.[15]).toBe(0xbee00);
+    // New columns [16]=system_label (systemName), [17]=source_alias — null
+    // when the event carries neither (older agents / unresolved joins).
+    expect(ins?.[16]).toBeNull();
+    expect(ins?.[17]).toBeNull();
 
     const sys = callWith('node_radio_hourly_sys');
     // [receivedAt, system, talkgroup, site_rfss, site_id, logicalIncrement]
@@ -150,6 +154,16 @@ describe('recordActivityEvents', () => {
 
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
     expect(clientRelease).toHaveBeenCalled();
+  });
+
+  it('writes the friendly systemName and OTA sourceAlias into system_label/source_alias', async () => {
+    armQueries({ foundRadio: null, insertIds: ['101'] });
+    await recordActivityEvents('node-aaaa', 'stream-1234', [
+      { ...baseEvent, systemName: 'NSWPSN', sourceAlias: 'NEWRAD08' },
+    ]);
+    const ins = callWith('INSERT INTO node_radio_events');
+    expect(ins?.[16]).toBe('NSWPSN');
+    expect(ins?.[17]).toBe('NEWRAD08');
   });
 
   it("groups two nodes' events with the same systemId+target within ±4s", async () => {

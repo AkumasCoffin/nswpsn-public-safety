@@ -93,6 +93,14 @@ export interface ActivityEventInput {
   /** Decoder channel label. Validated but NOT stored: talkgroup labels are
    *  planned to resolve from the global agencies config at read time. */
   channelName: string | null;
+  /** Channel's configured P25 system name (e.g. "NSWPSN") — stored in the
+   *  `system_label` column so the Data tab can show a friendly name for the
+   *  numeric systemId. Optional/null: absent from older agents. */
+  systemName?: string | null;
+  /** Over-the-air talker alias last captured for the source radio — stored in
+   *  the `source_alias` column (migration 046). Optional/null: absent from
+   *  older agents. */
+  sourceAlias?: string | null;
 }
 
 /**
@@ -162,9 +170,10 @@ export async function recordActivityEvents(
                (node_id, received_at, stream_id, source_event_id,
                 action, event_type, system, talkgroup, source_unit,
                 frequency, timeslot, encrypted,
-                site_rfss, site_id, site_nac, wacn)
+                site_rfss, site_id, site_nac, wacn,
+                system_label, source_alias)
              VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9,
-                     $10, $11, $12, $13, $14, $15, $16)
+                     $10, $11, $12, $13, $14, $15, $16, $17, $18)
              ON CONFLICT (node_id, stream_id, source_event_id) DO NOTHING
              RETURNING id`,
             [
@@ -184,6 +193,8 @@ export async function recordActivityEvents(
               safeInt(ev.site),
               safeInt(ev.nac),
               safeInt(ev.wacn),
+              ev.systemName ?? null,
+              ev.sourceAlias ?? null,
             ],
           );
           const rowId = ins.rows[0]?.id;
