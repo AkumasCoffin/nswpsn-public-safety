@@ -44,6 +44,7 @@ package configapply
 import (
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -228,8 +229,11 @@ func unescapeXMLAttr(s string) string {
 // buildVceConfig maps a ConfigPayload onto the vce ConfigurationState body for
 // POST /config/import. presetList is the alias-list name P25 channels
 // reference (from the preset playlist); localKeys are the per-system local
-// rdio API keys.
-func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList string) vceConfigState {
+// rdio API keys. tunerSerials are the live tuners' preferred-tuner identifiers
+// (the vce getPreferredName strings, surfaced as the control server's /tuners
+// `name` field) used to auto-spread Auto (unpinned) channels across dongles;
+// nil/empty disables the auto-assign.
+func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList string, tunerSerials []string) vceConfigState {
 	state := vceConfigState{
 		AliasListDefinitions:    []vceAliasListDef{},
 		Aliases:                 []vceAlias{},
@@ -424,8 +428,16 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 
 	// ---- channels -----------------------------------------------------------
 	// effectiveChannels honours Node on/off: capture-off forces every channel
-	// autoStart=false so the import brings up nothing.
-	for _, ch := range payload.effectiveChannels() {
+	// autoStart=false so the import brings up nothing. Copy the slice so the
+	// preferred-tuner auto-assign below can't mutate the caller's payload
+	// (effectiveChannels returns payload.Channels directly when capture is on).
+	chans := append([]ChannelPlan(nil), payload.effectiveChannels()...)
+	// Spread Auto (unpinned) channels across the live tuners so freq-adjacent
+	// channels that would otherwise pack onto ONE dongle's usable window get
+	// distributed (fixes "channels auto-start but sit IDLE" from front-end/AGC
+	// desense). Only fills preferredTuner for channels with an empty SDR.
+	assignPreferredTuners(chans, tunerSerials)
+	for _, ch := range chans {
 		dc, ok := buildDecodeConfig(ch.Decoder, ch.DecoderConfig)
 		if !ok {
 			log.Printf("configapply: channel %q: decoder %q not supported by sdrtrunk-vce; skipping", ch.Name, ch.Decoder)
@@ -484,6 +496,92 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 	}
 
 	return state
+}
+
+// assignPreferredTuners spreads Auto (empty-SDR) channels across the live tuners
+// so a cluster of frequencies that would all fit inside ONE dongle's usable
+// window (and which vce's greedy first-fit allocator would therefore pack onto
+// the first tuner, leaving the others idle) is instead distributed across the
+// dongles. It ONLY fills preferredTuner for channels whose SDR is empty
+// (explicit pins are always respected) and mutates channels in place.
+//
+// tunerSerials must be the identifiers vce matches a channel's preferredTuner
+// against — the vce Tuner.getPreferredName() strings, which the control server
+// surfaces as the /tuners `name` field. The values are deduplicated and sorted
+// so re-applies are deterministic and never reshuffle.
+//
+// No-op (leaves everything Auto) when there are fewer than two distinct tuners
+// or fewer than two auto channels — a single tuner or a single channel can't be
+// spread. Decoder-agnostic: any tuner-sourced channel (p25p1/p25p2/nbfm/am/dmr)
+// with a real frequency participates.
+func assignPreferredTuners(channels []ChannelPlan, tunerSerials []string) {
+	serials := uniqueSortedNonEmpty(tunerSerials)
+	if len(serials) < 2 {
+		return
+	}
+
+	// Auto channels carrying a real frequency, in payload order. A channel with
+	// no frequency (shouldn't happen for a tuner source) is left Auto.
+	type autoCh struct {
+		idx  int
+		freq int64
+	}
+	var autos []autoCh
+	for i := range channels {
+		if strings.TrimSpace(channels[i].SDR) != "" {
+			continue // explicit pin — never override
+		}
+		if channels[i].Frequency <= 0 {
+			continue // no tuner frequency to cluster on
+		}
+		autos = append(autos, autoCh{idx: i, freq: channels[i].Frequency})
+	}
+	if len(autos) < 2 {
+		return
+	}
+
+	// Cluster by frequency: sort ascending (stable on payload index for ties) so
+	// adjacent frequencies stay together, then split into K contiguous groups.
+	sort.SliceStable(autos, func(a, b int) bool {
+		if autos[a].freq != autos[b].freq {
+			return autos[a].freq < autos[b].freq
+		}
+		return autos[a].idx < autos[b].idx
+	})
+
+	k := len(serials)
+	if len(autos) < k {
+		k = len(autos)
+	}
+	// Even split: proportional boundaries make group sizes differ by at most one,
+	// and each contiguous (freq-adjacent) group lands on a distinct tuner.
+	for gi := 0; gi < k; gi++ {
+		lo := gi * len(autos) / k
+		hi := (gi + 1) * len(autos) / k
+		for j := lo; j < hi; j++ {
+			channels[autos[j].idx].SDR = serials[gi]
+		}
+	}
+}
+
+// uniqueSortedNonEmpty trims, drops empties, deduplicates and sorts s. Sorting
+// makes the tuner-to-group assignment deterministic across applies; dedup means
+// two dongles that report the same preferred name (e.g. identical unflashed
+// serials — which vce also can't tell apart) collapse to one target rather than
+// being double-counted.
+func uniqueSortedNonEmpty(s []string) []string {
+	seen := make(map[string]bool, len(s))
+	out := make([]string, 0, len(s))
+	for _, v := range s {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // rememberFamily records a family claim for a list; the first protocol-specific
