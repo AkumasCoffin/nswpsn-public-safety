@@ -310,7 +310,7 @@ func ImportOnBoot(payload ConfigPayload, d Deps) error {
 	if err != nil {
 		return stageErr("keys", "ensure local api keys", err)
 	}
-	state := buildVceConfig(payload, localKeys, d.presetAliasListName())
+	state := buildVceConfig(payload, localKeys, d.presetAliasListName(), d.tunerSerials())
 	body, err := json.Marshal(state)
 	if err != nil {
 		return stageErr("playlist", "encode vce config", err)
@@ -360,7 +360,7 @@ func (d Deps) applySdrtrunkConfig(payload ConfigPayload, localKeys map[int]strin
 	// auto-start=false so the import brings nothing up AND the backstop below
 	// stops anything still running.
 	chans := payload.effectiveChannels()
-	state := buildVceConfig(payload, localKeys, d.presetAliasListName())
+	state := buildVceConfig(payload, localKeys, d.presetAliasListName(), d.tunerSerials())
 	body, err := json.Marshal(state)
 	if err != nil {
 		return stageErr("playlist", "encode vce config", err)
@@ -652,6 +652,31 @@ func (d Deps) loadPlaylistTemplate() []byte {
 		return b
 	}
 	return presets.DefaultPlaylistXML
+}
+
+// tunerSerials returns the preferred-tuner identifiers of the currently live
+// tuners, best-effort — the vce Tuner.getPreferredName() strings the control
+// server surfaces as each /tuners entry's `name`. That is the EXACT string
+// vce's TunerManager.getDiscoveredTuner matches a channel's preferredTuner
+// against, so buildVceConfig can use these to auto-spread Auto channels and have
+// vce actually honour the pins. An error or no control client yields nil, which
+// disables the auto-spread (channels stay Auto). Only tuners with a non-empty
+// name (a started, available tuner) are included.
+func (d Deps) tunerSerials() []string {
+	if d.SDR == nil {
+		return nil
+	}
+	live, err := d.SDR.Tuners()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(live))
+	for _, t := range live {
+		if n := strings.TrimSpace(t.Name); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // applyTuners pushes per-SDR gain/ppm to the live tuners via the control API.

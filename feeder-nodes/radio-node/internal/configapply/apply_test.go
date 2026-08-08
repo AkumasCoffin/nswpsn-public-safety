@@ -41,7 +41,7 @@ func TestBuildVceConfigDisabledChannel(t *testing.T) {
 			{Name: "test", Frequency: 142658000, Decoder: "p25p2", System: "NSW PSN", Site: "test", Order: 2, AutoStart: false},
 		},
 	}
-	state := buildVceConfig(payload, nil, "catch all PSN")
+	state := buildVceConfig(payload, nil, "catch all PSN", nil)
 	if len(state.Channels) != 1 {
 		t.Fatalf("expected 1 channel, got %d", len(state.Channels))
 	}
@@ -66,7 +66,7 @@ func TestBuildVceConfigCaptureOff(t *testing.T) {
 			{Name: "on-ch", Frequency: 142658000, Decoder: "p25p2", System: "NSW PSN", Site: "s", Order: 1, AutoStart: true},
 		},
 	}
-	state := buildVceConfig(payload, nil, "catch all PSN")
+	state := buildVceConfig(payload, nil, "catch all PSN", nil)
 	for _, ch := range state.Channels {
 		if ch.AutoStart {
 			t.Errorf("capture off should force autoStart=false on %q", ch.Name)
