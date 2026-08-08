@@ -96,10 +96,18 @@ describe('buildConfigPayload (radio) uses the imported sdrtrunk config', () => {
     expect(new Set(p.aliases.map((a) => a.list))).toEqual(new Set(['NSWPSN']));
     expect(p.aliases[0]!.name).toBe('101 ME1');
     // Streams come from the import (name = broadcastChannel route; systemId links rdio).
-    expect(p.streamTargets).toEqual([{ systemId: 2, name: 'FRNSW' }]);
-    // rdio apiKey exists for that systemId (agent fills the key), linked by systemId.
-    const apiKeys = (p.rdioConfig as { apiKeys?: Array<{ systems: Array<{ id: number }> }> }).apiKeys ?? [];
-    expect(apiKeys.some((k) => k.systems?.[0]?.id === 2)).toBe(true);
+    expect(p.streamTargets).toHaveLength(1);
+    expect(p.streamTargets[0]!.systemId).toBe(2);
+    expect(p.streamTargets[0]!.name).toBe('FRNSW');
+    // Each stream carries a real (non-empty) server-generated key.
+    expect(p.streamTargets[0]!.key).toMatch(/^[0-9a-f-]{36}$/);
+    // rdio apiKey exists for that systemId with the SAME key (linked by systemId).
+    const apiKeys = (p.rdioConfig as { apiKeys?: Array<{ key: string; systems: Array<{ id: number }> }> }).apiKeys ?? [];
+    const ak = apiKeys.find((k) => k.systems?.[0]?.id === 2);
+    expect(ak).toBeDefined();
+    expect(ak!.key).toBe(p.streamTargets[0]!.key);
+    // No empty apiKey keys (would 500 the local rdio on UNIQUE(key)).
+    expect(apiKeys.every((k) => k.key && k.key.length > 0)).toBe(true);
     // rdio system 2 is present (from agencies), so the uploaded call has a home.
     const systems = (p.rdioConfig as { systems?: Array<{ id: number }> }).systems ?? [];
     expect(systems.some((s) => s.id === 2)).toBe(true);
