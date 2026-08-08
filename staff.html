@@ -646,6 +646,13 @@
     }
     .nd-panel-h > i:first-child { color: var(--accent); }
     .nd-panel-h .nd-h-spacer { flex: 1; }
+    /* "Show encrypted" toggle in the Now-playing header (hidden by default). */
+    .nd-enc-toggle {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      text-transform: none; letter-spacing: 0; font-weight: 500;
+      font-size: 0.66rem; color: var(--text-soft); cursor: pointer; white-space: nowrap;
+    }
+    .nd-enc-toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
     .nd-panel-b { padding: 0.65rem 0.75rem; }
     .nd-panel-b.flush { padding: 0; }
     /* Empty-state cards inside flush (table) panels keep some breathing room. */
@@ -2694,6 +2701,10 @@
               <div class="nd-panel-h">
                 <i class="fas fa-tower-broadcast"></i> Now playing
                 <span class="nd-tab-count" id="nd-np-count" style="display:none;"></span>
+                <span class="nd-h-spacer"></span>
+                <label class="nd-enc-toggle" title="Reveal encrypted calls in the live display (hidden by default)">
+                  <input type="checkbox" id="nd-show-enc" onchange="_ndSetShowEnc(this.checked)"> Show encrypted
+                </label>
               </div>
               <div class="nd-panel-b" id="nd-nowplaying"></div>
             </div>
@@ -5663,6 +5674,7 @@
     let _ndPrevChan = Object.create(null);          // channelId -> {type, state} snapshot for transition diff
     let _ndCallStart = {};         // channelId -> epoch ms when the current call started
     let _ndNpTimer = null;         // 1s ticker for "now playing" elapsed clocks
+    let _ndShowEnc = false;        // Nodes tab: reveal encrypted calls in the per-node live display (default OFF). Persists across status frames.
 
     // API_BASE_URL is an http(s) URL (config.js: https://api.forcequit.xyz).
     // Swapping the leading "http" for "ws" turns https->wss and http->ws.
@@ -6945,6 +6957,17 @@
     // inputs. The full editable table is (re)built by _ndCfgRender().
     const _ND_LIVE_ACTIVE = new Set(['CALL', 'ACTIVE', 'DATA', 'ENCRYPTED']);
 
+    // Encrypted calls carry no listenable audio and the operator hides them by
+    // default; the "Show encrypted" toggle reveals them. The encryption marker is
+    // the channel/call state === 'ENCRYPTED' (vce State.ENCRYPTED), which is the
+    // only encryption signal in the status frame.
+    function _ndIsEnc(x) { return String((x && x.state) || '').toUpperCase() === 'ENCRYPTED'; }
+    function _ndSetShowEnc(on) {
+      _ndShowEnc = !!on;
+      _ndRenderChannels();     // repaint live-state cells + unmatched-live rows
+      _ndRenderNowPlaying();   // repaint the active-call cards + count
+    }
+
     // Match a config channel {name, frequency(Hz)} to a live status channel.
     // Primary key = frequency in Hz (exact); fallback = name (case-insensitive).
     // Returns {chan, index} into _ndChannels, or null.
@@ -6969,8 +6992,11 @@
     function _ndLiveStateHtml(match) {
       const live = match ? match.chan : null;
       if (!live) return `<span class="nd-state offline" title="No live channel matched">offline</span>`;
-      const st = String(live.state || '').toUpperCase();
+      let st = String(live.state || '').toUpperCase();
       const isControl = live.control === true || st === 'CONTROL';
+      // Encrypted call hidden: present the channel as idle so no call detail leaks
+      // (the channel is still processing; only the encrypted-call surface is hidden).
+      if (!_ndShowEnc && st === 'ENCRYPTED' && !isControl) st = 'IDLE';
       let cls, label;
       if (isControl) { cls = 'control'; label = 'Control'; }
       else if (st === 'ENCRYPTED') { cls = 'enc'; label = 'Encrypted'; }
@@ -7008,7 +7034,8 @@
           const live = m ? m.chan : null;
           const st = live ? String(live.state || '').toUpperCase() : '';
           const isControl = !!(live && (live.control === true || st === 'CONTROL'));
-          const lit = !!(live && _ND_LIVE_ACTIVE.has(st)) && !isControl;
+          const encHidden = !_ndShowEnc && st === 'ENCRYPTED';
+          const lit = !!(live && _ND_LIVE_ACTIVE.has(st)) && !isControl && !encHidden;
           row.classList.toggle('nd-ch-live-ctrl', isControl);
           row.classList.toggle('nd-ch-live-lit', lit);
         }
@@ -7030,6 +7057,8 @@
         const isControl = c.control === true || st === 'CONTROL';
         // Only genuinely-active (in-progress call) unmatched channels.
         if (!_ND_LIVE_ACTIVE.has(st) || isControl) return;
+        // Hide encrypted calls unless the "Show encrypted" toggle is on.
+        if (!_ndShowEnc && st === 'ENCRYPTED') return;
         extra.push({ chan: c, index: idx });
       });
       if (!extra.length) { host.innerHTML = ''; return; }
@@ -7198,12 +7227,14 @@
       // Data calls (state DATA) are hidden from Now Playing — they carry no voice
       // and just take up space.
       const isData = (c) => String(c.state || '').toUpperCase() === 'DATA';
+      // Encrypted calls are hidden unless the "Show encrypted" toggle is on.
+      const encHidden = (c) => !_ndShowEnc && _ndIsEnc(c);
       // Prefer the dedicated activeCalls array (includes dynamically-allocated
       // P25 traffic channels not present in the channels list). Fall back to
       // channels in a live state only when activeCalls is absent.
-      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c));
+      if (Array.isArray(_ndCalls) && _ndCalls.length) return _ndCalls.filter(c => !isData(c) && !encHidden(c));
       const ACTIVE = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
-      return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && (c.from || c.to || c.frequency != null));
+      return _ndChannels.filter(c => ACTIVE.has(String(c.state || '').toUpperCase()) && !encHidden(c) && (c.from || c.to || c.frequency != null));
     }
 
     function _ndRenderNowPlaying() {
@@ -7268,18 +7299,31 @@
     // === Per-node channel editor (P1) ==================================
     const _ND_DECODERS = ['p25p1', 'p25p2', 'dmr', 'nbfm', 'am'];
 
-    // Available SDR serials for the per-channel "sdr" picker — merged from the
-    // live tuners and any serials already referenced in the saved config.
-    function _ndCfgSerials() {
-      const set = new Set();
-      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s) set.add(s); });
-      if (_ndConfig && Array.isArray(_ndConfig.tuners)) {
-        _ndConfig.tuners.forEach(t => { if (t && t.serial != null) set.add(String(t.serial)); });
-      }
+    // Options for the per-channel "SDR" picker, as {value,label} descriptors.
+    // The option VALUE must be the tuner's getPreferredName() (the `name` field in
+    // /tuners, e.g. "RTL2832/R820T 00000101"), because that is what vce and the
+    // agent's auto-spread match a channel's preferredTuner against — NOT the USB
+    // bus/port id in `t.id`. Using the id meant manual pins never took effect.
+    // A tuner with no name yet (only populated when started/available) is skipped,
+    // so the channel falls back to Auto rather than being pinned to a bad value.
+    // Any sdr already saved on a channel is surfaced too (it may be a legacy
+    // bus/port id that no longer matches) so the select still shows the saved value.
+    function _ndCfgSdrOptions() {
+      const seen = new Set();
+      const opts = [];
+      const add = (value, label) => {
+        const v = value != null ? String(value).trim() : '';
+        if (!v || seen.has(v)) return;
+        seen.add(v);
+        opts.push({ value: v, label: (label != null && String(label).trim()) ? String(label) : v });
+      };
+      // Live tuners: value = getPreferredName (t.name); full name is the label.
+      _ndTuners.forEach(t => { if (t) add(t.name, t.name); });
+      // Existing per-channel pins (may be legacy ids that no longer match a tuner).
       if (_ndConfig && Array.isArray(_ndConfig.channels)) {
-        _ndConfig.channels.forEach(c => { if (c && c.sdr) set.add(String(c.sdr)); });
+        _ndConfig.channels.forEach(c => { if (c && c.sdr) add(c.sdr, c.sdr); });
       }
-      return Array.from(set);
+      return opts;
     }
 
     async function _ndCfgFetch() {
@@ -7565,14 +7609,14 @@
         _ndRenderChannels(); // still surface any live-only channels below
         return;
       }
-      const serials = _ndCfgSerials();
+      const sdrOptList = _ndCfgSdrOptions();
       const rows = chans.map((c, i) => {
         const freqMhz = c.frequency != null ? (c.frequency / 1e6) : '';
         const decoder = c.decoder || 'p25p1';
         const decOpts = _ND_DECODERS.map(d => `<option value="${d}" ${d === decoder ? 'selected' : ''}>${d}</option>`).join('');
         const sdrCur = c.sdr != null ? String(c.sdr) : '';
         const sdrOpts = [`<option value="" ${sdrCur === '' ? 'selected' : ''}>Auto</option>`]
-          .concat(serials.map(s => `<option value="${escapeHtml(s)}" ${String(s) === sdrCur ? 'selected' : ''}>${escapeHtml(s)}</option>`)).join('');
+          .concat(sdrOptList.map(o => `<option value="${escapeHtml(o.value)}" ${o.value === sdrCur ? 'selected' : ''}>${escapeHtml(o.label)}</option>`)).join('');
         const detailBody = _ndDecoderFieldsHtml(i, decoder, c.decoderConfig || {});
         return `<tr id="nd-ch-row-${i}">
           <td><span class="nd-ch-en"><input type="checkbox" id="nd-ch-${i}-auto" title="Auto-start this channel when the node comes up" ${c.autoStart !== false ? 'checked' : ''}></span></td>
