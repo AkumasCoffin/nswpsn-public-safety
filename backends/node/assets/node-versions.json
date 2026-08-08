@@ -1,7 +1,7 @@
 {
   "_comment": "Node self-update + component manifest. Everything is served as static files off the site webroot (NODE_DOWNLOADS_BASE, default https://nswpsn.forcequit.xyz/downloads). Deploy builds the agent binaries there; the SDR-Trunk runtime (from the feature/node-control branch) and the rdio binary are placed there once. Fill in the sha256 hex once the artifacts exist (leave empty to disable that entry — the agent treats empty sha256 as 'no update' and skips). The agent checks this on start, every 6h, and on cmd{action:'update'}: downloads to .pending, sha256-verifies, swaps the component dir / self-replaces via a detached helper, restarts.",
   "agent": {
-    "version": "0.2.3",
+    "version": "0.2.4",
     "urls": {
       "windows-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-windows-amd64.exe",
       "linux-amd64": "https://nswpsn.forcequit.xyz/downloads/nodeagent-linux-amd64",
