@@ -1063,6 +1063,11 @@
     }
     .gc-icon-btn:hover { background: rgba(239, 68, 68, 0.24); }
     .gc-empty { font-size: 0.78rem; color: var(--text-soft); padding: 1.2rem; text-align: center; }
+    .gc-alias-list { display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto; border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 6px; }
+    .gc-alias-row { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.28rem 0.5rem; font-size: 0.74rem; }
+    .gc-alias-row:nth-child(even) { background: rgba(255,255,255,0.03); }
+    .gc-alias-tg { flex: 0 0 auto; min-width: 3.5rem; font-variant-numeric: tabular-nums; color: var(--text-soft); font-weight: 600; }
+    .gc-alias-name { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .gc-attr-row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.35rem; }
     .gc-badge-btn {
       background: rgba(56, 189, 248, 0.1); border: 1px solid var(--accent-border);
@@ -7646,7 +7651,7 @@
         const prioOpts = [`<option value="default" ${priVal === 'default' ? 'selected' : ''}>Monitor (default)</option>`,
           `<option value="-1" ${priVal === '-1' ? 'selected' : ''}>Do not monitor</option>`]
           .concat(Array.from({ length: 99 }, (_, n) => { const v = String(n + 1); return `<option value="${v}" ${v === priVal ? 'selected' : ''}>Priority ${v}</option>`; })).join('');
-        const idEditors = aliasIds.map((id, idi) => _gcRenderId(i, idi, id)).join('');
+        const sdr = _gcSdrForAgency(a);
         const shownTgs = tgs.map((tg, ti) => ({ tg, ti })).filter(({ tg }) => !q || matchTg(tg));
         const body = !open ? '' : `<div class="gc-card-body">
           <section class="gc-sect gc-sect-global">
@@ -7671,13 +7676,14 @@
           </section>
 
           <section class="gc-sect gc-sect-sdr">
-            <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Alias &amp; streaming ranges</div>
-            <div class="gc-hint">Talkgroup / radio ids streamed for this agency. Priority &amp; broadcast channel are set automatically from the fields above.</div>
-            ${idEditors || `<div class="gc-empty" style="padding:0.6rem;">No streaming ranges.</div>`}
-            <button class="gc-badge-btn" style="margin-top:0.4rem;" onclick="_gcAddId(${i})"><i class="fas fa-plus"></i> Add range</button>
-            <div class="gc-inline" style="margin-top:0.6rem;">
-              <div class="nd-fld"><label>Stream as talkgroup</label><input type="number" style="max-width:140px;" value="${escapeHtml(a.streamTalkgroupAlias != null ? String(a.streamTalkgroupAlias) : '')}" oninput="_gcAgencyStreamSet(${i},this.value)" placeholder="talkgroup"></div>
-            </div>
+            <div class="gc-sect-h"><span class="gc-src-badge gc-src-sdr">SDR-Trunk</span> Aliases &amp; streams <span class="gc-sect-count">${sdr.aliases.length.toLocaleString()}</span></div>
+            <div class="gc-hint">Imported from your sdrtrunk-vce database (Import above) and managed fleet-wide — linked to this agency by system ID ${(a.systemId == null || a.systemId === '') ? '<em>(unset)</em>' : escapeHtml(String(a.systemId))}. Edit the .db and re-import to change them.</div>
+            ${sdr.streams.length ? `<div class="gc-hint" style="margin-top:0.2rem;">Streams: ${sdr.streams.map(s => escapeHtml(s.name)).join(', ')}</div>` : ''}
+            ${sdr.aliases.length
+              ? `<div class="gc-alias-list">${sdr.aliases.slice(0, 12).map(al => `<div class="gc-alias-row"><span class="gc-alias-tg">${escapeHtml(_gcAliasTgText(al))}</span><span class="gc-alias-name">${escapeHtml(al.name || '')}</span></div>`).join('')}</div>${sdr.aliases.length > 12 ? `<div class="gc-hint">+${(sdr.aliases.length - 12).toLocaleString()} more…</div>` : ''}`
+              : (sdr.hasImport
+                ? `<div class="gc-empty" style="padding:0.6rem;">No imported aliases route to this system — check the agency's system ID matches a stream in the import.</div>`
+                : `<div class="gc-empty" style="padding:0.6rem;">No SDR-Trunk aliases imported yet — use &ldquo;Import sdrtrunk .db&rdquo; above.</div>`)}
           </section>
 
           <section class="gc-sect gc-sect-rdio">
@@ -7761,6 +7767,29 @@
     function _gcAgencySet(i, field, val, delEmpty) { const a = _gcData.agencies[i]; if (a) _gcAssignField(a, field, val, delEmpty); }
     function _gcAddAgency() { _gcData.agencies.push({ systemId: '', name: 'New agency', aliasIds: [], talkgroups: [], units: [] }); _gcOpenAgency.clear(); _gcOpenAgency.add(_gcData.agencies.length - 1); _gcRenderAgencies(); }
     async function _gcRemoveAgency(i) { if (!await uiConfirm('Remove this agency (its alias, system, talkgroups and units)?', { danger: true, okText: 'Remove' })) return; _gcData.agencies.splice(i, 1); _gcOpenAgency.clear(); _gcOpenTg.clear(); _gcRenderAgencies(); }
+    // SDR-Trunk aliases + streams are import-managed fleet-wide (from the sdrtrunk-vce
+    // .db), NOT edited per agency. They link to an agency only by systemID: each alias
+    // routes to a broadcastChannel that is a stream name, and the stream carries the
+    // systemID. Reflect the imported aliases routed to this agency's system, read-only.
+    function _gcSdrForAgency(a) {
+      const sc = _gcData.sdrtrunkConfig;
+      const hasImport = !!(sc && (((sc.aliases || []).length) || ((sc.streams || []).length)));
+      const sid = (a && a.systemId != null && a.systemId !== '') ? String(a.systemId) : null;
+      if (!sc || sid == null) return { streams: [], aliases: [], hasImport };
+      const streams = (sc.streams || []).filter(s => String(s.systemId) === sid);
+      const chans = new Set(streams.map(s => s.name));
+      const aliases = (sc.aliases || []).filter(al => Array.isArray(al.ids)
+        && al.ids.some(id => id && id.type === 'broadcastChannel' && id.attrs && chans.has(id.attrs.channel)));
+      return { streams, aliases, hasImport };
+    }
+    function _gcAliasTgText(al) {
+      const ids = Array.isArray(al.ids) ? al.ids : [];
+      const tg = ids.find(id => id && id.type === 'talkgroup');
+      if (tg && tg.attrs && tg.attrs.value != null) return String(tg.attrs.value);
+      const rng = ids.find(id => id && id.type === 'talkgroupRange');
+      if (rng && rng.attrs) return `${rng.attrs.min != null ? rng.attrs.min : ''}–${rng.attrs.max != null ? rng.attrs.max : ''}`;
+      return '';
+    }
     // Streaming ranges live on agency.aliasIds — same {type, attrs} shape and editor
     // as the old SDR-Trunk alias ids (the backend adds priority/broadcastChannel).
     function _gcAddId(i) { const a = _gcData.agencies[i]; if (!Array.isArray(a.aliasIds)) a.aliasIds = []; a.aliasIds.push({ type: 'talkgroup', attrs: {} }); _gcRenderAgencies(); }
