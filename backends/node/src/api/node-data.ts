@@ -737,6 +737,7 @@ nodeDataRouter.get(
               talkgroup_label: string | null;
               system_label: string | null;
               source_unit: number | null;
+              source_alias: string | null;
               frequency: string | null;
               action: string | null;
               event_type: string | null;
@@ -753,6 +754,8 @@ nodeDataRouter.get(
                       MAX(e.talkgroup_label) AS talkgroup_label,
                       MAX(e.system_label) AS system_label,
                       MIN(e.source_unit) AS source_unit,
+                      (array_agg(e.source_alias ORDER BY e.received_at DESC)
+                         FILTER (WHERE e.source_alias IS NOT NULL))[1] AS source_alias,
                       MIN(e.frequency)::bigint AS frequency,
                       MIN(e.action) AS action,
                       MIN(e.event_type) AS event_type,
@@ -816,6 +819,7 @@ nodeDataRouter.get(
               talkgroupLabel: d.talkgroup_label ?? (d.talkgroup !== null ? labels.get(d.talkgroup) ?? null : null),
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
+              sourceAlias: d.source_alias,
               frequency: d.frequency !== null ? Number(d.frequency) : null,
               action: d.action,
               eventType: d.event_type,
@@ -1014,6 +1018,7 @@ nodeDataRouter.get(
       const res = await pool.query<{
         wacn: number | null;
         system: number | null;
+        name: string | null;
         calls: unknown;
         logical: unknown;
         enc: unknown;
@@ -1023,7 +1028,11 @@ nodeDataRouter.get(
         first_seen: Date;
         last_seen: Date;
       }>(
+        // name: the most-recent non-null friendly system label (system_name
+        // from vce, e.g. "NSWPSN"); null when no reception carried one.
         `SELECT wacn, system,
+                (array_agg(system_label ORDER BY received_at DESC)
+                   FILTER (WHERE system_label IS NOT NULL))[1] AS name,
                 COUNT(*)::int AS calls,
                 COUNT(DISTINCT logical_call_id)::int AS logical,
                 (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
@@ -1047,6 +1056,7 @@ nodeDataRouter.get(
         systems: res.rows.map((r) => ({
           wacn: r.wacn,
           system: r.system,
+          name: r.name ?? null,
           calls: num(r.calls),
           logicalCalls: num(r.logical),
           encryptedCalls: num(r.enc),
@@ -1092,7 +1102,7 @@ nodeDataRouter.get(
         `${p}received_at >= now() - $1::interval AND ${p}system = $2` +
         (wacn !== null ? ` AND ${p}wacn = $3` : '');
 
-      const [detail, sitesQ] = await Promise.all([
+      const [detail, sitesQ, nameQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
         pool.query<{
           rfss: number;
@@ -1128,12 +1138,22 @@ nodeDataRouter.get(
             ORDER BY s.calls DESC, s.rfss ASC, s.site ASC`,
           params,
         ),
+        // Friendly system name for the drill-down heading (most-recent
+        // non-null system_label within the scope); null when none seen.
+        pool.query<{ name: string | null }>(
+          `SELECT (array_agg(system_label ORDER BY received_at DESC)
+                     FILTER (WHERE system_label IS NOT NULL))[1] AS name
+             FROM node_radio_events
+            WHERE ${scope('')}`,
+          params,
+        ),
       ]);
 
       return c.json({
         window,
         system,
         wacn,
+        name: nameQ.rows[0]?.name ?? null,
         totals: detail.totals,
         sites: sitesQ.rows.map((r) => ({
           rfss: r.rfss,
@@ -1481,10 +1501,15 @@ nodeDataRouter.get(
           wacn: number | null;
           system: number | null;
           radio: number;
+          alias: string | null;
           calls: unknown;
           last_seen: Date;
         }>(
+          // alias: the most-recent non-null OTA/talker alias for this radio
+          // (source_alias from vce); null when none was ever captured.
           `SELECT wacn, system, source_unit AS radio,
+                  (array_agg(source_alias ORDER BY received_at DESC)
+                     FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
                   COUNT(*)::int AS calls,
                   MAX(received_at) AS last_seen
              FROM node_radio_events
@@ -1617,6 +1642,7 @@ nodeDataRouter.get(
             wacn: r.wacn,
             system: r.system,
             radio: r.radio,
+            alias: r.alias ?? null,
             calls: num(r.calls),
             lastSeen: iso(r.last_seen),
             lastSite: ex?.lastSite ?? null,

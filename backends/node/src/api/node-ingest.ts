@@ -271,6 +271,11 @@ const ActivityEventSchema = z.object({
   // Validated but not stored — labels resolve from the global agencies
   // config at read time (see services/nodeEvents.ts).
   channelName: z.string().max(128).nullish(),
+  // Friendly P25 system name (e.g. "NSWPSN") → node_radio_events.system_label.
+  // Talker/OTA alias for the source radio → node_radio_events.source_alias.
+  // Both optional/nullable so older agents (which omit them) still validate.
+  systemName: z.string().max(128).nullish(),
+  sourceAlias: z.string().max(128).nullish(),
 });
 
 const ActivityBodySchema = z.object({
@@ -353,6 +358,8 @@ nodeIngestRouter.post('/api/node-ingest/activity', async (c) => {
       wacn: ev.wacn ?? null,
       systemId: ev.systemId ?? null,
       channelName: ev.channelName ?? null,
+      systemName: ev.systemName ?? null,
+      sourceAlias: ev.sourceAlias ?? null,
     })),
   );
   log.info(

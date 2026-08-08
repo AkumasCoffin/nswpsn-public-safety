@@ -1,0 +1,1148 @@
+﻿id,address,alias,agency,icon,color,pluginconf,ignore
+1,0010627,Lower Hunter - Gresford Brigade Captain,RFS,fire-alt,orange,{},0
+2,0010634,Lower Hunter Group 2,RFS,fire-alt,orange,{},0
+3,0010648,Lower Hunter - Fingal Bay Brigade,RFS,fire-alt,orange,{},0
+4,0010650,Lower Hunter Deputy Group 1,RFS,fire-alt,orange,{},0
+5,0010658,Lower Hunter Deputy Group 2,RFS,fire-alt,orange,{},0
+6,0010664,Lower Hunter Comms Support Unit Captain,RFS,fire-alt,orange,{},0
+7,0010672,Lower Hunter Comms Support Unit,RFS,fire-alt,orange,{},0
+8,0010688,Lower Hunter - Soldiers Point Brigade Captain,RFS,fire-alt,orange,{},0
+9,0010696,Lower Hunter - Soldiers Point Brigade,RFS,fire-alt,orange,{},0
+10,0010704,Lower Hunter - Martins Creek Brigade Captain,RFS,fire-alt,orange,{},0
+11,0010714,Lower Hunter Deputy Group 3,RFS,fire-alt,orange,{},0
+12,0010720,Lower Hunter - Anna Bay Brigade,RFS,fire-alt,orange,{},0
+13,0010722,Lower Hunter - Iona/Duns Creek Brigade,RFS,fire-alt,orange,{},0
+14,0010728,Lower Hunter Broadcast Message,RFS,fire-alt,orange,{},0
+15,0010730,Lower Hunter - Eccleston Brigade,RFS,fire-alt,orange,{},0
+16,0010738,Lower Hunter Deputy Group 4,RFS,fire-alt,orange,{},0
+17,0010744,Lower Hunter - Williamtown/Salt Ash Brigade,RFS,fire-alt,orange,{},0
+18,0010760,Lower Hunter - Tanilba Bay Brigade Captain,RFS,fire-alt,orange,{},0
+19,0010768,Lower Hunter - Tilligerry Brigade,RFS,fire-alt,orange,{},0
+20,0010784,Lower Hunter - Lemon Tree Brigade Captain,RFS,fire-alt,orange,{},0
+21,0010792,Lower Hunter - Lemon Tree Passage Brigade,RFS,fire-alt,orange,{},0
+22,0010808,Lower Hunter - Medowie Brigade Captain,RFS,fire-alt,orange,{},0
+23,0010816,Lower Hunter - Medowie Brigade,RFS,fire-alt,orange,{},0
+24,0010832,Lower Hunter - Karuah Brigade Captain,RFS,fire-alt,orange,{},0
+25,0010840,Lower Hunter - Karuah Brigade,RFS,fire-alt,orange,{},0
+26,0010856,Lower Hunter - Raymond Terrace Brigade Captain,RFS,fire-alt,orange,{},0
+27,0010864,Lower Hunter - Raymond Terrace Brigade,RFS,fire-alt,orange,{},0
+28,0010880,Lower Hunter Quads,RFS,fire-alt,orange,{},0
+29,0010904,Lower Hunter - Seaham Brigade Captain,RFS,fire-alt,orange,{},0
+30,0010912,Lower Hunter - Seaham Brigade,RFS,fire-alt,orange,{},0
+31,0010936,Lower Hunter - Duns Creek Brigade,RFS,fire-alt,orange,{},0
+32,0010960,Lower Hunter - Bowthorne/Hinton Brigade,RFS,fire-alt,orange,{},0
+33,0011000,Lower Hunter Group 2,RFS,fire-alt,orange,{},0
+34,0011072,Lower Hunter - Clarencetown Brigade Captain,RFS,fire-alt,orange,{},0
+35,0011088,Lower Hunter - Wallarobba Brigade Captain,RFS,fire-alt,orange,{},0
+36,0011120,Lower Hunter Pager Techs,RFS,fire-alt,orange,{},0
+37,0011136,Lower Hunter Deputy Group 4,RFS,fire-alt,orange,{},0
+38,0011144,Lower Hunter - Clarence Town CFS,RFS,fire-alt,orange,{},0
+39,0011152,Lower Hunter Group 4,RFS,fire-alt,orange,{},0
+40,0011272,Lower Hunter - Martins Creek Brigade,RFS,fire-alt,orange,{},0
+41,0011312,Lower Hunter Catering Support Unit,RFS,fire-alt,orange,{},0
+42,0011392,Lower Hunter - Dungog Brigade,RFS,fire-alt,orange,{},0
+43,0011400,Lower Hunter - Gresford Brigade,RFS,fire-alt,orange,{},0
+44,0011408,Lower Hunter Group 3,RFS,fire-alt,orange,{},0
+45,0011416,Lower Hunter - Paterson Brigade,RFS,fire-alt,orange,{},0
+46,0011432,Lower Hunter - Vacy Brigade,RFS,fire-alt,orange,{},0
+47,0011680,Lower Hunter - Wallarobba Brigade,RFS,fire-alt,orange,{},0
+48,0011720,Lower Hunter - Flat Tops Brigade,RFS,fire-alt,orange,{},0
+49,0011800,Lower Hunter Broadcast Message,RFS,fire-alt,orange,{},0
+50,0029024,Macarthur - Oberon Brigade,RFS,fire-alt,orange,{},0
+51,0029040,Macarthur - Turon Brigade,RFS,fire-alt,orange,{},0
+52,0029064,Macarthur - Burraga Brigade,RFS,fire-alt,orange,{},0
+53,0060008,Cumberland Broadcast Message,RFS,fire-alt,orange,{},0
+54,0089016,Port Stephens SES - Duty Officer,SES,exclamation-triangle,yellow,{},0
+55,0089024,Port Stephens SES,SES,medkit,orange,{},0
+1112,0104811,48 Mortdale,FRNSW,fire-extinguisher,#FF0000,{},0
+1122,0106611,66 Rhodes,FRNSW,fire-extinguisher,#FF0000,{},0
+1123,0107211,72 Merrylands,FRNSW,fire-extinguisher,#FF0000,{},0
+1124,0107811,78 Ropes Crossing,FRNSW,fire-extinguisher,#FF0000,{},0
+1125,0107911,79 Ingleburn,FRNSW,fire-extinguisher,#FF0000,{},0
+1126,0108011,80 Bundeena,FRNSW,fire-extinguisher,#FF0000,{},0
+1127,0108111,81 Windsor,FRNSW,fire-extinguisher,#FF0000,{},0
+1128,0108211,82 Richmond,FRNSW,fire-extinguisher,#FF0000,{},0
+1129,0108311,83 Riverstone,FRNSW,fire-extinguisher,#FF0000,{},0
+1130,0108811,88 Campbelltown,FRNSW,fire-extinguisher,#FF0000,{},0
+1131,0109011,90 Menai,FRNSW,fire-extinguisher,#FF0000,{},0
+1057,0120211,202 Abermain,FRNSW,fire-extinguisher,#FF0000,{},0
+1058,0120711,207 Albion Park,FRNSW,fire-extinguisher,#FF0000,{},0
+1059,0121011,210 Balgownie,FRNSW,fire-extinguisher,#FF0000,{},0
+1060,0122011,220 Bellbird,FRNSW,fire-extinguisher,#FF0000,{},0
+1061,0122211,222 Belmont,FRNSW,fire-extinguisher,#FF0000,{},0
+1062,0122611,226 Blackheath,FRNSW,fire-extinguisher,#FF0000,{},0
+1063,0123411,234 Bowral,FRNSW,fire-extinguisher,#FF0000,{},0
+1064,0123711,237 Branxton,FRNSW,fire-extinguisher,#FF0000,{},0
+1065,0124211,242 Bundanoon,FRNSW,fire-extinguisher,#FF0000,{},0
+1066,0124511,245 Budgewoi,FRNSW,fire-extinguisher,#FF0000,{},0
+1067,0124811,248 Camden,FRNSW,fire-extinguisher,#FF0000,{},0
+1068,0125111,251 Cardiff,FRNSW,fire-extinguisher,#FF0000,{},0
+1069,0125211,252 Carrington,FRNSW,fire-extinguisher,#FF0000,{},0
+1070,0125411,254 Cessnock,FRNSW,fire-extinguisher,#FF0000,{},0
+1071,0125511,255 Charlestown,FRNSW,fire-extinguisher,#FF0000,{},0
+1072,0125811,258 Coledale,FRNSW,fire-extinguisher,#FF0000,{},0
+1073,0126911,269 Corrimal,FRNSW,fire-extinguisher,#FF0000,{},0
+1074,0129211,292 Doyalson 2 way,FRNSW,fire-extinguisher,#FF0000,{},0
+1075,0130111,301 Glenbrook,FRNSW,fire-extinguisher,#FF0000,{},0
+1076,0132511,325 Helensburgh,FRNSW,fire-extinguisher,#FF0000,{},0
+1077,0134011,340 Umina,FRNSW,fire-extinguisher,#FF0000,{},0
+1078,0134111,341 Kariong,FRNSW,fire-extinguisher,#FF0000,{},0
+1079,0134311,343 Katoomba,FRNSW,fire-extinguisher,#FF0000,{},0
+1080,0134411,344 Kearsley,FRNSW,fire-extinguisher,#FF0000,{},0
+1081,0134611,346 Kiama,FRNSW,fire-extinguisher,#FF0000,{},0
+1082,0134911,349 Kurri Kurri,FRNSW,fire-extinguisher,#FF0000,{},0
+1055,0135711,357 Lambton,FRNSW,fire-extinguisher,#FF0000,{},0
+1083,0136111,361 Leura,FRNSW,fire-extinguisher,#FF0000,{},0
+1084,0136311,363 Lithgow,FRNSW,fire-extinguisher,#FF0000,{},0
+1085,0136411,364 Lithgow West,FRNSW,fire-extinguisher,#FF0000,{},0
+1086,0137411,374 Maitland,FRNSW,fire-extinguisher,#FF0000,{},0
+1056,0137611,376 Merewether,FRNSW,fire-extinguisher,#FF0000,{},0
+1087,0137711,377 Minmi,FRNSW,fire-extinguisher,#FF0000,{},0
+1088,0137811,378 Mittagong,FRNSW,fire-extinguisher,#FF0000,{},0
+1089,0138211,382 Morpeth,FRNSW,fire-extinguisher,#FF0000,{},0
+1090,0138311,383 Morisset,FRNSW,fire-extinguisher,#FF0000,{},0
+1091,0138511,385 Moss Vale,FRNSW,fire-extinguisher,#FF0000,{},0
+1092,0138611,386 Mt Victoria,FRNSW,fire-extinguisher,#FF0000,{},0
+1093,0140211,402 Salmander Bay,FRNSW,fire-extinguisher,#FF0000,{},0
+1094,0141811,418 Paxton,FRNSW,fire-extinguisher,#FF0000,{},0
+1095,0142111,421 Picton,FRNSW,fire-extinguisher,#FF0000,{},0
+1096,0143211,432 Raymond Terrace,FRNSW,fire-extinguisher,#FF0000,{},0
+1097,0144211,442 Scarborough,FRNSW,fire-extinguisher,#FF0000,{},0
+1098,0144411,444 Singleton,FRNSW,fire-extinguisher,#FF0000,{},0
+1099,0144511,445 Spingwood,FRNSW,fire-extinguisher,#FF0000,{},0
+1100,0144611,446 Stockton,FRNSW,fire-extinguisher,#FF0000,{},0
+1101,0144711,447 Swansea,FRNSW,fire-extinguisher,#FF0000,{},0
+1102,0145011,450 Saratoga,FRNSW,fire-extinguisher,#FF0000,{},0
+1103,0145411,454 Tarro,FRNSW,fire-extinguisher,#FF0000,{},0
+1104,0145511,455 Telarah,FRNSW,fire-extinguisher,#FF0000,{},0
+1105,0145811,458 Teralba,FRNSW,fire-extinguisher,#FF0000,{},0
+1106,0145911,459 Terrigal,FRNSW,fire-extinguisher,#FF0000,{},0
+1107,0146011,460 The Entrance,FRNSW,fire-extinguisher,#FF0000,{},0
+1108,0146111,461 Thirroul,FRNSW,fire-extinguisher,#FF0000,{},0
+1109,0146411,464 Toronto,FRNSW,fire-extinguisher,#FF0000,{},0
+1110,0147011,470 Toukley,FRNSW,fire-extinguisher,#FF0000,{},0
+1111,0147411,474 Unanderra,FRNSW,fire-extinguisher,#FF0000,{},0
+1113,0148411,484 Wallsend,FRNSW,fire-extinguisher,#FF0000,{},0
+1114,0148511,485 Wangi Wangi,FRNSW,fire-extinguisher,#FF0000,{},0
+1115,0148811,488 Shellharbour,FRNSW,fire-extinguisher,#FF0000,{},0
+1116,0148911,489 Warragamba,FRNSW,fire-extinguisher,#FF0000,{},0
+1117,0149511,495 Wentwoth Falls,FRNSW,fire-extinguisher,#FF0000,{},0
+1118,0149811,498 Holmesville,FRNSW,fire-extinguisher,#FF0000,{},0
+1119,0150011,500 Tingira Heights,FRNSW,fire-extinguisher,#FF0000,{},0
+1120,0150511,505 Wyong,FRNSW,fire-extinguisher,#FF0000,{},0
+1121,0150911,509 Wyoming,FRNSW,fire-extinguisher,#FF0000,{},0
+56,0180008,Cumberland Broadcast Message,RFS,fire-alt,orange,{},0
+57,0180042,Cumberland - Wallacia Brigade,RFS,fire-alt,orange,{},0
+58,0180184,Cumberland - Eastern Creek Brigade,RFS,fire-alt,orange,{},0
+59,0180192,Cumberland - Plumpton Brigade,RFS,fire-alt,orange,{},0
+60,0180200,Cumberland - Shanes Park Brigade,RFS,fire-alt,orange,{},0
+61,0180208,Cumberland - Marsden Park Brigade,RFS,fire-alt,orange,{},0
+62,0180216,Cumberland - Horsley Park Brigade,RFS,fire-alt,orange,{},0
+63,0180224,Cumberland - Schofields Brigade,RFS,fire-alt,orange,{},0
+64,0180240,Cumberland Duty Officer,RFS,fire-alt,orange,{},0
+65,0180627,Cumberland Comms Support Unit,RFS,fire-alt,orange,{},0
+66,0200104,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+67,0200200,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+68,0200232,Canobolas - Carcoar Brigade,RFS,fire-alt,orange,{},0
+69,0200240,Canobolas - Lidster Brigade,RFS,fire-alt,orange,{},0
+70,0200288,Canobolas - Millthorpe Brigade,RFS,fire-alt,orange,{},0
+71,0209000,Canobolas - Blayney Brigade,RFS,fire-alt,orange,{},0
+72,0210000,Blue Mountains Broadcast Message,RFS,fire-alt,orange,{},0
+73,0210008,Blue Mountains FCO1,RFS,fire-alt,orange,{},0
+74,0210016,Blue Mountains FCO2,RFS,fire-alt,orange,{},0
+75,0210032,Blue Mountains FCO4,RFS,fire-alt,orange,{},0
+76,0210040,Blue Mountains FCO5,RFS,fire-alt,orange,{},0
+77,0210048,Blue Mountains Ops Support,RFS,fire-alt,orange,{},0
+78,0210056,Blue Mountains Duty Officer,RFS,fire-alt,orange,{},0
+79,0210120,Blue Mountains First Responders,RFS,fire-alt,orange,{},0
+80,0210160,Blue Mountains Group Support Comms,RFS,fire-alt,orange,{},0
+81,0210168,Blue Mountains Group Leader,RFS,fire-alt,orange,{},0
+82,0210176,Blue Mountains Group Mechanic,RFS,fire-alt,orange,{},0
+83,0210192,Blue Mountains Blue Mountains GSB,RFS,fire-alt,orange,{},0
+84,0210216,Blue Mountains Central 1,RFS,fire-alt,orange,{},0
+85,0210224,Blue Mountains Central 2,RFS,fire-alt,orange,{},0
+86,0210232,Blue Mountains Central 3,RFS,fire-alt,orange,{},0
+87,0210240,Blue Mountains East 1,RFS,fire-alt,orange,{},0
+88,0210248,Blue Mountains East 2,RFS,fire-alt,orange,{},0
+89,0210256,Blue Mountains East 3,RFS,fire-alt,orange,{},0
+90,0210264,Blue Mountains West 1,RFS,fire-alt,orange,{},0
+91,0210272,Blue Mountains West 2,RFS,fire-alt,orange,{},0
+92,0210280,Blue Mountains West 3,RFS,fire-alt,orange,{},0
+93,0210288,Blue Mountains - Bell Brigade Captain,RFS,fire-alt,orange,{},0
+94,0210296,Blue Mountains - Bell Brigade,RFS,fire-alt,orange,{},0
+95,0210304,Blue Mountains - Blaxland Brigade Captain,RFS,fire-alt,orange,{},0
+96,0210312,Blue Mountains - Blaxland Brigade,RFS,fire-alt,orange,{},0
+97,0210320,Blue Mountains - Bullaburra Brigade Captain,RFS,fire-alt,orange,{},0
+98,0210328,Blue Mountains - Bullaburra Brigade,RFS,fire-alt,orange,{},0
+99,0210336,Blue Mountains - Faulconbridge Brigade Captain,RFS,fire-alt,orange,{},0
+1052,0210344,Blue Mountains - Faulconbridge Brigade,RFS,fire-alt,orange,{},0
+101,0210352,Blue Mountains - Glenbrook/Lapstone Brigade Captain,RFS,fire-alt,orange,{},0
+102,0210360,Blue Mountains - Glenbrook/Lapstone Brigade,RFS,fire-alt,orange,{},0
+103,0210368,Blue Mountains - Hazelbrook Brigade Captain,RFS,fire-alt,orange,{},0
+104,0210376,Blue Mountains - Hazelbrook Brigade,RFS,fire-alt,orange,{},0
+105,0210384,Blue Mountains - South Katoomba Brigade Captain,RFS,fire-alt,orange,{},0
+106,0210392,Blue Mountains - South Katoomba Brigade,RFS,fire-alt,orange,{},0
+107,0210416,Blue Mountains - Katoomba/Leura Brigade Captain,RFS,fire-alt,orange,{},0
+108,0210424,Blue Mountains - Katoomba/Leura Brigade,RFS,fire-alt,orange,{},0
+109,0210432,Blue Mountains - Lawson Brigade Captain,RFS,fire-alt,orange,{},0
+110,0210440,Blue Mountains - Lawson Brigade,RFS,fire-alt,orange,{},0
+111,0210448,Blue Mountains - Linden Brigade Captain,RFS,fire-alt,orange,{},0
+112,0210456,Blue Mountains - Linden Brigade,RFS,fire-alt,orange,{},0
+113,0210464,Blue Mountains - Medlow Bath Brigade Captain,RFS,fire-alt,orange,{},0
+114,0210472,Blue Mountains - Medlow Bath Brigade,RFS,fire-alt,orange,{},0
+115,0210480,Blue Mountains - Mt Riverview Brigade Captain,RFS,fire-alt,orange,{},0
+116,0210488,Blue Mountains - Mount Riverview Brigade,RFS,fire-alt,orange,{},0
+117,0210496,Blue Mountains - Mt Tomah Brigade Captain,RFS,fire-alt,orange,{},0
+118,0210504,Blue Mountains - Mt Tomah Brigade,RFS,fire-alt,orange,{},0
+119,0210512,Blue Mountains - orangeheath/Mt Victoria Brigade Captain,RFS,fire-alt,orange,{},0
+120,0210520,Blue Mountains - orangeheath/Mt Victoria Brigade,RFS,fire-alt,orange,{},0
+121,0210528,Blue Mountains - Mt Wilson/Mt Irvine Brigade Captain,RFS,fire-alt,orange,{},0
+122,0210536,Blue Mountains - Mt Wilson/Mt Irvine Brigade,RFS,fire-alt,orange,{},0
+123,0210544,Blue Mountains - Shipley Brigade Captain,RFS,fire-alt,orange,{},0
+124,0210552,Blue Mountains - Shipley Brigade,RFS,fire-alt,orange,{},0
+125,0210560,Blue Mountains - Valley Heights Brigade Captain,RFS,fire-alt,orange,{},0
+126,0210568,Blue Mountains - Valley Heights Brigade,RFS,fire-alt,orange,{},0
+127,0210576,Blue Mountains - Warrimoo Brigade Captain,RFS,fire-alt,orange,{},0
+128,0210584,Blue Mountains - Warrimoo Brigade,RFS,fire-alt,orange,{},0
+129,0210592,Blue Mountains - Wentworth Falls Brigade Captain,RFS,fire-alt,orange,{},0
+130,0210600,Blue Mountains - Wentworth Falls Brigade,RFS,fire-alt,orange,{},0
+131,0210608,Blue Mountains - Winmalee Brigade Captain,RFS,fire-alt,orange,{},0
+132,0210616,Blue Mountains - Winmalee Brigade,RFS,fire-alt,orange,{},0
+133,0210624,Blue Mountains - Woodford Brigade Captain,RFS,fire-alt,orange,{},0
+134,0210632,Blue Mountains - Woodford Brigade,RFS,fire-alt,orange,{},0
+135,0210640,Blue Mountains - Megalong Valley Brigade Captain,RFS,fire-alt,orange,{},0
+136,0210648,Blue Mountains - Megalong Valley Brigade,RFS,fire-alt,orange,{},0
+137,0212000,Blue Mountains Central Sector GO,RFS,fire-alt,orange,{},0
+138,0213000,Blue Mountains East Sector GO,RFS,fire-alt,orange,{},0
+139,0214000,Blue Mountains West Sector GO,RFS,fire-alt,orange,{},0
+140,0215000,Blue Mountains Captains Message,RFS,fire-alt,orange,{},0
+1151,0218000,Blue Mountains,SES,medkit,orange,{},0
+141,0280008,Macarthur Broadcast Message,RFS,fire-alt,orange,{},0
+142,0280016,Macarthur - Camden West Brigade,RFS,fire-alt,orange,{},0
+143,0280112,Macarthur - Catherine Field Brigade,RFS,fire-alt,orange,{},0
+144,0280200,Macarthur - Cobbitty Brigade,RFS,fire-alt,orange,{},0
+145,0280352,Macarthur Catering Support Unit,RFS,fire-alt,orange,{},0
+146,0280360,Macarthur Catering Support Unit,RFS,fire-alt,orange,{},0
+147,0280440,Macarthur - Narellan Brigade,RFS,fire-alt,orange,{},0
+148,0280688,Macarthur - Leppington Brigade,RFS,fire-alt,orange,{},0
+1142,0280872,Macarthur - Unknown??,RFS,fire-alt,orange,{},0
+149,0280920,Macarthur Comms Support Unit,RFS,fire-alt,orange,{},0
+150,0290016,Macarthur - Varroville Brigade,RFS,fire-alt,orange,{},0
+151,0290032,Macarthur - Minto Heights Brigade,RFS,fire-alt,orange,{},0
+152,0290040,Macarthur - Kentlyn Brigade,RFS,fire-alt,orange,{},0
+153,0290048,Macarthur - Lynwood Park Brigade,RFS,fire-alt,orange,{},0
+154,0290056,Macarthur - Wedderburn Brigade,RFS,fire-alt,orange,{},0
+155,0290064,Macarthur - Menangle Park Brigade,RFS,fire-alt,orange,{},0
+156,0290232,Macarthur Group 2,RFS,fire-alt,orange,{},0
+157,0440160,Canobolas - Torrington Brigade,RFS,fire-alt,orange,{},0
+158,0440168,Canobolas - Woodstock Brigade,RFS,fire-alt,orange,{},0
+159,0440664,Canobolas - Koorawatha Brigade,RFS,fire-alt,orange,{},0
+160,0440672,Canobolas - Morongla-Cucumgilliga Brigade,RFS,fire-alt,orange,{},0
+161,0440680,Canobolas - Neila Brigade,RFS,fire-alt,orange,{},0
+162,0440696,Canobolas - Waugoola Brigade,RFS,fire-alt,orange,{},0
+163,0440760,Canobolas - Darbys Falls Brigade,RFS,fire-alt,orange,{},0
+164,0440776,Canobolas - Torrington Brigade,RFS,fire-alt,orange,{},0
+165,0440784,Canobolas - Orange Brigade,RFS,fire-alt,orange,{},0
+166,0440800,Canobolas - Woodstock Brigade,RFS,fire-alt,orange,{},0
+167,0442000,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+168,0449000,Canobolas - Cowra Brigade,RFS,fire-alt,orange,{},0
+169,0480112,Orana - Dubbo Duty Officer,RFS,fire-alt,orange,{},0
+170,0480128,Orana - Dubbo Brigade,RFS,fire-alt,orange,{},0
+171,0480136,Orana - Dubbo Brigade,RFS,fire-alt,orange,{},0
+172,0480200,Orana - Ballimore Brigade,RFS,fire-alt,orange,{},0
+173,0480203,Orana - Ballimore Brigade,RFS,fire-alt,orange,{},0
+174,0480216,Orana - Unknown??,RFS,fire-alt,orange,{},0
+175,0480218,Orana - Unknown??,RFS,fire-alt,orange,{},0
+176,0480283,Orana - Dubbo Brigade,RFS,fire-alt,orange,{},0
+177,0520008,Chifley Lithgow - Chifley Manager,RFS,fire-alt,orange,{},0
+178,0520024,Chifley Lithgow - Chifley OPS Officer,RFS,fire-alt,orange,{},0
+179,0520032,Chifley Lithgow - Chifley OPS Sup Officer,RFS,fire-alt,orange,{},0
+180,0520040,Chifley Lithgow - Chifley Business Officer,RFS,fire-alt,orange,{},0
+181,0520048,Chifley Lithgow - Chifley Fire Mit Officer,RFS,fire-alt,orange,{},0
+182,0520056,Chifley Lithgow - Chifley Comm Safety Officer,RFS,fire-alt,orange,{},0
+183,0520064,Chifley Lithgow - Chifley Duty Officer,RFS,fire-alt,orange,{},0
+184,0520072,Chifley Lithgow - Chifley Admin 1,RFS,fire-alt,orange,{},0
+185,0520080,Chifley Lithgow - Chifley Admin 2,RFS,fire-alt,orange,{},0
+186,0520104,Chifley Lithgow - Chifley Group 1 Officer,RFS,fire-alt,orange,{},0
+187,0520112,Chifley Lithgow - Chifley Group 2 Officer,RFS,fire-alt,orange,{},0
+188,0520120,Chifley Lithgow - Chifley Group 3 Officer,RFS,fire-alt,orange,{},0
+189,0520128,Chifley Lithgow - Chifley Group 4 Officer,RFS,fire-alt,orange,{},0
+190,0520136,Chifley Lithgow - Chifley Group 5 Officer,RFS,fire-alt,orange,{},0
+191,0520144,Chifley Lithgow - Chifley Group 6 Officer,RFS,fire-alt,orange,{},0
+192,0520152,Chifley Lithgow - Chifley Support Group,RFS,fire-alt,orange,{},0
+193,0520160,Chifley Lithgow - Arkell Brigade Captain,RFS,fire-alt,orange,{},0
+194,0520168,Chifley Lithgow - Arkell Brigade,RFS,fire-alt,orange,{},0
+195,0520200,Chifley Lithgow - Chifley Support Group Manager,RFS,fire-alt,orange,{},0
+196,0520208,Chifley Lithgow - Bruinbun Brigade Captain,RFS,fire-alt,orange,{},0
+197,0520216,Chifley Lithgow - Bruinbun Brigade,RFS,fire-alt,orange,{},0
+198,0520224,Chifley Lithgow - Duramana Brigade Captain,RFS,fire-alt,orange,{},0
+199,0520232,Chifley Lithgow - Duramana Brigade,RFS,fire-alt,orange,{},0
+200,0520240,Chifley Lithgow - Eglington Brigade Captain,RFS,fire-alt,orange,{},0
+201,0520248,Chifley Lithgow - Eglington Brigade,RFS,fire-alt,orange,{},0
+202,0520256,Chifley Lithgow - Fitzgerald Valley Brigade Captain,RFS,fire-alt,orange,{},0
+203,0520264,Chifley Lithgow - Fitzgerald Valley Brigade,RFS,fire-alt,orange,{},0
+204,0520272,Chifley Lithgow - Freemantle Brigade Captain,RFS,fire-alt,orange,{},0
+205,0520280,Chifley Lithgow - Freemantle Brigade,RFS,fire-alt,orange,{},0
+206,0520288,Chifley Lithgow - Glanmire-Walang Brigade Captain,RFS,fire-alt,orange,{},0
+207,0520296,Chifley Lithgow - Glanmire-Walang Brigade,RFS,fire-alt,orange,{},0
+208,0520304,Chifley Lithgow - Hill End Brigade Captain,RFS,fire-alt,orange,{},0
+209,0520312,Chifley Lithgow - Hill End Brigade,RFS,fire-alt,orange,{},0
+210,0520338,Chifley Lithgow - Peel Brigade Captain,RFS,fire-alt,orange,{},0
+211,0520344,Chifley Lithgow - Peel Brigade,RFS,fire-alt,orange,{},0
+212,0520352,Chifley Lithgow - Perthville Brigade Captain,RFS,fire-alt,orange,{},0
+213,0520360,Chifley Lithgow - Perthville Brigade,RFS,fire-alt,orange,{},0
+214,0520368,Chifley Lithgow - Raglan Brigade Captain,RFS,fire-alt,orange,{},0
+215,0520376,Chifley Lithgow - Raglan Brigade,RFS,fire-alt,orange,{},0
+216,0520384,Chifley Lithgow - Rock Forest-Vittoria Brigade Captain,RFS,fire-alt,orange,{},0
+217,0520392,Chifley Lithgow - Rock Forest-Vittoria Brigade,RFS,fire-alt,orange,{},0
+218,0520400,Chifley Lithgow - Rockley Brigade Captain,RFS,fire-alt,orange,{},0
+219,0520408,Chifley Lithgow - Rockley Brigade,RFS,fire-alt,orange,{},0
+220,0520416,Chifley Lithgow - Sally's Flat Brigade Captain,RFS,fire-alt,orange,{},0
+221,0520424,Chifley Lithgow - Sally's Flat Brigade,RFS,fire-alt,orange,{},0
+222,0520448,Chifley Lithgow - Triangle Flat Brigade Captain,RFS,fire-alt,orange,{},0
+223,0520456,Chifley Lithgow - Turondale Brigade Captain,RFS,fire-alt,orange,{},0
+224,0520472,Chifley Lithgow - Turondale Brigade,RFS,fire-alt,orange,{},0
+225,0520480,Chifley Lithgow - Wattle Flat Brigade Captain,RFS,fire-alt,orange,{},0
+226,0520488,Chifley Lithgow - Wattle Flat Brigade,RFS,fire-alt,orange,{},0
+227,0520496,Chifley Lithgow - Yetholme Brigade Captain,RFS,fire-alt,orange,{},0
+228,0520504,Chifley Lithgow - Yetholme Brigade,RFS,fire-alt,orange,{},0
+229,0520512,Chifley Lithgow - Chifley Senior Group Officer,RFS,fire-alt,orange,{},0
+230,0520520,Chifley Lithgow - Chifley Group 7 Officer,RFS,fire-alt,orange,{},0
+231,0520528,Chifley Lithgow - Chifley Group 8 Officer,RFS,fire-alt,orange,{},0
+232,0521000,Chifley Lithgow - Chifley Admin Group,RFS,fire-alt,orange,{},0
+233,0523000,Chifley Lithgow - Chifley Group Officer Group,RFS,fire-alt,orange,{},0
+234,0523008,Chifley Lithgow - Bathurst HQ Brigade Captain,RFS,fire-alt,orange,{},0
+235,0523016,Chifley Lithgow - Trunkey Brigade,RFS,fire-alt,orange,{},0
+236,0523024,Chifley Lithgow - Trunkey Brigade Captain,RFS,fire-alt,orange,{},0
+237,0524000,Chifley Lithgow - Chifley Duty Officer Bathurst,RFS,fire-alt,orange,{},0
+238,0524008,Chifley Lithgow - Chifley Duty Officer Oberon,RFS,fire-alt,orange,{},0
+239,0540000,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+240,0540152,Mid Lachlan Valley - Forbes Air Base Ops,RFS,fire-alt,orange,{},0
+241,0540248,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+242,0540272,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+243,0540280,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+244,0540304,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+245,0540392,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+246,0540424,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+247,0549016,Gooloogong SES,SES,exclamation-triangle,yellow,{},0
+248,0560000,Mid Coast Broadcast Message,RFS,fire-alt,orange,{},0
+249,0560016,Mid Coast - Gloucester Duty Officer,RFS,fire-alt,orange,{},0
+250,0560080,Mid Coast - Barrington Brigade,RFS,fire-alt,orange,{},0
+251,0560120,Mid Coast - Bundook Brigade,RFS,fire-alt,orange,{},0
+252,0560128,Mid Coast - Bundook Brigade,RFS,fire-alt,orange,{},0
+253,0560136,Mid Coast - Gloucester Duty Officer,RFS,fire-alt,orange,{},0
+254,0560168,Mid Coast - Gangat Brigade Captain,RFS,fire-alt,orange,{},0
+255,0560176,Mid Coast - Gangat Brigade,RFS,fire-alt,orange,{},0
+256,0560184,Mid Coast - Gloucester Brigade Captain,RFS,fire-alt,orange,{},0
+257,0560192,Mid Coast - Gloucester Brigade,RFS,fire-alt,orange,{},0
+258,0560208,Mid Coast - Gloucester Rivers,RFS,fire-alt,orange,{},0
+259,0560240,Mid Coast - Rookhurst Brigade,RFS,fire-alt,orange,{},0
+260,0560248,Mid Coast - Avon Brigade Captain,RFS,fire-alt,orange,{},0
+261,0560256,Mid Coast - Avon Brigade,RFS,fire-alt,orange,{},0
+262,0560272,Mid Coast - Tibbuc Brigade,RFS,fire-alt,orange,{},0
+263,0560361,Gloucester/Stroud SES,SES,medkit,orange,{},0
+264,0570000,Central Coast Broadcast Message,RFS,fire-alt,orange,{},0
+265,0570008,Central Coast FCO1,RFS,fire-alt,orange,{},0
+266,0570016,Central Coast FCO2,RFS,fire-alt,orange,{},0
+267,0570032,Central Coast FCO4,RFS,fire-alt,orange,{},0
+268,0570064,Central Coast Group 3,RFS,fire-alt,orange,{},0
+269,0570072,Central Coast Group 4,RFS,fire-alt,orange,{},0
+270,0570080,Central Coast Group 5,RFS,fire-alt,orange,{},0
+271,0570104,Central Coast - Avoca Brigade Captain,RFS,fire-alt,orange,{},0
+272,0570112,Central Coast - Avoca Brigade,RFS,fire-alt,orange,{},0
+273,0570120,Central Coast - Copacabana Brigade Captain,RFS,fire-alt,orange,{},0
+274,0570128,Central Coast - Copacabana Brigade,RFS,fire-alt,orange,{},0
+275,0570144,Central Coast - Brisbane Waters Brigade,RFS,fire-alt,orange,{},0
+276,0570152,Central Coast - Empire Bay Brigade Captain,RFS,fire-alt,orange,{},0
+277,0570160,Central Coast - Empire Bay Brigade,RFS,fire-alt,orange,{},0
+278,0570168,Central Coast Bulk Water Support Unit,RFS,fire-alt,orange,{},0
+279,0570176,Central Coast - Kariong Brigade,RFS,fire-alt,orange,{},0
+280,0570184,Central Coast - Killcare Brigade Captain,RFS,fire-alt,orange,{},0
+281,0570192,Central Coast - Killcare Brigade,RFS,fire-alt,orange,{},0
+282,0570200,Central Coast - MacMasters Brigade Captain,RFS,fire-alt,orange,{},0
+283,0570208,Central Coast - MacMasters Brigade,RFS,fire-alt,orange,{},0
+284,0570224,Central Coast - Mangrove Mountain Brigade,RFS,fire-alt,orange,{},0
+285,0570240,Central Coast - Matcham/Holgate Brigade,RFS,fire-alt,orange,{},0
+286,0570256,Central Coast - Mooney Brigade,RFS,fire-alt,orange,{},0
+287,0570272,Central Coast Trail Bike Support Unit,RFS,fire-alt,orange,{},0
+288,0570280,Central Coast - Calga/Mount White Brigade Captain,RFS,fire-alt,orange,{},0
+289,0570288,Central Coast - Calga/Mount White Brigade,RFS,fire-alt,orange,{},0
+290,0570304,Central Coast - Narara Brigade,RFS,fire-alt,orange,{},0
+291,0570320,Central Coast - Patonga Brigade,RFS,fire-alt,orange,{},0
+292,0570336,Central Coast - Pearl Beach Brigade,RFS,fire-alt,orange,{},0
+293,0570352,Central Coast - Somersby Brigade,RFS,fire-alt,orange,{},0
+294,0570368,Central Coast - Spencer Brigade,RFS,fire-alt,orange,{},0
+295,0570384,Central Coast - The Bays Brigade,RFS,fire-alt,orange,{},0
+296,0570400,Central Coast - Bar Point Brigade,RFS,fire-alt,orange,{},0
+297,0570416,Central Coast - Wamberal Brigade,RFS,fire-alt,orange,{},0
+298,0570432,Central Coast - Wendoree Park Brigade,RFS,fire-alt,orange,{},0
+299,0570440,Central Coast Bulk Water Support Unit,RFS,fire-alt,orange,{},0
+300,0570448,Central Coast Air Support Unit,RFS,fire-alt,orange,{},0
+301,0570464,Central Coast Catering Support Unit,RFS,fire-alt,orange,{},0
+302,0570472,Central Coast Comms Support Unit Supervisors,RFS,fire-alt,orange,{},0
+303,0570480,Central Coast Comms Support Unit,RFS,fire-alt,orange,{},0
+304,0570496,Central Coast - Brisbane Waters Brigade,RFS,fire-alt,orange,{},0
+305,0570504,Central Coast Operational Support Unit,RFS,fire-alt,orange,{},0
+306,0570512,Central Coast Bulk Water Support Unit,RFS,fire-alt,orange,{},0
+307,0570520,Central Coast DO,RFS,fire-alt,orange,{},0
+308,0570528,Central Coast Radio Tech,RFS,fire-alt,orange,{},0
+309,0570560,Central Coast Group 9,RFS,fire-alt,orange,{},0
+310,0570572,Central Coast Bulk Water Support Unit,RFS,fire-alt,orange,{},0
+311,0570608,Central Coast Group 13,RFS,fire-alt,orange,{},0
+312,0570616,Central Coast Group 14,RFS,fire-alt,orange,{},0
+313,0572000,Central Coast Group Officers,RFS,fire-alt,orange,{},0
+314,0574000,Central Coast Group Officers,RFS,fire-alt,orange,{},0
+315,0590000,Mid Coast Broadcast Message,RFS,fire-alt,orange,{},0
+316,0590032,Mid Coast - Limeburners Creek Brigade Captain,RFS,fire-alt,orange,{},0
+317,0590072,Mid Coast - Booral Brigade,RFS,fire-alt,orange,{},0
+318,0590080,Mid Coast - Bulahdelah Brigade Captain,RFS,fire-alt,orange,{},0
+319,0590088,Mid Coast - Bulahdelah Brigade,RFS,fire-alt,orange,{},0
+320,0590104,Mid Coast - Bungwahl Brigade,RFS,fire-alt,orange,{},0
+321,0590136,Mid Coast - Coolongolook Brigade,RFS,fire-alt,orange,{},0
+322,0590152,Mid Coast - Coomba Park Brigade,RFS,fire-alt,orange,{},0
+323,0590168,Mid Coast - Girvan Brigade,RFS,fire-alt,orange,{},0
+324,0590184,Mid Coast - Green Point Brigade,RFS,fire-alt,orange,{},0
+325,0590200,Mid Coast - Forster/Tuncurry Brigade,RFS,fire-alt,orange,{},0
+326,0590216,Mid Coast - Limeburners Creek Brigade,RFS,fire-alt,orange,{},0
+327,0590232,Mid Coast - Bulahdelah Brigade,RFS,fire-alt,orange,{},0
+328,0590240,Mid Coast - Minimbah Brigade Captain,RFS,fire-alt,orange,{},0
+329,0590248,Mid Coast - Minimbah Brigade,RFS,fire-alt,orange,{},0
+330,0590296,Mid Coast - North Arm Cove Brigade,RFS,fire-alt,orange,{},0
+331,0590312,Mid Coast - Pacific Palms Brigade,RFS,fire-alt,orange,{},0
+332,0590344,Mid Coast - Stroud Brigade,RFS,fire-alt,orange,{},0
+333,0590360,Mid Coast - Stroud Road Brigade,RFS,fire-alt,orange,{},0
+334,0590368,Mid Coast - Forster/Tuncurry Brigade,RFS,fire-alt,orange,{},0
+335,0590376,Mid Coast - Pindimar/Tea Gardens Brigade,RFS,fire-alt,orange,{},0
+336,0590384,Mid Coast - Wards River Brigade Captain,RFS,fire-alt,orange,{},0
+337,0590392,Mid Coast - Wards River Brigade,RFS,fire-alt,orange,{},0
+338,0590408,Mid Coast - Wootton Brigade,RFS,fire-alt,orange,{},0
+339,0590430,Mid Coast Duty Officer,RFS,fire-alt,orange,{},0
+340,0590448,Mid Coast Group 3 South,RFS,fire-alt,orange,{},0
+341,0590456,Mid Coast Group 1 South,RFS,fire-alt,orange,{},0
+342,0600000,Chifley Lithgow - Lithgow Broadcast Message,RFS,fire-alt,orange,{},0
+343,0600008,Chifley Lithgow - Lithgow FCO,RFS,fire-alt,orange,{},0
+344,0600032,Chifley Lithgow - Senior Group,RFS,fire-alt,orange,{},0
+345,0600040,Chifley Lithgow - Lithgow Group North,RFS,fire-alt,orange,{},0
+346,0600048,Chifley Lithgow - Lithgow Group East,RFS,fire-alt,orange,{},0
+347,0600056,Chifley Lithgow - Lithgow Group South,RFS,fire-alt,orange,{},0
+348,0600064,Chifley Lithgow - Lithgow Group West,RFS,fire-alt,orange,{},0
+349,0600072,Chifley Lithgow - Lithgow Comms Support Unit Captain,RFS,fire-alt,orange,{},0
+350,0600080,Chifley Lithgow - Lithgow Comms Support Unit,RFS,fire-alt,orange,{},0
+351,0600088,Chifley Lithgow - Capertee Brigade Captain,RFS,fire-alt,orange,{},0
+352,0600096,Chifley Lithgow - Capertee Brigade,RFS,fire-alt,orange,{},0
+353,0600104,Chifley Lithgow - Clarence Dargan Brigade Captain,RFS,fire-alt,orange,{},0
+354,0600112,Chifley Lithgow - Clarence Dargan Brigade,RFS,fire-alt,orange,{},0
+355,0600120,Chifley Lithgow - Cullen Bullen Brigade Captain,RFS,fire-alt,orange,{},0
+356,0600128,Chifley Lithgow - Cullen Bullen Brigade,RFS,fire-alt,orange,{},0
+357,0600136,Chifley Lithgow - Dark Corner Brigade Captain,RFS,fire-alt,orange,{},0
+358,0600144,Chifley Lithgow - Dark Corner Brigade,RFS,fire-alt,orange,{},0
+359,0600152,Chifley Lithgow - Glen Alice Brigade Captain,RFS,fire-alt,orange,{},0
+360,0600160,Chifley Lithgow - Glen Alice Brigade,RFS,fire-alt,orange,{},0
+361,0600168,Chifley Lithgow - Lowther Hampton Brigade Captain,RFS,fire-alt,orange,{},0
+362,0600176,Chifley Lithgow - Lowther Hampton Brigade,RFS,fire-alt,orange,{},0
+363,0600184,Chifley Lithgow - Hartley Brigade Captain,RFS,fire-alt,orange,{},0
+364,0600192,Chifley Lithgow - Hartley Brigade,RFS,fire-alt,orange,{},0
+365,0600200,Chifley Lithgow - Kanimbla Brigade Captain,RFS,fire-alt,orange,{},0
+366,0600208,Chifley Lithgow - Kanimbla Brigade,RFS,fire-alt,orange,{},0
+367,0600216,Chifley Lithgow - Marrangaroo Brigade Captain,RFS,fire-alt,orange,{},0
+368,0600224,Chifley Lithgow - Marrangaroo Brigade,RFS,fire-alt,orange,{},0
+369,0600232,Chifley Lithgow - Meadow Flat Brigade Captain,RFS,fire-alt,orange,{},0
+370,0600240,Chifley Lithgow - Meadow Flat Brigade,RFS,fire-alt,orange,{},0
+371,0600248,Chifley Lithgow - Palmers Oakey Brigade Captain,RFS,fire-alt,orange,{},0
+372,0600256,Chifley Lithgow - Palmers Oakey Brigade,RFS,fire-alt,orange,{},0
+373,0600264,Chifley Lithgow - Portland Brigade Captain,RFS,fire-alt,orange,{},0
+374,0600272,Chifley Lithgow - Portland Brigade,RFS,fire-alt,orange,{},0
+375,0600280,Chifley Lithgow - Rydal Brigade Captain,RFS,fire-alt,orange,{},0
+376,0600288,Chifley Lithgow - Rydal Brigade,RFS,fire-alt,orange,{},0
+377,0600296,Chifley Lithgow - South Bowenfels Brigade Captain,RFS,fire-alt,orange,{},0
+378,0600304,Chifley Lithgow - South Bowenfels Brigade,RFS,fire-alt,orange,{},0
+379,0600312,Chifley Lithgow - Sunny Corner Brigade Captain,RFS,fire-alt,orange,{},0
+380,0600320,Chifley Lithgow - Sunny Corner Brigade,RFS,fire-alt,orange,{},0
+381,0600344,Chifley Lithgow - Wallerawang Brigade Captain,RFS,fire-alt,orange,{},0
+382,0600352,Chifley Lithgow - Wallerawang Brigade,RFS,fire-alt,orange,{},0
+383,0600360,Chifley Lithgow - Lithgow Group Central,RFS,fire-alt,orange,{},0
+384,0601000,Chifley Lithgow - Lithgow Admin Group,RFS,fire-alt,orange,{},0
+385,0602000,Chifley Lithgow - Lithgow Brigade Captains Group,RFS,fire-alt,orange,{},0
+386,0602008,Chifley Lithgow - Tarana Brigade,RFS,fire-alt,orange,{},0
+387,0602016,Chifley Lithgow - Tarana Brigade Captain,RFS,fire-alt,orange,{},0
+388,0602024,Chifley Lithgow - Lithgow Admin,RFS,fire-alt,orange,{},0
+389,0604000,Chifley Lithgow - Lithgow All Group Capt,RFS,fire-alt,orange,{},0
+390,0604008,Chifley Lithgow - Lithgow Duty Officer,RFS,fire-alt,orange,{},0
+391,0610000,Mid Coast Broadcast Message,RFS,fire-alt,orange,{},0
+392,0610040,Mid Coast Comms Support Unit,RFS,fire-alt,orange,{},0
+393,0610088,Mid Coast - Burrell Creek Brigade,RFS,fire-alt,orange,{},0
+394,0610104,Mid Coast - Coopernook Brigade,RFS,fire-alt,orange,{},0
+395,0610120,Mid Coast - Diamond Beach Brigade,RFS,fire-alt,orange,{},0
+396,0610136,Mid Coast - Firefly Brigade,RFS,fire-alt,orange,{},0
+397,0610152,Mid Coast - Hannam Vale Brigade,RFS,fire-alt,orange,{},0
+398,0610168,Mid Coast - Harrington Brigade,RFS,fire-alt,orange,{},0
+399,0610184,Mid Coast - Johns River Brigade,RFS,fire-alt,orange,{},0
+400,0610200,Mid Coast - Killabakh Brigade,RFS,fire-alt,orange,{},0
+401,0610216,Mid Coast - Krambach Brigade,RFS,fire-alt,orange,{},0
+402,0610232,Mid Coast - Kundle/Moto Brigade,RFS,fire-alt,orange,{},0
+403,0610240,Mid Coast - Lansdowne Brigade Captain,RFS,fire-alt,orange,{},0
+404,0610248,Mid Coast - Lansdowne Brigade,RFS,fire-alt,orange,{},0
+405,0610264,Mid Coast - Marlee Brigade,RFS,fire-alt,orange,{},0
+406,0610280,Mid Coast - Mitchells Island Brigade,RFS,fire-alt,orange,{},0
+407,0610312,Mid Coast - Mt George Brigade,RFS,fire-alt,orange,{},0
+408,0610328,Mid Coast - Nabiac Brigade,RFS,fire-alt,orange,{},0
+409,0610344,Mid Coast - Old Bar Brigade,RFS,fire-alt,orange,{},0
+410,0610360,Mid Coast - Rainbow Flat Brigade,RFS,fire-alt,orange,{},0
+411,0610376,Mid Coast - Taree Brigade,RFS,fire-alt,orange,{},0
+412,0610392,Mid Coast - Tinonee Brigade,RFS,fire-alt,orange,{},0
+413,0610404,Mid Coast - Coopernook Brigade,RFS,fire-alt,orange,{},0
+414,0610408,Mid Coast - Wallaby Joe Brigade,RFS,fire-alt,orange,{},0
+415,0610424,Mid Coast - Wherrol Flat Brigade,RFS,fire-alt,orange,{},0
+416,0610432,Mid Coast RDO,RFS,fire-alt,orange,{},0
+417,0610520,Mid Coast Group 5 South,RFS,fire-alt,orange,{},0
+418,0610608,Mid Coast - Moorland Brigade,RFS,fire-alt,orange,{},0
+419,0619008,Mid Coast - Nabiac Brigade,RFS,fire-alt,orange,{},0
+420,0680068,Mid Coast Comms Support Unit,RFS,fire-alt,orange,{},0
+421,0680080,Mid Coast Comms Support Unit,RFS,fire-alt,orange,{},0
+422,0680096,Mid Coast - Beechwood Brigade,RFS,fire-alt,orange,{},0
+423,0680112,Mid Coast - Bellangry Brigade,RFS,fire-alt,orange,{},0
+424,0680144,Mid Coast - Bonny Hills Brigade,RFS,fire-alt,orange,{},0
+425,0680160,Mid Coast - Byabarra Brigade,RFS,fire-alt,orange,{},0
+426,0680176,Mid Coast - Camden Haven Brigade,RFS,fire-alt,orange,{},0
+427,0680192,Mid Coast - Comboyne Brigade,RFS,fire-alt,orange,{},0
+428,0680208,Mid Coast - Wauchope Hastings HQ Brigade,RFS,fire-alt,orange,{},0
+429,0680224,Mid Coast - Hollisdale Brigade,RFS,fire-alt,orange,{},0
+430,0680240,Mid Coast - Huntingdon Brigade,RFS,fire-alt,orange,{},0
+431,0680264,Mid Coast - King Creek Brigade Captain,RFS,fire-alt,orange,{},0
+432,0680272,Mid Coast - King Creek Brigade,RFS,fire-alt,orange,{},0
+433,0680288,Mid Coast - Lake Cathie Brigade,RFS,fire-alt,orange,{},0
+434,0680304,Mid Coast - Lake Innes Brigade,RFS,fire-alt,orange,{},0
+435,0680320,Mid Coast - Long Flat/Ellenborough Brigade,RFS,fire-alt,orange,{},0
+436,0680336,Mid Coast - Lorne Brigade,RFS,fire-alt,orange,{},0
+437,0680352,Mid Coast - North Shore Brigade,RFS,fire-alt,orange,{},0
+438,0680368,Mid Coast - Pappinbarra Brigade,RFS,fire-alt,orange,{},0
+439,0680384,Mid Coast - Pembrooke Brigade,RFS,fire-alt,orange,{},0
+440,0680416,Mid Coast - Rollins Planes Brigade,RFS,fire-alt,orange,{},0
+441,0680432,Mid Coast - Sancrox/Thrumster Brigade,RFS,fire-alt,orange,{},0
+442,0680448,Mid Coast - Telegraph Point Brigade,RFS,fire-alt,orange,{},0
+443,0680512,Mid Coast Group 1,RFS,fire-alt,orange,{},0
+444,0680560,Marine Rescue - Port Macquarie Marine Rescue,RFS,fire-alt,orange,{},0
+445,0685008,Camden Haven SES,SES,medkit,orange,{},0
+446,0685016,Port Macquarie/Hastings SES,SES,medkit,orange,{},0
+447,0690016,Hawkesbury FCO2,RFS,fire-alt,orange,{},0
+448,0690024,Hawkesbury FCO4,RFS,fire-alt,orange,{},0
+449,0690032,Hawkesbury FCO5,RFS,fire-alt,orange,{},0
+450,0690048,Hawkesbury - Bilpin Brigade,RFS,fire-alt,orange,{},0
+451,0690056,Hawkesbury - Blaxland Ridge Brigade,RFS,fire-alt,orange,{},0
+452,0690064,Hawkesbury - Colo Heights Brigade,RFS,fire-alt,orange,{},0
+453,0690072,Hawkesbury - East Kurrajong Brigade,RFS,fire-alt,orange,{},0
+454,0690080,Hawkesbury - Ebenezer Brigade,RFS,fire-alt,orange,{},0
+455,0690088,Hawkesbury - Freemans Reach Brigade,RFS,fire-alt,orange,{},0
+456,0690096,Hawkesbury - Glossodia Brigade,RFS,fire-alt,orange,{},0
+457,0690104,Hawkesbury - Grose Vale Brigade,RFS,fire-alt,orange,{},0
+458,0690112,Hawkesbury - Grose Wold Brigade,RFS,fire-alt,orange,{},0
+459,0690120,Hawkesbury Headquarters Brigade,RFS,fire-alt,orange,{},0
+460,0690128,Hawkesbury - Kurrajong Brigade,RFS,fire-alt,orange,{},0
+461,0690136,Hawkesbury - Kurrajong Heights Brigade,RFS,fire-alt,orange,{},0
+462,0690144,Hawkesbury - Lower MacDonald Brigade,RFS,fire-alt,orange,{},0
+463,0690152,Hawkesbury Broadcast Message,RFS,fire-alt,orange,{},0
+464,0690160,Hawkesbury - Mountain Lagoon Brigade,RFS,fire-alt,orange,{},0
+465,0690168,Hawkesbury - Oakville Brigade,RFS,fire-alt,orange,{},0
+466,0690176,Hawkesbury - St Albans Brigade,RFS,fire-alt,orange,{},0
+467,0690184,Hawkesbury - Tennyson Brigade,RFS,fire-alt,orange,{},0
+468,0690192,Hawkesbury - Upper Colo Brigade,RFS,fire-alt,orange,{},0
+469,0690200,Hawkesbury - Wilberforce Brigade,RFS,fire-alt,orange,{},0
+470,0690208,Hawkesbury - Yarramundi Brigade,RFS,fire-alt,orange,{},0
+471,0690216,Hawkesbury Catering Support Unit,RFS,fire-alt,orange,{},0
+472,0690224,Hawkesbury Comms Support Unit,RFS,fire-alt,orange,{},0
+473,0690232,Hawkesbury West 1,RFS,fire-alt,orange,{},0
+474,0690240,Hawkesbury South 1,RFS,fire-alt,orange,{},0
+475,0690248,Hawkesbury North 1,RFS,fire-alt,orange,{},0
+476,0690256,Hawkesbury North 3,RFS,fire-alt,orange,{},0
+477,0690264,Hawkesbury West 2,RFS,fire-alt,orange,{},0
+478,0690272,Hawkesbury - Tennyson Brigade,RFS,fire-alt,orange,{},0
+479,0690280,Hawkesbury North 2,RFS,fire-alt,orange,{},0
+480,0690288,Hawkesbury Broadcast Message,RFS,fire-alt,orange,{},0
+481,0690304,Hawkesbury - Blaxlands Ridge Brigade Captain,RFS,fire-alt,orange,{},0
+482,0690312,Hawkesbury - Colo Heights Brigade Captain,RFS,fire-alt,orange,{},0
+483,0690320,Hawkesbury - East Kurrajong Brigade Captain,RFS,fire-alt,orange,{},0
+484,0690328,Hawkesbury - Ebenezer Brigade Captain,RFS,fire-alt,orange,{},0
+485,0690336,Hawkesbury - Freemans Reach Brigade,RFS,fire-alt,orange,{},0
+486,0690344,Hawkesbury - Glossodia Brigade Captain,RFS,fire-alt,orange,{},0
+487,0690352,Hawkesbury - Grose Vale Brigade Captain,RFS,fire-alt,orange,{},0
+488,0690360,Hawkesbury - Grose Wold Brigade Captain,RFS,fire-alt,orange,{},0
+489,0690368,Hawkesbury - Headquarters Brigade Captain,RFS,fire-alt,orange,{},0
+490,0690376,Hawkesbury - Kurrajong Brigade Captain,RFS,fire-alt,orange,{},0
+491,0690384,Hawkesbury - Kurrajong Heights Brigade Captain,RFS,fire-alt,orange,{},0
+492,0690392,Hawkesbury - Lower MacDonald Brigade Captain,RFS,fire-alt,orange,{},0
+493,0690400,Hawkesbury - Lower Portland Brigade Captain,RFS,fire-alt,orange,{},0
+494,0690408,Hawkesbury - Mountain Lagoon Brigade Captain,RFS,fire-alt,orange,{},0
+495,0690416,Hawkesbury - St Albans Brigade Captain,RFS,fire-alt,orange,{},0
+496,0690424,Hawkesbury - Tennyson Brigade Captain,RFS,fire-alt,orange,{},0
+497,0690432,Hawkesbury - Upper Colo Brigade Captain,RFS,fire-alt,orange,{},0
+498,0690440,Hawkesbury - Wilberforce Brigade Captain,RFS,fire-alt,orange,{},0
+499,0690448,Hawkesbury - Yarramundi Brigade Captain,RFS,fire-alt,orange,{},0
+500,0690456,Hawkesbury - Oakville Brigade Captain,RFS,fire-alt,orange,{},0
+501,0690464,Hawkesbury Catering Captain,RFS,fire-alt,orange,{},0
+502,0690472,Hawkesbury Comms Support Unit Captain,RFS,fire-alt,orange,{},0
+503,0690488,Hawkesbury - Grose Wold Brigade,RFS,fire-alt,orange,{},0
+504,0690512,Hawkesbury - Oakville Brigade,RFS,fire-alt,orange,{},0
+505,0690536,Hawkesbury West 3,RFS,fire-alt,orange,{},0
+506,0690544,Hawkesbury South 3,RFS,fire-alt,orange,{},0
+507,0690552,Hawkesbury - Grose Wold Brigade,RFS,fire-alt,orange,{},0
+508,0690560,Hawkesbury - Bilpin Brigade,RFS,fire-alt,orange,{},0
+509,0690568,Hawkesbury - Blaxlands Ridge Brigade,RFS,fire-alt,orange,{},0
+510,0690576,Hawkesbury - Colo Heights Brigade,RFS,fire-alt,orange,{},0
+511,0690584,Hawkesbury - East Kurrajong Brigade,RFS,fire-alt,orange,{},0
+512,0690592,Hawkesbury - Ebenezer Brigade,RFS,fire-alt,orange,{},0
+513,0690600,Hawkesbury - Freemans Reach Brigade,RFS,fire-alt,orange,{},0
+514,0690608,Hawkesbury - Glossodia Brigade,RFS,fire-alt,orange,{},0
+515,0690616,Hawkesbury - Grose Vale Brigade,RFS,fire-alt,orange,{},0
+516,0690624,Hawkesbury - Grose Wold Brigade,RFS,fire-alt,orange,{},0
+517,0690632,Hawkesbury - Headquarters Brigade,RFS,fire-alt,orange,{},0
+518,0690640,Hawkesbury - Kurrajong Brigade,RFS,fire-alt,orange,{},0
+519,0690648,Hawkesbury - Kurrajong Heights Brigade,RFS,fire-alt,orange,{},0
+520,0690656,Hawkesbury - Lower MacDonald Brigade,RFS,fire-alt,orange,{},0
+521,0690664,Hawkesbury - Lower Portland Brigade,RFS,fire-alt,orange,{},0
+522,0690672,Hawkesbury - Mountain Lagoon Brigade,RFS,fire-alt,orange,{},0
+523,0690680,Hawkesbury - Oakville Brigade,RFS,fire-alt,orange,{},0
+524,0690688,Hawkesbury - St Albans Brigade,RFS,fire-alt,orange,{},0
+525,0690696,Hawkesbury - Tennyson Brigade,RFS,fire-alt,orange,{},0
+526,0690704,Hawkesbury - Upper Colo Brigade,RFS,fire-alt,orange,{},0
+527,0690712,Hawkesbury - Wilberforce Brigade,RFS,fire-alt,orange,{},0
+528,0690720,Hawkesbury - Yarramundi Brigade,RFS,fire-alt,orange,{},0
+529,0690728,Hawkesbury RAFT,RFS,fire-alt,orange,{},0
+530,0720008,Hornsby/Ku-Ring-Gai - Hornsby Broadcast Message,RFS,fire-alt,orange,{},0
+531,0720016,Hornsby/Ku-Ring-Gai - Arcadia Brigade,RFS,fire-alt,orange,{},0
+532,0720032,Hornsby/Ku-Ring-Gai - Berowra Brigade,RFS,fire-alt,orange,{},0
+533,0720040,Hornsby/Ku-Ring-Gai - Hornsby Duty Officer,RFS,fire-alt,orange,{},0
+534,0720048,Hornsby/Ku-Ring-Gai - Brooklyn Brigade,RFS,fire-alt,orange,{},0
+535,0720064,The Hills - Canoelands Brigade,RFS,fire-alt,orange,{},0
+536,0720072,Hornsby/Ku-Ring-Gai - Hornsby Group Officers,RFS,fire-alt,orange,{},0
+537,0720080,Hornsby/Ku-Ring-Gai - Hornsby Catering Support Unit,RFS,fire-alt,orange,{},0
+538,0720088,Hornsby/Ku-Ring-Gai - Hornsby Catering Support Unit,RFS,fire-alt,orange,{},0
+539,0720096,Hornsby/Ku-Ring-Gai - Cherrybrook Brigade,RFS,fire-alt,orange,{},0
+540,0720104,Hornsby/Ku-Ring-Gai - Cherrybrook Brigade Captain,RFS,fire-alt,orange,{},0
+541,0720112,Hornsby/Ku-Ring-Gai - Hornsby Comms Support Unit,RFS,fire-alt,orange,{},0
+542,0720120,Hornsby/Ku-Ring-Gai - Hornsby Comms Support Unit Captain,RFS,fire-alt,orange,{},0
+543,0720128,Hornsby/Ku-Ring-Gai - Cowan Brigade,RFS,fire-alt,orange,{},0
+544,0720144,Hornsby/Ku-Ring-Gai - Dangar Island Brigade,RFS,fire-alt,orange,{},0
+545,0720160,Hornsby/Ku-Ring-Gai - Dural Brigade,RFS,fire-alt,orange,{},0
+546,0720168,Hornsby/Ku-Ring-Gai - Dural Brigade Captain,RFS,fire-alt,orange,{},0
+547,0720176,Hornsby/Ku-Ring-Gai - Galston Brigade,RFS,fire-alt,orange,{},0
+548,0720192,Hornsby/Ku-Ring-Gai - Hornsby/Hornsby Hts Brigade,RFS,fire-alt,orange,{},0
+549,0720200,Hornsby/Ku-Ring-Gai - Hornsby Broadcast Message,RFS,fire-alt,orange,{},0
+550,0720208,Hornsby/Ku-Ring-Gai - Hornsby/Hornsby Hts Brigade,RFS,fire-alt,orange,{},0
+551,0720224,Hornsby/Ku-Ring-Gai - Ku-ring-gai Brigade,RFS,fire-alt,orange,{},0
+552,0720232,Hornsby/Ku-Ring-Gai - Mt Kuring-gai Brigade Captain,RFS,fire-alt,orange,{},0
+553,0720256,Hornsby/Ku-Ring-Gai - Muogamarra Brigade,RFS,fire-alt,orange,{},0
+554,0720272,Hornsby/Ku-Ring-Gai - Mt Kuring-gai Brigade,RFS,fire-alt,orange,{},0
+555,0720296,Hornsby/Ku-Ring-Gai - Brooklyn Brigade Captain,RFS,fire-alt,orange,{},0
+556,0720304,Hornsby/Ku-Ring-Gai - Westleigh Brigade,RFS,fire-alt,orange,{},0
+557,0720312,Hornsby/Ku-Ring-Gai - Westleigh Brigade,RFS,fire-alt,orange,{},0
+558,0720376,Hornsby/Ku-Ring-Gai - Hornsby Group 4,RFS,fire-alt,orange,{},0
+559,0720392,Hornsby/Ku-Ring-Gai - Hornsby Group 2,RFS,fire-alt,orange,{},0
+560,0720400,Hornsby/Ku-Ring-Gai - Hornsby Group 6,RFS,fire-alt,orange,{},0
+1133,0720416,Hornsby/Ku-Ring-Gai - Unknown???,RFS,fire-alt,orange,{},0
+561,0720432,Hornsby/Ku-Ring-Gai - Hornsby Duty Officer,RFS,fire-alt,orange,{},0
+562,0720440,Hornsby/Ku-Ring-Gai - Hornsby FCO,RFS,fire-alt,orange,{},0
+1132,0720448,Hornsby/Ku-Ring-Gai - Unknown??,RFS,fire-alt,orange,{},0
+563,0720464,Hornsby/Ku-Ring-Gai - Hornsby Group 3,RFS,fire-alt,orange,{},0
+564,0720472,Hornsby/Ku-Ring-Gai - Hornsby Group 6,RFS,fire-alt,orange,{},0
+565,0720480,Hornsby/Ku-Ring-Gai - Hornsby Group 5,RFS,fire-alt,orange,{},0
+566,0770376,Kempsey Shire SES,SES,exclamation-triangle,yellow,{},0
+567,0781008,Illawarra - Gerringong Brigade,RFS,fire-alt,orange,{},0
+568,0782008,Illawarra - Jamberoo Brigade,RFS,fire-alt,orange,{},0
+569,0783008,Illawarra - Foxground Brigade,RFS,fire-alt,orange,{},0
+570,0784008,Illawarra - Carrington Falls Brigade,RFS,fire-alt,orange,{},0
+571,0789000,Illawarra Broadcast Message,RFS,fire-alt,orange,{},0
+572,0789008,Kiama SES,SES,exclamation-triangle,yellow,{},0
+573,0810208,North West - Condobolin Brigade,RFS,fire-alt,orange,{},0
+574,0810296,North West - Condobolin Brigade,RFS,fire-alt,orange,{},0
+575,0810304,North West - Condobolin Brigade,RFS,fire-alt,orange,{},0
+576,0810312,North West - Condobolin Brigade,RFS,fire-alt,orange,{},0
+577,0810360,North West - Nevertire Brigade,RFS,fire-alt,orange,{},0
+578,0819000,North West - Condobolin Brigade,RFS,fire-alt,orange,{},0
+579,0820000,Central Coast Group Officers,RFS,fire-alt,orange,{},0
+580,0820008,Central Coast FCO 1,RFS,fire-alt,orange,{},0
+581,0820024,Central Coast FCO 5,RFS,fire-alt,orange,{},0
+582,0820048,Central Coast Group 6,RFS,fire-alt,orange,{},0
+583,0820064,Central Coast Group 8,RFS,fire-alt,orange,{},0
+584,0820072,Central Coast Group 7,RFS,fire-alt,orange,{},0
+585,0820096,Central Coast Group 10,RFS,fire-alt,orange,{},0
+586,0820256,Central Coast - Awaba Brigade,RFS,fire-alt,orange,{},0
+587,0820384,Central Coast - Seahampton Brigade,RFS,fire-alt,orange,{},0
+588,0820496,Central Coast - Killingworth Brigade,RFS,fire-alt,orange,{},0
+589,0820624,Central Coast - Wakefield Brigade,RFS,fire-alt,orange,{},0
+590,0820656,Central Coast - Cooranbong Brigade Captain,RFS,fire-alt,orange,{},0
+591,0820752,Central Coast - Cameron Park Brigade,RFS,fire-alt,orange,{},0
+592,0820760,Central Coast - Martinsville Brigade,RFS,fire-alt,orange,{},0
+593,0820792,Central Coast - Dora Creek Brigade Captain,RFS,fire-alt,orange,{},0
+594,0820872,Central Coast - Dora Creek Brigade,RFS,fire-alt,orange,{},0
+595,0821064,Central Coast - Cooranbong Brigade,RFS,fire-alt,orange,{},0
+596,0821176,Central Coast - Wallarah Brigade,RFS,fire-alt,orange,{},0
+597,0821208,Central Coast - Martinsville Brigade Captain,RFS,fire-alt,orange,{},0
+598,0821304,Central Coast - Martinsville Brigade,RFS,fire-alt,orange,{},0
+599,0821416,Central Coast - Mandalong Brigade,RFS,fire-alt,orange,{},0
+600,0821456,Central Coast - Peninsula Brigade Captain,RFS,fire-alt,orange,{},0
+601,0821552,Central Coast - Peninsula Brigade,RFS,fire-alt,orange,{},0
+602,0821680,Central Coast - Wyee Point Brigade,RFS,fire-alt,orange,{},0
+603,0821808,Central Coast - Wyee Brigade,RFS,fire-alt,orange,{},0
+604,0821936,Central Coast - Nords Wharf Brigade,RFS,fire-alt,orange,{},0
+605,0822056,Central Coast - Catherine Hill Bay Brigade,RFS,fire-alt,orange,{},0
+606,0822216,Central Coast Comms Support Unit,RFS,fire-alt,orange,{},0
+607,0829000,Lake Macquarie SES,SES,exclamation-triangle,yellow,{},0
+608,0829008,Cooranbong SES,SES,exclamation-triangle,yellow,{},0
+609,0850008,Macarthur - Liverpool Brigade,RFS,fire-alt,orange,{},0
+610,0850016,Macarthur - Austral Brigade,RFS,fire-alt,orange,{},0
+611,0850104,Macarthur - Bringelly Brigade,RFS,fire-alt,orange,{},0
+612,0850168,Macarthur - Hoxton Park Brigade,RFS,fire-alt,orange,{},0
+613,0850424,Macarthur - Kemps Creek Brigade,RFS,fire-alt,orange,{},0
+614,0850504,Macarthur - Luddenham Brigade,RFS,fire-alt,orange,{},0
+615,0850600,Macarthur - Casula Brigade,RFS,fire-alt,orange,{},0
+1137,0950048,Hunter Valley - Kayuga Brigade,RFS,fire-alt,orange,{},0
+1135,0950056,Hunter Valley - Bulga Group Officers,RFS,fire-alt,orange,{},0
+1136,0950232,Hunter Valley - Edinglassie Brigade,RFS,fire-alt,orange,{},0
+1138,0950272,Hunter Valley - Kayuga Brigade,RFS,fire-alt,orange,{},0
+616,0959008,Muswellbrook SES,SES,exclamation-triangle,yellow,{},0
+100,100,0210344,Faulconbridge Brigade,Blue Mountains,fire-alt,"""orange""",null
+1148,1010032,Clarence Valley - Glenugie Brigade,RFS,fire-alt,orange,{},0
+1147,1010640,Clarence Valley - Glenugie Brigade,RFS,fire-alt,orange,{},0
+1150,1010648,Clarence Valley - Grafton City Brigade,RFS,fire-alt,orange,{},0
+1149,1010712,Clarence Valley - Nymboida Brigade,RFS,fire-alt,orange,{},0
+617,1020000,Chifley Lithgow - Chifley Broadcast Message,RFS,fire-alt,orange,{},0
+618,1020064,Chifley Lithgow - Back Creek Brigade Captain,RFS,fire-alt,orange,{},0
+619,1020072,Chifley Lithgow - Back Creek Brigade,RFS,fire-alt,orange,{},0
+620,1020080,Chifley Lithgow - orange Springs Brigade Captain,RFS,fire-alt,orange,{},0
+621,1020088,Chifley Lithgow - orange Springs Brigade,RFS,fire-alt,orange,{},0
+622,1020096,Chifley Lithgow - Duckmaloi Brigade Captain,RFS,fire-alt,orange,{},0
+623,1020104,Chifley Lithgow - Duckmaloi Brigade,RFS,fire-alt,orange,{},0
+624,1020112,Chifley Lithgow - Edith Brigade Captain,RFS,fire-alt,orange,{},0
+625,1020120,Chifley Lithgow - Edith Brigade,RFS,fire-alt,orange,{},0
+626,1020128,Chifley Lithgow - Gingkin Brigade Captain,RFS,fire-alt,orange,{},0
+627,1020136,Chifley Lithgow - Gingkin Brigade,RFS,fire-alt,orange,{},0
+628,1020144,Chifley Lithgow - Gurnang Brigade Captain,RFS,fire-alt,orange,{},0
+629,1020152,Chifley Lithgow - Gurnang Brigade,RFS,fire-alt,orange,{},0
+630,1020160,Chifley Lithgow - Hazelgrove Brigade Captain,RFS,fire-alt,orange,{},0
+631,1020168,Chifley Lithgow - Hazelgrove Brigade,RFS,fire-alt,orange,{},0
+632,1020192,Chifley Lithgow - Jerrong Pyds Brigade Captain,RFS,fire-alt,orange,{},0
+633,1020200,Chifley Lithgow - Jerrong Pyds Brigade,RFS,fire-alt,orange,{},0
+634,1020208,Chifley Lithgow - Jenolan Caves Brigade Captain,RFS,fire-alt,orange,{},0
+635,1020216,Chifley Lithgow - Jenolan Caves Brigade,RFS,fire-alt,orange,{},0
+636,1020224,Chifley Lithgow - Native Dog Brigade Captain,RFS,fire-alt,orange,{},0
+637,1020232,Chifley Lithgow - Mayfield Brigade,RFS,fire-alt,orange,{},0
+638,1020248,Chifley Lithgow - Native Dog Brigade,RFS,fire-alt,orange,{},0
+639,1020256,Chifley Lithgow - Norway Brigade Captain,RFS,fire-alt,orange,{},0
+640,1020264,Chifley Lithgow - Norway Brigade,RFS,fire-alt,orange,{},0
+641,1020272,Chifley Lithgow - Oberon Support Brigade Captain,RFS,fire-alt,orange,{},0
+642,1020280,Chifley Lithgow - Oberon Support Brigade,RFS,fire-alt,orange,{},0
+643,1020288,Chifley Lithgow - O'Connell Brigade Captain,RFS,fire-alt,orange,{},0
+644,1020296,Chifley Lithgow - Porters Retreat Brigade Captain,RFS,fire-alt,orange,{},0
+645,1020304,Chifley Lithgow - Porters Retreat Brigade,RFS,fire-alt,orange,{},0
+646,1020312,Chifley Lithgow - Shooter's Hill Brigade Captain,RFS,fire-alt,orange,{},0
+647,1020320,Chifley Lithgow - Shooter's Hill Brigade,RFS,fire-alt,orange,{},0
+648,1020328,Chifley Lithgow - Burraga Brigade Captain,RFS,fire-alt,orange,{},0
+649,1020336,Chifley Lithgow - Burraga Brigade,RFS,fire-alt,orange,{},0
+650,1020344,Chifley Lithgow - The Lagoon Brigade Captain,RFS,fire-alt,orange,{},0
+651,1020352,Chifley Lithgow - The Lagoon Brigade,RFS,fire-alt,orange,{},0
+652,1020360,Chifley Lithgow - O'Connell Brigade,RFS,fire-alt,orange,{},0
+653,1022000,Chifley Lithgow - Mayfield Brigade Captain,RFS,fire-alt,orange,{},0
+654,1022008,Chifley Lithgow - Bald Ridge Brigade,RFS,fire-alt,orange,{},0
+655,1022016,Chifley Lithgow - Bald Ridge Brigade Captain,RFS,fire-alt,orange,{},0
+656,1023000,Chifley Lithgow - Chifley Brigade Captains Group,RFS,fire-alt,orange,{},0
+657,1029000,Bathurst SES - General,SES,exclamation-triangle,yellow,{},0
+658,1029008,Bathurst SES - Rescue,SES,exclamation-triangle,yellow,{},0
+659,1029016,Oberon SES - General,SES,exclamation-triangle,yellow,{},0
+660,1029024,Oberon SES - Rescue,SES,exclamation-triangle,yellow,{},0
+661,1029032,Turon SES - General,SES,exclamation-triangle,yellow,{},0
+662,1029040,Turon SES - Rescue,SES,exclamation-triangle,yellow,{},0
+663,1029064,Chifley Lithgow - Burraga Brigade,RFS,fire-alt,orange,{},0
+664,1029080,Chifley Lithgow - Turon CFR,RFS,fire-alt,orange,{},0
+665,1029088,Chifley Lithgow - Portland CWRPRT,RFS,fire-alt,orange,{},0
+666,1029104,Chifley Lithgow - Lithgow CWRLGW,RFS,fire-alt,orange,{},0
+667,1030008,Canobolas RDO,RFS,fire-alt,orange,{},0
+668,1030112,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+669,1030624,Canobolas - Orange Brigade,RFS,fire-alt,orange,{},0
+670,1030640,Canobolas - Lucknow/Summer Hill Crk Brigade,RFS,fire-alt,orange,{},0
+671,1030648,Canobolas - Spring Hill/Huntley Brigade,RFS,fire-alt,orange,{},0
+672,1030656,Canobolas - Clifton Grove-Ophir / Orange Brigade,RFS,fire-alt,orange,{},0
+673,1032056,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+674,1032072,Canobolas - Clifton Grove-Ophir / Orange Brigade,RFS,fire-alt,orange,{},0
+675,1040200,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+676,1040216,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+677,1040240,Mid Lachlan Valley - Tichborne Brigade,RFS,fire-alt,orange,{},0
+678,1040256,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+679,1040296,Mid Lachlan Valley - Fifield Brigade,RFS,fire-alt,orange,{},0
+680,1040328,Mid Lachlan Valley - Peak Hill Brigade,RFS,fire-alt,orange,{},0
+681,1042064,Mid Lachlan Valley - Parkes Brigade,RFS,fire-alt,orange,{},0
+682,1042072,Mid Lachlan Valley - Trundle Brigade,RFS,fire-alt,orange,{},0
+683,1049000,Mid Lachlan Valley - Peak Hill Brigade,RFS,fire-alt,orange,{},0
+684,1060032,Cumberland - Berkshire Park Brigade,RFS,fire-alt,orange,{},0
+685,1060048,Cumberland - Castlereagh Brigade,RFS,fire-alt,orange,{},0
+686,1060056,Cumberland Comms Support Unit,RFS,fire-alt,orange,{},0
+687,1060072,Cumberland - Erskine Park Brigade,RFS,fire-alt,orange,{},0
+688,1060080,Cumberland - Llandilo Brigade,RFS,fire-alt,orange,{},0
+689,1060088,Cumberland - Londonderry Brigade,RFS,fire-alt,orange,{},0
+690,1060096,Cumberland - Mulgoa Brigade,RFS,fire-alt,orange,{},0
+691,1060104,Cumberland - Orchard Hills Brigade,RFS,fire-alt,orange,{},0
+692,1060112,Cumberland - Regentville Brigade,RFS,fire-alt,orange,{},0
+693,1060120,Cumberland - Wallacia Brigade,RFS,fire-alt,orange,{},0
+694,1060128,Cumberland FCO,RFS,fire-alt,orange,{},0
+695,1060144,Cumberland Group 1,RFS,fire-alt,orange,{},0
+696,1110021,Central Coast Group 3,RFS,fire-alt,orange,{},0
+697,1110069,Central Coast - Unknown??,RFS,fire-alt,orange,{},0
+698,1110141,Central Coast Group Officers,RFS,fire-alt,orange,{},0
+699,1110157,Central Coast Duty,RFS,fire-alt,orange,{},0
+700,1110189,Central Coast Catering Support Unit,RFS,fire-alt,orange,{},0
+701,1110205,Central Coast Group Officers,RFS,fire-alt,orange,{},0
+702,1110229,Central Coast OSB,RFS,fire-alt,orange,{},0
+703,1110237,Central Coast Comms Support Unit,RFS,fire-alt,orange,{},0
+704,1110349,Central Coast - Berkeley Vale Brigade,RFS,fire-alt,orange,{},0
+705,1110381,Central Coast - Charmhaven Brigade,RFS,fire-alt,orange,{},0
+706,1110413,Central Coast - Tuggerah Brigade,RFS,fire-alt,orange,{},0
+707,1110445,Central Coast - Dooralong Brigade,RFS,fire-alt,orange,{},0
+708,1110477,Central Coast - Gwandalan Brigade,RFS,fire-alt,orange,{},0
+709,1110509,Central Coast - Wadalba Brigade,RFS,fire-alt,orange,{},0
+710,1110541,Central Coast - Kulnura Brigade,RFS,fire-alt,orange,{},0
+711,1110573,Central Coast - Lake Munmorah Brigade,RFS,fire-alt,orange,{},0
+712,1110605,Central Coast - Mannering Park Brigade,RFS,fire-alt,orange,{},0
+713,1110637,Central Coast - Ourimbah Brigade,RFS,fire-alt,orange,{},0
+714,1110669,Central Coast - Warnervale Brigade,RFS,fire-alt,orange,{},0
+715,1110701,Central Coast - Charmhaven Brigade,RFS,fire-alt,orange,{},0
+716,1110733,Central Coast - Yarramalong Brigade,RFS,fire-alt,orange,{},0
+717,1110781,Central Coast Rescue Squad,Volunteer Rescue Association,car,green,{},0
+718,1112101,The Hills - Annangrove Brigade,RFS,fire-alt,orange,{},0
+719,1112103,The Hills - Glenhaven Brigade,RFS,fire-alt,orange,{},0
+720,1112104,The Hills - Glenorie Brigade,RFS,fire-alt,orange,{},0
+721,1112106,The Hills - Kellyville Brigade,RFS,fire-alt,orange,{},0
+722,1112107,The Hills - Kenthurst Brigade,RFS,fire-alt,orange,{},0
+723,1112108,The Hills - Lower Portland Brigade,RFS,fire-alt,orange,{},0
+724,1112109,The Hills - Maroota Brigade,RFS,fire-alt,orange,{},0
+725,1112110,The Hills - Maroota South Brigade,RFS,fire-alt,orange,{},0
+726,1112111,The Hills - Middle Dural Brigade,RFS,fire-alt,orange,{},0
+727,1112113,The Hills - Round Corner Brigade,RFS,fire-alt,orange,{},0
+728,1112114,The Hills - Rouse Hill Brigade,RFS,fire-alt,orange,{},0
+729,1112216,The Hills - Annangrove Brigade,RFS,fire-alt,orange,{},0
+730,1112222,The Hills Broadcast Message,RFS,fire-alt,orange,{},0
+731,1112224,The Hills - Box Hill/Nelson Brigade,RFS,fire-alt,orange,{},0
+732,1112288,The Hills Broadcast Message,RFS,fire-alt,orange,{},0
+733,1112296,The Hills - Glenorie Brigade,RFS,fire-alt,orange,{},0
+734,1112304,The Hills - Glenhaven Brigade,RFS,fire-alt,orange,{},0
+735,1112328,The Hills - Hillside Brigade,RFS,fire-alt,orange,{},0
+736,1112336,The Hills - Kellyville Brigade,RFS,fire-alt,orange,{},0
+737,1112344,The Hills - Kenthurst Brigade,RFS,fire-alt,orange,{},0
+738,1112352,The Hills - Lower Portland Brigade,RFS,fire-alt,orange,{},0
+739,1112360,The Hills - Maroota Brigade,RFS,fire-alt,orange,{},0
+740,1112368,The Hills - Maroota South Brigade,RFS,fire-alt,orange,{},0
+741,1112376,The Hills - Middle Dural Brigade,RFS,fire-alt,orange,{},0
+742,1112384,The Hills - North Rocks Brigade,RFS,fire-alt,orange,{},0
+743,1112392,The Hills - Round Corner Brigade,RFS,fire-alt,orange,{},0
+744,1112400,The Hills - Rouse Hill Brigade,RFS,fire-alt,orange,{},0
+745,1112432,The Hills - Wisemans Ferry Brigade,RFS,fire-alt,orange,{},0
+746,1112464,The Hills - Kellyville/Lighting Brigade,RFS,fire-alt,orange,{},0
+747,1112520,The Hills - Middle Dural Brigade,RFS,fire-alt,orange,{},0
+748,1112912,The Hills - Middle Dural Brigade,RFS,fire-alt,orange,{},0
+749,1139008,Lower Hunter - Scone Brigade,RFS,fire-alt,orange,{},0
+750,1152008,Illawarra - Albion Park Brigade,RFS,fire-alt,orange,{},0
+751,1153008,Illawarra - Oak Flats Brigade,RFS,fire-alt,orange,{},0
+752,1154008,Illawarra - Dunmore Brigade,RFS,fire-alt,orange,{},0
+753,1155008,Illawarra - Calderwood Brigade,RFS,fire-alt,orange,{},0
+754,1160000,Shoalhaven Broadcast Message,RFS,fire-alt,orange,{},0
+755,1160008,Shoalhaven FCO 2,RFS,fire-alt,orange,{},0
+756,1160040,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+757,1160048,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+758,1160056,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+759,1160064,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+760,1160072,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+761,1160080,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+762,1160088,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+763,1160096,Shoalhaven - Basin View Brigade Captain,RFS,fire-alt,orange,{},0
+764,1160104,Shoalhaven - Basin View Brigade,RFS,fire-alt,orange,{},0
+765,1160112,Shoalhaven - Beaumont Brigade Captain,RFS,fire-alt,orange,{},0
+766,1160120,Shoalhaven - Beaumont Brigade,RFS,fire-alt,orange,{},0
+767,1160128,Shoalhaven - Bendalong Brigade Captain,RFS,fire-alt,orange,{},0
+768,1160136,Shoalhaven - Bendalong Brigade,RFS,fire-alt,orange,{},0
+769,1160144,Shoalhaven - Broughton Vale Brigade Captain,RFS,fire-alt,orange,{},0
+770,1160152,Shoalhaven - Broughton Vale Brigade,RFS,fire-alt,orange,{},0
+771,1160160,Shoalhaven - Callala Bay Brigade Captain,RFS,fire-alt,orange,{},0
+772,1160168,Shoalhaven - Callala Bay Brigade,RFS,fire-alt,orange,{},0
+773,1160176,Shoalhaven - Callala Beach Brigade Captain,RFS,fire-alt,orange,{},0
+774,1160184,Shoalhaven - Callala Beach Brigade,RFS,fire-alt,orange,{},0
+775,1160192,Shoalhaven - Cambewarra Brigade Captain,RFS,fire-alt,orange,{},0
+776,1160200,Shoalhaven - Cambewarra Brigade,RFS,fire-alt,orange,{},0
+777,1160208,Shoalhaven - Culburra Brigade Captain,RFS,fire-alt,orange,{},0
+778,1160216,Shoalhaven - Culburra Brigade,RFS,fire-alt,orange,{},0
+779,1160224,Shoalhaven - Cunjurong Brigade Captain,RFS,fire-alt,orange,{},0
+780,1160232,Shoalhaven - Cunjurong Brigade,RFS,fire-alt,orange,{},0
+781,1160240,Shoalhaven - Currarong Brigade Captain,RFS,fire-alt,orange,{},0
+782,1160248,Shoalhaven - Currarong Brigade,RFS,fire-alt,orange,{},0
+783,1160256,Shoalhaven - Erowal Bay Brigade Captain,RFS,fire-alt,orange,{},0
+784,1160264,Shoalhaven - Erowal Bay Brigade,RFS,fire-alt,orange,{},0
+785,1160272,Shoalhaven - Falls Creek Brigade Captain,RFS,fire-alt,orange,{},0
+786,1160280,Shoalhaven - Falls Creek Brigade,RFS,fire-alt,orange,{},0
+787,1160288,Shoalhaven - Greenwell Point Brigade Captain,RFS,fire-alt,orange,{},0
+788,1160296,Shoalhaven - Greenwell Point Brigade,RFS,fire-alt,orange,{},0
+789,1160304,Shoalhaven - Huskisson Brigade Captain,RFS,fire-alt,orange,{},0
+790,1160312,Shoalhaven - Huskisson Brigade,RFS,fire-alt,orange,{},0
+791,1160320,Shoalhaven - Hyams Beach Brigade,RFS,fire-alt,orange,{},0
+792,1160328,Shoalhaven - Hyams Beach Brigade,RFS,fire-alt,orange,{},0
+793,1160336,Shoalhaven - Illaroo Road Brigade Captain,RFS,fire-alt,orange,{},0
+794,1160344,Shoalhaven - Illaroo Road Brigade,RFS,fire-alt,orange,{},0
+795,1160352,Shoalhaven - Kangaroo Valley Brigade Captain,RFS,fire-alt,orange,{},0
+796,1160360,Shoalhaven - Kangaroo Valley Brigade,RFS,fire-alt,orange,{},0
+797,1160368,Shoalhaven - Milton Brigade Captain,RFS,fire-alt,orange,{},0
+798,1160376,Shoalhaven - Milton Brigade,RFS,fire-alt,orange,{},0
+799,1160384,Shoalhaven - Sanctuary Point Brigade Captain,RFS,fire-alt,orange,{},0
+800,1160392,Shoalhaven - Sanctuary Point Brigade,RFS,fire-alt,orange,{},0
+801,1160400,Shoalhaven Heads Brigade Captain,RFS,fire-alt,orange,{},0
+802,1160408,Shoalhaven Heads Brigade,RFS,fire-alt,orange,{},0
+803,1160416,Shoalhaven - Unknown??,RFS,fire-alt,orange,{},0
+804,1160424,Shoalhaven - Unknown??,RFS,fire-alt,orange,{},0
+805,1160432,Shoalhaven - Sussex Inlet Brigade Captain,RFS,fire-alt,orange,{},0
+806,1160440,Shoalhaven - Sussex Inlet Brigade,RFS,fire-alt,orange,{},0
+807,1160448,Shoalhaven - Bawley Point Brigade Captain,RFS,fire-alt,orange,{},0
+808,1160456,Shoalhaven - Bawley Point Brigade,RFS,fire-alt,orange,{},0
+809,1160464,Shoalhaven - Cudmirrah Brigade Captain,RFS,fire-alt,orange,{},0
+810,1160472,Shoalhaven - Cudmirrah Brigade,RFS,fire-alt,orange,{},0
+811,1160480,Shoalhaven - Depot Beach Brigade Captain,RFS,fire-alt,orange,{},0
+812,1160488,Shoalhaven - Depot Beach Brigade,RFS,fire-alt,orange,{},0
+813,1160496,Shoalhaven - Kioloa Brigade Captain,RFS,fire-alt,orange,{},0
+814,1160504,Shoalhaven - Kioloa Brigade,RFS,fire-alt,orange,{},0
+815,1160512,Shoalhaven - Lake Conjola Brigade Captain,RFS,fire-alt,orange,{},0
+816,1160520,Shoalhaven - Lake Conjola Brigade,RFS,fire-alt,orange,{},0
+817,1160528,Shoalhaven - Tabourie Brigade Captain,RFS,fire-alt,orange,{},0
+818,1160536,Shoalhaven - Tabourie Brigade,RFS,fire-alt,orange,{},0
+819,1160544,Shoalhaven - Tomerong Brigade Captain,RFS,fire-alt,orange,{},0
+820,1160552,Shoalhaven - Tomerong Brigade,RFS,fire-alt,orange,{},0
+821,1160560,Shoalhaven - Wandandian Brigade Captain,RFS,fire-alt,orange,{},0
+822,1160568,Shoalhaven - Wandandian Brigade,RFS,fire-alt,orange,{},0
+823,1160576,Shoalhaven - St Georges Basin Brigade Captain,RFS,fire-alt,orange,{},0
+824,1160584,Shoalhaven - St Georges Basin Brigade,RFS,fire-alt,orange,{},0
+825,1160608,Shoalhaven Comms Support Unit,RFS,fire-alt,orange,{},0
+826,1160656,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+827,1160664,Shoalhaven Group Officer,RFS,fire-alt,orange,{},0
+1054,1160680,Shoalhaven - Unknown?,RFS,fire-alt,orange,{},0
+828,1160696,Shoalhaven - Fishermans Paradise Brigade,RFS,fire-alt,orange,{},0
+829,1160960,Shoalhaven Community Education Unit,RFS,fire-alt,orange,{},0
+830,1161000,Shoalhaven - All Shoalhaven District Fire Control Officers?,RFS,fire-alt,orange,{},0
+831,1162000,Shoalhaven - All Shoalhaven District Brigade Captains,RFS,fire-alt,orange,{},0
+832,1163000,Shoalhaven - All Shoalhaven District Group Officers,RFS,fire-alt,orange,{},0
+1140,1170032,Hunter Valley Ops Staff,RFS,fire-alt,orange,{},0
+1141,1170040,Hunter Valley Staff,RFS,fire-alt,orange,{},0
+1134,1170048,Hunter Valley - Bulga Brigade,RFS,fire-alt,orange,{},0
+833,1170112,Hunter Valley - Belford Brigade,RFS,fire-alt,orange,{},0
+834,1170128,Hunter Valley - Broke Brigade,RFS,fire-alt,orange,{},0
+835,1170176,Hunter Valley - Darlington Brigade,RFS,fire-alt,orange,{},0
+1139,1170256,Hunter Valley - Putty Brigade,RFS,fire-alt,orange,{},0
+836,1170384,Hunter Valley - Whittingham Brigade,RFS,fire-alt,orange,{},0
+837,1210133,Cudgegong RDO,RFS,fire-alt,orange,{},0
+838,1210157,Cudgegong RAFT Team,RFS,fire-alt,orange,{},0
+839,1210325,Cudgegong RDO,RFS,fire-alt,orange,{},0
+840,1210357,Gulgong Rescue Squad,Volunteer Rescue Association,car,green,{},0
+841,1210501,Cudgegong - Unknown??,RFS,fire-alt,orange,{},0
+842,1210557,Cudgegong - Bogee Brigade,RFS,fire-alt,orange,{},0
+843,1210581,Rylstone Rescue Squad,Volunteer Rescue Association,car,green,{},0
+844,1210589,Cudgegong - Unknown??,RFS,fire-alt,orange,{},0
+845,1210637,Cudgegong - Unknown??,RFS,fire-alt,orange,{},0
+846,1210685,Cudgegong - Unknown??,RFS,fire-alt,orange,{},0
+847,1210693,Cudgegong - Clandulla Brigade,RFS,fire-alt,orange,{},0
+848,1210725,Cudgegong - Unknown??,RFS,fire-alt,orange,{},0
+849,1210733,Cudgegong - Rylstone Brigade,RFS,fire-alt,orange,{},0
+850,1210781,Cudgegong - Mudgee Brigade,RFS,fire-alt,orange,{},0
+851,1210845,Cudgegong - Mullamuddy Brigade,RFS,fire-alt,orange,{},0
+852,1310000,Lower Hunter Broadcast Message,RFS,fire-alt,orange,{},0
+853,1310096,Lower Hunter - Greta Brigade,RFS,fire-alt,orange,{},0
+854,1310104,Lower Hunter - Central Cessnock Brigade,RFS,fire-alt,orange,{},0
+855,1310112,Lower Hunter Support Brigade,RFS,fire-alt,orange,{},0
+856,1310120,Lower Hunter - North Rothbury Brigade,RFS,fire-alt,orange,{},0
+857,1310128,Lower Hunter - Pokolbin Brigade,RFS,fire-alt,orange,{},0
+858,1310136,Lower Hunter - Rothbury Brigade,RFS,fire-alt,orange,{},0
+859,1310144,Hunter Valley Brigade,RFS,fire-alt,orange,{},0
+860,1310152,Lower Hunter - Kearsley Brigade,RFS,fire-alt,orange,{},0
+861,1310160,Lower Hunter - Clarence Town CFR,RFS,fire-alt,orange,{},0
+862,1310168,Lower Hunter - Mulbring Brigade,RFS,fire-alt,orange,{},0
+863,1310176,Lower Hunter - Neath Brigade,RFS,fire-alt,orange,{},0
+864,1310184,Lower Hunter - Quorrobolong Brigade,RFS,fire-alt,orange,{},0
+865,1310192,Lower Hunter - Bishops Bridge Brigade,RFS,fire-alt,orange,{},0
+866,1310200,Lower Hunter - Lochinvar Brigade,RFS,fire-alt,orange,{},0
+867,1310208,Lower Hunter - East Maitland Brigade,RFS,fire-alt,orange,{},0
+868,1310216,Lower Hunter - Maitland Vale/Luskintyre Brigade,RFS,fire-alt,orange,{},0
+869,1310224,Lower Hunter - Thornton Brigade,RFS,fire-alt,orange,{},0
+870,1310232,Lower Hunter - Bucketty Brigade,RFS,fire-alt,orange,{},0
+871,1310240,Lower Hunter - Laguna Brigade,RFS,fire-alt,orange,{},0
+872,1310248,Lower Hunter - Wollombi Brigade,RFS,fire-alt,orange,{},0
+873,1310256,Lower Hunter Catering Support Unit Captain,RFS,fire-alt,orange,{},0
+874,1310272,Lower Hunter - Bolwarra/Largs Brigade,RFS,fire-alt,orange,{},0
+875,1310344,Lower Hunter RAFT,RFS,fire-alt,orange,{},0
+876,1310360,Lower Hunter - Millfield Brigade,RFS,fire-alt,orange,{},0
+877,1310400,Lower Hunter Group 5,RFS,fire-alt,orange,{},0
+878,1310408,Lower Hunter Deputy Group 5,RFS,fire-alt,orange,{},0
+879,1310416,Lower Hunter Group 6,RFS,fire-alt,orange,{},0
+880,1310424,Lower Hunter Deputy Group 6,RFS,fire-alt,orange,{},0
+881,1310432,Lower Hunter Group 7,RFS,fire-alt,orange,{},0
+882,1310440,Lower Hunter Deputy Group 7,RFS,fire-alt,orange,{},0
+883,1310448,Lower Hunter Group 6,RFS,fire-alt,orange,{},0
+884,1310456,Lower Hunter Deputy Group 6,RFS,fire-alt,orange,{},0
+885,1310488,Lower Hunter - Bucketty Brigade Captain,RFS,fire-alt,orange,{},0
+886,1310496,Lower Hunter - Unknown??,RFS,fire-alt,orange,{},0
+887,1310504,Lower Hunter - Greta Brigade Captain,RFS,fire-alt,orange,{},0
+888,1310528,Lower Hunter - Lochinvar Brigade Captain,RFS,fire-alt,orange,{},0
+889,1310544,Lower Hunter - East Maitland Brigade Captain,RFS,fire-alt,orange,{},0
+890,1310600,Lower Hunter - Millfield Brigade Captain,RFS,fire-alt,orange,{},0
+891,1310608,Lower Hunter - Mulbring Brigade Captain,RFS,fire-alt,orange,{},0
+892,1310616,Lower Hunter - Neath Brigade Captain,RFS,fire-alt,orange,{},0
+893,1310632,Lower Hunter - Pokolbin Brigade Captain,RFS,fire-alt,orange,{},0
+894,1310640,Lower Hunter - Quorrobolong Brigade Captain,RFS,fire-alt,orange,{},0
+895,1310760,Lower Hunter - Cessnock Catering Support Unit Captain,RFS,fire-alt,orange,{},0
+896,1370008,Northern Beaches Broadcast Message,RFS,fire-alt,orange,{},0
+897,1370016,Northern Beaches Captains,RFS,fire-alt,orange,{},0
+1143,1370024,Northern Beaches - Unknown??,RFS,fire-alt,orange,{},0
+898,1370056,Northern Beaches - Beacon Hill Brigade Captain,RFS,fire-alt,orange,{},0
+899,1370064,Northern Beaches - Belrose Brigade Captain,RFS,fire-alt,orange,{},0
+900,1370080,Northern Beaches Comms Support Unit Captain,RFS,fire-alt,orange,{},0
+901,1370088,Northern Beaches Catering Support Unit Captain,RFS,fire-alt,orange,{},0
+902,1370096,Northern Beaches - Coal & Candle Brigade Captain,RFS,fire-alt,orange,{},0
+903,1370104,Northern Beaches - Cottage Point Brigade Captain,RFS,fire-alt,orange,{},0
+904,1370112,Northern Beaches - Davidson Brigade Captain,RFS,fire-alt,orange,{},0
+905,1370120,Northern Beaches - Duffys Forest Brigade Captain,RFS,fire-alt,orange,{},0
+906,1370136,Northern Beaches - Ingleside Brigade Captain,RFS,fire-alt,orange,{},0
+907,1370144,Northern Beaches - Mackeral Beach Brigade Captain,RFS,fire-alt,orange,{},0
+908,1370152,Northern Beaches - Scotland Island Brigade Captain,RFS,fire-alt,orange,{},0
+909,1370160,Northern Beaches - Terrey Hills Brigade Captain,RFS,fire-alt,orange,{},0
+910,1370168,Northern Beaches - Tumbledown Dick Brigade Captain,RFS,fire-alt,orange,{},0
+911,1370176,Northern Beaches - West Pittwater Captain,RFS,fire-alt,orange,{},0
+912,1370192,Northern Beaches Group 1,RFS,fire-alt,orange,{},0
+913,1370200,Northern Beaches Group 2,RFS,fire-alt,orange,{},0
+914,1370208,Northern Beaches Group 3,RFS,fire-alt,orange,{},0
+915,1370240,Northern Beaches FCO 1,RFS,fire-alt,orange,{},0
+916,1370304,Northern Beaches FCO 2,RFS,fire-alt,orange,{},0
+917,1370312,Northern Beaches - Beacon Hill Brigade,RFS,fire-alt,orange,{},0
+918,1370320,Northern Beaches - Belrose Brigade,RFS,fire-alt,orange,{},0
+919,1370328,Northern Beaches - Coasters Retreat Brigade,RFS,fire-alt,orange,{},0
+920,1370336,Northern Beaches Comms Support Unit,RFS,fire-alt,orange,{},0
+921,1370344,Northern Beaches Catering Support Unit,RFS,fire-alt,orange,{},0
+922,1370352,Northern Beaches - Coal & Candle Brigade,RFS,fire-alt,orange,{},0
+923,1370360,Northern Beaches - Cottage Point Brigade,RFS,fire-alt,orange,{},0
+924,1370368,Northern Beaches - Davidson Brigade,RFS,fire-alt,orange,{},0
+925,1370376,Northern Beaches - Duffys Forest Brigade,RFS,fire-alt,orange,{},0
+926,1370392,Northern Beaches - Ingleside Brigade,RFS,fire-alt,orange,{},0
+927,1370400,Northern Beaches - Mackeral Beach Brigade,RFS,fire-alt,orange,{},0
+928,1370408,Northern Beaches - Scotland Island Brigade,RFS,fire-alt,orange,{},0
+929,1370416,Northern Beaches - Terry Hills Brigade,RFS,fire-alt,orange,{},0
+930,1370424,Northern Beaches - Tumbledown Dick Brigade,RFS,fire-alt,orange,{},0
+931,1370432,Northern Beaches - West Pittwater Brigade,RFS,fire-alt,orange,{},0
+932,1370440,Northern Beaches Flyer,RFS,fire-alt,orange,{},0
+933,1370456,Northern Beaches Duty Group,RFS,fire-alt,orange,{},0
+934,1370472,Northern Beaches Support Brigade,RFS,fire-alt,orange,{},0
+935,1370480,Northern Beaches Support Captain,RFS,fire-alt,orange,{},0
+936,1370696,Northern Beaches FCO 5,RFS,fire-alt,orange,{},0
+937,1370704,Northern Beaches Duty Officer,RFS,fire-alt,orange,{},0
+938,1370736,Northern Beaches Community First responders,RFS,fire-alt,orange,{},0
+939,1370744,Northern Beaches FCO 4,RFS,fire-alt,orange,{},0
+940,1370752,Northern Beaches OP Support 21,RFS,fire-alt,orange,{},0
+941,1380056,Mid Lachlan Valley - Bonnievale/Martins Lane Brigade,RFS,fire-alt,orange,{},0
+942,1380064,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+943,1380144,Mid Lachlan Valley - Bonnievale/Martins Lane Brigade,RFS,fire-alt,orange,{},0
+944,1380200,Mid Lachlan Valley - Unknown??,RFS,fire-alt,orange,{},0
+945,1389008,Mid Lachlan Valley - Grenfell Brigade,RFS,fire-alt,orange,{},0
+946,1390136,Orana - Mt Arthur Brigade,RFS,fire-alt,orange,{},0
+947,1390144,Orana - Unknown??,RFS,fire-alt,orange,{},0
+948,1390200,Orana - Unknown??,RFS,fire-alt,orange,{},0
+949,1390256,Orana - Euchareena Brigade,RFS,fire-alt,orange,{},0
+950,1390312,Orana - Mt Arthur Brigade,RFS,fire-alt,orange,{},0
+951,1390320,Orana - Mumbil Brigade,RFS,fire-alt,orange,{},0
+952,1390344,Orana - Stuart Town Brigade,RFS,fire-alt,orange,{},0
+953,1390360,Orana - Unknown??,RFS,fire-alt,orange,{},0
+954,1399000,Orana - Unknown??,RFS,fire-alt,orange,{},0
+955,1410016,Unknown??,RFS,fire-alt,orange,{},0
+956,1410056,Illawarra - Helensburgh Brigade,RFS,fire-alt,orange,{},0
+957,1410064,Illawarra - Otford Brigade,RFS,fire-alt,orange,{},0
+958,1410072,Illawarra - Darkes Forest Brigade,RFS,fire-alt,orange,{},0
+959,1410080,Illawarra - Stanwell Park Brigade,RFS,fire-alt,orange,{},0
+960,1410088,Illawarra - Bulli Brigade,RFS,fire-alt,orange,{},0
+961,1410096,Illawarra - Austinmer Brigade,RFS,fire-alt,orange,{},0
+962,1410104,Illawarra - Dapto Brigade,RFS,fire-alt,orange,{},0
+963,1410112,Illawarra - Mt Kembla Brigade,RFS,fire-alt,orange,{},0
+964,1410120,Illawarra - Mt Keira Brigade,RFS,fire-alt,orange,{},0
+965,1410128,Illawarra - Farmborough Heights Brigade,RFS,fire-alt,orange,{},0
+966,1410344,Illawarra Support Brigade,RFS,fire-alt,orange,{},0
+967,1419100,Wollongong SES,SES,exclamation-triangle,yellow,{},0
+1053,1419224,CONISTON,SES,exclamation-triangle,yellow,{},0
+968,1430008,Southern Highlands Broadcast Message,RFS,fire-alt,orange,{},0
+969,1430112,Southern Highlands Comms Support Unit,RFS,fire-alt,orange,{},0
+970,1430128,Southern Highlands - Alpine Brigade,RFS,fire-alt,orange,{},0
+971,1430152,Southern Highlands - Avoca Brigade,RFS,fire-alt,orange,{},0
+972,1430176,Southern Highlands - Balmoral Brigade,RFS,fire-alt,orange,{},0
+973,1430200,Southern Highlands - Berrima Brigade,RFS,fire-alt,orange,{},0
+974,1430224,Southern Highlands - Bundanoon Brigade,RFS,fire-alt,orange,{},0
+975,1430248,Southern Highlands - Burawang Brigade,RFS,fire-alt,orange,{},0
+976,1430280,Southern Highlands - Canyonleigh Brigade,RFS,fire-alt,orange,{},0
+977,1430304,Southern Highlands - Colo Vale Brigade,RFS,fire-alt,orange,{},0
+978,1430352,Southern Highlands - Exeter Brigade,RFS,fire-alt,orange,{},0
+979,1430376,Southern Highlands - Hill Top Brigade,RFS,fire-alt,orange,{},0
+980,1430400,Southern Highlands - Mandemar Brigade,RFS,fire-alt,orange,{},0
+981,1430448,Southern Highlands - Mittagong Brigade,RFS,fire-alt,orange,{},0
+982,1430472,Southern Highlands - Moss Vale Brigade,RFS,fire-alt,orange,{},0
+983,1430496,Southern Highlands - Penrose Brigade,RFS,fire-alt,orange,{},0
+984,1430520,Southern Highlands - Robertson Brigade,RFS,fire-alt,orange,{},0
+985,1430544,Southern Highlands - Wingello Brigade,RFS,fire-alt,orange,{},0
+986,1430568,Southern Highlands - Woodlands Brigade,RFS,fire-alt,orange,{},0
+987,1430592,Southern Highlands - Yerrinbool Brigade,RFS,fire-alt,orange,{},0
+988,1430616,Southern Highlands - Wollondilly Brigade,RFS,fire-alt,orange,{},0
+989,1440008,Southern Highlands Broadcast Message,RFS,fire-alt,orange,{},0
+990,1440016,Southern Highlands - Wollondilly Comms Support Unit,RFS,fire-alt,orange,{},0
+991,1440024,Southern Highlands Broadcast Message,RFS,fire-alt,orange,{},0
+992,1440032,Southern Highlands - Appin Brigade,RFS,fire-alt,orange,{},0
+993,1440040,Southern Highlands - Bargo Brigade,RFS,fire-alt,orange,{},0
+994,1440048,Southern Highlands - Buxton Brigade,RFS,fire-alt,orange,{},0
+995,1440056,Southern Highlands - Cawdor Brigade,RFS,fire-alt,orange,{},0
+996,1440064,Southern Highlands - Douglas Park Brigade,RFS,fire-alt,orange,{},0
+997,1440072,Southern Highlands - Lakesland Brigade,RFS,fire-alt,orange,{},0
+998,1440080,Southern Highlands - Menangle Brigade,RFS,fire-alt,orange,{},0
+999,1440088,Southern Highlands - Mount Hunter Brigade,RFS,fire-alt,orange,{},0
+1000,1440096,Southern Highlands - Oakdale Brigade,RFS,fire-alt,orange,{},0
+1001,1440104,Southern Highlands - Werombi Brigade,RFS,fire-alt,orange,{},0
+1002,1440112,Southern Highlands - Pheasants Nest Brigade,RFS,fire-alt,orange,{},0
+1003,1440120,Southern Highlands - Picton Brigade,RFS,fire-alt,orange,{},0
+1004,1440128,Southern Highlands - Silverdale Brigade,RFS,fire-alt,orange,{},0
+1005,1440136,Southern Highlands - Tahmoor Brigade,RFS,fire-alt,orange,{},0
+1006,1440144,Southern Highlands - The Oaks Brigade,RFS,fire-alt,orange,{},0
+1007,1440152,Southern Highlands - Theresa Park Brigade,RFS,fire-alt,orange,{},0
+1008,1440160,Southern Highlands - Thirlmere Brigade,RFS,fire-alt,orange,{},0
+1009,1440168,Southern Highlands - Wilton Brigade,RFS,fire-alt,orange,{},0
+1010,1440176,Southern Highlands - Yanderra Brigade,RFS,fire-alt,orange,{},0
+1011,1440184,Southern Highlands - Wollondilly FCO1,RFS,fire-alt,orange,{},0
+1012,1440224,Southern Highlands - Wollondilly Group 5,RFS,fire-alt,orange,{},0
+1013,1440240,Southern Highlands - Wollobdilly FCO,RFS,fire-alt,orange,{},0
+1014,1440256,Southern Highlands - Wollondilly Group 3,RFS,fire-alt,orange,{},0
+1015,1440568,Southern Highlands - Wollondilly Captains,RFS,fire-alt,orange,{},0
+1016,1490024,Northern - Unknown??,RFS,fire-alt,orange,{},0
+1017,1510088,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+1018,1510208,Canobolas - Spring Hill/Huntley Brigade,RFS,fire-alt,orange,{},0
+1019,1510360,Canobolas - Eugowra Brigade,RFS,fire-alt,orange,{},0
+1020,1510456,Canobolas - Unknown??,RFS,fire-alt,orange,{},0
+1021,1510504,Canobolas - Moorbel Brigade,RFS,fire-alt,orange,{},0
+1022,1510752,Canobolas - Ponds Brigade,RFS,fire-alt,orange,{},0
+1023,1510768,Canobolas - Lidster Brigade,RFS,fire-alt,orange,{},0
+1024,1510816,Canobolas - Mullion Creek Brigade,RFS,fire-alt,orange,{},0
+1025,1510936,Canobolas - Cumnock Brigade,RFS,fire-alt,orange,{},0
+1026,1511000,Canobolas - Yeoval Brigade,RFS,fire-alt,orange,{},0
+1027,1519000,Canobolas - Canowindra Brigade,RFS,fire-alt,orange,{},0
+1028,1519008,Canobolas - Eugowra Brigade,RFS,fire-alt,orange,{},0
+1029,1519072,Molong SES,SES,exclamation-triangle,yellow,{},0
+1030,1519080,Orange SES,SES,exclamation-triangle,yellow,{},0
+1145,1888072,Cessnock District Rescue Squad,Volunteer Rescue Association,car,green,{},0
+1146,1888264,Taree Rescue Squad,Volunteer Rescue Association,car,green,{},0
+1031,1990080,Southern Highlands - Sutherland Brigade FCO 4,RFS,fire-alt,orange,{},0
+1032,1990120,Sutherland Group Officers,RFS,fire-alt,orange,{},0
+1033,1990168,Sutherland - Bundeena Brigade,RFS,fire-alt,orange,{},0
+1034,1990176,Sutherland - Engadine Brigade,RFS,fire-alt,orange,{},0
+1035,1990184,Sutherland - Grays Point Brigade,RFS,fire-alt,orange,{},0
+1036,1990192,Sutherland - Heathcote Brigade,RFS,fire-alt,orange,{},0
+1037,1990200,Sutherland - Illawong Brigade,RFS,fire-alt,orange,{},0
+1038,1990208,Sutherland - Kurnell Brigade,RFS,fire-alt,orange,{},0
+1039,1990216,Sutherland - Loftus Brigade,RFS,fire-alt,orange,{},0
+1040,1990224,Sutherland - Maianbar Brigade,RFS,fire-alt,orange,{},0
+1041,1990232,Sutherland - Menai Brigade,RFS,fire-alt,orange,{},0
+1042,1990240,Sutherland - Sandy Point Brigade,RFS,fire-alt,orange,{},0
+1043,1990248,Sutherland - Waterfall Brigade,RFS,fire-alt,orange,{},0
+1044,1990256,Sutherland - Woronora Brigade,RFS,fire-alt,orange,{},0
+1045,1990552,Sutherland Comms Support Unit,RFS,fire-alt,orange,{},0
+1046,1990584,Sutherland Broadcast Message,RFS,fire-alt,orange,{},0
+1144,2000008,RFS State Comms,RFS,fire-alt,orange,{},0
+1047,2001016,Lower Hunter - Region East RDO,RFS,fire-alt,orange,{},0

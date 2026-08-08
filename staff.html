@@ -3497,7 +3497,9 @@
           <td><span class="nd2-type-chip radio">RADIO</span></td>
           <td><span class="nd-sub">${escapeHtml(ev.systemLabel || String(ev.system != null ? ev.system : '—'))}</span></td>
           <td>${tgLabel}${badges}</td>
-          <td>${ev.sourceUnit != null ? escapeHtml(String(ev.sourceUnit)) : '—'}</td>
+          <td>${ev.sourceAlias
+            ? `<span class="nd-strong">${escapeHtml(String(ev.sourceAlias))}</span> <span class="nd-sub">${escapeHtml(String(ev.sourceUnit != null ? ev.sourceUnit : '—'))}</span>`
+            : (ev.sourceUnit != null ? escapeHtml(String(ev.sourceUnit)) : '—')}</td>
           <td>${sites || '—'}</td>
           <td>${nodeCell || '—'}</td>
         </tr>`;
@@ -3636,7 +3638,8 @@
         }
         const prev = sel.value;
         sel.innerHTML = '<option value="">All systems</option>' + nd2.systemsCache.map(s =>
-          `<option value="${escapeHtml(String(s.system))}">System ${escapeHtml(String(s.system))}` +
+          `<option value="${escapeHtml(String(s.system))}">` +
+          escapeHtml(s.name ? `${s.name} (${s.system})` : `System ${s.system}`) +
           (s.wacn != null ? ` · WACN ${escapeHtml(String(s.wacn))}` : '') + `</option>`).join('');
         if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
       } catch (e) { /* leave the "All systems" default in place */ }
@@ -3662,17 +3665,18 @@
       const s = nd2.sys;
       // Keep the detail-panel headings in sync with the current drill-down.
       const sysTitle = document.getElementById('nd2-sys-title');
-      if (sysTitle && s.system != null) sysTitle.textContent = `System ${s.system}`;
+      if (sysTitle && s.system != null) sysTitle.textContent = nd2SysText(s.name, s.system);
       const siteTitle = document.getElementById('nd2-site-title');
       if (siteTitle && s.rfss != null && s.site != null) siteTitle.textContent = `R${s.rfss} · S${s.site}`;
+      const sysCrumb = nd2SysText(s.name, s.system);
       if (s.level === 'list') {
         el.innerHTML = '<span class="nd2-crumb-cur">Systems</span>';
       } else if (s.level === 'system') {
         el.innerHTML = `<a onclick="nd2SysGoList()">Systems</a><span class="nd2-crumb-sep">›</span>` +
-          `<span class="nd2-crumb-cur">System ${escapeHtml(String(s.system))}</span>`;
+          `<span class="nd2-crumb-cur">${escapeHtml(sysCrumb)}</span>`;
       } else {
         el.innerHTML = `<a onclick="nd2SysGoList()">Systems</a><span class="nd2-crumb-sep">›</span>` +
-          `<a onclick="nd2SysGoSystem()">System ${escapeHtml(String(s.system))}</a>` +
+          `<a onclick="nd2SysGoSystem()">${escapeHtml(sysCrumb)}</a>` +
           `<span class="nd2-crumb-sep">›</span><span class="nd2-crumb-cur">R${escapeHtml(String(s.rfss))} S${escapeHtml(String(s.site))}</span>`;
       }
     }
@@ -3691,7 +3695,7 @@
         if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No systems seen in this window.</td></tr>'; return; }
         body.innerHTML = rows.map(s => `
           <tr class="nd2-rowlink" onclick="nd2OpenSystem(${s.system}, ${s.wacn == null ? 'null' : s.wacn})">
-            <td><span class="nd-strong">System ${escapeHtml(String(s.system))}</span></td>
+            <td>${nd2SysCell(s.name, s.system)}</td>
             <td><span class="nd-sub">${s.wacn != null ? escapeHtml(String(s.wacn)) : '—'}</span></td>
             <td class="nd2-num">${nd2Num(s.logicalCalls)}<span class="nd-sub" title="total receptions"> /${nd2Num(s.calls)}</span></td>
             <td class="nd2-num">${nd2Num(s.encryptedCalls)}</td>
@@ -3706,9 +3710,26 @@
     function nd2OpenSystem(system, wacn) {
       nd2.sys.system = system;
       nd2.sys.wacn = wacn;
+      // Seed the heading from the cached list row (the /system fetch confirms
+      // it); avoids passing a free-text name through the inline onclick.
+      nd2.sys.name = (nd2.systemsCache || []).find(s => s.system === system)?.name || null;
       nd2SysShow('system');
       nd2SysCrumbs();
       nd2LoadSystem();
+    }
+
+    // Friendly P25 system label: name primary + numeric id secondary (e.g.
+    // "NSWPSN" / "721"), falling back to "System <id>" when no name is known.
+    function nd2SysCell(name, system) {
+      const id = system != null ? String(system) : '—';
+      return name
+        ? `<span class="nd-strong">${escapeHtml(String(name))}</span> <span class="nd-sub">${escapeHtml(id)}</span>`
+        : `<span class="nd-strong">System ${escapeHtml(id)}</span>`;
+    }
+    // Plain-text form for crumbs / headings (textContent, no HTML).
+    function nd2SysText(name, system) {
+      const id = system != null ? String(system) : '—';
+      return name ? `${name} · ${id}` : `System ${id}`;
     }
 
     function nd2ScopedTiles(prefix, tot, includeSites) {
@@ -3742,6 +3763,9 @@
         const data = await nd2Fetch(`/api/node-data/system?${params}`);
         if (nd2.view !== view || nd2.sys.level !== 'system') return;
         if (msgEl) msgEl.style.display = 'none';
+        // Prefer the server's resolved name (fills the heading on a direct
+        // load/refresh where the list-row name wasn't passed in).
+        if (data.name) { nd2.sys.name = data.name; nd2SysCrumbs(); }
         nd2ScopedTiles('nd2-sys-tiles', data.totals || {}, true);
         nd2DrawDetailChart('nd2-sys-chart', 'nd2-sys-chart-empty', 'nd2-sys-chart-note', data.series, 'sys');
         const sitesBody = document.getElementById('nd2-sys-sites-body');
@@ -3881,7 +3905,9 @@
           }).join(' ') || '—';
           return `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
-            <td><span class="nd-strong">${escapeHtml(String(r.radio))}</span></td>
+            <td>${r.alias
+              ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span> <span class="nd-sub">${escapeHtml(String(r.radio))}</span>`
+              : `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`}</td>
             <td><span class="nd-sub">${r.system != null ? escapeHtml(String(r.system)) : '—'}</span></td>
             <td class="nd2-num">${nd2Num(r.calls)}</td>
             <td>${nd2LastSeen(r.lastSeen)}</td>

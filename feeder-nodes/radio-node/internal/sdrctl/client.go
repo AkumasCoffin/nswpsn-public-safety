@@ -390,6 +390,12 @@ type ActivityEvent struct {
 	Wacn        *int    `json:"wacn"`
 	SystemID    *int    `json:"systemId"`
 	ChannelName *string `json:"channelName"`
+	// SystemName is the channel's configured P25 system name (e.g. "NSWPSN")
+	// the operator's Data tab shows; SourceAlias is the over-the-air talker
+	// alias last captured for the source radio. Both are null on older control
+	// servers that don't emit them (backward compatible).
+	SystemName  *string `json:"systemName"`
+	SourceAlias *string `json:"sourceAlias"`
 }
 
 // ActivityEvents GETs /activity/events?sinceId=..&limit=..&kinds=calls: the
