@@ -26,10 +26,21 @@
 // Because groups/tags are referenced by their _id, and the desired document
 // carries explicit, self-consistent _id / groupId / tagId integers, groups and
 // tags are reconciled BY _id (preserving it) and no label->id rewriting is
-// needed. The transcribe / transcriptionPrompt fields the document may carry are
-// deliberately NOT written: in this fork those columns have been migrated out of
-// systems/talkgroups into the transcripts plugin's own tables, so rdio's own
-// core admin Write does not touch them either.
+// needed.
+//
+// Transcription config. The fork KEEPS the transcribe columns
+// (rdioScannerSystems.transcribe + .transcriptionPrompt, rdioScannerTalkgroups.
+// transcribe) and additionally mirrors them into the transcripts plugin's own
+// tables (plugin_transcripts_systems(systemId, transcribe, prompt),
+// plugin_transcripts_talkgroups(systemId, talkgroupId, transcribe)). rdio's HTTP
+// config-save hook performs that mirror; this direct-DB path bypasses that hook,
+// so it writes BOTH the core columns AND the plugin rows itself from the same
+// desired values — otherwise the transcriber reads stale config after a bounce.
+// Every transcription write is guarded by an existence check (PRAGMA table_info
+// for the columns, sqlite_master for the plugin tables): on an older rdio DB
+// lacking the columns or plugin tables the write is silently skipped so a
+// missing column/table never fails the whole apply. The plugin tables are never
+// CREATEd here — the plugin owns them; they are only written when present.
 package rdioctl
 
 import (
@@ -76,13 +87,18 @@ func WriteConfigDB(dbPath string, cfg map[string]any) (err error) {
 		}
 	}()
 
+	// Probe once (in-transaction) which transcription columns/plugin tables this
+	// DB actually has, so every transcription write can be guarded and an older
+	// rdio DB still applies core config without error.
+	caps := probeTranscriptCaps(tx)
+
 	if err = writeGroups(tx, cfg["groups"]); err != nil {
 		return fmt.Errorf("groups: %w", err)
 	}
 	if err = writeTags(tx, cfg["tags"]); err != nil {
 		return fmt.Errorf("tags: %w", err)
 	}
-	if err = writeSystems(tx, cfg["systems"]); err != nil {
+	if err = writeSystems(tx, cfg["systems"], caps); err != nil {
 		return fmt.Errorf("systems: %w", err)
 	}
 	if err = writeApiKeys(tx, cfg["apiKeys"]); err != nil {
@@ -182,7 +198,7 @@ func writeTags(tx *sql.Tx, v any) error {
 // references a system's rowid, and omitting it removes any risk of a primary-key
 // collision when the operator's config assigns _id values that clash with rows
 // already in the DB. Removed systems (and their talkgroups/units) are deleted.
-func writeSystems(tx *sql.Tx, v any) error {
+func writeSystems(tx *sql.Tx, v any, caps transcriptCaps) error {
 	rows := asArrayOfMaps(v)
 	if rows == nil {
 		return nil
@@ -232,7 +248,11 @@ func writeSystems(tx *sql.Tx, v any) error {
 		); err != nil {
 			return err
 		}
-		if err := writeTalkgroups(tx, id, r["talkgroups"]); err != nil {
+		// Transcription: core columns + plugin row for this system (guarded).
+		if err := writeSystemTranscription(tx, id, r, caps); err != nil {
+			return err
+		}
+		if err := writeTalkgroups(tx, id, r["talkgroups"], caps); err != nil {
 			return err
 		}
 		if err := writeUnits(tx, id, r["units"]); err != nil {
@@ -246,7 +266,7 @@ func writeSystems(tx *sql.Tx, v any) error {
 // tag references are written straight from the integer groupId / tagId in the
 // document (which point at rdioScannerGroups._id / rdioScannerTags._id); no
 // label lookup is involved, matching rdio's Talkgroups.Write.
-func writeTalkgroups(tx *sql.Tx, systemID int, v any) error {
+func writeTalkgroups(tx *sql.Tx, systemID int, v any, caps transcriptCaps) error {
 	rows := asArrayOfMaps(v)
 	if rows == nil {
 		// A system row with no talkgroups key: clear its talkgroups so the DB
@@ -282,6 +302,10 @@ func writeTalkgroups(tx *sql.Tx, systemID int, v any) error {
 			asNullStr(r["led"]), asStr(r["name"]), asIntDefault(r["order"], 0), systemID,
 			asIntDefault(r["tagId"], 0), asIntDefault(r["delay"], 0), asStr(r["alert"]),
 		); err != nil {
+			return err
+		}
+		// Transcription: core column + plugin row for this talkgroup (guarded).
+		if err := writeTalkgroupTranscription(tx, systemID, id, r, caps); err != nil {
 			return err
 		}
 	}
@@ -408,6 +432,135 @@ func writeDownstreams(tx *sql.Tx, v any) error {
 		}
 	}
 	return nil
+}
+
+// --- transcription config sync ------------------------------------------------
+
+// transcriptCaps records which transcription columns/plugin tables the target
+// DB actually has. An older rdio DB may lack any of them; each write is guarded
+// so a missing column/table silently skips rather than failing the apply.
+type transcriptCaps struct {
+	systemsTranscribe    bool // rdioScannerSystems.transcribe
+	systemsPrompt        bool // rdioScannerSystems.transcriptionPrompt
+	talkgroupsTranscribe bool // rdioScannerTalkgroups.transcribe
+	pluginSystems        bool // plugin_transcripts_systems table
+	pluginTalkgroups     bool // plugin_transcripts_talkgroups table
+}
+
+// probeTranscriptCaps inspects the schema once per apply.
+func probeTranscriptCaps(tx *sql.Tx) transcriptCaps {
+	return transcriptCaps{
+		systemsTranscribe:    columnExists(tx, "rdioScannerSystems", "transcribe"),
+		systemsPrompt:        columnExists(tx, "rdioScannerSystems", "transcriptionPrompt"),
+		talkgroupsTranscribe: columnExists(tx, "rdioScannerTalkgroups", "transcribe"),
+		pluginSystems:        tableExists(tx, "plugin_transcripts_systems"),
+		pluginTalkgroups:     tableExists(tx, "plugin_transcripts_talkgroups"),
+	}
+}
+
+// writeSystemTranscription writes a system's transcribe flag + prompt to the
+// core rdioScannerSystems columns (post-upsert UPDATE, so the base upsert SQL is
+// untouched) AND mirrors them into plugin_transcripts_systems — matching the
+// migration's id→systemId, transcribe→transcribe, transcriptionPrompt→prompt
+// mapping — because the direct-DB path bypasses rdio's config-save hook that
+// normally performs that mirror. transcribe defaults to 1 (rdio's own default)
+// when unset; prompt defaults to an empty string. Each write is skipped when its
+// column/table is absent.
+func writeSystemTranscription(tx *sql.Tx, id int, r map[string]any, caps transcriptCaps) error {
+	transcribe := asBoolIntDefault(r["transcribe"], 1)
+	prompt := asStr(r["transcriptionPrompt"])
+
+	if caps.systemsTranscribe {
+		if _, err := tx.Exec(
+			"UPDATE `rdioScannerSystems` SET `transcribe` = ? WHERE `id` = ?", transcribe, id,
+		); err != nil {
+			return err
+		}
+	}
+	if caps.systemsPrompt {
+		if _, err := tx.Exec(
+			"UPDATE `rdioScannerSystems` SET `transcriptionPrompt` = ? WHERE `id` = ?", prompt, id,
+		); err != nil {
+			return err
+		}
+	}
+	if caps.pluginSystems {
+		if _, err := tx.Exec(
+			"INSERT INTO `plugin_transcripts_systems` (`systemId`, `transcribe`, `prompt`) VALUES (?, ?, ?) "+
+				"ON CONFLICT(`systemId`) DO UPDATE SET "+
+				"`transcribe` = excluded.`transcribe`, `prompt` = excluded.`prompt`",
+			id, transcribe, prompt,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeTalkgroupTranscription writes a talkgroup's transcribe flag to the core
+// rdioScannerTalkgroups column AND mirrors it into plugin_transcripts_talkgroups
+// (systemId, talkgroupId=id, transcribe), same rationale as the system variant.
+// transcribe defaults to 1 when unset; skipped when its column/table is absent.
+func writeTalkgroupTranscription(tx *sql.Tx, systemID, id int, r map[string]any, caps transcriptCaps) error {
+	transcribe := asBoolIntDefault(r["transcribe"], 1)
+
+	if caps.talkgroupsTranscribe {
+		if _, err := tx.Exec(
+			"UPDATE `rdioScannerTalkgroups` SET `transcribe` = ? WHERE `systemId` = ? AND `id` = ?",
+			transcribe, systemID, id,
+		); err != nil {
+			return err
+		}
+	}
+	if caps.pluginTalkgroups {
+		if _, err := tx.Exec(
+			"INSERT INTO `plugin_transcripts_talkgroups` (`systemId`, `talkgroupId`, `transcribe`) VALUES (?, ?, ?) "+
+				"ON CONFLICT(`systemId`, `talkgroupId`) DO UPDATE SET `transcribe` = excluded.`transcribe`",
+			systemID, id, transcribe,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// columnExists reports whether table has the named column, via PRAGMA
+// table_info. Any probe error (missing table, etc.) reads as absent so the
+// caller skips the guarded write rather than failing.
+func columnExists(tx *sql.Tx, table, column string) bool {
+	rows, err := tx.Query("PRAGMA table_info(`" + table + "`)")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
+}
+
+// tableExists reports whether a table of the given name exists (sqlite_master).
+// Used to gate writes to the transcripts plugin's tables, which this code never
+// creates — the plugin owns them.
+func tableExists(tx *sql.Tx, table string) bool {
+	var name string
+	err := tx.QueryRow(
+		"SELECT `name` FROM `sqlite_master` WHERE `type` = 'table' AND `name` = ?", table,
+	).Scan(&name)
+	return err == nil
 }
 
 // deleteOrphans removes rows of table whose integer keyCol is not in keep. An
@@ -551,6 +704,33 @@ func asBoolInt(v any) int {
 		}
 	}
 	return 0
+}
+
+// asBoolIntDefault coerces a JSON bool/number/string to 0/1, returning d when
+// the value is absent or unrecognised. Used for transcribe flags, which rdio
+// defaults to true (1) when unset.
+func asBoolIntDefault(v any, d int) int {
+	switch b := v.(type) {
+	case bool:
+		if b {
+			return 1
+		}
+		return 0
+	case float64:
+		if b != 0 {
+			return 1
+		}
+		return 0
+	case string:
+		s := strings.TrimSpace(b)
+		if strings.EqualFold(s, "true") || s == "1" {
+			return 1
+		}
+		if strings.EqualFold(s, "false") || s == "0" {
+			return 0
+		}
+	}
+	return d
 }
 
 func asStr(v any) string {
