@@ -118,3 +118,36 @@ func TestHasStage(t *testing.T) {
 		t.Error("nil error has no stage")
 	}
 }
+
+func TestEnrichRdioRowIDs(t *testing.T) {
+	cur := map[string]any{
+		"systems": []any{
+			map[string]any{"_id": float64(5), "id": float64(2)},
+			map[string]any{"_id": float64(9), "id": float64(7)},
+		},
+		"apiKeys": []any{
+			map[string]any{"_id": float64(3), "key": "abc"},
+		},
+	}
+	cfg := map[string]any{
+		"systems": []any{
+			map[string]any{"id": float64(2)},            // matches -> _id 5
+			map[string]any{"id": float64(99)},           // new -> no _id
+		},
+		"apiKeys": []any{
+			map[string]any{"key": "abc"},                // matches -> _id 3
+			map[string]any{"key": "xyz"},                // new -> no _id
+		},
+	}
+	enrichRdioRowIDs(cfg, cur)
+	sys := cfg["systems"].([]any)
+	if sys[0].(map[string]any)["_id"] != float64(5) {
+		t.Errorf("system id=2 should get _id 5, got %v", sys[0].(map[string]any)["_id"])
+	}
+	if _, has := sys[1].(map[string]any)["_id"]; has {
+		t.Errorf("new system id=99 should have no _id")
+	}
+	if cfg["apiKeys"].([]any)[0].(map[string]any)["_id"] != float64(3) {
+		t.Errorf("apiKey abc should get _id 3")
+	}
+}

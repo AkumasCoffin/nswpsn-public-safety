@@ -418,10 +418,72 @@ func (d Deps) applyRdio(payload ConfigPayload, localKeys map[int]string) error {
 	if err := rdioLoginReady(d.Rdio, d.RdioPassword); err != nil {
 		return stageErr("rdio", "admin login", err)
 	}
+	// rdio-scanner's admin write matches existing rows by their `_id` (rowid); an
+	// entry WITHOUT `_id` is treated as new and INSERTed, colliding with the
+	// existing row on UNIQUE(id)/UNIQUE(key) on every re-apply. The admin UI
+	// avoids this by round-tripping `_id`; we do the same — read the current
+	// config and stamp each outgoing system/apiKey/group/tag with its existing
+	// rowid so rdio UPDATES in place. Best-effort: a GET failure (fresh rdio)
+	// just means everything inserts, which is correct for an empty DB.
+	if cur, gerr := d.Rdio.GetConfig(); gerr == nil {
+		enrichRdioRowIDs(rdioCfg, cur)
+	}
 	if err := d.Rdio.PutConfig(rdioCfg); err != nil {
 		return stageErr("rdio", "put config", err)
 	}
 	return nil
+}
+
+// enrichRdioRowIDs copies the `_id` (rowid) of each existing rdio config entry
+// onto the matching outgoing entry so rdio-scanner UPDATEs it instead of
+// INSERTing a duplicate. Systems/groups/tags match on their `id`; apiKeys match
+// on their `key`. Entries with no match keep no `_id` and are inserted as new.
+func enrichRdioRowIDs(cfg, cur map[string]any) {
+	byKey := func(list any, key string) map[string]any {
+		out := map[string]any{}
+		arr, ok := list.([]any)
+		if !ok {
+			return out
+		}
+		for _, e := range arr {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, hasID := m["_id"]; !hasID {
+				continue
+			}
+			if kv, ok := m[key]; ok && kv != nil {
+				out[fmt.Sprintf("%v", kv)] = m["_id"]
+			}
+		}
+		return out
+	}
+	stamp := func(section, key string) {
+		rows := byKey(cur[section], key)
+		if len(rows) == 0 {
+			return
+		}
+		arr, ok := cfg[section].([]any)
+		if !ok {
+			return
+		}
+		for _, e := range arr {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if kv, ok := m[key]; ok && kv != nil {
+				if rid, ok := rows[fmt.Sprintf("%v", kv)]; ok {
+					m["_id"] = rid
+				}
+			}
+		}
+	}
+	stamp("systems", "id")
+	stamp("apiKeys", "key")
+	stamp("groups", "id")
+	stamp("tags", "id")
 }
 
 // systemIDsFrom collects every system id referenced by the payload: the stream
