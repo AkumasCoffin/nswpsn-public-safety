@@ -33,6 +33,7 @@ import {
 import {
   getGlobalConfig,
   agenciesToAliases,
+  agenciesToTalkgroupAliases,
   agenciesToSystems,
   type Alias,
   type GlobalConfig,
@@ -189,9 +190,6 @@ function buildPagerPayload(node: NodeRow): ConfigPayload {
   return { configVersion, ...payloadNoVersion };
 }
 
-// The "system" label reported in the channel plan — the radio network these
-// nodes receive. (The site is only NAMED after NSW PSN; see project memory.)
-const PLAN_SYSTEM = 'NSW PSN';
 
 interface RdioSystem {
   id?: number;
@@ -270,24 +268,15 @@ function parseOverride(raw: Record<string, unknown> | null | undefined): ConfigO
  * deprecated single-channel `site` form (first control frequency → one channel)
  * so pre-P5 overrides keep working.
  */
-function deriveChannels(override: ConfigOverride, node: NodeRow): ChannelPlan[] {
+function deriveChannels(override: ConfigOverride, _node: NodeRow): ChannelPlan[] {
+  // A node has exactly the channels configured on its node page — nothing is
+  // synthesized. A fresh node starts with zero channels; the operator adds each
+  // one (with its control frequency) manually, so no phantom/default channel is
+  // ever pushed to sdrtrunk.
   if (override.channels && override.channels.length > 0) {
     return override.channels.map((c) => ({ ...c }));
   }
-  const freqs = override.site?.controlFrequencies ?? [];
-  const first = freqs[0];
-  if (first === undefined) return [];
-  return [
-    {
-      name: override.site?.name ?? node.name ?? 'Control',
-      frequency: first,
-      decoder: 'p25p2',
-      system: PLAN_SYSTEM,
-      site: override.site?.name,
-      autoStart: true,
-      order: 1,
-    },
-  ];
+  return [];
 }
 
 /**
@@ -330,8 +319,14 @@ export async function buildConfigPayload(
   const tuners = deriveTuners(override);
 
   // Agencies are the single source of truth: derive the SDR-Trunk aliases + the
-  // rdio systems from them (id/label/name/broadcastChannel all unified).
-  const aliases = agenciesToAliases(globalCfg.agencies);
+  // rdio systems from them (id/label/name/broadcastChannel all unified). The
+  // agency-level aliases carry the streaming ranges + routing; the per-talkgroup
+  // aliases give every talkgroup its own label and route (so all talkgroups get
+  // imported into sdrtrunk-vce and show individually in the activity view).
+  const aliases = [
+    ...agenciesToAliases(globalCfg.agencies),
+    ...agenciesToTalkgroupAliases(globalCfg.agencies),
+  ];
   const derivedSystems = agenciesToSystems(globalCfg.agencies);
 
   // The rdio document: preset as the base (options/apiKeys/downstreams/etc.),

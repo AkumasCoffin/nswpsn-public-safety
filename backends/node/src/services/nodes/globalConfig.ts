@@ -208,6 +208,45 @@ function agencyToSystem(a: Agency): Record<string, unknown> {
 }
 
 /**
+ * Expand every agency's talkgroups into one SDR-Trunk alias each, so all
+ * talkgroups get imported into the node's sdrtrunk-vce (individually labelled in
+ * the activity/Data view) and each routes to its agency's rdio stream. The
+ * matcher is a plain P25 talkgroup (value only) — matching how the reference vce
+ * config models them — and the alias carries a broadcastChannel = agency name so
+ * calls upload under that agency's systemId. Deduped by talkgroup value (a single
+ * alias list can't hold two identical talkgroup matchers); the first occurrence
+ * wins. Talkgroups with no usable numeric id are skipped.
+ */
+export function agenciesToTalkgroupAliases(agencies: Agency[]): Alias[] {
+  const out: Alias[] = [];
+  const seen = new Set<number>();
+
+  for (const agency of agencies) {
+    const rows = Array.isArray(agency.talkgroups) ? agency.talkgroups : [];
+    for (const tg of rows) {
+      const id = Number((tg as Record<string, unknown>)['id']);
+      if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+      seen.add(id);
+      const label =
+        String((tg as Record<string, unknown>)['label'] ?? '').trim() ||
+        String((tg as Record<string, unknown>)['name'] ?? '').trim() ||
+        `TG ${id}`;
+      out.push({
+        name: label,
+        list: ALIAS_LIST_NAME,
+        group: agency.name,
+        ids: [
+          { type: 'broadcastChannel', attrs: { channel: agency.name } },
+          { type: 'talkgroup', attrs: { protocol: 'APCO25', value: String(id) } },
+        ],
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * The rdio systems for all agencies. Each agency owns a unique systemId (RFS=1,
  * FRNSW=2, …), so this is normally a 1:1 map. rdio-scanner requires unique system
  * ids and 500s the admin config PUT with a UNIQUE constraint on

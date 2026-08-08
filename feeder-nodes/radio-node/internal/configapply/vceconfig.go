@@ -119,6 +119,10 @@ type vceDecodeConfig struct {
 	// also used by DMR (DecodeConfigDMR.java).
 	IgnoreDataCalls        *bool `json:"ignoreDataCalls,omitempty"`
 	TrafficChannelPoolSize *int  `json:"trafficChannelPoolSize,omitempty"`
+	// p25 (DecodeConfigP25.java, shared by phase1/phase2): learn the alternate
+	// control channels announced on the current one, so only ONE control freq
+	// needs configuring and the node follows the site as it rotates.
+	LearnAnnouncedControlChannels *bool `json:"learnAnnouncedControlChannels,omitempty"`
 	// p25p1 (DecodeConfigP25Phase1.java)
 	Modulation string `json:"modulation,omitempty"` // "C4FM" | "CQPSK"
 	// p25p2 (DecodeConfigP25Phase2.java)
@@ -413,10 +417,11 @@ func buildDecodeConfig(decoder string, cfg *DecoderConfig) (vceDecodeConfig, boo
 			mod = "C4FM"
 		}
 		return vceDecodeConfig{
-			Type:                   "decodeConfigP25Phase1",
-			Modulation:             mod,
-			IgnoreDataCalls:        boolPtrOr(cfg.IgnoreDataCalls, false),
-			TrafficChannelPoolSize: intPtrOr(cfg.TrafficPoolSize, 20),
+			Type:                          "decodeConfigP25Phase1",
+			Modulation:                    mod,
+			LearnAnnouncedControlChannels: boolPtrOr(cfg.LearnControlChannels, true),
+			IgnoreDataCalls:               boolPtrOr(cfg.IgnoreDataCalls, false),
+			TrafficChannelPoolSize:        intPtrOr(cfg.TrafficPoolSize, 20),
 		}, true
 
 	case "p25p2":
@@ -426,10 +431,11 @@ func buildDecodeConfig(decoder string, cfg *DecoderConfig) (vceDecodeConfig, boo
 			auto = *cfg.AutoDetectScramble
 		}
 		dc := vceDecodeConfig{
-			Type:                         "decodeConfigP25Phase2",
-			AutoDetectScrambleParameters: &auto,
-			IgnoreDataCalls:              boolPtrOr(cfg.IgnoreDataCalls, false),
-			TrafficChannelPoolSize:       intPtrOr(cfg.TrafficPoolSize, 20),
+			Type:                          "decodeConfigP25Phase2",
+			AutoDetectScrambleParameters:  &auto,
+			LearnAnnouncedControlChannels: boolPtrOr(cfg.LearnControlChannels, true),
+			IgnoreDataCalls:               boolPtrOr(cfg.IgnoreDataCalls, false),
+			TrafficChannelPoolSize:        intPtrOr(cfg.TrafficPoolSize, 20),
 		}
 		if cfg.Scramble != nil {
 			dc.ScrambleParameters = &vceScramble{

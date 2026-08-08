@@ -83,6 +83,8 @@ func TestBuildVceConfigChannelShape(t *testing.T) {
 	for k, want := range map[string]any{
 		"type": "decodeConfigP25Phase1", "modulation": "CQPSK",
 		"ignoreDataCalls": true, "trafficChannelPoolSize": float64(50),
+		// learn-announced-control-channels defaults on so one control freq suffices.
+		"learnAnnouncedControlChannels": true,
 	} {
 		if dec[k] != want {
 			t.Errorf("decodeConfiguration %q = %v, want %v", k, dec[k], want)

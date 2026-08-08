@@ -61,6 +61,9 @@ type ChannelPlan struct {
 type DecoderConfig struct {
 	// p25p1
 	Modulation string `json:"modulation"` // "C4FM" | "CQPSK"
+	// p25 (phase1/phase2): learn alternate control channels (default on) so only
+	// one control frequency needs configuring per site.
+	LearnControlChannels *bool `json:"learnControlChannels"`
 	// shared: p25p1 / p25p2 / dmr
 	IgnoreDataCalls *bool `json:"ignoreDataCalls"`
 	TrafficPoolSize *int  `json:"trafficPoolSize"`
