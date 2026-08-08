@@ -950,6 +950,16 @@
       display: none; align-items: center; gap: 0.3rem;
     }
     .nd-sync-hint.out { display: inline-flex; background: rgba(245, 158, 11, 0.14); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+    /* Channels-panel warning chip: too many channels piled on one SDR. */
+    .nd-warn-chip {
+      align-items: center; gap: 0.3rem; margin-left: 0.5rem;
+      padding: 0.14rem 0.55rem; border-radius: 999px;
+      font-size: 0.66rem; font-weight: 700; letter-spacing: 0.02em;
+      text-transform: none;
+      background: rgba(245, 158, 11, 0.14); color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3); cursor: pointer;
+    }
+    .nd-warn-chip:hover { background: rgba(245, 158, 11, 0.24); }
     .nd-sync-hint.ok  { display: inline-flex; background: rgba(34, 197, 94, 0.12); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
     .nd-cfg-row {
       border: 1px solid var(--border-subtle); border-radius: 9px;
@@ -1679,6 +1689,36 @@
     .nd2-crumbs a:hover { text-decoration: underline; }
     .nd2-crumb-sep { opacity: 0.5; font-size: 1.05rem; }
     .nd2-crumb-cur { color: var(--text-primary); font-weight: 700; }
+    /* Drill-down context strip under the Systems breadcrumb: a slim colored
+       bar that names the current level ("SYSTEM — NSWPSN · 721" / "SITE — …")
+       so it's unmistakable where you are. */
+    .nd2-ctx {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      margin: -0.5rem 0 1rem;
+      padding: 0.4rem 0.7rem;
+      border: 1px solid var(--accent-border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      background: var(--accent-soft);
+      font-size: 0.8rem;
+      color: var(--text-soft);
+    }
+    .nd2-ctx-kind {
+      font-size: 0.64rem;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      color: var(--accent);
+    }
+    .nd2-ctx-name { color: var(--text-primary); font-weight: 600; }
+    .nd2-ctx.site {
+      border-color: rgba(52, 211, 153, 0.35);
+      border-left-color: #34d399;
+      background: rgba(52, 211, 153, 0.1);
+    }
+    .nd2-ctx.site .nd2-ctx-kind { color: #34d399; }
     /* Detail-panel header: obvious "← Back" + a heading naming where you are. */
     .nd2-detail-head {
       display: flex;
@@ -2063,6 +2103,9 @@
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
         <div id="nd2-view-systems" style="display: none;">
           <div class="nd2-crumbs" id="nd2-sys-crumbs"><span class="nd2-crumb-cur">Systems</span></div>
+          <!-- Drill-down context strip: filled by nd2SysCrumbs when a system or
+               site is open so it's unmistakable which level you're looking at. -->
+          <div id="nd2-sys-ctx" class="nd2-ctx" style="display: none;"></div>
 
           <div id="nd2-sys-list">
             <div class="nd2-table-wrap">
@@ -2070,7 +2113,6 @@
                 <thead>
                   <tr>
                     <th>System</th>
-                    <th>WACN</th>
                     <th class="nd2-num">Calls</th>
                     <th class="nd2-num">Enc</th>
                     <th class="nd2-num">Sites</th>
@@ -2080,7 +2122,7 @@
                   </tr>
                 </thead>
                 <tbody id="nd2-sys-body">
-                  <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                  <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -2164,7 +2206,6 @@
                   <thead>
                     <tr>
                       <th>Talkgroup</th>
-                      <th>System</th>
                       <th class="nd2-num">Calls</th>
                       <th class="nd2-num">Enc</th>
                       <th>Last seen</th>
@@ -2174,7 +2215,7 @@
                     </tr>
                   </thead>
                   <tbody id="nd2-tg-body">
-                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -2208,7 +2249,6 @@
                   <thead>
                     <tr>
                       <th>Radio</th>
-                      <th>System</th>
                       <th class="nd2-num">Calls</th>
                       <th>Last seen</th>
                       <th>Last site</th>
@@ -2218,7 +2258,7 @@
                     </tr>
                   </thead>
                   <tbody id="nd2-rad-body">
-                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -2526,12 +2566,14 @@
           <div class="nd-panel nd-span-all nd-radio-only">
             <div class="nd-panel-h">
               <i class="fas fa-broadcast-tower"></i> Channels
+              <span class="nd-warn-chip" id="nd-cfg-dist-warn" style="display: none;" onclick="_ndCfgDistribute()"></span>
               <span class="nd-h-spacer"></span>
               <span class="nd-sync-hint" id="nd-cfg-sync"></span>
             </div>
             <div class="nd-panel-b flush"><div class="nd-table-scroll" id="nd-cfg-channels"></div></div>
             <div class="nd-cfg-actions">
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
+              <button class="btn btn-secondary btn-sm" onclick="_ndCfgDistribute()" title="Sort channels by frequency and spread contiguous frequency clusters across the node's SDRs — review the assignments, then Save &amp; sync"><i class="fas fa-shuffle"></i> Distribute across SDRs</button>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
               <span class="nd-spacer"></span>
               <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
@@ -3506,7 +3548,7 @@
 
       const table = (headers, rows) => rows.length
         ? `<table class="nd-table"><thead><tr>${headers.map(h =>
-            `<th${h.num ? ' class="nd2-num"' : ''}>${h.t}</th>`).join('')}</tr></thead><tbody>${
+            `<th${h.num ? ' class="nd2-num"' : ''}${h.title ? ` title="${escapeHtml(h.title)}"` : ''}>${h.t}</th>`).join('')}</tr></thead><tbody>${
             rows.map(r => `<tr>${r.map((c, i) =>
               `<td${headers[i] && headers[i].num ? ' class="nd2-num"' : ''}>${c}</td>`).join('')}</tr>`).join('')
           }</tbody></table>`
@@ -3522,13 +3564,16 @@
           nd2Num(t.calls),
         ]);
         tgEl.innerHTML = table(
-          [{ t: 'Talkgroup' }, { t: 'Sys' }, { t: 'Calls', num: true }, { t: 'Rx', num: true }], rows);
+          [{ t: 'Talkgroup' }, { t: 'Sys' }, { t: 'Calls', num: true },
+           { t: 'Receptions', num: true, title: 'Total times this talkgroup was heard across all feeder nodes and sites — one call is usually received several times' }], rows);
       }
 
       const unitsEl = document.getElementById('nd2-top-units');
       if (unitsEl && !isPager) {
         const rows = ((ov && ov.topUnits) || []).slice(0, 10).map(u => [
-          `<span class="nd-strong">${escapeHtml(String(u.unit))}</span>`,
+          u.alias
+            ? `<span class="nd-strong">${escapeHtml(String(u.alias))}</span> <span class="nd-sub">${escapeHtml(String(u.unit))}</span>`
+            : `<span class="nd-strong">${escapeHtml(String(u.unit))}</span>`,
           nd2Num(u.calls),
         ]);
         unitsEl.innerHTML = table([{ t: 'Unit' }, { t: 'Calls', num: true }], rows);
@@ -3539,7 +3584,9 @@
       const sitesEl = document.getElementById('nd2-top-sites');
       if (sitesEl && !isPager) {
         const rows = ((ov && ov.topSites) || []).slice(0, 10).map(s => [
-          `<span class="nd-strong">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`,
+          s.name
+            ? `<span class="nd-strong">${escapeHtml(String(s.name))}</span> <span class="nd-sub">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`
+            : `<span class="nd-strong">R${escapeHtml(String(s.siteRfss))} S${escapeHtml(String(s.siteId))}</span>`,
           nd2Num(s.calls),
         ]);
         sitesEl.innerHTML = table([{ t: 'Site' }, { t: 'Calls', num: true }], rows);
@@ -3646,13 +3693,17 @@
         const timeCell = `<span class="nd2-time">${isNaN(d) ? '—' : d.toLocaleTimeString([], { hour12: false })}` +
           `<span class="nd2-time-rel">${nd2RelTime(ev.at)}</span></span>`;
 
-        // Node chips + a ×N receptions marker: one row = one over-the-air
-        // event; several node chips = the same call heard by several receivers.
+        // De-duped node chips + a separate receptions badge: one row = one
+        // over-the-air event; the badge counts how many times it was received
+        // in total (several nodes and/or several sites hear the same call).
         const nodes = ev.nodes || [];
         const rx = ev.receptions || nodes.length || 1;
+        const siteN = (ev.sites || []).length;
+        const rxTitle = `${rx} receptions across ${nodes.length} node(s)` +
+          (siteN ? ` / ${siteN} site(s)` : '');
         const nodeCell = nodes.map(n =>
           `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('') +
-          (rx > 1 ? ` <span class="nd2-rx" title="Heard by ${rx} receivers (grouped as one call)">×${rx}</span>` : '');
+          (rx > 1 ? ` <span class="nd2-rx" title="${escapeHtml(rxTitle)}">${rx} rx</span>` : '');
 
         if (ev.type === 'pager') {
           const freq = (ev.freqMhz != null && isFinite(ev.freqMhz))
@@ -3680,8 +3731,7 @@
         const badges =
           (ev.encrypted ? `<span class="nd2-badge nd2-badge-enc" title="Encrypted call"><i class="fas fa-lock"></i>ENC</span>` : '') +
           (ev.recorded ? `<span class="nd2-badge nd2-badge-rec" title="Audio recorded in rdio-scanner"><i class="fas fa-volume-high"></i></span>` : '');
-        const sites = (ev.sites || []).map(s =>
-          `<span class="nd2-chip">R${escapeHtml(String(s.rfss))} S${escapeHtml(String(s.site))}</span>`).join('');
+        const sites = (ev.sites || []).map(s => nd2SiteChip(s)).join('');
         return `<tr>
           <td>${timeCell}</td>
           <td><span class="nd2-type-chip radio">RADIO</span></td>
@@ -3731,8 +3781,14 @@
       if (isNaN(d)) return '—';
       return `<span title="${escapeHtml(d.toLocaleString())}">${escapeHtml(nd2RelTime(iso))}</span>`;
     }
+    // Site chip: friendly name primary (when a site snapshot has named it)
+    // with the raw "R.. S.." id secondary; bare id otherwise.
     function nd2SiteChip(o) {
-      return o ? `<span class="nd2-chip">R${escapeHtml(String(o.rfss))} S${escapeHtml(String(o.site))}</span>` : '—';
+      if (!o) return '—';
+      const id = `R${escapeHtml(String(o.rfss))} S${escapeHtml(String(o.site))}`;
+      return o.name
+        ? `<span class="nd2-chip"><span class="nd-strong">${escapeHtml(String(o.name))}</span> <span class="nd-sub">${id}</span></span>`
+        : `<span class="nd2-chip">${id}</span>`;
     }
     function nd2NodeChip(o) {
       return o ? `<span class="nd2-chip">${escapeHtml(o.name || String(o.id))}</span>` +
@@ -3880,6 +3936,26 @@
           `<a onclick="nd2SysGoSystem()">${escapeHtml(sysCrumb)}</a>` +
           `<span class="nd2-crumb-sep">›</span><span class="nd2-crumb-cur">${escapeHtml(nd2SiteText(s.siteName, s.rfss, s.site))}</span>`;
       }
+      // Context strip: a slim colored bar naming the current drill-down level
+      // ("SYSTEM — NSWPSN · 721" / "SITE — Cambewarra MT · R4 S85").
+      const ctx = document.getElementById('nd2-sys-ctx');
+      if (ctx) {
+        if (s.level === 'system') {
+          ctx.className = 'nd2-ctx system';
+          ctx.innerHTML = `<span class="nd2-ctx-kind">SYSTEM</span>` +
+            `<span class="nd2-ctx-name">${escapeHtml(sysCrumb)}</span>`;
+          ctx.style.display = '';
+        } else if (s.level === 'site') {
+          ctx.className = 'nd2-ctx site';
+          ctx.innerHTML = `<span class="nd2-ctx-kind">SITE</span>` +
+            `<span class="nd2-ctx-name">${escapeHtml(nd2SiteText(s.siteName, s.rfss, s.site))}</span>` +
+            `<span class="nd-sub">in ${escapeHtml(sysCrumb)}</span>`;
+          ctx.style.display = '';
+        } else {
+          ctx.style.display = 'none';
+          ctx.innerHTML = '';
+        }
+      }
     }
     function nd2SysGoList() { nd2SysShow('list'); nd2SysCrumbs(); nd2LoadSystems(); }
     // Back from a site → the system detail, restoring whichever sub-tab was open.
@@ -3894,11 +3970,10 @@
         const body = document.getElementById('nd2-sys-body');
         if (!body) return;
         const rows = data.systems || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No systems seen in this window.</td></tr>'; return; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No systems seen in this window.</td></tr>'; return; }
         body.innerHTML = rows.map(s => `
           <tr class="nd2-rowlink" onclick="nd2OpenSystem(${s.system}, ${s.wacn == null ? 'null' : s.wacn})">
-            <td>${nd2SysCell(s.name, s.system)}</td>
-            <td><span class="nd-sub">${s.wacn != null ? escapeHtml(String(s.wacn)) : '—'}</span></td>
+            <td>${nd2SysCell(s.name, s.system)}${s.wacn != null ? `<div class="nd-sub">WACN ${escapeHtml(String(s.wacn))}</div>` : ''}</td>
             <td class="nd2-num">${nd2Num(s.logicalCalls)}<span class="nd-sub" title="total receptions"> /${nd2Num(s.calls)}</span></td>
             <td class="nd2-num">${nd2Num(s.encryptedCalls)}</td>
             <td class="nd2-num">${nd2Num(s.sites)}</td>
@@ -3906,7 +3981,7 @@
             <td class="nd2-num">${nd2Num(s.radios)}</td>
             <td>${nd2LastSeen(s.lastSeen)}</td>
           </tr>`).join('');
-      } catch (e) { nd2TableMsg('nd2-sys-body', 8, e); }
+      } catch (e) { nd2TableMsg('nd2-sys-body', 7, e); }
     }
 
     function nd2OpenSystem(system, wacn) {
@@ -3956,7 +4031,11 @@
     function nd2TopRadioHtml(list) {
       return nd2MiniTable(
         [{ label: 'Radio' }, { label: 'Calls', num: true }, { label: 'Last seen' }],
-        (list || []).map(r => [escapeHtml(String(r.radio)), nd2Num(r.calls), nd2LastSeen(r.lastSeen)]));
+        (list || []).map(r => [
+          r.alias
+            ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span> <span class="nd-sub">${escapeHtml(String(r.radio))}</span>`
+            : escapeHtml(String(r.radio)),
+          nd2Num(r.calls), nd2LastSeen(r.lastSeen)]));
     }
 
     async function nd2LoadSystem() {
@@ -4203,11 +4282,10 @@
         nd2.tg.total = data.total || 0;
         const body = document.getElementById('nd2-tg-body');
         const rows = data.talkgroups || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No talkgroups match.</td></tr>'; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No talkgroups match.</td></tr>'; }
         else body.innerHTML = rows.map(t => `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${t.talkgroup}})" title="View events for this talkgroup">
             <td>${nd2TgCell(t)}</td>
-            <td><span class="nd-sub">${t.system != null ? escapeHtml(String(t.system)) : '—'}</span></td>
             <td class="nd2-num">${nd2Num(t.logicalCalls)}<span class="nd-sub" title="receptions"> /${nd2Num(t.calls)}</span></td>
             <td class="nd2-num">${nd2Num(t.encryptedCalls)}</td>
             <td>${nd2LastSeen(t.lastSeen)}</td>
@@ -4216,7 +4294,7 @@
             <td>${nd2NodeChip(t.topNode)}</td>
           </tr>`).join('');
         nd2PageBtns('tg', nd2.tg, rows.length);
-      } catch (e) { nd2TableMsg('nd2-tg-body', 8, e); nd2.tg.total = 0; nd2PageBtns('tg', nd2.tg, 0); }
+      } catch (e) { nd2TableMsg('nd2-tg-body', 7, e); nd2.tg.total = 0; nd2PageBtns('tg', nd2.tg, 0); }
     }
 
     // --- Radios view -----------------------------------------------------
@@ -4249,7 +4327,7 @@
         nd2.rad.total = data.total || 0;
         const body = document.getElementById('nd2-rad-body');
         const rows = data.radios || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No radios match.</td></tr>'; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No radios match.</td></tr>'; }
         else body.innerHTML = rows.map(r => {
           const topTgs = (r.topTalkgroups || []).map(t => {
             const primary = t.label ? escapeHtml(String(t.label)) : `TG ${escapeHtml(String(t.talkgroup))}`;
@@ -4261,7 +4339,6 @@
             <td>${r.alias
               ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span> <span class="nd-sub">${escapeHtml(String(r.radio))}</span>`
               : `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`}</td>
-            <td><span class="nd-sub">${r.system != null ? escapeHtml(String(r.system)) : '—'}</span></td>
             <td class="nd2-num">${nd2Num(r.calls)}</td>
             <td>${nd2LastSeen(r.lastSeen)}</td>
             <td>${nd2SiteChip(r.lastSite)}</td>
@@ -4271,7 +4348,7 @@
           </tr>`;
         }).join('');
         nd2PageBtns('rad', nd2.rad, rows.length);
-      } catch (e) { nd2TableMsg('nd2-rad-body', 8, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
+      } catch (e) { nd2TableMsg('nd2-rad-body', 7, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
     }
 
     // Shared Prev/Next + "x–y of total" for the tg/rad paged tables.
@@ -4546,10 +4623,11 @@
           const d = new Date(m.at);
           const timeCell = `<span class="nd2-time">${isNaN(d) ? '—' : d.toLocaleTimeString([], { hour12: false })}` +
             `<span class="nd2-time-rel">${nd2RelTime(m.at)}</span></span>`;
-          const rx = m.receptions || (m.nodes || []).length || 0;
-          const nodeChips = (m.nodes || []).map(n =>
+          const msgNodes = m.nodes || [];
+          const rx = m.receptions || msgNodes.length || 0;
+          const nodeChips = msgNodes.map(n =>
             `<span class="nd2-chip">${escapeHtml(n.name || String(n.id))}</span>`).join('') +
-            (rx > 1 ? ` <span class="nd2-rx" title="Heard by ${rx} receivers (grouped as one page)">×${rx}</span>` : '');
+            (rx > 1 ? ` <span class="nd2-rx" title="${escapeHtml(`${rx} receptions across ${msgNodes.length} node(s)`)}">${rx} rx</span>` : '');
           const msg = m.message || '';
           const freq = m.freqMhz != null ? `${Number(m.freqMhz).toFixed(4)} MHz` : '—';
           return `<tr>
@@ -5483,6 +5561,7 @@
       _ndRenderReaders();      // pager: reader running/stopped + msg count live (no-op for radio)
       _ndRenderNowPlaying();
       _ndRenderCfgSync();
+      _ndCfgDistWarn();        // channels-piled-on-one-SDR hint (needs live tuner set)
       _ndRenderVersions();     // reflect a just-completed component update live
       _ndRenderTunerSelector();
       // Spectrum is opt-in: staff press "Start spectrum" (see _ndToggleSpectrum).
@@ -6400,7 +6479,7 @@
           <td>${_ndSrCellHtml(i, prof, t)}</td>
           <td class="nd-gain-cell">${_ndGainCellHtml(i, prof, t)}</td>
           <td><input class="nd-input nd-input-sm" id="nd-ppm-${i}" type="number" step="0.1" value="${escapeHtml(String(ppm))}" ${autoPpm ? 'disabled' : ''}></td>
-          <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" disabled title="Auto-PPM isn't available in this sdrtrunk build — set PPM manually and watch Meas. err to zero it"></td>
+          <td style="text-align:center;"><input type="checkbox" id="nd-autoppm-${i}" ${autoPpm ? 'checked' : ''} onchange="_ndToggleAutoPpm(${i})" title="Automatically correct this SDR's PPM from the measured frequency error (vce autoppm)"></td>
           <td id="nd-meas-${i}">${measured}</td>
           <td><span class="nd-sub" id="nd-freq-${i}" title="Center frequency the channels are driving — read-only">${freqMhz}</span></td>
           <td id="nd-tstat-${i}">${stat}</td>
@@ -6468,10 +6547,25 @@
       showToast(`Tuning to ${mhz.toFixed(4)} MHz…`, 'success', 1500);
     }
 
+    // Toggle vce's automatic PPM correction for one SDR. Sends the change
+    // immediately (tunerSet → agent → control-server /tuners/{id}/autoppm),
+    // persists it into config_override.tuners[] so it re-applies on boot, and
+    // keeps the manual PPM input disabled while auto is on.
     function _ndToggleAutoPpm(i) {
       const auto = document.getElementById('nd-autoppm-' + i);
       const ppm = document.getElementById('nd-ppm-' + i);
       if (ppm && auto) ppm.disabled = auto.checked;
+      const t = _ndTuners[i];
+      if (!t || !auto) return;
+      const tid = t.id != null ? t.id : t.index;
+      const serial = _ndTunerSerial(t);
+      const args = { tunerId: tid, autoPpm: auto.checked };
+      if (!auto.checked && ppm && ppm.value !== '') {
+        const v = parseFloat(ppm.value);
+        if (!Number.isNaN(v)) args.ppm = v;   // hand back the manual PPM on disable
+      }
+      _ndCmd('tunerSet', args, `${auto.checked ? 'Enable' : 'Disable'} auto-PPM on ${t.name || ('tuner ' + serial)}`);
+      _ndPersistTuner(serial, { serial, autoPpm: auto.checked, ppm: args.ppm });
     }
 
     function _ndApplyTuner(i) {
@@ -7195,6 +7289,7 @@
         el.innerHTML = _ndEmpty('No channels configured', 'Use “Add channel” to create one') +
           `<div id="nd-ch-unmatched"></div>`;
         _ndRenderChannels(); // still surface any live-only channels below
+        _ndCfgDistWarn();
         return;
       }
       const serials = _ndCfgSerials();
@@ -7227,6 +7322,7 @@
       </table>
       <div id="nd-ch-unmatched"></div>`;
       _ndRenderChannels(); // paint live-state cells + any unmatched-live rows now
+      _ndCfgDistWarn();
     }
 
     function _ndCfgAddChannel() {
@@ -7248,6 +7344,73 @@
       _ndCfgReadDom();
       _ndConfig.channels.splice(i, 1);
       _ndCfgRender();
+    }
+
+    // "Distribute across SDRs": sort the configured channels by frequency and
+    // split them at the largest frequency gaps into as many CONTIGUOUS clusters
+    // as there are live tuner serials, then pin each cluster's channels to one
+    // SDR (round-robin if there are ever more clusters than tuners). Only
+    // updates the in-memory config + table — the operator reviews the
+    // assignments and hits Save & sync to apply.
+    function _ndCfgDistribute() {
+      if (!_ndConfig) { showToast('Config still loading…', 'warn'); return; }
+      _ndCfgReadDom();
+      const chans = Array.isArray(_ndConfig.channels) ? _ndConfig.channels : [];
+      const withFreq = chans.filter(c => c.frequency != null && !Number.isNaN(Number(c.frequency)));
+      if (!withFreq.length) { showToast('No channels with a frequency to distribute.', 'warn'); return; }
+      const serials = [];
+      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s && serials.indexOf(s) === -1) serials.push(s); });
+      if (!serials.length) { showToast('No live SDRs reported — cannot distribute.', 'warn'); return; }
+      const sorted = withFreq.slice().sort((a, b) => Number(a.frequency) - Number(b.frequency));
+      const nClusters = Math.min(serials.length, sorted.length);
+      // Cut the sorted list at the (nClusters-1) largest gaps.
+      const gaps = [];
+      for (let k = 1; k < sorted.length; k++) {
+        gaps.push({ idx: k, gap: Number(sorted[k].frequency) - Number(sorted[k - 1].frequency) });
+      }
+      gaps.sort((a, b) => b.gap - a.gap);
+      const cuts = gaps.slice(0, nClusters - 1).map(g => g.idx).sort((a, b) => a - b);
+      const clusters = [];
+      let start = 0;
+      cuts.concat([sorted.length]).forEach(end => { clusters.push(sorted.slice(start, end)); start = end; });
+      const counts = [];
+      clusters.forEach((cluster, ci) => {
+        const serial = serials[ci % serials.length];
+        cluster.forEach(c => { c.sdr = serial; });
+        counts.push(cluster.length);
+      });
+      _ndCfgRender();
+      showToast(
+        `${sorted.length} channel${sorted.length === 1 ? '' : 's'} → ${clusters.length} SDR${clusters.length === 1 ? '' : 's'} ` +
+        `(${counts.join('/')}). Review + Save & sync.`, 'success', 5000);
+    }
+
+    // Warning chip in the Channels panel header: multiple tuners exist but >2
+    // channels are piled onto (or defaulting to) one SDR. Cheap config-side
+    // heuristic — blank sdr counts as one "Auto" bucket, since auto-assigned
+    // channels can all land on the same tuner.
+    function _ndCfgDistWarn() {
+      const el = document.getElementById('nd-cfg-dist-warn');
+      if (!el) return;
+      const chans = (_ndConfig && Array.isArray(_ndConfig.channels)) ? _ndConfig.channels : [];
+      const serialSet = new Set();
+      _ndTuners.forEach(t => { const s = _ndTunerSerial(t); if (s) serialSet.add(s); });
+      let worst = 0;
+      if (serialSet.size > 1 && chans.length > 2) {
+        const bySdr = {};
+        chans.forEach(c => {
+          const k = c.sdr != null && String(c.sdr) !== '' ? String(c.sdr) : '';
+          bySdr[k] = (bySdr[k] || 0) + 1;
+          if (bySdr[k] > worst) worst = bySdr[k];
+        });
+      }
+      if (worst > 2) {
+        el.innerHTML = `<i class="fas fa-triangle-exclamation"></i> ${worst} channels on 1 SDR — click Distribute`;
+        el.style.display = 'inline-flex';
+        el.title = 'More than two channels share one SDR (or all default to Auto) while this node has multiple tuners. Click to spread them across SDRs by frequency.';
+      } else {
+        el.style.display = 'none';
+      }
     }
 
     // PATCH the full merged config_override back to the node.

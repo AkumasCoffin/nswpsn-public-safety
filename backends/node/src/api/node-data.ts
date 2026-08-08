@@ -71,6 +71,57 @@ async function talkgroupLabels(): Promise<Map<number, string>> {
   return map;
 }
 
+/**
+ * Site (system, rfss, site) → friendly name (channel_name from the latest
+ * node_site_snapshots row, e.g. "Cambewarra MT"). Same display-only pattern
+ * (and ~60s cache) as talkgroupLabels. Keys are "system:rfss:site" plus an
+ * "rfss:site" fallback for callers that don't have the system id in scope
+ * (e.g. the overview topSites rollup).
+ */
+let _siteNameCache: { at: number; map: Map<string, string> } | null = null;
+async function siteNames(pool: Pool): Promise<Map<string, string>> {
+  if (_siteNameCache && Date.now() - _siteNameCache.at < 60_000) return _siteNameCache.map;
+  const map = new Map<string, string>();
+  try {
+    const res = await pool.query<{
+      system_id: number;
+      rfss: number;
+      site_id: number;
+      channel_name: string;
+    }>(
+      `SELECT DISTINCT ON (system_id, rfss, site_id)
+              system_id, rfss, site_id, channel_name
+         FROM node_site_snapshots
+        WHERE channel_name IS NOT NULL
+        ORDER BY system_id, rfss, site_id, received_at DESC`,
+    );
+    for (const r of res.rows) {
+      map.set(`${r.system_id}:${r.rfss}:${r.site_id}`, r.channel_name);
+      const fallback = `${r.rfss}:${r.site_id}`;
+      if (!map.has(fallback)) map.set(fallback, r.channel_name);
+    }
+  } catch (e) {
+    log.warn({ err: e }, 'siteNames: failed to load site snapshots');
+  }
+  _siteNameCache = { at: Date.now(), map };
+  return map;
+}
+
+/** Resolve a site name from the siteNames() map (system key, then fallback). */
+function siteNameFor(
+  map: Map<string, string>,
+  system: number | null | undefined,
+  rfss: number | null | undefined,
+  site: number | null | undefined,
+): string | null {
+  if (rfss == null || site == null) return null;
+  if (system != null) {
+    const hit = map.get(`${system}:${rfss}:${site}`);
+    if (hit !== undefined) return hit;
+  }
+  return map.get(`${rfss}:${site}`) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Pager capcode → alias resolution.
 //
@@ -278,7 +329,7 @@ nodeDataRouter.get(
         logical: unknown;
         label: string | null;
       }> = [];
-      let topUnitRows: Array<{ unit: number; calls: unknown }> = [];
+      let topUnitRows: Array<{ unit: number; alias: string | null; calls: unknown }> = [];
       let topSiteRows: Array<{ site_rfss: number; site_id: number; calls: unknown }> = [];
       let seriesRadioRows: Array<{ bucket: Date; n: unknown }> = [];
       let seriesPagerRows: Array<{ bucket: Date; n: unknown }> = [];
@@ -339,8 +390,11 @@ nodeDataRouter.get(
                 )
               : null,
             wantRadio
-              ? pool.query<{ unit: number; calls: unknown }>(
-                  `SELECT source_unit AS unit, COUNT(*)::int AS calls
+              ? pool.query<{ unit: number; alias: string | null; calls: unknown }>(
+                  `SELECT source_unit AS unit,
+                          (array_agg(source_alias ORDER BY received_at DESC)
+                             FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                          COUNT(*)::int AS calls
                      FROM node_radio_events
                     WHERE received_at >= now() - interval '30 days'
                       AND source_unit IS NOT NULL
@@ -436,8 +490,11 @@ nodeDataRouter.get(
               )
             : null,
           wantRadio
-            ? pool.query<{ unit: number; calls: unknown }>(
-                `SELECT source_unit AS unit, COUNT(*)::int AS calls
+            ? pool.query<{ unit: number; alias: string | null; calls: unknown }>(
+                `SELECT source_unit AS unit,
+                        (array_agg(source_alias ORDER BY received_at DESC)
+                           FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                        COUNT(*)::int AS calls
                    FROM node_radio_events
                   WHERE ${cond} AND source_unit IS NOT NULL
                   GROUP BY source_unit ORDER BY calls DESC LIMIT 15`,
@@ -535,6 +592,7 @@ nodeDataRouter.get(
         .map(([k, v]) => ({ [bucketField]: k, radio: v.radio, pager: v.pager }));
 
       const tgLabels = await talkgroupLabels();
+      const siteMap = await siteNames(pool);
       const body: Record<string, unknown> = {
         window,
         scope,
@@ -553,10 +611,17 @@ nodeDataRouter.get(
           calls: num(r.calls),
           logicalCalls: num(r.logical),
         })),
-        topUnits: topUnitRows.map((r) => ({ unit: r.unit, calls: num(r.calls) })),
+        topUnits: topUnitRows.map((r) => ({
+          unit: r.unit,
+          alias: r.alias ?? null,
+          calls: num(r.calls),
+        })),
         topSites: topSiteRows.map((r) => ({
           siteRfss: r.site_rfss,
           siteId: r.site_id,
+          // These rollup rows carry no system id — resolve via the
+          // "rfss:site" fallback key.
+          name: siteNameFor(siteMap, null, r.site_rfss, r.site_id),
           calls: num(r.calls),
         })),
         series,
@@ -806,6 +871,7 @@ nodeDataRouter.get(
       const radioMap = new Map((radioDetail?.rows ?? []).map((r) => [r.id, r]));
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
       const labels = await talkgroupLabels();
+      const siteMap = radioIds.length > 0 ? await siteNames(pool) : null;
       const capAliases = pagerIds.length > 0 ? capcodeAliases() : null;
 
       const events = page
@@ -829,7 +895,10 @@ nodeDataRouter.get(
               // A logical call is "encrypted"/"recorded" if ANY reception was.
               encrypted: d.encrypted === true,
               recorded: d.recorded === true,
-              sites: d.sites,
+              sites: d.sites.map((s) => ({
+                ...s,
+                name: siteMap ? siteNameFor(siteMap, d.system, s.rfss, s.site) : null,
+              })),
               nodes: d.nodes,
               receptions: d.receptions,
             };
@@ -903,7 +972,7 @@ interface ScopedDetail {
     encryptedCalls: number;
     lastSeen: string;
   }>;
-  topRadios: Array<{ radio: number; calls: number; lastSeen: string }>;
+  topRadios: Array<{ radio: number; alias: string | null; calls: number; lastSeen: string }>;
   series: Array<{ hour: string; calls: number }>;
 }
 
@@ -958,8 +1027,10 @@ async function scopedRadioDetail(
         LIMIT 20`,
       params,
     ),
-    pool.query<{ radio: number; calls: unknown; last_seen: Date }>(
+    pool.query<{ radio: number; alias: string | null; calls: unknown; last_seen: Date }>(
       `SELECT source_unit AS radio,
+              (array_agg(source_alias ORDER BY received_at DESC)
+                 FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
               COUNT(*)::int AS calls,
               MAX(received_at) AS last_seen
          FROM node_radio_events
@@ -997,6 +1068,7 @@ async function scopedRadioDetail(
     })),
     topRadios: unQ.rows.map((r) => ({
       radio: r.radio,
+      alias: r.alias ?? null,
       calls: num(r.calls),
       lastSeen: iso(r.last_seen),
     })),
@@ -1173,6 +1245,8 @@ nodeDataRouter.get(
         ),
       ]);
 
+      // Cached (~60s) — same map scopedRadioDetail used for its own lists.
+      const tgLabels = await talkgroupLabels();
       return c.json({
         window,
         system,
@@ -1189,7 +1263,11 @@ nodeDataRouter.get(
           lastSeen: iso(r.last_seen),
           topTalkgroup:
             r.top_tg !== null
-              ? { talkgroup: r.top_tg, calls: num(r.top_tg_calls) }
+              ? {
+                  talkgroup: r.top_tg,
+                  label: tgLabels.get(r.top_tg) ?? null,
+                  calls: num(r.top_tg_calls),
+                }
               : null,
           // Deep-metadata enrichment (null until a node forwards site
           // snapshots — see migration 047 / node_site_snapshots).
@@ -1508,6 +1586,7 @@ nodeDataRouter.get(
       }
 
       const labels = await talkgroupLabels();
+      const siteMap = await siteNames(pool);
       return c.json({
         window,
         total,
@@ -1524,8 +1603,12 @@ nodeDataRouter.get(
             logicalCalls: num(r.logical),
             encryptedCalls: num(r.enc),
             lastSeen: iso(r.last_seen),
-            lastSite: ex?.lastSite ?? null,
-            topSite: ex?.topSite ?? null,
+            lastSite: ex?.lastSite
+              ? { ...ex.lastSite, name: siteNameFor(siteMap, r.system, ex.lastSite.rfss, ex.lastSite.site) }
+              : null,
+            topSite: ex?.topSite
+              ? { ...ex.topSite, name: siteNameFor(siteMap, r.system, ex.topSite.rfss, ex.topSite.site) }
+              : null,
             topNode: ex?.topNode ?? null,
           };
         }),
@@ -1725,6 +1808,8 @@ nodeDataRouter.get(
         }
       }
 
+      const tgLabels = await talkgroupLabels();
+      const siteMap = await siteNames(pool);
       return c.json({
         window,
         total,
@@ -1739,10 +1824,17 @@ nodeDataRouter.get(
             alias: r.alias ?? null,
             calls: num(r.calls),
             lastSeen: iso(r.last_seen),
-            lastSite: ex?.lastSite ?? null,
-            topSite: ex?.topSite ?? null,
+            lastSite: ex?.lastSite
+              ? { ...ex.lastSite, name: siteNameFor(siteMap, r.system, ex.lastSite.rfss, ex.lastSite.site) }
+              : null,
+            topSite: ex?.topSite
+              ? { ...ex.topSite, name: siteNameFor(siteMap, r.system, ex.topSite.rfss, ex.topSite.site) }
+              : null,
             topNode: ex?.topNode ?? null,
-            topTalkgroups: ex?.topTalkgroups ?? [],
+            topTalkgroups: (ex?.topTalkgroups ?? []).map((t) => ({
+              ...t,
+              label: tgLabels.get(t.talkgroup) ?? null,
+            })),
           };
         }),
       });
