@@ -580,6 +580,7 @@
         <h2>Request Submitted!</h2>
         <p>Thanks for your interest! We'll review your request and contact you via Discord.
            Your account is ready to sign in with now — editor/feeder features switch on once you're approved.</p>
+        <p id="success-confirm-note" style="display:none; color: var(--accent); margin-top:0.5rem;"><i class="fas fa-envelope"></i> One more step: check your email and confirm your address so you can sign in.</p>
         <div style="margin-top: 1.5rem;">
           <a href="map.html" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid var(--border-subtle);">
             <i class="fas fa-map"></i>
@@ -1073,6 +1074,7 @@
       submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
       messageEl.textContent = '';
 
+      let needsEmailConfirm = false;
       try {
         if (!existingSession) {
           const pw = document.getElementById('signup-password').value;
@@ -1096,16 +1098,14 @@
             return;
           }
           if (!suData?.session) {
-            // Email confirmation is required before a session exists. Ask the
-            // user to confirm + sign in, then resubmit (form stays filled) so
-            // the request links to their verified account.
-            messageEl.innerHTML = 'Account created! Check your email to confirm your address, then '
-              + '<a href="login.html?redirect=/signup.html" style="color:var(--accent);">sign in</a> '
-              + 'and press Submit Request again to send your request.';
-            messageEl.className = 'message success';
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
-            return;
+            // Email confirmation is required, so there's no session/JWT yet — but
+            // DON'T stop here. Fall through and submit the request now as an
+            // email-identified request (the backend accepts it by email and links
+            // the account on approval). Returning early here is exactly what left
+            // confirmed accounts sitting with NO request in the queue: users saw
+            // "account created", confirmed their email, and never came back to
+            // press Submit again.
+            needsEmailConfirm = true;
           }
         }
 
@@ -1149,6 +1149,10 @@
         if (typeof umami !== 'undefined') umami.track('editor-signup-submit', { types: requestTypes.join(','), region: region });
         document.getElementById('form-container').style.display = 'none';
         document.getElementById('success-container').style.display = 'block';
+        if (needsEmailConfirm) {
+          const note = document.getElementById('success-confirm-note');
+          if (note) note.style.display = '';
+        }
 
       } catch (error) {
         messageEl.textContent = error.message || 'Failed to submit request. Please try again.';
