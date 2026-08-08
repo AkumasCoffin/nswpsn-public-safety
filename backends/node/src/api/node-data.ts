@@ -19,6 +19,9 @@
  *   GET /api/node-data/site       — drill-down for one site of a system
  *   GET /api/node-data/talkgroups — paged talkgroup monitor (per-TG rollup)
  *   GET /api/node-data/radios     — paged radio (source unit) monitor
+ *   GET /api/node-data/pager-overview — pager totals, top capcodes/nodes, series
+ *   GET /api/node-data/capcodes   — paged per-capcode rollup (with top node)
+ *   GET /api/node-data/capcode    — message browser for one capcode (grouped)
  *
  * overview/events: windows ≤30d compute from the detail tables (logical
  * counts via COUNT(DISTINCT logical_*)); window=all uses the hourly forever
@@ -1655,6 +1658,310 @@ nodeDataRouter.get(
     } catch (err) {
       log.error({ err }, '/api/node-data/radios error');
       return c.json({ error: 'failed to load radios' }, 500);
+    }
+  },
+);
+
+// ===========================================================================
+// Pager monitoring.
+//
+// These read node_pager_events (30-day detail) only, so the window is
+// 24h|7d|30d with a 7d default — there is no 'all'. A page heard by N nodes
+// shares one logical_id (stamped to the first row's id); COALESCE(logical_id,
+// id) treats a not-yet-stamped row as its own group. Capcodes are labelled at
+// read time from the capcodeAliases() reference map (display-only), matched on
+// the normalised capcode so zero-padding differences don't split a page.
+// ===========================================================================
+
+/** topNode-per-capcode lateral, shared by pager-overview and capcodes. */
+async function pagerTopNodeByCapcode(
+  pool: Pool,
+  interval: string,
+  capcodes: string[],
+): Promise<Map<string, { id: string; name: string | null; pages: number }>> {
+  const out = new Map<string, { id: string; name: string | null; pages: number }>();
+  if (capcodes.length === 0) return out;
+  const res = await pool.query<{
+    capcode: string;
+    node_id: string | null;
+    name: string | null;
+    pages: unknown;
+  }>(
+    `SELECT k.capcode, tn.node_id, n.name, tn.pages
+       FROM unnest($2::text[]) AS k(capcode)
+       LEFT JOIN LATERAL (
+         SELECT e.node_id, COUNT(*)::int AS pages
+           FROM node_pager_events e
+          WHERE e.received_at >= now() - $1::interval
+            AND e.capcode = k.capcode
+          GROUP BY e.node_id
+          ORDER BY pages DESC, e.node_id ASC
+          LIMIT 1
+       ) tn ON true
+       LEFT JOIN nodes n ON n.id = tn.node_id`,
+    [interval, capcodes],
+  );
+  for (const r of res.rows) {
+    if (r.node_id !== null) {
+      out.set(r.capcode, { id: r.node_id, name: r.name, pages: num(r.pages) });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/pager-overview?window=24h|7d|30d
+//   Totals, top capcodes (with their busiest node), top nodes, hourly series.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/pager-overview',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const interval = WINDOW_INTERVAL[window];
+
+      const [totalsQ, topCapsQ, topNodesQ, seriesQ] = await Promise.all([
+        pool.query<{ pages: unknown; logical: unknown; nodes: unknown; capcodes: unknown }>(
+          `SELECT COUNT(*)::int AS pages,
+                  COUNT(DISTINCT COALESCE(logical_id, id))::int AS logical,
+                  COUNT(DISTINCT node_id)::int AS nodes,
+                  COUNT(DISTINCT capcode)::int AS capcodes
+             FROM node_pager_events
+            WHERE received_at >= now() - $1::interval`,
+          [interval],
+        ),
+        pool.query<{ capcode: string; pages: unknown; last_seen: Date }>(
+          `SELECT capcode, COUNT(*)::int AS pages, MAX(received_at) AS last_seen
+             FROM node_pager_events
+            WHERE received_at >= now() - $1::interval
+            GROUP BY capcode
+            ORDER BY pages DESC, capcode ASC
+            LIMIT 15`,
+          [interval],
+        ),
+        pool.query<{ node_id: string; name: string | null; pages: unknown }>(
+          `SELECT e.node_id, n.name, COUNT(*)::int AS pages
+             FROM node_pager_events e
+             JOIN nodes n ON n.id = e.node_id
+            WHERE e.received_at >= now() - $1::interval
+            GROUP BY e.node_id, n.name
+            ORDER BY pages DESC, e.node_id ASC
+            LIMIT 15`,
+          [interval],
+        ),
+        pool.query<{ hour: Date; pages: unknown }>(
+          `SELECT date_trunc('hour', received_at) AS hour, COUNT(*)::int AS pages
+             FROM node_pager_events
+            WHERE received_at >= now() - $1::interval
+            GROUP BY 1 ORDER BY 1`,
+          [interval],
+        ),
+      ]);
+
+      const topNodeByCap = await pagerTopNodeByCapcode(
+        pool,
+        interval,
+        topCapsQ.rows.map((r) => r.capcode),
+      );
+      const aliases = capcodeAliases();
+      const t = totalsQ.rows[0];
+
+      return c.json({
+        window,
+        totals: {
+          pages: num(t?.pages),
+          pagesLogical: num(t?.logical),
+          activeNodes: num(t?.nodes),
+          capcodes: num(t?.capcodes),
+        },
+        topCapcodes: topCapsQ.rows.map((r) => {
+          const a = aliases.get(normalizeCapcode(r.capcode)) ?? null;
+          return {
+            capcode: r.capcode,
+            alias: a?.alias ?? null,
+            agency: a?.agency ?? null,
+            pages: num(r.pages),
+            lastSeen: iso(r.last_seen),
+            topNode: topNodeByCap.get(r.capcode) ?? null,
+          };
+        }),
+        topNodes: topNodesQ.rows.map((r) => ({
+          nodeId: r.node_id,
+          name: r.name,
+          pages: num(r.pages),
+        })),
+        series: seriesQ.rows.map((r) => ({ hour: iso(r.hour), pages: num(r.pages) })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/pager-overview error');
+      return c.json({ error: 'failed to load pager overview' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/capcodes
+//   ?window=&q=<opt capcode prefix>&sort=pages|lastSeen&limit=50(≤100)&offset=0
+//
+// Paged per-capcode rollup. Grouping + pagination first, then topNode resolves
+// per returned capcode via lateral — same shape as the talkgroups endpoint.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/capcodes',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const interval = WINDOW_INTERVAL[window];
+      const qRaw = (url.searchParams.get('q') ?? '').trim();
+      if (qRaw && !/^\d+$/.test(qRaw)) {
+        return c.json({ error: 'q must be a numeric capcode prefix' }, 400);
+      }
+      const sortRaw = url.searchParams.get('sort') ?? 'pages';
+      const sort = (['pages', 'lastSeen'] as const).find((s) => s === sortRaw) ?? 'pages';
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
+      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
+      const params: unknown[] = [interval];
+      const conds = ['received_at >= now() - $1::interval'];
+      if (qRaw) {
+        params.push(`${qRaw}%`);
+        conds.push(`capcode LIKE $${params.length}`);
+      }
+      const where = conds.join(' AND ');
+      const orderCol = sort === 'lastSeen' ? 'last_seen' : 'pages';
+
+      const pageParams = [...params];
+      pageParams.push(limit);
+      const limIdx = pageParams.length;
+      pageParams.push(offset);
+      const offIdx = pageParams.length;
+
+      const [countQ, pageQ] = await Promise.all([
+        pool.query<{ n: unknown }>(
+          `SELECT COUNT(DISTINCT capcode)::int AS n
+             FROM node_pager_events WHERE ${where}`,
+          params,
+        ),
+        pool.query<{ capcode: string; pages: unknown; last_seen: Date }>(
+          `SELECT capcode, COUNT(*)::int AS pages, MAX(received_at) AS last_seen
+             FROM node_pager_events
+            WHERE ${where}
+            GROUP BY capcode
+            ORDER BY ${orderCol} DESC, capcode ASC
+            LIMIT $${limIdx} OFFSET $${offIdx}`,
+          pageParams,
+        ),
+      ]);
+      const total = num(countQ.rows[0]?.n);
+      const page = pageQ.rows;
+
+      const topNodeByCap = await pagerTopNodeByCapcode(
+        pool,
+        interval,
+        page.map((r) => r.capcode),
+      );
+      const aliases = capcodeAliases();
+
+      return c.json({
+        total,
+        limit,
+        offset,
+        capcodes: page.map((r) => {
+          const a = aliases.get(normalizeCapcode(r.capcode)) ?? null;
+          return {
+            capcode: r.capcode,
+            alias: a?.alias ?? null,
+            agency: a?.agency ?? null,
+            pages: num(r.pages),
+            lastSeen: iso(r.last_seen),
+            topNode: topNodeByCap.get(r.capcode) ?? null,
+          };
+        }),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/capcodes error');
+      return c.json({ error: 'failed to load capcodes' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/capcode?capcode=<exact>&window=&limit=50(≤100)&offset=0
+//
+// Message browser for one capcode. Grouped by logical_id (COALESCE(logical_id,
+// id)) so each distinct page shows once with its reception count + node chips,
+// newest first.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/capcode',
+  requireRole(canManageNodes),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const interval = WINDOW_INTERVAL[window];
+      const capcode = (url.searchParams.get('capcode') ?? '').trim();
+      if (!capcode) return c.json({ error: 'capcode is required' }, 400);
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50) || 50));
+      const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
+
+      const [countQ, pageQ] = await Promise.all([
+        pool.query<{ n: unknown }>(
+          `SELECT COUNT(DISTINCT COALESCE(logical_id, id))::int AS n
+             FROM node_pager_events
+            WHERE received_at >= now() - $1::interval AND capcode = $2`,
+          [interval, capcode],
+        ),
+        pool.query<{
+          at: Date;
+          message: string | null;
+          freq_mhz: number | null;
+          receptions: number;
+          nodes: Array<{ id: string; name: string }>;
+        }>(
+          `SELECT MIN(e.received_at) AS at,
+                  MIN(e.message) AS message,
+                  MIN(e.freq_mhz)::float8 AS freq_mhz,
+                  COUNT(*)::int AS receptions,
+                  jsonb_agg(DISTINCT jsonb_build_object('id', e.node_id, 'name', n.name)) AS nodes
+             FROM node_pager_events e
+             JOIN nodes n ON n.id = e.node_id
+            WHERE e.received_at >= now() - $1::interval AND e.capcode = $2
+            GROUP BY COALESCE(e.logical_id, e.id)
+            ORDER BY at DESC
+            LIMIT $3 OFFSET $4`,
+          [interval, capcode, limit, offset],
+        ),
+      ]);
+
+      const total = num(countQ.rows[0]?.n);
+      const a = capcodeAliases().get(normalizeCapcode(capcode)) ?? null;
+      return c.json({
+        total,
+        capcode,
+        alias: a?.alias ?? null,
+        agency: a?.agency ?? null,
+        messages: pageQ.rows.map((r) => ({
+          at: iso(r.at),
+          message: r.message,
+          freqMhz: r.freq_mhz,
+          nodes: r.nodes,
+          receptions: r.receptions,
+        })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/capcode error');
+      return c.json({ error: 'failed to load capcode' }, 500);
     }
   },
 );
