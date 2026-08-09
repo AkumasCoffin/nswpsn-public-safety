@@ -1202,8 +1202,11 @@
     .requests-table tbody tr:hover td { background: rgba(56, 189, 248, 0.04); }
     /* Requests-tab kind switcher + agency data-change review cards. */
     .req-kind-bar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
-    .req-kind-bar label { color: var(--text-soft); font-size: 0.85rem; }
-    .req-kind-bar select { background: rgba(0,0,0,0.25); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.4rem 0.7rem; font-family: inherit; font-size: 0.9rem; }
+    .req-kind-bar .req-kind-label { color: var(--text-soft); font-size: 0.85rem; }
+    /* Reviewing switcher trigger — the same tab-dd dropdown as the Data tab, but
+       given a subtle border so it reads as a control inside the tab content. */
+    .req-kind-bar #req-kind-btn { border: 1px solid var(--border-subtle); background: rgba(255, 255, 255, 0.03); }
+    .req-kind-bar #req-kind-btn:hover { color: var(--text-primary); border-color: var(--accent-border, #38bdf8); }
     .req-kind-badge { background: rgba(234,179,8,0.16); color: #fbbf24; border: 1px solid rgba(234,179,8,0.4); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
     .dc-card { background: var(--bg-card, #0e1728); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 0.8rem; }
     .dc-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
@@ -2135,13 +2138,19 @@
 
       <!-- Requests Tab -->
       <div id="requests-tab" class="tab-content active">
-        <!-- Which kind of request to review: signups vs agency data changes -->
+        <!-- Which kind of request to review: signups vs agency data changes.
+             Uses the same dropdown pattern as the Data tab (tab-dd / tab-dd-menu). -->
         <div class="req-kind-bar">
-          <label for="req-kind">Reviewing</label>
-          <select id="req-kind" onchange="switchRequestsView(this.value)">
-            <option value="signup">Signup requests</option>
-            <option value="data">Data changes</option>
-          </select>
+          <span class="req-kind-label">Reviewing</span>
+          <div class="tab-dd" id="req-kind-dd">
+            <button class="tab-btn" id="req-kind-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleReqKindMenu(event)">
+              <i class="fas fa-inbox"></i> <span id="req-kind-current">Signup requests</span> <i class="fas fa-caret-down tab-dd-caret"></i>
+            </button>
+            <div class="tab-dd-menu" id="req-kind-menu" role="menu" aria-label="Request kind">
+              <button class="tab-dd-item active" role="menuitem" data-kind="signup" onclick="openRequestsView('signup')"><i class="fas fa-user-plus"></i> Signup requests</button>
+              <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes</button>
+            </div>
+          </div>
           <span id="req-datachanges-badge" class="req-kind-badge" style="display:none;"></span>
         </div>
 
@@ -9271,6 +9280,35 @@
         if (signup) signup.style.display = 'block';
       }
     }
+    // Reviewing dropdown — mirrors the Data tab menu (toggleDataMenu/openDataMode).
+    function toggleReqKindMenu(event) {
+      if (event) { event.preventDefault(); event.stopPropagation(); }
+      const menu = document.getElementById('req-kind-menu');
+      if (!menu) return;
+      const open = !menu.classList.contains('open');
+      menu.classList.toggle('open', open);
+      const btn = document.getElementById('req-kind-btn');
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    function closeReqKindMenu() {
+      const menu = document.getElementById('req-kind-menu');
+      if (menu) menu.classList.remove('open');
+      const btn = document.getElementById('req-kind-btn');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+    function openRequestsView(kind) {
+      closeReqKindMenu();
+      const cur = document.getElementById('req-kind-current');
+      if (cur) cur.textContent = kind === 'data' ? 'Data changes' : 'Signup requests';
+      document.querySelectorAll('#req-kind-menu .tab-dd-item').forEach(it =>
+        it.classList.toggle('active', it.dataset.kind === kind));
+      switchRequestsView(kind);
+    }
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('req-kind-dd');
+      if (dd && !dd.contains(e.target)) closeReqKindMenu();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeReqKindMenu(); });
     function setDcFilter(status) {
       _dcFilter = status;
       document.querySelectorAll('[data-dcfilter]').forEach(b => b.classList.toggle('active', b.dataset.dcfilter === status));
