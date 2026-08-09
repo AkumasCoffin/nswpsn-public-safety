@@ -550,7 +550,7 @@ describe('GET /api/check-admin/:userId', () => {
     expect(body['is_owner']).toBe(true);
     expect(body['can_manage_users']).toBe(true);
     expect(body['can_assign_privileged_roles']).toBe(true);
-    expect(body['tabs']).toEqual({ requests: true, users: true, dev: true, nodes: true, data: true });
+    expect(body['tabs']).toEqual({ requests: true, users: true, dev: true, nodes: true, data: true, data_changes: true });
   });
 
   it('team_member sees requests + users but NOT dev', async () => {
@@ -559,7 +559,7 @@ describe('GET /api/check-admin/:userId', () => {
     const res = await app.request('/api/check-admin/u-tm');
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['can_assign_privileged_roles']).toBe(false);
-    expect(body['tabs']).toEqual({ requests: true, users: true, dev: false, nodes: false, data: false });
+    expect(body['tabs']).toEqual({ requests: true, users: true, dev: false, nodes: false, data: false, data_changes: true });
   });
 
   it('dev sees only the Dev tab', async () => {
@@ -567,7 +567,7 @@ describe('GET /api/check-admin/:userId', () => {
     const app = makeApp();
     const res = await app.request('/api/check-admin/u-dev');
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body['tabs']).toEqual({ requests: false, users: false, dev: true, nodes: true, data: true });
+    expect(body['tabs']).toEqual({ requests: false, users: false, dev: true, nodes: true, data: true, data_changes: false });
   });
 
   it('grants first-time owner when no owners exist anywhere', async () => {
