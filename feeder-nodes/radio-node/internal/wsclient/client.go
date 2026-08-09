@@ -9,9 +9,12 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -698,9 +701,87 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 	case "pushConfig":
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "not implemented in this build"})
 
+	case "logs":
+		// Tail the last N lines of a component's log file (sdrtrunk | rdio) for the
+		// staff node page. Read-only; the files live under <dataDir>/logs/<comp>.log.
+		var a struct {
+			Component string `json:"component"`
+			Lines     int    `json:"lines"`
+		}
+		_ = json.Unmarshal(cmd.Args, &a)
+		comp := strings.TrimSpace(a.Component)
+		if comp != "sdrtrunk" && comp != "rdio" {
+			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "unknown component: " + comp})
+			return
+		}
+		n := a.Lines
+		if n <= 0 || n > 200 {
+			n = 20
+		}
+		lines, err := tailLogLines(filepath.Join(c.cfg.DataDir, "logs", comp+".log"), n)
+		if err != nil {
+			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Component: comp, Message: "read log: " + err.Error()})
+			return
+		}
+		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{
+			OK: true, Component: comp, Lines: lines, Message: fmt.Sprintf("%d line(s)", len(lines)),
+		})
+
 	default:
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "unknown action: " + cmd.Action})
 	}
+}
+
+// tailLogLines returns the last n non-empty-trimmed lines of the file at path,
+// oldest-first. It reads only the trailing window of the file (logs rotate at
+// 10 MiB) so a large log doesn't cost a full read. Returns an empty slice (not
+// an error) when the file doesn't exist yet — the component may not have logged.
+func tailLogLines(path string, n int) ([]string, error) {
+	const window = 128 << 10 // last 128 KiB is plenty for a few hundred lines
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := info.Size()
+	start := int64(0)
+	if size > window {
+		start = size - window
+	}
+	if _, err := f.Seek(start, 0); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, size-start)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return nil, err
+	}
+
+	text := string(buf)
+	// Drop a partial first line when we seeked into the middle of the file.
+	if start > 0 {
+		if i := strings.IndexByte(text, '\n'); i >= 0 {
+			text = text[i+1:]
+		}
+	}
+	raw := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(raw))
+	for _, ln := range raw {
+		if strings.TrimSpace(ln) != "" {
+			out = append(out, ln)
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out, nil
 }
 
 // reply sends a typed response echoing the incoming correlation id.

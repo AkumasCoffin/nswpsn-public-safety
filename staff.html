@@ -677,6 +677,14 @@
       display: flex; align-items: center; gap: 0.5rem;
     }
     .nd-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .nd-complog {
+      margin: 0; max-height: 340px; overflow: auto;
+      background: rgba(0, 0, 0, 0.38); border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px; padding: 0.6rem 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem; line-height: 1.5; color: #cbd5e1;
+      white-space: pre; tab-size: 4;
+    }
 
     .nd-banner {
       padding: 0.7rem 0.9rem; border-radius: 8px; font-size: 0.8rem;
@@ -2752,6 +2760,19 @@
                 <button class="btn btn-secondary btn-sm nd-write" onclick="_ndUpdate()"><i class="fas fa-download"></i> Trigger update</button>
                 <button class="btn btn-danger btn-sm nd-write" onclick="_ndReboot()"><i class="fas fa-power-off"></i> Restart agent</button>
               </div>
+            </div>
+          </div>
+
+          <!-- Component logs (sdrtrunk / rdio) — last 20 lines on demand -->
+          <div class="nd-panel nd-span-all nd-radio-only nd-write">
+            <div class="nd-panel-h"><i class="fas fa-file-lines"></i> Component logs</div>
+            <div class="nd-panel-b">
+              <div class="nd-controls" style="margin-bottom:0.6rem;">
+                <button class="btn btn-secondary btn-sm" onclick="_ndShowComponentLog('sdrtrunk')"><i class="fas fa-satellite-dish"></i> SDR-Trunk</button>
+                <button class="btn btn-secondary btn-sm" onclick="_ndShowComponentLog('rdio')"><i class="fas fa-broadcast-tower"></i> rdio</button>
+                <button class="btn btn-secondary btn-sm" onclick="_ndRefreshComponentLog()" title="Refresh the current log"><i class="fas fa-rotate"></i> Refresh</button>
+              </div>
+              <pre id="nd-complog" class="nd-complog">Choose SDR-Trunk or rdio to view its last 20 log lines.</pre>
             </div>
           </div>
 
@@ -6004,15 +6025,43 @@
       const meta = _ndReqMeta[d.reqId];
       const label = meta ? meta.label : 'Command';
       if (meta) delete _ndReqMeta[d.reqId];
+      // Logs command: render the tailed lines into the panel, not a toast.
+      if (meta && meta.logsComponent) {
+        const pre = document.getElementById('nd-complog');
+        if (pre) {
+          if (d.ok && Array.isArray(d.lines)) {
+            pre.textContent = d.lines.length ? d.lines.join('\n') : '(log is empty)';
+            pre.scrollTop = pre.scrollHeight; // jump to newest line
+          } else {
+            pre.textContent = 'Could not load ' + meta.logsComponent + ' log: ' + (d.message || d.error || 'failed');
+          }
+        }
+        return;
+      }
       if (d.ok) showToast(`${label}: ${d.message || 'OK'}`, 'success');
       else showToast(`${label}: ${d.message || 'failed'}`, 'error');
     }
 
-    function _ndCmd(action, args, label) {
+    function _ndCmd(action, args, label, extraMeta) {
       if (!_ndWs || !_ndAuthed) { showToast('Not connected to node.', 'error'); return; }
       const reqId = 'r' + (++_ndReqSeq);
-      _ndReqMeta[reqId] = { label: label || action };
+      _ndReqMeta[reqId] = Object.assign({ label: label || action }, extraMeta || {});
       _ndWsSend({ t: 'cmd', data: { nodeId: _ndNodeId, action, args: args || {}, id: reqId } });
+    }
+
+    // --- Component logs (sdrtrunk / rdio last 20 lines) ---
+    let _ndLogComponent = null;
+    function _ndShowComponentLog(component) {
+      _ndLogComponent = component;
+      const pre = document.getElementById('nd-complog');
+      if (pre) pre.textContent = 'Loading ' + component + ' log…';
+      // logsComponent in the req meta routes the cmdResult to the panel (below),
+      // robust even if the command times out.
+      _ndCmd('logs', { component, lines: 20 }, 'Logs · ' + component, { logsComponent: component });
+    }
+    function _ndRefreshComponentLog() {
+      if (!_ndLogComponent) { showToast('Pick SDR-Trunk or rdio first.', 'error'); return; }
+      _ndShowComponentLog(_ndLogComponent);
     }
 
     // --- Spectrum lifecycle ---

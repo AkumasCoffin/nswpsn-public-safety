@@ -85,6 +85,10 @@ type Command struct {
 type CmdResult struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
+	// Component + Lines carry a log-tail response for the "logs" command. Empty
+	// for every other command (omitempty keeps normal results unchanged).
+	Component string   `json:"component,omitempty"`
+	Lines     []string `json:"lines,omitempty"`
 }
 
 // ConfigApplied acks a successful configPush apply.
