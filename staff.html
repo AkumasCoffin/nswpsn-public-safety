@@ -1203,10 +1203,9 @@
     /* Requests-tab kind switcher + agency data-change review cards. */
     .req-kind-bar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
     .req-kind-bar .req-kind-label { color: var(--text-soft); font-size: 0.85rem; }
-    /* Reviewing switcher trigger — the same tab-dd dropdown as the Data tab, but
-       given a subtle border so it reads as a control inside the tab content. */
-    .req-kind-bar #req-kind-btn { border: 1px solid var(--border-subtle); background: rgba(255, 255, 255, 0.03); }
-    .req-kind-bar #req-kind-btn:hover { color: var(--text-primary); border-color: var(--accent-border, #38bdf8); }
+    /* Reviewing switcher trigger — a borderless tab-btn like the Data tab
+       dropdown (integrated look). Hover just lifts the text colour. */
+    .req-kind-bar #req-kind-btn:hover { color: var(--text-primary); }
     .req-kind-badge { background: rgba(234,179,8,0.16); color: #fbbf24; border: 1px solid rgba(234,179,8,0.4); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
     .dc-card { background: var(--bg-card, #0e1728); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 0.8rem; }
     .dc-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
