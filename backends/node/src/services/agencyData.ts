@@ -194,3 +194,115 @@ export async function saveAgencyExtended(pool: Pool, slug: string, data: AgencyE
   );
   _cache = null;
 }
+
+// ── Row edits ───────────────────────────────────────────────────────────────
+
+export interface RowChange {
+  sectionKey: string; // the section's stable `csv` key
+  op: 'add' | 'update' | 'delete';
+  rowKey?: string; // first-column value (update/delete)
+  afterCells?: string[]; // new row cells (add/update)
+}
+
+/** Find the editable table section of a blob by its stable `csv` key. */
+export function findEditableSection(data: AgencyExtended, sectionKey: string): AgencySection | null {
+  for (const s of data.sections ?? []) {
+    if (s.csv === sectionKey && s.table) return s;
+  }
+  return null;
+}
+
+/** The natural row key of a row = its first cell (Reg / Code / Callsign). */
+export function rowKeyOf(cells: string[]): string {
+  return (cells[0] ?? '').trim();
+}
+
+/**
+ * Apply a row change to an agency blob IN PLACE. Returns null on success or an
+ * error string (bad section / row not found / duplicate key). Does not persist.
+ */
+export function applyRowChangeInPlace(data: AgencyExtended, change: RowChange): string | null {
+  const section = findEditableSection(data, change.sectionKey);
+  if (!section || !section.table) return 'unknown section';
+  const rows = section.table.rows;
+  const width = section.table.headers.length;
+  const norm = (cells: string[] | undefined): string[] => {
+    const c = (cells ?? []).map((x) => String(x ?? ''));
+    // Pad/truncate to the header width so a row can't desync the table.
+    if (width > 0) {
+      while (c.length < width) c.push('');
+      if (c.length > width) c.length = width;
+    }
+    return c;
+  };
+
+  if (change.op === 'add') {
+    const cells = norm(change.afterCells);
+    const key = rowKeyOf(cells);
+    if (!key) return 'new row needs a value in the first column';
+    if (rows.some((r) => rowKeyOf(r) === key)) return `a row with ${section.table!.headers[0] || 'key'} "${key}" already exists`;
+    rows.push(cells);
+    return null;
+  }
+
+  const key = (change.rowKey ?? '').trim();
+  const idx = rows.findIndex((r) => rowKeyOf(r) === key);
+  if (idx === -1) return `row "${key}" not found (it may have changed)`;
+
+  if (change.op === 'delete') {
+    rows.splice(idx, 1);
+    return null;
+  }
+  // update
+  const cells = norm(change.afterCells);
+  if (!rowKeyOf(cells)) return 'row needs a value in the first column';
+  const newKey = rowKeyOf(cells);
+  if (newKey !== key && rows.some((r, i) => i !== idx && rowKeyOf(r) === newKey)) {
+    return `a row with ${section.table.headers[0] || 'key'} "${newKey}" already exists`;
+  }
+  rows[idx] = cells;
+  return null;
+}
+
+/**
+ * Transactionally apply an approved change to the stored blob. Locks the agency
+ * row (FOR UPDATE) so concurrent edits serialise. Returns null on success or an
+ * error string.
+ */
+export async function applyRowChange(pool: Pool, slug: string, change: RowChange): Promise<string | null> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query<{ data: AgencyExtended }>(
+      'SELECT data FROM agency_extended WHERE slug = $1 FOR UPDATE',
+      [slug],
+    );
+    const data = rows[0]?.data;
+    if (!data) {
+      await client.query('ROLLBACK');
+      return 'unknown agency';
+    }
+    const err = applyRowChangeInPlace(data, change);
+    if (err) {
+      await client.query('ROLLBACK');
+      return err;
+    }
+    await client.query(
+      'UPDATE agency_extended SET data = $2::jsonb, updated_at = now() WHERE slug = $1',
+      [slug, JSON.stringify(data)],
+    );
+    await client.query('COMMIT');
+    _cache = null;
+    return null;
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    log.error({ err: e, slug }, 'agencyData: applyRowChange failed');
+    return 'internal error applying change';
+  } finally {
+    client.release();
+  }
+}

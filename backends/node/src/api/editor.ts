@@ -612,12 +612,18 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
       [userId],
     );
     const hasRequest = (reqRes.rowCount ?? 0) > 0;
+    const isDataFeeder = userRoles.includes('data_feeder');
     return c.json({
       user_id: userId,
       has_access: hasAccess,
       is_owner: isOwner,
       is_team_member: isTeamMember,
       is_map_editor: isMapEditor,
+      is_data_feeder: isDataFeeder,
+      // Owner OR data_feeder may edit agency reference tables (owner instant,
+      // feeder via approval). Surfaced here so the public agency page can show
+      // the edit controls without a second round-trip.
+      can_edit_agency_data: isOwner || isDataFeeder,
       has_request: hasRequest,
       roles: userRoles,
     });
@@ -658,12 +664,17 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
       }
     }
 
+    const isDataFeeder = userRoles.includes('data_feeder');
     const canViewRequests = isOwner || isTeamMember;
     const canViewUsers = isOwner || isTeamMember;
     const canViewDev = isOwner || isDev;
     // Read access to the Data + Nodes pages. node_monitor gets the views but
     // NOT write access (can_manage_nodes stays owner|dev).
     const canViewNodeData = isOwner || isDev || isNodeMonitor;
+    // Owner|team_member review agency data-change requests (Requests tab
+    // dropdown). Owner|data_feeder EDIT the agency tables (on the agency page).
+    const canReviewAgencyData = isOwner || isTeamMember;
+    const canEditAgencyData = isOwner || isDataFeeder;
 
     return c.json({
       user_id: userId,
@@ -672,15 +683,19 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
       is_team_member: isTeamMember,
       is_dev: isDev,
       is_node_monitor: isNodeMonitor,
+      is_data_feeder: isDataFeeder,
       can_manage_users: canViewUsers,
       can_manage_nodes: isOwner || isDev,
       can_assign_privileged_roles: isOwner,
+      can_review_agency_data: canReviewAgencyData,
+      can_edit_agency_data: canEditAgencyData,
       tabs: {
         requests: canViewRequests,
         users: canViewUsers,
         dev: canViewDev,
         nodes: canViewNodeData,
         data: canViewNodeData,
+        data_changes: canReviewAgencyData,
       },
       roles: userRoles,
     });

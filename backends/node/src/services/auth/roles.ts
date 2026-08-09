@@ -130,6 +130,23 @@ export async function canEditIncidents(userId: string): Promise<boolean> {
   return hasRole(userId, ['owner', 'team_member', 'map_editor']);
 }
 
+/**
+ * Owner OR data_feeder — may edit agency reference tables (add/update/delete
+ * rows) on the agency page. Owner edits apply instantly; data_feeder edits
+ * become pending data-change requests needing review (see canReviewAgencyData).
+ */
+export async function canEditAgencyData(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'data_feeder']);
+}
+
+/**
+ * Owner OR team_member — may review (approve/reject) pending agency data-change
+ * requests. Mirrors the editor-request reviewer set.
+ */
+export async function canReviewAgencyData(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'team_member']);
+}
+
 export function isPrivilegedRole(role: string): boolean {
   return PRIVILEGED_ROLES.has(role);
 }
