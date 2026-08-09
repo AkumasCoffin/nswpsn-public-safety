@@ -1200,6 +1200,26 @@
     .requests-table tr:last-child td { border-bottom: none; }
     .requests-table tbody tr { transition: background 0.1s ease; }
     .requests-table tbody tr:hover td { background: rgba(56, 189, 248, 0.04); }
+    /* Requests-tab kind switcher + agency data-change review cards. */
+    .req-kind-bar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+    .req-kind-bar label { color: var(--text-soft); font-size: 0.85rem; }
+    .req-kind-bar select { background: rgba(0,0,0,0.25); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.4rem 0.7rem; font-family: inherit; font-size: 0.9rem; }
+    .req-kind-badge { background: rgba(234,179,8,0.16); color: #fbbf24; border: 1px solid rgba(234,179,8,0.4); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
+    .dc-card { background: var(--bg-card, #0e1728); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 0.8rem; }
+    .dc-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+    .dc-op { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.1rem 0.45rem; border-radius: 5px; }
+    .dc-op.add { background: rgba(34,197,94,0.16); color: #4ade80; }
+    .dc-op.update { background: rgba(56,189,248,0.16); color: #7dd3fc; }
+    .dc-op.delete { background: rgba(239,68,68,0.16); color: #f87171; }
+    .dc-agency { font-weight: 700; }
+    .dc-section { color: var(--text-soft); font-size: 0.82rem; }
+    .dc-meta { color: var(--text-soft); font-size: 0.74rem; margin-left: auto; }
+    .dc-cells { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; line-height: 1.5; word-break: break-word; }
+    .dc-cells.dc-old { color: #f87171; }
+    .dc-cells.dc-new { color: #4ade80; }
+    .dc-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
+    .dc-status { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; margin-top: 0.4rem; }
+    .dc-status.approved { color: #4ade80; } .dc-status.rejected { color: #f87171; } .dc-status.pending { color: #fbbf24; }
 
     .status-badge {
       display: inline-block;
@@ -1522,6 +1542,7 @@
     .role-badge.dev               { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
     .role-badge.owner             { background: rgba(234, 179, 8, 0.18);  color: #fbbf24; }
     .role-badge.node_monitor      { background: rgba(6, 182, 212, 0.18);  color: #22d3ee; }
+    .role-badge.data_feeder       { background: rgba(132, 204, 22, 0.18);  color: #a3e635; }
 
     .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
 
@@ -2114,40 +2135,66 @@
 
       <!-- Requests Tab -->
       <div id="requests-tab" class="tab-content active">
-        <div class="stats-bar">
-          <div class="stat-card pending">
-            <div class="stat-value" id="stat-pending">-</div>
-            <div class="stat-label">Pending</div>
+        <!-- Which kind of request to review: signups vs agency data changes -->
+        <div class="req-kind-bar">
+          <label for="req-kind">Reviewing</label>
+          <select id="req-kind" onchange="switchRequestsView(this.value)">
+            <option value="signup">Signup requests</option>
+            <option value="data">Data changes</option>
+          </select>
+          <span id="req-datachanges-badge" class="req-kind-badge" style="display:none;"></span>
+        </div>
+
+        <!-- Signup requests (existing) -->
+        <div id="requests-signup-view">
+          <div class="stats-bar">
+            <div class="stat-card pending">
+              <div class="stat-value" id="stat-pending">-</div>
+              <div class="stat-label">Pending</div>
+            </div>
+            <div class="stat-card approved">
+              <div class="stat-value" id="stat-approved">-</div>
+              <div class="stat-label">Approved</div>
+            </div>
+            <div class="stat-card rejected">
+              <div class="stat-value" id="stat-rejected">-</div>
+              <div class="stat-label">Rejected</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="stat-total">-</div>
+              <div class="stat-label">Total</div>
+            </div>
           </div>
-          <div class="stat-card approved">
-            <div class="stat-value" id="stat-approved">-</div>
-            <div class="stat-label">Approved</div>
+
+          <div class="filter-bar">
+            <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button>
+            <button class="filter-btn" data-filter="pending" onclick="setFilter('pending')">Pending</button>
+            <button class="filter-btn" data-filter="approved" onclick="setFilter('approved')">Approved</button>
+            <button class="filter-btn" data-filter="rejected" onclick="setFilter('rejected')">Rejected</button>
+            <div class="filter-spacer"></div>
+            <div class="search-box">
+              <i class="fas fa-search"></i>
+              <input type="text" id="request-search" placeholder="Search email, Discord, region..." oninput="renderRequests()">
+            </div>
           </div>
-          <div class="stat-card rejected">
-            <div class="stat-value" id="stat-rejected">-</div>
-            <div class="stat-label">Rejected</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-value" id="stat-total">-</div>
-            <div class="stat-label">Total</div>
+
+          <div id="requests-container">
+            <div class="loading">
+              <i class="fas fa-spinner"></i>
+            </div>
           </div>
         </div>
 
-        <div class="filter-bar">
-          <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button>
-          <button class="filter-btn" data-filter="pending" onclick="setFilter('pending')">Pending</button>
-          <button class="filter-btn" data-filter="approved" onclick="setFilter('approved')">Approved</button>
-          <button class="filter-btn" data-filter="rejected" onclick="setFilter('rejected')">Rejected</button>
-          <div class="filter-spacer"></div>
-          <div class="search-box">
-            <i class="fas fa-search"></i>
-            <input type="text" id="request-search" placeholder="Search email, Discord, region..." oninput="renderRequests()">
+        <!-- Agency data-change requests (new) -->
+        <div id="requests-datachanges-view" style="display:none;">
+          <div class="filter-bar">
+            <button class="filter-btn active" data-dcfilter="pending" onclick="setDcFilter('pending')">Pending</button>
+            <button class="filter-btn" data-dcfilter="approved" onclick="setDcFilter('approved')">Approved</button>
+            <button class="filter-btn" data-dcfilter="rejected" onclick="setDcFilter('rejected')">Rejected</button>
+            <button class="filter-btn" data-dcfilter="all" onclick="setDcFilter('all')">All</button>
           </div>
-        </div>
-
-        <div id="requests-container">
-          <div class="loading">
-            <i class="fas fa-spinner"></i>
+          <div id="datachanges-container">
+            <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
         </div>
       </div>
@@ -3101,6 +3148,11 @@
             <input type="checkbox" id="edit-role-node-monitor" style="width: 16px; height: 16px; accent-color: var(--accent);">
             <span>👁️ Node Monitor</span>
             <span style="color: var(--text-soft); font-size: 0.75rem;">- View-only Data + Nodes</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
+            <input type="checkbox" id="edit-role-data-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
+            <span>🗃️ Data Feeder</span>
+            <span style="color: var(--text-soft); font-size: 0.75rem;">- Edit agency tables (via approval)</span>
           </label>
           <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
@@ -9204,7 +9256,97 @@
       }
     }
     
+    // --- Agency data-change requests (Requests tab → "Data changes") ---
+    let _dcChanges = [];
+    let _dcFilter = 'pending';
+    function switchRequestsView(kind) {
+      const signup = document.getElementById('requests-signup-view');
+      const data = document.getElementById('requests-datachanges-view');
+      if (kind === 'data') {
+        if (signup) signup.style.display = 'none';
+        if (data) data.style.display = 'block';
+        loadDataChanges();
+      } else {
+        if (data) data.style.display = 'none';
+        if (signup) signup.style.display = 'block';
+      }
+    }
+    function setDcFilter(status) {
+      _dcFilter = status;
+      document.querySelectorAll('[data-dcfilter]').forEach(b => b.classList.toggle('active', b.dataset.dcfilter === status));
+      loadDataChanges();
+    }
+    function _dcUpdateBadge(n) {
+      const b = document.getElementById('req-datachanges-badge');
+      if (!b) return;
+      if (n && n > 0) { b.style.display = ''; b.textContent = n + ' pending'; }
+      else b.style.display = 'none';
+    }
+    // Lightweight pending-count refresh for the dropdown badge (called on tab load).
+    async function _dcRefreshBadge() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/agency/changes?status=pending`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) return;
+        const data = await res.json();
+        _dcUpdateBadge(data.pendingCount);
+      } catch (e) { /* ignore */ }
+    }
+    async function loadDataChanges() {
+      const el = document.getElementById('datachanges-container');
+      if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/agency/changes?status=${encodeURIComponent(_dcFilter)}`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        _dcChanges = data.changes || [];
+        _dcUpdateBadge(data.pendingCount);
+        renderDataChanges();
+      } catch (e) {
+        if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load data changes.</p></div>`;
+      }
+    }
+    function _dcCells(cells) { return (cells || []).map(c => escapeHtml(String(c))).join('  ·  '); }
+    function renderDataChanges() {
+      const el = document.getElementById('datachanges-container');
+      if (!el) return;
+      if (!_dcChanges.length) {
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-inbox"></i><p>No ${_dcFilter === 'all' ? '' : escapeHtml(_dcFilter)} data changes.</p></div>`;
+        return;
+      }
+      el.innerHTML = _dcChanges.map(ch => {
+        const when = ch.createdAt ? new Date(ch.createdAt).toLocaleString() : '';
+        const who = escapeHtml(ch.createdByName || ch.createdBy || 'someone');
+        let diff = '';
+        if (ch.op === 'add') diff = `<div class="dc-cells dc-new">+ ${_dcCells(ch.afterCells)}</div>`;
+        else if (ch.op === 'delete') diff = `<div class="dc-cells dc-old">− ${_dcCells(ch.beforeCells)}</div>`;
+        else diff = `<div class="dc-cells dc-old">− ${_dcCells(ch.beforeCells)}</div><div class="dc-cells dc-new">+ ${_dcCells(ch.afterCells)}</div>`;
+        const actions = ch.status === 'pending'
+          ? `<div class="dc-actions"><button class="btn btn-success btn-sm" onclick="dcAction(${ch.id}, 'approve')"><i class="fas fa-check"></i> Approve</button><button class="btn btn-danger btn-sm" onclick="dcAction(${ch.id}, 'reject')"><i class="fas fa-times"></i> Reject</button></div>`
+          : `<div class="dc-status ${escapeHtml(ch.status)}">${escapeHtml(ch.status)}${ch.reviewedByName ? ' · by ' + escapeHtml(ch.reviewedByName) : ''}</div>`;
+        return `<div class="dc-card">
+          <div class="dc-head">
+            <span class="dc-op ${escapeHtml(ch.op)}">${escapeHtml(ch.op)}</span>
+            <span class="dc-agency">${escapeHtml(ch.slug)}</span>
+            <span class="dc-section">${escapeHtml(ch.sectionTitle || ch.sectionKey || '')}</span>
+            <span class="dc-meta">${who} · ${escapeHtml(when)}</span>
+          </div>
+          ${diff}
+          ${actions}
+        </div>`;
+      }).join('');
+    }
+    async function dcAction(id, action) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/agency/changes/${id}/${action}`, { method: 'POST', headers: { 'Authorization': await authHeader() } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(data.error || (action + ' failed'), 'error'); return; }
+        showToast('Change ' + (action === 'approve' ? 'approved' : 'rejected'), 'success');
+        loadDataChanges();
+      } catch (e) { showToast(action + ' failed', 'error'); }
+    }
+
     async function loadRequests() {
+      _dcRefreshBadge();
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           headers: {
@@ -9374,7 +9516,8 @@
         'team_member': { icon: '👥', label: 'Team' },
         'dev': { icon: '💻', label: 'Dev' },
         'owner': { icon: '👑', label: 'Owner' },
-        'node_monitor': { icon: '👁️', label: 'Node Monitor' }
+        'node_monitor': { icon: '👁️', label: 'Node Monitor' },
+        'data_feeder': { icon: '🗃️', label: 'Data Feeder' }
       };
       
       const rows = shown.map(user => {
@@ -9541,6 +9684,7 @@
       document.getElementById('edit-role-pager-contributor').checked = userRoles.includes('pager_contributor');
       document.getElementById('edit-role-radio-contributor').checked = userRoles.includes('radio_contributor');
       document.getElementById('edit-role-node-monitor').checked = userRoles.includes('node_monitor');
+      document.getElementById('edit-role-data-feeder').checked = userRoles.includes('data_feeder');
       document.getElementById('edit-role-team-member').checked = userRoles.includes('team_member');
       document.getElementById('edit-role-dev').checked = userRoles.includes('dev');
       document.getElementById('edit-role-owner').checked = userRoles.includes('owner');
@@ -9568,6 +9712,7 @@
       if (document.getElementById('edit-role-pager-contributor').checked) roles.push('pager_contributor');
       if (document.getElementById('edit-role-radio-contributor').checked) roles.push('radio_contributor');
       if (document.getElementById('edit-role-node-monitor').checked) roles.push('node_monitor');
+      if (document.getElementById('edit-role-data-feeder').checked) roles.push('data_feeder');
       if (document.getElementById('edit-role-team-member').checked) roles.push('team_member');
       if (document.getElementById('edit-role-dev').checked) roles.push('dev');
       if (document.getElementById('edit-role-owner').checked) roles.push('owner');

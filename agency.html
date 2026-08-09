@@ -111,6 +111,150 @@
       return (params.get('slug') || '').trim().toLowerCase();
     }
 
+    // ===== Agency table editing (owner / data_feeder) =========================
+    let _agencyCanEdit = false;   // owner OR data_feeder
+    let _agencyIsOwner = false;   // owner edits apply instantly; feeder → approval
+    let _agencySlug = '';
+    const _agencyTables = {};     // sectionKey (csv) -> { headers, rows }
+
+    async function _agencyInitPerms() {
+      _agencyCanEdit = false; _agencyIsOwner = false;
+      try {
+        const { data } = await window.sb.auth.getSession();
+        const uid = data && data.session && data.session.user && data.session.user.id;
+        if (!uid) return;
+        const r = await fetch(`${API_BASE_URL}/api/check-editor/${uid}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        _agencyCanEdit = !!d.can_edit_agency_data;
+        _agencyIsOwner = !!d.is_owner;
+      } catch (e) { /* not logged in / offline → no edit controls */ }
+    }
+
+    function _agToast(msg, ok) {
+      let host = document.getElementById('ag-toast-host');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'ag-toast-host';
+        host.style.cssText = 'position:fixed;bottom:1.25rem;right:1.25rem;z-index:4000;display:flex;flex-direction:column;gap:0.5rem;';
+        document.body.appendChild(host);
+      }
+      const el = document.createElement('div');
+      el.textContent = msg;
+      el.style.cssText = `background:#0e1728;border:1px solid rgba(148,163,184,0.25);border-left:3px solid ${ok ? '#22c55e' : '#ef4444'};color:#f1f5f9;border-radius:10px;padding:0.7rem 1rem;font-size:0.85rem;max-width:340px;box-shadow:0 10px 30px -8px rgba(0,0,0,0.6);`;
+      host.appendChild(el);
+      setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 320); }, 3200);
+    }
+
+    function _agEnsureStyles() {
+      if (document.getElementById('ag-edit-styles')) return;
+      const st = document.createElement('style');
+      st.id = 'ag-edit-styles';
+      st.textContent = `
+        .ag-mini{background:rgba(255,255,255,0.06);border:1px solid rgba(148,163,184,0.25);border-radius:6px;color:#94a3b8;padding:0.3rem 0.5rem;font-size:0.8rem;cursor:pointer;margin-left:0.25rem;}
+        .ag-mini:hover{color:#f1f5f9;border-color:#38bdf8;}
+        .ag-mini.ag-danger:hover{color:#fca5a5;border-color:rgba(239,68,68,0.5);}
+        .ag-add{background:rgba(56,189,248,0.14);border:1px solid rgba(56,189,248,0.35);border-radius:8px;color:#bae6fd;padding:0.45rem 0.85rem;font-family:inherit;font-weight:600;font-size:0.85rem;cursor:pointer;}
+        .ag-add:hover{background:rgba(56,189,248,0.25);}
+        .ag-add:disabled{opacity:0.6;cursor:not-allowed;}
+        td.ag-row-actions{text-align:right;white-space:nowrap;}
+      `;
+      document.head.appendChild(st);
+    }
+
+    // Edit-controls markup appended to each editable table (owner/feeder only).
+    function _agRowActions(sectionKey, i) {
+      if (!_agencyCanEdit) return '';
+      return `<td class="ag-row-actions" style="white-space:nowrap;">
+        <button class="ag-mini" title="Edit row" onclick="agEditRow('${escapeHtml(sectionKey)}',${i})"><i class="fa-solid fa-pen"></i></button>
+        <button class="ag-mini ag-danger" title="Delete row" onclick="agDeleteRow('${escapeHtml(sectionKey)}',${i})"><i class="fa-solid fa-trash"></i></button>
+      </td>`;
+    }
+    function _agAddRowBar(sectionKey) {
+      if (!_agencyCanEdit) return '';
+      const hint = _agencyIsOwner ? '' : ' <span style="color:var(--text-soft);font-size:0.78rem;">— changes need approval</span>';
+      return `<div style="margin-top:0.6rem;"><button class="ag-add" onclick="agAddRow('${escapeHtml(sectionKey)}')"><i class="fa-solid fa-plus"></i> Add row</button>${hint}</div>`;
+    }
+
+    function agAddRow(sectionKey) { _agOpenEditor(sectionKey, null); }
+    function agEditRow(sectionKey, i) { _agOpenEditor(sectionKey, i); }
+
+    function _agOpenEditor(sectionKey, rowIndex) {
+      const tbl = _agencyTables[sectionKey];
+      if (!tbl) return;
+      const headers = tbl.headers || [];
+      const editing = rowIndex != null;
+      const cells = editing ? (tbl.rows[rowIndex] || []) : [];
+      const overlay = document.createElement('div');
+      overlay.className = 'ag-modal-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:4001;padding:1rem;';
+      const fields = headers.map((h, idx) => `
+        <label style="display:flex;flex-direction:column;gap:0.25rem;margin-bottom:0.7rem;">
+          <span style="font-size:0.8rem;color:var(--text-soft);">${escapeHtml(h)}</span>
+          <input class="ag-field" data-idx="${idx}" value="${escapeHtml(cells[idx] != null ? cells[idx] : '')}"
+            style="background:rgba(0,0,0,0.25);border:1px solid rgba(148,163,184,0.25);border-radius:8px;color:#f1f5f9;padding:0.5rem 0.7rem;font-family:inherit;font-size:0.9rem;">
+        </label>`).join('');
+      overlay.innerHTML = `
+        <div style="background:#0e1728;border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:1.3rem;max-width:520px;width:100%;max-height:85vh;overflow:auto;">
+          <h3 style="margin:0 0 0.9rem;font-size:1.1rem;">${editing ? 'Edit row' : 'Add row'}${_agencyIsOwner ? '' : ' <span style="font-size:0.7rem;color:#fbbf24;">· needs approval</span>'}</h3>
+          ${fields}
+          <div style="display:flex;gap:0.5rem;margin-top:0.4rem;">
+            <button class="ag-add" id="ag-save"><i class="fa-solid fa-check"></i> ${_agencyIsOwner ? 'Save' : 'Submit for approval'}</button>
+            <button class="ag-mini" id="ag-cancel" style="padding:0.45rem 0.8rem;">Cancel</button>
+          </div>
+        </div>`;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      overlay.querySelector('#ag-cancel').addEventListener('click', () => overlay.remove());
+      overlay.querySelector('#ag-save').addEventListener('click', async () => {
+        const after = Array.from(overlay.querySelectorAll('.ag-field')).map((el) => el.value);
+        const btn = overlay.querySelector('#ag-save');
+        btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+        const ok = await _agSubmit({
+          op: editing ? 'update' : 'add',
+          sectionKey,
+          rowKey: editing ? (cells[0] || '') : undefined,
+          beforeCells: editing ? cells : undefined,
+          afterCells: after,
+        });
+        if (ok) overlay.remove(); else { btn.disabled = false; btn.innerHTML = `<i class="fa-solid fa-check"></i> ${_agencyIsOwner ? 'Save' : 'Submit for approval'}`; }
+      });
+      document.body.appendChild(overlay);
+      const first = overlay.querySelector('.ag-field'); if (first) first.focus();
+    }
+
+    async function agDeleteRow(sectionKey, i) {
+      const tbl = _agencyTables[sectionKey];
+      if (!tbl) return;
+      const cells = tbl.rows[i] || [];
+      const label = cells[0] || 'this row';
+      if (!window.confirm(`${_agencyIsOwner ? 'Delete' : 'Request deletion of'} "${label}"?`)) return;
+      await _agSubmit({ op: 'delete', sectionKey, rowKey: cells[0] || '', beforeCells: cells });
+    }
+
+    async function _agSubmit(change) {
+      try {
+        const { data } = await window.sb.auth.getSession();
+        const token = data && data.session && data.session.access_token;
+        if (!token) { _agToast('Please log in again.', false); return false; }
+        const res = await fetch(`${API_BASE_URL}/api/agency/changes`, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug: _agencySlug, ...change }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { _agToast(body.error || 'Change failed', false); return false; }
+        if (body.applied) {
+          _agToast('Saved.', true);
+          // Owner edit applied instantly — refresh to show it.
+          if (window.AgencyJSON) window.AgencyJSON.extended = null;
+          setTimeout(() => location.reload(), 700);
+        } else {
+          _agToast('Submitted for approval.', true);
+        }
+        return true;
+      } catch (e) { _agToast('Change failed', false); return false; }
+    }
+
     function setNotFound(slug) {
       document.getElementById('agency-title').textContent = 'Agency not found';
       document.getElementById('agency-meta').textContent = slug
@@ -241,14 +385,18 @@
       return parts.join('') || '&nbsp;';
     }
 
-    function renderTable(table, tableClass) {
+    function renderTable(table, tableClass, sectionKey) {
       if (!table || !table.headers || !table.rows) return '';
+      const editable = _agencyCanEdit && !!sectionKey;
       const cls = ['table'].concat(tableClass ? [tableClass] : []).join(' ');
-      const thead = '<thead><tr>' + table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('') + '</tr></thead>';
-      const tbody = '<tbody>' + table.rows.map((row) =>
-        '<tr>' + row.map((cell) => `<td>${renderCellMarkup(cell || '')}</td>`).join('') + '</tr>'
+      const thead = '<thead><tr>' + table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')
+        + (editable ? '<th></th>' : '') + '</tr></thead>';
+      const tbody = '<tbody>' + table.rows.map((row, i) =>
+        '<tr>' + row.map((cell) => `<td>${renderCellMarkup(cell || '')}</td>`).join('')
+        + (editable ? _agRowActions(sectionKey, i) : '') + '</tr>'
       ).join('') + '</tbody>';
-      return `<div class="table-wrapper"><div class="table-scroll"><table class="${cls}">${thead}${tbody}</table></div></div>`;
+      const addBar = editable ? _agAddRowBar(sectionKey) : '';
+      return `<div class="table-wrapper"><div class="table-scroll"><table class="${cls}">${thead}${tbody}</table></div>${addBar}</div>`;
     }
 
     function renderOverviewBody(blocks) {
@@ -289,7 +437,8 @@
 
       if (s.type === 'table') {
         const intro = s.intro ? `<p>${escapeHtml(s.intro)}</p>` : '';
-        return `<article class="card${wide}">${header}<div class="card-body">${intro}${renderTable(s.table, s.table_class)}</div></article>`;
+        if (s.csv && s.table) _agencyTables[s.csv] = s.table;
+        return `<article class="card${wide}">${header}<div class="card-body">${intro}${renderTable(s.table, s.table_class, s.csv)}</div></article>`;
       }
       if (s.type === 'grouped-table') {
         const intro = s.intro ? `<p>${escapeHtml(s.intro)}</p>` : '';
@@ -331,6 +480,12 @@
     async function renderExtended(slug) {
       const grid = document.getElementById('agency-content');
       if (!grid) return;
+      // Reset per-agency edit state and resolve the viewer's edit permission
+      // before rendering (renderSection/renderTable consult _agencyCanEdit).
+      _agencySlug = slug;
+      Object.keys(_agencyTables).forEach((k) => delete _agencyTables[k]);
+      _agEnsureStyles();
+      await _agencyInitPerms();
       let data;
       try {
         // Shared cache from agencies.js — avoids a duplicate fetch.
