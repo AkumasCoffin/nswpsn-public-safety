@@ -53,6 +53,10 @@ export const PUBLIC_ENDPOINTS = new Set<string>([
   // an exact match so the prefix doesn't over-match sibling routes like
   // '/api/centralwatch/cameras-admin'.
   '/api/centralwatch/cameras',
+  // Agency reference tables — replaces the public static agency-extended.json,
+  // so the read stays public (the agency page needs no login). Write/edit
+  // endpoints under /api/agency/ are gated per-handler, NOT listed here.
+  '/api/agency/extended',
 ]);
 
 // Prefix-match public endpoints — mirrors python's PUBLIC_ENDPOINT_PREFIXES
@@ -73,6 +77,9 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // Node self-update manifest. Same story: the node authenticates with its
   // feeder token (X-Node-Token), verified inside the handler.
   '/api/node-updates/',
+  // Per-agency reference tables (/api/agency/extended/:slug) — public read,
+  // matching the exact /api/agency/extended above.
+  '/api/agency/extended/',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {

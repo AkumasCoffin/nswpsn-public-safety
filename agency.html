@@ -336,7 +336,7 @@
         // Shared cache from agencies.js — avoids a duplicate fetch.
         data = await (window.AgencyJSON && window.AgencyJSON.loadExtended
           ? window.AgencyJSON.loadExtended()
-          : fetch('agency-extended.json').then((r) => r.ok ? r.json() : { agencies: {} }));
+          : fetch(`${(typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz'}/api/agency/extended`).then((r) => r.ok ? r.json() : { agencies: {} }));
       } catch (e) {
         return;
       }

@@ -308,7 +308,10 @@
     },
     loadExtended() {
       if (!this.extended) {
-        this.extended = fetch("agency-extended.json").then((r) => {
+        // Served live from the backend (CSV source of truth), replacing the old
+        // committed agency-extended.json. API_BASE_URL comes from auth-common.js.
+        const base = (typeof API_BASE_URL !== "undefined") ? API_BASE_URL : "https://api.forcequit.xyz";
+        this.extended = fetch(`${base}/api/agency/extended`).then((r) => {
           if (!r.ok) return { agencies: {} };
           return r.json();
         }).catch(() => ({ agencies: {} }));
