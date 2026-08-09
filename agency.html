@@ -158,8 +158,52 @@
         .ag-add:hover{background:rgba(56,189,248,0.25);}
         .ag-add:disabled{opacity:0.6;cursor:not-allowed;}
         td.ag-row-actions{text-align:right;white-space:nowrap;}
+        /* Edit controls are in the DOM for editors but only shown when edit mode
+           is toggled ON (body.ag-edit-on). Off by default. */
+        .ag-actions-th,.ag-row-actions{display:none;}
+        .ag-add-bar{display:none;}
+        body.ag-edit-on .ag-actions-th,body.ag-edit-on .ag-row-actions{display:table-cell;}
+        body.ag-edit-on .ag-add-bar{display:block;}
       `;
       document.head.appendChild(st);
+    }
+
+    // --- Edit-mode toggle (sidebar account panel) ---
+    let _agEditMode = (function () { try { return localStorage.getItem('agEditMode') === '1'; } catch (e) { return false; } })();
+    function _agApplyEditModeClass() {
+      document.body.classList.toggle('ag-edit-on', !!(_agEditMode && _agencyCanEdit));
+    }
+    function agToggleEditMode() {
+      _agEditMode = !_agEditMode;
+      try { localStorage.setItem('agEditMode', _agEditMode ? '1' : '0'); } catch (e) { /* ignore */ }
+      _agApplyEditModeClass();
+      _agInjectEditToggle();
+    }
+    function _agEditToggleHtml() {
+      const on = _agEditMode;
+      const bg = on ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.1)';
+      const bd = on ? 'rgba(34,197,94,0.4)' : 'rgba(148,163,184,0.25)';
+      const col = on ? '#4ade80' : '#cbd5e1';
+      return `<button id="ag-editmode-btn" onclick="agToggleEditMode()" title="Toggle edit mode for agency tables"
+        style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:${bg}; border:1px solid ${bd}; border-radius:6px; color:${col}; font-size:0.72rem; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap;">
+        <i class="fas fa-pen"></i> Edit mode: ${on ? 'On' : 'Off'}</button>`;
+    }
+    // Place the toggle in the sidebar account panel (below the role chips). The
+    // account panel is injected by auth-common.js, possibly after us — the caller
+    // retries until it exists.
+    function _agInjectEditToggle() {
+      if (!_agencyCanEdit) return false;
+      const panel = document.getElementById('auth-logged-in');
+      if (!panel) return false;
+      let wrap = document.getElementById('ag-editmode-wrap');
+      if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.id = 'ag-editmode-wrap';
+        wrap.style.cssText = 'display:flex; gap:0.4rem; margin-top:0.4rem;';
+        panel.appendChild(wrap);
+      }
+      wrap.innerHTML = _agEditToggleHtml();
+      return true;
     }
 
     // Edit-controls markup appended to each editable table (owner/feeder only).
@@ -173,7 +217,7 @@
     function _agAddRowBar(sectionKey) {
       if (!_agencyCanEdit) return '';
       const hint = _agencyIsOwner ? '' : ' <span style="color:var(--text-soft);font-size:0.78rem;">— changes need approval</span>';
-      return `<div style="margin-top:0.6rem;"><button class="ag-add" onclick="agAddRow('${escapeHtml(sectionKey)}')"><i class="fa-solid fa-plus"></i> Add row</button>${hint}</div>`;
+      return `<div class="ag-add-bar" style="margin-top:0.6rem;"><button class="ag-add" onclick="agAddRow('${escapeHtml(sectionKey)}')"><i class="fa-solid fa-plus"></i> Add row</button>${hint}</div>`;
     }
 
     function agAddRow(sectionKey) { _agOpenEditor(sectionKey, null); }
@@ -390,7 +434,7 @@
       const editable = _agencyCanEdit && !!sectionKey;
       const cls = ['table'].concat(tableClass ? [tableClass] : []).join(' ');
       const thead = '<thead><tr>' + table.headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')
-        + (editable ? '<th></th>' : '') + '</tr></thead>';
+        + (editable ? '<th class="ag-actions-th"></th>' : '') + '</tr></thead>';
       const tbody = '<tbody>' + table.rows.map((row, i) =>
         '<tr>' + row.map((cell) => `<td>${renderCellMarkup(cell || '')}</td>`).join('')
         + (editable ? _agRowActions(sectionKey, i) : '') + '</tr>'
@@ -486,6 +530,15 @@
       Object.keys(_agencyTables).forEach((k) => delete _agencyTables[k]);
       _agEnsureStyles();
       await _agencyInitPerms();
+      _agApplyEditModeClass();
+      // The sidebar account panel is injected by auth-common.js, possibly after
+      // us — retry the toggle injection briefly until it lands.
+      if (_agencyCanEdit && !_agInjectEditToggle()) {
+        let tries = 0;
+        const iv = setInterval(() => {
+          if (_agInjectEditToggle() || ++tries > 25) clearInterval(iv);
+        }, 200);
+      }
       let data;
       try {
         // Shared cache from agencies.js — avoids a duplicate fetch.
