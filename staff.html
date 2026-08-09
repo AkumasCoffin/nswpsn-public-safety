@@ -924,6 +924,16 @@
     .nd-ch-actions { display: flex; gap: 0.3rem; justify-content: flex-end; }
     .nd-ch-livecol { display: flex; align-items: center; gap: 0.4rem; }
     .nd-ch-livebtn { padding: 0.22rem 0.5rem; line-height: 1; }
+    /* Decode-health % + signal bar (from vce ControlChannelQualityMonitor). */
+    .nd-qual { display: inline-flex; align-items: center; gap: 0.35rem; }
+    .nd-sync { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 0.72rem; color: #94a3b8; }
+    .nd-sync.good { color: #4ade80; }
+    .nd-sync.ok   { color: #fbbf24; }
+    .nd-sync.weak { color: #f87171; }
+    .nd-sig { display: inline-block; width: 32px; height: 6px; border-radius: 3px;
+      background: rgba(148, 163, 184, 0.22); overflow: hidden; }
+    .nd-sig-fill { display: block; height: 100%; background: linear-gradient(90deg, #38bdf8, #22d3ee); }
+    .nd-np-qual { margin-top: 0.3rem; }
     /* Per-decoder settings sub-row (expand/collapse under a channel). */
     .nd-ch-detail-row > td {
       background: rgba(56, 189, 248, 0.035);
@@ -7213,7 +7223,29 @@
           ? `<button class="btn btn-danger btn-sm nd-ch-livebtn" onclick="_ndChannel(${match.index}, false)" title="Stop this channel"><i class="fas fa-stop"></i></button>`
           : `<button class="btn btn-success btn-sm nd-ch-livebtn" onclick="_ndChannel(${match.index}, true)" title="Start this channel"><i class="fas fa-play"></i></button>`;
       }
-      return `<div class="nd-ch-livecol"><span class="nd-state ${cls}">${escapeHtml(label)}</span>${btn}</div>${ft}`;
+      return `<div class="nd-ch-livecol"><span class="nd-state ${cls}">${escapeHtml(label)}</span>${_ndQualityHtml(live)}${btn}</div>${ft}`;
+    }
+
+    // Decode-health % + signal bar from vce's ControlChannelQualityMonitor
+    // (syncPercent 0-100, signalDbfs negative). Returns '' when neither is
+    // present (e.g. a dynamically-allocated traffic call, which vce doesn't
+    // quality-monitor). Signal maps -90 dBFS (noise) .. -10 dBFS (strong) → 0-100%.
+    function _ndSyncPct(v) { return (v == null || Number.isNaN(Number(v))) ? null : Math.max(0, Math.min(100, Math.round(Number(v)))); }
+    function _ndSignalPct(dbfs) {
+      if (dbfs == null || Number.isNaN(Number(dbfs))) return null;
+      const lo = -90, hi = -10;
+      return Math.max(0, Math.min(100, Math.round((Number(dbfs) - lo) / (hi - lo) * 100)));
+    }
+    function _ndQualityHtml(c) {
+      if (!c) return '';
+      const sync = _ndSyncPct(c.syncPercent);
+      const sig = _ndSignalPct(c.signalDbfs);
+      if (sync == null && sig == null) return '';
+      const cls = sync == null ? '' : (sync >= 85 ? ' good' : (sync >= 60 ? ' ok' : ' weak'));
+      const syncTxt = sync == null ? '' : `<span class="nd-sync${cls}" title="decode health">${sync}%</span>`;
+      const bar = sig == null ? ''
+        : `<span class="nd-sig" title="signal ${Math.round(Number(c.signalDbfs))} dBFS"><span class="nd-sig-fill" style="width:${sig}%"></span></span>`;
+      return `<span class="nd-qual">${syncTxt}${bar}</span>`;
     }
 
     function _ndRenderChannels() {
@@ -7477,12 +7509,14 @@
         const sys = [c.system, c.site].filter(Boolean).join(' · ');
         const freq = c.frequency != null ? (c.frequency / 1e6).toFixed(4) + ' MHz' : '';
         const sub = [chan, sys, freq].filter(Boolean).join(' · ');
+        const qh = _ndQualityHtml(c);
         return `<div class="nd-np-card">
           <span class="nd-np-live"></span>
           <div class="nd-np-main">
             <div class="nd-np-tg">${escapeHtml(String(tg))}</div>
             <div class="nd-np-ft">${escapeHtml(String(fromLbl))} → ${escapeHtml(String(tg))}${talker}</div>
             ${sub ? `<div class="nd-np-sub">${escapeHtml(sub)}</div>` : ''}
+            ${qh ? `<div class="nd-np-qual">${qh}</div>` : ''}
           </div>
           <div class="nd-np-elapsed" data-cid="${escapeHtml(key)}">${elapsed}</div>
         </div>`;

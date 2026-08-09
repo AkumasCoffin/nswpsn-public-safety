@@ -83,22 +83,29 @@ type Channel struct {
 	TalkerAlias *string `json:"talkerAlias"`
 	Timeslot    *int    `json:"timeslot"`
 	Frequency   *int64  `json:"frequency"`
+	// Live decode-health % (0-100) and signal level (dBFS) from vce's
+	// ControlChannelQualityMonitor. Null unless this is a standard/control
+	// channel with a fresh snapshot.
+	SyncPercent *float64 `json:"syncPercent"`
+	SignalDbfs  *float64 `json:"signalDbfs"`
 }
 
 // ActiveCall mirrors one element of the "activeCalls" array of GET /channels.
 type ActiveCall struct {
-	State       string  `json:"state"`
-	Control     bool    `json:"control"`
-	ChannelID   int     `json:"channelId"`
-	ChannelName string  `json:"channelName"`
-	From        *string `json:"from"`
-	FromAlias   *string `json:"fromAlias"`
-	To          *string `json:"to"`
-	Talkgroup   *string `json:"talkgroup"`
-	ToAlias     *string `json:"toAlias"`
-	TalkerAlias *string `json:"talkerAlias"`
-	Timeslot    *int    `json:"timeslot"`
-	Frequency   *int64  `json:"frequency"`
+	State       string   `json:"state"`
+	Control     bool     `json:"control"`
+	ChannelID   int      `json:"channelId"`
+	ChannelName string   `json:"channelName"`
+	From        *string  `json:"from"`
+	FromAlias   *string  `json:"fromAlias"`
+	To          *string  `json:"to"`
+	Talkgroup   *string  `json:"talkgroup"`
+	ToAlias     *string  `json:"toAlias"`
+	TalkerAlias *string  `json:"talkerAlias"`
+	Timeslot    *int     `json:"timeslot"`
+	Frequency   *int64   `json:"frequency"`
+	SyncPercent *float64 `json:"syncPercent"`
+	SignalDbfs  *float64 `json:"signalDbfs"`
 }
 
 // Event mirrors one element of GET /events.
