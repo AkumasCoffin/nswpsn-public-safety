@@ -205,22 +205,37 @@ agencyRouter.post('/api/agency/changes/:id/approve', requireRole(canReviewAgency
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.json({ error: 'bad id' }, 400);
   try {
-    const { rows } = await pool.query<ChangeRow>('SELECT * FROM agency_data_change WHERE id = $1', [id]);
+    const name = await getUsername(userId).catch(() => null);
+    // Atomically claim the pending change so two concurrent approvals can't both
+    // pass a status check and double-apply. Only the reviewer whose UPDATE flips
+    // pending→approved proceeds to apply the row change.
+    const { rows } = await pool.query<ChangeRow>(
+      `UPDATE agency_data_change SET status='approved', reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now()
+       WHERE id=$1 AND status='pending' RETURNING *`,
+      [id, userId, name],
+    );
     const ch = rows[0];
-    if (!ch) return c.json({ error: 'not found' }, 404);
-    if (ch.status !== 'pending') return c.json({ error: `already ${ch.status}` }, 409);
+    if (!ch) {
+      // Lost the claim: the row is gone or another reviewer already handled it.
+      const cur = await pool.query<{ status: string }>('SELECT status FROM agency_data_change WHERE id=$1', [id]);
+      if (!cur.rows[0]) return c.json({ error: 'not found' }, 404);
+      return c.json({ error: `already ${cur.rows[0].status}` }, 409);
+    }
     const err = await applyRowChange(pool, ch.slug, {
       sectionKey: ch.section_key,
       op: ch.op,
       rowKey: ch.row_key ?? undefined,
       afterCells: ch.after_cells ?? undefined,
     });
-    if (err) return c.json({ error: err }, 400); // stays pending so the reviewer can see why
-    const name = await getUsername(userId).catch(() => null);
-    await pool.query(
-      "UPDATE agency_data_change SET status='approved', reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now() WHERE id=$1",
-      [id, userId, name],
-    );
+    if (err) {
+      // Apply failed — release the claim so the reviewer can see it's still
+      // pending (and why) rather than leaving it stuck as approved-but-unapplied.
+      await pool.query(
+        "UPDATE agency_data_change SET status='pending', reviewed_by=NULL, reviewed_by_name=NULL, reviewed_at=NULL WHERE id=$1",
+        [id],
+      );
+      return c.json({ error: err }, 400);
+    }
     return c.json({ ok: true });
   } catch (err) {
     log.error({ err, id }, 'agency change approve failed');

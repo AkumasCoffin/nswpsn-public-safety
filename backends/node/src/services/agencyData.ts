@@ -170,7 +170,11 @@ export async function getAllAgencyExtended(): Promise<Record<string, AgencyExten
     );
     for (const r of rows) out[r.slug] = r.data;
   } catch (e) {
+    // Don't cache on error: a transient DB blip must not pin an empty result
+    // (which would blank the public agency page until the next edit). Return
+    // the empty map for this request only and let the next call retry.
     log.error({ err: e }, 'agencyData: read failed');
+    return out;
   }
   _cache = out;
   return out;
