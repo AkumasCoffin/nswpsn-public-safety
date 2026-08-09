@@ -163,7 +163,7 @@
         .ag-actions-th,.ag-row-actions{display:none;}
         .ag-add-bar{display:none;}
         body.ag-edit-on .ag-actions-th,body.ag-edit-on .ag-row-actions{display:table-cell;}
-        body.ag-edit-on .ag-add-bar{display:block;}
+        body.ag-edit-on .ag-add-bar{display:block; margin:0.9rem 0.35rem 0.7rem;}
       `;
       document.head.appendChild(st);
     }
@@ -217,7 +217,7 @@
     function _agAddRowBar(sectionKey) {
       if (!_agencyCanEdit) return '';
       const hint = _agencyIsOwner ? '' : ' <span style="color:var(--text-soft);font-size:0.78rem;">— changes need approval</span>';
-      return `<div class="ag-add-bar" style="margin-top:0.6rem;"><button class="ag-add" onclick="agAddRow('${escapeHtml(sectionKey)}')"><i class="fa-solid fa-plus"></i> Add row</button>${hint}</div>`;
+      return `<div class="ag-add-bar"><button class="ag-add" onclick="agAddRow('${escapeHtml(sectionKey)}')"><i class="fa-solid fa-plus"></i> Add row</button>${hint}</div>`;
     }
 
     function agAddRow(sectionKey) { _agOpenEditor(sectionKey, null); }
