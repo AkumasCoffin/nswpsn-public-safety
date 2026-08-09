@@ -8,19 +8,19 @@
  * data was previously a public static asset).
  */
 import { Hono } from 'hono';
-import { loadAllAgencyExtended, getAgencyExtended } from '../services/agencyData.js';
+import { getAllAgencyExtended, getAgencyExtended } from '../services/agencyData.js';
 
 export const agencyRouter = new Hono();
 
-agencyRouter.get('/api/agency/extended', (c) => {
-  c.header('Cache-Control', 'public, max-age=300');
-  return c.json({ agencies: loadAllAgencyExtended() });
+agencyRouter.get('/api/agency/extended', async (c) => {
+  c.header('Cache-Control', 'public, max-age=60');
+  return c.json({ agencies: await getAllAgencyExtended() });
 });
 
-agencyRouter.get('/api/agency/extended/:slug', (c) => {
+agencyRouter.get('/api/agency/extended/:slug', async (c) => {
   const slug = c.req.param('slug');
-  const agency = getAgencyExtended(slug);
+  const agency = await getAgencyExtended(slug);
   if (!agency) return c.json({ error: 'unknown agency' }, 404);
-  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Cache-Control', 'public, max-age=60');
   return c.json({ slug, ...agency });
 });

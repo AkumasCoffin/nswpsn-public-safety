@@ -44,6 +44,7 @@ import {
   stopRdioSummaryScheduler,
 } from './services/llm.js';
 import { ensureSessionTables } from './services/dashboardSession.js';
+import { seedAgencyDataIfEmpty } from './services/agencyData.js';
 import { closeBotDbPool } from './services/botDb.js';
 import { centralwatchBrowser } from './services/centralwatchBrowser.js';
 import { marinetrafficBrowser } from './services/marinetrafficBrowser.js';
@@ -176,6 +177,15 @@ async function preflight(): Promise<void> {
     await ensureSessionTables();
   } catch (err) {
     log.warn({ err }, 'dashboard session table hydrate failed (non-fatal)');
+  }
+
+  // One-time import of the agency reference tables (data/Extended CSVs) into
+  // Postgres. No-op once agency_extended is populated; the DB is authoritative
+  // thereafter.
+  try {
+    await seedAgencyDataIfEmpty();
+  } catch (err) {
+    log.warn({ err }, 'agency data seed failed (non-fatal)');
   }
 
   // Centralwatch: kick the Playwright worker init off (non-blocking;

@@ -1,20 +1,21 @@
 /**
- * Agency reference data ("Extended" tables) — served straight from the CSV
- * source, replacing the committed agency-extended.json compile-and-commit step.
+ * Agency reference data ("Extended" tables).
  *
- * Source of truth: data/Extended/<slug>/meta.json + one CSV per table section
- * (the same layout the old scripts/build-extended-data.py read). This module
- * loads that tree once, resolves each section's `csv` reference into a
- * {headers, rows} table, and caches the result. The API layer serves it whole
- * (/api/agency/extended) or per-agency (/api/agency/extended/:slug).
+ * Source of truth is Postgres (agency_extended). The data/Extended CSV tree is
+ * used ONCE, as a seed: on startup, if agency_extended is empty, we import the
+ * CSVs (meta.json + one CSV per table section) into the DB. After that the DB is
+ * authoritative — reads come from it and edits are applied to it.
  *
- * The `csv` field is KEPT on each resolved section (the Python build deleted it)
- * because it is the stable per-agency section key the row-edit feature uses.
+ * Each agency row stores the whole {title, tag, badges, overview, sections} blob
+ * the agency page renders; each table section carries an inline {headers, rows}
+ * plus its `csv` field, which is the STABLE section key the row-edit feature uses.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Pool } from 'pg';
 import { parseCsvRows } from '../api/node-data.js';
+import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +42,8 @@ export interface AgencyExtended {
   sections: AgencySection[];
 }
 
-/** Candidate locations for data/Extended, mirroring node-data's data-path resolution. */
+// ── CSV seed loader (used once to import into the DB) ───────────────────────
+
 function extendedDirCandidates(): string[] {
   const env = (process.env['AGENCY_EXTENDED_DIR'] ?? '').trim();
   const rel = 'data/Extended';
@@ -53,27 +55,17 @@ function extendedDirCandidates(): string[] {
   ];
 }
 
-let _extendedDir: string | null | undefined;
 function extendedDir(): string | null {
-  if (_extendedDir !== undefined) return _extendedDir;
-  _extendedDir = null;
   for (const c of extendedDirCandidates()) {
     try {
-      if (statSync(c).isDirectory()) {
-        _extendedDir = c;
-        break;
-      }
+      if (statSync(c).isDirectory()) return c;
     } catch {
-      /* try next candidate */
+      /* next */
     }
   }
-  if (!_extendedDir) {
-    log.warn({ candidates: extendedDirCandidates() }, 'agencyData: data/Extended dir not found');
-  }
-  return _extendedDir;
+  return null;
 }
 
-/** Parse one CSV file into {headers, rows}, dropping fully-blank trailing rows. */
 function readTable(dir: string, csv: string): AgencyTable {
   try {
     const rows = parseCsvRows(readFileSync(path.join(dir, csv), 'utf8')).filter(
@@ -82,17 +74,14 @@ function readTable(dir: string, csv: string): AgencyTable {
     if (!rows.length) return { headers: [], rows: [] };
     return { headers: rows[0] ?? [], rows: rows.slice(1) };
   } catch (e) {
-    log.warn({ err: e, csv }, 'agencyData: failed to read table csv');
+    log.warn({ err: e, csv }, 'agencyData: failed to read seed csv');
     return { headers: [], rows: [] };
   }
 }
 
-/** Resolve a section's `csv` (and any group `csv`) into an inline table. */
 function resolveSection(section: Record<string, unknown>, dir: string): AgencySection {
   const s: AgencySection = { ...section };
-  if (typeof s.csv === 'string') {
-    s.table = readTable(dir, s.csv);
-  }
+  if (typeof s.csv === 'string') s.table = readTable(dir, s.csv);
   if (Array.isArray(s.groups)) {
     s.groups = s.groups.map((g) => {
       const gg = { ...g };
@@ -103,15 +92,12 @@ function resolveSection(section: Record<string, unknown>, dir: string): AgencySe
   return s;
 }
 
-let _cache: Record<string, AgencyExtended> | null = null;
-
-/** Load + cache every agency's extended data. Cheap, static; reload() clears it. */
-export function loadAllAgencyExtended(): Record<string, AgencyExtended> {
-  if (_cache) return _cache;
+/** Parse the whole data/Extended CSV tree into per-slug blobs (the DB seed). */
+export function loadCsvSeed(): Record<string, AgencyExtended> {
   const out: Record<string, AgencyExtended> = {};
   const dir = extendedDir();
   if (!dir) {
-    _cache = out;
+    log.warn({ candidates: extendedDirCandidates() }, 'agencyData: data/Extended dir not found for seed');
     return out;
   }
   for (const name of readdirSync(dir).sort()) {
@@ -125,7 +111,7 @@ export function loadAllAgencyExtended(): Record<string, AgencyExtended> {
     try {
       meta = JSON.parse(readFileSync(path.join(adir, 'meta.json'), 'utf8'));
     } catch {
-      continue; // no/invalid meta.json → skip, mirroring the Python build
+      continue;
     }
     const sections = Array.isArray(meta.sections)
       ? (meta.sections as Record<string, unknown>[]).map((s) => resolveSection(s, adir))
@@ -138,16 +124,73 @@ export function loadAllAgencyExtended(): Record<string, AgencyExtended> {
       sections,
     };
   }
-  _cache = out;
-  log.info({ agencies: Object.keys(out).length }, 'agencyData: loaded extended agency data');
   return out;
 }
 
-/** Drop the cache so the next read re-parses the CSV tree (used after edits). */
-export function reloadAgencyExtended(): void {
+// ── DB-backed reads (authoritative after seed) ──────────────────────────────
+
+let _cache: Record<string, AgencyExtended> | null = null;
+
+/** One-time import of the CSV seed into agency_extended when the table is empty. */
+export async function seedAgencyDataIfEmpty(): Promise<void> {
+  const pool = await getPool();
+  if (!pool) return;
+  try {
+    const { rows } = await pool.query<{ n: string }>('SELECT COUNT(*)::int AS n FROM agency_extended');
+    if (Number(rows[0]?.n ?? 0) > 0) return; // already seeded
+    const seed = loadCsvSeed();
+    const slugs = Object.keys(seed);
+    if (!slugs.length) {
+      log.warn('agencyData: CSV seed empty — nothing imported');
+      return;
+    }
+    for (const slug of slugs) {
+      await pool.query(
+        `INSERT INTO agency_extended (slug, data) VALUES ($1, $2::jsonb)
+         ON CONFLICT (slug) DO NOTHING`,
+        [slug, JSON.stringify(seed[slug])],
+      );
+    }
+    _cache = null;
+    log.info({ agencies: slugs.length }, 'agencyData: seeded agency_extended from CSV tree');
+  } catch (e) {
+    log.error({ err: e }, 'agencyData: seed failed');
+  }
+}
+
+/** All agencies keyed by slug, cached in memory until an edit invalidates it. */
+export async function getAllAgencyExtended(): Promise<Record<string, AgencyExtended>> {
+  if (_cache) return _cache;
+  const pool = await getPool();
+  if (!pool) return {};
+  const out: Record<string, AgencyExtended> = {};
+  try {
+    const { rows } = await pool.query<{ slug: string; data: AgencyExtended }>(
+      'SELECT slug, data FROM agency_extended',
+    );
+    for (const r of rows) out[r.slug] = r.data;
+  } catch (e) {
+    log.error({ err: e }, 'agencyData: read failed');
+  }
+  _cache = out;
+  return out;
+}
+
+export async function getAgencyExtended(slug: string): Promise<AgencyExtended | null> {
+  return (await getAllAgencyExtended())[slug] ?? null;
+}
+
+/** Drop the in-memory cache so the next read re-queries the DB (after an edit). */
+export function invalidateAgencyCache(): void {
   _cache = null;
 }
 
-export function getAgencyExtended(slug: string): AgencyExtended | null {
-  return loadAllAgencyExtended()[slug] ?? null;
+/** Persist a mutated agency blob and invalidate the cache. */
+export async function saveAgencyExtended(pool: Pool, slug: string, data: AgencyExtended): Promise<void> {
+  await pool.query(
+    `INSERT INTO agency_extended (slug, data, updated_at) VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (slug) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [slug, JSON.stringify(data)],
+  );
+  _cache = null;
 }
