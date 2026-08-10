@@ -244,10 +244,36 @@ export async function runBatchOnce(): Promise<{
   // true once we flipped to fetch, defeating the fetch fast-path.
   lastStrategyRetryAt = now;
 
+  // TEMP DIAGNOSTIC (remove once the image-cache cause is found): neither
+  // fetch path logs per-image status, so a whole-pass failure is otherwise
+  // silent. When a pass caches nothing, probe a few images via the
+  // status-bearing fetch() path and surface the raw upstream result
+  // (403/404/429 vs content-type vs too-small) at warn level.
+  if (cached === 0 && inputs.length > 0) {
+    try {
+      const probe = await centralwatchBrowser.fetchImagesBatch(inputs.slice(0, 3));
+      log.warn(
+        {
+          sampleUrls: inputs.slice(0, 3).map((i) => i.url),
+          probe: probe.map((r) => ({
+            id: r.id,
+            ok: r.ok,
+            status: r.status,
+            size: r.bytes?.length,
+            contentType: r.contentType,
+            retryAfter: r.retryAfter,
+            error: r.error,
+          })),
+        },
+        'centralwatch image batch DIAGNOSTIC: 0 cached this pass',
+      );
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, 'centralwatch image batch DIAGNOSTIC probe threw');
+    }
+  }
+
   const { evicted, remaining } = cleanup(activeIds);
-  // Demoted to debug — 30 s cadence drowns the log otherwise. The
-  // info-level warning still fires on every fetch failure inside the
-  // browser worker, which is the only signal worth surfacing here.
+  // Demoted to debug — 30 s cadence drowns the log otherwise.
   log.debug(
     `centralwatch image batch: ${cached}/${inputs.length} cached, ${evicted} evicted, size=${remaining} (${domPath}/${lastStrategy})`,
   );
