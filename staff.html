@@ -9837,7 +9837,8 @@
         const typeLabels = {
           'editor': '📝 Editor',
           'pager_feeder': '📟 Pager',
-          'radio_feeder': '📻 Radio'
+          'radio_feeder': '📻 Radio',
+          'other': '🙋 Other'
         };
         const typesHtml = (req.request_type || []).map(t => `<span class="type-badge">${typeLabels[t] || escapeHtml(t)}</span>`).join(' ') || '—';
         
@@ -9946,7 +9947,8 @@
       const typeLabels = {
         'editor': '📝 Map Editor',
         'pager_feeder': '📟 Pager Feeder',
-        'radio_feeder': '📻 Radio Feeder'
+        'radio_feeder': '📻 Radio Feeder',
+        'other': '🙋 Other (staff / general — no default role)'
       };
       const requestedTypes = (req.request_type || []).map(t => typeLabels[t] || t).join(', ') || 'Not specified';
       document.getElementById('confirm-requested').textContent = requestedTypes;
@@ -10180,7 +10182,8 @@
       const typeLabels = {
         'editor': '📝 Map Editor',
         'pager_feeder': '📟 Pager Feeder',
-        'radio_feeder': '📻 Radio Feeder'
+        'radio_feeder': '📻 Radio Feeder',
+        'other': '🙋 Other (staff / general)'
       };
       const typesFormatted = (req.request_type || []).map(t => typeLabels[t] || t).join(', ') || 'Not specified';
       
