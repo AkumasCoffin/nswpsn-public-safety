@@ -1919,6 +1919,8 @@
     }
     .camera-fullscreen-info {
       color: #fff;
+      flex: 1;
+      min-width: 0;
     }
     .camera-fullscreen-title {
       font-size: 1.25rem;
@@ -1968,11 +1970,18 @@
     }
     .camera-fs-add.active { background: rgba(34, 197, 94, 0.85); }
     .camera-fullscreen-overlay.grid-mode #camera-fs-add { display: none; }
-    /* ✕ on a grid tile to drop it from the selection (mobile, no Ctrl+Click). */
+    /* ✕ on a grid tile to drop it from the selection (mobile, no Ctrl+Click).
+       Styled as a neutral ghost icon that only goes red on hover, so it sits
+       as a matched pair with the expand button rather than shouting in red. */
     .camera-grid-item-remove {
-      background: rgba(239, 68, 68, 0.85); color: #fff; border: none; border-radius: 6px;
-      width: 32px; height: 32px; min-width: 32px; cursor: pointer; margin-left: 6px;
+      background: rgba(148, 163, 184, 0.12); color: #cbd5e1;
+      border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 7px;
+      width: 28px; height: 28px; min-width: 28px; cursor: pointer; font-size: 0.72rem;
       display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+      transition: all 0.15s;
+    }
+    .camera-grid-item-remove:hover {
+      background: rgba(239, 68, 68, 0.9); border-color: #ef4444; color: #fff;
     }
     .camera-fullscreen-close:hover {
       background: rgba(239, 68, 68, 0.8);
@@ -2234,24 +2243,29 @@
       box-shadow: 0 8px 30px rgba(139, 92, 246, 0.3);
     }
     .camera-grid-item-header {
-      padding: 8px 12px;
-      background: rgba(0,0,0,0.5);
+      padding: 9px 12px;
+      background: linear-gradient(180deg, rgba(15,23,42,0.96), rgba(15,23,42,0.78));
+      border-bottom: 1px solid rgba(139,92,246,0.18);
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
+      align-items: center;
       flex-shrink: 0;
       gap: 8px;
     }
     .camera-grid-item-title {
-      color: #fff;
+      color: #f1f5f9;
       font-weight: 600;
-      font-size: 0.75rem;
+      font-size: 0.78rem;
       display: flex;
-      align-items: flex-start;
-      gap: 6px;
+      align-items: center;
+      gap: 7px;
       line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .camera-grid-item-title i { color: #8b5cf6; flex-shrink: 0; margin-top: 2px; }
+    .camera-grid-item-title i { color: #8b5cf6; flex-shrink: 0; }
+    .camera-grid-item-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .camera-grid-item-info {
       flex: 1;
       min-width: 0;
@@ -2261,18 +2275,20 @@
       font-size: 0.65rem;
     }
     .camera-grid-item-expand {
-      background: rgba(139, 92, 246, 0.3);
-      border: 1px solid rgba(139, 92, 246, 0.5);
-      color: #c4b5fd;
-      padding: 4px 8px;
-      border-radius: 6px;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      color: #cbd5e1;
+      width: 28px; height: 28px; min-width: 28px; padding: 0;
+      border-radius: 7px;
       cursor: pointer;
-      font-size: 0.7rem;
-      transition: all 0.2s;
+      font-size: 0.72rem;
+      transition: all 0.15s;
       flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center;
     }
     .camera-grid-item-expand:hover {
-      background: #8b5cf6;
+      background: rgba(139, 92, 246, 0.9);
+      border-color: #8b5cf6;
       color: #fff;
     }
     .camera-grid-item-select {
@@ -3718,6 +3734,17 @@
     let cameraMarkerMap = new Map(); // Map camera ID to marker element
     let isGridView = false;
     
+    // Turn a raw camera region code (SYD_SOUTH, REG_NORTH) into a readable
+    // label ("Sydney South", "Regional North"). Leaves already-friendly strings
+    // ("New South Wales") intact.
+    function prettyRegion(code) {
+      if (!code) return '';
+      const MAP = { SYD: 'Sydney', REG: 'Regional', MET: 'Metro', NTH: 'North', STH: 'South', NSW: 'NSW' };
+      return String(code).split(/[_\s]+/).filter(Boolean)
+        .map(p => MAP[p.toUpperCase()] || (p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()))
+        .join(' ');
+    }
+
     function openCameraFullscreen(cameraProps) {
       isGridView = false;
       currentCameraData = cameraProps;
@@ -3739,7 +3766,7 @@
       title.textContent = cameraProps.title || 'Traffic Camera';
       view.innerHTML = cameraProps.view ? `<i class="fa-solid fa-eye"></i> ${escapeHtml(cameraProps.view)}` : '';
       direction.innerHTML = cameraProps.direction ? `<i class="fa-solid fa-compass"></i> ${escapeHtml(cameraProps.direction)}` : '';
-      region.innerHTML = cameraProps.region ? `<i class="fa-solid fa-location-dot"></i> ${escapeHtml(cameraProps.region)}` : '';
+      region.innerHTML = cameraProps.region ? `<i class="fa-solid fa-location-dot"></i> ${escapeHtml(prettyRegion(cameraProps.region))}` : '';
       
       // Set image with cache buster
       if (cameraProps.imageUrl) {
@@ -3795,8 +3822,8 @@
           <div class="camera-grid-item">
             <div class="camera-grid-item-header">
               <div class="camera-grid-item-info">
-                <div class="camera-grid-item-title"><i class="fa-solid fa-video"></i> ${escapeHtml(cam.title || 'Camera')}</div>
-                <div class="camera-grid-item-meta">${escapeHtml(cam.region || cam.view || '')}</div>
+                <div class="camera-grid-item-title"><i class="fa-solid fa-video"></i> <span>${escapeHtml(cam.title || 'Camera')}</span></div>
+                <div class="camera-grid-item-meta">${escapeHtml(cam.region ? prettyRegion(cam.region) : (cam.view || ''))}</div>
               </div>
               <button class="camera-grid-item-expand" onclick="openCameraFullscreen(selectedCameras[${idx}])">
                 <i class="fa-solid fa-expand"></i>
