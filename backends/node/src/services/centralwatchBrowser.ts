@@ -440,6 +440,58 @@ class CentralwatchBrowser {
     });
   }
 
+  /**
+   * TEMP diagnostic: raw GET of a URL in the page context, returning status +
+   * content-type + a body preview + a few response headers, so we can tell a
+   * Vercel/WAF challenge page apart from a hard 403 on the image endpoint.
+   * Remove once the centralwatch image-403 cause is fixed.
+   */
+  async diagnosticFetch(
+    url: string,
+    timeoutMs = 15000,
+  ): Promise<{
+    status?: number;
+    contentType?: string;
+    bodyPreview?: string;
+    headers?: Record<string, string>;
+    error?: string;
+  } | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const script = `(async () => {
+        const url = ${JSON.stringify(url)};
+        const timeout = ${JSON.stringify(timeoutMs)};
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        try {
+          const resp = await fetch(url, { signal: controller.signal, credentials: 'include' });
+          clearTimeout(timer);
+          const ct = resp.headers.get('content-type') || '';
+          const pick = {};
+          ['server','content-type','www-authenticate','x-vercel-error','x-vercel-id','x-vercel-mitigated','x-matched-path','x-robots-tag','cf-ray'].forEach(h => { const v = resp.headers.get(h); if (v) pick[h] = v; });
+          let preview = '';
+          try { preview = (await resp.text()).slice(0, 400); } catch (e) {}
+          return { status: resp.status, contentType: ct, bodyPreview: preview, headers: pick };
+        } catch (e) {
+          clearTimeout(timer);
+          return { error: String(e && e.message ? e.message : e) };
+        }
+      })()`;
+      try {
+        return await this.evaluateWithRetry<{
+          status?: number;
+          contentType?: string;
+          bodyPreview?: string;
+          headers?: Record<string, string>;
+          error?: string;
+        }>(script);
+      } catch (err) {
+        log.warn({ err: (err as Error).message, url }, 'centralwatch diagnosticFetch threw');
+        return null;
+      }
+    });
+  }
+
   async fetchImage(
     url: string,
     timeoutMs = 15000,

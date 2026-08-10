@@ -251,20 +251,9 @@ export async function runBatchOnce(): Promise<{
   // (403/404/429 vs content-type vs too-small) at warn level.
   if (cached === 0 && inputs.length > 0) {
     try {
-      const probe = await centralwatchBrowser.fetchImagesBatch(inputs.slice(0, 3));
+      const diag = await centralwatchBrowser.diagnosticFetch(inputs[0]!.url);
       log.warn(
-        {
-          sampleUrls: inputs.slice(0, 3).map((i) => i.url),
-          probe: probe.map((r) => ({
-            id: r.id,
-            ok: r.ok,
-            status: r.status,
-            size: r.bytes?.length,
-            contentType: r.contentType,
-            retryAfter: r.retryAfter,
-            error: r.error,
-          })),
-        },
+        { url: inputs[0]!.url, diag },
         'centralwatch image batch DIAGNOSTIC: 0 cached this pass',
       );
     } catch (e) {
