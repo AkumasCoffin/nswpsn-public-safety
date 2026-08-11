@@ -35,6 +35,16 @@
       border-radius: 9px; padding: 0.7rem 0.8rem; font: inherit; font-size: 0.92rem;
     }
     input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    /* Custom dropdown chrome: hide the native arrow, add our own chevron, and
+       theme the option list dark with accent region headers. */
+    select {
+      -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 2.3rem;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a5b6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 0.8rem center; background-size: 0.9rem;
+    }
+    select:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle)); }
+    select optgroup { background: var(--bg-elevated-soft); color: var(--accent); font-weight: 700; font-style: normal; letter-spacing: 0.02em; }
+    select option { background: var(--bg-elevated); color: var(--text-main); padding: 0.4rem 0.6rem; }
     textarea { resize: vertical; min-height: 90px; line-height: 1.55; }
     textarea.body { min-height: 220px; }
 
@@ -251,6 +261,21 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
     const LIMITS = { media: { img: 6 }, article: { img: 4 } };
+
+    // Build region-grouped <optgroup>s for an LGA <select>. rawNames = UPPERCASE
+    // LGA names; lgaReg maps each to its planning region.
+    const WIRE_REGION_ORDER = ['Greater Sydney', 'Central Coast', 'Hunter', 'Illawarra-Shoalhaven', 'North Coast', 'New England North West', 'Central West and Orana', 'Riverina Murray', 'South East and Tablelands', 'Far West', 'Other'];
+    function buildLgaOptgroups(rawNames, lgaReg) {
+      const groups = {};
+      rawNames.forEach((raw) => { const region = (lgaReg && lgaReg[raw]) || 'Other'; (groups[region] = groups[region] || []).push(titleCase(raw)); });
+      const frag = document.createDocumentFragment();
+      Object.keys(groups).sort((a, b) => { const ia = WIRE_REGION_ORDER.indexOf(a), ib = WIRE_REGION_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); }).forEach((region) => {
+        const og = document.createElement('optgroup'); og.label = region;
+        groups[region].sort((a, b) => a.localeCompare(b)).forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; og.appendChild(o); });
+        frag.appendChild(og);
+      });
+      return frag;
+    }
 
     async function loadKey() { try { const r = await fetch(`${API_BASE}/api/config`); API_KEY = (await r.json()).apiKey; } catch (e) {} }
     async function keyHeaders() { return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
@@ -476,17 +501,20 @@
       return false;
     }
 
-    // The area picker uses the 132 NSW LGAs (names come UPPERCASE, so we
-    // title-case them for display; the title-cased name is what we store).
+    // The area picker uses the 132 NSW LGAs, grouped by planning region for a
+    // cleaner dropdown (mapping in data/boundaries/lga-regions.json). Names come
+    // UPPERCASE, so we title-case them for display; the title-cased name is what
+    // we store.
     function areaFeature(name) { return (regionsGeo || []).find((x) => titleCase(x.properties.name) === name); }
     async function loadRegions() {
       try {
-        const geo = await fetch('data/boundaries/nsw-lga.geojson', { cache: 'force-cache' }).then((r) => r.json());
+        const [geo, lgaReg] = await Promise.all([
+          fetch('data/boundaries/nsw-lga.geojson', { cache: 'force-cache' }).then((r) => r.json()),
+          fetch('data/boundaries/lga-regions.json', { cache: 'force-cache' }).then((r) => r.json()).catch(() => ({})),
+        ]);
         regionsGeo = geo.features || [];
         const sel = $('#regionSelect');
-        regionsGeo.map((f) => titleCase(f.properties.name)).sort((a, b) => a.localeCompare(b)).forEach((name) => {
-          const o = document.createElement('option'); o.value = name; o.textContent = name; sel.appendChild(o);
-        });
+        sel.appendChild(buildLgaOptgroups(regionsGeo.map((f) => f.properties.name), lgaReg));
         sel.addEventListener('change', () => {
           const f = areaFeature(sel.value);
           if (!f) { state.location.region = null; refreshLocReadout(); return; }

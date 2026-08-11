@@ -42,6 +42,15 @@
       background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-main);
       border-radius: 8px; padding: 0.45rem 0.6rem; font: inherit; font-size: 0.82rem; min-width: 140px;
     }
+    .wire-filters select {
+      -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 1.9rem;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a5b6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 0.6rem center; background-size: 0.85rem;
+    }
+    .wire-filters select:hover, .wire-filters input:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border-subtle)); }
+    .wire-filters select:focus, .wire-filters input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    .wire-filters optgroup { background: var(--bg-elevated-soft); color: var(--accent); font-weight: 700; font-style: normal; }
+    .wire-filters option { background: var(--bg-elevated); color: var(--text-main); }
     .wire-filters .clear { background: none; border: 0; color: var(--text-soft); font: inherit; font-size: 0.8rem; cursor: pointer; text-decoration: underline; }
 
     .wire-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 1.1rem; }
@@ -209,6 +218,20 @@
     const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
     const fmtViews = (n) => (Number(n) || 0).toLocaleString('en-AU');
 
+    // Region-grouped <optgroup>s for an LGA <select> (mapping lga-regions.json).
+    const WIRE_REGION_ORDER = ['Greater Sydney', 'Central Coast', 'Hunter', 'Illawarra-Shoalhaven', 'North Coast', 'New England North West', 'Central West and Orana', 'Riverina Murray', 'South East and Tablelands', 'Far West', 'Other'];
+    function buildLgaOptgroups(rawNames, lgaReg) {
+      const groups = {};
+      rawNames.forEach((raw) => { const region = (lgaReg && lgaReg[raw]) || 'Other'; (groups[region] = groups[region] || []).push(titleCase(raw)); });
+      const frag = document.createDocumentFragment();
+      Object.keys(groups).sort((a, b) => { const ia = WIRE_REGION_ORDER.indexOf(a), ib = WIRE_REGION_ORDER.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); }).forEach((region) => {
+        const og = document.createElement('optgroup'); og.label = region;
+        groups[region].sort((a, b) => a.localeCompare(b)).forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; og.appendChild(o); });
+        frag.appendChild(og);
+      });
+      return frag;
+    }
+
     async function loadKey() {
       if (API_KEY) return API_KEY;
       try {
@@ -245,10 +268,8 @@
           .forEach((a) => { const o = document.createElement('option'); o.value = a.slug; o.textContent = a.name; sel.appendChild(o); });
       } catch (e) {}
       try {
-        const geo = await fetch('data/boundaries/nsw-lga.geojson', { cache: 'force-cache' }).then((r) => r.json());
-        const sel = $('#fRegion');
-        (geo.features || []).map((f) => f.properties && titleCase(f.properties.name)).filter(Boolean).sort()
-          .forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; sel.appendChild(o); });
+        const lgaReg = await fetch('data/boundaries/lga-regions.json', { cache: 'force-cache' }).then((r) => r.json()).catch(() => ({}));
+        $('#fRegion').appendChild(buildLgaOptgroups(Object.keys(lgaReg), lgaReg));
       } catch (e) {}
     }
 

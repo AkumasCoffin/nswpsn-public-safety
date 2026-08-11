@@ -50,7 +50,7 @@ DirectoryIndex index.html
 # Front-end fetches `/agency-data.json` and `/agency-extended.json` to populate
 # the sidebar Agencies dropdown and the per-agency reference pages. The broader
 # .json deny rule above protects everything else (package.json etc.).
-<FilesMatch "^(agency-data|agency-extended)\.json$">
+<FilesMatch "^(agency-data|agency-extended|lga-regions)\.json$">
   Require all granted
 </FilesMatch>
 
