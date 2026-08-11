@@ -153,7 +153,7 @@
     <div class="wire-filters" id="filters">
       <input type="text" id="fUnit" placeholder="Filter by unit / callsign…" autocomplete="off">
       <select id="fAgency"><option value="">All agencies</option></select>
-      <select id="fRegion"><option value="">All regions</option></select>
+      <select id="fRegion"><option value="">All LGAs</option></select>
       <button class="clear" id="fClear">Clear</button>
     </div>
 
@@ -203,6 +203,7 @@
 
     const $ = (s, r = document) => r.querySelector(s);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
     const fmtViews = (n) => (Number(n) || 0).toLocaleString('en-AU');
 
     async function loadKey() {
@@ -241,9 +242,9 @@
           .forEach((a) => { const o = document.createElement('option'); o.value = a.slug; o.textContent = a.name; sel.appendChild(o); });
       } catch (e) {}
       try {
-        const geo = await fetch('data/boundaries/nsw-regions.geojson', { cache: 'force-cache' }).then((r) => r.json());
+        const geo = await fetch('data/boundaries/nsw-lga.geojson', { cache: 'force-cache' }).then((r) => r.json());
         const sel = $('#fRegion');
-        (geo.features || []).map((f) => f.properties && f.properties.name).filter(Boolean).sort()
+        (geo.features || []).map((f) => f.properties && titleCase(f.properties.name)).filter(Boolean).sort()
           .forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; sel.appendChild(o); });
       } catch (e) {}
     }
