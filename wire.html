@@ -266,7 +266,8 @@
       const vids = (item.media || []).filter((m) => m.kind === 'video').length;
       const badge = isArticle ? 'Article' : (vids ? `${vids} video${vids > 1 ? 's' : ''}` : `${imgs} photo${imgs !== 1 ? 's' : ''}`);
       const units = (item.units || []).slice(0, 3).map((u) => `<span class="wire-chip">${esc(u)}</span>`).join('');
-      const loc = item.location && (item.location.region || item.location.type === 'pin')
+      const hasLoc = item.location && (item.location.region || item.location.lat != null);
+      const loc = hasLoc
         ? `<span class="wire-chip loc"><i class="fa-solid fa-location-dot"></i> ${esc(item.location.region || 'Pinned')}</span>` : '';
       const draft = item.status === 'draft' ? `<span class="wire-draft-badge">Draft</span>` : '';
       const key = isArticle ? item.slug : item.id;

@@ -136,12 +136,13 @@
       </div>
 
       <div class="field">
-        <label>Location</label>
+        <label>Location · optional</label>
         <div class="toggle2" id="locToggle">
-          <button type="button" data-loc="pin" aria-current="true">Drop a pin</button>
+          <button type="button" data-loc="none" aria-current="true">No location</button>
+          <button type="button" data-loc="pin" aria-current="false">Drop a pin</button>
           <button type="button" data-loc="region" aria-current="false">Pick an LGA</button>
         </div>
-        <div id="pinWrap"><div id="pinMap"></div></div>
+        <div id="pinWrap" style="display:none"><div id="pinMap"></div></div>
         <div id="regionWrap" style="display:none">
           <select id="regionSelect"><option value="">Select an LGA…</option></select>
         </div>
@@ -374,11 +375,20 @@
     // ---- location ----
     $('#locToggle').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => setLocMode(b.dataset.loc)));
     function setLocMode(mode) {
-      state.location.type = mode;
       $('#locToggle').querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.loc === mode)));
       $('#pinWrap').style.display = mode === 'pin' ? 'block' : 'none';
       $('#regionWrap').style.display = mode === 'region' ? 'block' : 'none';
-      if (mode === 'pin') { setTimeout(() => map && map.invalidateSize(), 50); state.location.region = null; }
+      if (mode === 'none') {
+        // Optional: clear any location entirely (stored as pin + null coords).
+        state.location = { type: 'pin', region: null, lat: null, lng: null };
+        if (marker && map) { map.removeLayer(marker); marker = null; }
+        $('#regionSelect').value = '';
+      } else if (mode === 'pin') {
+        setTimeout(() => map && map.invalidateSize(), 50);
+        state.location.type = 'pin'; state.location.region = null;
+      } else if (mode === 'region') {
+        state.location.type = 'region';
+      }
       refreshLocReadout(); refreshIncidentSuggestions();
     }
     function initMap() {
@@ -565,9 +575,11 @@
       state.incidentTitle = it.incident_id ? 'Linked incident' : null;
       if (it.location) state.location = { type: it.location.type || 'pin', region: it.location.region || null, lat: it.location.lat, lng: it.location.lng };
       renderMedia(); renderAgencyCheck(''); renderIncidentChosen();
-      setLocMode(state.location.type);
-      if (state.location.type === 'pin' && state.location.lat != null) setPin(state.location.lat, state.location.lng);
-      if (state.location.type === 'region' && state.location.region) $('#regionSelect').value = state.location.region;
+      const hasLoc = (state.location.type === 'region' && state.location.region) || (state.location.type === 'pin' && state.location.lat != null);
+      const wasRegion = state.location.type === 'region', wasLat = state.location.lat, wasLng = state.location.lng, wasRegionName = state.location.region;
+      setLocMode(hasLoc ? state.location.type : 'none');
+      if (hasLoc && !wasRegion && wasLat != null) setPin(wasLat, wasLng);
+      if (hasLoc && wasRegion && wasRegionName) { state.location = { type: 'region', region: wasRegionName, lat: wasLat, lng: wasLng }; $('#regionSelect').value = wasRegionName; refreshLocReadout(); }
     }
 
     // ---- init ----
