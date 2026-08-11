@@ -31,9 +31,6 @@
     .wire-title { font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 800; letter-spacing: -0.02em; margin: 0; }
     .wire-title .dot { color: var(--accent); }
     .wire-sub { color: var(--text-muted); font-size: 0.9rem; margin: 0.2rem 0 0; }
-    .wire-tabs { display: flex; gap: 0.3rem; margin: 1rem 0 0.6rem; border-bottom: 1px solid var(--border-subtle); }
-    .wire-tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-muted); font: inherit; font-size: 0.9rem; font-weight: 600; padding: 0.55rem 0.9rem; cursor: pointer; }
-    .wire-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
     .wire-post-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--accent); color: #fff; border: 0; border-radius: 9px; font: inherit; font-weight: 700; font-size: 0.85rem; padding: 0.55rem 1rem; cursor: pointer; text-decoration: none; }
     .wire-post-btn:hover { background: #ea580c; }
 
@@ -148,14 +145,9 @@
     <div class="wire-head">
       <div>
         <h1 class="wire-title">The <span class="dot">Wire</span></h1>
-        <p class="wire-sub">Independent photos, video &amp; news from contributors on the ground.</p>
+        <p class="wire-sub" id="wireSub">Independent photos, video &amp; news from contributors on the ground.</p>
       </div>
       <a class="wire-post-btn" id="postBtn" href="wire-compose" style="display:none"><i class="fa-solid fa-plus"></i> Post to The Wire</a>
-    </div>
-
-    <div class="wire-tabs" role="tablist">
-      <button class="wire-tab" data-tab="media" role="tab" aria-selected="true">Media Posts</button>
-      <button class="wire-tab" data-tab="articles" role="tab" aria-selected="false">Articles</button>
     </div>
 
     <div class="wire-filters" id="filters">
@@ -479,15 +471,15 @@
       if (r.ok) { closeDetail(); loadFeed(); } else { alert(`Failed to ${verb}.`); }
     }
 
-    // ---- tabs / filters / routing ----
-    function selectTab(tab, push = true) {
-      currentTab = tab;
-      document.querySelectorAll('.wire-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-      const unitWrap = $('#fUnit'); unitWrap.style.display = tab === 'articles' ? 'none' : '';
-      if (push) history.replaceState({}, '', `wire?tab=${tab}`);
-      loadFeed();
+    // ---- section label / filters / routing ----
+    // Switching Media Posts <-> Articles is driven ONLY by the sidebar (full
+    // navigation to wire?tab=...); this page just reflects the ?tab it loaded.
+    function applySection() {
+      $('#wireSub').textContent = currentTab === 'articles'
+        ? 'Independent news & reporting from contributors.'
+        : 'Independent photos & video from contributors on the ground.';
+      $('#fUnit').style.display = currentTab === 'articles' ? 'none' : '';
     }
-    document.querySelectorAll('.wire-tab').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
     ['fUnit', 'fAgency', 'fRegion'].forEach((id) => {
       const el = $('#' + id); const ev = id === 'fUnit' ? 'input' : 'change';
       let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, id === 'fUnit' ? 300 : 0); });
@@ -499,13 +491,12 @@
       const post = p.get('post'), article = p.get('article');
       if (article) openDetail('article', article, false);
       else if (post) openDetail('media', post, false);
-      else { const tab = p.get('tab') === 'articles' ? 'articles' : 'media'; if (tab !== currentTab) selectTab(tab, false); closeDetail(false); }
+      else closeDetail(false);
     });
 
     // ---- init ----
     (async function init() {
-      document.querySelectorAll('.wire-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === currentTab)));
-      $('#fUnit').style.display = currentTab === 'articles' ? 'none' : '';
+      applySection();
       await Promise.all([loadKey(), loadMe(), loadFilterOptions()]);
       const p = new URLSearchParams(location.search);
       const post = p.get('post'), article = p.get('article');
