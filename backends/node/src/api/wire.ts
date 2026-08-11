@@ -26,10 +26,8 @@ import {
 } from '../services/auth/roles.js';
 import { rememberCallsigns, normaliseCallsign } from '../services/callsigns.js';
 import {
-  createImageDirectUploadUrl,
-  cfImagesConfigured,
+  createImageUploadUrl,
   deleteCfImage,
-  imageVariantUrl,
   r2Configured,
   createVideoUploadUrl,
   deleteR2Object,
@@ -107,6 +105,7 @@ interface MediaItem {
   cf_image_id: string | null;
   r2_key: string | null;
   poster_cf_image_id: string | null;
+  poster_r2_key: string | null;
   duration_seconds: number | null;
   is_cover: boolean;
   unit: string | null;
@@ -135,6 +134,7 @@ function validateMedia(raw: unknown, cfg: EntityCfg): { items: MediaItem[]; unit
       cf_image_id: str(o['cf_image_id']),
       r2_key: str(o['r2_key']),
       poster_cf_image_id: str(o['poster_cf_image_id']),
+      poster_r2_key: str(o['poster_r2_key']),
       duration_seconds: int(o['duration_seconds']),
       is_cover: o['is_cover'] === true,
       unit: normaliseCallsign(o['unit']) || null,
@@ -143,7 +143,7 @@ function validateMedia(raw: unknown, cfg: EntityCfg): { items: MediaItem[]; unit
       bytes: int(o['bytes']),
     };
     if (kind === 'image') {
-      if (!item.cf_image_id) return { error: 'each image needs a cf_image_id' };
+      if (!item.r2_key) return { error: 'each image needs an r2_key' };
       images.push(item);
     } else {
       if (!item.r2_key) return { error: 'each video needs an r2_key' };
@@ -171,10 +171,10 @@ async function insertMediaRows(client: PoolClient, cfg: EntityCfg, parentId: str
     const m = items[i]!;
     await client.query(
       `INSERT INTO wire_media
-         (parent_type, parent_id, kind, cf_image_id, r2_key, poster_cf_image_id,
+         (parent_type, parent_id, kind, cf_image_id, r2_key, poster_cf_image_id, poster_r2_key,
           duration_seconds, is_cover, unit, sort_order, width, height, bytes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [cfg.parentType, parentId, m.kind, m.cf_image_id, m.r2_key, m.poster_cf_image_id,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [cfg.parentType, parentId, m.kind, m.cf_image_id, m.r2_key, m.poster_cf_image_id, m.poster_r2_key,
         m.duration_seconds, m.is_cover, m.unit, i, m.width, m.height, m.bytes],
     );
   }
@@ -278,17 +278,12 @@ async function uniqueSlug(pool: Pool, title: string, excludeId?: string): Promis
 // ===========================================================================
 
 wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => {
-  if (!cfImagesConfigured()) return c.json({ error: 'image uploads not configured' }, 503);
-  const up = await createImageDirectUploadUrl({ feature: 'wire', by: currentUserId(c) ?? '' });
+  // Images now go to R2 (same bucket as video). The browser optimises the
+  // photo (downscale + WebP, which also strips GPS) and PUTs it to uploadURL.
+  if (!r2Configured()) return c.json({ error: 'image uploads not configured' }, 503);
+  const up = await createImageUploadUrl();
   if (!up) return c.json({ error: 'could not create upload url' }, 503);
-  // deliveryUrl lets compose show an instant preview before the post is saved
-  // (the CF direct_upload response itself carries no delivery URL).
-  return c.json({
-    id: up.id,
-    uploadURL: up.uploadURL,
-    deliveryUrl: imageVariantUrl(up.id, 'public'),
-    thumbUrl: imageVariantUrl(up.id, 'thumb'),
-  });
+  return c.json({ uploadURL: up.uploadURL, key: up.key, publicUrl: up.publicUrl });
 });
 
 wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (c) => {
@@ -464,7 +459,7 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     // Best-effort: delete CF images no longer referenced.
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
-    const keptKeys = new Set(mv.items.map((m) => m.r2_key).filter(Boolean) as string[]);
+    const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
     for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
     return c.json({ success: true });
   } catch (err) {
@@ -677,7 +672,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     await rememberCallsigns(pool, mv.units);
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
-    const keptKeys = new Set(mv.items.map((m) => m.r2_key).filter(Boolean) as string[]);
+    const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
     for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
     return c.json({ success: true, slug });
   } catch (err) {
@@ -735,11 +730,16 @@ async function imageIdsFor(pool: Pool, parentType: string, parentId: string): Pr
 }
 
 async function r2KeysFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {
-  const r = await pool.query<{ r2_key: string | null }>(
-    'SELECT r2_key FROM wire_media WHERE parent_type=$1 AND parent_id=$2 AND r2_key IS NOT NULL',
+  const r = await pool.query<{ r2_key: string | null; poster_r2_key: string | null }>(
+    'SELECT r2_key, poster_r2_key FROM wire_media WHERE parent_type=$1 AND parent_id=$2',
     [parentType, parentId],
   );
-  return r.rows.map((row) => row.r2_key).filter((k): k is string => !!k);
+  const keys: string[] = [];
+  for (const row of r.rows) {
+    if (row.r2_key) keys.push(row.r2_key);
+    if (row.poster_r2_key) keys.push(row.poster_r2_key);
+  }
+  return keys;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

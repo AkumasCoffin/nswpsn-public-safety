@@ -4,7 +4,7 @@ import { slugify, viewerHash, shapeMedia, normaliseLicense, licenseLabel, WIRE_L
 function mediaRow(over: Partial<WireMediaRow>): WireMediaRow {
   return {
     id: 'm1', parent_type: 'media_post', parent_id: 'p1', kind: 'image',
-    cf_image_id: null, r2_key: null, poster_cf_image_id: null, duration_seconds: null,
+    cf_image_id: null, r2_key: null, poster_cf_image_id: null, poster_r2_key: null, duration_seconds: null,
     is_cover: false, unit: null, sort_order: 0, width: null, height: null, bytes: null,
     ...over,
   };
@@ -49,14 +49,18 @@ describe('wire.license', () => {
 });
 
 describe('wire.shapeMedia', () => {
-  it('exposes image variant urls and the round-trippable cf id', () => {
-    const out = shapeMedia(mediaRow({ kind: 'image', cf_image_id: 'abc', is_cover: true, unit: 'P421' }));
+  it('serves R2 images (single optimised size) and round-trips the key', () => {
+    const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp', is_cover: true, unit: 'P421' }));
     expect(out['kind']).toBe('image');
     expect(out['is_cover']).toBe(true);
     expect(out['unit']).toBe('P421');
-    expect(out['cf_image_id']).toBe('abc');
+    expect(out['r2_key']).toBe('wire/img/abc.webp');
+    expect(String(out['url'])).toContain('abc.webp');
+    expect(out['thumb_url']).toBe(out['url']);
+  });
+  it('falls back to Cloudflare variants for legacy cf-only image rows', () => {
+    const out = shapeMedia(mediaRow({ kind: 'image', cf_image_id: 'abc' }));
     expect(String(out['url'])).toContain('/abc/public');
-    expect(String(out['thumb_url'])).toContain('/abc/thumb');
   });
   it('shapes a video with its r2 public url', () => {
     const out = shapeMedia(mediaRow({ kind: 'video', r2_key: 'vids/x.mp4' }));

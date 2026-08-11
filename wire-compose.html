@@ -126,7 +126,7 @@
         <div class="dropzone" id="dropzone">
           <div class="big"><i class="fa-solid fa-cloud-arrow-up"></i></div>
           <div id="dzText">Drag images here, or click to choose</div>
-          <div style="font-size:0.7rem;margin-top:0.3rem">GPS &amp; camera metadata are stripped on delivery</div>
+          <div style="font-size:0.7rem;margin-top:0.3rem">Photos are resized &amp; stripped of GPS/metadata before upload</div>
         </div>
         <div class="media-grid" id="mediaGrid"></div>
         <div style="margin-top:0.7rem;display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">
@@ -267,23 +267,40 @@
       const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/jpeg,image/png,image/webp,image/gif'; inp.multiple = true;
       inp.onchange = () => handleFiles(inp.files); inp.click();
     }
+    // Downscale + re-encode to WebP in the browser. This is the optimisation
+    // (smaller files) AND strips EXIF/GPS (a canvas draw drops all metadata).
+    async function optimizeImage(file, maxDim, quality) {
+      try {
+        const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+        const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+        const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+        bmp.close && bmp.close();
+        const webp = await new Promise((res) => canvas.toBlob(res, 'image/webp', quality));
+        if (webp) return webp;
+        const jpg = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
+        return jpg || file;
+      } catch (e) { return file; }
+    }
     async function handleFiles(files) {
       const cap = LIMITS[type].img;
       for (const file of files) {
         if (state.media.filter((m) => m.kind === 'image').length >= cap) { setMsg(`Max ${cap} images.`, true); break; }
         if (!/^image\//.test(file.type)) continue;
-        const item = { kind: 'image', cf_image_id: null, unit: '', is_cover: state.media.length === 0, previewUrl: URL.createObjectURL(file), uploading: true };
+        const item = { kind: 'image', r2_key: null, unit: '', is_cover: state.media.length === 0, previewUrl: URL.createObjectURL(file), uploading: true };
         state.media.push(item); renderMedia();
         try {
+          const blob = await optimizeImage(file, 1600, 0.82);
           const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders() });
+          if (r.status === 503) { setMsg("Image uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
           if (!r.ok) throw new Error('upload-url ' + r.status);
-          const { uploadURL, id, deliveryUrl } = await r.json();
-          const fd = new FormData(); fd.append('file', file);
-          const up = await fetch(uploadURL, { method: 'POST', body: fd });
-          if (!up.ok) throw new Error('cf upload ' + up.status);
-          item.cf_image_id = id; item.uploading = false; if (deliveryUrl) item.deliveredUrl = deliveryUrl;
+          const { uploadURL, key, publicUrl } = await r.json();
+          const up = await fetch(uploadURL, { method: 'PUT', body: blob });
+          if (!up.ok) throw new Error('r2 put ' + up.status);
+          item.r2_key = key; item.uploading = false; if (publicUrl) item.deliveredUrl = publicUrl;
         } catch (e) {
-          setMsg('An image failed to upload (is Cloudflare Images configured?).', true);
+          setMsg('An image failed to upload (' + e.message + ').', true);
           state.media = state.media.filter((m) => m !== item);
         }
         renderMedia();
@@ -338,7 +355,7 @@
           if (!up.ok) throw new Error('r2 put ' + up.status);
           item.r2_key = key; item.url = publicUrl; item.uploading = false;
           renderMedia();
-          capturePoster(file).then((pid) => { if (pid) item.poster_cf_image_id = pid; }).catch(() => {});
+          capturePoster(file).then((pid) => { if (pid) item.poster_r2_key = pid; }).catch(() => {});
         } catch (e) {
           setMsg('A video failed to upload (' + e.message + ').', true);
           state.media = state.media.filter((m) => m !== item); renderMedia();
@@ -361,12 +378,11 @@
               try {
                 const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders() });
                 if (!r.ok) return bail();
-                const { uploadURL, id } = await r.json();
-                const fd = new FormData(); fd.append('file', blob, 'poster.jpg');
-                const up = await fetch(uploadURL, { method: 'POST', body: fd });
-                resolve(up.ok ? id : null);
+                const { uploadURL, key } = await r.json();
+                const up = await fetch(uploadURL, { method: 'PUT', body: blob });
+                resolve(up.ok ? key : null);
               } catch (e) { bail(); }
-            }, 'image/jpeg', 0.8);
+            }, 'image/webp', 0.8);
           } catch (e) { bail(); }
         };
       });
@@ -515,10 +531,10 @@
     // ---- submit ----
     function buildPayload(status) {
       const media = state.media
-        .filter((m) => (m.kind === 'image' && m.cf_image_id) || (m.kind === 'video' && m.r2_key))
+        .filter((m) => m.r2_key)
         .map((m) => m.kind === 'video'
-          ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || null, poster_cf_image_id: m.poster_cf_image_id || null }
-          : { kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || null, is_cover: !!m.is_cover });
+          ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || null, poster_r2_key: m.poster_r2_key || null }
+          : { kind: 'image', r2_key: m.r2_key, unit: m.unit || null, is_cover: !!m.is_cover });
       const base = {
         title: $('#title').value.trim(),
         location_type: state.location.type, region: state.location.region,
@@ -565,8 +581,8 @@
       $('#title').value = it.title || '';
       if (isArt) { $('#excerpt').value = it.excerpt || ''; $('#body').value = it.body || ''; } else { $('#caption').value = it.caption || ''; }
       state.media = (it.media || []).map((m) => m.kind === 'video'
-        ? { kind: 'video', r2_key: m.r2_key, poster_cf_image_id: m.poster_cf_image_id || null, unit: m.unit || '', url: m.url, previewUrl: m.url }
-        : { kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
+        ? { kind: 'video', r2_key: m.r2_key, poster_r2_key: m.poster_r2_key || null, unit: m.unit || '', url: m.url, previewUrl: m.url }
+        : { kind: 'image', r2_key: m.r2_key, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
       (it.agencies || []).forEach((a) => state.agencies.add(a));
       $('#license').value = it.license || 'credit';
       $('#credit').value = it.credit || '';

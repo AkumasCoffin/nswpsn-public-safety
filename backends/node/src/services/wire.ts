@@ -122,6 +122,28 @@ async function r2Client() {
 }
 
 /**
+ * Presign a browser->R2 PUT for an optimised image (WebP). Content-Type is NOT
+ * signed, so the browser's blob type (image/webp, or image/jpeg on old
+ * browsers) is accepted and stored as-is. The browser downscales + re-encodes
+ * before upload, which also strips EXIF/GPS. Returns null when R2 isn't
+ * configured or signing fails.
+ */
+export async function createImageUploadUrl(): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
+  if (!r2Configured()) return null;
+  try {
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+    const s3 = await r2Client();
+    const key = `wire/img/${randomUUID()}.webp`;
+    const uploadURL = await getSignedUrl(s3, new PutObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key }), { expiresIn: 600 });
+    return { uploadURL, key, publicUrl: r2PublicUrl(key) };
+  } catch (err) {
+    log.warn({ err }, 'wire: R2 image presign failed');
+    return null;
+  }
+}
+
+/**
  * Presign a browser->R2 PUT for a video (<=50MB MP4). The browser PUTs the file
  * straight to R2 with `Content-Type: video/mp4` (which is signed, so it must
  * match) — the bytes never touch this origin, bypassing the 50Mbps uplink.
@@ -205,7 +227,9 @@ export interface WireMediaRow {
   kind: string;
   cf_image_id: string | null;
   r2_key: string | null;
+  thumb_r2_key?: string | null;
   poster_cf_image_id: string | null;
+  poster_r2_key: string | null;
   duration_seconds: number | null;
   is_cover: boolean;
   unit: string | null;
@@ -226,20 +250,29 @@ export function shapeMedia(row: WireMediaRow): Record<string, unknown> {
     width: row.width,
     height: row.height,
     duration_seconds: row.duration_seconds,
-    // Storage ids are already derivable from the delivery URL below, so
+    // Storage keys are already derivable from the delivery URL below, so
     // exposing them is not a leak — and it lets the compose editor round-trip
     // existing media on edit without re-uploading.
     cf_image_id: row.cf_image_id,
     r2_key: row.r2_key,
+    poster_r2_key: row.poster_r2_key,
     poster_cf_image_id: row.poster_cf_image_id,
   };
-  if (row.kind === 'image' && row.cf_image_id) {
-    out['thumb_url'] = imageVariantUrl(row.cf_image_id, 'thumb');
-    out['feed_url'] = imageVariantUrl(row.cf_image_id, 'feed');
-    out['url'] = imageVariantUrl(row.cf_image_id, 'public');
+  if (row.kind === 'image') {
+    // New images live in R2 (single optimised WebP). Legacy Cloudflare-Images
+    // rows fall back to variant URLs.
+    if (row.r2_key) {
+      const u = r2PublicUrl(row.r2_key);
+      out['url'] = u; out['feed_url'] = u; out['thumb_url'] = u;
+    } else if (row.cf_image_id) {
+      out['url'] = imageVariantUrl(row.cf_image_id, 'public');
+      out['feed_url'] = imageVariantUrl(row.cf_image_id, 'feed');
+      out['thumb_url'] = imageVariantUrl(row.cf_image_id, 'thumb');
+    }
   } else if (row.kind === 'video' && row.r2_key) {
     out['url'] = r2PublicUrl(row.r2_key);
-    if (row.poster_cf_image_id) out['poster_url'] = imageVariantUrl(row.poster_cf_image_id, 'public');
+    if (row.poster_r2_key) out['poster_url'] = r2PublicUrl(row.poster_r2_key);
+    else if (row.poster_cf_image_id) out['poster_url'] = imageVariantUrl(row.poster_cf_image_id, 'public');
   }
   return out;
 }
