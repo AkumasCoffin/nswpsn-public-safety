@@ -83,6 +83,8 @@
   <script type="module">
     const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    // Only allow http(s) links (defence-in-depth on top of the backend's URL check).
+    const safeUrl = (u) => { try { const url = new URL(u, location.origin); return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '#'; } catch (e) { return '#'; } };
     let API_KEY = null;
 
     const qs = new URLSearchParams(location.search);
@@ -108,7 +110,7 @@
         ? `<img src="${esc(p.avatar_url)}" alt="">`
         : esc((name || '?').charAt(0).toUpperCase());
       const links = SOCIALS.filter((s) => p && p[s.key]).map((s) =>
-        `<a href="${esc(p[s.key])}" target="_blank" rel="noopener noreferrer" title="${s.label}"><i class="${s.icon}"></i></a>`).join('');
+        `<a href="${esc(safeUrl(p[s.key]))}" target="_blank" rel="noopener noreferrer" title="${s.label}"><i class="${s.icon}"></i></a>`).join('');
       document.getElementById('profContent').innerHTML = `
         <div class="prof-card">
           <div class="prof-avatar">${avatar}</div>

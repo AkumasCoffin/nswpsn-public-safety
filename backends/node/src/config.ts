@@ -417,6 +417,11 @@ const Schema = z.object({
   // so view counting works out of the box; override to rotate.
   VIEW_HASH_SALT: z.string().default('nswpsn-wire-views'),
 
+  // Soft-launch flag for The Wire. While 'false' (default), the Wire read
+  // endpoints are restricted to the owner (the frontend also shows a
+  // coming-soon banner). Set to 'true' to open it to everyone at launch.
+  WIRE_PUBLIC: z.string().default('false'),
+
 });
 
 const parsed = Schema.safeParse(process.env);

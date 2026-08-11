@@ -18,11 +18,13 @@ import { Hono } from 'hono';
 import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { config } from '../config.js';
 import {
   requireRole,
   canFeedMedia,
   canModerateWire,
   canManageUsers,
+  isOwner,
 } from '../services/auth/roles.js';
 import { rememberCallsigns, normaliseCallsign } from '../services/callsigns.js';
 import {
@@ -66,6 +68,15 @@ function currentUserName(c: { get: (k: string) => unknown }): string | null {
 function clientIp(c: { req: { header: (k: string) => string | undefined } }): string {
   const fwd = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '';
   return fwd.split(',')[0]?.trim() || 'unknown';
+}
+
+// Soft launch: while WIRE_PUBLIC !== 'true', only the owner may read the feed —
+// this enforces the "coming soon for everyone except owner" gate server-side
+// (the frontend banner alone is cosmetic). Flip WIRE_PUBLIC=true at launch.
+async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean> {
+  if (config.WIRE_PUBLIC === 'true') return true;
+  const uid = currentUserId(c);
+  return !!(uid && (await isOwner(uid)));
 }
 
 // ---- validation ------------------------------------------------------------
@@ -317,8 +328,18 @@ wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => 
   if (hash) {
     const pool = await getPool();
     if (pool) {
+      // Only reuse an object from an already-PUBLISHED, non-taken-down post, so
+      // dedup can't resurrect a removed/taken-down image or reveal whether an
+      // image exists in someone else's draft/pending post.
       const dup = await pool.query<{ r2_key: string }>(
-        'SELECT r2_key FROM wire_media WHERE hash = $1 AND r2_key IS NOT NULL LIMIT 1', [hash]);
+        `SELECT wm.r2_key FROM wire_media wm
+           JOIN media_posts mp ON wm.parent_type='media_post' AND wm.parent_id = mp.id
+          WHERE wm.hash=$1 AND wm.r2_key IS NOT NULL AND mp.status='published' AND mp.taken_down_at IS NULL
+         UNION
+         SELECT wm.r2_key FROM wire_media wm
+           JOIN articles a ON wm.parent_type='article' AND wm.parent_id = a.id
+          WHERE wm.hash=$1 AND wm.r2_key IS NOT NULL AND a.status='published' AND a.taken_down_at IS NULL
+         LIMIT 1`, [hash]);
       const existing = dup.rows[0]?.r2_key;
       if (existing) return c.json({ duplicate: true, key: existing, publicUrl: r2PublicUrl(existing), hash });
     }
@@ -334,7 +355,7 @@ wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (
   const size = Number(body['size']) || 0;
   if (size <= 0) return c.json({ error: 'size (bytes) is required' }, 400);
   if (size > MAX_VIDEO_BYTES) return c.json({ error: 'video too large (50MB max)' }, 413);
-  const up = await createVideoUploadUrl();
+  const up = await createVideoUploadUrl(size);
   if (!up) return c.json({ error: 'could not create upload url' }, 503);
   // Browser must PUT with Content-Type: video/mp4 (it's part of the signature).
   return c.json({ ...up, maxBytes: MAX_VIDEO_BYTES });
@@ -347,6 +368,7 @@ wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (
 wireRouter.get('/api/wire/media', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  if (!(await wireReadable(c))) return c.json({ posts: [] });
   try {
     const url = new URL(c.req.url);
     const mine = url.searchParams.get('mine') === '1';
@@ -391,6 +413,7 @@ wireRouter.get('/api/wire/media', async (c) => {
 wireRouter.get('/api/wire/media/:id', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  if (!(await wireReadable(c))) return c.json({ error: 'not found' }, 404);
   const id = c.req.param('id');
   try {
     const r = await pool.query('SELECT * FROM media_posts WHERE id = $1', [id]);
@@ -564,6 +587,7 @@ wireRouter.post('/api/wire/media/:id/view', async (c) => {
 wireRouter.get('/api/wire/articles', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  if (!(await wireReadable(c))) return c.json({ articles: [] });
   try {
     const url = new URL(c.req.url);
     const mine = url.searchParams.get('mine') === '1';
@@ -603,6 +627,7 @@ wireRouter.get('/api/wire/articles', async (c) => {
 wireRouter.get('/api/wire/articles/:slug', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  if (!(await wireReadable(c))) return c.json({ error: 'not found' }, 404);
   const slug = c.req.param('slug');
   try {
     // Accept a slug (public URLs) OR an id (the compose edit link uses the id).
@@ -1000,6 +1025,18 @@ wireRouter.post('/api/wire/takedowns/:id/uphold', requireRole(canModerateWire), 
       throw err;
     } finally {
       client.release();
+    }
+    // DMCA purge: delete the target's media rows and their R2/Cloudflare objects
+    // so the infringing bytes are actually gone (and can't be re-linked via the
+    // hash-dedup path). Best-effort — the tombstone stands regardless.
+    try {
+      const imgIds = await imageIdsFor(pool, row.target_type, row.target_id);
+      const r2keys = await r2KeysFor(pool, row.target_type, row.target_id);
+      await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', [row.target_type, row.target_id]);
+      for (const iid of imgIds) await deleteCfImage(iid);
+      for (const k of r2keys) await safeDeleteR2(pool, k);
+    } catch (e) {
+      log.warn({ e, id }, 'wire: takedown media purge failed (bytes may remain)');
     }
     return c.json({ success: true });
   } catch (err) {

@@ -23,6 +23,9 @@ function normUrl(v: unknown): string | null {
   const s = v.trim().slice(0, 300);
   if (!s) return null;
   const url = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  // Reject anything that could break out of an href/attribute if the frontend
+  // ever mis-escapes it (defence in depth on top of frontend escaping).
+  if (/["'<>`\\]/.test(url)) return null;
   return /^https?:\/\/[^\s.]+\.[^\s]+$/i.test(url) ? url : null;
 }
 
@@ -76,7 +79,9 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
     const youtube = normUrl(d['youtube']);
     const website = normUrl(d['website']);
     // avatar_key is only written when provided (COALESCE keeps the existing one).
-    const avatarKey = typeof d['avatar_key'] === 'string' && d['avatar_key'] ? d['avatar_key'].slice(0, 200) : null;
+    // Must be a key we minted (under wire/avatars/) — never an arbitrary object.
+    let avatarKey = typeof d['avatar_key'] === 'string' && d['avatar_key'] ? d['avatar_key'].slice(0, 200) : null;
+    if (avatarKey && !avatarKey.startsWith('wire/avatars/')) avatarKey = null;
     const r = await pool.query<ProfileRow>(
       `INSERT INTO user_profiles (user_id, display_name, avatar_key, twitter, facebook, instagram, youtube, website, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())

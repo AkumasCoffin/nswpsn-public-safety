@@ -149,15 +149,20 @@ export async function createImageUploadUrl(prefix = 'wire/img'): Promise<{ uploa
  * match) — the bytes never touch this origin, bypassing the 50Mbps uplink.
  * Returns null when R2 isn't configured or signing fails.
  */
-export async function createVideoUploadUrl(): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
+export async function createVideoUploadUrl(contentLength?: number): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
   if (!r2Configured()) return null;
   try {
     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
     const s3 = await r2Client();
     const key = `wire/videos/${randomUUID()}.mp4`;
-    const cmd = new PutObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key, ContentType: 'video/mp4' });
-    const uploadURL = await getSignedUrl(s3, cmd, { expiresIn: 600 });
+    // Sign the exact Content-Length so the browser can't upload more than the
+    // declared (server-capped) size — the PUT's Content-Length must match.
+    const cmd = new PutObjectCommand({
+      Bucket: config.R2_BUCKET as string, Key: key, ContentType: 'video/mp4',
+      ...(contentLength && contentLength > 0 ? { ContentLength: contentLength } : {}),
+    });
+    const uploadURL = await getSignedUrl(s3, cmd, { expiresIn: 600, signableHeaders: contentLength ? new Set(['content-length', 'content-type', 'host']) : undefined });
     return { uploadURL, key, publicUrl: r2PublicUrl(key) };
   } catch (err) {
     log.warn({ err }, 'wire: R2 presign failed');

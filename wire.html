@@ -352,7 +352,7 @@
       let media = '';
       if (cover && cover.kind === 'image') {
         const src = cover.feed_url || cover.url;
-        media = `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.onerror=null;this.src='${esc(cover.url || '')}'">`;
+        media = `<img src="${esc(src)}" alt="" loading="lazy" data-fb="${esc(cover.url || '')}" onerror="this.onerror=null;this.src=this.dataset.fb">`;
       } else if (cover && cover.kind === 'video') {
         media = (cover.poster_url ? `<img src="${esc(cover.poster_url)}" alt="">` : `<div class="placeholder"><i class="fa-solid fa-film"></i></div>`) + `<span class="wire-play"><i class="fa-solid fa-play"></i></span>`;
       } else {
@@ -559,7 +559,7 @@
     function wireGallery() {
       const strip = $('#galStrip'); if (!strip) return;
       strip.innerHTML = galleryMedia.map((m, i) => {
-        const thumb = m.kind === 'image' ? `<img src="${esc(m.thumb_url || m.url)}" alt="" onerror="this.onerror=null;this.src='${esc(m.url || '')}'">` : (m.poster_url ? `<img src="${esc(m.poster_url)}">` : '') + `<span class="vico"><i class="fa-solid fa-play"></i></span>`;
+        const thumb = m.kind === 'image' ? `<img src="${esc(m.thumb_url || m.url)}" alt="" data-fb="${esc(m.url || '')}" onerror="this.onerror=null;this.src=this.dataset.fb">` : (m.poster_url ? `<img src="${esc(m.poster_url)}">` : '') + `<span class="vico"><i class="fa-solid fa-play"></i></span>`;
         return `<div class="wd-thumb" data-i="${i}" aria-current="${i === galleryIdx}">${thumb}</div>`;
       }).join('');
       strip.querySelectorAll('.wd-thumb').forEach((t) => t.addEventListener('click', () => {
