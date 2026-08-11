@@ -28,6 +28,8 @@
 
   <style>
     .wire-main { padding: 1.4rem clamp(1rem, 4vw, 2.4rem) 4rem; }
+    /* Mobile: clear the fixed 60px header (the base .main rule is overridden here). */
+    @media (max-width: 900px) { .wire-main { padding-top: 5rem; } }
     .wire-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
     .wire-title { font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 800; letter-spacing: -0.02em; margin: 0; }
     .wire-title .dot { color: var(--accent); }
