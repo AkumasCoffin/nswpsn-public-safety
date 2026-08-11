@@ -31,6 +31,9 @@ import {
   deleteCfImage,
   imageVariantUrl,
   r2Configured,
+  createVideoUploadUrl,
+  deleteR2Object,
+  MAX_VIDEO_BYTES,
   slugify,
   viewerHash,
   shapeMedia,
@@ -281,10 +284,15 @@ wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => 
 });
 
 wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (c) => {
-  // Phase 1.5: R2 presigned PUT. Until R2 + the aws-sdk wiring land, report
-  // unavailable so the compose UI can hide/disable the video slots.
-  if (!r2Configured()) return c.json({ error: 'video uploads not yet available' }, 503);
-  return c.json({ error: 'video uploads not yet available' }, 503);
+  if (!r2Configured()) return c.json({ error: 'video uploads not configured' }, 503);
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const size = Number(body['size']) || 0;
+  if (size <= 0) return c.json({ error: 'size (bytes) is required' }, 400);
+  if (size > MAX_VIDEO_BYTES) return c.json({ error: 'video too large (50MB max)' }, 413);
+  const up = await createVideoUploadUrl();
+  if (!up) return c.json({ error: 'could not create upload url' }, 503);
+  // Browser must PUT with Content-Type: video/mp4 (it's part of the signature).
+  return c.json({ ...up, maxBytes: MAX_VIDEO_BYTES });
 });
 
 // ===========================================================================
@@ -413,6 +421,7 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     if ('error' in mv) return c.json({ error: mv.error }, 400);
 
     const oldImageIds = await imageIdsFor(pool, 'media_post', id);
+    const oldR2Keys = await r2KeysFor(pool, 'media_post', id);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -434,6 +443,8 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     // Best-effort: delete CF images no longer referenced.
     const keptIds = new Set(mv.items.map((m) => m.cf_image_id).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
+    const keptKeys = new Set(mv.items.map((m) => m.r2_key).filter(Boolean) as string[]);
+    for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: update media failed');
@@ -454,9 +465,11 @@ wireRouter.delete('/api/wire/media/:id', async (c) => {
       return c.json({ error: 'forbidden' }, 403);
     }
     const imgIds = await imageIdsFor(pool, 'media_post', id);
+    const r2keys = await r2KeysFor(pool, 'media_post', id);
     await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
     await pool.query('DELETE FROM media_posts WHERE id = $1', [id]);
     for (const iid of imgIds) await deleteCfImage(iid);
+    for (const k of r2keys) await deleteR2Object(k);
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: delete media failed');
@@ -605,6 +618,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';
 
     const oldImageIds = await imageIdsFor(pool, 'article', id);
+    const oldR2Keys = await r2KeysFor(pool, 'article', id);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -625,6 +639,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     await rememberCallsigns(pool, mv.units);
     const keptIds = new Set(mv.items.map((m) => m.cf_image_id).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
+    const keptKeys = new Set(mv.items.map((m) => m.r2_key).filter(Boolean) as string[]);
+    for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
     return c.json({ success: true, slug });
   } catch (err) {
     log.error({ err, id }, 'wire: update article failed');
@@ -643,9 +659,11 @@ wireRouter.delete('/api/wire/articles/:id', async (c) => {
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) return c.json({ error: 'forbidden' }, 403);
     const imgIds = await imageIdsFor(pool, 'article', id);
+    const r2keys = await r2KeysFor(pool, 'article', id);
     await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
     await pool.query('DELETE FROM articles WHERE id = $1', [id]);
     for (const iid of imgIds) await deleteCfImage(iid);
+    for (const k of r2keys) await deleteR2Object(k);
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: delete article failed');
@@ -676,6 +694,14 @@ async function imageIdsFor(pool: Pool, parentType: string, parentId: string): Pr
     if (row.poster_cf_image_id) ids.push(row.poster_cf_image_id);
   }
   return ids;
+}
+
+async function r2KeysFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {
+  const r = await pool.query<{ r2_key: string | null }>(
+    'SELECT r2_key FROM wire_media WHERE parent_type=$1 AND parent_id=$2 AND r2_key IS NOT NULL',
+    [parentType, parentId],
+  );
+  return r.rows.map((row) => row.r2_key).filter((k): k is string => !!k);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

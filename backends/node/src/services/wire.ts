@@ -6,7 +6,7 @@
  * unit-testable and reusable.
  */
 import { fetch, FormData } from 'undici';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 
@@ -86,7 +86,9 @@ export function imageVariantUrl(id: string, variant = 'public'): string {
   return `https://imagedelivery.net/${config.CF_IMAGES_HASH}/${id}/${variant}`;
 }
 
-// ---- R2 video (phase 1.5) --------------------------------------------------
+// ---- R2 video --------------------------------------------------------------
+
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50 MB per clip
 
 export function r2Configured(): boolean {
   return Boolean(
@@ -102,6 +104,56 @@ export function r2Configured(): boolean {
 export function r2PublicUrl(key: string): string {
   const base = (config.R2_PUBLIC_BASE ?? '').replace(/\/$/, '');
   return `${base}/${key.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+// The S3 SDK is heavy and only needed when video is actually used, so it's
+// dynamically imported (same lazy pattern as pg in db/pool.ts).
+async function r2Client() {
+  const { S3Client } = await import('@aws-sdk/client-s3');
+  return new S3Client({
+    region: 'auto',
+    endpoint: config.R2_ENDPOINT,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.R2_ACCESS_KEY_ID as string,
+      secretAccessKey: config.R2_SECRET_ACCESS_KEY as string,
+    },
+  });
+}
+
+/**
+ * Presign a browser->R2 PUT for a video (<=50MB MP4). The browser PUTs the file
+ * straight to R2 with `Content-Type: video/mp4` (which is signed, so it must
+ * match) — the bytes never touch this origin, bypassing the 50Mbps uplink.
+ * Returns null when R2 isn't configured or signing fails.
+ */
+export async function createVideoUploadUrl(): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
+  if (!r2Configured()) return null;
+  try {
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+    const s3 = await r2Client();
+    const key = `wire/videos/${randomUUID()}.mp4`;
+    const cmd = new PutObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key, ContentType: 'video/mp4' });
+    const uploadURL = await getSignedUrl(s3, cmd, { expiresIn: 600 });
+    return { uploadURL, key, publicUrl: r2PublicUrl(key) };
+  } catch (err) {
+    log.warn({ err }, 'wire: R2 presign failed');
+    return null;
+  }
+}
+
+/** Best-effort delete of a stored R2 video (called when a post/asset is
+ * removed so orphaned objects don't accrue storage). Never throws. */
+export async function deleteR2Object(key: string): Promise<void> {
+  if (!key || !r2Configured()) return;
+  try {
+    const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
+    const s3 = await r2Client();
+    await s3.send(new DeleteObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key }));
+  } catch (err) {
+    log.warn({ err, key }, 'wire: R2 delete failed (orphan left)');
+  }
 }
 
 // ---- Pure helpers ----------------------------------------------------------

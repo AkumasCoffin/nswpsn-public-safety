@@ -129,7 +129,10 @@
           <div style="font-size:0.7rem;margin-top:0.3rem">GPS &amp; camera metadata are stripped on delivery</div>
         </div>
         <div class="media-grid" id="mediaGrid"></div>
-        <div class="video-note" id="videoNote"><i class="fa-solid fa-film"></i> Video (up to 2 clips, 50&nbsp;MB each) is coming in the next update.</div>
+        <div style="margin-top:0.7rem;display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">
+          <button type="button" class="btn" id="addVideoBtn"><i class="fa-solid fa-film"></i> Add video</button>
+          <span class="hint" style="margin:0">Up to 2 clips · MP4 · 50&nbsp;MB each · uploads straight to storage</span>
+        </div>
       </div>
 
       <div class="field">
@@ -266,21 +269,84 @@
 
     function renderMedia() {
       const grid = $('#mediaGrid'); const isArt = type === 'article';
-      grid.innerHTML = state.media.map((m, i) => `
-        <div class="media-item">
-          <div class="pic">
-            <img src="${esc(m.previewUrl || m.deliveredUrl || m.url || '')}" alt="">
+      grid.innerHTML = state.media.map((m, i) => {
+        const pic = m.kind === 'video'
+          ? `<video src="${esc(m.previewUrl || m.url || '')}" muted playsinline preload="metadata" style="width:100%;height:100%;object-fit:cover"></video><span style="position:absolute;bottom:5px;left:5px;font-size:0.6rem;background:rgba(0,0,0,0.6);color:#fff;padding:1px 6px;border-radius:5px">VIDEO</span>`
+          : `<img src="${esc(m.previewUrl || m.deliveredUrl || m.url || '')}" alt="">`;
+        const cover = (isArt && m.kind === 'image') ? `<label class="cover-row"><input type="radio" name="cover" data-cover="${i}" ${m.is_cover ? 'checked' : ''}> Cover</label>` : '';
+        return `<div class="media-item">
+          <div class="pic">${pic}
             <button type="button" class="rm" data-rm="${i}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
             ${m.uploading ? '<div class="up"><i class="fa-solid fa-spinner fa-spin"></i></div>' : ''}
           </div>
           <div class="meta">
             <input list="callsign-list" data-unit="${i}" value="${esc(m.unit || '')}" placeholder="Unit / callsign">
-            ${isArt ? `<label class="cover-row"><input type="radio" name="cover" data-cover="${i}" ${m.is_cover ? 'checked' : ''}> Cover</label>` : ''}
+            ${cover}
           </div>
-        </div>`).join('');
-      grid.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { state.media.splice(+b.dataset.rm, 1); if (isArt && !state.media.some((m) => m.is_cover) && state.media[0]) state.media[0].is_cover = true; renderMedia(); }));
+        </div>`;
+      }).join('');
+      grid.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => {
+        state.media.splice(+b.dataset.rm, 1);
+        if (isArt && !state.media.some((m) => m.is_cover)) { const fi = state.media.find((m) => m.kind === 'image'); if (fi) fi.is_cover = true; }
+        renderMedia();
+      }));
       grid.querySelectorAll('[data-unit]').forEach((inp) => inp.addEventListener('input', () => { state.media[+inp.dataset.unit].unit = inp.value; }));
-      grid.querySelectorAll('[data-cover]').forEach((r) => r.addEventListener('change', () => { state.media.forEach((m, idx) => (m.is_cover = idx === +r.dataset.cover)); }));
+      grid.querySelectorAll('[data-cover]').forEach((r) => r.addEventListener('change', () => { state.media.forEach((m) => (m.is_cover = false)); state.media[+r.dataset.cover].is_cover = true; }));
+    }
+
+    // ---- video upload (R2) ----
+    $('#addVideoBtn').addEventListener('click', () => {
+      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/mp4'; inp.multiple = true;
+      inp.onchange = () => handleVideos(inp.files); inp.click();
+    });
+    async function handleVideos(files) {
+      for (const file of files) {
+        if (state.media.filter((m) => m.kind === 'video').length >= 2) { setMsg('Max 2 videos.', true); break; }
+        if (!/^video\//.test(file.type)) { setMsg('Videos must be MP4.', true); continue; }
+        if (file.size > 50 * 1024 * 1024) { setMsg('Each video must be 50 MB or less.', true); continue; }
+        const item = { kind: 'video', r2_key: null, unit: '', previewUrl: URL.createObjectURL(file), uploading: true };
+        state.media.push(item); renderMedia();
+        try {
+          const r = await fetch(`${API_BASE}/api/wire/video-upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ size: file.size }) });
+          if (r.status === 503) { setMsg("Video uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); return; }
+          if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'video-upload-url ' + r.status); }
+          const { uploadURL, key, publicUrl } = await r.json();
+          const up = await fetch(uploadURL, { method: 'PUT', headers: { 'Content-Type': 'video/mp4' }, body: file });
+          if (!up.ok) throw new Error('r2 put ' + up.status);
+          item.r2_key = key; item.url = publicUrl; item.uploading = false;
+          renderMedia();
+          capturePoster(file).then((pid) => { if (pid) item.poster_cf_image_id = pid; }).catch(() => {});
+        } catch (e) {
+          setMsg('A video failed to upload (' + e.message + ').', true);
+          state.media = state.media.filter((m) => m !== item); renderMedia();
+        }
+      }
+    }
+    // Best-effort: grab the first frame and store it as a Cloudflare Images poster.
+    function capturePoster(file) {
+      return new Promise((resolve) => {
+        const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = URL.createObjectURL(file);
+        const bail = () => resolve(null);
+        v.onloadeddata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch (e) { bail(); } };
+        v.onerror = bail;
+        v.onseeked = () => {
+          try {
+            const c = document.createElement('canvas'); c.width = v.videoWidth || 640; c.height = v.videoHeight || 360;
+            c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+            c.toBlob(async (blob) => {
+              if (!blob) return bail();
+              try {
+                const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders() });
+                if (!r.ok) return bail();
+                const { uploadURL, id } = await r.json();
+                const fd = new FormData(); fd.append('file', blob, 'poster.jpg');
+                const up = await fetch(uploadURL, { method: 'POST', body: fd });
+                resolve(up.ok ? id : null);
+              } catch (e) { bail(); }
+            }, 'image/jpeg', 0.8);
+          } catch (e) { bail(); }
+        };
+      });
     }
 
     // ---- location ----
@@ -413,7 +479,11 @@
 
     // ---- submit ----
     function buildPayload(status) {
-      const media = state.media.filter((m) => m.cf_image_id).map((m) => ({ kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || null, is_cover: !!m.is_cover }));
+      const media = state.media
+        .filter((m) => (m.kind === 'image' && m.cf_image_id) || (m.kind === 'video' && m.r2_key))
+        .map((m) => m.kind === 'video'
+          ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || null, poster_cf_image_id: m.poster_cf_image_id || null }
+          : { kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || null, is_cover: !!m.is_cover });
       const base = {
         title: $('#title').value.trim(),
         location_type: state.location.type, region: state.location.region,
@@ -455,9 +525,9 @@
       const it = data.post || data.article; if (!it) return;
       $('#title').value = it.title || '';
       if (isArt) { $('#excerpt').value = it.excerpt || ''; $('#body').value = it.body || ''; } else { $('#caption').value = it.caption || ''; }
-      state.media = (it.media || []).filter((m) => m.kind === 'image').map((m) => ({
-        kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url,
-      }));
+      state.media = (it.media || []).map((m) => m.kind === 'video'
+        ? { kind: 'video', r2_key: m.r2_key, poster_cf_image_id: m.poster_cf_image_id || null, unit: m.unit || '', url: m.url, previewUrl: m.url }
+        : { kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
       (it.agencies || []).forEach((a) => state.agencies.add(a));
       state.incidentId = it.incident_id || null;
       state.incidentTitle = it.incident_id ? 'Linked incident' : null;

@@ -23,6 +23,8 @@
     "migrate-history": "node --env-file-if-exists=../.env scripts/migrate-history.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1107.0",
+    "@aws-sdk/s3-request-presigner": "^3.1107.0",
     "@hono/node-server": "^2.0.12",
     "dictionary-en-au": "^3.0.0",
     "fast-xml-parser": "^5.10.1",
