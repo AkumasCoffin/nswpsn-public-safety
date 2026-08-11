@@ -105,6 +105,16 @@
     .wire-lb.on { display: grid; }
     .wire-lb img { max-width: 94vw; max-height: 88vh; border-radius: 8px; }
     .wire-lb .x { position: absolute; top: 1rem; right: 1.3rem; background: none; border: 0; color: #fff; font-size: 2rem; cursor: pointer; }
+
+    /* Takedown modal */
+    .rp-modal { position: fixed; inset: 0; z-index: 9500; background: rgba(2,4,8,0.85); display: none; align-items: center; justify-content: center; padding: 1.5rem; overflow-y: auto; }
+    .rp-modal.on { display: flex; }
+    .rp-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 14px; max-width: 540px; width: 100%; padding: 1.6rem; max-height: 90vh; overflow-y: auto; }
+    .rp-card h2 { margin: 0; font-size: 1.2rem; }
+    .rp-card input[type=text], .rp-card textarea { width: 100%; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); color: var(--text-main); border-radius: 8px; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.88rem; }
+    .rp-card textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
+    .rp-card label.chk { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.8rem; color: var(--text-muted); cursor: pointer; }
+    .rp-card label.chk input { width: auto; margin-top: 0.15rem; accent-color: var(--accent); }
   </style>
 </head>
 <body>
@@ -165,6 +175,27 @@
   </main>
 
   <div class="wire-lb" id="lightbox"><button class="x" aria-label="Close">&times;</button></div>
+
+  <div class="rp-modal" id="reportModal">
+    <div class="rp-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+        <h2>Report / request takedown</h2>
+        <button id="reportClose" style="background:none;border:0;color:var(--text-muted);font-size:1.6rem;cursor:pointer;line-height:1">&times;</button>
+      </div>
+      <p style="color:var(--text-soft);font-size:0.8rem;margin:0 0 1rem">File a notice if this content infringes your rights. Provide accurate details — knowingly false notices carry legal liability.</p>
+      <div style="display:flex;flex-direction:column;gap:0.7rem">
+        <input type="text" id="rp-name" placeholder="Your full name *" autocomplete="name">
+        <input type="text" id="rp-email" placeholder="Your email *" autocomplete="email">
+        <input type="text" id="rp-org" placeholder="Organisation (optional)">
+        <input type="text" id="rp-url" placeholder="Link to your original work (optional)">
+        <textarea id="rp-complaint" placeholder="Describe the content and why it infringes your rights *"></textarea>
+        <label class="chk"><input type="checkbox" id="rp-good"> I have a good-faith belief that this use is not authorised by the rights holder, its agent, or the law.</label>
+        <label class="chk"><input type="checkbox" id="rp-acc"> The information in this notice is accurate, and I am the rights holder or authorised to act on their behalf.</label>
+        <div id="rp-msg" style="font-size:0.8rem;min-height:1.1em"></div>
+        <button class="wire-post-btn" id="rp-submit" style="justify-content:center"><i class="fa-solid fa-paper-plane"></i> Submit notice</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     function toggleSidebar() {
@@ -288,7 +319,7 @@
     }
 
     // ---- detail ----
-    let galleryMedia = [], galleryIdx = 0;
+    let galleryMedia = [], galleryIdx = 0, currentItem = null;
 
     async function openDetail(kind, key, push = true) {
       const path = kind === 'article' ? `articles/${encodeURIComponent(key)}` : `media/${encodeURIComponent(key)}`;
@@ -296,7 +327,14 @@
         const r = await fetch(`${API_BASE}/api/wire/${path}`, { headers: await userHeaders() });
         if (!r.ok) { alert('Post not found.'); return; }
         const j = await r.json();
+        if (j.tombstone) {
+          renderTombstone();
+          $('#feedView').style.display = 'none'; $('#detail').classList.add('on'); window.scrollTo({ top: 0, behavior: 'smooth' });
+          if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}`);
+          return;
+        }
         const item = j.post || j.article;
+        currentItem = { id: item.id, kind: item.kind === 'article' ? 'article' : 'media_post', title: item.title };
         renderDetail(item);
         $('#feedView').style.display = 'none';
         $('#detail').classList.add('on');
@@ -351,6 +389,10 @@
             <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
             <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
             <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
+            <div class="wd-block"><div class="wd-lbl">License</div>
+              <div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-regular fa-copyright"></i> ${esc(item.license_label || 'Credit required')}${item.credit ? ' · ' + esc(item.credit) : ''}</div>
+              <button class="wd-btn" id="reportBtn" style="margin-top:0.7rem;font-size:0.75rem"><i class="fa-regular fa-flag"></i> Report / request takedown</button>
+            </div>
             ${incidentBlock}
             ${actions}
           </div>
@@ -360,6 +402,17 @@
       wireGallery();
       const del = $('#detail [data-act="delete"]'); if (del) del.addEventListener('click', () => mutateDelete(item, false));
       const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
+      const rep = $('#reportBtn'); if (rep) rep.addEventListener('click', openReportModal);
+    }
+
+    function renderTombstone() {
+      $('#detail').innerHTML = `
+        <button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>
+        <div class="wire-empty" style="padding:4rem 1rem">
+          <p><i class="fa-solid fa-circle-minus" style="font-size:2rem;color:var(--text-soft)"></i></p>
+          <p>This content was removed in response to a rights complaint.</p>
+        </div>`;
+      $('#backBtn').addEventListener('click', () => closeDetail());
     }
 
     function galleryPane() {
@@ -390,6 +443,32 @@
 
     function openLightbox(src) { const lb = $('#lightbox'); lb.querySelectorAll('img').forEach((i) => i.remove()); const img = new Image(); img.src = src; lb.appendChild(img); lb.classList.add('on'); }
     $('#lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox' || e.target.classList.contains('x')) $('#lightbox').classList.remove('on'); });
+
+    // ---- takedown / report ----
+    function openReportModal() { if (!currentItem) return; ['rp-name', 'rp-email', 'rp-org', 'rp-url', 'rp-complaint'].forEach((i) => ($('#' + i).value = '')); $('#rp-good').checked = false; $('#rp-acc').checked = false; $('#rp-msg').textContent = ''; $('#reportModal').classList.add('on'); }
+    function closeReportModal() { $('#reportModal').classList.remove('on'); }
+    $('#reportClose').addEventListener('click', closeReportModal);
+    $('#reportModal').addEventListener('click', (e) => { if (e.target.id === 'reportModal') closeReportModal(); });
+    $('#rp-submit').addEventListener('click', async () => {
+      if (!currentItem) return;
+      const v = (id) => $('#' + id).value.trim();
+      const msg = (t, err) => { const el = $('#rp-msg'); el.textContent = t; el.style.color = err ? '#ef4444' : 'var(--text-muted)'; };
+      if (!v('rp-name') || !v('rp-email') || !v('rp-complaint')) return msg('Name, email and a description are required.', true);
+      if (!$('#rp-good').checked || !$('#rp-acc').checked) return msg('Please confirm both statements.', true);
+      msg('Submitting…');
+      const body = {
+        target_type: currentItem.kind, target_id: currentItem.id,
+        reporter_name: v('rp-name'), reporter_email: v('rp-email'), reporter_org: v('rp-org') || null,
+        original_url: v('rp-url') || null, complaint: v('rp-complaint'),
+        good_faith: true, accuracy: true,
+      };
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/takedown`, { method: 'POST', headers: { ...(await keyHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) { msg('Notice submitted — our team will review it.'); setTimeout(closeReportModal, 1800); }
+        else msg(j.error || 'Failed to submit notice.', true);
+      } catch (e) { msg('Network error.', true); }
+    });
 
     async function mutateDelete(item, moderate) {
       const verb = moderate ? 'remove' : 'delete';

@@ -162,6 +162,27 @@
         <div class="agency-check" id="agencyCheck"></div>
       </div>
 
+      <div class="field">
+        <label for="license">License / rights</label>
+        <select id="license">
+          <option value="credit">Credit required — anyone may share/repost with attribution</option>
+          <option value="display">All rights reserved — display only, no reuse</option>
+          <option value="public">Public domain — no credit needed</option>
+        </select>
+        <div class="hint">How others may use this. Shown on the post.</div>
+      </div>
+
+      <div class="field">
+        <label for="credit">Credit line · optional</label>
+        <input type="text" id="credit" maxlength="200" placeholder="e.g. © 2026 M. Doyle / Forcequit">
+        <div class="hint">Overrides your username as the attribution shown on the post.</div>
+      </div>
+
+      <label style="display:flex;gap:0.6rem;align-items:flex-start;font-size:0.85rem;color:var(--text-muted);background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:9px;padding:0.75rem 0.9rem;margin-bottom:1rem;cursor:pointer">
+        <input type="checkbox" id="rightsAffirm" style="width:auto;margin-top:0.15rem;accent-color:var(--accent)">
+        <span>I own or have the rights to publish this content, and understand it may be removed in response to a valid rights complaint.</span>
+      </label>
+
       <datalist id="callsign-list"></datalist>
 
       <div class="actions" id="actions">
@@ -490,11 +511,15 @@
         lat: state.location.lat, lng: state.location.lng,
         agencies: [...state.agencies], incident_id: state.incidentId, media,
       };
+      base.license = $('#license').value;
+      base.credit = $('#credit').value.trim() || null;
+      base.rights_affirmed = $('#rightsAffirm').checked;
       if (type === 'article') return { ...base, excerpt: $('#excerpt').value.trim(), body: $('#body').value, status };
       return { ...base, caption: $('#caption').value.trim() };
     }
     async function submit(status) {
       if (!$('#title').value.trim()) { setMsg('A headline is required.', true); return; }
+      if (status === 'published' && !$('#rightsAffirm').checked) { setMsg('Please confirm you hold the rights before publishing.', true); return; }
       if (state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
       setBusy(true); setMsg('Saving…');
       const payload = buildPayload(status);
@@ -529,6 +554,9 @@
         ? { kind: 'video', r2_key: m.r2_key, poster_cf_image_id: m.poster_cf_image_id || null, unit: m.unit || '', url: m.url, previewUrl: m.url }
         : { kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
       (it.agencies || []).forEach((a) => state.agencies.add(a));
+      $('#license').value = it.license || 'credit';
+      $('#credit').value = it.credit || '';
+      $('#rightsAffirm').checked = true; // already affirmed when first published
       state.incidentId = it.incident_id || null;
       state.incidentTitle = it.incident_id ? 'Linked incident' : null;
       if (it.location) state.location = { type: it.location.type || 'pin', region: it.location.region || null, lat: it.location.lat, lng: it.location.lng };

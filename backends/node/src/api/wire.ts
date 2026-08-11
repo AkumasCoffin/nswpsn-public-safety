@@ -34,6 +34,8 @@ import {
   createVideoUploadUrl,
   deleteR2Object,
   MAX_VIDEO_BYTES,
+  normaliseLicense,
+  licenseLabel,
   slugify,
   viewerHash,
   shapeMedia,
@@ -218,6 +220,9 @@ function shapeMediaPost(row: any, media: WireMediaRow[]): Record<string, unknown
     agencies: row.agencies ?? [],
     incident_id: row.incident_id,
     units: deriveUnits(media),
+    license: row.license || 'credit',
+    license_label: licenseLabel(row.license || 'credit'),
+    credit: row.credit || null,
     views: Number(row.views) || 0,
     status: row.status,
     author: { id: row.author_id, name: row.author_name },
@@ -242,6 +247,9 @@ function shapeArticle(row: any, media: WireMediaRow[]): Record<string, unknown> 
     agencies: row.agencies ?? [],
     incident_id: row.incident_id,
     units: deriveUnits(media),
+    license: row.license || 'credit',
+    license_label: licenseLabel(row.license || 'credit'),
+    credit: row.credit || null,
     views: Number(row.views) || 0,
     status: row.status,
     author: { id: row.author_id, name: row.author_name },
@@ -345,7 +353,11 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
     const row = r.rows[0];
     const uid = currentUserId(c);
     const isAuthor = uid && row.author_id === uid;
-    if (row.status !== 'published' && !isAuthor && !(uid && (await canManageUsers(uid)))) {
+    const isAdmin = !!(uid && (await canManageUsers(uid)));
+    if (row.taken_down_at && !isAuthor && !isAdmin) {
+      return c.json({ tombstone: { type: 'media_post', taken_down_at: isoOrNull(row.taken_down_at) } });
+    }
+    if (row.status !== 'published' && !isAuthor && !isAdmin) {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'media_post', [id]);
@@ -367,6 +379,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const license = normaliseLicense(data['license']);
+    const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    if (data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], MEDIA);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
 
@@ -377,9 +392,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     try {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10) RETURNING id`,
-        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId],
+        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true) RETURNING id`,
+        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, MEDIA, newId, mv.items);
@@ -417,6 +432,8 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const license = normaliseLicense(data['license']);
+    const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
     const mv = validateMedia(data['media'], MEDIA);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
 
@@ -427,8 +444,8 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE media_posts SET title=$1, caption=$2, location_type=$3, region=$4, lat=$5, lng=$6,
-           agencies=$7::jsonb, incident_id=$8, updated_at=now() WHERE id=$9`,
-        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, id],
+           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, updated_at=now() WHERE id=$11`,
+        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
       await insertMediaRows(client, MEDIA, id, mv.items);
@@ -533,7 +550,11 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
     const row = r.rows[0];
     const uid = currentUserId(c);
     const isAuthor = uid && row.author_id === uid;
-    if (row.status !== 'published' && !isAuthor && !(uid && (await canManageUsers(uid)))) {
+    const isAdmin = !!(uid && (await canManageUsers(uid)));
+    if (row.taken_down_at && !isAuthor && !isAdmin) {
+      return c.json({ tombstone: { type: 'article', taken_down_at: isoOrNull(row.taken_down_at) } });
+    }
+    if (row.status !== 'published' && !isAuthor && !isAdmin) {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'article', [row.id]);
@@ -557,6 +578,10 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const license = normaliseLicense(data['license']);
+    const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    const rightsAffirmed = data['rights_affirmed'] === true;
+    if (status === 'published' && !rightsAffirmed) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     const slug = await uniqueSlug(pool, title);
@@ -569,9 +594,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
         `INSERT INTO articles (author_id, author_name, title, slug, excerpt, body, status, published_at,
-           location_type, region, lat, lng, agencies, incident_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13) RETURNING id`,
-        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId],
+           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16) RETURNING id`,
+        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, ARTICLE, newId, mv.items);
@@ -611,11 +636,15 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const license = normaliseLicense(data['license']);
+    const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    if (status === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     const slug = await uniqueSlug(pool, title, id);
     // First publish stamps published_at; keep the original on re-publish.
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';
+    const affirmSet = data['rights_affirmed'] === true ? ', rights_affirmed = true' : '';
 
     const oldImageIds = await imageIdsFor(pool, 'article', id);
     const oldR2Keys = await r2KeysFor(pool, 'article', id);
@@ -624,8 +653,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE articles SET title=$1, slug=$2, excerpt=$3, body=$4, status=$5, location_type=$6, region=$7,
-           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, updated_at=now()${setPublished} WHERE id=$12`,
-        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, id],
+           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
+        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
       await insertMediaRows(client, ARTICLE, id, mv.items);
@@ -721,6 +750,135 @@ async function softRemove(c: any, cfg: EntityCfg) {
     log.error({ err, id, table: cfg.table }, 'wire: remove failed');
     return c.json({ error: 'failed to remove' }, 500);
   }
+}
+
+// ===========================================================================
+// TAKEDOWNS (DMCA-style notice-and-takedown)
+// ===========================================================================
+
+const TARGET_TABLE: Record<string, string> = { media_post: 'media_posts', article: 'articles' };
+
+// Public intake: anyone may file a notice (key-gated like other public routes,
+// no login required — a rights holder isn't a site user).
+wireRouter.post('/api/wire/takedown', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  try {
+    const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const targetType = d['target_type'] === 'article' ? 'article' : d['target_type'] === 'media_post' ? 'media_post' : null;
+    const targetId = typeof d['target_id'] === 'string' ? d['target_id'] : '';
+    const name = typeof d['reporter_name'] === 'string' ? d['reporter_name'].trim().slice(0, 200) : '';
+    const email = typeof d['reporter_email'] === 'string' ? d['reporter_email'].trim().slice(0, 200) : '';
+    const complaint = typeof d['complaint'] === 'string' ? d['complaint'].trim().slice(0, 5000) : '';
+    const org = typeof d['reporter_org'] === 'string' ? d['reporter_org'].trim().slice(0, 200) || null : null;
+    const originalUrl = typeof d['original_url'] === 'string' ? d['original_url'].trim().slice(0, 500) || null : null;
+    if (!targetType || !targetId) return c.json({ error: 'target_type and target_id are required' }, 400);
+    if (!name || !email || !complaint) return c.json({ error: 'name, email and a description are required' }, 400);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: 'a valid email is required' }, 400);
+    // The two sworn statements a valid notice must carry.
+    if (d['good_faith'] !== true || d['accuracy'] !== true) {
+      return c.json({ error: 'both good-faith and accuracy statements must be confirmed' }, 400);
+    }
+    // Denormalise the target title for the review queue (best-effort).
+    let title: string | null = null;
+    try {
+      const t = await pool.query<{ title: string }>(`SELECT title FROM ${TARGET_TABLE[targetType]} WHERE id = $1`, [targetId]);
+      title = t.rows[0]?.title ?? null;
+    } catch { /* leave null */ }
+    await pool.query(
+      `INSERT INTO wire_takedowns (target_type, target_id, target_title, reporter_name, reporter_email, reporter_org, complaint, original_url, good_faith, accuracy)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true)`,
+      [targetType, targetId, title, name, email, org, complaint, originalUrl],
+    );
+    log.warn({ targetType, targetId }, 'wire: takedown notice filed');
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err }, 'wire: takedown intake failed');
+    return c.json({ error: 'failed to file notice' }, 500);
+  }
+});
+
+wireRouter.get('/api/wire/takedowns', requireRole(canModerateWire), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  try {
+    const status = new URL(c.req.url).searchParams.get('status') || 'pending';
+    const r = await pool.query(
+      `SELECT * FROM wire_takedowns WHERE status = $1 ORDER BY created_at DESC LIMIT 200`, [status]);
+    const pc = await pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM wire_takedowns WHERE status = 'pending'`);
+    const takedowns = r.rows.map((row) => ({
+      ...row,
+      created_at: isoOrNull(row.created_at),
+      reviewed_at: isoOrNull(row.reviewed_at),
+    }));
+    return c.json({ takedowns, pendingCount: Number(pc.rows[0]?.n ?? 0) });
+  } catch (err) {
+    log.error({ err }, 'wire: list takedowns failed');
+    return c.json({ error: 'failed to list takedowns' }, 500);
+  }
+});
+
+wireRouter.post('/api/wire/takedowns/:id/uphold', requireRole(canModerateWire), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const id = c.req.param('id');
+  const note = await noteFromBody(c);
+  try {
+    const t = await pool.query<{ target_type: string; target_id: string; status: string }>(
+      'SELECT target_type, target_id, status FROM wire_takedowns WHERE id = $1', [id]);
+    if (t.rowCount === 0) return c.json({ error: 'not found' }, 404);
+    const row = t.rows[0]!;
+    const table = TARGET_TABLE[row.target_type];
+    if (!table) return c.json({ error: 'bad target' }, 400);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Soft-remove + tombstone the target (retained for the audit trail).
+      await client.query(
+        `UPDATE ${table} SET status='removed', taken_down_at=now(), removed_by=$1, removed_by_name=$2, removed_at=now(), updated_at=now() WHERE id=$3`,
+        [currentUserId(c) ?? null, currentUserName(c), row.target_id],
+      );
+      await client.query(
+        `UPDATE wire_takedowns SET status='upheld', action_note=$1, reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now() WHERE id=$4`,
+        [note, currentUserId(c) ?? null, currentUserName(c), id],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id }, 'wire: uphold takedown failed');
+    return c.json({ error: 'failed to uphold' }, 500);
+  }
+});
+
+wireRouter.post('/api/wire/takedowns/:id/reject', requireRole(canModerateWire), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const id = c.req.param('id');
+  const note = await noteFromBody(c);
+  try {
+    const r = await pool.query(
+      `UPDATE wire_takedowns SET status='rejected', action_note=$1, reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now()
+       WHERE id=$4 AND status='pending' RETURNING id`,
+      [note, currentUserId(c) ?? null, currentUserName(c), id],
+    );
+    if (r.rowCount === 0) return c.json({ error: 'not found or already reviewed' }, 404);
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id }, 'wire: reject takedown failed');
+    return c.json({ error: 'failed to reject' }, 500);
+  }
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function noteFromBody(c: any): Promise<string | null> {
+  const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return typeof d['note'] === 'string' ? d['note'].trim().slice(0, 2000) || null : null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

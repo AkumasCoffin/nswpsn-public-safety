@@ -2149,9 +2149,11 @@
             <div class="tab-dd-menu" id="req-kind-menu" role="menu" aria-label="Request kind">
               <button class="tab-dd-item active" role="menuitem" data-kind="signup" onclick="openRequestsView('signup')"><i class="fas fa-user-plus"></i> Signup requests</button>
               <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes</button>
+              <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns</button>
             </div>
           </div>
           <span id="req-datachanges-badge" class="req-kind-badge" style="display:none;"></span>
+          <span id="req-takedowns-badge" class="req-kind-badge" style="display:none;"></span>
         </div>
 
         <!-- Signup requests (existing) -->
@@ -2203,6 +2205,18 @@
             <button class="filter-btn" data-dcfilter="all" onclick="setDcFilter('all')">All</button>
           </div>
           <div id="datachanges-container">
+            <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+        </div>
+
+        <!-- Wire takedowns (DMCA notice-and-takedown) -->
+        <div id="requests-takedowns-view" style="display:none;">
+          <div class="filter-bar">
+            <button class="filter-btn active" data-tdfilter="pending" onclick="setTdFilter('pending')">Pending</button>
+            <button class="filter-btn" data-tdfilter="upheld" onclick="setTdFilter('upheld')">Upheld</button>
+            <button class="filter-btn" data-tdfilter="rejected" onclick="setTdFilter('rejected')">Rejected</button>
+          </div>
+          <div id="takedowns-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
         </div>
@@ -9279,16 +9293,10 @@
     let _dcChanges = [];
     let _dcFilter = 'pending';
     function switchRequestsView(kind) {
-      const signup = document.getElementById('requests-signup-view');
-      const data = document.getElementById('requests-datachanges-view');
-      if (kind === 'data') {
-        if (signup) signup.style.display = 'none';
-        if (data) data.style.display = 'block';
-        loadDataChanges();
-      } else {
-        if (data) data.style.display = 'none';
-        if (signup) signup.style.display = 'block';
-      }
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', takedowns: 'requests-takedowns-view' };
+      Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
+      if (kind === 'data') loadDataChanges();
+      else if (kind === 'takedowns') loadTakedowns();
     }
     // Reviewing dropdown — mirrors the Data tab menu (toggleDataMenu/openDataMode).
     function toggleReqKindMenu(event) {
@@ -9309,7 +9317,7 @@
     function openRequestsView(kind) {
       closeReqKindMenu();
       const cur = document.getElementById('req-kind-current');
-      if (cur) cur.textContent = kind === 'data' ? 'Data changes' : 'Signup requests';
+      if (cur) cur.textContent = { data: 'Data changes', takedowns: 'Wire takedowns', signup: 'Signup requests' }[kind] || 'Signup requests';
       document.querySelectorAll('#req-kind-menu .tab-dd-item').forEach(it =>
         it.classList.toggle('active', it.dataset.kind === kind));
       switchRequestsView(kind);
@@ -9393,8 +9401,90 @@
       } catch (e) { showToast(action + ' failed', 'error'); }
     }
 
+    // --- Wire takedowns (Requests tab → "Wire takedowns") ---
+    let _tdFilter = 'pending', _tdItems = [];
+    function setTdFilter(status) {
+      _tdFilter = status;
+      document.querySelectorAll('[data-tdfilter]').forEach(b => b.classList.toggle('active', b.dataset.tdfilter === status));
+      loadTakedowns();
+    }
+    function _tdUpdateBadge(n) {
+      const b = document.getElementById('req-takedowns-badge');
+      if (!b) return;
+      if (n && n > 0) { b.style.display = ''; b.textContent = n + ' takedown' + (n > 1 ? 's' : ''); }
+      else b.style.display = 'none';
+    }
+    async function _tdRefreshBadge() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/takedowns?status=pending`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) return;
+        const d = await res.json();
+        _tdUpdateBadge(d.pendingCount);
+      } catch (e) { /* ignore */ }
+    }
+    async function loadTakedowns() {
+      const el = document.getElementById('takedowns-container');
+      if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/takedowns?status=${encodeURIComponent(_tdFilter)}`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const d = await res.json();
+        _tdItems = d.takedowns || [];
+        _tdUpdateBadge(d.pendingCount);
+        renderTakedowns();
+      } catch (e) {
+        if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load takedowns.</p></div>`;
+      }
+    }
+    function renderTakedowns() {
+      const el = document.getElementById('takedowns-container');
+      if (!el) return;
+      if (!_tdItems.length) {
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-inbox"></i><p>No ${_tdFilter === 'all' ? '' : escapeHtml(_tdFilter)} takedowns.</p></div>`;
+        return;
+      }
+      el.innerHTML = _tdItems.map(t => {
+        const when = t.created_at ? new Date(t.created_at).toLocaleString() : '';
+        const tab = t.target_type === 'article' ? 'articles' : 'media';
+        const paramK = t.target_type === 'article' ? 'article' : 'post';
+        const link = `wire?tab=${tab}&${paramK}=${encodeURIComponent(t.target_id)}`;
+        const actions = t.status === 'pending'
+          ? `<div class="dc-actions"><button class="btn btn-danger btn-sm" onclick="tdAction('${t.id}', 'uphold')"><i class="fas fa-ban"></i> Uphold &amp; remove</button><button class="btn btn-success btn-sm" onclick="tdAction('${t.id}', 'reject')"><i class="fas fa-times"></i> Reject</button></div>`
+          : `<div class="dc-status ${escapeHtml(t.status)}">${escapeHtml(t.status)}${t.reviewed_by_name ? ' · by ' + escapeHtml(t.reviewed_by_name) : ''}</div>`;
+        return `<div class="dc-card">
+          <div class="dc-head">
+            <span class="dc-op delete"><i class="fas fa-flag"></i> takedown</span>
+            <span class="dc-agency">${escapeHtml(t.target_title || t.target_id)}</span>
+            <span class="dc-section">${escapeHtml(t.target_type)}</span>
+            <span class="dc-meta">${escapeHtml(when)}</span>
+          </div>
+          <div style="font-size:0.85rem;color:#cbd5e1;padding:0.3rem 0;line-height:1.5">
+            <div><b>From:</b> ${escapeHtml(t.reporter_name)} &lt;${escapeHtml(t.reporter_email)}&gt;${t.reporter_org ? ' · ' + escapeHtml(t.reporter_org) : ''}</div>
+            ${t.original_url ? `<div><b>Original work:</b> <a href="${escapeHtml(t.original_url)}" target="_blank" rel="noopener">${escapeHtml(t.original_url)}</a></div>` : ''}
+            <div style="margin-top:0.35rem;white-space:pre-wrap">${escapeHtml(t.complaint)}</div>
+            <div style="margin-top:0.35rem"><a href="${link}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i> View reported content</a></div>
+            ${t.action_note ? `<div style="margin-top:0.35rem;color:#94a3b8"><b>Note:</b> ${escapeHtml(t.action_note)}</div>` : ''}
+          </div>
+          ${actions}
+        </div>`;
+      }).join('');
+    }
+    async function tdAction(id, action) {
+      if (action === 'uphold' && !confirm('Uphold this notice and remove the content? Viewers will see a takedown notice in its place.')) return;
+      let note = null;
+      if (action === 'reject') note = prompt('Reason for rejecting (optional):') || null;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/takedowns/${id}/${action}`, { method: 'POST', headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(d.error || (action + ' failed'), 'error'); return; }
+        showToast(action === 'uphold' ? 'Content removed' : 'Notice rejected', 'success');
+        loadTakedowns();
+      } catch (e) { showToast(action + ' failed', 'error'); }
+    }
+
     async function loadRequests() {
       _dcRefreshBadge();
+      _tdRefreshBadge();
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           headers: {

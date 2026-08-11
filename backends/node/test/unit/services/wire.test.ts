@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugify, viewerHash, shapeMedia, type WireMediaRow } from '../../../src/services/wire.js';
+import { slugify, viewerHash, shapeMedia, normaliseLicense, licenseLabel, WIRE_LICENSES, type WireMediaRow } from '../../../src/services/wire.js';
 
 function mediaRow(over: Partial<WireMediaRow>): WireMediaRow {
   return {
@@ -30,6 +30,21 @@ describe('wire.viewerHash', () => {
   it('differs when the ip or ua changes', () => {
     expect(viewerHash('1.2.3.4', 'UA')).not.toBe(viewerHash('1.2.3.5', 'UA'));
     expect(viewerHash('1.2.3.4', 'UA')).not.toBe(viewerHash('1.2.3.4', 'OTHER'));
+  });
+});
+
+describe('wire.license', () => {
+  it('defaults unknown/blank to credit-required', () => {
+    expect(normaliseLicense(undefined)).toBe('credit');
+    expect(normaliseLicense('nope')).toBe('credit');
+    expect(normaliseLicense('display')).toBe('display');
+    expect(normaliseLicense('public')).toBe('public');
+  });
+  it('labels use the plain-language names', () => {
+    expect(WIRE_LICENSES['credit']).toBe('Credit required');
+    expect(WIRE_LICENSES['display']).toBe('All rights reserved');
+    expect(WIRE_LICENSES['public']).toBe('Public domain');
+    expect(licenseLabel('bogus')).toBe('Credit required');
   });
 });
 

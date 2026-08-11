@@ -156,6 +156,25 @@ export async function deleteR2Object(key: string): Promise<void> {
   }
 }
 
+// ---- Licensing -------------------------------------------------------------
+
+/** The offered license set (code -> human label). Plain-language rather than
+ * CC jargon. Validated in app so the set can grow without a migration.
+ * 'credit' is the default. */
+export const WIRE_LICENSES: Record<string, string> = {
+  credit: 'Credit required',
+  display: 'All rights reserved',
+  public: 'Public domain',
+};
+
+export function normaliseLicense(v: unknown): string {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(WIRE_LICENSES, v) ? v : 'credit';
+}
+
+export function licenseLabel(code: string): string {
+  return WIRE_LICENSES[code] ?? WIRE_LICENSES['credit']!;
+}
+
 // ---- Pure helpers ----------------------------------------------------------
 
 /** URL-safe slug base from a title. */
