@@ -492,6 +492,66 @@ class CentralwatchBrowser {
     });
   }
 
+  /**
+   * TEMP diagnostic: load a URL as an <img> (Sec-Fetch-Dest: image, like the
+   * real site) and report whether it loaded, its dimensions, and whether the
+   * pixels read back off a canvas. Distinguishes a request-shape WAF deny
+   * (fetch blocked, <img> allowed) from a hard path/IP deny (both blocked).
+   */
+  async diagnosticImgLoad(
+    url: string,
+    timeoutMs = 12000,
+  ): Promise<{
+    phase?: string;
+    naturalWidth?: number;
+    naturalHeight?: number;
+    canvasOk?: boolean;
+    canvasErr?: string;
+    dataLen?: number;
+  } | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const script = `(async () => {
+        const url = ${JSON.stringify(url)};
+        const timeout = ${JSON.stringify(timeoutMs)};
+        return await new Promise((resolve) => {
+          let done = false;
+          const img = document.createElement('img');
+          img.crossOrigin = 'anonymous';
+          const finish = (o) => { if (done) return; done = true; try { img.remove(); } catch (e) {} resolve(o); };
+          const timer = setTimeout(() => finish({ phase: 'timeout' }), timeout);
+          img.onload = () => {
+            clearTimeout(timer);
+            const w = img.naturalWidth, h = img.naturalHeight;
+            let canvasOk = false, canvasErr = '', dataLen = 0;
+            try {
+              const c = document.createElement('canvas'); c.width = w; c.height = h;
+              c.getContext('2d').drawImage(img, 0, 0);
+              dataLen = c.toDataURL('image/jpeg', 0.8).length; canvasOk = true;
+            } catch (e) { canvasErr = String(e && e.message ? e.message : e); }
+            finish({ phase: 'load', naturalWidth: w, naturalHeight: h, canvasOk, canvasErr, dataLen });
+          };
+          img.onerror = () => { clearTimeout(timer); finish({ phase: 'error' }); };
+          img.src = url;
+          document.body.appendChild(img);
+        });
+      })()`;
+      try {
+        return await this.evaluateWithRetry<{
+          phase?: string;
+          naturalWidth?: number;
+          naturalHeight?: number;
+          canvasOk?: boolean;
+          canvasErr?: string;
+          dataLen?: number;
+        }>(script);
+      } catch (err) {
+        log.warn({ err: (err as Error).message, url }, 'centralwatch diagnosticImgLoad threw');
+        return null;
+      }
+    });
+  }
+
   async fetchImage(
     url: string,
     timeoutMs = 15000,

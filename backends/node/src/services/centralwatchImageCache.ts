@@ -251,9 +251,27 @@ export async function runBatchOnce(): Promise<{
   // (403/404/429 vs content-type vs too-small) at warn level.
   if (cached === 0 && inputs.length > 0) {
     try {
-      const diag = await centralwatchBrowser.diagnosticFetch(inputs[0]!.url);
+      const imgUrl = inputs[0]!.url;
+      const [diag, imgDiag, listRaw] = await Promise.all([
+        centralwatchBrowser.diagnosticFetch(imgUrl),
+        centralwatchBrowser.diagnosticImgLoad(imgUrl),
+        centralwatchBrowser.fetchJson('https://centralwatch.watchtowers.io/au/api/cameras'),
+      ]);
+      // Dump one raw upstream camera object so we can see whether the API
+      // hands us a ready image URL/token we're not using (vs building the
+      // /image/{ts} path ourselves).
+      let sampleCamera: unknown = null;
+      let cameraKeys: string[] | null = null;
+      const cams =
+        listRaw && typeof listRaw === 'object' && Array.isArray((listRaw as { cameras?: unknown[] }).cameras)
+          ? (listRaw as { cameras: unknown[] }).cameras
+          : null;
+      if (cams && cams[0] && typeof cams[0] === 'object') {
+        sampleCamera = cams[0];
+        cameraKeys = Object.keys(cams[0] as Record<string, unknown>);
+      }
       log.warn(
-        { url: inputs[0]!.url, diag },
+        { url: imgUrl, diag, imgDiag, cameraKeys, sampleCamera },
         'centralwatch image batch DIAGNOSTIC: 0 cached this pass',
       );
     } catch (e) {
