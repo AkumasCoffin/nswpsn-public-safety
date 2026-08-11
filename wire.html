@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – The Wire</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="The Wire — independent photos, video and news from NSW emergency-services contributors on Forcequit NSW PSN.">
+  <meta name="author" content="Forcequit">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nswpsn.forcequit.xyz/wire">
+  <meta property="og:title" content="NSW PSN – The Wire">
+  <meta property="og:description" content="Independent photos, video and news from NSW emergency-services contributors.">
+  <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
+  <meta property="og:site_name" content="Forcequit NSW PSN">
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="canonical" href="https://nswpsn.forcequit.xyz/wire">
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+  <script src="agencies.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+
+  <style>
+    .wire-main { padding: 1.4rem clamp(1rem, 4vw, 2.4rem) 4rem; }
+    .wire-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+    .wire-title { font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+    .wire-title .dot { color: var(--accent); }
+    .wire-sub { color: var(--text-muted); font-size: 0.9rem; margin: 0.2rem 0 0; }
+    .wire-tabs { display: flex; gap: 0.3rem; margin: 1rem 0 0.6rem; border-bottom: 1px solid var(--border-subtle); }
+    .wire-tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-muted); font: inherit; font-size: 0.9rem; font-weight: 600; padding: 0.55rem 0.9rem; cursor: pointer; }
+    .wire-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+    .wire-post-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--accent); color: #fff; border: 0; border-radius: 9px; font: inherit; font-weight: 700; font-size: 0.85rem; padding: 0.55rem 1rem; cursor: pointer; text-decoration: none; }
+    .wire-post-btn:hover { background: #ea580c; }
+
+    .wire-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.4rem 0 1.2rem; align-items: center; }
+    .wire-filters input, .wire-filters select {
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-main);
+      border-radius: 8px; padding: 0.45rem 0.6rem; font: inherit; font-size: 0.82rem; min-width: 140px;
+    }
+    .wire-filters .clear { background: none; border: 0; color: var(--text-soft); font: inherit; font-size: 0.8rem; cursor: pointer; text-decoration: underline; }
+
+    .wire-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 1.1rem; }
+    .wire-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: transform .16s, border-color .16s, box-shadow .16s; }
+    .wire-card:hover { transform: translateY(-3px); border-color: var(--accent); box-shadow: var(--shadow-soft); }
+    .wire-thumb { position: relative; aspect-ratio: 3/2; background: var(--bg-elevated-soft); overflow: hidden; }
+    .wire-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .wire-thumb .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-soft); font-size: 2rem; }
+    .wire-badge { position: absolute; top: 8px; left: 8px; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 7px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; backdrop-filter: blur(2px); }
+    .wire-badge.article { background: rgba(249,115,22,0.85); }
+    .wire-views { position: absolute; bottom: 8px; right: 8px; font-size: 0.7rem; background: rgba(0,0,0,0.62); color: #fff; padding: 2px 7px; border-radius: 6px; display: flex; align-items: center; gap: 4px; }
+    .wire-play { position: absolute; inset: 0; margin: auto; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 50%; background: rgba(0,0,0,0.5); color: #fff; pointer-events: none; }
+    .wire-card-body { padding: 0.75rem 0.85rem 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+    .wire-card-body h3 { margin: 0; font-size: 1rem; line-height: 1.25; }
+    .wire-byline { font-size: 0.75rem; color: var(--text-soft); }
+    .wire-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
+    .wire-chip { font-size: 0.68rem; padding: 2px 7px; border-radius: 5px; background: var(--bg-elevated-soft); color: var(--text-muted); border: 1px solid var(--border-subtle); }
+    .wire-chip.loc { background: transparent; }
+    .wire-status { font-size: 0.65rem; color: #f59e0b; }
+
+    .wire-empty, .wire-loading { color: var(--text-muted); padding: 3rem 1rem; text-align: center; }
+    .wire-draft-badge { font-size: 0.62rem; background: rgba(148,163,184,0.2); color: var(--text-muted); padding: 2px 6px; border-radius: 5px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Detail */
+    .wire-detail { display: none; }
+    .wire-detail.on { display: block; }
+    .wire-back { background: none; border: 0; color: var(--text-muted); font: inherit; font-size: 0.85rem; cursor: pointer; padding: 0.3rem 0; margin-bottom: 0.8rem; display: inline-flex; align-items: center; gap: 0.4rem; }
+    .wire-back:hover { color: var(--accent); }
+    .wd-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1.8rem; }
+    @media (max-width: 820px) { .wd-grid { grid-template-columns: 1fr; } }
+    .wd-gallery-main { aspect-ratio: 3/2; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); background: var(--bg-elevated-soft); position: relative; }
+    .wd-gallery-main img { width: 100%; height: 100%; object-fit: contain; background: #000; cursor: zoom-in; }
+    .wd-gallery-main video { width: 100%; height: 100%; background: #000; }
+    .wd-unit-tag { position: absolute; bottom: 10px; left: 10px; font-size: 0.72rem; background: rgba(0,0,0,0.66); color: #fff; padding: 3px 9px; border-radius: 6px; font-weight: 600; }
+    .wd-strip { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .wd-thumb { width: 76px; aspect-ratio: 3/2; border-radius: 7px; overflow: hidden; border: 2px solid transparent; cursor: pointer; background: var(--bg-elevated-soft); position: relative; }
+    .wd-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .wd-thumb[aria-current="true"] { border-color: var(--accent); }
+    .wd-thumb .vico { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,0.35); }
+    .wd-title { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 0.3rem; }
+    .wd-meta { font-size: 0.8rem; color: var(--text-soft); margin-bottom: 1rem; }
+    .wd-caption { color: var(--text-muted); line-height: 1.6; }
+    .wd-article { line-height: 1.75; color: var(--text-main); margin-top: 1rem; }
+    .wd-article :is(h1,h2,h3) { line-height: 1.25; }
+    .wd-article img { max-width: 100%; border-radius: 8px; }
+    .wd-block { border-top: 1px solid var(--border-subtle); padding-top: 0.9rem; margin-top: 1.1rem; }
+    .wd-lbl { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); margin-bottom: 0.5rem; }
+    .wd-stats { display: flex; gap: 1.4rem; }
+    .wd-stats .n { font-size: 1.3rem; font-weight: 700; }
+    .wd-stats .k { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-soft); }
+    .wd-inc { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.6rem 0.7rem; border: 1px solid var(--border-subtle); border-radius: 9px; text-decoration: none; color: inherit; }
+    .wd-inc:hover { border-color: var(--accent); }
+    .wd-inc .tick { width: 3px; align-self: stretch; border-radius: 2px; background: var(--accent); }
+    .wd-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .wd-btn { font: inherit; font-size: 0.8rem; padding: 0.5rem 0.9rem; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-main); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; }
+    .wd-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .wd-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+
+    /* Lightbox */
+    .wire-lb { position: fixed; inset: 0; z-index: 9000; background: rgba(2,4,8,0.92); display: none; place-items: center; padding: 2rem; }
+    .wire-lb.on { display: grid; }
+    .wire-lb img { max-width: 94vw; max-height: 88vh; border-radius: 8px; }
+    .wire-lb .x { position: absolute; top: 1rem; right: 1.3rem; background: none; border: 0; color: #fff; font-size: 2rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>The Wire</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+      <a href="about.html">About</a>
+    </nav>
+    <div id="agencies-nav-mount"></div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main wire-main">
+    <div class="wire-head">
+      <div>
+        <h1 class="wire-title">The <span class="dot">Wire</span></h1>
+        <p class="wire-sub">Independent photos, video &amp; news from contributors on the ground.</p>
+      </div>
+      <a class="wire-post-btn" id="postBtn" href="wire-compose" style="display:none"><i class="fa-solid fa-plus"></i> Post to The Wire</a>
+    </div>
+
+    <div class="wire-tabs" role="tablist">
+      <button class="wire-tab" data-tab="media" role="tab" aria-selected="true">Media Posts</button>
+      <button class="wire-tab" data-tab="articles" role="tab" aria-selected="false">Articles</button>
+    </div>
+
+    <div class="wire-filters" id="filters">
+      <input type="text" id="fUnit" placeholder="Filter by unit / callsign…" autocomplete="off">
+      <select id="fAgency"><option value="">All agencies</option></select>
+      <select id="fRegion"><option value="">All regions</option></select>
+      <button class="clear" id="fClear">Clear</button>
+    </div>
+
+    <div id="feedView">
+      <div class="wire-grid" id="grid"></div>
+      <div class="wire-loading" id="loading" style="display:none">Loading…</div>
+      <div class="wire-empty" id="empty" style="display:none"></div>
+    </div>
+
+    <div class="wire-detail" id="detail"></div>
+  </main>
+
+  <div class="wire-lb" id="lightbox"><button class="x" aria-label="Close">&times;</button></div>
+
+  <script>
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.querySelector('.menu-overlay').classList.toggle('active');
+    }
+  </script>
+  <script type="module">
+    const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
+    let API_KEY = null;
+    let ME = { userId: null, canFeed: false, canModerate: false };
+    let currentTab = new URLSearchParams(location.search).get('tab') === 'articles' ? 'articles' : 'media';
+
+    const $ = (s, r = document) => r.querySelector(s);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmtViews = (n) => (Number(n) || 0).toLocaleString('en-AU');
+
+    async function loadKey() {
+      if (API_KEY) return API_KEY;
+      try {
+        const r = await fetch(`${API_BASE}/api/config`);
+        const j = await r.json();
+        API_KEY = j.apiKey || null;
+      } catch (e) { console.warn('config load failed', e); }
+      return API_KEY;
+    }
+    async function keyHeaders() { await loadKey(); return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
+    async function userHeaders() {
+      try { const { data } = await sb.auth.getSession(); const t = data.session?.access_token; if (t) return { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }; } catch (e) {}
+      return keyHeaders();
+    }
+
+    async function loadMe() {
+      try {
+        const { data } = await sb.auth.getSession();
+        const uid = data.session?.user?.id;
+        if (!uid) return;
+        ME.userId = uid;
+        const r = await fetch(`${API_BASE}/api/check-editor/${uid}`);
+        if (r.ok) { const j = await r.json(); ME.canFeed = !!j.can_feed_media; ME.canModerate = !!j.can_moderate_wire; }
+      } catch (e) {}
+      if (ME.canFeed) $('#postBtn').style.display = 'inline-flex';
+    }
+
+    // ---- filter option loaders ----
+    async function loadFilterOptions() {
+      try {
+        const data = await window.AgencyJSON.loadData();
+        const sel = $('#fAgency');
+        (data.agencies ? Object.values(data.agencies) : []).sort((a, b) => a.name.localeCompare(b.name))
+          .forEach((a) => { const o = document.createElement('option'); o.value = a.slug; o.textContent = a.name; sel.appendChild(o); });
+      } catch (e) {}
+      try {
+        const geo = await fetch('data/boundaries/nsw-regions.geojson', { cache: 'force-cache' }).then((r) => r.json());
+        const sel = $('#fRegion');
+        (geo.features || []).map((f) => f.properties && f.properties.name).filter(Boolean).sort()
+          .forEach((name) => { const o = document.createElement('option'); o.value = name; o.textContent = name; sel.appendChild(o); });
+      } catch (e) {}
+    }
+
+    // ---- feed ----
+    function cardHTML(item) {
+      const cover = item.cover;
+      const isArticle = item.kind === 'article';
+      let media = '';
+      if (cover && cover.kind === 'image') {
+        const src = cover.feed_url || cover.url;
+        media = `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.onerror=null;this.src='${esc(cover.url || '')}'">`;
+      } else if (cover && cover.kind === 'video') {
+        media = (cover.poster_url ? `<img src="${esc(cover.poster_url)}" alt="">` : `<div class="placeholder"><i class="fa-solid fa-film"></i></div>`) + `<span class="wire-play"><i class="fa-solid fa-play"></i></span>`;
+      } else {
+        media = `<div class="placeholder"><i class="fa-regular fa-${isArticle ? 'newspaper' : 'image'}"></i></div>`;
+      }
+      const imgs = (item.media || []).filter((m) => m.kind === 'image').length;
+      const vids = (item.media || []).filter((m) => m.kind === 'video').length;
+      const badge = isArticle ? 'Article' : (vids ? `${vids} video${vids > 1 ? 's' : ''}` : `${imgs} photo${imgs !== 1 ? 's' : ''}`);
+      const units = (item.units || []).slice(0, 3).map((u) => `<span class="wire-chip">${esc(u)}</span>`).join('');
+      const loc = item.location && (item.location.region || item.location.type === 'pin')
+        ? `<span class="wire-chip loc"><i class="fa-solid fa-location-dot"></i> ${esc(item.location.region || 'Pinned')}</span>` : '';
+      const draft = item.status === 'draft' ? `<span class="wire-draft-badge">Draft</span>` : '';
+      const key = isArticle ? item.slug : item.id;
+      return `<article class="wire-card" data-kind="${item.kind}" data-key="${esc(key)}">
+        <div class="wire-thumb">${media}<span class="wire-badge ${isArticle ? 'article' : ''}">${esc(badge)}</span>
+          <span class="wire-views"><i class="fa-regular fa-eye"></i> ${fmtViews(item.views)}</span></div>
+        <div class="wire-card-body">
+          <h3>${esc(item.title)} ${draft}</h3>
+          <div class="wire-byline">by ${esc(item.author?.name || 'contributor')}${item.created_at ? ' · ' + timeAgo(item.created_at) : ''}</div>
+          <div class="wire-chips">${units}${loc}</div>
+        </div></article>`;
+    }
+
+    function timeAgo(iso) {
+      const d = new Date(iso).getTime(); if (!d) return '';
+      const s = Math.floor((Date.now() - d) / 1000);
+      if (s < 3600) return Math.max(1, Math.floor(s / 60)) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      if (s < 604800) return Math.floor(s / 86400) + 'd ago';
+      return new Date(iso).toLocaleDateString('en-AU');
+    }
+
+    async function loadFeed() {
+      const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
+      grid.innerHTML = ''; empty.style.display = 'none'; loading.style.display = 'block';
+      const params = new URLSearchParams();
+      const unit = $('#fUnit').value.trim(); const ag = $('#fAgency').value; const rg = $('#fRegion').value;
+      if (unit) params.set('unit', unit);
+      if (ag) params.set('agency', ag);
+      if (rg) params.set('region', rg);
+      const path = currentTab === 'articles' ? 'articles' : 'media';
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/${path}?${params}`, { headers: await keyHeaders() });
+        const j = await r.json();
+        const items = j.posts || j.articles || [];
+        loading.style.display = 'none';
+        if (!items.length) { empty.textContent = currentTab === 'articles' ? 'No articles yet.' : 'No media posts yet.'; empty.style.display = 'block'; return; }
+        grid.innerHTML = items.map(cardHTML).join('');
+        grid.querySelectorAll('.wire-card').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.kind, el.dataset.key)));
+      } catch (e) {
+        loading.style.display = 'none'; empty.textContent = 'Failed to load The Wire.'; empty.style.display = 'block';
+      }
+    }
+
+    // ---- detail ----
+    let galleryMedia = [], galleryIdx = 0;
+
+    async function openDetail(kind, key, push = true) {
+      const path = kind === 'article' ? `articles/${encodeURIComponent(key)}` : `media/${encodeURIComponent(key)}`;
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/${path}`, { headers: await userHeaders() });
+        if (!r.ok) { alert('Post not found.'); return; }
+        const j = await r.json();
+        const item = j.post || j.article;
+        renderDetail(item);
+        $('#feedView').style.display = 'none';
+        $('#detail').classList.add('on');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}&${kind === 'article' ? 'article' : 'post'}=${encodeURIComponent(key)}`);
+        // count a view (deduped server-side)
+        fetch(`${API_BASE}/api/wire/${kind === 'article' ? 'articles' : 'media'}/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await keyHeaders() }).catch(() => {});
+      } catch (e) { console.warn(e); }
+    }
+
+    function closeDetail(push = true) {
+      $('#detail').classList.remove('on'); $('#detail').innerHTML = '';
+      $('#feedView').style.display = '';
+      if (push) history.pushState({}, '', `wire?tab=${currentTab}`);
+    }
+
+    function renderDetail(item) {
+      const isArticle = item.kind === 'article';
+      galleryMedia = item.media || []; galleryIdx = Math.max(0, galleryMedia.findIndex((m) => m.is_cover));
+      if (galleryIdx < 0) galleryIdx = 0;
+      const canEdit = ME.userId && item.author && item.author.id === ME.userId;
+      const incidentBlock = item.incident_id ? `
+        <div class="wd-block"><div class="wd-lbl">Linked incident</div>
+          <a class="wd-inc" href="logs?source_id=${encodeURIComponent(item.incident_id)}"><span class="tick"></span>
+            <div><div style="font-weight:600">View on the logs</div><div style="font-size:0.7rem;color:var(--text-soft)">${esc(item.incident_id)}</div></div></a></div>` : '';
+      const units = (item.units || []).map((u) => `<span class="wire-chip">${esc(u)}</span>`).join('') || '<span style="color:var(--text-soft);font-size:0.8rem">—</span>';
+      const agencies = (item.agencies || []).map((a) => `<span class="wire-chip">${esc(a)}</span>`).join('') || '<span style="color:var(--text-soft);font-size:0.8rem">—</span>';
+      const loc = item.location ? (item.location.region ? esc(item.location.region) : (item.location.lat != null ? `${(+item.location.lat).toFixed(4)}, ${(+item.location.lng).toFixed(4)}` : '—')) : '—';
+      const actions = (canEdit || ME.canModerate) ? `
+        <div class="wd-block"><div class="wd-lbl">Manage</div><div class="wd-actions">
+          ${canEdit ? `<a class="wd-btn" href="wire-compose?type=${isArticle ? 'article' : 'media'}&edit=${encodeURIComponent(item.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
+          ${canEdit ? `<button class="wd-btn danger" data-act="delete"><i class="fa-solid fa-trash"></i> Delete</button>` : ''}
+          ${ME.canModerate && !canEdit ? `<button class="wd-btn danger" data-act="remove"><i class="fa-solid fa-ban"></i> Remove</button>` : ''}
+        </div></div>` : '';
+
+      const left = isArticle
+        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
+        : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
+
+      $('#detail').innerHTML = `
+        <button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>
+        <div class="wd-grid">
+          <div>${left}</div>
+          <div>
+            <h1 class="wd-title">${esc(item.title)}</h1>
+            <div class="wd-meta">by ${esc(item.author?.name || 'contributor')}${item.status === 'draft' ? ' · <span style="color:#f59e0b">Draft</span>' : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}</div>
+            ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
+            <div class="wd-block"><div class="wd-stats">
+              <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
+              <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div>
+            </div></div>
+            <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
+            <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
+            <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
+            ${incidentBlock}
+            ${actions}
+          </div>
+        </div>`;
+
+      $('#backBtn').addEventListener('click', () => closeDetail());
+      wireGallery();
+      const del = $('#detail [data-act="delete"]'); if (del) del.addEventListener('click', () => mutateDelete(item, false));
+      const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
+    }
+
+    function galleryPane() {
+      return `<div class="wd-gallery-main" id="galMain"></div><div class="wd-strip" id="galStrip"></div>`;
+    }
+    function renderGalleryMain() {
+      const m = galleryMedia[galleryIdx]; const main = $('#galMain'); if (!m || !main) return;
+      if (m.kind === 'video') {
+        main.innerHTML = `<video controls playsinline ${m.poster_url ? `poster="${esc(m.poster_url)}"` : ''} src="${esc(m.url)}"></video>`;
+      } else {
+        main.innerHTML = `<img src="${esc(m.url)}" alt="">${m.unit ? `<span class="wd-unit-tag">${esc(m.unit)}</span>` : ''}`;
+        main.querySelector('img').addEventListener('click', () => openLightbox(m.url));
+      }
+    }
+    function wireGallery() {
+      const strip = $('#galStrip'); if (!strip) return;
+      strip.innerHTML = galleryMedia.map((m, i) => {
+        const thumb = m.kind === 'image' ? `<img src="${esc(m.thumb_url || m.url)}" alt="" onerror="this.onerror=null;this.src='${esc(m.url || '')}'">` : (m.poster_url ? `<img src="${esc(m.poster_url)}">` : '') + `<span class="vico"><i class="fa-solid fa-play"></i></span>`;
+        return `<div class="wd-thumb" data-i="${i}" aria-current="${i === galleryIdx}">${thumb}</div>`;
+      }).join('');
+      strip.querySelectorAll('.wd-thumb').forEach((t) => t.addEventListener('click', () => {
+        galleryIdx = +t.dataset.i;
+        strip.querySelectorAll('.wd-thumb').forEach((x) => x.setAttribute('aria-current', 'false'));
+        t.setAttribute('aria-current', 'true'); renderGalleryMain();
+      }));
+      renderGalleryMain();
+    }
+
+    function openLightbox(src) { const lb = $('#lightbox'); lb.querySelectorAll('img').forEach((i) => i.remove()); const img = new Image(); img.src = src; lb.appendChild(img); lb.classList.add('on'); }
+    $('#lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox' || e.target.classList.contains('x')) $('#lightbox').classList.remove('on'); });
+
+    async function mutateDelete(item, moderate) {
+      const verb = moderate ? 'remove' : 'delete';
+      if (!confirm(`${moderate ? 'Remove' : 'Delete'} "${item.title}"? This can't be undone.`)) return;
+      const base = item.kind === 'article' ? 'articles' : 'media';
+      const url = `${API_BASE}/api/wire/${base}/${encodeURIComponent(item.id)}${moderate ? '/remove' : ''}`;
+      const r = await fetch(url, { method: moderate ? 'POST' : 'DELETE', headers: await userHeaders() });
+      if (r.ok) { closeDetail(); loadFeed(); } else { alert(`Failed to ${verb}.`); }
+    }
+
+    // ---- tabs / filters / routing ----
+    function selectTab(tab, push = true) {
+      currentTab = tab;
+      document.querySelectorAll('.wire-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+      const unitWrap = $('#fUnit'); unitWrap.style.display = tab === 'articles' ? 'none' : '';
+      if (push) history.replaceState({}, '', `wire?tab=${tab}`);
+      loadFeed();
+    }
+    document.querySelectorAll('.wire-tab').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+    ['fUnit', 'fAgency', 'fRegion'].forEach((id) => {
+      const el = $('#' + id); const ev = id === 'fUnit' ? 'input' : 'change';
+      let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, id === 'fUnit' ? 300 : 0); });
+    });
+    $('#fClear').addEventListener('click', () => { $('#fUnit').value = ''; $('#fAgency').value = ''; $('#fRegion').value = ''; loadFeed(); });
+
+    window.addEventListener('popstate', () => {
+      const p = new URLSearchParams(location.search);
+      const post = p.get('post'), article = p.get('article');
+      if (article) openDetail('article', article, false);
+      else if (post) openDetail('media', post, false);
+      else { const tab = p.get('tab') === 'articles' ? 'articles' : 'media'; if (tab !== currentTab) selectTab(tab, false); closeDetail(false); }
+    });
+
+    // ---- init ----
+    (async function init() {
+      document.querySelectorAll('.wire-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === currentTab)));
+      $('#fUnit').style.display = currentTab === 'articles' ? 'none' : '';
+      await Promise.all([loadKey(), loadMe(), loadFilterOptions()]);
+      const p = new URLSearchParams(location.search);
+      const post = p.get('post'), article = p.get('article');
+      if (article) { await loadFeed(); openDetail('article', article, false); }
+      else if (post) { await loadFeed(); openDetail('media', post, false); }
+      else loadFeed();
+    })();
+  </script>
+</body>
+</html>

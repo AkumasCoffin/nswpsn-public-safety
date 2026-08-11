@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – Compose · The Wire</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+  <script src="agencies.js"></script>
+
+  <style>
+    .cmp { max-width: 780px; margin: 0 auto; padding: 1.4rem clamp(1rem, 4vw, 2rem) 5rem; }
+    .cmp h1 { font-size: 1.5rem; font-weight: 800; margin: 0 0 0.2rem; }
+    .cmp .sub { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1.4rem; }
+    .cmp-gate { color: var(--text-muted); text-align: center; padding: 4rem 1rem; }
+    .seg { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 9px; overflow: hidden; margin-bottom: 1.4rem; }
+    .seg button { background: var(--bg-elevated); border: 0; color: var(--text-muted); font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.55rem 1.2rem; cursor: pointer; }
+    .seg button + button { border-left: 1px solid var(--border-subtle); }
+    .seg button[aria-current="true"] { background: var(--accent); color: #fff; }
+    .field { margin-bottom: 1.2rem; }
+    .field > label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-soft); margin-bottom: 0.45rem; font-weight: 600; }
+    .field .hint { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.4rem; }
+    input[type=text], textarea, select {
+      width: 100%; background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-main);
+      border-radius: 9px; padding: 0.7rem 0.8rem; font: inherit; font-size: 0.92rem;
+    }
+    input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 90px; line-height: 1.55; }
+    textarea.body { min-height: 220px; }
+
+    .dropzone { border: 1.5px dashed var(--border-subtle); border-radius: 11px; padding: 1.6rem; text-align: center; color: var(--text-muted); cursor: pointer; transition: border-color .15s, color .15s; }
+    .dropzone:hover { border-color: var(--accent); color: var(--accent); }
+    .dropzone .big { font-size: 1.7rem; margin-bottom: 0.3rem; }
+    .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.8rem; margin-top: 0.9rem; }
+    .media-item { border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; background: var(--bg-elevated); }
+    .media-item .pic { position: relative; aspect-ratio: 4/3; background: var(--bg-elevated-soft); }
+    .media-item .pic img { width: 100%; height: 100%; object-fit: cover; }
+    .media-item .pic .rm { position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; border: 0; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; }
+    .media-item .pic .up { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.55); color: #fff; font-size: 0.75rem; }
+    .media-item .meta { padding: 0.45rem; display: flex; flex-direction: column; gap: 0.4rem; }
+    .media-item .meta input[list] { padding: 0.35rem 0.5rem; font-size: 0.8rem; }
+    .cover-row { display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--text-muted); }
+
+    .toggle2 { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; margin-bottom: 0.7rem; }
+    .toggle2 button { background: var(--bg-elevated); border: 0; color: var(--text-muted); font: inherit; font-size: 0.78rem; padding: 0.4rem 0.9rem; cursor: pointer; }
+    .toggle2 button + button { border-left: 1px solid var(--border-subtle); }
+    .toggle2 button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); }
+    #pinMap { height: 240px; border-radius: 10px; border: 1px solid var(--border-subtle); }
+    .loc-readout { font-size: 0.75rem; color: var(--text-soft); margin-top: 0.4rem; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .chip { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); padding: 0.3rem 0.6rem; border-radius: 7px; }
+    .chip b { cursor: pointer; color: var(--text-soft); }
+    .chip b:hover { color: #ef4444; }
+    .suggest-box { border: 1px solid var(--border-subtle); border-radius: 9px; max-height: 220px; overflow-y: auto; background: var(--bg-elevated); margin-top: 0.5rem; }
+    .suggest-box .row { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.7rem; cursor: pointer; border-bottom: 1px solid var(--border-subtle); }
+    .suggest-box .row:last-child { border-bottom: 0; }
+    .suggest-box .row:hover, .suggest-box .row.sel { background: var(--accent-soft); }
+    .suggest-box .row small { color: var(--text-soft); }
+    .agency-check { max-height: 200px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 9px; padding: 0.4rem; background: var(--bg-elevated); }
+    .agency-check label { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; font-size: 0.82rem; border-radius: 6px; cursor: pointer; }
+    .agency-check label:hover { background: rgba(148,163,184,0.08); }
+    .agency-check input { width: auto; }
+
+    .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.8rem; }
+    .btn { font: inherit; font-size: 0.85rem; font-weight: 700; padding: 0.65rem 1.2rem; border-radius: 9px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-main); cursor: pointer; }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: #ea580c; color: #fff; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg { margin-top: 1rem; font-size: 0.85rem; min-height: 1.2em; }
+    .video-note { font-size: 0.75rem; color: var(--text-soft); border: 1px dashed var(--border-subtle); border-radius: 8px; padding: 0.6rem 0.8rem; margin-top: 0.6rem; }
+    .topbar { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1.2rem; }
+    .topbar a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; }
+    .topbar a:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main class="main cmp">
+    <div class="topbar"><a href="wire"><i class="fa-solid fa-arrow-left"></i> The Wire</a></div>
+
+    <div id="gate" class="cmp-gate" style="display:none">
+      <p><i class="fa-solid fa-lock" style="font-size:1.6rem;color:var(--text-soft)"></i></p>
+      <p id="gateMsg">You need the Media Feeder role to post to The Wire.</p>
+      <p><a class="btn" href="signup.html">Request access</a> <a class="btn" href="wire">Back to The Wire</a></p>
+    </div>
+
+    <form id="form" style="display:none" onsubmit="return false">
+      <h1 id="formTitle">Compose a dispatch</h1>
+      <p class="sub">Post-moderation: your post goes live immediately. You can edit or delete it any time.</p>
+
+      <div class="seg" id="typeSeg">
+        <button type="button" data-type="media" aria-current="true">Media Post</button>
+        <button type="button" data-type="article">Article</button>
+      </div>
+
+      <div class="field">
+        <label for="title">Headline</label>
+        <input type="text" id="title" maxlength="300" placeholder="What's happening, and where">
+      </div>
+
+      <div class="field" id="captionField">
+        <label for="caption">Caption</label>
+        <textarea id="caption" maxlength="4000" placeholder="Set the scene in a line or two…"></textarea>
+      </div>
+
+      <div class="field" id="excerptField" style="display:none">
+        <label for="excerpt">Excerpt / standfirst</label>
+        <textarea id="excerpt" maxlength="600" placeholder="One-sentence summary shown on the article card"></textarea>
+      </div>
+      <div class="field" id="bodyField" style="display:none">
+        <label for="body">Article body · Markdown</label>
+        <textarea id="body" class="body" placeholder="Write the story. **bold**, _italic_, [links](https://…), and headings supported."></textarea>
+      </div>
+
+      <div class="field">
+        <label id="mediaLabel">Photos · up to 6</label>
+        <div class="dropzone" id="dropzone">
+          <div class="big"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+          <div id="dzText">Drag images here, or click to choose</div>
+          <div style="font-size:0.7rem;margin-top:0.3rem">GPS &amp; camera metadata are stripped on delivery</div>
+        </div>
+        <div class="media-grid" id="mediaGrid"></div>
+        <div class="video-note" id="videoNote"><i class="fa-solid fa-film"></i> Video (up to 2 clips, 50&nbsp;MB each) is coming in the next update.</div>
+      </div>
+
+      <div class="field">
+        <label>Location</label>
+        <div class="toggle2" id="locToggle">
+          <button type="button" data-loc="pin" aria-current="true">Drop a pin</button>
+          <button type="button" data-loc="region" aria-current="false">Pick a region</button>
+        </div>
+        <div id="pinWrap"><div id="pinMap"></div></div>
+        <div id="regionWrap" style="display:none">
+          <select id="regionSelect"><option value="">Select a NSW region…</option></select>
+        </div>
+        <div class="loc-readout" id="locReadout">No location set.</div>
+      </div>
+
+      <div class="field">
+        <label>Linked incident · optional (one)</label>
+        <div id="incidentChosen" class="chips" style="margin-bottom:0.5rem"></div>
+        <input type="text" id="incidentSearch" placeholder="Search incidents, or set a location to see nearby ones…" autocomplete="off">
+        <div class="suggest-box" id="incidentBox" style="display:none"></div>
+        <div class="hint" id="incidentHint">Set a location above and the closest / in-region incidents appear here.</div>
+      </div>
+
+      <div class="field">
+        <label>Agencies</label>
+        <input type="text" id="agencyFilter" placeholder="Filter agencies…" autocomplete="off" style="margin-bottom:0.5rem">
+        <div class="agency-check" id="agencyCheck"></div>
+      </div>
+
+      <datalist id="callsign-list"></datalist>
+
+      <div class="actions" id="actions">
+        <button class="btn primary" id="publishBtn" type="button">Publish</button>
+        <button class="btn" id="draftBtn" type="button" style="display:none">Save draft</button>
+        <button class="btn" id="cancelBtn" type="button">Cancel</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </form>
+  </main>
+
+  <script type="module">
+    const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
+    let API_KEY = null;
+    const qs = new URLSearchParams(location.search);
+    const editId = qs.get('edit');
+    let type = qs.get('type') === 'article' ? 'article' : 'media';
+
+    const state = {
+      media: [],          // {kind,cf_image_id,unit,is_cover, previewUrl}
+      location: { type: 'pin', region: null, lat: null, lng: null },
+      incidentId: null, incidentTitle: null,
+      agencies: new Set(),
+    };
+    let allIncidents = [];   // {id,title,lat,lng,location}
+    let regionsGeo = null;   // features
+    let agencyList = [];     // {slug,name}
+    let map, marker;
+
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const LIMITS = { media: { img: 6 }, article: { img: 4 } };
+
+    async function loadKey() { try { const r = await fetch(`${API_BASE}/api/config`); API_KEY = (await r.json()).apiKey; } catch (e) {} }
+    async function keyHeaders() { return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
+    async function userHeaders(json) {
+      const { data } = await sb.auth.getSession(); const t = data.session?.access_token;
+      const h = t ? { Authorization: `Bearer ${t}` } : await keyHeaders();
+      if (json) h['Content-Type'] = 'application/json';
+      return h;
+    }
+
+    // ---- gate ----
+    async function checkAccess() {
+      const { data } = await sb.auth.getSession();
+      const uid = data.session?.user?.id;
+      if (!uid) { showGate('Please log in with a Media Feeder account to post.'); return false; }
+      try {
+        const r = await fetch(`${API_BASE}/api/check-editor/${uid}`);
+        const j = await r.json();
+        if (!j.can_feed_media) { showGate(); return false; }
+      } catch (e) { showGate('Could not verify your access. Try again.'); return false; }
+      return true;
+    }
+    function showGate(m) { $('#gate').style.display = 'block'; $('#form').style.display = 'none'; if (m) $('#gateMsg').textContent = m; }
+
+    // ---- type toggle ----
+    function applyType() {
+      $('#typeSeg').querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.type === type)));
+      const isArt = type === 'article';
+      $('#captionField').style.display = isArt ? 'none' : 'block';
+      $('#excerptField').style.display = isArt ? 'block' : 'none';
+      $('#bodyField').style.display = isArt ? 'block' : 'none';
+      $('#mediaLabel').textContent = isArt ? 'Images · up to 4 (pick a cover)' : 'Photos · up to 6';
+      $('#draftBtn').style.display = isArt ? 'inline-block' : 'none';
+      $('#publishBtn').textContent = isArt ? 'Publish' : 'Publish';
+      $('#formTitle').textContent = editId ? (isArt ? 'Edit article' : 'Edit media post') : (isArt ? 'Write an article' : 'Compose a media post');
+      renderMedia();
+    }
+    $('#typeSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { if (editId) return; type = b.dataset.type; applyType(); }));
+
+    // ---- media upload ----
+    const dz = $('#dropzone');
+    dz.addEventListener('click', () => pickFiles());
+    dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.style.borderColor = 'var(--accent)'; });
+    dz.addEventListener('dragleave', () => (dz.style.borderColor = ''));
+    dz.addEventListener('drop', (e) => { e.preventDefault(); dz.style.borderColor = ''; handleFiles(e.dataTransfer.files); });
+
+    function pickFiles() {
+      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/jpeg,image/png,image/webp,image/gif'; inp.multiple = true;
+      inp.onchange = () => handleFiles(inp.files); inp.click();
+    }
+    async function handleFiles(files) {
+      const cap = LIMITS[type].img;
+      for (const file of files) {
+        if (state.media.filter((m) => m.kind === 'image').length >= cap) { setMsg(`Max ${cap} images.`, true); break; }
+        if (!/^image\//.test(file.type)) continue;
+        const item = { kind: 'image', cf_image_id: null, unit: '', is_cover: state.media.length === 0, previewUrl: URL.createObjectURL(file), uploading: true };
+        state.media.push(item); renderMedia();
+        try {
+          const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders() });
+          if (!r.ok) throw new Error('upload-url ' + r.status);
+          const { uploadURL, id, deliveryUrl } = await r.json();
+          const fd = new FormData(); fd.append('file', file);
+          const up = await fetch(uploadURL, { method: 'POST', body: fd });
+          if (!up.ok) throw new Error('cf upload ' + up.status);
+          item.cf_image_id = id; item.uploading = false; if (deliveryUrl) item.deliveredUrl = deliveryUrl;
+        } catch (e) {
+          setMsg('An image failed to upload (is Cloudflare Images configured?).', true);
+          state.media = state.media.filter((m) => m !== item);
+        }
+        renderMedia();
+      }
+    }
+
+    function renderMedia() {
+      const grid = $('#mediaGrid'); const isArt = type === 'article';
+      grid.innerHTML = state.media.map((m, i) => `
+        <div class="media-item">
+          <div class="pic">
+            <img src="${esc(m.previewUrl || m.deliveredUrl || m.url || '')}" alt="">
+            <button type="button" class="rm" data-rm="${i}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+            ${m.uploading ? '<div class="up"><i class="fa-solid fa-spinner fa-spin"></i></div>' : ''}
+          </div>
+          <div class="meta">
+            <input list="callsign-list" data-unit="${i}" value="${esc(m.unit || '')}" placeholder="Unit / callsign">
+            ${isArt ? `<label class="cover-row"><input type="radio" name="cover" data-cover="${i}" ${m.is_cover ? 'checked' : ''}> Cover</label>` : ''}
+          </div>
+        </div>`).join('');
+      grid.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { state.media.splice(+b.dataset.rm, 1); if (isArt && !state.media.some((m) => m.is_cover) && state.media[0]) state.media[0].is_cover = true; renderMedia(); }));
+      grid.querySelectorAll('[data-unit]').forEach((inp) => inp.addEventListener('input', () => { state.media[+inp.dataset.unit].unit = inp.value; }));
+      grid.querySelectorAll('[data-cover]').forEach((r) => r.addEventListener('change', () => { state.media.forEach((m, idx) => (m.is_cover = idx === +r.dataset.cover)); }));
+    }
+
+    // ---- location ----
+    $('#locToggle').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => setLocMode(b.dataset.loc)));
+    function setLocMode(mode) {
+      state.location.type = mode;
+      $('#locToggle').querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.loc === mode)));
+      $('#pinWrap').style.display = mode === 'pin' ? 'block' : 'none';
+      $('#regionWrap').style.display = mode === 'region' ? 'block' : 'none';
+      if (mode === 'pin') { setTimeout(() => map && map.invalidateSize(), 50); state.location.region = null; }
+      refreshLocReadout(); refreshIncidentSuggestions();
+    }
+    function initMap() {
+      map = L.map('pinMap', { center: [-33.4, 150.9], zoom: 7 });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap', maxZoom: 18 }).addTo(map);
+      map.on('click', (e) => { setPin(e.latlng.lat, e.latlng.lng); });
+    }
+    function setPin(lat, lng) {
+      state.location.type = 'pin'; state.location.lat = lat; state.location.lng = lng; state.location.region = null;
+      if (!marker) marker = L.marker([lat, lng]).addTo(map); else marker.setLatLng([lat, lng]);
+      refreshLocReadout(); refreshIncidentSuggestions();
+    }
+    function refreshLocReadout() {
+      const l = state.location;
+      $('#locReadout').textContent = l.type === 'region' && l.region ? `Region: ${l.region}` :
+        (l.lat != null ? `Pin: ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}` : 'No location set.');
+    }
+
+    // region centroid (rough: average of first ring)
+    function regionCentroid(feature) {
+      const ring = feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : feature.geometry.coordinates[0][0];
+      let x = 0, y = 0; ring.forEach((c) => { x += c[0]; y += c[1]; });
+      return [y / ring.length, x / ring.length];
+    }
+    function pointInRingSet(lat, lng, feature) {
+      const polys = feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+      for (const poly of polys) {
+        const ring = poly[0]; let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+          if (((yi > lat) !== (yj > lat)) && (lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)) inside = !inside;
+        }
+        if (inside) return true;
+      }
+      return false;
+    }
+
+    async function loadRegions() {
+      try {
+        const geo = await fetch('data/boundaries/nsw-regions.geojson', { cache: 'force-cache' }).then((r) => r.json());
+        regionsGeo = geo.features || [];
+        const sel = $('#regionSelect');
+        [...regionsGeo].sort((a, b) => a.properties.name.localeCompare(b.properties.name)).forEach((f) => {
+          const o = document.createElement('option'); o.value = f.properties.name; o.textContent = f.properties.name; sel.appendChild(o);
+        });
+        sel.addEventListener('change', () => {
+          const f = regionsGeo.find((x) => x.properties.name === sel.value);
+          if (!f) { state.location.region = null; refreshLocReadout(); return; }
+          const c = regionCentroid(f);
+          state.location = { type: 'region', region: sel.value, lat: c[0], lng: c[1] };
+          refreshLocReadout(); refreshIncidentSuggestions();
+        });
+      } catch (e) {}
+    }
+
+    // ---- incidents ----
+    function haversine(a, b, c, d) { const R = 6371, r = Math.PI / 180; const dLat = (c - a) * r, dLng = (d - b) * r; const s = Math.sin(dLat / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(s)); }
+    async function loadIncidents() {
+      try {
+        const r = await fetch(`${API_BASE}/api/incidents?active=true`, { headers: await keyHeaders() });
+        const rows = await r.json();
+        allIncidents = (Array.isArray(rows) ? rows : []).filter((x) => x && x.lat != null && x.title).map((x) => ({ id: x.id, title: x.title, lat: +x.lat, lng: +x.lng, location: x.location }));
+      } catch (e) {}
+    }
+    function refreshIncidentSuggestions() {
+      const box = $('#incidentBox'); const l = state.location;
+      let list = [];
+      if (l.type === 'region' && l.region) {
+        const f = regionsGeo && regionsGeo.find((x) => x.properties.name === l.region);
+        if (f) list = allIncidents.filter((inc) => pointInRingSet(inc.lat, inc.lng, f)).slice(0, 15);
+      } else if (l.lat != null) {
+        list = [...allIncidents].map((inc) => ({ ...inc, d: haversine(l.lat, l.lng, inc.lat, inc.lng) })).sort((a, b) => a.d - b.d).slice(0, 10);
+      }
+      if (!list.length) { box.style.display = 'none'; return; }
+      renderIncidentRows(list);
+    }
+    function renderIncidentRows(list) {
+      const box = $('#incidentBox');
+      box.innerHTML = list.map((inc) => `<div class="row ${state.incidentId === inc.id ? 'sel' : ''}" data-id="${esc(inc.id)}" data-title="${esc(inc.title)}">
+        <span>${esc(inc.title)}</span><small>${inc.d != null ? inc.d.toFixed(1) + ' km' : esc(inc.location || '')}</small></div>`).join('');
+      box.style.display = 'block';
+      box.querySelectorAll('.row').forEach((row) => row.addEventListener('click', () => { setIncident(row.dataset.id, row.dataset.title); }));
+    }
+    function setIncident(id, title) { state.incidentId = id; state.incidentTitle = title; renderIncidentChosen(); $('#incidentBox').style.display = 'none'; $('#incidentSearch').value = ''; }
+    function renderIncidentChosen() {
+      const box = $('#incidentChosen');
+      box.innerHTML = state.incidentId ? `<span class="chip">${esc(state.incidentTitle)} <b data-clear>×</b></span>` : '';
+      const b = box.querySelector('[data-clear]'); if (b) b.addEventListener('click', () => { state.incidentId = null; state.incidentTitle = null; renderIncidentChosen(); refreshIncidentSuggestions(); });
+    }
+    $('#incidentSearch').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      if (!q) { refreshIncidentSuggestions(); return; }
+      renderIncidentRows(allIncidents.filter((i) => i.title.toLowerCase().includes(q)).slice(0, 12));
+    });
+
+    // ---- agencies ----
+    async function loadAgencies() {
+      try {
+        const data = await window.AgencyJSON.loadData();
+        agencyList = (data.agencies ? Object.values(data.agencies) : []).map((a) => ({ slug: a.slug, name: a.name })).sort((a, b) => a.name.localeCompare(b.name));
+      } catch (e) {}
+      renderAgencyCheck('');
+      $('#agencyFilter').addEventListener('input', (e) => renderAgencyCheck(e.target.value.trim().toLowerCase()));
+    }
+    function renderAgencyCheck(filter) {
+      const box = $('#agencyCheck');
+      box.innerHTML = agencyList.filter((a) => !filter || a.name.toLowerCase().includes(filter)).map((a) =>
+        `<label><input type="checkbox" value="${esc(a.slug)}" ${state.agencies.has(a.slug) ? 'checked' : ''}> ${esc(a.name)}</label>`).join('');
+      box.querySelectorAll('input').forEach((c) => c.addEventListener('change', () => { c.checked ? state.agencies.add(c.value) : state.agencies.delete(c.value); }));
+    }
+
+    // ---- callsign dict ----
+    async function loadCallsigns() {
+      try {
+        const r = await fetch(`${API_BASE}/api/incidents/callsigns`, { headers: await keyHeaders() });
+        const j = await r.json();
+        $('#callsign-list').innerHTML = (j.callsigns || []).map((c) => `<option value="${esc(c)}">`).join('');
+      } catch (e) {}
+    }
+
+    // ---- submit ----
+    function buildPayload(status) {
+      const media = state.media.filter((m) => m.cf_image_id).map((m) => ({ kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || null, is_cover: !!m.is_cover }));
+      const base = {
+        title: $('#title').value.trim(),
+        location_type: state.location.type, region: state.location.region,
+        lat: state.location.lat, lng: state.location.lng,
+        agencies: [...state.agencies], incident_id: state.incidentId, media,
+      };
+      if (type === 'article') return { ...base, excerpt: $('#excerpt').value.trim(), body: $('#body').value, status };
+      return { ...base, caption: $('#caption').value.trim() };
+    }
+    async function submit(status) {
+      if (!$('#title').value.trim()) { setMsg('A headline is required.', true); return; }
+      if (state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
+      setBusy(true); setMsg('Saving…');
+      const payload = buildPayload(status);
+      const isArt = type === 'article';
+      const base = isArt ? 'articles' : 'media';
+      const url = editId ? `${API_BASE}/api/wire/${base}/${encodeURIComponent(editId)}` : `${API_BASE}/api/wire/${base}`;
+      try {
+        const r = await fetch(url, { method: editId ? 'PUT' : 'POST', headers: await userHeaders(true), body: JSON.stringify(payload) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { setMsg(j.error || 'Save failed.', true); setBusy(false); return; }
+        const key = isArt ? (j.slug || editId) : (j.id || editId);
+        location.href = `wire?tab=${isArt ? 'articles' : 'media'}&${isArt ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+      } catch (e) { setMsg('Network error.', true); setBusy(false); }
+    }
+    function setBusy(b) { $('#publishBtn').disabled = b; $('#draftBtn').disabled = b; }
+    function setMsg(m, err) { const el = $('#msg'); el.textContent = m; el.style.color = err ? '#ef4444' : 'var(--text-muted)'; }
+
+    $('#publishBtn').addEventListener('click', () => submit('published'));
+    $('#draftBtn').addEventListener('click', () => submit('draft'));
+    $('#cancelBtn').addEventListener('click', () => (location.href = 'wire'));
+
+    // ---- edit prefill ----
+    async function prefill() {
+      const isArt = type === 'article';
+      const r = await fetch(`${API_BASE}/api/wire/${isArt ? 'articles' : 'media'}/${encodeURIComponent(editId)}`, { headers: await userHeaders() });
+      if (!r.ok) { setMsg('Could not load this post for editing.', true); return; }
+      const data = await r.json();
+      const it = data.post || data.article; if (!it) return;
+      $('#title').value = it.title || '';
+      if (isArt) { $('#excerpt').value = it.excerpt || ''; $('#body').value = it.body || ''; } else { $('#caption').value = it.caption || ''; }
+      state.media = (it.media || []).filter((m) => m.kind === 'image').map((m) => ({
+        kind: 'image', cf_image_id: m.cf_image_id, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url,
+      }));
+      (it.agencies || []).forEach((a) => state.agencies.add(a));
+      state.incidentId = it.incident_id || null;
+      state.incidentTitle = it.incident_id ? 'Linked incident' : null;
+      if (it.location) state.location = { type: it.location.type || 'pin', region: it.location.region || null, lat: it.location.lat, lng: it.location.lng };
+      renderMedia(); renderAgencyCheck(''); renderIncidentChosen();
+      setLocMode(state.location.type);
+      if (state.location.type === 'pin' && state.location.lat != null) setPin(state.location.lat, state.location.lng);
+      if (state.location.type === 'region' && state.location.region) $('#regionSelect').value = state.location.region;
+    }
+
+    // ---- init ----
+    (async function init() {
+      await loadKey();
+      if (!(await checkAccess())) return;
+      $('#form').style.display = 'block';
+      applyType();
+      if (editId) { $('#typeSeg').style.display = 'none'; }
+      initMap();
+      await Promise.all([loadRegions(), loadIncidents(), loadAgencies(), loadCallsigns()]);
+      if (editId) await prefill();
+      refreshLocReadout();
+    })();
+  </script>
+</body>
+</html>

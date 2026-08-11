@@ -33,6 +33,7 @@ import { heartbeatRouter } from './api/heartbeat.js';
 import { statsRouter } from './api/stats.js';
 // Incidents / editor / users (W5).
 import { incidentsRouter } from './api/incidents.js';
+import { wireRouter } from './api/wire.js';
 import { editorRouter } from './api/editor.js';
 import { usersRouter } from './api/users.js';
 // Data-history archive reads (W6).
@@ -315,6 +316,7 @@ export function createApp() {
   app.route('/', statsRouter);
   // Incidents + editor + users (W5)
   app.route('/', incidentsRouter);
+  app.route('/', wireRouter);
   app.route('/', editorRouter);
   app.route('/', usersRouter);
   // Data-history archive reads (W6)

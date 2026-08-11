@@ -390,6 +390,33 @@ const Schema = z.object({
   // (backends/node → ../../downloads).
   NODE_DOWNLOADS_DIR: z.string().default('../../downloads'),
 
+  // ---- The Wire (news & media) media storage ------------------------------
+  // All optional: when unset, The Wire's text/feed still works but the media
+  // upload endpoints return 503 (same "feature stays dark until configured"
+  // pattern as the feeder/rdio vars above). Never breaks unrelated routes.
+  //
+  // Cloudflare Images: photos upload browser->Cloudflare via a one-time direct
+  // upload URL we mint with the API token; we store the returned image id and
+  // serve https://imagedelivery.net/<HASH>/<id>/<variant>. Serving only named
+  // variants strips EXIF/GPS on delivery.
+  CF_IMAGES_ACCOUNT_ID: z.string().optional(),
+  CF_IMAGES_API_TOKEN: z.string().optional(),
+  CF_IMAGES_HASH: z.string().optional(),      // account hash = imagedelivery.net URL prefix
+
+  // Cloudflare R2 (video, phase 1.5): browser->R2 presigned PUT (<=50MB MP4);
+  // served from R2_PUBLIC_BASE. R2_ENDPOINT is the S3 API endpoint
+  // (https://<account>.r2.cloudflarestorage.com).
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_PUBLIC_BASE: z.string().url().optional(),
+
+  // Salt for the per-day view de-dupe hash (hash(ip + ua + salt)). Defaulted
+  // so view counting works out of the box; override to rotate.
+  VIEW_HASH_SALT: z.string().default('nswpsn-wire-views'),
+
 });
 
 const parsed = Schema.safeParse(process.env);

@@ -1,0 +1,53 @@
+import { describe, it, expect } from 'vitest';
+import { slugify, viewerHash, shapeMedia, type WireMediaRow } from '../../../src/services/wire.js';
+
+function mediaRow(over: Partial<WireMediaRow>): WireMediaRow {
+  return {
+    id: 'm1', parent_type: 'media_post', parent_id: 'p1', kind: 'image',
+    cf_image_id: null, r2_key: null, poster_cf_image_id: null, duration_seconds: null,
+    is_cover: false, unit: null, sort_order: 0, width: null, height: null, bytes: null,
+    ...over,
+  };
+}
+
+describe('wire.slugify', () => {
+  it('lowercases, hyphenates and trims', () => {
+    expect(slugify('Ridge-line Backburn Holds!')).toBe('ridge-line-backburn-holds');
+  });
+  it('collapses runs and strips edges', () => {
+    expect(slugify('  Hello   World  ')).toBe('hello-world');
+  });
+  it('falls back for empty/symbol-only input', () => {
+    expect(slugify('')).toBe('article');
+    expect(slugify('!!!')).toBe('article');
+  });
+});
+
+describe('wire.viewerHash', () => {
+  it('is deterministic for the same inputs', () => {
+    expect(viewerHash('1.2.3.4', 'UA')).toBe(viewerHash('1.2.3.4', 'UA'));
+  });
+  it('differs when the ip or ua changes', () => {
+    expect(viewerHash('1.2.3.4', 'UA')).not.toBe(viewerHash('1.2.3.5', 'UA'));
+    expect(viewerHash('1.2.3.4', 'UA')).not.toBe(viewerHash('1.2.3.4', 'OTHER'));
+  });
+});
+
+describe('wire.shapeMedia', () => {
+  it('exposes image variant urls and the round-trippable cf id', () => {
+    const out = shapeMedia(mediaRow({ kind: 'image', cf_image_id: 'abc', is_cover: true, unit: 'P421' }));
+    expect(out['kind']).toBe('image');
+    expect(out['is_cover']).toBe(true);
+    expect(out['unit']).toBe('P421');
+    expect(out['cf_image_id']).toBe('abc');
+    expect(String(out['url'])).toContain('/abc/public');
+    expect(String(out['thumb_url'])).toContain('/abc/thumb');
+  });
+  it('shapes a video with its r2 public url', () => {
+    const out = shapeMedia(mediaRow({ kind: 'video', r2_key: 'vids/x.mp4' }));
+    expect(out['kind']).toBe('video');
+    expect(out['r2_key']).toBe('vids/x.mp4');
+    // url is present (exact host depends on R2_PUBLIC_BASE env; may be undefined base)
+    expect(out).toHaveProperty('url');
+  });
+});

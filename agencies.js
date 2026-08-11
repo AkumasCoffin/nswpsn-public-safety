@@ -352,9 +352,42 @@
     attachSearch(mount, idx);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", render);
-  } else {
+  // ---------- The Wire (news & media) nav item ----------
+  // Injected here rather than hard-coded into all 10 sidebar pages: agencies.js
+  // is the one first-party script loaded on every page that carries the sidebar,
+  // and #agencies-nav-mount is a stable, byte-identical anchor. Native <details>
+  // gives the expand/collapse for free (chevron is CSS, see .wire-nav in
+  // styles.css). Children deep-link to the two Wire tabs.
+  function renderWireNav() {
+    const mount = document.getElementById("agencies-nav-mount");
+    if (!mount || document.getElementById("wire-nav")) return;
+    const path = location.pathname.replace(/\/$/, "");
+    const onWire = path.endsWith("/wire") || path.endsWith("/wire.html");
+    const tab = onWire ? new URLSearchParams(location.search).get("tab") || "media" : null;
+    const active = (t) =>
+      tab === t ? ' class="agency-item-link active"' : ' class="agency-item-link"';
+    const wrap = document.createElement("div");
+    wrap.id = "wire-nav";
+    wrap.innerHTML = `
+      <div class="sidebar-section-label">News &amp; Media</div>
+      <details class="wire-nav"${onWire ? " open" : ""}>
+        <summary><i class="fa-solid fa-photo-film"></i><span>The Wire</span></summary>
+        <div class="wire-nav-list">
+          <a${active("media")} href="wire?tab=media"><i class="agency-item-icon fa-solid fa-images"></i><span class="agency-item-name">Media Posts</span></a>
+          <a${active("articles")} href="wire?tab=articles"><i class="agency-item-icon fa-solid fa-newspaper"></i><span class="agency-item-name">Articles</span></a>
+        </div>
+      </details>`;
+    mount.parentNode.insertBefore(wrap, mount);
+  }
+
+  function initSidebarExtras() {
     render();
+    renderWireNav();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initSidebarExtras);
+  } else {
+    initSidebarExtras();
   }
 })();

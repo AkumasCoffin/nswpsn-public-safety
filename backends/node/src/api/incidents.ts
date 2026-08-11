@@ -63,6 +63,7 @@ import {
   type IncidentImage,
 } from '../services/incidentImages.js';
 import { MetadataStripError } from '../services/imageMetadata.js';
+import { rememberCallsigns, sanitizeUnits } from '../services/callsigns.js';
 
 export const incidentsRouter = new Hono();
 
@@ -146,42 +147,10 @@ type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
 const JSONB_FIELDS: ReadonlySet<string> = new Set(['type', 'responding_agencies', 'units']);
 
 /**
- * Sanitize an editor-supplied units list: strings only, trimmed,
- * uppercased, de-duped, bounded (24 chars each, 50 units max) so a
- * malformed payload can't bloat the row or the callsign dictionary.
+ * sanitizeUnits + rememberCallsigns now live in ../services/callsigns.ts so
+ * The Wire compose flow reuses the exact same dictionary upsert. Imported at
+ * the top of this file.
  */
-export function sanitizeUnits(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const u of raw) {
-    if (typeof u !== 'string') continue;
-    const s = u.trim().toUpperCase().slice(0, 24);
-    if (!s || seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
-    if (out.length >= 50) break;
-  }
-  return out;
-}
-
-/** Upsert saved callsigns into the persistent dictionary (best-effort —
- * a failure here must never fail the incident save). */
-async function rememberCallsigns(pool: Pool, units: string[]): Promise<void> {
-  for (const cs of units) {
-    try {
-      await pool.query(
-        `INSERT INTO callsigns (callsign) VALUES ($1)
-         ON CONFLICT (callsign) DO UPDATE
-           SET last_used = now(), use_count = callsigns.use_count + 1`,
-        [cs],
-      );
-    } catch (err) {
-      log.warn({ err, cs }, 'callsigns: upsert failed');
-      return;
-    }
-  }
-}
 
 /**
  * Coerce an untrusted JSON value into a finite coordinate number.

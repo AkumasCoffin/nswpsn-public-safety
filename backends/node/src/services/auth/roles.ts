@@ -147,6 +147,24 @@ export async function canReviewAgencyData(userId: string): Promise<boolean> {
   return hasRole(userId, ['owner', 'team_member']);
 }
 
+/**
+ * Owner OR media_feeder — may publish/edit The Wire media posts and articles.
+ * Post-moderation: there is no approval queue, the role is vetted at signup.
+ * Per-item edit/delete is further restricted to the author (or an admin
+ * override via canManageUsers) inside the handlers.
+ */
+export async function canFeedMedia(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'media_feeder']);
+}
+
+/**
+ * Owner OR team_member — may soft-remove any Wire post/article (moderation).
+ * Mirrors the reviewer set used elsewhere (canReviewAgencyData / canManageUsers).
+ */
+export async function canModerateWire(userId: string): Promise<boolean> {
+  return hasRole(userId, ['owner', 'team_member']);
+}
+
 export function isPrivilegedRole(role: string): boolean {
   return PRIVILEGED_ROLES.has(role);
 }

@@ -613,6 +613,7 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
     );
     const hasRequest = (reqRes.rowCount ?? 0) > 0;
     const isDataFeeder = userRoles.includes('data_feeder');
+    const isMediaFeeder = userRoles.includes('media_feeder');
     return c.json({
       user_id: userId,
       has_access: hasAccess,
@@ -620,10 +621,16 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
       is_team_member: isTeamMember,
       is_map_editor: isMapEditor,
       is_data_feeder: isDataFeeder,
+      is_media_feeder: isMediaFeeder,
       // Owner OR data_feeder may edit agency reference tables (owner instant,
       // feeder via approval). Surfaced here so the public agency page can show
       // the edit controls without a second round-trip.
       can_edit_agency_data: isOwner || isDataFeeder,
+      // Owner OR media_feeder may publish to The Wire; owner|team_member may
+      // moderate (remove) any post. Surfaced so wire.html/wire-compose.html can
+      // show the compose + remove controls without a second round-trip.
+      can_feed_media: isOwner || isMediaFeeder,
+      can_moderate_wire: isOwner || isTeamMember,
       has_request: hasRequest,
       roles: userRoles,
     });

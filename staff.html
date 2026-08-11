@@ -1545,6 +1545,7 @@
     .role-badge.owner             { background: rgba(234, 179, 8, 0.18);  color: #fbbf24; }
     .role-badge.node_monitor      { background: rgba(6, 182, 212, 0.18);  color: #22d3ee; }
     .role-badge.data_feeder       { background: rgba(132, 204, 22, 0.18);  color: #a3e635; }
+    .role-badge.media_feeder      { background: rgba(249, 115, 22, 0.18);  color: #fb923c; }
 
     .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
 
@@ -3064,6 +3065,11 @@
             <span>📻 Radio Contributor</span>
             <span style="color: var(--text-soft); font-size: 0.75rem;">- Can stream radio</span>
           </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
+            <input type="checkbox" id="role-media-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
+            <span>📸 Media Feeder</span>
+            <span style="color: var(--text-soft); font-size: 0.75rem;">- Post to The Wire</span>
+          </label>
           <!-- Privileged roles - only visible to owners -->
           <div id="privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
@@ -3161,6 +3167,11 @@
             <input type="checkbox" id="edit-role-data-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
             <span>🗃️ Data Feeder</span>
             <span style="color: var(--text-soft); font-size: 0.75rem;">- Edit agency tables (via approval)</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
+            <input type="checkbox" id="edit-role-media-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
+            <span>📸 Media Feeder</span>
+            <span style="color: var(--text-soft); font-size: 0.75rem;">- Post to The Wire</span>
           </label>
           <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
             <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
@@ -9554,7 +9565,8 @@
         'dev': { icon: '💻', label: 'Dev' },
         'owner': { icon: '👑', label: 'Owner' },
         'node_monitor': { icon: '👁️', label: 'Node Monitor' },
-        'data_feeder': { icon: '🗃️', label: 'Data Feeder' }
+        'data_feeder': { icon: '🗃️', label: 'Data Feeder' },
+        'media_feeder': { icon: '📸', label: 'Media Feeder' }
       };
       
       const rows = shown.map(user => {
@@ -9722,6 +9734,7 @@
       document.getElementById('edit-role-radio-contributor').checked = userRoles.includes('radio_contributor');
       document.getElementById('edit-role-node-monitor').checked = userRoles.includes('node_monitor');
       document.getElementById('edit-role-data-feeder').checked = userRoles.includes('data_feeder');
+      document.getElementById('edit-role-media-feeder').checked = userRoles.includes('media_feeder');
       document.getElementById('edit-role-team-member').checked = userRoles.includes('team_member');
       document.getElementById('edit-role-dev').checked = userRoles.includes('dev');
       document.getElementById('edit-role-owner').checked = userRoles.includes('owner');
@@ -9750,6 +9763,7 @@
       if (document.getElementById('edit-role-radio-contributor').checked) roles.push('radio_contributor');
       if (document.getElementById('edit-role-node-monitor').checked) roles.push('node_monitor');
       if (document.getElementById('edit-role-data-feeder').checked) roles.push('data_feeder');
+      if (document.getElementById('edit-role-media-feeder').checked) roles.push('media_feeder');
       if (document.getElementById('edit-role-team-member').checked) roles.push('team_member');
       if (document.getElementById('edit-role-dev').checked) roles.push('dev');
       if (document.getElementById('edit-role-owner').checked) roles.push('owner');
@@ -9996,6 +10010,7 @@
       if (document.getElementById('role-map-editor').checked) roles.push('map_editor');
       if (document.getElementById('role-pager-contributor').checked) roles.push('pager_contributor');
       if (document.getElementById('role-radio-contributor').checked) roles.push('radio_contributor');
+      if (document.getElementById('role-media-feeder').checked) roles.push('media_feeder');
       if (document.getElementById('role-team-member').checked) roles.push('team_member');
       if (document.getElementById('role-dev').checked) roles.push('dev');
       
@@ -10038,6 +10053,7 @@
           'map_editor': '📝 Map Editor',
           'pager_contributor': '📟 Pager Contributor',
           'radio_contributor': '📻 Radio Contributor',
+          'media_feeder': '📸 Media Feeder',
           'team_member': '👥 Team Member',
           'dev': '💻 Developer'
         };
