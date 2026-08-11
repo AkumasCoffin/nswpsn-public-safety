@@ -454,8 +454,12 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
         if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}&${kind === 'article' ? 'article' : 'post'}=${encodeURIComponent(key)}`);
         if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: kind === 'article' ? 'article' : 'media_post' });
-        // count a view (deduped server-side)
-        fetch(`${API_BASE}/api/wire/${kind === 'article' ? 'articles' : 'media'}/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await keyHeaders() }).catch(() => {});
+        // Count a view (deduped server-side). Don't count the author's own
+        // views: skip the request if you're the author, and send your JWT so the
+        // server can also exclude the author server-side.
+        if (!(ME.userId && item.author && item.author.id === ME.userId)) {
+          fetch(`${API_BASE}/api/wire/${kind === 'article' ? 'articles' : 'media'}/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
+        }
       } catch (e) { console.warn(e); }
     }
 

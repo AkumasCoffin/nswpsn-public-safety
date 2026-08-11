@@ -1029,6 +1029,14 @@ async function countView(c: any, parentType: string, table: string) {
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const id = c.req.param('id');
   try {
+    // The author's own views don't count — only other users. When a logged-in
+    // user hits this, skip counting if they're the author.
+    const uid = currentUserId(c);
+    if (uid) {
+      const a = await pool.query<{ author_id: string; views: string }>(`SELECT author_id, views FROM ${table} WHERE id = $1`, [id]);
+      if (a.rowCount === 0) return c.json({ error: 'not found' }, 404);
+      if (a.rows[0]!.author_id === uid) return c.json({ views: Number(a.rows[0]!.views) || 0, self: true });
+    }
     const hash = viewerHash(clientIp(c), c.req.header('user-agent') || '');
     const ins = await pool.query(
       `INSERT INTO wire_views (parent_type, parent_id, viewer_hash, day)
