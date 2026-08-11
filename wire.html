@@ -447,56 +447,32 @@
           <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
           <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div></div></div>`;
       const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
-
-      if (isArticle) {
-        const cover = galleryMedia.find((m) => m.is_cover) || galleryMedia.find((m) => m.kind === 'image') || galleryMedia[0];
-        const coverHtml = cover ? (cover.kind === 'video'
-          ? `<div class="wd-cover"><video controls playsinline ${cover.poster_url ? `poster="${esc(cover.poster_url)}"` : ''} src="${esc(cover.url)}"></video></div>`
-          : `<div class="wd-cover"><img src="${esc(cover.url)}" alt="" data-lb="${esc(cover.url)}"></div>`) : '';
-        const extra = galleryMedia.filter((m) => m !== cover);
-        const extraHtml = extra.length ? `<div class="wd-more-media">${extra.map((m) => m.kind === 'video'
-          ? `<video controls playsinline ${m.poster_url ? `poster="${esc(m.poster_url)}"` : ''} src="${esc(m.url)}" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"></video>`
-          : `<img class="wd-more-thumb" src="${esc(m.thumb_url || m.url)}" alt="" data-lb="${esc(m.url)}">`).join('')}</div>` : '';
-        $('#detail').innerHTML = `${back}
-          <article class="wd-article-wrap">
-            <h1 class="wd-headline">${esc(item.title)}</h1>
+      // Both media posts and articles use the mockup's two-column layout: a
+      // gallery panel (3:2, contained) on the left, the info rail on the right.
+      // Articles render their Markdown body under the gallery.
+      const left = isArticle
+        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
+        : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
+      $('#detail').innerHTML = `${back}
+        <div class="wd-grid">
+          <div>${left}</div>
+          <div>
+            <h1 class="wd-title">${esc(item.title)}</h1>
             <div class="wd-meta">${byline}</div>
             ${notices}
-            ${item.excerpt ? `<p class="wd-dek">${esc(item.excerpt)}</p>` : ''}
-            ${coverHtml}
-            <div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>
-            ${extraHtml}
-            <div class="wd-info"><div class="wd-info-grid">
-              ${statsBlock}
-              <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
-              <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
-              <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
-              ${licenseBlock}
-              ${incidentBlock}
-            </div>${actions}</div>
-          </article>`;
-      } else {
-        $('#detail').innerHTML = `${back}
-          <div class="wd-grid">
-            <div>${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p></div>
-            <div>
-              <h1 class="wd-title">${esc(item.title)}</h1>
-              <div class="wd-meta">${byline}</div>
-              ${notices}
-              ${statsBlock}
-              <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
-              <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
-              <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
-              ${licenseBlock}
-              ${incidentBlock}
-              ${actions}
-            </div>
-          </div>`;
-      }
+            ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
+            ${statsBlock}
+            <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
+            <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
+            <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
+            ${licenseBlock}
+            ${incidentBlock}
+            ${actions}
+          </div>
+        </div>`;
 
       $('#backBtn').addEventListener('click', () => closeDetail());
-      if (!isArticle) wireGallery();
-      $('#detail').querySelectorAll('[data-lb]').forEach((el) => el.addEventListener('click', () => openLightbox(el.dataset.lb)));
+      wireGallery();
       const del = $('#detail [data-act="delete"]'); if (del) del.addEventListener('click', () => mutateDelete(item, false));
       const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
       const rep = $('#reportBtn'); if (rep) rep.addEventListener('click', openReportModal);

@@ -641,30 +641,44 @@
     // Pull the same incident feed the logs page uses (/api/data/history): RFS,
     // traffic, pager, user incidents, etc. — not just user-created ones. full=1
     // so titles/locations are populated; keep only rows we can link (source_id).
+    // Sources that aren't scene "incidents" you'd link a photo to (power
+    // outages, weather/BoM, news) — dropped so the list stays incident-focused.
+    const INCIDENT_BLOCK = /endeavour|essential|ausgrid|power|outage|\bbom\b|weather|news/i;
     async function loadIncidents() {
       try {
-        const r = await fetch(`${API_BASE}/api/data/history?limit=200&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
+        const r = await fetch(`${API_BASE}/api/data/history?limit=300&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
         const j = await r.json();
         const recs = (j && Array.isArray(j.records)) ? j.records : [];
         allIncidents = recs
-          .filter((x) => x && x.source_id)
+          .filter((x) => x && x.source_id && !INCIDENT_BLOCK.test(x.source || ''))
           .map((x) => ({
             source: x.source, source_id: x.source_id,
             title: x.title || x.location_text || sourceLabel(x.source),
             location: x.location_text || '',
+            category: x.subcategory || x.category || '',
+            status: x.status || '',
+            ts: x.source_timestamp || x.fetched_at_iso || null,
             lat: x.latitude != null ? +x.latitude : null,
             lng: x.longitude != null ? +x.longitude : null,
           }));
       } catch (e) {}
     }
     function sourceLabel(s) { return String(s || 'incident').replace(/_/g, ' '); }
+    function incTimeAgo(iso) {
+      if (!iso) return ''; const d = new Date(iso).getTime(); if (!d) return '';
+      const s = Math.floor((Date.now() - d) / 1000); if (s < 0) return '';
+      if (s < 3600) return Math.max(1, Math.floor(s / 60)) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      if (s < 604800) return Math.floor(s / 86400) + 'd ago';
+      return new Date(iso).toLocaleDateString('en-AU');
+    }
     // Search-first picker: filter by name/suburb, then rank by distance to the
     // chosen location (rows with coords first) — every incident stays searchable
     // because a unit may be en route to a farther one, not the closest.
     function refreshIncidentSuggestions() {
       const box = $('#incidentBox'); const l = state.location;
       const q = ($('#incidentSearch').value || '').trim().toLowerCase();
-      let list = q ? allIncidents.filter((i) => i.title.toLowerCase().includes(q) || (i.location || '').toLowerCase().includes(q)) : allIncidents.slice();
+      let list = q ? allIncidents.filter((i) => i.title.toLowerCase().includes(q) || (i.location || '').toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q) || sourceLabel(i.source).toLowerCase().includes(q)) : allIncidents.slice();
       if (l.lat != null) {
         list = list.map((inc) => ({ ...inc, d: inc.lat != null ? haversine(l.lat, l.lng, inc.lat, inc.lng) : null }))
           .sort((a, b) => (a.d == null ? Infinity : a.d) - (b.d == null ? Infinity : b.d));
@@ -680,8 +694,17 @@
     function renderIncidentRows(list) {
       const box = $('#incidentBox');
       const cur = state.incident && state.incident.source_id;
-      box.innerHTML = list.map((inc, i) => `<div class="row ${cur === inc.source_id ? 'sel' : ''}" data-i="${i}">
-        <span>${esc(inc.title)}${inc.location && inc.location.toLowerCase() !== inc.title.toLowerCase() ? ` <small style="color:var(--text-soft)">· ${esc(inc.location)}</small>` : ''} <small style="color:var(--text-soft)">(${esc(sourceLabel(inc.source))})</small></span><small>${inc.d != null ? inc.d.toFixed(1) + ' km' : ''}</small></div>`).join('');
+      box.innerHTML = list.map((inc, i) => {
+        const suburb = inc.location && inc.location.toLowerCase() !== inc.title.toLowerCase() ? inc.location : '';
+        const sub = [sourceLabel(inc.source), inc.category, inc.status, suburb, incTimeAgo(inc.ts)].filter(Boolean).join(' · ');
+        return `<div class="row ${cur === inc.source_id ? 'sel' : ''}" data-i="${i}">
+          <div style="min-width:0;flex:1">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(inc.title)}</div>
+            <div style="font-size:0.72rem;color:var(--text-soft);margin-top:2px;overflow:hidden;text-overflow:ellipsis">${esc(sub)}</div>
+          </div>
+          <small style="white-space:nowrap;margin-left:0.6rem;align-self:flex-start;color:var(--text-soft)">${inc.d != null ? inc.d.toFixed(1) + ' km' : ''}</small>
+        </div>`;
+      }).join('');
       box.style.display = 'block';
       box._list = list;
       box.querySelectorAll('.row[data-i]').forEach((row) => row.addEventListener('click', () => setIncident(list[+row.dataset.i])));
