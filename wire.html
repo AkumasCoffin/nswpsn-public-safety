@@ -66,6 +66,10 @@
     .wire-filters optgroup { background: var(--bg-elevated-soft); color: var(--accent); font-weight: 700; font-style: normal; }
     .wire-filters option { background: var(--bg-elevated); color: var(--text-main); }
     .wire-filters .clear { background: none; border: 0; color: var(--text-soft); font: inherit; font-size: 0.8rem; cursor: pointer; text-decoration: underline; }
+    .wire-tabs2 { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 9px; overflow: hidden; margin: 0.2rem 0 1.2rem; }
+    .wire-tabs2 button { background: var(--bg-elevated); border: 0; color: var(--text-muted); font: inherit; font-size: 0.82rem; padding: 0.45rem 0.95rem; cursor: pointer; }
+    .wire-tabs2 button + button { border-left: 1px solid var(--border-subtle); }
+    .wire-tabs2 button.on { background: var(--accent); color: #fff; }
 
     .wire-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 1.1rem; }
     .wire-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: transform .16s, border-color .16s, box-shadow .16s; }
@@ -210,6 +214,12 @@
       <button class="clear" id="fClear">Clear</button>
     </div>
 
+    <div class="wire-tabs2" id="mineFilters" style="display:none" role="tablist">
+      <button data-mf="all" class="on">All</button>
+      <button data-mf="media">Media posts</button>
+      <button data-mf="articles">Articles</button>
+    </div>
+
     <div id="feedView">
       <div class="wire-grid" id="grid"></div>
       <div class="wire-loading" id="loading" style="display:none">Loading…</div>
@@ -254,6 +264,7 @@
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
     let currentTab = new URLSearchParams(location.search).get('tab') === 'articles' ? 'articles' : 'media';
     let mineMode = new URLSearchParams(location.search).get('mine') === '1';
+    let mineFilter = 'all'; // all | media | articles (My posts view)
 
     const $ = (s, r = document) => r.querySelector(s);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -372,7 +383,32 @@
       return new Date(iso).toLocaleDateString('en-AU');
     }
 
+    function wireCards() {
+      $('#grid').querySelectorAll('.wire-card').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.kind, el.dataset.key)));
+    }
+
+    async function loadMine() {
+      const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
+      grid.innerHTML = ''; empty.style.display = 'none'; loading.style.display = 'block';
+      try {
+        const hdr = await userHeaders();
+        const getMedia = mineFilter !== 'articles'
+          ? fetch(`${API_BASE}/api/wire/media?mine=1`, { headers: hdr }).then((r) => r.json()).then((j) => j.posts || []).catch(() => [])
+          : Promise.resolve([]);
+        const getArticles = mineFilter !== 'media'
+          ? fetch(`${API_BASE}/api/wire/articles?mine=1`, { headers: hdr }).then((r) => r.json()).then((j) => j.articles || []).catch(() => [])
+          : Promise.resolve([]);
+        const [media, articles] = await Promise.all([getMedia, getArticles]);
+        const items = [...media, ...articles].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+        loading.style.display = 'none';
+        if (!items.length) { empty.textContent = "You haven't posted anything here yet."; empty.style.display = 'block'; return; }
+        grid.innerHTML = items.map(cardHTML).join('');
+        wireCards();
+      } catch (e) { loading.style.display = 'none'; empty.textContent = 'Failed to load your posts.'; empty.style.display = 'block'; }
+    }
+
     async function loadFeed() {
+      if (mineMode) return loadMine();
       const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
       grid.innerHTML = ''; empty.style.display = 'none'; loading.style.display = 'block';
       const params = new URLSearchParams();
@@ -575,6 +611,11 @@
       let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, id === 'fUnit' ? 300 : 0); });
     });
     $('#fClear').addEventListener('click', () => { $('#fUnit').value = ''; $('#fAgency').value = ''; $('#fRegion').value = ''; loadFeed(); });
+    $('#mineFilters').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      mineFilter = b.dataset.mf;
+      $('#mineFilters').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      loadFeed();
+    }));
 
     window.addEventListener('popstate', () => {
       const p = new URLSearchParams(location.search);
@@ -595,6 +636,9 @@
       await Promise.all([loadKey(), loadMe(), loadFilterOptions()]);
       // Soft launch: only the owner sees The Wire; everyone else gets a banner.
       if (!ME.isOwner) { showComingSoon(); return; }
+      // My posts = combined media + articles with an All/Media/Articles filter;
+      // the public agency/region filters don't apply there.
+      if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }
       const p = new URLSearchParams(location.search);
       const post = p.get('post'), article = p.get('article');
       if (article) { await loadFeed(); openDetail('article', article, false); }
