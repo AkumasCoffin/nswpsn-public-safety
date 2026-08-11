@@ -1207,6 +1207,8 @@
        dropdown (integrated look). Hover just lifts the text colour. */
     .req-kind-bar #req-kind-btn:hover { color: var(--text-primary); }
     .req-kind-badge { background: rgba(234,179,8,0.16); color: #fbbf24; border: 1px solid rgba(234,179,8,0.4); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
+    /* Pending-count pills on the Requests dropdown items (data/approvals/takedowns). */
+    .tab-dd-item .dd-count { margin-left: auto; min-width: 1.1rem; text-align: center; background: rgba(234,179,8,0.2); color: #fbbf24; border-radius: 999px; padding: 0.02rem 0.42rem; font-size: 0.68rem; font-weight: 700; }
     .dc-card { background: var(--bg-card, #0e1728); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 0.8rem; }
     .dc-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
     .dc-op { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.1rem 0.45rem; border-radius: 5px; }
@@ -2111,10 +2113,19 @@
 
       <!-- Tab Navigation -->
       <div class="tab-nav">
-        <button class="tab-btn active" data-tab="requests" onclick="switchTab('requests')">
-          <i class="fas fa-inbox"></i> Requests
-          <span class="badge" id="pending-badge" style="display: none;">0</span>
-        </button>
+        <div class="tab-dd" id="requests-dd">
+          <button class="tab-btn active" data-tab="requests" id="requests-tab-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleRequestsMenu(event)">
+            <i class="fas fa-inbox"></i> Requests
+            <span class="badge" id="pending-badge" style="display: none;">0</span>
+            <i class="fas fa-caret-down tab-dd-caret"></i>
+          </button>
+          <div class="tab-dd-menu" id="requests-dd-menu" role="menu" aria-label="Request kind">
+            <button class="tab-dd-item active" role="menuitem" data-kind="signup" onclick="openRequestsView('signup')"><i class="fas fa-user-plus"></i> Signup requests</button>
+            <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes <span class="dd-count" id="dd-data-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="approvals" onclick="openRequestsView('approvals')"><i class="fas fa-clock"></i> Wire approvals <span class="dd-count" id="dd-approvals-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
+          </div>
+        </div>
         <button class="tab-btn" data-tab="users" onclick="switchTab('users')">
           <i class="fas fa-users"></i> Users
         </button>
@@ -2136,25 +2147,9 @@
         </button>
       </div>
 
-      <!-- Requests Tab -->
+      <!-- Requests Tab (kind chosen from the integrated Requests dropdown in the
+           tab bar — signup / data changes / wire approvals / wire takedowns). -->
       <div id="requests-tab" class="tab-content active">
-        <!-- Which kind of request to review: signups vs agency data changes.
-             Uses the same dropdown pattern as the Data tab (tab-dd / tab-dd-menu). -->
-        <div class="req-kind-bar">
-          <span class="req-kind-label">Reviewing</span>
-          <div class="tab-dd" id="req-kind-dd">
-            <button class="tab-btn" id="req-kind-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleReqKindMenu(event)">
-              <i class="fas fa-inbox"></i> <span id="req-kind-current">Signup requests</span> <i class="fas fa-caret-down tab-dd-caret"></i>
-            </button>
-            <div class="tab-dd-menu" id="req-kind-menu" role="menu" aria-label="Request kind">
-              <button class="tab-dd-item active" role="menuitem" data-kind="signup" onclick="openRequestsView('signup')"><i class="fas fa-user-plus"></i> Signup requests</button>
-              <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes</button>
-              <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns</button>
-            </div>
-          </div>
-          <span id="req-datachanges-badge" class="req-kind-badge" style="display:none;"></span>
-          <span id="req-takedowns-badge" class="req-kind-badge" style="display:none;"></span>
-        </div>
 
         <!-- Signup requests (existing) -->
         <div id="requests-signup-view">
@@ -2217,6 +2212,13 @@
             <button class="filter-btn" data-tdfilter="rejected" onclick="setTdFilter('rejected')">Rejected</button>
           </div>
           <div id="takedowns-container">
+            <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+        </div>
+
+        <!-- Wire approvals (pre-moderation queue for pending posts & articles) -->
+        <div id="requests-approvals-view" style="display:none;">
+          <div id="approvals-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
         </div>
@@ -9292,50 +9294,53 @@
     // --- Agency data-change requests (Requests tab → "Data changes") ---
     let _dcChanges = [];
     let _dcFilter = 'pending';
+    let _reqKind = 'signup';
     function switchRequestsView(kind) {
-      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', takedowns: 'requests-takedowns-view' };
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view' };
       Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
       if (kind === 'data') loadDataChanges();
+      else if (kind === 'approvals') loadApprovals();
       else if (kind === 'takedowns') loadTakedowns();
     }
-    // Reviewing dropdown — mirrors the Data tab menu (toggleDataMenu/openDataMode).
-    function toggleReqKindMenu(event) {
+    // Requests dropdown lives in the tab bar and behaves exactly like the Data
+    // tab dropdown (toggleDataMenu/openDataMode).
+    function toggleRequestsMenu(event) {
       if (event) { event.preventDefault(); event.stopPropagation(); }
-      const menu = document.getElementById('req-kind-menu');
+      const menu = document.getElementById('requests-dd-menu');
       if (!menu) return;
       const open = !menu.classList.contains('open');
       menu.classList.toggle('open', open);
-      const btn = document.getElementById('req-kind-btn');
+      const btn = document.getElementById('requests-tab-btn');
       if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
-    function closeReqKindMenu() {
-      const menu = document.getElementById('req-kind-menu');
+    function closeRequestsMenu() {
+      const menu = document.getElementById('requests-dd-menu');
       if (menu) menu.classList.remove('open');
-      const btn = document.getElementById('req-kind-btn');
+      const btn = document.getElementById('requests-tab-btn');
       if (btn) btn.setAttribute('aria-expanded', 'false');
     }
     function openRequestsView(kind) {
-      closeReqKindMenu();
-      const cur = document.getElementById('req-kind-current');
-      if (cur) cur.textContent = { data: 'Data changes', takedowns: 'Wire takedowns', signup: 'Signup requests' }[kind] || 'Signup requests';
-      document.querySelectorAll('#req-kind-menu .tab-dd-item').forEach(it =>
+      _reqKind = kind;
+      closeRequestsMenu();
+      if (currentTab !== 'requests') switchTab('requests');
+      document.querySelectorAll('#requests-dd-menu .tab-dd-item').forEach(it =>
         it.classList.toggle('active', it.dataset.kind === kind));
       switchRequestsView(kind);
     }
     document.addEventListener('click', (e) => {
-      const dd = document.getElementById('req-kind-dd');
-      if (dd && !dd.contains(e.target)) closeReqKindMenu();
+      const dd = document.getElementById('requests-dd');
+      if (dd && !dd.contains(e.target)) closeRequestsMenu();
     });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeReqKindMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRequestsMenu(); });
     function setDcFilter(status) {
       _dcFilter = status;
       document.querySelectorAll('[data-dcfilter]').forEach(b => b.classList.toggle('active', b.dataset.dcfilter === status));
       loadDataChanges();
     }
     function _dcUpdateBadge(n) {
-      const b = document.getElementById('req-datachanges-badge');
+      const b = document.getElementById('dd-data-badge');
       if (!b) return;
-      if (n && n > 0) { b.style.display = ''; b.textContent = n + ' pending'; }
+      if (n && n > 0) { b.style.display = ''; b.textContent = n; }
       else b.style.display = 'none';
     }
     // Lightweight pending-count refresh for the dropdown badge (called on tab load).
@@ -9409,9 +9414,9 @@
       loadTakedowns();
     }
     function _tdUpdateBadge(n) {
-      const b = document.getElementById('req-takedowns-badge');
+      const b = document.getElementById('dd-takedowns-badge');
       if (!b) return;
-      if (n && n > 0) { b.style.display = ''; b.textContent = n + ' takedown' + (n > 1 ? 's' : ''); }
+      if (n && n > 0) { b.style.display = ''; b.textContent = n; }
       else b.style.display = 'none';
     }
     async function _tdRefreshBadge() {
@@ -9482,9 +9487,88 @@
       } catch (e) { showToast(action + ' failed', 'error'); }
     }
 
+    // --- Wire approvals (Requests tab → "Wire approvals") — pre-moderation queue ---
+    let _apItems = [];
+    function _apUpdateBadge(n) {
+      const b = document.getElementById('dd-approvals-badge');
+      if (b) { if (n && n > 0) { b.style.display = ''; b.textContent = n; } else b.style.display = 'none'; }
+      // Reuse the main Requests badge to surface the pending-approval count too.
+    }
+    async function _apRefreshBadge() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/pending`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) return;
+        const d = await res.json();
+        _apUpdateBadge(d.pendingCount);
+      } catch (e) { /* ignore */ }
+    }
+    async function loadApprovals() {
+      const el = document.getElementById('approvals-container');
+      if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/pending`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const d = await res.json();
+        _apItems = d.items || [];
+        _apUpdateBadge(d.pendingCount);
+        renderApprovals();
+      } catch (e) {
+        if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load pending posts.</p></div>`;
+      }
+    }
+    function renderApprovals() {
+      const el = document.getElementById('approvals-container');
+      if (!el) return;
+      if (!_apItems.length) {
+        el.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle"></i><p>No posts awaiting approval.</p></div>`;
+        return;
+      }
+      el.innerHTML = _apItems.map(p => {
+        const isArticle = p.kind === 'article';
+        const base = isArticle ? 'articles' : 'media';
+        const key = isArticle ? p.slug : p.id;
+        const link = `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+        const when = p.created_at ? new Date(p.created_at).toLocaleString() : '';
+        const cover = p.cover && p.cover.thumb_url ? p.cover.thumb_url : (p.cover && p.cover.url ? p.cover.url : '');
+        const thumb = cover ? `<img src="${escapeHtml(cover)}" alt="" style="width:64px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0">` : `<span style="width:64px;height:48px;display:grid;place-items:center;background:rgba(148,163,184,0.12);border-radius:6px;flex-shrink:0"><i class="fas fa-${isArticle ? 'newspaper' : 'image'}"></i></span>`;
+        const units = (p.units || []).slice(0, 4).map(u => `<span style="font-size:0.68rem;background:rgba(148,163,184,0.12);padding:1px 6px;border-radius:4px">${escapeHtml(u)}</span>`).join(' ');
+        return `<div class="dc-card">
+          <div class="dc-head">
+            <span class="dc-op ${isArticle ? 'update' : 'add'}"><i class="fas fa-${isArticle ? 'newspaper' : 'photo-film'}"></i> ${isArticle ? 'article' : 'media post'}</span>
+            <span class="dc-agency">${escapeHtml(p.title || '')}</span>
+            <span class="dc-meta">${escapeHtml(p.author && p.author.name || 'contributor')} · ${escapeHtml(when)}</span>
+          </div>
+          <div style="display:flex;gap:0.7rem;align-items:flex-start;padding:0.4rem 0;font-size:0.85rem;color:#cbd5e1">
+            ${thumb}
+            <div style="flex:1;min-width:0">
+              <div style="white-space:pre-wrap">${escapeHtml(p.caption || p.excerpt || '')}</div>
+              <div style="margin-top:0.35rem;display:flex;gap:4px;flex-wrap:wrap">${units}</div>
+              <div style="margin-top:0.35rem"><a href="${link}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i> Preview</a></div>
+            </div>
+          </div>
+          <div class="dc-actions">
+            <button class="btn btn-success btn-sm" onclick="apAction('${base}','${p.id}','approve')"><i class="fas fa-check"></i> Approve &amp; publish</button>
+            <button class="btn btn-danger btn-sm" onclick="apAction('${base}','${p.id}','reject')"><i class="fas fa-times"></i> Reject</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+    async function apAction(base, id, action) {
+      let note = null;
+      if (action === 'reject') note = prompt('Reason for rejecting (optional — the contributor will see it):') || null;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/${base}/${id}/${action}`, { method: 'POST', headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(d.error || (action + ' failed'), 'error'); return; }
+        showToast(action === 'approve' ? 'Published' : 'Rejected', 'success');
+        loadApprovals();
+      } catch (e) { showToast(action + ' failed', 'error'); }
+    }
+
     async function loadRequests() {
       _dcRefreshBadge();
       _tdRefreshBadge();
+      _apRefreshBadge();
       try {
         const response = await fetch(`${API_BASE_URL}/api/editor-requests`, {
           headers: {

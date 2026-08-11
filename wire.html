@@ -36,6 +36,9 @@
     .wire-sub { color: var(--text-muted); font-size: 0.9rem; margin: 0.2rem 0 0; }
     .wire-post-btn { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--accent); color: #fff; border: 0; border-radius: 9px; font: inherit; font-weight: 700; font-size: 0.85rem; padding: 0.55rem 1rem; cursor: pointer; text-decoration: none; }
     .wire-post-btn:hover { background: #ea580c; }
+    .wire-post-btn.secondary { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); }
+    .wire-post-btn.secondary:hover { background: rgba(148,163,184,0.1); border-color: var(--accent); color: var(--accent); }
+    .wire-post-btn.secondary.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
     .wire-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.4rem 0 1.2rem; align-items: center; }
     .wire-filters input, .wire-filters select {
@@ -159,7 +162,10 @@
         <h1 class="wire-title">The <span class="dot">Wire</span></h1>
         <p class="wire-sub" id="wireSub">Independent photos, video &amp; news from contributors on the ground.</p>
       </div>
-      <a class="wire-post-btn" id="postBtn" href="wire-compose" style="display:none"><i class="fa-solid fa-plus"></i> Post to The Wire</a>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+        <a class="wire-post-btn secondary" id="mineBtn" href="#" style="display:none"><i class="fa-regular fa-user"></i> My posts</a>
+        <a class="wire-post-btn" id="postBtn" href="wire-compose" style="display:none"><i class="fa-solid fa-plus"></i> Post to The Wire</a>
+      </div>
     </div>
 
     <div class="wire-filters" id="filters">
@@ -212,11 +218,18 @@
     let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false };
     let currentTab = new URLSearchParams(location.search).get('tab') === 'articles' ? 'articles' : 'media';
+    let mineMode = new URLSearchParams(location.search).get('mine') === '1';
 
     const $ = (s, r = document) => r.querySelector(s);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
     const fmtViews = (n) => (Number(n) || 0).toLocaleString('en-AU');
+    function statusBadge(s) {
+      if (!s || s === 'published') return '';
+      const map = { pending: ['Pending review', '#f59e0b'], rejected: ['Rejected', '#ef4444'], draft: ['Draft', 'var(--text-soft)'], removed: ['Removed', '#ef4444'] };
+      const [label, color] = map[s] || [s, 'var(--text-soft)'];
+      return `<span class="wire-draft-badge" style="color:${color};border:1px solid ${color === 'var(--text-soft)' ? 'var(--border-subtle)' : color}">${label}</span>`;
+    }
 
     // Region-grouped <optgroup>s for an LGA <select> (mapping lga-regions.json).
     const WIRE_REGION_ORDER = ['Greater Sydney', 'Central Coast', 'Hunter', 'Illawarra-Shoalhaven', 'North Coast', 'New England North West', 'Central West and Orana', 'Riverina Murray', 'South East and Tablelands', 'Far West', 'Other'];
@@ -256,7 +269,13 @@
         const r = await fetch(`${API_BASE}/api/check-editor/${uid}`);
         if (r.ok) { const j = await r.json(); ME.canFeed = !!j.can_feed_media; ME.canModerate = !!j.can_moderate_wire; }
       } catch (e) {}
-      if (ME.canFeed) $('#postBtn').style.display = 'inline-flex';
+      if (ME.canFeed) {
+        $('#postBtn').style.display = 'inline-flex';
+        const mb = $('#mineBtn');
+        mb.style.display = 'inline-flex';
+        if (mineMode) { mb.classList.add('on'); mb.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Public feed'; mb.href = `wire?tab=${currentTab}`; }
+        else { mb.href = `wire?tab=${currentTab}&mine=1`; }
+      }
     }
 
     // ---- filter option loaders ----
@@ -293,7 +312,7 @@
       const hasLoc = item.location && (item.location.region || item.location.lat != null);
       const loc = hasLoc
         ? `<span class="wire-chip loc"><i class="fa-solid fa-location-dot"></i> ${esc(item.location.region || 'Pinned')}</span>` : '';
-      const draft = item.status === 'draft' ? `<span class="wire-draft-badge">Draft</span>` : '';
+      const draft = statusBadge(item.status);
       const key = isArticle ? item.slug : item.id;
       return `<article class="wire-card" data-kind="${item.kind}" data-key="${esc(key)}">
         <div class="wire-thumb">${media}<span class="wire-badge ${isArticle ? 'article' : ''}">${esc(badge)}</span>
@@ -322,13 +341,14 @@
       if (unit) params.set('unit', unit);
       if (ag) params.set('agency', ag);
       if (rg) params.set('region', rg);
+      if (mineMode) params.set('mine', '1');
       const path = currentTab === 'articles' ? 'articles' : 'media';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${path}?${params}`, { headers: await keyHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/${path}?${params}`, { headers: mineMode ? await userHeaders() : await keyHeaders() });
         const j = await r.json();
         const items = j.posts || j.articles || [];
         loading.style.display = 'none';
-        if (!items.length) { empty.textContent = currentTab === 'articles' ? 'No articles yet.' : 'No media posts yet.'; empty.style.display = 'block'; return; }
+        if (!items.length) { empty.textContent = mineMode ? "You haven't posted any " + (currentTab === 'articles' ? 'articles' : 'media') + ' yet.' : (currentTab === 'articles' ? 'No articles yet.' : 'No media posts yet.'); empty.style.display = 'block'; return; }
         grid.innerHTML = items.map(cardHTML).join('');
         grid.querySelectorAll('.wire-card').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.kind, el.dataset.key)));
       } catch (e) {
@@ -399,7 +419,9 @@
           <div>${left}</div>
           <div>
             <h1 class="wd-title">${esc(item.title)}</h1>
-            <div class="wd-meta">by ${esc(item.author?.name || 'contributor')}${item.status === 'draft' ? ' · <span style="color:#f59e0b">Draft</span>' : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}</div>
+            <div class="wd-meta">by ${esc(item.author?.name || 'contributor')}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}</div>
+            ${item.status === 'pending' ? `<div style="color:#f59e0b;font-size:0.82rem;margin-bottom:0.9rem"><i class="fa-regular fa-clock"></i> Awaiting moderator approval — only you can see this until it's approved.</div>` : ''}
+            ${item.status === 'rejected' && item.review_note ? `<div style="color:#ef4444;font-size:0.82rem;margin-bottom:0.9rem"><b>Rejected:</b> ${esc(item.review_note)} — edit and re-submit to send it back for review.</div>` : ''}
             ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
             <div class="wd-block"><div class="wd-stats">
               <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
@@ -502,9 +524,9 @@
     // Switching Media Posts <-> Articles is driven ONLY by the sidebar (full
     // navigation to wire?tab=...); this page just reflects the ?tab it loaded.
     function applySection() {
-      $('#wireSub').textContent = currentTab === 'articles'
-        ? 'Independent news & reporting from contributors.'
-        : 'Independent photos & video from contributors on the ground.';
+      $('#wireSub').textContent = mineMode
+        ? 'Your posts — including anything awaiting review.'
+        : (currentTab === 'articles' ? 'Independent news & reporting from contributors.' : 'Independent photos & video from contributors on the ground.');
       $('#fUnit').style.display = currentTab === 'articles' ? 'none' : '';
     }
     ['fUnit', 'fAgency', 'fRegion'].forEach((id) => {

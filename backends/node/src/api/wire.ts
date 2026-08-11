@@ -225,6 +225,7 @@ function shapeMediaPost(row: any, media: WireMediaRow[]): Record<string, unknown
     credit: row.credit || null,
     views: Number(row.views) || 0,
     status: row.status,
+    review_note: row.review_note ?? null,
     author: { id: row.author_id, name: row.author_name },
     media: shaped,
     cover,
@@ -252,6 +253,7 @@ function shapeArticle(row: any, media: WireMediaRow[]): Record<string, unknown> 
     credit: row.credit || null,
     views: Number(row.views) || 0,
     status: row.status,
+    review_note: row.review_note ?? null,
     author: { id: row.author_id, name: row.author_name },
     media: shaped,
     cover,
@@ -385,14 +387,17 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
 
     const authorId = currentUserId(c)!;
     const authorName = currentUserName(c);
+    // Pre-moderation: moderators (owner|team_member) publish instantly; everyone
+    // else's post is 'pending' until a moderator approves it.
+    const status = (await canModerateWire(authorId)) ? 'published' : 'pending';
     const client = await pool.connect();
     let newId: string;
     try {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true) RETURNING id`,
-        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit],
+        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13) RETURNING id`,
+        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, MEDIA, newId, mv.items);
@@ -404,7 +409,7 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
       client.release();
     }
     await rememberCallsigns(pool, mv.units);
-    return c.json({ id: newId, success: true }, 201);
+    return c.json({ id: newId, success: true, status }, 201);
   } catch (err) {
     log.error({ err }, 'wire: create media failed');
     return c.json({ error: 'failed to create media post' }, 500);
@@ -418,12 +423,14 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
   const uid = currentUserId(c);
   if (!uid) return c.json({ error: 'authentication required' }, 401);
   try {
-    const existing = await pool.query<{ author_id: string; taken_down_at: unknown }>('SELECT author_id, taken_down_at FROM media_posts WHERE id = $1', [id]);
+    const existing = await pool.query<{ author_id: string; taken_down_at: unknown; status: string }>('SELECT author_id, taken_down_at, status FROM media_posts WHERE id = $1', [id]);
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) {
       return c.json({ error: 'forbidden' }, 403);
     }
     if (existing.rows[0]!.taken_down_at) return c.json({ error: 'this content was removed following a rights complaint and cannot be edited' }, 409);
+    // Editing a rejected post resends it for review. Otherwise status is unchanged.
+    const statusSet = existing.rows[0]!.status === 'rejected' ? `, status='pending'` : '';
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const title = typeof data['title'] === 'string' ? data['title'].trim().slice(0, 300) : '';
     if (!title) return c.json({ error: 'title is required' }, 400);
@@ -443,7 +450,7 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE media_posts SET title=$1, caption=$2, location_type=$3, region=$4, lat=$5, lng=$6,
-           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, updated_at=now() WHERE id=$11`,
+           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, updated_at=now()${statusSet} WHERE id=$11`,
         [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
@@ -573,20 +580,23 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     if (!title) return c.json({ error: 'title is required' }, 400);
     const excerpt = typeof data['excerpt'] === 'string' ? data['excerpt'].slice(0, 600) : '';
     const body = typeof data['body'] === 'string' ? data['body'].slice(0, 100_000) : '';
-    const status = data['status'] === 'published' ? 'published' : 'draft';
+    // Pre-moderation: "publish" from a moderator goes live; from anyone else it
+    // becomes 'pending' review. Drafts stay private to the author.
+    const wantPublish = data['status'] === 'published';
+    const authorId = currentUserId(c)!;
+    const status = wantPublish ? ((await canModerateWire(authorId)) ? 'published' : 'pending') : 'draft';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
-    const rightsAffirmed = data['rights_affirmed'] === true;
-    if (status === 'published' && !rightsAffirmed) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
+    if (wantPublish && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     const slug = await uniqueSlug(pool, title);
 
-    const authorId = currentUserId(c)!;
     const authorName = currentUserName(c);
+    const rightsAffirmed = data['rights_affirmed'] === true;
     const client = await pool.connect();
     let newId: string;
     try {
@@ -607,7 +617,7 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       client.release();
     }
     await rememberCallsigns(pool, mv.units);
-    return c.json({ id: newId, slug, success: true }, 201);
+    return c.json({ id: newId, slug, success: true, status }, 201);
   } catch (err) {
     log.error({ err }, 'wire: create article failed');
     return c.json({ error: 'failed to create article' }, 500);
@@ -633,7 +643,12 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     if (!title) return c.json({ error: 'title is required' }, 400);
     const excerpt = typeof data['excerpt'] === 'string' ? data['excerpt'].slice(0, 600) : '';
     const body = typeof data['body'] === 'string' ? data['body'].slice(0, 100_000) : '';
-    let status = data['status'] === 'published' ? 'published' : (prev.status === 'removed' ? 'removed' : 'draft');
+    // Pre-moderation: a moderator's "publish" goes live; a contributor's
+    // "publish" becomes 'pending' review (unless the article is already public,
+    // in which case their edits stay live). Drafts stay drafts.
+    let status: string;
+    if (data['status'] === 'published') status = isAdmin ? 'published' : (prev.status === 'published' ? 'published' : 'pending');
+    else status = 'draft';
     // A soft-removed article can't be re-published by its author — only a
     // moderator (canModerateWire ⊇ canManageUsers) may restore it.
     if (prev.status === 'removed' && !isAdmin) status = 'removed';
@@ -642,7 +657,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
-    if (status === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
+    if (data['status'] === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     const slug = await uniqueSlug(pool, title, id);
@@ -713,8 +728,62 @@ wireRouter.post('/api/wire/articles/:id/view', async (c) => {
 });
 
 // ===========================================================================
+// PENDING REVIEW (pre-moderation queue)
+// ===========================================================================
+
+wireRouter.get('/api/wire/pending', requireRole(canModerateWire), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  try {
+    const [m, a] = await Promise.all([
+      pool.query(`SELECT * FROM media_posts WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
+      pool.query(`SELECT * FROM articles WHERE status='pending' ORDER BY created_at DESC LIMIT 100`),
+    ]);
+    const mMedia = await fetchMediaFor(pool, 'media_post', m.rows.map((r) => r.id));
+    const aMedia = await fetchMediaFor(pool, 'article', a.rows.map((r) => r.id));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = [
+      ...m.rows.map((r) => shapeMediaPost(r, mMedia.get(r.id) ?? [])),
+      ...a.rows.map((r) => shapeArticle(r, aMedia.get(r.id) ?? [])),
+    ].sort((x, y) => new Date(String(y['created_at'] || 0)).getTime() - new Date(String(x['created_at'] || 0)).getTime());
+    return c.json({ items, pendingCount: items.length });
+  } catch (err) {
+    log.error({ err }, 'wire: pending list failed');
+    return c.json({ error: 'failed to list pending' }, 500);
+  }
+});
+
+wireRouter.post('/api/wire/media/:id/approve', requireRole(canModerateWire), (c) => reviewPost(c, MEDIA, 'approve'));
+wireRouter.post('/api/wire/media/:id/reject', requireRole(canModerateWire), (c) => reviewPost(c, MEDIA, 'reject'));
+wireRouter.post('/api/wire/articles/:id/approve', requireRole(canModerateWire), (c) => reviewPost(c, ARTICLE, 'approve'));
+wireRouter.post('/api/wire/articles/:id/reject', requireRole(canModerateWire), (c) => reviewPost(c, ARTICLE, 'reject'));
+
+// ===========================================================================
 // shared mutating helpers
 // ===========================================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function reviewPost(c: any, cfg: EntityCfg, action: 'approve' | 'reject') {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const id = c.req.param('id');
+  const note = await noteFromBody(c);
+  const newStatus = action === 'approve' ? 'published' : 'rejected';
+  // Approving an article stamps published_at on first publish.
+  const publishSet = action === 'approve' && cfg.parentType === 'article' ? ', published_at = COALESCE(published_at, now())' : '';
+  try {
+    const r = await pool.query(
+      `UPDATE ${cfg.table} SET status=$1${publishSet}, reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now(), review_note=$4, updated_at=now()
+       WHERE id=$5 AND status='pending' RETURNING id`,
+      [newStatus, currentUserId(c) ?? null, currentUserName(c), note, id],
+    );
+    if (r.rowCount === 0) return c.json({ error: 'not found or already reviewed' }, 404);
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, id, table: cfg.table, action }, 'wire: review failed');
+    return c.json({ error: 'failed to review' }, 500);
+  }
+}
 
 async function imageIdsFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {
   const r = await pool.query<{ cf_image_id: string | null; poster_cf_image_id: string | null }>(

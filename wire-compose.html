@@ -133,7 +133,7 @@
 
     <form id="form" style="display:none" onsubmit="return false">
       <h1 id="formTitle">Compose a dispatch</h1>
-      <p class="sub">Post-moderation: your post goes live immediately. You can edit or delete it any time.</p>
+      <p class="sub" id="composeSub">Your post is reviewed by our team before it goes public. You can edit or delete it any time.</p>
 
       <div class="seg" id="typeSeg">
         <button type="button" data-type="media" aria-current="true">Media Post</button>
@@ -252,6 +252,7 @@
       incidentId: null, incidentTitle: null,
       agencies: new Set(),
     };
+    let isModerator = false; // owner/team_member → posts publish instantly
     let allIncidents = [];   // {id,title,lat,lng,location}
     let regionsGeo = null;   // features
     let agencyList = [];     // {slug,name}
@@ -295,6 +296,8 @@
         const r = await fetch(`${API_BASE}/api/check-editor/${uid}`);
         const j = await r.json();
         if (!j.can_feed_media) { showGate(); return false; }
+        isModerator = !!j.can_moderate_wire;
+        if (isModerator) $('#composeSub').textContent = 'You can publish directly, or save a draft. Edit or delete any time.';
       } catch (e) { showGate('Could not verify your access. Try again.'); return false; }
       return true;
     }
@@ -309,7 +312,7 @@
       $('#bodyField').style.display = isArt ? 'block' : 'none';
       $('#mediaLabel').textContent = isArt ? 'Images · up to 4 (pick a cover)' : 'Photos · up to 6';
       $('#draftBtn').style.display = isArt ? 'inline-block' : 'none';
-      $('#publishBtn').textContent = isArt ? 'Publish' : 'Publish';
+      $('#publishBtn').textContent = isModerator ? 'Publish' : 'Submit for review';
       $('#formTitle').textContent = editId ? (isArt ? 'Edit article' : 'Edit media post') : (isArt ? 'Write an article' : 'Compose a media post');
       renderMedia();
     }
