@@ -90,6 +90,28 @@
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .msg { margin-top: 1rem; font-size: 0.85rem; min-height: 1.2em; }
     .video-note { font-size: 0.75rem; color: var(--text-soft); border: 1px dashed var(--border-subtle); border-radius: 8px; padding: 0.6rem 0.8rem; margin-top: 0.6rem; }
+    /* Markdown help tooltip on the article body label */
+    .md-info { position: relative; display: inline-block; cursor: help; color: var(--text-soft); margin-left: 0.25rem; }
+    .md-info > i { font-size: 0.9rem; }
+    .md-info .md-tip {
+      display: none; position: absolute; left: 0; top: 1.5rem; z-index: 30; width: 250px;
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 9px;
+      padding: 0.65rem 0.75rem; box-shadow: var(--shadow-soft);
+      font: 0.76rem/1.7 var(--mono, ui-monospace, monospace); color: var(--text-muted);
+      text-transform: none; letter-spacing: normal; white-space: normal;
+    }
+    .md-info .md-tip code { background: var(--bg-elevated-soft); padding: 0.05rem 0.3rem; border-radius: 4px; color: var(--text-main); }
+    .md-info .md-tip b { color: var(--accent); }
+    .md-info .md-tip-note { display: block; margin-top: 0.4rem; color: var(--text-soft); font-family: var(--sans); font-size: 0.72rem; }
+    .md-info:hover .md-tip, .md-info:focus .md-tip, .md-info:focus-within .md-tip { display: block; }
+
+    /* Right-click Markdown context menu */
+    .md-menu { position: fixed; z-index: 9999; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-soft); padding: 0.3rem; min-width: 158px; }
+    .md-menu button { display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left; background: none; border: 0; color: var(--text-main); font: inherit; font-size: 0.85rem; padding: 0.42rem 0.6rem; border-radius: 6px; cursor: pointer; }
+    .md-menu button:hover { background: var(--accent-soft); color: var(--accent); }
+    .md-menu button .k { width: 1.1rem; text-align: center; color: var(--text-soft); font-size: 0.8rem; }
+    .md-menu button:hover .k { color: var(--accent); }
+
     .topbar { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1.2rem; }
     .topbar a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; }
     .topbar a:hover { color: var(--accent); }
@@ -155,8 +177,20 @@
         <textarea id="excerpt" maxlength="600" placeholder="One-sentence summary shown on the article card"></textarea>
       </div>
       <div class="field" id="bodyField" style="display:none">
-        <label for="body">Article body · Markdown</label>
-        <textarea id="body" class="body" placeholder="Write the story. **bold**, _italic_, [links](https://…), and headings supported."></textarea>
+        <label for="body">Article body · Markdown
+          <span class="md-info" tabindex="0" aria-label="Markdown help"><i class="fa-regular fa-circle-question"></i>
+            <span class="md-tip">
+              <b>Markdown</b><br>
+              <code>**bold**</code> &nbsp; <code>_italic_</code><br>
+              <code># Heading</code> &nbsp; <code>## Sub</code><br>
+              <code>[text](https://…)</code> — link<br>
+              <code>&gt; quote</code> &nbsp; <code>- list item</code><br>
+              <code>`code`</code><br>
+              <span class="md-tip-note">Tip: select text and right-click to format it.</span>
+            </span>
+          </span>
+        </label>
+        <textarea id="body" class="body" placeholder="Write the story. Select text and right-click to format, or use **bold**, _italic_, [links](https://…), and # headings."></textarea>
       </div>
 
       <div class="field">
@@ -192,7 +226,7 @@
         <div id="incidentChosen" class="chips" style="margin-bottom:0.5rem"></div>
         <input type="text" id="incidentSearch" placeholder="Search incidents, or set a location to see nearby ones…" autocomplete="off">
         <div class="suggest-box" id="incidentBox" style="display:none"></div>
-        <div class="hint" id="incidentHint">Set a location above and the closest / in-LGA incidents appear here.</div>
+        <div class="hint" id="incidentHint">Click the box to browse, or search by name/suburb. With a location set, the nearest incidents are listed first — but a unit may be en route to a farther one, so all incidents stay searchable.</div>
       </div>
 
       <div class="field">
@@ -233,11 +267,63 @@
     </form>
   </main>
 
+  <div class="md-menu" id="mdMenu" style="display:none" role="menu" aria-label="Format selection">
+    <button data-md="bold" role="menuitem"><span class="k"><b>B</b></span> Bold</button>
+    <button data-md="italic" role="menuitem"><span class="k"><i>I</i></span> Italic</button>
+    <button data-md="h2" role="menuitem"><span class="k">#</span> Heading</button>
+    <button data-md="link" role="menuitem"><span class="k"><i class="fa-solid fa-link"></i></span> Link</button>
+    <button data-md="quote" role="menuitem"><span class="k">&ldquo;</span> Quote</button>
+    <button data-md="list" role="menuitem"><span class="k">&bull;</span> List</button>
+    <button data-md="code" role="menuitem"><span class="k">&lt;&gt;</span> Code</button>
+  </div>
+
   <script>
     function toggleSidebar() {
       document.getElementById('sidebar').classList.toggle('open');
       document.querySelector('.menu-overlay').classList.toggle('active');
     }
+    // ---- Markdown: right-click a selection in the article body to format it ----
+    (function () {
+      const ta = document.getElementById('body');
+      const menu = document.getElementById('mdMenu');
+      if (!ta || !menu) return;
+      function apply(kind) {
+        const s = ta.selectionStart, e = ta.selectionEnd;
+        const sel = ta.value.slice(s, e);
+        const before = ta.value.slice(0, s), after = ta.value.slice(e);
+        let out = ta.value, ns = s, ne = e;
+        const wrap = (p, q) => { q = q || p; out = before + p + sel + q + after; ns = s + p.length; ne = ns + sel.length; };
+        const linePfx = (p) => { const lines = (sel || '').split('\n').map((l) => p + l).join('\n'); out = before + lines + after; ns = s; ne = s + lines.length; };
+        switch (kind) {
+          case 'bold': wrap('**'); break;
+          case 'italic': wrap('_'); break;
+          case 'code': wrap('`'); break;
+          case 'h2': linePfx('## '); break;
+          case 'quote': linePfx('> '); break;
+          case 'list': linePfx('- '); break;
+          case 'link': {
+            const text = sel || 'text';
+            out = before + '[' + text + '](url)' + after;
+            ns = before.length + text.length + 3; ne = ns + 3; // selects "url"
+            break;
+          }
+        }
+        ta.value = out; ta.focus(); ta.setSelectionRange(ns, ne);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      ta.addEventListener('contextmenu', (e) => {
+        if (ta.selectionStart === ta.selectionEnd) return; // no selection → native menu
+        e.preventDefault();
+        menu.style.display = 'block';
+        const w = menu.offsetWidth || 160, h = menu.offsetHeight || 260;
+        menu.style.left = Math.min(e.clientX, window.innerWidth - w - 8) + 'px';
+        menu.style.top = Math.min(e.clientY, window.innerHeight - h - 8) + 'px';
+      });
+      menu.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { apply(b.dataset.md); menu.style.display = 'none'; }));
+      document.addEventListener('click', (e) => { if (!e.target.closest('#mdMenu')) menu.style.display = 'none'; });
+      document.addEventListener('scroll', () => { menu.style.display = 'none'; }, true);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') menu.style.display = 'none'; });
+    })();
   </script>
   <script type="module">
     const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
@@ -532,47 +618,55 @@
     function haversine(a, b, c, d) { const R = 6371, r = Math.PI / 180; const dLat = (c - a) * r, dLng = (d - b) * r; const s = Math.sin(dLat / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(s)); }
     async function loadIncidents() {
       try {
-        const r = await fetch(`${API_BASE}/api/incidents?active=true`, { headers: await keyHeaders() });
+        const r = await fetch(`${API_BASE}/api/incidents`, { headers: await keyHeaders() });
         const rows = await r.json();
-        allIncidents = (Array.isArray(rows) ? rows : []).filter((x) => x && x.lat != null && x.title).map((x) => ({ id: x.id, title: x.title, lat: +x.lat, lng: +x.lng, location: x.location }));
+        allIncidents = (Array.isArray(rows) ? rows : [])
+          .filter((x) => x && x.lat != null && x.title && !x.is_rfs_stub)
+          .map((x) => ({ id: x.id, title: x.title, lat: +x.lat, lng: +x.lng, location: x.location, status: x.status }));
       } catch (e) {}
     }
+    // Search-first incident picker: filter by name, then rank by distance to the
+    // chosen location so the nearest appear first — but every incident stays
+    // searchable, because the recorded unit isn't always at the closest one.
     function refreshIncidentSuggestions() {
       const box = $('#incidentBox'); const l = state.location;
-      let list = [];
-      if (l.type === 'region' && l.region) {
-        const f = areaFeature(l.region);
-        if (f) list = allIncidents.filter((inc) => pointInRingSet(inc.lat, inc.lng, f)).slice(0, 15);
-      } else if (l.lat != null) {
-        list = [...allIncidents].map((inc) => ({ ...inc, d: haversine(l.lat, l.lng, inc.lat, inc.lng) })).sort((a, b) => a.d - b.d).slice(0, 10);
+      const q = ($('#incidentSearch').value || '').trim().toLowerCase();
+      let list = q ? allIncidents.filter((i) => i.title.toLowerCase().includes(q) || (i.location || '').toLowerCase().includes(q)) : allIncidents.slice();
+      if (l.lat != null) list = list.map((inc) => ({ ...inc, d: haversine(l.lat, l.lng, inc.lat, inc.lng) })).sort((a, b) => a.d - b.d);
+      list = list.slice(0, 25);
+      if (!list.length) {
+        box.innerHTML = `<div class="row" style="cursor:default;color:var(--text-soft)">${allIncidents.length ? 'No matching incidents.' : 'No incidents available to link.'}</div>`;
+        box.style.display = 'block';
+        return;
       }
-      if (!list.length) { box.style.display = 'none'; return; }
       renderIncidentRows(list);
     }
     function renderIncidentRows(list) {
       const box = $('#incidentBox');
       box.innerHTML = list.map((inc) => `<div class="row ${state.incidentId === inc.id ? 'sel' : ''}" data-id="${esc(inc.id)}" data-title="${esc(inc.title)}">
-        <span>${esc(inc.title)}</span><small>${inc.d != null ? inc.d.toFixed(1) + ' km' : esc(inc.location || '')}</small></div>`).join('');
+        <span>${esc(inc.title)}${inc.location ? ` <small style="color:var(--text-soft)">· ${esc(inc.location)}</small>` : ''}</span><small>${inc.d != null ? inc.d.toFixed(1) + ' km' : esc(inc.status || '')}</small></div>`).join('');
       box.style.display = 'block';
-      box.querySelectorAll('.row').forEach((row) => row.addEventListener('click', () => { setIncident(row.dataset.id, row.dataset.title); }));
+      box.querySelectorAll('.row[data-id]').forEach((row) => row.addEventListener('click', () => { setIncident(row.dataset.id, row.dataset.title); }));
     }
     function setIncident(id, title) { state.incidentId = id; state.incidentTitle = title; renderIncidentChosen(); $('#incidentBox').style.display = 'none'; $('#incidentSearch').value = ''; }
     function renderIncidentChosen() {
       const box = $('#incidentChosen');
       box.innerHTML = state.incidentId ? `<span class="chip">${esc(state.incidentTitle)} <b data-clear>×</b></span>` : '';
-      const b = box.querySelector('[data-clear]'); if (b) b.addEventListener('click', () => { state.incidentId = null; state.incidentTitle = null; renderIncidentChosen(); refreshIncidentSuggestions(); });
+      const b = box.querySelector('[data-clear]'); if (b) b.addEventListener('click', () => { state.incidentId = null; state.incidentTitle = null; renderIncidentChosen(); });
     }
-    $('#incidentSearch').addEventListener('input', (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      if (!q) { refreshIncidentSuggestions(); return; }
-      renderIncidentRows(allIncidents.filter((i) => i.title.toLowerCase().includes(q)).slice(0, 12));
-    });
+    $('#incidentSearch').addEventListener('input', refreshIncidentSuggestions);
+    $('#incidentSearch').addEventListener('focus', refreshIncidentSuggestions);
+    document.addEventListener('click', (e) => { if (!e.target.closest('#incidentBox') && e.target !== $('#incidentSearch')) $('#incidentBox').style.display = 'none'; });
 
     // ---- agencies ----
+    // Groups hidden from the agency picker (by name or category).
+    const AGENCY_HIDE = new Set(['unconfirmed groups', 'sydney opera house', 'shared liaison groups', 'rental groups']);
     async function loadAgencies() {
       try {
         const data = await window.AgencyJSON.loadData();
-        agencyList = (data.agencies ? Object.values(data.agencies) : []).map((a) => ({ slug: a.slug, name: a.name })).sort((a, b) => a.name.localeCompare(b.name));
+        agencyList = (data.agencies ? Object.values(data.agencies) : [])
+          .filter((a) => !AGENCY_HIDE.has((a.name || '').toLowerCase()) && !AGENCY_HIDE.has((a.category || '').toLowerCase()))
+          .map((a) => ({ slug: a.slug, name: a.name })).sort((a, b) => a.name.localeCompare(b.name));
       } catch (e) {}
       renderAgencyCheck('');
       $('#agencyFilter').addEventListener('input', (e) => renderAgencyCheck(e.target.value.trim().toLowerCase()));

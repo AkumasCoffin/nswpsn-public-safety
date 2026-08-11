@@ -281,9 +281,12 @@
     // ---- filter option loaders ----
     async function loadFilterOptions() {
       try {
+        const HIDE = new Set(['unconfirmed groups', 'sydney opera house', 'shared liaison groups', 'rental groups']);
         const data = await window.AgencyJSON.loadData();
         const sel = $('#fAgency');
-        (data.agencies ? Object.values(data.agencies) : []).sort((a, b) => a.name.localeCompare(b.name))
+        (data.agencies ? Object.values(data.agencies) : [])
+          .filter((a) => !HIDE.has((a.name || '').toLowerCase()) && !HIDE.has((a.category || '').toLowerCase()))
+          .sort((a, b) => a.name.localeCompare(b.name))
           .forEach((a) => { const o = document.createElement('option'); o.value = a.slug; o.textContent = a.name; sel.appendChild(o); });
       } catch (e) {}
       try {
