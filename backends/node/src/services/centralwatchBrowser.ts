@@ -552,6 +552,59 @@ class CentralwatchBrowser {
     });
   }
 
+  /**
+   * TEMP diagnostic: navigate to the real app UI, let it load, then read back
+   * the image-request URLs it actually issued (via the Performance resource
+   * timeline — these carry whatever view-token query param the app appends) and
+   * dump JS storage + cookies. Re-warms the API path afterwards. Run ONCE.
+   */
+  async diagnosticAppImageCapture(): Promise<{
+    imageRequests?: string[];
+    local?: Record<string, string>;
+    session?: Record<string, string>;
+    cookies?: string;
+  } | null> {
+    if (!this.isReady()) return null;
+    return this.runExclusive(async () => {
+      const page = this.page as {
+        goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
+        waitForTimeout: (ms: number) => Promise<void>;
+      };
+      let result: {
+        imageRequests?: string[];
+        local?: Record<string, string>;
+        session?: Record<string, string>;
+        cookies?: string;
+      } | null = null;
+      try {
+        await page.goto('https://centralwatch.watchtowers.io/au', {
+          timeout: 30000,
+          waitUntil: 'domcontentloaded',
+        });
+        await page.waitForTimeout(7000); // let the app bootstrap + request thumbnails
+        result = await this.evaluateWithRetry(`(() => {
+          const imgs = performance.getEntriesByType('resource')
+            .map(e => e.name)
+            .filter(n => n.includes('/image/') || n.toLowerCase().includes('token'))
+            .slice(0, 8);
+          const dump = (s) => { const o = {}; try { for (let i = 0; i < s.length; i++) { const k = s.key(i); const v = s.getItem(k) || ''; o[k] = v.length > 160 ? v.slice(0, 160) + '…' : v; } } catch (e) { o.__err = String(e); } return o; };
+          return { imageRequests: imgs, local: dump(localStorage), session: dump(sessionStorage), cookies: document.cookie };
+        })()`);
+      } catch (e) {
+        log.warn({ err: (e as Error).message }, 'centralwatch diagnosticAppImageCapture threw');
+      } finally {
+        // Restore the API-path warm so list fetches keep working.
+        try {
+          await page.goto('https://centralwatch.watchtowers.io/au/api/cameras', {
+            timeout: 20000,
+            waitUntil: 'domcontentloaded',
+          });
+        } catch { /* refresh loop will re-warm */ }
+      }
+      return result;
+    });
+  }
+
   async fetchImage(
     url: string,
     timeoutMs = 15000,

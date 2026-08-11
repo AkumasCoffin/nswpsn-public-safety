@@ -48,6 +48,8 @@ const cache = new Map<string, CachedImage>();
 let batchTimer: NodeJS.Timeout | null = null;
 let batchInFlight = false;
 let stopRequested = false;
+// TEMP: gate the expensive app-UI token capture to a single run.
+let _tokenProbeDone = false;
 
 export function setImage(
   cameraId: string,
@@ -252,26 +254,17 @@ export async function runBatchOnce(): Promise<{
   if (cached === 0 && inputs.length > 0) {
     try {
       const imgUrl = inputs[0]!.url;
-      const [diag, imgDiag, listRaw] = await Promise.all([
-        centralwatchBrowser.diagnosticFetch(imgUrl),
-        centralwatchBrowser.diagnosticImgLoad(imgUrl),
-        centralwatchBrowser.fetchJson('https://centralwatch.watchtowers.io/au/api/cameras'),
-      ]);
-      // Dump one raw upstream camera object so we can see whether the API
-      // hands us a ready image URL/token we're not using (vs building the
-      // /image/{ts} path ourselves).
-      let sampleCamera: unknown = null;
-      let cameraKeys: string[] | null = null;
-      const cams =
-        listRaw && typeof listRaw === 'object' && Array.isArray((listRaw as { cameras?: unknown[] }).cameras)
-          ? (listRaw as { cameras: unknown[] }).cameras
-          : null;
-      if (cams && cams[0] && typeof cams[0] === 'object') {
-        sampleCamera = cams[0];
-        cameraKeys = Object.keys(cams[0] as Record<string, unknown>);
+      const diag = await centralwatchBrowser.diagnosticFetch(imgUrl);
+      // The app returns {"reason":"missing_view_token"} — capture how the real
+      // app UI requests an image (token and all) + JS storage. Once only: the
+      // capture navigates the shared page, so it's expensive.
+      let appCapture: unknown = null;
+      if (!_tokenProbeDone) {
+        _tokenProbeDone = true;
+        appCapture = await centralwatchBrowser.diagnosticAppImageCapture();
       }
       log.warn(
-        { url: imgUrl, diag, imgDiag, cameraKeys, sampleCamera },
+        { url: imgUrl, diag, appCapture },
         'centralwatch image batch DIAGNOSTIC: 0 cached this pass',
       );
     } catch (e) {
