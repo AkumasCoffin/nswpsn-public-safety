@@ -31,6 +31,7 @@ import {
   r2Configured,
   createVideoUploadUrl,
   deleteR2Object,
+  r2PublicUrl,
   MAX_VIDEO_BYTES,
   normaliseLicense,
   licenseLabel,
@@ -100,12 +101,35 @@ function cleanLocation(data: Record<string, unknown>): LocationFields {
   return { location_type: type, region, lat: toNum(data['lat']), lng: toNum(data['lng']) };
 }
 
+interface IncidentRef { source: string | null; source_id: string; title: string | null; }
+/** Parse the linked-incident from a payload: prefer the {source,source_id,title}
+ * logs-feed object; fall back to a legacy bare incident_id (a user_incident). */
+function parseIncident(data: Record<string, unknown>): IncidentRef | null {
+  const inc = data['incident'];
+  if (inc && typeof inc === 'object') {
+    const o = inc as Record<string, unknown>;
+    const source_id = typeof o['source_id'] === 'string' ? o['source_id'].slice(0, 200) : '';
+    if (source_id) {
+      return {
+        source: typeof o['source'] === 'string' ? o['source'].slice(0, 60) : null,
+        source_id,
+        title: typeof o['title'] === 'string' ? o['title'].slice(0, 300) : null,
+      };
+    }
+  }
+  if (typeof data['incident_id'] === 'string' && data['incident_id']) {
+    return { source: 'user_incident', source_id: data['incident_id'], title: null };
+  }
+  return null;
+}
+
 interface MediaItem {
   kind: 'image' | 'video';
   cf_image_id: string | null;
   r2_key: string | null;
   poster_cf_image_id: string | null;
   poster_r2_key: string | null;
+  hash: string | null;
   duration_seconds: number | null;
   is_cover: boolean;
   unit: string | null;
@@ -135,6 +159,7 @@ function validateMedia(raw: unknown, cfg: EntityCfg): { items: MediaItem[]; unit
       r2_key: str(o['r2_key']),
       poster_cf_image_id: str(o['poster_cf_image_id']),
       poster_r2_key: str(o['poster_r2_key']),
+      hash: typeof o['hash'] === 'string' ? o['hash'].slice(0, 128) : null,
       duration_seconds: int(o['duration_seconds']),
       is_cover: o['is_cover'] === true,
       unit: normaliseCallsign(o['unit']) || null,
@@ -172,10 +197,10 @@ async function insertMediaRows(client: PoolClient, cfg: EntityCfg, parentId: str
     await client.query(
       `INSERT INTO wire_media
          (parent_type, parent_id, kind, cf_image_id, r2_key, poster_cf_image_id, poster_r2_key,
-          duration_seconds, is_cover, unit, sort_order, width, height, bytes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          duration_seconds, is_cover, unit, sort_order, width, height, bytes, hash)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [cfg.parentType, parentId, m.kind, m.cf_image_id, m.r2_key, m.poster_cf_image_id, m.poster_r2_key,
-        m.duration_seconds, m.is_cover, m.unit, i, m.width, m.height, m.bytes],
+        m.duration_seconds, m.is_cover, m.unit, i, m.width, m.height, m.bytes, m.hash],
     );
   }
 }
@@ -219,6 +244,7 @@ function shapeMediaPost(row: any, media: WireMediaRow[]): Record<string, unknown
     location: { type: row.location_type, region: row.region, lat: row.lat, lng: row.lng },
     agencies: row.agencies ?? [],
     incident_id: row.incident_id,
+    incident: row.incident || (row.incident_id ? { source: 'user_incident', source_id: row.incident_id, title: null } : null),
     units: deriveUnits(media),
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
@@ -247,6 +273,7 @@ function shapeArticle(row: any, media: WireMediaRow[]): Record<string, unknown> 
     location: { type: row.location_type, region: row.region, lat: row.lat, lng: row.lng },
     agencies: row.agencies ?? [],
     incident_id: row.incident_id,
+    incident: row.incident || (row.incident_id ? { source: 'user_incident', source_id: row.incident_id, title: null } : null),
     units: deriveUnits(media),
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
@@ -283,9 +310,22 @@ wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => 
   // Images now go to R2 (same bucket as video). The browser optimises the
   // photo (downscale + WebP, which also strips GPS) and PUTs it to uploadURL.
   if (!r2Configured()) return c.json({ error: 'image uploads not configured' }, 503);
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const hash = typeof body['hash'] === 'string' ? body['hash'].slice(0, 128) : null;
+  // De-dup: if this exact image was uploaded before, reuse its R2 object rather
+  // than uploading again. The client skips the PUT when `duplicate` is set.
+  if (hash) {
+    const pool = await getPool();
+    if (pool) {
+      const dup = await pool.query<{ r2_key: string }>(
+        'SELECT r2_key FROM wire_media WHERE hash = $1 AND r2_key IS NOT NULL LIMIT 1', [hash]);
+      const existing = dup.rows[0]?.r2_key;
+      if (existing) return c.json({ duplicate: true, key: existing, publicUrl: r2PublicUrl(existing), hash });
+    }
+  }
   const up = await createImageUploadUrl();
   if (!up) return c.json({ error: 'could not create upload url' }, 503);
-  return c.json({ uploadURL: up.uploadURL, key: up.key, publicUrl: up.publicUrl });
+  return c.json({ uploadURL: up.uploadURL, key: up.key, publicUrl: up.publicUrl, hash });
 });
 
 wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (c) => {
@@ -378,7 +418,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     const caption = typeof data['caption'] === 'string' ? data['caption'].slice(0, 4000) : '';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
-    const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const incident = parseIncident(data);
+    const incidentId = incident?.source_id ?? null;
+    const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
     if (data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
@@ -395,9 +437,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     try {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13) RETURNING id`,
-        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status],
+        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status, incident)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13,$14::jsonb) RETURNING id`,
+        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status, incidentJson],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, MEDIA, newId, mv.items);
@@ -437,7 +479,9 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     const caption = typeof data['caption'] === 'string' ? data['caption'].slice(0, 4000) : '';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
-    const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const incident = parseIncident(data);
+    const incidentId = incident?.source_id ?? null;
+    const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
     const mv = validateMedia(data['media'], MEDIA);
@@ -450,8 +494,8 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE media_posts SET title=$1, caption=$2, location_type=$3, region=$4, lat=$5, lng=$6,
-           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, updated_at=now()${statusSet} WHERE id=$11`,
-        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id],
+           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, incident=$12::jsonb, updated_at=now()${statusSet} WHERE id=$11`,
+        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
       await insertMediaRows(client, MEDIA, id, mv.items);
@@ -467,7 +511,7 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
     const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
-    for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
+    for (const old of oldR2Keys) if (!keptKeys.has(old)) await safeDeleteR2(pool, old);
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: update media failed');
@@ -492,7 +536,7 @@ wireRouter.delete('/api/wire/media/:id', async (c) => {
     await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
     await pool.query('DELETE FROM media_posts WHERE id = $1', [id]);
     for (const iid of imgIds) await deleteCfImage(iid);
-    for (const k of r2keys) await deleteR2Object(k);
+    for (const k of r2keys) await safeDeleteR2(pool, k);
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: delete media failed');
@@ -551,7 +595,8 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const slug = c.req.param('slug');
   try {
-    const r = await pool.query('SELECT * FROM articles WHERE slug = $1', [slug]);
+    // Accept a slug (public URLs) OR an id (the compose edit link uses the id).
+    const r = await pool.query('SELECT * FROM articles WHERE slug = $1 OR id = $1', [slug]);
     if (r.rowCount === 0) return c.json({ error: 'not found' }, 404);
     const row = r.rows[0];
     const uid = currentUserId(c);
@@ -587,7 +632,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     const status = wantPublish ? ((await canModerateWire(authorId)) ? 'published' : 'pending') : 'draft';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
-    const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const incident = parseIncident(data);
+    const incidentId = incident?.source_id ?? null;
+    const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
     if (wantPublish && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
@@ -603,9 +650,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
         `INSERT INTO articles (author_id, author_name, title, slug, excerpt, body, status, published_at,
-           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16) RETURNING id`,
-        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed],
+           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb) RETURNING id`,
+        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, ARTICLE, newId, mv.items);
@@ -654,7 +701,9 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     if (prev.status === 'removed' && !isAdmin) status = 'removed';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
-    const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
+    const incident = parseIncident(data);
+    const incidentId = incident?.source_id ?? null;
+    const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
     if (data['status'] === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
@@ -672,8 +721,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE articles SET title=$1, slug=$2, excerpt=$3, body=$4, status=$5, location_type=$6, region=$7,
-           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
-        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id],
+           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
+        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
       await insertMediaRows(client, ARTICLE, id, mv.items);
@@ -688,7 +737,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
     const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
-    for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
+    for (const old of oldR2Keys) if (!keptKeys.has(old)) await safeDeleteR2(pool, old);
     return c.json({ success: true, slug });
   } catch (err) {
     log.error({ err, id }, 'wire: update article failed');
@@ -711,7 +760,7 @@ wireRouter.delete('/api/wire/articles/:id', async (c) => {
     await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
     await pool.query('DELETE FROM articles WHERE id = $1', [id]);
     for (const iid of imgIds) await deleteCfImage(iid);
-    for (const k of r2keys) await deleteR2Object(k);
+    for (const k of r2keys) await safeDeleteR2(pool, k);
     return c.json({ success: true });
   } catch (err) {
     log.error({ err, id }, 'wire: delete article failed');
@@ -796,6 +845,14 @@ async function imageIdsFor(pool: Pool, parentType: string, parentId: string): Pr
     if (row.poster_cf_image_id) ids.push(row.poster_cf_image_id);
   }
   return ids;
+}
+
+/** Delete an R2 object only if no wire_media row still references it — dedup can
+ * share one object across posts. Call AFTER the owning rows are deleted. */
+async function safeDeleteR2(pool: Pool, key: string): Promise<void> {
+  if (!key) return;
+  const r = await pool.query('SELECT 1 FROM wire_media WHERE r2_key = $1 OR poster_r2_key = $1 LIMIT 1', [key]);
+  if (r.rowCount === 0) await deleteR2Object(key);
 }
 
 async function r2KeysFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {

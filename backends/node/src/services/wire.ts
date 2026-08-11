@@ -230,6 +230,7 @@ export interface WireMediaRow {
   thumb_r2_key?: string | null;
   poster_cf_image_id: string | null;
   poster_r2_key: string | null;
+  hash?: string | null;
   duration_seconds: number | null;
   is_cover: boolean;
   unit: string | null;
@@ -257,6 +258,7 @@ export function shapeMedia(row: WireMediaRow): Record<string, unknown> {
     r2_key: row.r2_key,
     poster_r2_key: row.poster_r2_key,
     poster_cf_image_id: row.poster_cf_image_id,
+    hash: row.hash ?? null,
   };
   if (row.kind === 'image') {
     // New images live in R2 (single optimised WebP). Legacy Cloudflare-Images

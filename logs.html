@@ -5017,11 +5017,15 @@
       // initial search, so run both API calls in parallel. With URL params
       // (deep link), applyUrlParams needs providersData from loadFilters first.
       const urlParams = new URLSearchParams(window.location.search);
-      const hasDeepLink = urlParams.has('provider') || urlParams.has('source');
+      const hasDeepLink = urlParams.has('provider') || urlParams.has('source') || urlParams.has('source_id');
       if (hasDeepLink) {
         await loadFilters();
         await applyUrlParams();
         await performSearch(1);
+        // Deep-link to a specific incident (e.g. from a linked Wire post):
+        // ?source=<src>&source_id=<id> → open that incident.
+        const _sid = urlParams.get('source_id');
+        if (_sid) { try { await scrollToIncident(_sid, urlParams.get('source') || ''); } catch (e) { /* ignore */ } }
       } else {
         await Promise.all([
           loadFilters(),

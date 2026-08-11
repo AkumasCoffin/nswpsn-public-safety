@@ -28,6 +28,12 @@
 
   <style>
     .wire-main { padding: 1.4rem clamp(1rem, 4vw, 2.4rem) 4rem; }
+    .coming-soon { max-width: 560px; margin: 4rem auto; text-align: center; padding: 2.5rem 1.5rem; }
+    .coming-soon .cs-badge { font-size: 3rem; margin-bottom: 1rem; }
+    .coming-soon h1 { font-size: clamp(1.6rem, 4vw, 2.1rem); margin: 0 0 0.7rem; letter-spacing: -0.02em; }
+    .coming-soon h1 span { color: var(--accent); }
+    .coming-soon p { color: var(--text-muted); font-size: 1rem; line-height: 1.65; margin: 0 auto; max-width: 460px; }
+    .coming-soon .cs-tag { display: inline-block; margin-top: 1.5rem; font-family: var(--mono, ui-monospace, monospace); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--border-subtle); padding: 0.45rem 1rem; border-radius: 999px; }
     /* Mobile: clear the fixed 60px header (the base .main rule is overridden here). */
     @media (max-width: 900px) { .wire-main { padding-top: 5rem; } }
     .wire-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
@@ -99,6 +105,19 @@
     .wd-article { line-height: 1.75; color: var(--text-main); margin-top: 1rem; }
     .wd-article :is(h1,h2,h3) { line-height: 1.25; }
     .wd-article img { max-width: 100%; border-radius: 8px; }
+
+    /* Article (editorial) layout: single column, article-first, cover above the info */
+    .wd-article-wrap { max-width: 760px; margin: 0 auto; }
+    .wd-headline { font-size: clamp(1.7rem, 3.6vw, 2.3rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.12; margin: 0 0 0.5rem; }
+    .wd-dek { font-size: 1.14rem; line-height: 1.5; color: var(--text-muted); margin: 0.4rem 0 1.3rem; }
+    .wd-cover { border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); margin: 0.6rem 0 1.6rem; background: var(--bg-elevated-soft); }
+    .wd-cover img { width: 100%; max-height: 420px; object-fit: cover; display: block; cursor: zoom-in; }
+    .wd-cover video { width: 100%; max-height: 420px; background: #000; display: block; }
+    .wd-more-media { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 1.6rem 0 0.4rem; }
+    .wd-more-thumb { width: 148px; height: 104px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border-subtle); cursor: zoom-in; }
+    .wd-info { border-top: 1px solid var(--border-subtle); margin-top: 2rem; padding-top: 1.3rem; }
+    .wd-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.2rem 1.8rem; align-items: start; }
+    .wd-info .wd-block { border-top: 0; margin-top: 0; padding-top: 0.6rem; }
     .wd-block { border-top: 1px solid var(--border-subtle); padding-top: 0.9rem; margin-top: 1.1rem; }
     .wd-lbl { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); margin-bottom: 0.5rem; }
     .wd-stats { display: flex; gap: 1.4rem; }
@@ -157,6 +176,13 @@
   </aside>
 
   <main class="main wire-main">
+    <div class="coming-soon" id="comingSoon" style="display:none">
+      <div class="cs-badge">📸</div>
+      <h1>The <span>Wire</span> is coming soon</h1>
+      <p>An independent photo, video &amp; news feed from NSW emergency-services contributors — photographers, videographers and stringers. We're putting the finishing touches on it.</p>
+      <div class="cs-tag">Launching soon</div>
+    </div>
+
     <div class="wire-head">
       <div>
         <h1 class="wire-title">The <span class="dot">Wire</span></h1>
@@ -216,7 +242,7 @@
   <script type="module">
     const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
     let API_KEY = null;
-    let ME = { userId: null, canFeed: false, canModerate: false };
+    let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
     let currentTab = new URLSearchParams(location.search).get('tab') === 'articles' ? 'articles' : 'media';
     let mineMode = new URLSearchParams(location.search).get('mine') === '1';
 
@@ -224,6 +250,7 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m, c) => c.toUpperCase());
     const fmtViews = (n) => (Number(n) || 0).toLocaleString('en-AU');
+    const sourceLabel = (s) => String(s || 'incident').replace(/_/g, ' ');
     function statusBadge(s) {
       if (!s || s === 'published') return '';
       const map = { pending: ['Pending review', '#f59e0b'], rejected: ['Rejected', '#ef4444'], draft: ['Draft', 'var(--text-soft)'], removed: ['Removed', '#ef4444'] };
@@ -267,7 +294,7 @@
         if (!uid) return;
         ME.userId = uid;
         const r = await fetch(`${API_BASE}/api/check-editor/${uid}`);
-        if (r.ok) { const j = await r.json(); ME.canFeed = !!j.can_feed_media; ME.canModerate = !!j.can_moderate_wire; }
+        if (r.ok) { const j = await r.json(); ME.canFeed = !!j.can_feed_media; ME.canModerate = !!j.can_moderate_wire; ME.isOwner = !!j.is_owner; }
       } catch (e) {}
       if (ME.canFeed) {
         $('#postBtn').style.display = 'inline-flex';
@@ -398,52 +425,78 @@
       galleryMedia = item.media || []; galleryIdx = Math.max(0, galleryMedia.findIndex((m) => m.is_cover));
       if (galleryIdx < 0) galleryIdx = 0;
       const canEdit = ME.userId && item.author && item.author.id === ME.userId;
-      const incidentBlock = item.incident_id ? `
+      const inc = item.incident;
+      const incidentBlock = inc && inc.source_id ? `
         <div class="wd-block"><div class="wd-lbl">Linked incident</div>
-          <a class="wd-inc" href="logs?source_id=${encodeURIComponent(item.incident_id)}"><span class="tick"></span>
-            <div><div style="font-weight:600">View on the logs</div><div style="font-size:0.7rem;color:var(--text-soft)">${esc(item.incident_id)}</div></div></a></div>` : '';
+          <a class="wd-inc" href="logs?source=${encodeURIComponent(inc.source || '')}&source_id=${encodeURIComponent(inc.source_id)}"><span class="tick"></span>
+            <div><div style="font-weight:600;font-size:0.9rem">${esc(inc.title || 'View incident')}</div><div style="font-size:0.7rem;color:var(--text-soft);margin-top:2px">${esc(sourceLabel(inc.source))} · open on the logs <i class="fa-solid fa-arrow-up-right-from-square" style="font-size:0.6rem"></i></div></div></a></div>` : '';
       const units = (item.units || []).map((u) => `<span class="wire-chip">${esc(u)}</span>`).join('') || '<span style="color:var(--text-soft);font-size:0.8rem">—</span>';
       const agencies = (item.agencies || []).map((a) => `<span class="wire-chip">${esc(a)}</span>`).join('') || '<span style="color:var(--text-soft);font-size:0.8rem">—</span>';
       const loc = item.location ? (item.location.region ? esc(item.location.region) : (item.location.lat != null ? `${(+item.location.lat).toFixed(4)}, ${(+item.location.lng).toFixed(4)}` : '—')) : '—';
-      const actions = (canEdit || ME.canModerate) ? `
-        <div class="wd-block"><div class="wd-lbl">Manage</div><div class="wd-actions">
+      const licenseBlock = `<div class="wd-block"><div class="wd-lbl">License</div>
+          <div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-regular fa-copyright"></i> ${esc(item.license_label || 'Credit required')}${item.credit ? ' · ' + esc(item.credit) : ''}</div>
+          <button class="wd-btn" id="reportBtn" style="margin-top:0.7rem;font-size:0.75rem"><i class="fa-regular fa-flag"></i> Report / request takedown</button></div>`;
+      const actions = (canEdit || ME.canModerate) ? `<div class="wd-block"><div class="wd-lbl">Manage</div><div class="wd-actions">
           ${canEdit ? `<a class="wd-btn" href="wire-compose?type=${isArticle ? 'article' : 'media'}&edit=${encodeURIComponent(item.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
           ${canEdit ? `<button class="wd-btn danger" data-act="delete"><i class="fa-solid fa-trash"></i> Delete</button>` : ''}
           ${ME.canModerate && !canEdit ? `<button class="wd-btn danger" data-act="remove"><i class="fa-solid fa-ban"></i> Remove</button>` : ''}
         </div></div>` : '';
+      const notices = `${item.status === 'pending' ? `<div style="color:#f59e0b;font-size:0.82rem;margin-bottom:0.9rem"><i class="fa-regular fa-clock"></i> Awaiting moderator approval — only you can see this until it's approved.</div>` : ''}${item.status === 'rejected' && item.review_note ? `<div style="color:#ef4444;font-size:0.82rem;margin-bottom:0.9rem"><b>Rejected:</b> ${esc(item.review_note)} — edit and re-submit to send it back for review.</div>` : ''}`;
+      const byline = `by ${esc(item.author?.name || 'contributor')}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}`;
+      const statsBlock = `<div class="wd-block"><div class="wd-stats">
+          <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
+          <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div></div></div>`;
+      const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
 
-      const left = isArticle
-        ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
-        : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
-
-      $('#detail').innerHTML = `
-        <button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>
-        <div class="wd-grid">
-          <div>${left}</div>
-          <div>
-            <h1 class="wd-title">${esc(item.title)}</h1>
-            <div class="wd-meta">by ${esc(item.author?.name || 'contributor')}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}</div>
-            ${item.status === 'pending' ? `<div style="color:#f59e0b;font-size:0.82rem;margin-bottom:0.9rem"><i class="fa-regular fa-clock"></i> Awaiting moderator approval — only you can see this until it's approved.</div>` : ''}
-            ${item.status === 'rejected' && item.review_note ? `<div style="color:#ef4444;font-size:0.82rem;margin-bottom:0.9rem"><b>Rejected:</b> ${esc(item.review_note)} — edit and re-submit to send it back for review.</div>` : ''}
-            ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
-            <div class="wd-block"><div class="wd-stats">
-              <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
-              <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div>
-            </div></div>
-            <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
-            <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
-            <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
-            <div class="wd-block"><div class="wd-lbl">License</div>
-              <div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-regular fa-copyright"></i> ${esc(item.license_label || 'Credit required')}${item.credit ? ' · ' + esc(item.credit) : ''}</div>
-              <button class="wd-btn" id="reportBtn" style="margin-top:0.7rem;font-size:0.75rem"><i class="fa-regular fa-flag"></i> Report / request takedown</button>
+      if (isArticle) {
+        const cover = galleryMedia.find((m) => m.is_cover) || galleryMedia.find((m) => m.kind === 'image') || galleryMedia[0];
+        const coverHtml = cover ? (cover.kind === 'video'
+          ? `<div class="wd-cover"><video controls playsinline ${cover.poster_url ? `poster="${esc(cover.poster_url)}"` : ''} src="${esc(cover.url)}"></video></div>`
+          : `<div class="wd-cover"><img src="${esc(cover.url)}" alt="" data-lb="${esc(cover.url)}"></div>`) : '';
+        const extra = galleryMedia.filter((m) => m !== cover);
+        const extraHtml = extra.length ? `<div class="wd-more-media">${extra.map((m) => m.kind === 'video'
+          ? `<video controls playsinline ${m.poster_url ? `poster="${esc(m.poster_url)}"` : ''} src="${esc(m.url)}" style="max-width:100%;border-radius:8px;border:1px solid var(--border-subtle)"></video>`
+          : `<img class="wd-more-thumb" src="${esc(m.thumb_url || m.url)}" alt="" data-lb="${esc(m.url)}">`).join('')}</div>` : '';
+        $('#detail').innerHTML = `${back}
+          <article class="wd-article-wrap">
+            <h1 class="wd-headline">${esc(item.title)}</h1>
+            <div class="wd-meta">${byline}</div>
+            ${notices}
+            ${item.excerpt ? `<p class="wd-dek">${esc(item.excerpt)}</p>` : ''}
+            ${coverHtml}
+            <div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>
+            ${extraHtml}
+            <div class="wd-info"><div class="wd-info-grid">
+              ${statsBlock}
+              <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
+              <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
+              <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
+              ${licenseBlock}
+              ${incidentBlock}
+            </div>${actions}</div>
+          </article>`;
+      } else {
+        $('#detail').innerHTML = `${back}
+          <div class="wd-grid">
+            <div>${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p></div>
+            <div>
+              <h1 class="wd-title">${esc(item.title)}</h1>
+              <div class="wd-meta">${byline}</div>
+              ${notices}
+              ${statsBlock}
+              <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
+              <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
+              <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
+              ${licenseBlock}
+              ${incidentBlock}
+              ${actions}
             </div>
-            ${incidentBlock}
-            ${actions}
-          </div>
-        </div>`;
+          </div>`;
+      }
 
       $('#backBtn').addEventListener('click', () => closeDetail());
-      wireGallery();
+      if (!isArticle) wireGallery();
+      $('#detail').querySelectorAll('[data-lb]').forEach((el) => el.addEventListener('click', () => openLightbox(el.dataset.lb)));
       const del = $('#detail [data-act="delete"]'); if (del) del.addEventListener('click', () => mutateDelete(item, false));
       const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
       const rep = $('#reportBtn'); if (rep) rep.addEventListener('click', openReportModal);
@@ -547,9 +600,16 @@
     });
 
     // ---- init ----
+    function showComingSoon() {
+      $('#comingSoon').style.display = 'block';
+      ['.wire-head', '.wire-filters', '#feedView', '#detail'].forEach((s) => { const el = document.querySelector(s); if (el) el.style.display = 'none'; });
+    }
+
     (async function init() {
       applySection();
       await Promise.all([loadKey(), loadMe(), loadFilterOptions()]);
+      // Soft launch: only the owner sees The Wire; everyone else gets a banner.
+      if (!ME.isOwner) { showComingSoon(); return; }
       const p = new URLSearchParams(location.search);
       const post = p.get('post'), article = p.get('article');
       if (article) { await loadFeed(); openDetail('article', article, false); }
