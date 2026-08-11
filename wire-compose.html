@@ -329,7 +329,7 @@
         state.media.push(item); renderMedia();
         try {
           const r = await fetch(`${API_BASE}/api/wire/video-upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ size: file.size }) });
-          if (r.status === 503) { setMsg("Video uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); return; }
+          if (r.status === 503) { setMsg("Video uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
           if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'video-upload-url ' + r.status); }
           const { uploadURL, key, publicUrl } = await r.json();
           const up = await fetch(uploadURL, { method: 'PUT', headers: { 'Content-Type': 'video/mp4' }, body: file });

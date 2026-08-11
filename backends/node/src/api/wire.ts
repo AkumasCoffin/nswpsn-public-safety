@@ -323,9 +323,13 @@ wireRouter.get('/api/wire/media', async (c) => {
     const vals: unknown[] = [];
     const where: string[] = [];
     if (mine && uid) { vals.push(uid); where.push(`author_id = $${vals.length}`); }
-    else { where.push(`status = 'published'`); }
+    else { where.push(`status = 'published' AND taken_down_at IS NULL`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
+    if (unit) {
+      vals.push(unit);
+      where.push(`EXISTS (SELECT 1 FROM wire_media wm WHERE wm.parent_type='media_post' AND wm.parent_id = media_posts.id AND wm.unit = $${vals.length})`);
+    }
     vals.push(limit, offset);
     const r = await pool.query(
       `SELECT * FROM media_posts WHERE ${where.join(' AND ')}
@@ -334,8 +338,7 @@ wireRouter.get('/api/wire/media', async (c) => {
     );
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'media_post', ids);
-    let posts = r.rows.map((row) => shapeMediaPost(row, mediaMap.get(row.id) ?? []));
-    if (unit) posts = posts.filter((p) => (p['units'] as string[]).includes(unit));
+    const posts = r.rows.map((row) => shapeMediaPost(row, mediaMap.get(row.id) ?? []));
     return c.json({ posts });
   } catch (err) {
     log.error({ err }, 'wire: list media failed');
@@ -420,11 +423,12 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
   const uid = currentUserId(c);
   if (!uid) return c.json({ error: 'authentication required' }, 401);
   try {
-    const existing = await pool.query<{ author_id: string }>('SELECT author_id FROM media_posts WHERE id = $1', [id]);
+    const existing = await pool.query<{ author_id: string; taken_down_at: unknown }>('SELECT author_id, taken_down_at FROM media_posts WHERE id = $1', [id]);
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    if (existing.rows[0]!.taken_down_at) return c.json({ error: 'this content was removed following a rights complaint and cannot be edited' }, 409);
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const title = typeof data['title'] === 'string' ? data['title'].trim().slice(0, 300) : '';
     if (!title) return c.json({ error: 'title is required' }, 400);
@@ -458,7 +462,7 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     }
     await rememberCallsigns(pool, mv.units);
     // Best-effort: delete CF images no longer referenced.
-    const keptIds = new Set(mv.items.map((m) => m.cf_image_id).filter(Boolean) as string[]);
+    const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
     const keptKeys = new Set(mv.items.map((m) => m.r2_key).filter(Boolean) as string[]);
     for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
@@ -521,7 +525,7 @@ wireRouter.get('/api/wire/articles', async (c) => {
     const vals: unknown[] = [];
     const where: string[] = [];
     if (mine && uid) { vals.push(uid); where.push(`author_id = $${vals.length}`); }
-    else { where.push(`status = 'published'`); }
+    else { where.push(`status = 'published' AND taken_down_at IS NULL`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
     vals.push(limit, offset);
@@ -622,17 +626,22 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
   const uid = currentUserId(c);
   if (!uid) return c.json({ error: 'authentication required' }, 401);
   try {
-    const existing = await pool.query<{ author_id: string; status: string; published_at: unknown }>(
-      'SELECT author_id, status, published_at FROM articles WHERE id = $1', [id]);
+    const existing = await pool.query<{ author_id: string; status: string; published_at: unknown; taken_down_at: unknown }>(
+      'SELECT author_id, status, published_at, taken_down_at FROM articles WHERE id = $1', [id]);
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     const prev = existing.rows[0]!;
-    if (prev.author_id !== uid && !(await canManageUsers(uid))) return c.json({ error: 'forbidden' }, 403);
+    const isAdmin = await canManageUsers(uid);
+    if (prev.author_id !== uid && !isAdmin) return c.json({ error: 'forbidden' }, 403);
+    if (prev.taken_down_at) return c.json({ error: 'this content was removed following a rights complaint and cannot be edited' }, 409);
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const title = typeof data['title'] === 'string' ? data['title'].trim().slice(0, 300) : '';
     if (!title) return c.json({ error: 'title is required' }, 400);
     const excerpt = typeof data['excerpt'] === 'string' ? data['excerpt'].slice(0, 600) : '';
     const body = typeof data['body'] === 'string' ? data['body'].slice(0, 100_000) : '';
-    const status = data['status'] === 'published' ? 'published' : (prev.status === 'removed' ? 'removed' : 'draft');
+    let status = data['status'] === 'published' ? 'published' : (prev.status === 'removed' ? 'removed' : 'draft');
+    // A soft-removed article can't be re-published by its author — only a
+    // moderator (canModerateWire ⊇ canManageUsers) may restore it.
+    if (prev.status === 'removed' && !isAdmin) status = 'removed';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incidentId = typeof data['incident_id'] === 'string' && data['incident_id'] ? data['incident_id'] : null;
@@ -666,7 +675,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       client.release();
     }
     await rememberCallsigns(pool, mv.units);
-    const keptIds = new Set(mv.items.map((m) => m.cf_image_id).filter(Boolean) as string[]);
+    const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
     const keptKeys = new Set(mv.items.map((m) => m.r2_key).filter(Boolean) as string[]);
     for (const old of oldR2Keys) if (!keptKeys.has(old)) await deleteR2Object(old);
@@ -771,7 +780,10 @@ wireRouter.post('/api/wire/takedown', async (c) => {
     const email = typeof d['reporter_email'] === 'string' ? d['reporter_email'].trim().slice(0, 200) : '';
     const complaint = typeof d['complaint'] === 'string' ? d['complaint'].trim().slice(0, 5000) : '';
     const org = typeof d['reporter_org'] === 'string' ? d['reporter_org'].trim().slice(0, 200) || null : null;
-    const originalUrl = typeof d['original_url'] === 'string' ? d['original_url'].trim().slice(0, 500) || null : null;
+    let originalUrl = typeof d['original_url'] === 'string' ? d['original_url'].trim().slice(0, 500) || null : null;
+    // Only http(s) — the staff review UI renders this as a clickable link, so a
+    // javascript:/data: scheme (survives HTML-escaping) must never be stored.
+    if (originalUrl && !/^https?:\/\//i.test(originalUrl)) originalUrl = null;
     if (!targetType || !targetId) return c.json({ error: 'target_type and target_id are required' }, 400);
     if (!name || !email || !complaint) return c.json({ error: 'name, email and a description are required' }, 400);
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: 'a valid email is required' }, 400);
@@ -828,19 +840,23 @@ wireRouter.post('/api/wire/takedowns/:id/uphold', requireRole(canModerateWire), 
       'SELECT target_type, target_id, status FROM wire_takedowns WHERE id = $1', [id]);
     if (t.rowCount === 0) return c.json({ error: 'not found' }, 404);
     const row = t.rows[0]!;
+    if (row.status !== 'pending') return c.json({ error: 'already reviewed' }, 409);
     const table = TARGET_TABLE[row.target_type];
     if (!table) return c.json({ error: 'bad target' }, 400);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // Soft-remove + tombstone the target (retained for the audit trail).
+      // Soft-remove + tombstone the target (retained for the audit trail). Claim
+      // the notice atomically so a double-submit can't re-remove / re-stamp.
+      const claim = await client.query(
+        `UPDATE wire_takedowns SET status='upheld', action_note=$1, reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now()
+         WHERE id=$4 AND status='pending' RETURNING id`,
+        [note, currentUserId(c) ?? null, currentUserName(c), id],
+      );
+      if (claim.rowCount === 0) { await client.query('ROLLBACK'); return c.json({ error: 'already reviewed' }, 409); }
       await client.query(
         `UPDATE ${table} SET status='removed', taken_down_at=now(), removed_by=$1, removed_by_name=$2, removed_at=now(), updated_at=now() WHERE id=$3`,
         [currentUserId(c) ?? null, currentUserName(c), row.target_id],
-      );
-      await client.query(
-        `UPDATE wire_takedowns SET status='upheld', action_note=$1, reviewed_by=$2, reviewed_by_name=$3, reviewed_at=now() WHERE id=$4`,
-        [note, currentUserId(c) ?? null, currentUserName(c), id],
       );
       await client.query('COMMIT');
     } catch (err) {

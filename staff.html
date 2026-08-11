@@ -9460,7 +9460,7 @@
           </div>
           <div style="font-size:0.85rem;color:#cbd5e1;padding:0.3rem 0;line-height:1.5">
             <div><b>From:</b> ${escapeHtml(t.reporter_name)} &lt;${escapeHtml(t.reporter_email)}&gt;${t.reporter_org ? ' · ' + escapeHtml(t.reporter_org) : ''}</div>
-            ${t.original_url ? `<div><b>Original work:</b> <a href="${escapeHtml(t.original_url)}" target="_blank" rel="noopener">${escapeHtml(t.original_url)}</a></div>` : ''}
+            ${(t.original_url && /^https?:\/\//i.test(t.original_url)) ? `<div><b>Original work:</b> <a href="${escapeHtml(t.original_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.original_url)}</a></div>` : (t.original_url ? `<div><b>Original work:</b> ${escapeHtml(t.original_url)}</div>` : '')}
             <div style="margin-top:0.35rem;white-space:pre-wrap">${escapeHtml(t.complaint)}</div>
             <div style="margin-top:0.35rem"><a href="${link}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i> View reported content</a></div>
             ${t.action_note ? `<div style="margin-top:0.35rem;color:#94a3b8"><b>Note:</b> ${escapeHtml(t.action_note)}</div>` : ''}
