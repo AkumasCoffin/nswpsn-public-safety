@@ -36,6 +36,14 @@
   <script src="config.js"></script>
 
   <style>
+    /* "I want to be a…" role rows: keep the role name on one line and let the
+       description take the remaining width (wrapping instead of squeezing the
+       name onto two lines — e.g. "Media Feeder", "Other"). */
+    label:has(> input[name="request-type"]) { align-items: flex-start !important; }
+    input[name="request-type"] { flex-shrink: 0; margin-top: 0.15rem; }
+    input[name="request-type"] + span { white-space: nowrap; }
+    input[name="request-type"] + span + span { flex: 1 1 auto; min-width: 0; }
+
     :root {
       --bg-dark: #020617;
       --bg-card: #1e293b;
