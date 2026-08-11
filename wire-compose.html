@@ -352,6 +352,7 @@
       agencies: new Set(),
     };
     let isModerator = false; // owner/team_member → posts publish instantly
+    let approvalRequired = true; // site toggle: contributor posts need approval
     let allIncidents = [];   // {id,title,lat,lng,location}
     let regionsGeo = null;   // features
     let agencyList = [];     // {slug,name}
@@ -397,7 +398,9 @@
         if (!j.is_owner) { $('#comingSoon').style.display = 'block'; $('#form').style.display = 'none'; $('#gate').style.display = 'none'; return false; }
         if (!j.can_feed_media) { showGate(); return false; }
         isModerator = !!j.can_moderate_wire;
-        if (isModerator) $('#composeSub').textContent = 'You can publish directly, or save a draft. Edit or delete any time.';
+        try { const s = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() }); if (s.ok) approvalRequired = (await s.json()).approval_required !== false; } catch (e) {}
+        if (isModerator || !approvalRequired) $('#composeSub').textContent = 'Your post publishes instantly. You can edit or delete it any time.';
+        else $('#composeSub').textContent = 'Your post is reviewed by our team before it goes public. You can edit or delete it any time.';
       } catch (e) { showGate('Could not verify your access. Try again.'); return false; }
       return true;
     }
@@ -412,7 +415,7 @@
       $('#bodyField').style.display = isArt ? 'block' : 'none';
       $('#mediaLabel').textContent = isArt ? 'Images · up to 4 (pick a cover)' : 'Photos · up to 6';
       $('#draftBtn').style.display = isArt ? 'inline-block' : 'none';
-      $('#publishBtn').textContent = isModerator ? 'Publish' : 'Submit for review';
+      $('#publishBtn').textContent = (isModerator || !approvalRequired) ? 'Publish' : 'Submit for review';
       $('#formTitle').textContent = editId ? (isArt ? 'Edit article' : 'Edit media post') : (isArt ? 'Write an article' : 'Compose a media post');
       renderMedia();
     }

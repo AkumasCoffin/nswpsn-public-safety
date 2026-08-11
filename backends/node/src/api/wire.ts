@@ -70,6 +70,17 @@ function clientIp(c: { req: { header: (k: string) => string | undefined } }): st
   return fwd.split(',')[0]?.trim() || 'unknown';
 }
 
+/** Whether contributor posts require approval before publishing (staff toggle).
+ * Defaults true (pre-moderation). */
+async function wireApprovalRequired(pool: Pool): Promise<boolean> {
+  try {
+    const r = await pool.query<{ value: string }>(`SELECT value FROM app_settings WHERE key = 'wire_approval_required'`);
+    return r.rowCount === 0 ? true : r.rows[0]!.value !== 'false';
+  } catch {
+    return true;
+  }
+}
+
 // Soft launch: while WIRE_PUBLIC !== 'true', only the owner may read the feed —
 // this enforces the "coming soon for everyone except owner" gate server-side
 // (the frontend banner alone is cosmetic). Flip WIRE_PUBLIC=true at launch.
@@ -457,9 +468,10 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
 
     const authorId = currentUserId(c)!;
     const authorName = currentUserName(c);
-    // Pre-moderation: moderators (owner|team_member) publish instantly; everyone
-    // else's post is 'pending' until a moderator approves it.
-    const status = (await canModerateWire(authorId)) ? 'published' : 'pending';
+    // Approval mode (staff toggle): when required, non-moderators' posts are
+    // 'pending' until approved; moderators always publish instantly. When the
+    // toggle is off, everyone publishes instantly.
+    const status = (!(await wireApprovalRequired(pool)) || (await canModerateWire(authorId))) ? 'published' : 'pending';
     const client = await pool.connect();
     let newId: string;
     try {
@@ -664,7 +676,7 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     // becomes 'pending' review. Drafts stay private to the author.
     const wantPublish = data['status'] === 'published';
     const authorId = currentUserId(c)!;
-    const status = wantPublish ? ((await canModerateWire(authorId)) ? 'published' : 'pending') : 'draft';
+    const status = wantPublish ? ((!(await wireApprovalRequired(pool)) || (await canModerateWire(authorId))) ? 'published' : 'pending') : 'draft';
     const loc = cleanLocation(data);
     const agencies = cleanAgencies(data['agencies']);
     const incident = parseIncident(data);
@@ -841,6 +853,32 @@ wireRouter.post('/api/wire/media/:id/approve', requireRole(canModerateWire), (c)
 wireRouter.post('/api/wire/media/:id/reject', requireRole(canModerateWire), (c) => reviewPost(c, MEDIA, 'reject'));
 wireRouter.post('/api/wire/articles/:id/approve', requireRole(canModerateWire), (c) => reviewPost(c, ARTICLE, 'approve'));
 wireRouter.post('/api/wire/articles/:id/reject', requireRole(canModerateWire), (c) => reviewPost(c, ARTICLE, 'reject'));
+
+// Approval-mode toggle. Read allowed for contributors (so compose can label the
+// button correctly); only moderators may change it.
+wireRouter.get('/api/wire/settings', requireRole(canFeedMedia), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  return c.json({ approval_required: await wireApprovalRequired(pool) });
+});
+
+wireRouter.put('/api/wire/settings', requireRole(canModerateWire), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  try {
+    const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const val = d['approval_required'] === false ? 'false' : 'true';
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ('wire_approval_required', $1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()`,
+      [val, currentUserId(c) ?? null],
+    );
+    return c.json({ success: true, approval_required: val !== 'false' });
+  } catch (err) {
+    log.error({ err }, 'wire: settings update failed');
+    return c.json({ error: 'failed to update settings' }, 500);
+  }
+});
 
 // ===========================================================================
 // shared mutating helpers

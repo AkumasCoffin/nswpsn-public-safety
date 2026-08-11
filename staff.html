@@ -1209,6 +1209,14 @@
     .req-kind-badge { background: rgba(234,179,8,0.16); color: #fbbf24; border: 1px solid rgba(234,179,8,0.4); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.72rem; font-weight: 700; }
     /* Pending-count pills on the Requests dropdown items (data/approvals/takedowns). */
     .tab-dd-item .dd-count { margin-left: auto; min-width: 1.1rem; text-align: center; background: rgba(234,179,8,0.2); color: #fbbf24; border-radius: 999px; padding: 0.02rem 0.42rem; font-size: 0.68rem; font-weight: 700; }
+    /* Approval-mode toggle */
+    .ap-mode-bar { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 1rem; padding: 0.85rem 1.1rem; background: rgba(148,163,184,0.06); border: 1px solid rgba(148,163,184,0.2); border-radius: 10px; }
+    .ap-switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+    .ap-switch input { opacity: 0; width: 0; height: 0; }
+    .ap-slider { position: absolute; inset: 0; cursor: pointer; background: rgba(148,163,184,0.3); border-radius: 999px; transition: 0.2s; }
+    .ap-slider::before { content: ""; position: absolute; height: 20px; width: 20px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+    .ap-switch input:checked + .ap-slider { background: var(--accent, #f97316); }
+    .ap-switch input:checked + .ap-slider::before { transform: translateX(20px); }
     .dc-card { background: var(--bg-card, #0e1728); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 0.8rem; }
     .dc-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
     .dc-op { font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.1rem 0.45rem; border-radius: 5px; }
@@ -2218,6 +2226,16 @@
 
         <!-- Wire approvals (pre-moderation queue for pending posts & articles) -->
         <div id="requests-approvals-view" style="display:none;">
+          <div class="ap-mode-bar">
+            <label class="ap-switch">
+              <input type="checkbox" id="ap-mode-toggle" onchange="toggleApprovalMode()">
+              <span class="ap-slider"></span>
+            </label>
+            <div>
+              <div style="font-weight:600;">Approval mode</div>
+              <div id="ap-mode-desc" style="font-size:0.78rem; color:var(--text-soft, #94a3b8);">Loading…</div>
+            </div>
+          </div>
           <div id="approvals-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
@@ -9502,7 +9520,35 @@
         _apUpdateBadge(d.pendingCount);
       } catch (e) { /* ignore */ }
     }
+    function _apSetModeUi(required) {
+      const t = document.getElementById('ap-mode-toggle'); if (t) t.checked = !!required;
+      const desc = document.getElementById('ap-mode-desc');
+      if (desc) desc.textContent = required
+        ? 'On — contributor posts go to this queue for approval before they\'re public.'
+        : 'Off — contributor posts publish instantly (no approval needed).';
+    }
+    async function _apLoadMode() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/settings`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) return;
+        _apSetModeUi((await res.json()).approval_required);
+      } catch (e) { /* ignore */ }
+    }
+    async function toggleApprovalMode() {
+      const t = document.getElementById('ap-mode-toggle');
+      const required = t.checked;
+      t.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/settings`, { method: 'PUT', headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify({ approval_required: required }) });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(d.error || 'Failed to update', 'error'); _apSetModeUi(!required); return; }
+        _apSetModeUi(d.approval_required);
+        showToast(d.approval_required ? 'Approval mode on' : 'Approval mode off — posts publish instantly', 'success');
+      } catch (e) { showToast('Failed to update', 'error'); _apSetModeUi(!required); }
+      finally { t.disabled = false; }
+    }
     async function loadApprovals() {
+      _apLoadMode();
       const el = document.getElementById('approvals-container');
       if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
       try {
