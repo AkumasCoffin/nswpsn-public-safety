@@ -360,7 +360,12 @@ wireRouter.get('/api/wire/media', async (c) => {
     const vals: unknown[] = [];
     const where: string[] = [];
     if (mine && uid) { vals.push(uid); where.push(`author_id = $${vals.length}`); }
-    else { where.push(`status = 'published' AND taken_down_at IS NULL`); }
+    else {
+      where.push(`status = 'published' AND taken_down_at IS NULL`);
+      // Public "posts by this contributor" (their published posts only).
+      const author = new URL(c.req.url).searchParams.get('author');
+      if (author) { vals.push(author); where.push(`author_id = $${vals.length}`); }
+    }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
     if (unit) {
@@ -571,7 +576,12 @@ wireRouter.get('/api/wire/articles', async (c) => {
     const vals: unknown[] = [];
     const where: string[] = [];
     if (mine && uid) { vals.push(uid); where.push(`author_id = $${vals.length}`); }
-    else { where.push(`status = 'published' AND taken_down_at IS NULL`); }
+    else {
+      where.push(`status = 'published' AND taken_down_at IS NULL`);
+      // Public "posts by this contributor" (their published posts only).
+      const author = new URL(c.req.url).searchParams.get('author');
+      if (author) { vals.push(author); where.push(`author_id = $${vals.length}`); }
+    }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
     vals.push(limit, offset);

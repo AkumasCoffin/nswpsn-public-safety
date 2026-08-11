@@ -218,6 +218,13 @@ function createProfileModal() {
         <button onclick="closeProfileModal()" style="background:none; border:none; color:#94a3b8; font-size:1.5rem; cursor:pointer; padding:0; width:30px; height:30px; display:flex; align-items:center; justify-content:center;">&times;</button>
       </div>
 
+      <div style="text-align:center; margin-bottom:1.3rem;">
+        <div id="profile-avatar-preview" style="width:82px; height:82px; border-radius:50%; margin:0 auto 0.55rem; background:rgba(249,115,22,0.2); color:#f97316; display:grid; place-items:center; font-size:1.9rem; font-weight:700; overflow:hidden; border:2px solid rgba(148,163,184,0.25);"></div>
+        <button type="button" onclick="pickProfileAvatar()" id="profile-avatar-btn" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-camera"></i> Change picture</button>
+        <input type="file" id="profile-avatar-input" accept="image/jpeg,image/png,image/webp" style="display:none">
+        <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Overrides your Discord avatar.</div>
+      </div>
+
       <div style="margin-bottom:1.2rem;">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Username</label>
         <div style="display:flex; gap:0.5rem;">
@@ -225,6 +232,18 @@ function createProfileModal() {
           <button onclick="saveProfile()" id="profile-save-btn" style="padding:0.65rem 1rem; background:#f97316; border:none; border-radius:8px; color:#fff; font-weight:700; cursor:pointer; font-size:0.85rem; font-family:inherit;">Save</button>
         </div>
         <div style="color:#64748b; font-size:0.75rem; margin-top:0.35rem;">How you'll appear around the site.</div>
+      </div>
+
+      <div style="margin-bottom:1.2rem;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Social links</label>
+        <div style="display:flex; flex-direction:column; gap:0.45rem;">
+          <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fab fa-x-twitter" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-twitter" placeholder="X / Twitter link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
+          <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fab fa-facebook" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-facebook" placeholder="Facebook link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
+          <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fab fa-instagram" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-instagram" placeholder="Instagram link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
+          <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fab fa-youtube" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-youtube" placeholder="YouTube link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
+          <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fas fa-globe" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-website" placeholder="Website link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
+        </div>
+        <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Shown on your contributor profile. Click Save to update.</div>
       </div>
 
       <div style="margin-bottom:1.2rem;">
@@ -252,6 +271,49 @@ function createProfileModal() {
   modal.addEventListener('click', (e) => {
     if (e.target.id === 'profile-modal') closeProfileModal();
   });
+  const avInput = document.getElementById('profile-avatar-input');
+  if (avInput) avInput.addEventListener('change', handleProfileAvatar);
+}
+
+// Pending avatar (uploaded to R2 but not yet saved to the profile).
+let _pendingAvatarKey = null, _pendingAvatarUrl = null;
+function pickProfileAvatar() { document.getElementById('profile-avatar-input')?.click(); }
+async function _optimizeAvatar(file) {
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const size = 256; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const scale = Math.max(size / bmp.width, size / bmp.height);
+    const w = bmp.width * scale, h = bmp.height * scale;
+    ctx.drawImage(bmp, (size - w) / 2, (size - h) / 2, w, h);
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/webp', 0.85));
+    return blob || file;
+  } catch (e) { return file; }
+}
+async function handleProfileAvatar(e) {
+  const file = e.target.files && e.target.files[0]; if (!file) return;
+  const btn = document.getElementById('profile-avatar-btn');
+  const msg = document.getElementById('profile-message');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading…'; }
+  try {
+    const { data } = await sb.auth.getSession();
+    const jwt = data.session?.access_token;
+    if (!jwt) throw new Error('not signed in');
+    const blob = await _optimizeAvatar(file);
+    const r = await fetch(`${API_BASE_URL}/api/profiles/avatar-url`, { method: 'POST', headers: { Authorization: 'Bearer ' + jwt } });
+    if (!r.ok) throw new Error('presign ' + r.status);
+    const { uploadURL, key, publicUrl } = await r.json();
+    const up = await fetch(uploadURL, { method: 'PUT', body: blob });
+    if (!up.ok) throw new Error('upload ' + up.status);
+    _pendingAvatarKey = key; _pendingAvatarUrl = publicUrl;
+    const prev = document.getElementById('profile-avatar-preview');
+    if (prev) prev.innerHTML = `<img src="${publicUrl}" style="width:100%;height:100%;object-fit:cover;">`;
+    if (msg) { msg.style.color = '#94a3b8'; msg.textContent = 'Picture ready — click Save to apply.'; }
+  } catch (err) {
+    if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Avatar upload failed (' + err.message + ').'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-camera"></i> Change picture'; }
+  }
 }
 
 async function openProfileModal() {
@@ -285,6 +347,21 @@ async function openProfileModal() {
   const hasEmailIdentity = identities.some((i) => i.provider === 'email');
   document.getElementById('profile-change-password').style.display = hasEmailIdentity ? 'flex' : 'none';
 
+  // Avatar + social links: preview the current avatar, then prefill from the
+  // backend profile (socials + custom avatar).
+  _pendingAvatarKey = null; _pendingAvatarUrl = null;
+  const avPrev = document.getElementById('profile-avatar-preview');
+  const fallbackAv = meta.custom_avatar_url || meta.avatar_url;
+  if (avPrev) avPrev.innerHTML = fallbackAv ? `<img src="${fallbackAv}" style="width:100%;height:100%;object-fit:cover;">` : (meta.display_name || user.email || '?').charAt(0).toUpperCase();
+  try {
+    const pr = await fetch(`${API_BASE_URL}/api/profiles/${user.id}`, { headers: { Authorization: 'Bearer ' + session.access_token } });
+    if (pr.ok) {
+      const { profile } = await pr.json();
+      ['twitter', 'facebook', 'instagram', 'youtube', 'website'].forEach((k) => { const el = document.getElementById('profile-' + k); if (el) el.value = (profile && profile[k]) || ''; });
+      if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
+    }
+  } catch (e) { /* ignore */ }
+
   const msg = document.getElementById('profile-message');
   if (msg) msg.textContent = '';
   document.getElementById('profile-modal').style.display = 'flex';
@@ -307,18 +384,34 @@ async function saveProfile() {
   }
   btn.disabled = true;
   btn.textContent = 'Saving…';
-  const { error } = await sb.auth.updateUser({ data: { display_name: username || null } });
-  btn.disabled = false;
-  btn.textContent = 'Save';
-  if (error) {
+  try {
+    const { data: sess } = await sb.auth.getSession();
+    const jwt = sess.session?.access_token;
+    // 1) Supabase metadata: display name, and mirror the custom avatar so the
+    //    sidebar/avatars can use it without a backend round-trip.
+    const metaData = { display_name: username || null };
+    if (_pendingAvatarUrl) metaData.custom_avatar_url = _pendingAvatarUrl;
+    const { error } = await sb.auth.updateUser({ data: metaData });
+    if (error) throw new Error(error.message);
+    // 2) Backend profile: social links + custom avatar.
+    if (jwt) {
+      const v = (id) => (document.getElementById(id)?.value || '').trim();
+      const body = { display_name: username || null, twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
+      if (_pendingAvatarKey) body.avatar_key = _pendingAvatarKey;
+      await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+    }
+    _pendingAvatarKey = null; _pendingAvatarUrl = null;
+    if (typeof umami !== 'undefined') umami.track('profile-saved');
+    msg.style.color = '#22c55e';
+    msg.textContent = 'Saved!';
+    checkAuthState();
+  } catch (err) {
     msg.style.color = '#ef4444';
-    msg.textContent = error.message;
-    return;
+    msg.textContent = err.message || 'Failed to save.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save';
   }
-  if (typeof umami !== 'undefined') umami.track('profile-username-saved');
-  msg.style.color = '#22c55e';
-  msg.textContent = 'Saved!';
-  checkAuthState();
 }
 
 async function linkDiscordAccount() {
@@ -461,10 +554,11 @@ async function checkAuthState() {
     // Avatar: Discord avatar image when available, else the first letter.
     const avatarDiv = document.getElementById('auth-avatar');
     if (avatarDiv) {
-      if (meta.avatar_url) {
+      const customAvatar = meta.custom_avatar_url || meta.avatar_url;
+      if (customAvatar) {
         avatarDiv.innerHTML = '';
         const img = document.createElement('img');
-        img.src = meta.avatar_url;
+        img.src = customAvatar;
         img.alt = '';
         img.style.cssText = 'width:100%; height:100%; object-fit:cover;';
         avatarDiv.appendChild(img);

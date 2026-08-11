@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <meta charset="UTF-8" />
+  <title>NSW PSN – Contributor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
+  <meta name="theme-color" content="#0f172a">
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32x32.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="auth-common.js"></script>
+  <script src="agencies.js"></script>
+  <style>
+    .prof-main { padding: 2rem clamp(1rem, 4vw, 2.4rem) 4rem; }
+    .prof-card { max-width: 560px; margin: 1rem auto; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 2.2rem 1.8rem; text-align: center; box-shadow: var(--shadow-soft); }
+    .prof-avatar { width: 116px; height: 116px; border-radius: 50%; margin: 0 auto 1.1rem; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 2.6rem; font-weight: 800; overflow: hidden; border: 2px solid var(--border-subtle); }
+    .prof-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .prof-name { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; margin: 0; }
+    .prof-role { color: var(--text-soft); font-size: 0.85rem; margin-top: 0.3rem; }
+    .prof-socials { display: flex; justify-content: center; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.5rem; }
+    .prof-socials a { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 1.15rem; text-decoration: none; transition: border-color .15s, color .15s, transform .15s; }
+    .prof-socials a:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+    .prof-empty { color: var(--text-soft); font-size: 0.85rem; margin-top: 1.3rem; }
+    .prof-back { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-muted); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; }
+    .prof-back:hover { color: var(--accent); }
+    .prof-loading { text-align: center; color: var(--text-muted); padding: 3rem 1rem; }
+    .pp-head { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.6rem; }
+    .pp-head::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+    .pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1rem; }
+    .pp-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; cursor: pointer; transition: transform .15s, border-color .15s; }
+    .pp-card:hover { transform: translateY(-3px); border-color: var(--accent); }
+    .pp-thumb { aspect-ratio: 3/2; background: var(--bg-elevated-soft); position: relative; }
+    .pp-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .pp-thumb .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-soft); font-size: 1.6rem; }
+    .pp-badge { position: absolute; top: 8px; left: 8px; font-size: 0.62rem; font-weight: 700; text-transform: uppercase; padding: 3px 7px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; }
+    .pp-badge.article { background: rgba(249,115,22,0.85); }
+    .pp-body { padding: 0.7rem 0.8rem 0.85rem; }
+    .pp-body h3 { margin: 0; font-size: 0.95rem; line-height: 1.25; }
+    .pp-body .m { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.35rem; }
+  </style>
+</head>
+<body>
+  <div class="mobile-header">
+    <div class="mobile-logo">Forcequit <span>Profile</span></div>
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+    </button>
+  </div>
+  <div class="menu-overlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">Forcequit <span>NSW PSN</span></div>
+    <div class="sidebar-subtitle">Quick reference handbook for NSW Public Safety Network monitoring.</div>
+    <div class="sidebar-section-label">Sections</div>
+    <nav class="sidebar-nav">
+      <a href="index.html">Home / Overview</a>
+      <a href="live.html" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="map.html">Incident Map</a>
+      <a href="logs.html">Incident Logs</a>
+      <a href="links.html">Useful Links</a>
+      <a href="data-sources.html">Data Sources</a>
+      <a href="about.html">About</a>
+    </nav>
+    <div id="agencies-nav-mount"></div>
+    <div class="sidebar-footer">NSW PSN Reference · Forcequit</div>
+  </aside>
+
+  <main class="main prof-main">
+    <a class="prof-back" href="wire"><i class="fa-solid fa-arrow-left"></i> The Wire</a>
+    <div id="profContent"><div class="prof-loading">Loading profile…</div></div>
+    <div id="profPosts" style="max-width:960px;margin:2.4rem auto 0"></div>
+  </main>
+
+  <script>
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.querySelector('.menu-overlay').classList.toggle('active');
+    }
+  </script>
+  <script type="module">
+    const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    let API_KEY = null;
+
+    const qs = new URLSearchParams(location.search);
+    const uid = qs.get('u');
+    const nameHint = qs.get('name');
+
+    async function keyHeaders() {
+      if (!API_KEY) { try { API_KEY = (await (await fetch(`${API_BASE}/api/config`)).json()).apiKey; } catch (e) {} }
+      return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {};
+    }
+
+    const SOCIALS = [
+      { key: 'twitter', icon: 'fa-brands fa-x-twitter', label: 'X / Twitter' },
+      { key: 'facebook', icon: 'fa-brands fa-facebook', label: 'Facebook' },
+      { key: 'instagram', icon: 'fa-brands fa-instagram', label: 'Instagram' },
+      { key: 'youtube', icon: 'fa-brands fa-youtube', label: 'YouTube' },
+      { key: 'website', icon: 'fa-solid fa-globe', label: 'Website' },
+    ];
+
+    function render(p) {
+      const name = (p && p.display_name) || nameHint || 'Contributor';
+      const avatar = p && p.avatar_url
+        ? `<img src="${esc(p.avatar_url)}" alt="">`
+        : esc((name || '?').charAt(0).toUpperCase());
+      const links = SOCIALS.filter((s) => p && p[s.key]).map((s) =>
+        `<a href="${esc(p[s.key])}" target="_blank" rel="noopener noreferrer" title="${s.label}"><i class="${s.icon}"></i></a>`).join('');
+      document.getElementById('profContent').innerHTML = `
+        <div class="prof-card">
+          <div class="prof-avatar">${avatar}</div>
+          <h1 class="prof-name">${esc(name)}</h1>
+          <div class="prof-role">Contributor to The Wire</div>
+          ${links ? `<div class="prof-socials">${links}</div>` : `<div class="prof-empty">No links shared yet.</div>`}
+        </div>`;
+    }
+
+    function timeAgo(iso) { const d = new Date(iso).getTime(); if (!d) return ''; const s = Math.floor((Date.now() - d) / 1000); if (s < 3600) return Math.max(1, Math.floor(s / 60)) + 'm ago'; if (s < 86400) return Math.floor(s / 3600) + 'h ago'; if (s < 604800) return Math.floor(s / 86400) + 'd ago'; return new Date(iso).toLocaleDateString('en-AU'); }
+
+    async function loadPosts() {
+      try {
+        const hdr = await keyHeaders();
+        const [mj, aj] = await Promise.all([
+          fetch(`${API_BASE}/api/wire/media?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({})),
+          fetch(`${API_BASE}/api/wire/articles?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({})),
+        ]);
+        const items = [...(mj.posts || []), ...(aj.articles || [])].sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
+        if (!items.length) return;
+        document.getElementById('profPosts').innerHTML = `<div class="pp-head">Posts on The Wire</div><div class="pp-grid">${items.map(card).join('')}</div>`;
+        document.querySelectorAll('.pp-card').forEach((el) => el.addEventListener('click', () => { location.href = el.dataset.href; }));
+      } catch (e) {}
+    }
+    function card(item) {
+      const isArticle = item.kind === 'article';
+      const cover = item.cover;
+      const media = cover && cover.kind === 'image' ? `<img src="${esc(cover.feed_url || cover.url)}" alt="" loading="lazy">`
+        : (cover && cover.poster_url ? `<img src="${esc(cover.poster_url)}">` : `<div class="ph"><i class="fa-regular fa-${isArticle ? 'newspaper' : 'image'}"></i></div>`);
+      const key = isArticle ? item.slug : item.id;
+      const href = `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+      return `<article class="pp-card" data-href="${esc(href)}">
+        <div class="pp-thumb">${media}<span class="pp-badge ${isArticle ? 'article' : ''}">${isArticle ? 'Article' : 'Media'}</span></div>
+        <div class="pp-body"><h3>${esc(item.title)}</h3><div class="m">${timeAgo(item.published_at || item.created_at)}</div></div>
+      </article>`;
+    }
+
+    (async function init() {
+      if (!uid) { document.getElementById('profContent').innerHTML = '<div class="prof-loading">No profile specified.</div>'; return; }
+      try {
+        const r = await fetch(`${API_BASE}/api/profiles/${encodeURIComponent(uid)}`, { headers: await keyHeaders() });
+        const j = await r.json();
+        render(j.profile || null);
+      } catch (e) { render(null); }
+      loadPosts();
+    })();
+  </script>
+</body>
+</html>

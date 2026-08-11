@@ -128,13 +128,13 @@ async function r2Client() {
  * before upload, which also strips EXIF/GPS. Returns null when R2 isn't
  * configured or signing fails.
  */
-export async function createImageUploadUrl(): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
+export async function createImageUploadUrl(prefix = 'wire/img'): Promise<{ uploadURL: string; key: string; publicUrl: string } | null> {
   if (!r2Configured()) return null;
   try {
     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
     const s3 = await r2Client();
-    const key = `wire/img/${randomUUID()}.webp`;
+    const key = `${prefix.replace(/\/+$/, '')}/${randomUUID()}.webp`;
     const uploadURL = await getSignedUrl(s3, new PutObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key }), { expiresIn: 600 });
     return { uploadURL, key, publicUrl: r2PublicUrl(key) };
   } catch (err) {
