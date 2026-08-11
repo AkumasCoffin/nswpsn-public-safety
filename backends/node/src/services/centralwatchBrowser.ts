@@ -39,6 +39,8 @@ type PwModule = {
 interface BatchImageInput {
   id: string;
   url: string;
+  /** Central Watch view token, sent as the `x-wt-token` header (image 403s without it). */
+  token?: string;
 }
 
 interface BatchImageResultJs {
@@ -441,167 +443,55 @@ class CentralwatchBrowser {
   }
 
   /**
-   * TEMP diagnostic: raw GET of a URL in the page context, returning status +
-   * content-type + a body preview + a few response headers, so we can tell a
-   * Vercel/WAF challenge page apart from a hard 403 on the image endpoint.
-   * Remove once the centralwatch image-403 cause is fixed.
+   * Mint a Central Watch "view token" for each camera id. The image endpoint
+   * (/au/api/cameras/{id}/image/{ts}) 403s "Access denied" without one: the app
+   * POSTs /au/api/cameras/{id}/view-token to get { token, exp } (exp in unix
+   * seconds, ~10 min TTL) and sends the token as the `x-wt-token` request header
+   * on the image GET. Tokens are per-camera and reusable until exp. Returns a
+   * map id -> { token, exp }; ids that failed to mint are omitted.
    */
-  async diagnosticFetch(
-    url: string,
-    timeoutMs = 15000,
-  ): Promise<{
-    status?: number;
-    contentType?: string;
-    bodyPreview?: string;
-    headers?: Record<string, string>;
-    error?: string;
-  } | null> {
-    if (!this.isReady()) return null;
+  async mintViewTokens(
+    cameraIds: string[],
+  ): Promise<Record<string, { token: string; exp: number }>> {
+    if (!this.isReady() || cameraIds.length === 0) return {};
     return this.runExclusive(async () => {
+      const ids = cameraIds.slice(0, 200);
       const script = `(async () => {
-        const url = ${JSON.stringify(url)};
-        const timeout = ${JSON.stringify(timeoutMs)};
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeout);
-        try {
-          const resp = await fetch(url, { signal: controller.signal, credentials: 'include' });
-          clearTimeout(timer);
-          const ct = resp.headers.get('content-type') || '';
-          const pick = {};
-          ['server','content-type','www-authenticate','x-vercel-error','x-vercel-id','x-vercel-mitigated','x-matched-path','x-robots-tag','cf-ray'].forEach(h => { const v = resp.headers.get(h); if (v) pick[h] = v; });
-          let preview = '';
-          try { preview = (await resp.text()).slice(0, 400); } catch (e) {}
-          return { status: resp.status, contentType: ct, bodyPreview: preview, headers: pick };
-        } catch (e) {
-          clearTimeout(timer);
-          return { error: String(e && e.message ? e.message : e) };
-        }
-      })()`;
-      try {
-        return await this.evaluateWithRetry<{
-          status?: number;
-          contentType?: string;
-          bodyPreview?: string;
-          headers?: Record<string, string>;
-          error?: string;
-        }>(script);
-      } catch (err) {
-        log.warn({ err: (err as Error).message, url }, 'centralwatch diagnosticFetch threw');
-        return null;
-      }
-    });
-  }
-
-  /**
-   * TEMP diagnostic: load a URL as an <img> (Sec-Fetch-Dest: image, like the
-   * real site) and report whether it loaded, its dimensions, and whether the
-   * pixels read back off a canvas. Distinguishes a request-shape WAF deny
-   * (fetch blocked, <img> allowed) from a hard path/IP deny (both blocked).
-   */
-  async diagnosticImgLoad(
-    url: string,
-    timeoutMs = 12000,
-  ): Promise<{
-    phase?: string;
-    naturalWidth?: number;
-    naturalHeight?: number;
-    canvasOk?: boolean;
-    canvasErr?: string;
-    dataLen?: number;
-  } | null> {
-    if (!this.isReady()) return null;
-    return this.runExclusive(async () => {
-      const script = `(async () => {
-        const url = ${JSON.stringify(url)};
-        const timeout = ${JSON.stringify(timeoutMs)};
-        return await new Promise((resolve) => {
-          let done = false;
-          const img = document.createElement('img');
-          img.crossOrigin = 'anonymous';
-          const finish = (o) => { if (done) return; done = true; try { img.remove(); } catch (e) {} resolve(o); };
-          const timer = setTimeout(() => finish({ phase: 'timeout' }), timeout);
-          img.onload = () => {
+        const ids = ${JSON.stringify(ids)};
+        const results = await Promise.allSettled(ids.map(async (id) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15000);
+          try {
+            const resp = await fetch('/au/api/cameras/' + id + '/view-token', { method: 'POST', credentials: 'include', signal: controller.signal });
             clearTimeout(timer);
-            const w = img.naturalWidth, h = img.naturalHeight;
-            let canvasOk = false, canvasErr = '', dataLen = 0;
-            try {
-              const c = document.createElement('canvas'); c.width = w; c.height = h;
-              c.getContext('2d').drawImage(img, 0, 0);
-              dataLen = c.toDataURL('image/jpeg', 0.8).length; canvasOk = true;
-            } catch (e) { canvasErr = String(e && e.message ? e.message : e); }
-            finish({ phase: 'load', naturalWidth: w, naturalHeight: h, canvasOk, canvasErr, dataLen });
-          };
-          img.onerror = () => { clearTimeout(timer); finish({ phase: 'error' }); };
-          img.src = url;
-          document.body.appendChild(img);
-        });
+            if (!resp.ok) return { id, ok: false, status: resp.status };
+            const j = await resp.json();
+            if (j && typeof j.token === 'string') return { id, ok: true, token: j.token, exp: (typeof j.exp === 'number' ? j.exp : 0) };
+            return { id, ok: false };
+          } catch (e) { clearTimeout(timer); return { id, ok: false, error: String(e && e.message ? e.message : e) }; }
+        }));
+        return results.map(r => r.status === 'fulfilled' ? r.value : { id: null, ok: false });
       })()`;
+      const out: Record<string, { token: string; exp: number }> = {};
       try {
-        return await this.evaluateWithRetry<{
-          phase?: string;
-          naturalWidth?: number;
-          naturalHeight?: number;
-          canvasOk?: boolean;
-          canvasErr?: string;
-          dataLen?: number;
-        }>(script);
+        const results = await this.evaluateWithRetry<
+          Array<{ id: string | null; ok: boolean; token?: string; exp?: number; status?: number }>
+        >(script);
+        let failures = 0;
+        for (const r of results || []) {
+          if (r && r.ok && r.id && r.token) out[r.id] = { token: r.token, exp: r.exp ?? 0 };
+          else failures++;
+        }
+        if (failures > 0) {
+          log.warn(
+            { minted: Object.keys(out).length, failures },
+            'centralwatch: some view-token mints failed',
+          );
+        }
       } catch (err) {
-        log.warn({ err: (err as Error).message, url }, 'centralwatch diagnosticImgLoad threw');
-        return null;
+        log.warn({ err: (err as Error).message }, 'centralwatch mintViewTokens threw');
       }
-    });
-  }
-
-  /**
-   * TEMP diagnostic: navigate to the real app UI, let it load, then read back
-   * the image-request URLs it actually issued (via the Performance resource
-   * timeline — these carry whatever view-token query param the app appends) and
-   * dump JS storage + cookies. Re-warms the API path afterwards. Run ONCE.
-   */
-  async diagnosticAppImageCapture(): Promise<{
-    imageRequests?: string[];
-    local?: Record<string, string>;
-    session?: Record<string, string>;
-    cookies?: string;
-  } | null> {
-    if (!this.isReady()) return null;
-    return this.runExclusive(async () => {
-      const page = this.page as {
-        goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
-        waitForTimeout: (ms: number) => Promise<void>;
-      };
-      let result: {
-        imageRequests?: string[];
-        local?: Record<string, string>;
-        session?: Record<string, string>;
-        cookies?: string;
-      } | null = null;
-      try {
-        await page.goto('https://centralwatch.watchtowers.io/au', {
-          timeout: 30000,
-          waitUntil: 'domcontentloaded',
-        });
-        await page.waitForTimeout(7000); // let the app bootstrap + request thumbnails
-        result = await this.evaluateWithRetry(`(() => {
-          const imgs = performance.getEntriesByType('resource')
-            .map(e => e.name)
-            .filter(n => n.includes('/image/') || n.toLowerCase().includes('token'))
-            .slice(0, 8);
-          const dump = (s) => { const o = {}; try { for (let i = 0; i < s.length; i++) { const k = s.key(i); const v = s.getItem(k) || ''; o[k] = v.length > 160 ? v.slice(0, 160) + '…' : v; } } catch (e) { o.__err = String(e); } return o; };
-          return { imageRequests: imgs, local: dump(localStorage), session: dump(sessionStorage), cookies: document.cookie };
-        })()`);
-      } catch (e) {
-        log.warn({ err: (e as Error).message }, 'centralwatch diagnosticAppImageCapture threw');
-      } finally {
-        // Restore the API-path warm so list fetches keep working.
-        try {
-          await page.goto('https://centralwatch.watchtowers.io/au/api/cameras', {
-            timeout: 20000,
-            waitUntil: 'domcontentloaded',
-          });
-        } catch { /* refresh loop will re-warm */ }
-      }
-      return result;
+      return out;
     });
   }
 
@@ -807,16 +697,17 @@ class CentralwatchBrowser {
   ): Promise<BatchImageResult[]> {
     if (!this.isReady() || images.length === 0) return [];
     return this.runExclusive(async () => {
-      const imageList = images.map((i) => [i.id, i.url]);
+      const imageList = images.map((i) => [i.id, i.url, i.token ?? '']);
       try {
         const script = `(async () => {
           const imageList = ${JSON.stringify(imageList)};
           const TIMEOUT = 15000;
-          const results = await Promise.allSettled(imageList.map(async ([id, url]) => {
+          const results = await Promise.allSettled(imageList.map(async ([id, url, token]) => {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), TIMEOUT);
             try {
-              const resp = await fetch(url, { signal: controller.signal, credentials: 'include' });
+              const headers = token ? { 'x-wt-token': token } : {};
+              const resp = await fetch(url, { signal: controller.signal, credentials: 'include', headers });
               clearTimeout(timer);
               if (!resp.ok) {
                 const ra = resp.headers.get('Retry-After');

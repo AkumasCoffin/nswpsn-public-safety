@@ -30,26 +30,21 @@ const STALE_AFTER_MS = 2 * 60 * 1000; // 2 min — the X-Cache: HIT vs STALE thr
 const BATCH_INTERVAL_MS = 30 * 1000; // 30 s between batch passes
 const MIN_IMAGE_BYTES = 500; // python: anything smaller is treated as a 1x1/error pixel
 
-// Two-phase strategy state — mirrors python `use_dom` / `last_dom_retry`
-// (external_api_proxy.py:8763-8766). DOM-load via <img> sends
-// `Sec-Fetch-Dest: image` and is generally not rate-limited; page-context
-// fetch() sends `Sec-Fetch-Dest: empty` and is. Start optimistically with
-// DOM. If the success rate falls below 40% we switch to fetch, but we
-// retry the other path every 5 min in case the limiter has reset.
-const DOM_SUCCESS_THRESHOLD = 0.4; // python: _CW_DOM_SUCCESS_THRESHOLD
-const STRATEGY_RETRY_INTERVAL_MS = 5 * 60 * 1000; // python: 300s (last_dom_retry > 300)
-
-type Strategy = 'dom' | 'fetch';
-let lastStrategy: Strategy = 'dom';
-let lastStrategyRetryAt = 0;
+// Central Watch now gates each camera image behind a per-camera "view token":
+// POST /au/api/cameras/{id}/view-token → { token, exp } (exp in unix seconds,
+// ~10 min TTL), and the token is sent as the `x-wt-token` header on the image
+// GET (which also requires a 15-second-aligned timestamp). We cache tokens per
+// camera and re-mint shortly before expiry. The old DOM-vs-fetch two-phase
+// strategy is gone — the DOM <img> path can't set the required header, so only
+// the fetch() path works now.
+const TOKEN_RENEW_MARGIN_S = 60; // re-mint a token this many seconds before its exp
+const tokenCache = new Map<string, { token: string; exp: number }>();
 
 const cache = new Map<string, CachedImage>();
 
 let batchTimer: NodeJS.Timeout | null = null;
 let batchInFlight = false;
 let stopRequested = false;
-// TEMP: gate the expensive app-UI token capture to a single run.
-let _tokenProbeDone = false;
 
 export function setImage(
   cameraId: string,
@@ -97,15 +92,13 @@ export function cleanup(
 }
 
 /**
- * Build the upstream image URL for a camera.
- *
- * Central Watch's image endpoint requires an ISO timestamp in the path.
- * Python tries (now-2min) first because the latest image isn't always
- * indexed yet; we mirror that here.
+ * Build the upstream image URL for a camera. Central Watch serves frames on a
+ * 15-second grid and 403s any timestamp that isn't 15s-aligned, so we floor to
+ * the previous 15s boundary (a little in the past so the frame is indexed).
  */
 function buildImageUrl(cameraId: string): string {
-  const t = new Date(Date.now() - 2 * 60 * 1000);
-  // python: '%Y-%m-%dT%H:%M:%S.000Z'
+  const alignedSec = Math.floor((Date.now() / 1000 - 30) / 15) * 15;
+  const t = new Date(alignedSec * 1000);
   const ts = `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-${pad2(
     t.getUTCDate(),
   )}T${pad2(t.getUTCHours())}:${pad2(t.getUTCMinutes())}:${pad2(t.getUTCSeconds())}.000Z`;
@@ -145,80 +138,41 @@ export async function runBatchOnce(): Promise<{
     return { attempted: 0, cached: 0, evicted };
   }
 
-  const inputs = cameras.map((c) => ({ id: c.id, url: buildImageUrl(c.id) }));
-  let cached = 0;
-
-  // Decide which path to try first. Python: start with DOM; once we've
-  // flipped to fetch, retry DOM every 5 min in case the limiter resets.
-  // Symmetrically, if we're on DOM, periodically reconsider — but DOM is
-  // the cheaper / less-rate-limited path so the bias is to stay on it.
-  const now = Date.now();
-  const dueForRetry = now - lastStrategyRetryAt > STRATEGY_RETRY_INTERVAL_MS;
-  const tryDomFirst = lastStrategy === 'dom' || dueForRetry;
-  let domPath: 'dom' | 'fetch' | null = null;
-  const cachedOk = new Set<string>();
-
-  if (tryDomFirst) {
-    domPath = 'dom';
+  // Ensure a fresh view token for every active camera — mint the ones we don't
+  // hold or that are about to expire. The image GET 403s without it.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const needToken = cameras
+    .map((c) => c.id)
+    .filter((id) => {
+      const t = tokenCache.get(id);
+      return !t || t.exp - nowSec <= TOKEN_RENEW_MARGIN_S;
+    });
+  if (needToken.length > 0) {
     try {
-      const results = await centralwatchBrowser.fetchImagesBatchViaDom(inputs);
-      for (const r of results) {
-        if (
-          r.ok &&
-          r.id &&
-          r.bytes &&
-          r.bytes.length > MIN_IMAGE_BYTES &&
-          activeIds.has(r.id)
-        ) {
-          setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
-          cached++;
-          cachedOk.add(r.id);
-        }
-      }
+      const minted = await centralwatchBrowser.mintViewTokens(needToken);
+      for (const [id, v] of Object.entries(minted)) tokenCache.set(id, v);
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
-        'centralwatch image batch: fetchImagesBatchViaDom threw',
+        'centralwatch image batch: view-token mint failed',
       );
     }
+  }
+  // Forget tokens for cameras no longer in the active list.
+  for (const id of [...tokenCache.keys()]) {
+    if (!activeIds.has(id)) tokenCache.delete(id);
+  }
 
-    const successRate = inputs.length > 0 ? cached / inputs.length : 0;
-    if (successRate >= DOM_SUCCESS_THRESHOLD) {
-      lastStrategy = 'dom';
-    } else {
-      // DOM degraded — flip the next-pass default to fetch, and fall
-      // through *now* to retry the cameras DOM didn't get via fetch().
-      lastStrategy = 'fetch';
-      const failedInputs = inputs.filter((i) => !cachedOk.has(i.id));
-      if (failedInputs.length > 0) {
-        try {
-          const results = await centralwatchBrowser.fetchImagesBatch(failedInputs);
-          for (const r of results) {
-            if (
-              r.ok &&
-              r.id &&
-              r.bytes &&
-              r.bytes.length > MIN_IMAGE_BYTES &&
-              activeIds.has(r.id)
-            ) {
-              setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
-              cached++;
-              cachedOk.add(r.id);
-            }
-          }
-          domPath = 'fetch';
-        } catch (err) {
-          log.warn(
-            { err: (err as Error).message },
-            'centralwatch image batch: fetchImagesBatch fallback threw',
-          );
-        }
-      }
-    }
-  } else {
-    // Default-fetch mode (we're cooling on DOM); 5min retry timer hasn't
-    // come up yet, so go straight to the fetch() path.
-    domPath = 'fetch';
+  // Only fetch cameras we hold a token for; the endpoint 403s without it.
+  const inputs = cameras
+    .map((c) => {
+      const tok = tokenCache.get(c.id);
+      return tok ? { id: c.id, url: buildImageUrl(c.id), token: tok.token } : null;
+    })
+    .filter((x): x is { id: string; url: string; token: string } => x !== null);
+
+  let cached = 0;
+  if (inputs.length > 0) {
     try {
       const results = await centralwatchBrowser.fetchImagesBatch(inputs);
       for (const r of results) {
@@ -231,7 +185,6 @@ export async function runBatchOnce(): Promise<{
         ) {
           setImage(r.id, r.bytes, r.contentType ?? 'image/jpeg');
           cached++;
-          cachedOk.add(r.id);
         }
       }
     } catch (err) {
@@ -241,41 +194,10 @@ export async function runBatchOnce(): Promise<{
       );
     }
   }
-  // Advance the DOM-retry cooldown regardless of which branch ran — only
-  // updating it in the tryDomFirst branch latched dueForRetry permanently
-  // true once we flipped to fetch, defeating the fetch fast-path.
-  lastStrategyRetryAt = now;
-
-  // TEMP DIAGNOSTIC (remove once the image-cache cause is found): neither
-  // fetch path logs per-image status, so a whole-pass failure is otherwise
-  // silent. When a pass caches nothing, probe a few images via the
-  // status-bearing fetch() path and surface the raw upstream result
-  // (403/404/429 vs content-type vs too-small) at warn level.
-  if (cached === 0 && inputs.length > 0) {
-    try {
-      const imgUrl = inputs[0]!.url;
-      const diag = await centralwatchBrowser.diagnosticFetch(imgUrl);
-      // The app returns {"reason":"missing_view_token"} — capture how the real
-      // app UI requests an image (token and all) + JS storage. Once only: the
-      // capture navigates the shared page, so it's expensive.
-      let appCapture: unknown = null;
-      if (!_tokenProbeDone) {
-        _tokenProbeDone = true;
-        appCapture = await centralwatchBrowser.diagnosticAppImageCapture();
-      }
-      log.warn(
-        { url: imgUrl, diag, appCapture },
-        'centralwatch image batch DIAGNOSTIC: 0 cached this pass',
-      );
-    } catch (e) {
-      log.warn({ err: (e as Error).message }, 'centralwatch image batch DIAGNOSTIC probe threw');
-    }
-  }
 
   const { evicted, remaining } = cleanup(activeIds);
-  // Demoted to debug — 30 s cadence drowns the log otherwise.
   log.debug(
-    `centralwatch image batch: ${cached}/${inputs.length} cached, ${evicted} evicted, size=${remaining} (${domPath}/${lastStrategy})`,
+    `centralwatch image batch: ${cached}/${inputs.length} cached, ${tokenCache.size} tokens, ${evicted} evicted, size=${remaining}`,
   );
   return { attempted: inputs.length, cached, evicted };
 }
@@ -321,29 +243,11 @@ export const STALE_AFTER_MS_EXPORT = STALE_AFTER_MS;
 /** Test hooks. */
 export function _resetCentralwatchImageCacheForTests(): void {
   cache.clear();
+  tokenCache.clear();
   if (batchTimer) {
     clearInterval(batchTimer);
     batchTimer = null;
   }
   batchInFlight = false;
   stopRequested = false;
-  lastStrategy = 'dom';
-  lastStrategyRetryAt = 0;
-}
-
-/** Test hook — peek at strategy state. */
-export function _getStrategyStateForTests(): {
-  lastStrategy: Strategy;
-  lastStrategyRetryAt: number;
-} {
-  return { lastStrategy, lastStrategyRetryAt };
-}
-
-/** Test hook — force-set the strategy state for retry-timer tests. */
-export function _setStrategyStateForTests(
-  s: Strategy,
-  retryAt = 0,
-): void {
-  lastStrategy = s;
-  lastStrategyRetryAt = retryAt;
 }
