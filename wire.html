@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <script defer src="https://analytics.forcequit.xyz/script.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
+  <script defer src="https://analytics.forcequit.xyz/recorder.js" data-website-id="32d5fcbf-4330-4223-a341-12b063edf831"></script>
   <meta charset="UTF-8" />
   <title>NSW PSN – The Wire</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
@@ -334,6 +335,7 @@
         $('#detail').classList.add('on');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}&${kind === 'article' ? 'article' : 'post'}=${encodeURIComponent(key)}`);
+        if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: kind === 'article' ? 'article' : 'media_post' });
         // count a view (deduped server-side)
         fetch(`${API_BASE}/api/wire/${kind === 'article' ? 'articles' : 'media'}/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await keyHeaders() }).catch(() => {});
       } catch (e) { console.warn(e); }
@@ -459,7 +461,7 @@
       try {
         const r = await fetch(`${API_BASE}/api/wire/takedown`, { method: 'POST', headers: { ...(await keyHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const j = await r.json().catch(() => ({}));
-        if (r.ok) { msg('Notice submitted — our team will review it.'); setTimeout(closeReportModal, 1800); }
+        if (r.ok) { if (typeof umami !== 'undefined') umami.track('wire-takedown-submit', { kind: currentItem.kind }); msg('Notice submitted — our team will review it.'); setTimeout(closeReportModal, 1800); }
         else msg(j.error || 'Failed to submit notice.', true);
       } catch (e) { msg('Network error.', true); }
     });

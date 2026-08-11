@@ -560,6 +560,7 @@
         const r = await fetch(url, { method: editId ? 'PUT' : 'POST', headers: await userHeaders(true), body: JSON.stringify(payload) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { setMsg(j.error || 'Save failed.', true); setBusy(false); return; }
+        if (typeof umami !== 'undefined') umami.track('wire-publish', { type, status, edit: !!editId });
         const key = isArt ? (j.slug || editId) : (j.id || editId);
         location.href = `wire?tab=${isArt ? 'articles' : 'media'}&${isArt ? 'article' : 'post'}=${encodeURIComponent(key)}`;
       } catch (e) { setMsg('Network error.', true); setBusy(false); }
