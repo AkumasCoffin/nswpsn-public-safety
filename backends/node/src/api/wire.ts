@@ -33,7 +33,6 @@ import {
   r2Configured,
   createVideoUploadUrl,
   deleteR2Object,
-  r2PublicUrl,
   MAX_VIDEO_BYTES,
   normaliseLicense,
   licenseLabel,
@@ -227,6 +226,35 @@ async function insertMediaRows(client: PoolClient, cfg: EntityCfg, parentId: str
   }
 }
 
+/** Returns an image hash from `items` that already belongs to ANOTHER active
+ * post (any author), or null if all images are new. Prevents the same image
+ * being posted to The Wire more than once. "Active" excludes removed / rejected
+ * / taken-down posts (whose images are effectively retracted and may be reused).
+ * `excludeId` is the post being edited — its own images don't count as dupes. */
+async function findDuplicateImageHash(pool: Pool, items: MediaItem[], excludeId: string | null): Promise<string | null> {
+  const hashes = [...new Set(items.filter((m) => m.kind === 'image' && m.hash).map((m) => m.hash as string))];
+  if (hashes.length === 0) return null;
+  const ex = excludeId ?? '';
+  const r = await pool.query<{ hash: string }>(
+    `SELECT wm.hash FROM wire_media wm
+        JOIN media_posts mp ON wm.parent_id = mp.id
+       WHERE wm.parent_type='media_post' AND wm.kind='image'
+         AND wm.hash = ANY($1::text[]) AND wm.parent_id <> $2
+         AND mp.taken_down_at IS NULL AND mp.status NOT IN ('removed','rejected')
+     UNION
+     SELECT wm.hash FROM wire_media wm
+        JOIN articles a ON wm.parent_id = a.id
+       WHERE wm.parent_type='article' AND wm.kind='image'
+         AND wm.hash = ANY($1::text[]) AND wm.parent_id <> $2
+         AND a.taken_down_at IS NULL AND a.status NOT IN ('removed','rejected')
+       LIMIT 1`,
+    [hashes, ex],
+  );
+  return r.rows[0]?.hash ?? null;
+}
+
+const DUPLICATE_IMAGE_MSG = 'One or more of these images has already been posted to The Wire. Each image can only be posted once.';
+
 /** Fetch wire_media for a set of parents, grouped by parent_id (avoids N+1). */
 async function fetchMediaFor(pool: Pool, parentType: string, ids: string[]): Promise<Map<string, WireMediaRow[]>> {
   const map = new Map<string, WireMediaRow[]>();
@@ -334,25 +362,27 @@ wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => 
   if (!r2Configured()) return c.json({ error: 'image uploads not configured' }, 503);
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const hash = typeof body['hash'] === 'string' ? body['hash'].slice(0, 128) : null;
-  // De-dup: if this exact image was uploaded before, reuse its R2 object rather
-  // than uploading again. The client skips the PUT when `duplicate` is set.
+  // Each image can only be posted to The Wire once. Tell the client early if this
+  // image already belongs to another active post so it can reject it up front
+  // (the create/edit handlers enforce the same rule authoritatively). Scope +
+  // exclusion match findDuplicateImageHash: skip removed/rejected/taken-down
+  // posts, and the post being edited (exclude_id).
   if (hash) {
     const pool = await getPool();
     if (pool) {
-      // Only reuse an object from an already-PUBLISHED, non-taken-down post, so
-      // dedup can't resurrect a removed/taken-down image or reveal whether an
-      // image exists in someone else's draft/pending post.
-      const dup = await pool.query<{ r2_key: string }>(
-        `SELECT wm.r2_key FROM wire_media wm
-           JOIN media_posts mp ON wm.parent_type='media_post' AND wm.parent_id = mp.id
-          WHERE wm.hash=$1 AND wm.r2_key IS NOT NULL AND mp.status='published' AND mp.taken_down_at IS NULL
+      const excludeId = typeof body['exclude_id'] === 'string' ? body['exclude_id'] : '';
+      const dup = await pool.query<{ x: number }>(
+        `SELECT 1 AS x FROM wire_media wm
+           JOIN media_posts mp ON wm.parent_id = mp.id
+          WHERE wm.parent_type='media_post' AND wm.kind='image' AND wm.hash=$1 AND wm.parent_id<>$2
+            AND mp.taken_down_at IS NULL AND mp.status NOT IN ('removed','rejected')
          UNION
-         SELECT wm.r2_key FROM wire_media wm
-           JOIN articles a ON wm.parent_type='article' AND wm.parent_id = a.id
-          WHERE wm.hash=$1 AND wm.r2_key IS NOT NULL AND a.status='published' AND a.taken_down_at IS NULL
-         LIMIT 1`, [hash]);
-      const existing = dup.rows[0]?.r2_key;
-      if (existing) return c.json({ duplicate: true, key: existing, publicUrl: r2PublicUrl(existing), hash });
+         SELECT 1 AS x FROM wire_media wm
+           JOIN articles a ON wm.parent_id = a.id
+          WHERE wm.parent_type='article' AND wm.kind='image' AND wm.hash=$1 AND wm.parent_id<>$2
+            AND a.taken_down_at IS NULL AND a.status NOT IN ('removed','rejected')
+         LIMIT 1`, [hash, excludeId]);
+      if (dup.rows.length) return c.json({ alreadyPosted: true, hash });
     }
   }
   const up = await createImageUploadUrl();
@@ -535,6 +565,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     if (data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], MEDIA);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
+    if (await findDuplicateImageHash(pool, mv.items, null)) {
+      return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
+    }
 
     const authorId = currentUserId(c)!;
     const authorName = currentUserName(c);
@@ -596,6 +629,9 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
     const mv = validateMedia(data['media'], MEDIA);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
+    if (await findDuplicateImageHash(pool, mv.items, id)) {
+      return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
+    }
 
     const oldImageIds = await imageIdsFor(pool, 'media_post', id);
     const oldR2Keys = await r2KeysFor(pool, 'media_post', id);
@@ -759,6 +795,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     if (wantPublish && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
+    if (await findDuplicateImageHash(pool, mv.items, null)) {
+      return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
+    }
     const slug = await uniqueSlug(pool, title);
 
     const authorName = currentUserName(c);
@@ -828,6 +867,9 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     if (data['status'] === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
+    if (await findDuplicateImageHash(pool, mv.items, id)) {
+      return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
+    }
     const slug = await uniqueSlug(pool, title, id);
     // First publish stamps published_at; keep the original on re-publish.
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';

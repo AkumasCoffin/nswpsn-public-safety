@@ -522,12 +522,13 @@
         try {
           const blob = await optimizeImage(file, 1600, 0.82);
           const hash = await sha256Hex(blob);
-          const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ hash }) });
+          const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ hash, exclude_id: editId || '' }) });
           if (r.status === 503) { setMsg("Image uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
           if (!r.ok) throw new Error('upload-url ' + r.status);
-          const { uploadURL, key, publicUrl, duplicate } = await r.json();
-          // Duplicate content → reuse the stored object, skip the upload entirely.
-          if (!duplicate) { const up = await fetch(uploadURL, { method: 'PUT', body: blob }); if (!up.ok) throw new Error('r2 put ' + up.status); }
+          const { uploadURL, key, publicUrl, alreadyPosted } = await r.json();
+          // Each image can only be posted once — reject one already on The Wire.
+          if (alreadyPosted) { setMsg('That image has already been posted to The Wire — each image can only be posted once.', true); state.media = state.media.filter((m) => m !== item); renderMedia(); continue; }
+          const up = await fetch(uploadURL, { method: 'PUT', body: blob }); if (!up.ok) throw new Error('r2 put ' + up.status);
           item.r2_key = key; item.hash = hash; item.uploading = false; if (publicUrl) item.deliveredUrl = publicUrl;
         } catch (e) {
           setMsg('An image failed to upload (' + e.message + ').', true);
