@@ -456,7 +456,9 @@
       grid.innerHTML = ''; empty.style.display = 'none'; $('#showMore').style.display = 'none'; loading.style.display = 'block';
       const path = currentTab === 'articles' ? 'articles' : 'media';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(0)}`, { headers: await keyHeaders() });
+        // Send the JWT when logged in (userHeaders falls back to the public key)
+        // so the owner-only soft-launch gate recognises the owner.
+        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(0)}`, { headers: await userHeaders() });
         const j = await r.json();
         const items = j.posts || j.articles || [];
         loading.style.display = 'none';
@@ -472,7 +474,7 @@
       const btn = $('#showMore'); btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = 'Loading…';
       const path = currentTab === 'articles' ? 'articles' : 'media';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(feedOffset)}`, { headers: await keyHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(feedOffset)}`, { headers: await userHeaders() });
         const j = await r.json();
         const items = j.posts || j.articles || [];
         $('#grid').insertAdjacentHTML('beforeend', items.map(cardHTML).join(''));

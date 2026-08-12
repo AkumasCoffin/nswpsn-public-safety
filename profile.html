@@ -95,6 +95,12 @@
       if (!API_KEY) { try { API_KEY = (await (await fetch(`${API_BASE}/api/config`)).json()).apiKey; } catch (e) {} }
       return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {};
     }
+    // Send the viewer's JWT when logged in so the owner-only soft-launch gate
+    // recognises them; falls back to the public key when signed out.
+    async function userHeaders() {
+      try { const { data } = await window.sb.auth.getSession(); const t = data.session?.access_token; if (t) return { Authorization: `Bearer ${t}` }; } catch (e) {}
+      return keyHeaders();
+    }
 
     const SOCIALS = [
       { key: 'twitter', icon: 'fa-brands fa-x-twitter', label: 'X / Twitter' },
@@ -124,7 +130,7 @@
 
     async function loadPosts() {
       try {
-        const hdr = await keyHeaders();
+        const hdr = await userHeaders();
         const [mj, aj] = await Promise.all([
           fetch(`${API_BASE}/api/wire/media?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({})),
           fetch(`${API_BASE}/api/wire/articles?author=${encodeURIComponent(uid)}`, { headers: hdr }).then((r) => r.json()).catch(() => ({})),
