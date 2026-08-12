@@ -143,6 +143,22 @@
     .wd-btn:hover { border-color: var(--accent); color: var(--accent); }
     .wd-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
 
+    /* Newswire detail treatment (matches the mockup): mono labels/meta, eyebrow,
+       bigger stat numbers, uppercase mono buttons, "your post" badge. */
+    .wire-detail { --wmono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace; }
+    .wd-eyebrow { font-family: var(--wmono); font-size: 0.7rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-soft); display: flex; align-items: center; gap: 0.7rem; margin: 0.1rem 0 1.2rem; }
+    .wd-eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+    .wire-detail .wd-title { font-size: clamp(1.5rem, 2.5vw, 1.95rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+    .wire-detail .wd-meta { font-family: var(--wmono); font-size: 0.72rem; letter-spacing: 0.02em; color: var(--text-soft); margin: 0.4rem 0 1.1rem; }
+    .wire-detail .wd-meta .wire-author { font-weight: 700; color: var(--text-muted); }
+    .wire-detail .wd-stats .n { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.01em; }
+    .wire-detail .wd-stats .k { font-family: var(--wmono); font-size: 0.6rem; letter-spacing: 0.12em; }
+    .wire-detail .wd-lbl { font-family: var(--wmono); font-size: 0.64rem; letter-spacing: 0.14em; }
+    .wire-detail .wire-chip { font-family: var(--wmono); font-size: 0.68rem; letter-spacing: 0.02em; }
+    .wire-detail .wd-inc .tick { background: var(--accent); }
+    .wire-detail .wd-btn { font-family: var(--wmono); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; }
+    .wd-yourpost { font-family: var(--wmono); font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; color: #22c55e; border: 1px solid rgba(34,197,94,0.45); border-radius: 6px; padding: 0.2rem 0.5rem; }
+
     /* Lightbox */
     .wire-lb { position: fixed; inset: 0; z-index: 9000; background: rgba(2,4,8,0.92); display: none; place-items: center; padding: 2rem; }
     .wire-lb.on { display: grid; }
@@ -211,6 +227,7 @@
     </div>
 
     <div class="wire-filters" id="filters">
+      <input type="text" id="fSearch" placeholder="Search The Wire…" autocomplete="off" style="min-width:200px">
       <input type="text" id="fUnit" placeholder="Filter by unit / callsign…" autocomplete="off">
       <select id="fAgency"><option value="">All agencies</option></select>
       <select id="fRegion"><option value="">All LGAs</option></select>
@@ -418,7 +435,8 @@
       const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
       grid.innerHTML = ''; empty.style.display = 'none'; loading.style.display = 'block';
       const params = new URLSearchParams();
-      const unit = $('#fUnit').value.trim(); const ag = $('#fAgency').value; const rg = $('#fRegion').value;
+      const unit = $('#fUnit').value.trim(); const ag = $('#fAgency').value; const rg = $('#fRegion').value; const search = $('#fSearch').value.trim();
+      if (search) params.set('q', search);
       if (unit) params.set('unit', unit);
       if (ag) params.set('agency', ag);
       if (rg) params.set('region', rg);
@@ -484,14 +502,14 @@
       const incidentBlock = inc && inc.source_id ? `
         <div class="wd-block"><div class="wd-lbl">Linked incident</div>
           <a class="wd-inc" href="logs?source=${encodeURIComponent(inc.source || '')}&source_id=${encodeURIComponent(inc.source_id)}"><span class="tick"></span>
-            <div><div style="font-weight:600;font-size:0.9rem">${esc(inc.title || 'View incident')}</div><div style="font-size:0.7rem;color:var(--text-soft);margin-top:2px">${esc(sourceLabel(inc.source))} · open on the logs <i class="fa-solid fa-arrow-up-right-from-square" style="font-size:0.6rem"></i></div></div></a></div>` : '';
+            <div><div style="font-weight:600;font-size:0.9rem">${esc(inc.title || 'View incident')}</div><div style="font-size:0.66rem;color:var(--text-soft);margin-top:3px;font-family:ui-monospace,monospace;letter-spacing:0.02em">${esc(sourceLabel(inc.source))} · open on the logs <i class="fa-solid fa-arrow-up-right-from-square" style="font-size:0.6rem"></i></div></div></a></div>` : '';
       const units = (item.units || []).map((u) => `<span class="wire-chip">${esc(u)}</span>`).join('') || '<span style="color:var(--text-soft);font-size:0.8rem">—</span>';
       const agencies = (item.agencies || []).map((a) => `<span class="wire-chip">${esc(a)}</span>`).join('') || '<span style="color:var(--text-soft);font-size:0.8rem">—</span>';
       const loc = item.location ? (item.location.region ? esc(item.location.region) : (item.location.lat != null ? `${(+item.location.lat).toFixed(4)}, ${(+item.location.lng).toFixed(4)}` : '—')) : '—';
       const licenseBlock = `<div class="wd-block"><div class="wd-lbl">License</div>
           <div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-regular fa-copyright"></i> ${esc(item.license_label || 'Credit required')}${item.credit ? ' · ' + esc(item.credit) : ''}</div>
           <button class="wd-btn" id="reportBtn" style="margin-top:0.7rem;font-size:0.75rem"><i class="fa-regular fa-flag"></i> Report / request takedown</button></div>`;
-      const actions = (canEdit || ME.canModerate) ? `<div class="wd-block"><div class="wd-lbl">Manage</div><div class="wd-actions">
+      const actions = (canEdit || ME.canModerate) ? `<div class="wd-block"><div class="wd-lbl" style="display:flex;justify-content:space-between;align-items:center">Manage ${canEdit ? '<span class="wd-yourpost">Your post</span>' : '<span class="wd-yourpost" style="color:#f59e0b;border-color:rgba(245,158,11,0.45)">Team</span>'}</div><div class="wd-actions">
           ${canEdit ? `<a class="wd-btn" href="wire-compose?type=${isArticle ? 'article' : 'media'}&edit=${encodeURIComponent(item.id)}"><i class="fa-solid fa-pen"></i> Edit</a>` : ''}
           ${canEdit ? `<button class="wd-btn danger" data-act="delete"><i class="fa-solid fa-trash"></i> Delete</button>` : ''}
           ${ME.canModerate && !canEdit ? `<button class="wd-btn danger" data-act="remove"><i class="fa-solid fa-ban"></i> Remove</button>` : ''}
@@ -503,13 +521,15 @@
           <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
           <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div></div></div>`;
       const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
+      const hasVideo = galleryMedia.some((m) => m.kind === 'video');
+      const eyebrow = `<div class="wd-eyebrow">Dispatch · ${isArticle ? 'Article' : (hasVideo ? 'Video' : 'Photo set')}</div>`;
       // Both media posts and articles use the mockup's two-column layout: a
       // gallery panel (3:2, contained) on the left, the info rail on the right.
       // Articles render their Markdown body under the gallery.
       const left = isArticle
         ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
         : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
-      $('#detail').innerHTML = `${back}
+      $('#detail').innerHTML = `${back}${eyebrow}
         <div class="wd-grid">
           <div>${left}</div>
           <div>
@@ -617,11 +637,11 @@
         : (currentTab === 'articles' ? 'Independent news & reporting from contributors.' : 'Independent photos & video from contributors on the ground.');
       $('#fUnit').style.display = currentTab === 'articles' ? 'none' : '';
     }
-    ['fUnit', 'fAgency', 'fRegion'].forEach((id) => {
-      const el = $('#' + id); const ev = id === 'fUnit' ? 'input' : 'change';
-      let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, id === 'fUnit' ? 300 : 0); });
+    ['fSearch', 'fUnit', 'fAgency', 'fRegion'].forEach((id) => {
+      const el = $('#' + id); const ev = (id === 'fUnit' || id === 'fSearch') ? 'input' : 'change';
+      let t; el.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(loadFeed, ev === 'input' ? 300 : 0); });
     });
-    $('#fClear').addEventListener('click', () => { $('#fUnit').value = ''; $('#fAgency').value = ''; $('#fRegion').value = ''; loadFeed(); });
+    $('#fClear').addEventListener('click', () => { $('#fSearch').value = ''; $('#fUnit').value = ''; $('#fAgency').value = ''; $('#fRegion').value = ''; loadFeed(); });
     $('#mineFilters').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
       mineFilter = b.dataset.mf;
       $('#mineFilters').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));

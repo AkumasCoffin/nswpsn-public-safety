@@ -387,7 +387,8 @@ wireRouter.get('/api/wire/media', async (c) => {
     const agency = url.searchParams.get('agency');
     const unit = normaliseCallsign(url.searchParams.get('unit') || '') || null;
     const region = url.searchParams.get('region');
-    const limit = Math.max(1, Math.min(60, Number(url.searchParams.get('limit') ?? 24) || 24));
+    const q = (url.searchParams.get('q') || '').trim();
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 48) || 48));
     const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
     const vals: unknown[] = [];
@@ -399,6 +400,7 @@ wireRouter.get('/api/wire/media', async (c) => {
       const author = new URL(c.req.url).searchParams.get('author');
       if (author) { vals.push(author); where.push(`author_id = $${vals.length}`); }
     }
+    if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR caption ILIKE $${vals.length})`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
     if (unit) {
@@ -606,7 +608,8 @@ wireRouter.get('/api/wire/articles', async (c) => {
     const uid = currentUserId(c);
     const agency = url.searchParams.get('agency');
     const region = url.searchParams.get('region');
-    const limit = Math.max(1, Math.min(60, Number(url.searchParams.get('limit') ?? 24) || 24));
+    const q = (url.searchParams.get('q') || '').trim();
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 48) || 48));
     const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0) || 0);
 
     const vals: unknown[] = [];
@@ -618,6 +621,7 @@ wireRouter.get('/api/wire/articles', async (c) => {
       const author = new URL(c.req.url).searchParams.get('author');
       if (author) { vals.push(author); where.push(`author_id = $${vals.length}`); }
     }
+    if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR excerpt ILIKE $${vals.length} OR body ILIKE $${vals.length})`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
     if (region) { vals.push(region); where.push(`region = $${vals.length}`); }
     vals.push(limit, offset);
