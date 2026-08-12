@@ -492,7 +492,10 @@ function ogImageUrl(rawUrl: string | null): string | null {
   if (!rawUrl) return null;
   const base = (config.R2_PUBLIC_BASE ?? '').replace(/\/$/, '');
   if (!base || !rawUrl.startsWith(base)) return rawUrl;
-  return `${base}/cdn-cgi/image/format=jpeg,width=1200,fit=scale-down,quality=82/${rawUrl}`;
+  // Use the PATH form (source relative to the zone), not the full-URL form —
+  // a nested "https://" in the path trips up some crawler image proxies.
+  const path = rawUrl.slice(base.length).replace(/^\//, '');
+  return `${base}/cdn-cgi/image/format=jpeg,width=1200,fit=scale-down,quality=82/${path}`;
 }
 
 // Public Open Graph metadata for link unfurls. The Cloudflare Worker on
