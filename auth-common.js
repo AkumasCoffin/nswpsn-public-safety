@@ -308,7 +308,23 @@ async function handleProfileAvatar(e) {
     _pendingAvatarKey = key; _pendingAvatarUrl = publicUrl;
     const prev = document.getElementById('profile-avatar-preview');
     if (prev) prev.innerHTML = `<img src="${publicUrl}" style="width:100%;height:100%;object-fit:cover;">`;
-    if (msg) { msg.style.color = '#94a3b8'; msg.textContent = 'Picture ready — click Save to apply.'; }
+    // Save on upload: persist immediately so the pfp sticks without pressing
+    // Save. Mirror to Supabase metadata (sidebar/avatars) + the backend profile.
+    // Socials come from the (already-prefilled) modal inputs so they're preserved.
+    if (msg) { msg.style.color = '#94a3b8'; msg.textContent = 'Saving picture…'; }
+    try {
+      await sb.auth.updateUser({ data: { custom_avatar_url: publicUrl } });
+      const v = (id) => (document.getElementById(id)?.value || '').trim();
+      const uname = (document.getElementById('profile-username')?.value || '').trim();
+      const body = { display_name: uname || null, avatar_key: key, twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
+      await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      _pendingAvatarKey = null; _pendingAvatarUrl = null;
+      if (typeof checkAuthState === 'function') checkAuthState();
+      if (msg) { msg.style.color = '#22c55e'; msg.textContent = 'Picture saved.'; }
+    } catch (e) {
+      // Upload succeeded but the save didn't — leave it pending so Save applies it.
+      if (msg) { msg.style.color = '#94a3b8'; msg.textContent = 'Picture ready — click Save to apply.'; }
+    }
   } catch (err) {
     if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Avatar upload failed (' + err.message + ').'; }
   } finally {
@@ -370,6 +386,24 @@ async function openProfileModal() {
 function closeProfileModal() {
   const modal = document.getElementById('profile-modal');
   if (modal) modal.style.display = 'none';
+}
+
+// Publish the user's Discord avatar to their public profile, at most once per
+// browser session per (user, avatar). Safe partial write — touches only
+// discord_avatar_url server-side.
+let _avatarSynced = false;
+async function syncProfileAvatarOnce(session) {
+  if (_avatarSynced) return;
+  const uid = session.user?.id;
+  const av = session.user?.user_metadata?.avatar_url;
+  if (!uid || !av) return;
+  const flag = 'pfpsync:' + uid + ':' + av;
+  try { if (sessionStorage.getItem(flag)) { _avatarSynced = true; return; } } catch (e) { /* ignore */ }
+  _avatarSynced = true;
+  try {
+    await fetch(`${API_BASE_URL}/api/profiles/sync`, { method: 'POST', headers: { Authorization: 'Bearer ' + session.access_token } });
+    try { sessionStorage.setItem(flag, '1'); } catch (e) { /* ignore */ }
+  } catch (e) { _avatarSynced = false; }
 }
 
 async function saveProfile() {
@@ -566,7 +600,12 @@ async function checkAuthState() {
         avatarDiv.textContent = (displayName || '?').charAt(0).toUpperCase();
       }
     }
-    
+
+    // Publish the Discord avatar to the public profile (once per session) so it
+    // shows when others open this user's profile from a post. The backend reads
+    // the avatar from the verified JWT — the body carries nothing sensitive.
+    if (meta.avatar_url) syncProfileAvatarOnce(session);
+
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
       const userId = session.user?.id;

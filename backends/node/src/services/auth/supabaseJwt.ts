@@ -32,6 +32,9 @@ declare module 'hono' {
     /** Verified account email (email claim) when present on the JWT. Used by
      *  self-service routes to mirror the by-email "no request" check. */
     userEmail?: string;
+    /** Discord (OAuth) avatar URL from user_metadata, when present. Captured so
+     *  a contributor's profile picture can be shown publicly without a custom pfp. */
+    userAvatar?: string;
   }
 }
 
@@ -130,6 +133,8 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
       if (typeof payload['email'] === 'string' && payload['email']) {
         c.set('userEmail', payload['email']);
       }
+      const av = avatarFromClaims(payload as Record<string, unknown>);
+      if (av) c.set('userAvatar', av);
     }
   } catch (err) {
     // Verification failed — log at debug because clients legitimately
@@ -149,6 +154,14 @@ export const optionalSupabaseJwt: MiddlewareHandler = async (c, next) => {
 /** Best-effort display name from Supabase JWT claims: user_metadata
  * username/display_name/full_name, falling back to the email local
  * part. Username ONLY — never the full email. */
+/** Discord (OAuth) avatar URL from the JWT's user_metadata, or '' if none/not
+ *  an http(s) URL. This is the provider avatar — NOT our custom_avatar_url. */
+export function avatarFromClaims(payload: Record<string, unknown>): string {
+  const meta = payload['user_metadata'] as Record<string, unknown> | undefined;
+  const v = meta?.['avatar_url'];
+  return typeof v === 'string' && /^https?:\/\//i.test(v) ? v.trim().slice(0, 300) : '';
+}
+
 export function displayNameFromClaims(payload: Record<string, unknown>): string {
   const meta = payload['user_metadata'] as Record<string, unknown> | undefined;
   for (const key of ['username', 'display_name', 'full_name', 'name']) {
@@ -190,6 +203,8 @@ export const requireSupabaseJwt: MiddlewareHandler = async (c, next) => {
     if (typeof payload['email'] === 'string' && payload['email']) {
       c.set('userEmail', payload['email']);
     }
+    const av = avatarFromClaims(payload as Record<string, unknown>);
+    if (av) c.set('userAvatar', av);
   } catch {
     return c.json({ error: 'invalid token' }, 401);
   }

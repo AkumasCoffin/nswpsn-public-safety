@@ -33,6 +33,7 @@ interface ProfileRow {
   user_id: string;
   display_name: string | null;
   avatar_key: string | null;
+  discord_avatar_url: string | null;
   twitter: string | null;
   facebook: string | null;
   instagram: string | null;
@@ -44,7 +45,9 @@ function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown>
   return {
     user_id: userId,
     display_name: row?.display_name ?? null,
-    avatar_url: row?.avatar_key ? r2PublicUrl(row.avatar_key) : null,
+    // Custom pfp wins; otherwise fall back to the stored Discord avatar so the
+    // picture shows to other viewers (who can't read the user's Supabase metadata).
+    avatar_url: row?.avatar_key ? r2PublicUrl(row.avatar_key) : (row?.discord_avatar_url ?? null),
     twitter: row?.twitter ?? null,
     facebook: row?.facebook ?? null,
     instagram: row?.instagram ?? null,
@@ -82,20 +85,49 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
     // Must be a key we minted (under wire/avatars/) — never an arbitrary object.
     let avatarKey = typeof d['avatar_key'] === 'string' && d['avatar_key'] ? d['avatar_key'].slice(0, 200) : null;
     if (avatarKey && !avatarKey.startsWith('wire/avatars/')) avatarKey = null;
+    // Discord avatar: prefer the verified JWT claim; fall back to a client-sent
+    // value. Stored as a public fallback pfp. COALESCE keeps any existing one.
+    const jwtAvatar = c.get('userAvatar');
+    const discordAvatar = normUrl(jwtAvatar) ?? normUrl(d['discord_avatar_url']);
     const r = await pool.query<ProfileRow>(
-      `INSERT INTO user_profiles (user_id, display_name, avatar_key, twitter, facebook, instagram, youtube, website, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+      `INSERT INTO user_profiles (user_id, display_name, avatar_key, discord_avatar_url, twitter, facebook, instagram, youtube, website, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
        ON CONFLICT (user_id) DO UPDATE SET
          display_name = $2,
          avatar_key   = COALESCE($3, user_profiles.avatar_key),
-         twitter = $4, facebook = $5, instagram = $6, youtube = $7, website = $8, updated_at = now()
+         discord_avatar_url = COALESCE($4, user_profiles.discord_avatar_url),
+         twitter = $5, facebook = $6, instagram = $7, youtube = $8, website = $9, updated_at = now()
        RETURNING *`,
-      [uid, displayName, avatarKey, twitter, facebook, instagram, youtube, website],
+      [uid, displayName, avatarKey, discordAvatar, twitter, facebook, instagram, youtube, website],
     );
     return c.json({ success: true, profile: shapeProfile(uid, r.rows[0]) });
   } catch (err) {
     log.error({ err, uid }, 'profiles: update failed');
     return c.json({ error: 'failed to save profile' }, 500);
+  }
+});
+
+// Capture the caller's Discord avatar into their public profile without
+// touching any other field. Called on load so a contributor's picture shows to
+// other viewers even if they never open the profile editor. The URL comes from
+// the verified JWT (user_metadata.avatar_url); the body is ignored.
+profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = c.get('userId') as string;
+  const discordAvatar = normUrl(c.get('userAvatar'));
+  if (!discordAvatar) return c.json({ success: true, skipped: 'no avatar' });
+  try {
+    await pool.query(
+      `INSERT INTO user_profiles (user_id, discord_avatar_url, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (user_id) DO UPDATE SET discord_avatar_url = $2, updated_at = now()`,
+      [uid, discordAvatar],
+    );
+    return c.json({ success: true });
+  } catch (err) {
+    log.error({ err, uid }, 'profiles: sync failed');
+    return c.json({ error: 'failed to sync profile' }, 500);
   }
 });
 
