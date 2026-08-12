@@ -483,6 +483,18 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
 // to build the canonical share URL that the OG tags point back to.
 const SITE_BASE = 'https://nswpsn.forcequit.xyz';
 
+// og:image compatibility: our images are stored as WebP, which some link
+// unfurlers still choke on. The media zone has Cloudflare image transformations
+// enabled, so serve crawlers a plain JPEG (~1200px, never upscaled) — works
+// everywhere, no extra storage. Falls back to the raw URL if it isn't on the
+// media base (e.g. a legacy CF-Images URL).
+function ogImageUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) return null;
+  const base = (config.R2_PUBLIC_BASE ?? '').replace(/\/$/, '');
+  if (!base || !rawUrl.startsWith(base)) return rawUrl;
+  return `${base}/cdn-cgi/image/format=jpeg,width=1200,fit=scale-down,quality=82/${rawUrl}`;
+}
+
 // Public Open Graph metadata for link unfurls. The Cloudflare Worker on
 // nswpsn.forcequit.xyz/wire* calls this to inject per-post OG/Twitter tags for
 // social crawlers (Discord, X, Facebook…), which don't run JS and so never see
@@ -525,7 +537,8 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
       shaped.find((m) => m['kind'] === 'image') ??
       shaped[0] ??
       null;
-    const image = cover ? (cover['url'] || cover['poster_url'] || null) : null;
+    const rawImage = cover ? ((cover['url'] as string) || (cover['poster_url'] as string) || null) : null;
+    const image = ogImageUrl(rawImage);
     const rawDesc = (parentType === 'article' ? row.excerpt : row.caption) || '';
     const description = String(rawDesc).replace(/\s+/g, ' ').trim().slice(0, 200);
     return c.json({
