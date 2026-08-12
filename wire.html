@@ -244,6 +244,9 @@
       <div class="wire-grid" id="grid"></div>
       <div class="wire-loading" id="loading" style="display:none">Loading…</div>
       <div class="wire-empty" id="empty" style="display:none"></div>
+      <div style="text-align:center;margin:1.6rem 0 0.5rem">
+        <button class="wire-post-btn secondary" id="showMore" style="display:none;margin:0 auto"><i class="fa-solid fa-chevron-down"></i> Show more</button>
+      </div>
     </div>
 
     <div class="wire-detail" id="detail"></div>
@@ -412,7 +415,7 @@
 
     async function loadMine() {
       const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
-      grid.innerHTML = ''; empty.style.display = 'none'; loading.style.display = 'block';
+      grid.innerHTML = ''; empty.style.display = 'none'; $('#showMore').style.display = 'none'; loading.style.display = 'block';
       try {
         const hdr = await userHeaders();
         const getMedia = mineFilter !== 'articles'
@@ -426,34 +429,59 @@
         loading.style.display = 'none';
         if (!items.length) { empty.textContent = "You haven't posted anything here yet."; empty.style.display = 'block'; return; }
         grid.innerHTML = items.map(cardHTML).join('');
-        wireCards();
       } catch (e) { loading.style.display = 'none'; empty.textContent = 'Failed to load your posts.'; empty.style.display = 'block'; }
     }
 
+    // Rolling feed with a "Show more" pager (12 at a time via limit/offset).
+    const PAGE = 12;
+    let feedOffset = 0;
+    function feedParams(offset) {
+      const params = new URLSearchParams();
+      const search = $('#fSearch').value.trim(); if (search) params.set('q', search);
+      const unit = $('#fUnit').value.trim(); if (unit) params.set('unit', unit);
+      const ag = $('#fAgency').value; if (ag) params.set('agency', ag);
+      const rg = $('#fRegion').value; if (rg) params.set('region', rg);
+      params.set('limit', PAGE); params.set('offset', offset);
+      return params;
+    }
+    // One delegated click handler covers cards added by loadFeed, loadMore and loadMine.
+    $('#grid').addEventListener('click', (e) => {
+      const card = e.target.closest('.wire-card'); if (card) openDetail(card.dataset.kind, card.dataset.key);
+    });
+
     async function loadFeed() {
       if (mineMode) return loadMine();
+      feedOffset = 0;
       const grid = $('#grid'), loading = $('#loading'), empty = $('#empty');
-      grid.innerHTML = ''; empty.style.display = 'none'; loading.style.display = 'block';
-      const params = new URLSearchParams();
-      const unit = $('#fUnit').value.trim(); const ag = $('#fAgency').value; const rg = $('#fRegion').value; const search = $('#fSearch').value.trim();
-      if (search) params.set('q', search);
-      if (unit) params.set('unit', unit);
-      if (ag) params.set('agency', ag);
-      if (rg) params.set('region', rg);
-      if (mineMode) params.set('mine', '1');
+      grid.innerHTML = ''; empty.style.display = 'none'; $('#showMore').style.display = 'none'; loading.style.display = 'block';
       const path = currentTab === 'articles' ? 'articles' : 'media';
       try {
-        const r = await fetch(`${API_BASE}/api/wire/${path}?${params}`, { headers: mineMode ? await userHeaders() : await keyHeaders() });
+        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(0)}`, { headers: await keyHeaders() });
         const j = await r.json();
         const items = j.posts || j.articles || [];
         loading.style.display = 'none';
-        if (!items.length) { empty.textContent = mineMode ? "You haven't posted any " + (currentTab === 'articles' ? 'articles' : 'media') + ' yet.' : (currentTab === 'articles' ? 'No articles yet.' : 'No media posts yet.'); empty.style.display = 'block'; return; }
+        if (!items.length) { empty.textContent = (currentTab === 'articles' ? 'No articles yet.' : 'No media posts yet.'); empty.style.display = 'block'; return; }
         grid.innerHTML = items.map(cardHTML).join('');
-        grid.querySelectorAll('.wire-card').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.kind, el.dataset.key)));
+        feedOffset = items.length;
+        $('#showMore').style.display = items.length === PAGE ? 'inline-flex' : 'none';
       } catch (e) {
         loading.style.display = 'none'; empty.textContent = 'Failed to load The Wire.'; empty.style.display = 'block';
       }
     }
+    async function loadMore() {
+      const btn = $('#showMore'); btn.disabled = true; const orig = btn.innerHTML; btn.innerHTML = 'Loading…';
+      const path = currentTab === 'articles' ? 'articles' : 'media';
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/${path}?${feedParams(feedOffset)}`, { headers: await keyHeaders() });
+        const j = await r.json();
+        const items = j.posts || j.articles || [];
+        $('#grid').insertAdjacentHTML('beforeend', items.map(cardHTML).join(''));
+        feedOffset += items.length;
+        btn.style.display = items.length === PAGE ? 'inline-flex' : 'none';
+      } catch (e) { /* keep button */ }
+      finally { btn.disabled = false; btn.innerHTML = orig; }
+    }
+    $('#showMore').addEventListener('click', loadMore);
 
     // ---- detail ----
     let galleryMedia = [], galleryIdx = 0, currentItem = null;
