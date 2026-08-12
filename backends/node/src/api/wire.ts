@@ -483,19 +483,14 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
 // to build the canonical share URL that the OG tags point back to.
 const SITE_BASE = 'https://nswpsn.forcequit.xyz';
 
-// og:image compatibility: our images are stored as WebP, which some link
-// unfurlers still choke on. The media zone has Cloudflare image transformations
-// enabled, so serve crawlers a plain JPEG (~1200px, never upscaled) — works
-// everywhere, no extra storage. Falls back to the raw URL if it isn't on the
-// media base (e.g. a legacy CF-Images URL).
+// og:image: serve the plain stored image URL. It's a clean https URL (no query
+// params, no /cdn-cgi/ path) that returns 200 image/webp to every fetcher, and
+// Discord / Facebook / X all support WebP. Earlier attempts used a Cloudflare
+// image-transform URL to hand crawlers a JPEG, but the comma-laden /cdn-cgi/
+// URL (and its nested-https full-URL form) tripped up Discord's image proxy —
+// the plain URL avoids that entirely.
 function ogImageUrl(rawUrl: string | null): string | null {
-  if (!rawUrl) return null;
-  const base = (config.R2_PUBLIC_BASE ?? '').replace(/\/$/, '');
-  if (!base || !rawUrl.startsWith(base)) return rawUrl;
-  // Use the PATH form (source relative to the zone), not the full-URL form —
-  // a nested "https://" in the path trips up some crawler image proxies.
-  const path = rawUrl.slice(base.length).replace(/^\//, '');
-  return `${base}/cdn-cgi/image/format=jpeg,width=1200,fit=scale-down,quality=82/${path}`;
+  return rawUrl || null;
 }
 
 // Public Open Graph metadata for link unfurls. The Cloudflare Worker on
