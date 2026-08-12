@@ -80,6 +80,10 @@ export const PUBLIC_ENDPOINT_PREFIXES: readonly string[] = [
   // Per-agency reference tables (/api/agency/extended/:slug) — public read,
   // matching the exact /api/agency/extended above.
   '/api/agency/extended/',
+  // Wire link-unfurl metadata. Consumed by the Cloudflare Worker on the /wire
+  // route to inject per-post Open Graph tags for social crawlers, which can't
+  // send an API key. Only exposes OG fields of already-published posts.
+  '/api/wire/og/',
 ];
 
 function extractKey(authHeader: string | undefined, xApiKey: string | undefined, qsKey: string | null): string {

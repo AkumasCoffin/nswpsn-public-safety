@@ -449,6 +449,74 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
   }
 });
 
+// Canonical public site origin (the static frontend behind Cloudflare). Used
+// to build the canonical share URL that the OG tags point back to.
+const SITE_BASE = 'https://nswpsn.forcequit.xyz';
+
+// Public Open Graph metadata for link unfurls. The Cloudflare Worker on
+// nswpsn.forcequit.xyz/wire* calls this to inject per-post OG/Twitter tags for
+// social crawlers (Discord, X, Facebook…), which don't run JS and so never see
+// the client-rendered detail. Only PUBLISHED, non-taken-down posts, and only
+// once the Wire itself is public — during soft launch everything stays private,
+// so embeds stay dark too. No API key required (crawlers can't send one), but
+// nothing sensitive is exposed: title, a short description, the cover image, and
+// the canonical URL of already-public content.
+wireRouter.get('/api/wire/og/:type/:key', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  if (config.WIRE_PUBLIC !== 'true') return c.json({ error: 'not found' }, 404);
+  const type = c.req.param('type');
+  const key = c.req.param('key');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let row: any = null;
+    let parentType: 'media_post' | 'article';
+    let canonical = '';
+    if (type === 'media' || type === 'post') {
+      const r = await pool.query('SELECT * FROM media_posts WHERE id = $1', [key]);
+      row = r.rows[0];
+      parentType = 'media_post';
+      if (row) canonical = `${SITE_BASE}/wire?tab=media&post=${encodeURIComponent(row.id)}`;
+    } else if (type === 'article' || type === 'articles') {
+      const r = await pool.query('SELECT * FROM articles WHERE slug = $1 OR id = $1', [key]);
+      row = r.rows[0];
+      parentType = 'article';
+      if (row) canonical = `${SITE_BASE}/wire?tab=articles&article=${encodeURIComponent(row.slug)}`;
+    } else {
+      return c.json({ error: 'not found' }, 404);
+    }
+    if (!row || row.status !== 'published' || row.taken_down_at) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    const mediaMap = await fetchMediaFor(pool, parentType, [row.id]);
+    const shaped = (mediaMap.get(row.id) ?? []).map(shapeMedia);
+    const cover =
+      shaped.find((m) => m['is_cover']) ??
+      shaped.find((m) => m['kind'] === 'image') ??
+      shaped[0] ??
+      null;
+    const image = cover ? (cover['url'] || cover['poster_url'] || null) : null;
+    const rawDesc = (parentType === 'article' ? row.excerpt : row.caption) || '';
+    const description = String(rawDesc).replace(/\s+/g, ' ').trim().slice(0, 200);
+    return c.json({
+      og: {
+        type: parentType === 'article' ? 'article' : 'website',
+        title: row.title || 'The Wire',
+        description:
+          description ||
+          'Independent photos & video from NSW emergency-services contributors.',
+        image: image || null,
+        url: canonical,
+        site_name: 'NSWPSN — The Wire',
+        author: row.author_name || null,
+      },
+    });
+  } catch (err) {
+    log.error({ err, type, key }, 'wire: og lookup failed');
+    return c.json({ error: 'not found' }, 404);
+  }
+});
+
 wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);

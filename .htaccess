@@ -18,6 +18,7 @@ DirectoryIndex index.html
 # Block backend and bot directories entirely
 <IfModule mod_rewrite.c>
   RewriteRule ^backends/ - [F,L]
+  RewriteRule ^workers/ - [F,L]
   RewriteRule ^discord-bot/ - [F,L]
   RewriteRule ^backup/ - [F,L]
   RewriteRule ^repo_stuff/ - [F,L]

@@ -15,6 +15,10 @@
   <meta property="og:description" content="Independent photos, video and news from NSW emergency-services contributors.">
   <meta property="og:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
   <meta property="og:site_name" content="Forcequit NSW PSN">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="NSW PSN – The Wire">
+  <meta name="twitter:description" content="Independent photos, video and news from NSW emergency-services contributors.">
+  <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/og-card.png">
 
   <link rel="stylesheet" href="styles.css" />
   <link rel="canonical" href="https://nswpsn.forcequit.xyz/wire">
@@ -142,6 +146,7 @@
     .wd-btn { font: inherit; font-size: 0.8rem; padding: 0.5rem 0.9rem; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-main); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; }
     .wd-btn:hover { border-color: var(--accent); color: var(--accent); }
     .wd-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+    .wd-btn.ok { border-color: rgba(34,197,94,0.45); color: #22c55e; }
 
     /* Newswire detail treatment (matches the mockup): mono labels/meta, eyebrow,
        bigger stat numbers, uppercase mono buttons, "your post" badge. */
@@ -565,6 +570,7 @@
           <div>
             <h1 class="wd-title">${esc(item.title)}</h1>
             <div class="wd-meta">${byline}</div>
+            <button class="wd-btn" id="shareBtn" style="margin:0.55rem 0 0.2rem;font-size:0.75rem"><i class="fa-solid fa-share-nodes"></i> <span>Share</span></button>
             ${notices}
             ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
             ${statsBlock}
@@ -582,6 +588,41 @@
       const del = $('#detail [data-act="delete"]'); if (del) del.addEventListener('click', () => mutateDelete(item, false));
       const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
       const rep = $('#reportBtn'); if (rep) rep.addEventListener('click', openReportModal);
+      const shr = $('#shareBtn'); if (shr) shr.addEventListener('click', () => sharePost(item, shr));
+    }
+
+    // ---- share ----
+    function wireShareUrl(item) {
+      const isArticle = item.kind === 'article';
+      const key = isArticle ? (item.slug || item.id) : item.id;
+      const q = isArticle ? `tab=articles&article=${encodeURIComponent(key)}` : `tab=media&post=${encodeURIComponent(key)}`;
+      return `${location.origin}/wire?${q}`;
+    }
+    function flashShare(btn, text) {
+      const span = btn.querySelector('span'); const icon = btn.querySelector('i');
+      if (span) span.textContent = text;
+      if (icon) icon.className = 'fa-solid fa-check';
+      btn.classList.add('ok');
+      setTimeout(() => { if (span) span.textContent = 'Share'; if (icon) icon.className = 'fa-solid fa-share-nodes'; btn.classList.remove('ok'); }, 1600);
+    }
+    async function sharePost(item, btn) {
+      const url = wireShareUrl(item);
+      // Native share sheet on touch devices; clipboard copy everywhere else.
+      if (navigator.share && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+        try { await navigator.share({ title: item.title || 'The Wire', url }); if (typeof umami !== 'undefined') umami.track('wire-share', { kind: item.kind, via: 'native' }); return; }
+        catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+        flashShare(btn, 'Link copied');
+      } catch (e) {
+        try {
+          const ta = document.createElement('textarea'); ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+          flashShare(btn, 'Link copied');
+        } catch (e2) { flashShare(btn, 'Copy failed'); }
+      }
+      if (typeof umami !== 'undefined') umami.track('wire-share', { kind: item.kind, via: 'copy' });
     }
 
     function renderTombstone() {

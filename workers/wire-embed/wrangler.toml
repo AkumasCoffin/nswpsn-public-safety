@@ -1,0 +1,11 @@
+name = "wire-embed"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Runs in front of the static /wire page on the production zone. The pattern
+# intentionally over-matches (/wire, /wire?..., /wire-compose, /wire/...) — the
+# Worker passes everything through untouched except crawler requests that carry
+# a ?post=/?article= param, so over-matching costs nothing.
+routes = [
+  { pattern = "nswpsn.forcequit.xyz/wire*", zone_name = "forcequit.xyz" }
+]
