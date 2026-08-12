@@ -15,9 +15,15 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
   <script src="agencies.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
   <style>
-    .cmp { max-width: 960px; margin: 0 auto; padding: 1.8rem clamp(1rem, 4vw, 2.4rem) 5rem; }
+    /* Keep .main's full-width scroll region + sidebar offset (don't override its
+       margin/width — that shrank the scroller to 960px centred in the viewport,
+       leaving a dead band beside the sidebar that didn't scroll). Instead centre
+       the 960px content column with symmetric padding inside the full-width main. */
+    .cmp { padding: 1.8rem max(clamp(1rem, 4vw, 2.4rem), calc((100vw - var(--sidebar-width) - 960px) / 2)) 5rem; }
     /* On mobile the sidebar collapses behind a fixed header — clear it. */
     @media (max-width: 900px) { .cmp { padding-top: 5rem; } }
     .cmp h1 { font-size: 1.5rem; font-weight: 800; margin: 0 0 0.2rem; }
@@ -53,6 +59,28 @@
     select option { background: var(--bg-elevated); color: var(--text-main); padding: 0.4rem 0.6rem; }
     textarea { resize: vertical; min-height: 90px; line-height: 1.55; }
     textarea.body { min-height: 220px; }
+    /* Write | Preview toggle for the Markdown body */
+    .md-toggle { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+    .md-toggle button { background: none; border: 0; color: var(--text-muted); font: inherit; font-size: 0.75rem; padding: 0.3rem 0.7rem; cursor: pointer; }
+    .md-toggle button.on { background: var(--accent); color: #fff; }
+    .md-preview { min-height: 220px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-elevated); padding: 0.9rem 1.1rem; line-height: 1.7; color: var(--text-main); }
+    .md-preview:empty::before { content: "Nothing to preview yet."; color: var(--text-soft); }
+    .md-preview > :first-child { margin-top: 0; }
+    .md-preview :is(h1,h2,h3,h4) { line-height: 1.25; margin: 1.2rem 0 0.5rem; }
+    .md-preview h1 { font-size: 1.5rem; } .md-preview h2 { font-size: 1.25rem; } .md-preview h3 { font-size: 1.08rem; }
+    .md-preview p { margin: 0.7rem 0; }
+    .md-preview a { color: var(--accent); text-decoration: underline; }
+    .md-preview :is(ul,ol) { padding-left: 1.4rem; margin: 0.7rem 0; }
+    .md-preview li { margin: 0.28rem 0; }
+    .md-preview img { max-width: 100%; border-radius: 8px; }
+    .md-preview blockquote { border-left: 3px solid var(--accent); margin: 0.9rem 0; padding: 0.2rem 0 0.2rem 1rem; color: var(--text-muted); }
+    .md-preview code { font-family: ui-monospace, monospace; font-size: 0.88em; background: var(--bg-elevated-soft); padding: 0.1rem 0.35rem; border-radius: 5px; }
+    .md-preview pre { background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.8rem 1rem; overflow-x: auto; }
+    .md-preview pre code { background: none; padding: 0; }
+    .md-preview hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 1.2rem 0; }
+    .md-preview table { border-collapse: collapse; width: 100%; margin: 0.9rem 0; display: block; overflow-x: auto; }
+    .md-preview :is(th,td) { border: 1px solid var(--border-subtle); padding: 0.4rem 0.65rem; text-align: left; }
+    .md-preview th { background: var(--bg-elevated-soft); }
 
     .dropzone { border: 1.5px dashed var(--border-subtle); border-radius: 11px; padding: 1.6rem; text-align: center; color: var(--text-muted); cursor: pointer; transition: border-color .15s, color .15s; }
     .dropzone:hover { border-color: var(--accent); color: var(--accent); }
@@ -190,20 +218,27 @@
         <textarea id="excerpt" maxlength="600" placeholder="One-sentence summary shown on the article card"></textarea>
       </div>
       <div class="field" id="bodyField" style="display:none">
-        <label for="body">Article body · Markdown
+        <label for="body" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+          <span>Article body · Markdown
           <span class="md-info" tabindex="0" aria-label="Markdown help"><i class="fa-regular fa-circle-question"></i>
             <span class="md-tip">
-              <b>Markdown</b><br>
-              <code>**bold**</code> &nbsp; <code>_italic_</code><br>
+              <b>Full Markdown</b><br>
+              <code>**bold**</code> &nbsp; <code>_italic_</code> &nbsp; <code>~~strike~~</code><br>
               <code># Heading</code> &nbsp; <code>## Sub</code><br>
               <code>[text](https://…)</code> — link<br>
-              <code>&gt; quote</code> &nbsp; <code>- list item</code><br>
-              <code>`code`</code><br>
+              <code>&gt; quote</code> &nbsp; <code>- list</code> &nbsp; <code>1. list</code><br>
+              <code>- [ ] task</code> &nbsp; <code>`code`</code> &nbsp; <code>---</code> rule<br>
+              <code>| a | b |</code> — tables<br>
               <span class="md-tip-note">Tip: select text and right-click to format it.</span>
             </span>
+          </span></span>
+          <span class="md-toggle" id="mdToggle" style="margin-left:auto">
+            <button type="button" data-md="write" class="on">Write</button>
+            <button type="button" data-md="preview">Preview</button>
           </span>
         </label>
-        <textarea id="body" class="body" placeholder="Write the story. Select text and right-click to format, or use **bold**, _italic_, [links](https://…), and # headings."></textarea>
+        <textarea id="body" class="body" placeholder="Write the story. Select text and right-click to format, or use **bold**, _italic_, [links](https://…), tables, lists and # headings."></textarea>
+        <div id="bodyPreview" class="md-preview" style="display:none"></div>
       </div>
 
       <div class="field">
@@ -336,6 +371,28 @@
       document.addEventListener('click', (e) => { if (!e.target.closest('#mdMenu')) menu.style.display = 'none'; });
       document.addEventListener('scroll', () => { menu.style.display = 'none'; }, true);
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') menu.style.display = 'none'; });
+    })();
+
+    // ---- Markdown live preview (Write | Preview toggle) ----
+    (function () {
+      const ta = document.getElementById('body');
+      const prev = document.getElementById('bodyPreview');
+      const seg = document.getElementById('mdToggle');
+      if (!ta || !prev || !seg) return;
+      if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
+      function render() {
+        try { prev.innerHTML = DOMPurify.sanitize(marked.parse(ta.value || '')); }
+        catch (e) { prev.textContent = ta.value || ''; }
+      }
+      function show(mode) {
+        const preview = mode === 'preview';
+        if (preview) { render(); prev.style.minHeight = ta.offsetHeight + 'px'; }
+        ta.style.display = preview ? 'none' : '';
+        prev.style.display = preview ? '' : 'none';
+        seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.md === mode));
+      }
+      seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => show(b.dataset.md)));
+      ta.addEventListener('input', () => { if (prev.style.display !== 'none') render(); });
     })();
   </script>
   <script type="module">

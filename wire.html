@@ -107,6 +107,9 @@
     .wd-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1.8rem; }
     @media (max-width: 820px) { .wd-grid { grid-template-columns: 1fr; } }
     .wd-gallery-main { aspect-ratio: 3/2; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); background: var(--bg-elevated-soft); position: relative; }
+    /* Articles: shrink the cover so the story text below is visible without a
+       long scroll (the image is illustrative, not the point). */
+    .wd-grid-article .wd-gallery-main { aspect-ratio: auto; height: min(38vh, 340px); }
     .wd-gallery-main img { width: 100%; height: 100%; object-fit: contain; background: #000; cursor: zoom-in; }
     .wd-gallery-main video { width: 100%; height: 100%; background: #000; }
     .wd-unit-tag { position: absolute; bottom: 10px; left: 10px; font-size: 0.72rem; background: rgba(0,0,0,0.66); color: #fff; padding: 3px 9px; border-radius: 6px; font-weight: 600; }
@@ -119,8 +122,22 @@
     .wd-meta { font-size: 0.8rem; color: var(--text-soft); margin-bottom: 1rem; }
     .wd-caption { color: var(--text-muted); line-height: 1.6; }
     .wd-article { line-height: 1.75; color: var(--text-main); margin-top: 1rem; }
-    .wd-article :is(h1,h2,h3) { line-height: 1.25; }
+    .wd-article :is(h1,h2,h3,h4) { line-height: 1.25; margin: 1.3rem 0 0.6rem; }
+    .wd-article h1 { font-size: 1.55rem; } .wd-article h2 { font-size: 1.3rem; } .wd-article h3 { font-size: 1.1rem; }
+    .wd-article p { margin: 0.75rem 0; }
     .wd-article img { max-width: 100%; border-radius: 8px; }
+    .wd-article :is(ul,ol) { padding-left: 1.4rem; margin: 0.8rem 0; }
+    .wd-article li { margin: 0.3rem 0; }
+    .wd-article li > input[type="checkbox"] { margin-right: 0.4rem; }
+    .wd-article a { color: var(--accent); text-decoration: underline; }
+    .wd-article blockquote { border-left: 3px solid var(--accent); margin: 1rem 0; padding: 0.2rem 0 0.2rem 1rem; color: var(--text-muted); }
+    .wd-article code { font-family: ui-monospace, monospace; font-size: 0.88em; background: var(--bg-elevated); padding: 0.1rem 0.35rem; border-radius: 5px; }
+    .wd-article pre { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 0.8rem 1rem; overflow-x: auto; margin: 1rem 0; }
+    .wd-article pre code { background: none; padding: 0; font-size: 0.85rem; }
+    .wd-article hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 1.4rem 0; }
+    .wd-article table { border-collapse: collapse; width: 100%; margin: 1rem 0; display: block; overflow-x: auto; }
+    .wd-article :is(th,td) { border: 1px solid var(--border-subtle); padding: 0.45rem 0.7rem; text-align: left; }
+    .wd-article th { background: var(--bg-elevated); }
 
     /* Article (editorial) layout: single column, article-first, cover above the info */
     .wd-article-wrap { max-width: 760px; margin: 0 auto; }
@@ -288,6 +305,9 @@
   </script>
   <script type="module">
     const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
+    // Full GitHub-flavoured Markdown for article bodies: tables, task lists,
+    // strikethrough, autolinks, and single-newline line breaks.
+    if (window.marked && marked.setOptions) marked.setOptions({ gfm: true, breaks: true });
     let API_KEY = null;
     let ME = { userId: null, canFeed: false, canModerate: false, isOwner: false };
     let currentTab = new URLSearchParams(location.search).get('tab') === 'articles' ? 'articles' : 'media';
@@ -501,7 +521,7 @@
         const j = await r.json();
         if (j.tombstone) {
           renderTombstone();
-          $('#feedView').style.display = 'none'; $('#detail').classList.add('on'); window.scrollTo({ top: 0, behavior: 'smooth' });
+          $('#feedView').style.display = 'none'; feedChrome(false); $('#detail').classList.add('on'); window.scrollTo({ top: 0, behavior: 'smooth' });
           if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}`);
           return;
         }
@@ -509,6 +529,7 @@
         currentItem = { id: item.id, kind: item.kind === 'article' ? 'article' : 'media_post', title: item.title };
         renderDetail(item);
         $('#feedView').style.display = 'none';
+        feedChrome(false);
         $('#detail').classList.add('on');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}&${kind === 'article' ? 'article' : 'post'}=${encodeURIComponent(key)}`);
@@ -522,9 +543,18 @@
       } catch (e) { console.warn(e); }
     }
 
+    // Show/hide the feed's filter chrome. Hidden while a post detail is open so
+    // the search/agency/LGA bar (or the My-posts tabs) doesn't sit above a post.
+    function feedChrome(show) {
+      if (!show) { $('#filters').style.display = 'none'; $('#mineFilters').style.display = 'none'; return; }
+      if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }
+      else { $('#filters').style.display = ''; $('#mineFilters').style.display = 'none'; }
+    }
+
     function closeDetail(push = true) {
       $('#detail').classList.remove('on'); $('#detail').innerHTML = '';
       $('#feedView').style.display = '';
+      feedChrome(true);
       if (push) history.pushState({}, '', `wire?tab=${currentTab}`);
     }
 
@@ -565,7 +595,7 @@
         ? `${galleryMedia.length ? galleryPane() : ''}<div class="wd-article">${DOMPurify.sanitize(marked.parse(item.body || ''))}</div>`
         : `${galleryPane()}<p class="wd-caption">${esc(item.caption || '')}</p>`;
       $('#detail').innerHTML = `${back}${eyebrow}
-        <div class="wd-grid">
+        <div class="wd-grid${isArticle ? ' wd-grid-article' : ''}">
           <div>${left}</div>
           <div>
             <h1 class="wd-title">${esc(item.title)}</h1>
