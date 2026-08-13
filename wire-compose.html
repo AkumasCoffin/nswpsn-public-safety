@@ -115,6 +115,17 @@
     .agency-check label { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; font-size: 0.82rem; border-radius: 6px; cursor: pointer; }
     .agency-check label:hover { background: rgba(148,163,184,0.08); }
     .agency-check input { width: auto; }
+    /* Co-author picker */
+    .coauth-wrap { position: relative; }
+    .coauth-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-soft); max-height: 240px; overflow-y: auto; }
+    .coauth-results .row { display: flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 0.85rem; }
+    .coauth-results .row:hover, .coauth-results .row.on { background: var(--accent-soft); }
+    .coauth-results .row.muted { color: var(--text-soft); cursor: default; }
+    .coauth-av { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; background: rgba(148,163,184,0.2); display: grid; place-items: center; font-size: 0.7rem; font-weight: 700; color: var(--text-muted); flex-shrink: 0; overflow: hidden; }
+    .coauth-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+    .coauth-chip { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 0.25rem 0.4rem 0.25rem 0.55rem; font-size: 0.8rem; }
+    .coauth-chip button { background: none; border: 0; color: var(--text-soft); cursor: pointer; font: inherit; line-height: 1; padding: 0 0.15rem; }
+    .coauth-chip button:hover { color: #ef4444; }
 
     .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.8rem; }
     .btn { font: inherit; font-size: 0.85rem; font-weight: 700; padding: 0.65rem 1.2rem; border-radius: 9px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); color: var(--text-main); cursor: pointer; }
@@ -283,6 +294,16 @@
         <div class="agency-check" id="agencyCheck"></div>
       </div>
 
+      <div class="field" id="coAuthorField">
+        <label for="coAuthorSearch">Co-authors · optional</label>
+        <div class="coauth-wrap">
+          <input type="text" id="coAuthorSearch" placeholder="Search contributors by name…" autocomplete="off">
+          <div class="coauth-results" id="coAuthorResults" style="display:none"></div>
+        </div>
+        <div class="coauth-chips" id="coAuthorChips"></div>
+        <div class="hint">Credit other Media Feeders on this post. It'll show on their profile too. Only the original author can edit or delete it.</div>
+      </div>
+
       <div class="field">
         <label for="license">License / rights</label>
         <select id="license">
@@ -407,6 +428,7 @@
       location: { type: 'pin', region: null, lat: null, lng: null },
       incident: null, // { source, source_id, title }
       agencies: new Set(),
+      coAuthors: [],  // [{ id, name, avatar_url }]
     };
     let isModerator = false; // owner/team_member → posts publish instantly
     let approvalRequired = true; // site toggle: contributor posts need approval
@@ -498,6 +520,10 @@
         return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
       } catch (e) { return null; }
     }
+    // Re-encode the image through a canvas (downscale + WebP/JPEG). This ALSO
+    // strips all EXIF/GPS/device metadata — the canvas export contains only
+    // pixels. Returns null on failure; the caller must then REFUSE the upload
+    // rather than send the original file (which would carry its EXIF/GPS).
     async function optimizeImage(file, maxDim, quality) {
       try {
         const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -509,8 +535,8 @@
         const webp = await new Promise((res) => canvas.toBlob(res, 'image/webp', quality));
         if (webp) return webp;
         const jpg = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
-        return jpg || file;
-      } catch (e) { return file; }
+        return jpg || null; // never fall back to the raw file (would keep EXIF)
+      } catch (e) { return null; }
     }
     async function handleFiles(files) {
       const cap = LIMITS[type].img;
@@ -521,6 +547,9 @@
         state.media.push(item); renderMedia();
         try {
           const blob = await optimizeImage(file, 1600, 0.82);
+          // If re-encoding failed we can't guarantee EXIF/GPS was stripped —
+          // refuse rather than upload the original with its metadata intact.
+          if (!blob) { setMsg("Couldn't process that image — please try a different file.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); continue; }
           const hash = await sha256Hex(blob);
           const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ hash, exclude_id: editId || '' }) });
           if (r.status === 503) { setMsg("Image uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
@@ -803,6 +832,45 @@
       box.querySelectorAll('input').forEach((c) => c.addEventListener('change', () => { c.checked ? state.agencies.add(c.value) : state.agencies.delete(c.value); }));
     }
 
+    // ---- co-authors ----
+    function coAuthAvatar(c) {
+      return c.avatar_url
+        ? `<span class="coauth-av"><img src="${esc(c.avatar_url)}" alt="" style="width:100%;height:100%;object-fit:cover"></span>`
+        : `<span class="coauth-av">${esc((c.name || '?').charAt(0).toUpperCase())}</span>`;
+    }
+    function renderCoAuthorChips() {
+      $('#coAuthorChips').innerHTML = state.coAuthors.map((c, i) =>
+        `<span class="coauth-chip">${coAuthAvatar(c)}${esc(c.name || 'Contributor')}<button type="button" data-co="${i}" aria-label="Remove">✕</button></span>`).join('');
+      $('#coAuthorChips').querySelectorAll('[data-co]').forEach((b) =>
+        b.addEventListener('click', () => { state.coAuthors.splice(+b.dataset.co, 1); renderCoAuthorChips(); }));
+    }
+    (function initCoAuthorPicker() {
+      const input = $('#coAuthorSearch'), box = $('#coAuthorResults');
+      if (!input || !box) return;
+      let t;
+      const hide = () => { box.style.display = 'none'; box.innerHTML = ''; };
+      async function search() {
+        const q = input.value.trim();
+        if (q.length < 2) { hide(); return; }
+        try {
+          const r = await fetch(`${API_BASE}/api/wire/contributors?q=${encodeURIComponent(q)}`, { headers: await userHeaders() });
+          const j = await r.json();
+          const results = (j.contributors || []).filter((c) => !state.coAuthors.some((x) => x.id === c.id));
+          if (!results.length) { box.innerHTML = `<div class="row muted">No matching contributors.</div>`; box.style.display = 'block'; return; }
+          box.innerHTML = results.map((c) =>
+            `<div class="row" data-id="${esc(c.id)}" data-name="${esc(c.name || '')}" data-av="${esc(c.avatar_url || '')}">${coAuthAvatar(c)}${esc(c.name || 'Contributor')}</div>`).join('');
+          box.style.display = 'block';
+          box.querySelectorAll('.row[data-id]').forEach((row) => row.addEventListener('click', () => {
+            state.coAuthors.push({ id: row.dataset.id, name: row.dataset.name, avatar_url: row.dataset.av || null });
+            renderCoAuthorChips(); input.value = ''; hide(); input.focus();
+          }));
+        } catch (e) { hide(); }
+      }
+      input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(search, 250); });
+      input.addEventListener('focus', () => { if (input.value.trim().length >= 2) search(); });
+      document.addEventListener('click', (e) => { if (!e.target.closest('#coAuthorField')) hide(); });
+    })();
+
     // ---- callsign dict ----
     async function loadCallsigns() {
       try {
@@ -824,6 +892,7 @@
         location_type: state.location.type, region: state.location.region,
         lat: state.location.lat, lng: state.location.lng,
         agencies: [...state.agencies], incident: state.incident, media,
+        co_authors: state.coAuthors.map((c) => ({ id: c.id, name: c.name })),
       };
       base.license = $('#license').value;
       base.credit = $('#credit').value.trim() || null;
@@ -869,12 +938,13 @@
         ? { kind: 'video', r2_key: m.r2_key, poster_r2_key: m.poster_r2_key || null, unit: m.unit || '', url: m.url, previewUrl: m.url }
         : { kind: 'image', r2_key: m.r2_key, hash: m.hash || null, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
       (it.agencies || []).forEach((a) => state.agencies.add(a));
+      state.coAuthors = (it.co_authors || []).map((c) => ({ id: c.id, name: c.name, avatar_url: c.avatar_url || null }));
       $('#license').value = it.license || 'credit';
       $('#credit').value = it.credit || '';
       $('#rightsAffirm').checked = true; // already affirmed when first published
       state.incident = it.incident || null;
       if (it.location) state.location = { type: it.location.type || 'pin', region: it.location.region || null, lat: it.location.lat, lng: it.location.lng };
-      renderMedia(); renderAgencyCheck(''); renderIncidentChosen();
+      renderMedia(); renderAgencyCheck(''); renderIncidentChosen(); renderCoAuthorChips();
       const hasLoc = (state.location.type === 'region' && state.location.region) || (state.location.type === 'pin' && state.location.lat != null);
       const wasRegion = state.location.type === 'region', wasLat = state.location.lat, wasLng = state.location.lng, wasRegionName = state.location.region;
       setLocMode(hasLoc ? state.location.type : 'none');

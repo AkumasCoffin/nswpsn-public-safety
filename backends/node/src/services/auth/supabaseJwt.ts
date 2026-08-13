@@ -29,6 +29,9 @@ declare module 'hono' {
   interface ContextVariableMap {
     /** Supabase user id (sub claim) when a valid JWT was presented. */
     userId?: string;
+    /** Best-effort display name from the JWT's user_metadata (username /
+     *  display_name / full_name / name), else the email local part. */
+    userName?: string;
     /** Verified account email (email claim) when present on the JWT. Used by
      *  self-service routes to mirror the by-email "no request" check. */
     userEmail?: string;

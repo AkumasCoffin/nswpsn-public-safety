@@ -33,6 +33,7 @@ import {
   r2Configured,
   createVideoUploadUrl,
   deleteR2Object,
+  r2PublicUrl,
   MAX_VIDEO_BYTES,
   normaliseLicense,
   licenseLabel,
@@ -255,6 +256,40 @@ async function findDuplicateImageHash(pool: Pool, items: MediaItem[], excludeId:
 
 const DUPLICATE_IMAGE_MSG = 'One or more of these images has already been posted to The Wire. Each image can only be posted once.';
 
+// Max co-authors creditable on one post.
+const MAX_CO_AUTHORS = 6;
+
+/**
+ * Validate + canonicalise the client-supplied co-authors into a stored
+ * [{id, name}] array. Only real media_feeder contributors may be credited, the
+ * author themselves is dropped, ids are deduped and capped, and the display
+ * NAME is taken from the server (user_profiles), never trusted from the client.
+ * Unknown / non-contributor ids are silently dropped (credit-only, so a stray
+ * id is harmless — no need to 400 the whole save).
+ */
+async function cleanCoAuthors(pool: Pool, raw: unknown, authorId: string): Promise<{ id: string; name: string | null }[]> {
+  const arr = Array.isArray(raw) ? raw : [];
+  const ids: string[] = [];
+  for (const v of arr) {
+    const id = typeof v === 'string' ? v : (v && typeof v === 'object' ? (v as Record<string, unknown>)['id'] : null);
+    if (typeof id === 'string' && id && id !== authorId && !ids.includes(id)) ids.push(id);
+    if (ids.length >= MAX_CO_AUTHORS) break;
+  }
+  if (ids.length === 0) return [];
+  // Keep only ids that actually hold the media_feeder (or owner) role, and pull
+  // their canonical display name from user_profiles.
+  const r = await pool.query<{ user_id: string; display_name: string | null }>(
+    `SELECT DISTINCT ur.user_id, up.display_name
+       FROM user_roles ur
+       LEFT JOIN user_profiles up ON up.user_id = ur.user_id
+      WHERE ur.user_id = ANY($1::text[]) AND ur.role IN ('media_feeder','owner')`,
+    [ids],
+  );
+  const byId = new Map(r.rows.map((row) => [row.user_id, row.display_name] as const));
+  // Preserve the client's order, keeping only validated contributors.
+  return ids.filter((id) => byId.has(id)).map((id) => ({ id, name: byId.get(id) ?? null }));
+}
+
 /** Fetch wire_media for a set of parents, grouped by parent_id (avoids N+1). */
 async function fetchMediaFor(pool: Pool, parentType: string, ids: string[]): Promise<Map<string, WireMediaRow[]>> {
   const map = new Map<string, WireMediaRow[]>();
@@ -303,6 +338,7 @@ function shapeMediaPost(row: any, media: WireMediaRow[], includeKeys = false): R
     status: row.status,
     review_note: row.review_note ?? null,
     author: { id: row.author_id, name: row.author_name },
+    co_authors: Array.isArray(row.co_authors) ? row.co_authors : [],
     media: shaped,
     cover,
     created_at: isoOrNull(row.created_at),
@@ -332,6 +368,7 @@ function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Rec
     status: row.status,
     review_note: row.review_note ?? null,
     author: { id: row.author_id, name: row.author_name },
+    co_authors: Array.isArray(row.co_authors) ? row.co_authors : [],
     media: shaped,
     cover,
     published_at: isoOrNull(row.published_at),
@@ -390,6 +427,40 @@ wireRouter.post('/api/wire/upload-url', requireRole(canFeedMedia), async (c) => 
   return c.json({ uploadURL: up.uploadURL, key: up.key, publicUrl: up.publicUrl, hash });
 });
 
+// Contributor search for the co-author picker. Only a media_feeder may search,
+// and it only returns OTHER media_feeder/owner contributors (by display name),
+// so you can't enumerate the whole user base — just fellow Wire contributors.
+wireRouter.get('/api/wire/contributors', requireRole(canFeedMedia), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const me = currentUserId(c);
+  const q = (new URL(c.req.url).searchParams.get('q') || '').trim();
+  if (q.length < 2) return c.json({ contributors: [] });
+  try {
+    const r = await pool.query<{ user_id: string; display_name: string | null; avatar_key: string | null; discord_avatar_url: string | null }>(
+      `SELECT DISTINCT ur.user_id, up.display_name, up.avatar_key, up.discord_avatar_url
+         FROM user_roles ur
+         JOIN user_profiles up ON up.user_id = ur.user_id
+        WHERE ur.role IN ('media_feeder','owner')
+          AND ur.user_id <> $1
+          AND up.display_name IS NOT NULL
+          AND up.display_name ILIKE $2
+        ORDER BY up.display_name
+        LIMIT 15`,
+      [me ?? '', `%${q}%`],
+    );
+    const contributors = r.rows.map((row) => ({
+      id: row.user_id,
+      name: row.display_name,
+      avatar_url: row.avatar_key ? r2PublicUrl(row.avatar_key) : (row.discord_avatar_url ?? null),
+    }));
+    return c.json({ contributors });
+  } catch (err) {
+    log.error({ err }, 'wire: contributor search failed');
+    return c.json({ error: 'search failed' }, 500);
+  }
+});
+
 wireRouter.post('/api/wire/video-upload-url', requireRole(canFeedMedia), async (c) => {
   if (!r2Configured()) return c.json({ error: 'video uploads not configured' }, 503);
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -431,9 +502,13 @@ wireRouter.get('/api/wire/media', async (c) => {
     }
     else {
       where.push(`status = 'published' AND taken_down_at IS NULL`);
-      // Public "posts by this contributor" (their published posts only).
+      // Public "posts by this contributor" — as author OR credited co-author.
       const author = new URL(c.req.url).searchParams.get('author');
-      if (author) { vals.push(author); where.push(`author_id = $${vals.length}`); }
+      if (author) {
+        vals.push(author); const p = vals.length;
+        vals.push(JSON.stringify([{ id: author }]));
+        where.push(`(author_id = $${p} OR co_authors @> $${vals.length}::jsonb)`);
+      }
     }
     if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR caption ILIKE $${vals.length})`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
@@ -588,6 +663,7 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
 
     const authorId = currentUserId(c)!;
     const authorName = currentUserName(c);
+    const coAuthors = await cleanCoAuthors(pool, data['co_authors'], authorId);
     // Approval mode (staff toggle): when required, non-moderators' posts are
     // 'pending' until approved; moderators always publish instantly. When the
     // toggle is off, everyone publishes instantly.
@@ -597,9 +673,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     try {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status, incident)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13,$14::jsonb) RETURNING id`,
-        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status, incidentJson],
+        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status, incident, co_authors)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13,$14::jsonb,$15::jsonb) RETURNING id`,
+        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status, incidentJson, JSON.stringify(coAuthors)],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, MEDIA, newId, mv.items);
@@ -649,6 +725,7 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     if (await findDuplicateImageHash(pool, mv.items, id)) {
       return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
     }
+    const coAuthors = await cleanCoAuthors(pool, data['co_authors'], existing.rows[0]!.author_id);
 
     const oldImageIds = await imageIdsFor(pool, 'media_post', id);
     const oldR2Keys = await r2KeysFor(pool, 'media_post', id);
@@ -657,8 +734,8 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE media_posts SET title=$1, caption=$2, location_type=$3, region=$4, lat=$5, lng=$6,
-           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, incident=$12::jsonb, updated_at=now()${statusSet} WHERE id=$11`,
-        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson],
+           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, incident=$12::jsonb, co_authors=$13::jsonb, updated_at=now()${statusSet} WHERE id=$11`,
+        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors)],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
       await insertMediaRows(client, MEDIA, id, mv.items);
@@ -757,9 +834,13 @@ wireRouter.get('/api/wire/articles', async (c) => {
     }
     else {
       where.push(`status = 'published' AND taken_down_at IS NULL`);
-      // Public "posts by this contributor" (their published posts only).
+      // Public "posts by this contributor" — as author OR credited co-author.
       const author = new URL(c.req.url).searchParams.get('author');
-      if (author) { vals.push(author); where.push(`author_id = $${vals.length}`); }
+      if (author) {
+        vals.push(author); const p = vals.length;
+        vals.push(JSON.stringify([{ id: author }]));
+        where.push(`(author_id = $${p} OR co_authors @> $${vals.length}::jsonb)`);
+      }
     }
     if (q) { vals.push(`%${q}%`); where.push(`(title ILIKE $${vals.length} OR excerpt ILIKE $${vals.length} OR body ILIKE $${vals.length})`); }
     if (agency) { vals.push(JSON.stringify([agency])); where.push(`agencies @> $${vals.length}::jsonb`); }
@@ -839,15 +920,16 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
 
     const authorName = currentUserName(c);
     const rightsAffirmed = data['rights_affirmed'] === true;
+    const coAuthors = await cleanCoAuthors(pool, data['co_authors'], authorId);
     const client = await pool.connect();
     let newId: string;
     try {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
         `INSERT INTO articles (author_id, author_name, title, slug, excerpt, body, status, published_at,
-           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb) RETURNING id`,
-        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson],
+           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident, co_authors)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,$18::jsonb) RETURNING id`,
+        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson, JSON.stringify(coAuthors)],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, ARTICLE, newId, mv.items);
@@ -908,6 +990,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
     }
     const slug = await uniqueSlug(pool, title, id);
+    const coAuthors = await cleanCoAuthors(pool, data['co_authors'], prev.author_id);
     // First publish stamps published_at; keep the original on re-publish.
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';
     const affirmSet = data['rights_affirmed'] === true ? ', rights_affirmed = true' : '';
@@ -919,8 +1002,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE articles SET title=$1, slug=$2, excerpt=$3, body=$4, status=$5, location_type=$6, region=$7,
-           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
-        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson],
+           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, co_authors=$16::jsonb, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
+        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors)],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
       await insertMediaRows(client, ARTICLE, id, mv.items);
@@ -1276,13 +1359,14 @@ async function countView(c: any, parentType: string, table: string) {
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const id = c.req.param('id');
   try {
-    // The author's own views don't count — only other users. When a logged-in
-    // user hits this, skip counting if they're the author.
+    // The author's (and any co-author's) own views don't count — only other
+    // users. When a logged-in user hits this, skip counting if they're credited.
     const uid = currentUserId(c);
     if (uid) {
-      const a = await pool.query<{ author_id: string; views: string }>(`SELECT author_id, views FROM ${table} WHERE id = $1`, [id]);
+      const a = await pool.query<{ author_id: string; views: string; co_authors: unknown }>(`SELECT author_id, views, co_authors FROM ${table} WHERE id = $1`, [id]);
       if (a.rowCount === 0) return c.json({ error: 'not found' }, 404);
-      if (a.rows[0]!.author_id === uid) return c.json({ views: Number(a.rows[0]!.views) || 0, self: true });
+      const coIds = Array.isArray(a.rows[0]!.co_authors) ? (a.rows[0]!.co_authors as { id?: string }[]).map((x) => x?.id) : [];
+      if (a.rows[0]!.author_id === uid || coIds.includes(uid)) return c.json({ views: Number(a.rows[0]!.views) || 0, self: true });
     }
     const hash = viewerHash(clientIp(c), c.req.header('user-agent') || '');
     const ins = await pool.query(

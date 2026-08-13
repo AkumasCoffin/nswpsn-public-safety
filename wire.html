@@ -88,6 +88,7 @@
     .wire-card-body { padding: 0.75rem 0.85rem 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
     .wire-card-body h3 { margin: 0; font-size: 1rem; line-height: 1.25; }
     .wire-byline { font-size: 0.75rem; color: var(--text-soft); }
+    .wire-co { color: var(--text-muted); font-weight: 600; }
     .wire-author { color: var(--text-muted); text-decoration: none; font-weight: 600; }
     .wire-author:hover { color: var(--accent); text-decoration: underline; }
     .wire-excerpt { font-size: 0.8rem; color: var(--text-muted); line-height: 1.45; margin: 0.15rem 0 0.1rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -419,13 +420,15 @@
       const draft = statusBadge(item.status);
       const key = isArticle ? item.slug : item.id;
       const authorLink = `<a class="wire-author" href="profile?u=${encodeURIComponent(item.author?.id || '')}&name=${encodeURIComponent(item.author?.name || '')}" onclick="event.stopPropagation()">${esc(item.author?.name || 'contributor')}</a>`;
+      const nCo = (item.co_authors || []).filter((c) => c && c.id).length;
+      const coPart = nCo ? ` <span class="wire-co">+${nCo}</span>` : '';
       const caption = isArticle ? (item.excerpt || '') : (item.caption || '');
       return `<article class="wire-card" data-kind="${item.kind}" data-key="${esc(key)}">
         <div class="wire-thumb">${media}<span class="wire-badge ${isArticle ? 'article' : ''}">${esc(badge)}</span>
           <span class="wire-views"><i class="fa-regular fa-eye"></i> ${fmtViews(item.views)}</span></div>
         <div class="wire-card-body">
           <h3>${esc(item.title)} ${draft}</h3>
-          <div class="wire-byline">by ${authorLink}${item.created_at ? ' · ' + timeAgo(item.created_at) : ''}</div>
+          <div class="wire-byline">by ${authorLink}${coPart}${item.created_at ? ' · ' + timeAgo(item.created_at) : ''}</div>
           ${caption ? `<p class="wire-excerpt">${esc(caption)}</p>` : ''}
           <div class="wire-chips">${units}${loc}</div>
         </div></article>`;
@@ -550,10 +553,11 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
         if (push) history.pushState({ kind, key }, '', `wire?tab=${kind === 'article' ? 'articles' : 'media'}&${kind === 'article' ? 'article' : 'post'}=${encodeURIComponent(key)}`);
         if (push && typeof umami !== 'undefined') umami.track('wire-open', { kind: kind === 'article' ? 'article' : 'media_post' });
-        // Count a view (deduped server-side). Don't count the author's own
-        // views: skip the request if you're the author, and send your JWT so the
-        // server can also exclude the author server-side.
-        if (!(ME.userId && item.author && item.author.id === ME.userId)) {
+        // Count a view (deduped server-side). Don't count the author's or a
+        // co-author's own views: skip the request if you're credited, and send
+        // your JWT so the server enforces the same exclusion.
+        const credited = ME.userId && ((item.author && item.author.id === ME.userId) || (item.co_authors || []).some((c) => c && c.id === ME.userId));
+        if (!credited) {
           fetch(`${API_BASE}/api/wire/${kind === 'article' ? 'articles' : 'media'}/${encodeURIComponent(item.id)}/view`, { method: 'POST', headers: await userHeaders() }).catch(() => {});
         }
       } catch (e) { console.warn(e); }
@@ -597,7 +601,10 @@
         </div></div>` : '';
       const notices = `${item.status === 'pending' ? `<div style="color:#f59e0b;font-size:0.82rem;margin-bottom:0.9rem"><i class="fa-regular fa-clock"></i> Awaiting moderator approval — only you can see this until it's approved.</div>` : ''}${item.status === 'rejected' && item.review_note ? `<div style="color:#ef4444;font-size:0.82rem;margin-bottom:0.9rem"><b>Rejected:</b> ${esc(item.review_note)} — edit and re-submit to send it back for review.</div>` : ''}`;
       const authorLink = `<a class="wire-author" href="profile?u=${encodeURIComponent(item.author?.id || '')}&name=${encodeURIComponent(item.author?.name || '')}">${esc(item.author?.name || 'contributor')}</a>`;
-      const byline = `by ${authorLink}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}`;
+      const coLinks = (item.co_authors || []).filter((c) => c && c.id).map((c) =>
+        `<a class="wire-author" href="profile?u=${encodeURIComponent(c.id)}&name=${encodeURIComponent(c.name || '')}">${esc(c.name || 'contributor')}</a>`);
+      const withPart = coLinks.length ? ` with ${coLinks.join(', ')}` : '';
+      const byline = `by ${authorLink}${withPart}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}`;
       const statsBlock = `<div class="wd-block"><div class="wd-stats">
           <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
           <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div></div></div>`;

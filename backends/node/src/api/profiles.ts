@@ -107,22 +107,28 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
   }
 });
 
-// Capture the caller's Discord avatar into their public profile without
-// touching any other field. Called on load so a contributor's picture shows to
-// other viewers even if they never open the profile editor. The URL comes from
-// the verified JWT (user_metadata.avatar_url); the body is ignored.
+// Capture the caller's Discord avatar + display name into their public profile
+// without touching any other field. Called on load so a contributor's picture
+// AND name show to others (and so they're findable in the co-author search)
+// even if they never open the profile editor. Both come from the verified JWT;
+// the display name only fills in when currently empty, so a user's own chosen
+// name is never overwritten.
 profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const uid = c.get('userId') as string;
   const discordAvatar = normUrl(c.get('userAvatar'));
-  if (!discordAvatar) return c.json({ success: true, skipped: 'no avatar' });
+  const jwtName = (c.get('userName') as string | undefined)?.trim().slice(0, 60) || null;
+  if (!discordAvatar && !jwtName) return c.json({ success: true, skipped: 'nothing to sync' });
   try {
     await pool.query(
-      `INSERT INTO user_profiles (user_id, discord_avatar_url, updated_at)
-       VALUES ($1, $2, now())
-       ON CONFLICT (user_id) DO UPDATE SET discord_avatar_url = $2, updated_at = now()`,
-      [uid, discordAvatar],
+      `INSERT INTO user_profiles (user_id, discord_avatar_url, display_name, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         discord_avatar_url = COALESCE($2, user_profiles.discord_avatar_url),
+         display_name = COALESCE(user_profiles.display_name, $3),
+         updated_at = now()`,
+      [uid, discordAvatar, jwtName],
     );
     return c.json({ success: true });
   } catch (err) {
