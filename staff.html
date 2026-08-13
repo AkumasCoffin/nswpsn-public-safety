@@ -1547,17 +1547,34 @@
       margin-bottom: 0.25rem;
       white-space: nowrap;
     }
-    .role-badge.map_editor        { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
-    .role-badge.pager_contributor { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
-    .role-badge.radio_contributor { background: rgba(34, 197, 94, 0.18);  color: #4ade80; }
-    .role-badge.team_member       { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
-    .role-badge.dev               { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
-    .role-badge.owner             { background: rgba(234, 179, 8, 0.18);  color: #fbbf24; }
-    .role-badge.node_monitor      { background: rgba(6, 182, 212, 0.18);  color: #22d3ee; }
-    .role-badge.data_feeder       { background: rgba(132, 204, 22, 0.18);  color: #a3e635; }
-    .role-badge.media_feeder      { background: rgba(249, 115, 22, 0.18);  color: #fb923c; }
+    /* Role badges. Role strings are "main:sub"; ':' isn't valid in a CSS class,
+       so roleClass() swaps non-word chars for '-' (wire:manager → wire-manager).
+       Legacy underscore names are kept so pre-migration rows still colour. */
+    .role-badge.map-editor          { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+    .role-badge.map-manager         { background: rgba(59, 130, 246, 0.28); color: #93c5fd; }
+    .role-badge.feeder-pager        { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
+    .role-badge.feeder-radio        { background: rgba(34, 197, 94, 0.18);  color: #4ade80; }
+    .role-badge.feeder-agency_data  { background: rgba(132, 204, 22, 0.18); color: #a3e635; }
+    .role-badge.feeder-monitor      { background: rgba(6, 182, 212, 0.18);  color: #22d3ee; }
+    .role-badge.feeder-manager      { background: rgba(16, 185, 129, 0.22); color: #34d399; }
+    .role-badge.wire-contributor    { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
+    .role-badge.wire-manager        { background: rgba(249, 115, 22, 0.30); color: #fdba74; }
+    .role-badge.staff               { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
+    .role-badge.owner               { background: rgba(234, 179, 8, 0.18);  color: #fbbf24; }
+    /* legacy names */
+    .role-badge.map_editor          { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+    .role-badge.pager_contributor   { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
+    .role-badge.radio_contributor   { background: rgba(34, 197, 94, 0.18);  color: #4ade80; }
+    .role-badge.team_member         { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
+    .role-badge.node_monitor        { background: rgba(6, 182, 212, 0.18);  color: #22d3ee; }
+    .role-badge.data_feeder         { background: rgba(132, 204, 22, 0.18); color: #a3e635; }
+    .role-badge.media_feeder        { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
 
     .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
+    .auth-view-note { color: var(--text-soft); font-size: 0.82rem; margin: 0 0 0.75rem; }
+    /* Grouped role checkboxes in the approval / edit-roles modals */
+    .role-group-hd { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); font-weight: 700; margin: 0.75rem 0 0.35rem; }
+    .role-group-hd:first-child { margin-top: 0; }
 
     /* === Toasts ======================================================== */
     #toast-stack {
@@ -2134,9 +2151,16 @@
             <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
           </div>
         </div>
-        <button class="tab-btn" data-tab="users" onclick="switchTab('users')">
-          <i class="fas fa-users"></i> Users
-        </button>
+        <div class="tab-dd" id="auth-dd">
+          <button class="tab-btn" data-tab="users" id="auth-tab-btn" aria-haspopup="menu" aria-expanded="false" onclick="toggleAuthMenu(event)">
+            <i class="fas fa-users"></i> Auth
+            <i class="fas fa-caret-down tab-dd-caret"></i>
+          </button>
+          <div class="tab-dd-menu" id="auth-dd-menu" role="menu" aria-label="Account kind">
+            <button class="tab-dd-item active" role="menuitem" data-authkind="members" onclick="openAuthView('members')"><i class="fas fa-user-shield"></i> Members <span class="dd-count" id="dd-members-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-authkind="users" onclick="openAuthView('users')"><i class="fas fa-user"></i> Users <span class="dd-count" id="dd-users-badge" style="display:none;"></span></button>
+          </div>
+        </div>
         <button class="tab-btn" data-tab="dev" onclick="switchTab('dev')">
           <i class="fas fa-server"></i> Dev
           <span class="dev-status-pill" id="dev-status-pill" style="display: none;"></span>
@@ -2242,24 +2266,30 @@
         </div>
       </div>
 
-      <!-- Users Tab -->
+      <!-- Auth Tab (Members / Users chosen from the integrated Auth dropdown in
+           the tab bar). Members = accounts holding a real role; Users =
+           accounts with only the base 'authed' role (no contributor access). -->
       <div id="users-tab" class="tab-content">
         <div class="stats-bar">
           <div class="stat-card">
             <div class="stat-value" id="stat-users">-</div>
-            <div class="stat-label">Total Users</div>
+            <div class="stat-label">Total Accounts</div>
           </div>
           <div class="stat-card approved">
-            <div class="stat-value" id="stat-editors">-</div>
-            <div class="stat-label">Map Editors</div>
+            <div class="stat-value" id="stat-members">-</div>
+            <div class="stat-label">Members</div>
           </div>
-          <div class="stat-card" style="border-color: rgba(168, 85, 247, 0.3);">
-            <div class="stat-value" id="stat-pager" style="color: #c084fc;">-</div>
-            <div class="stat-label">Pager Contributors</div>
+          <div class="stat-card" style="border-color: rgba(148, 163, 184, 0.3);">
+            <div class="stat-value" id="stat-plainusers" style="color: #94a3b8;">-</div>
+            <div class="stat-label">Users (no role)</div>
+          </div>
+          <div class="stat-card" style="border-color: rgba(249, 115, 22, 0.3);">
+            <div class="stat-value" id="stat-wire" style="color: #fb923c;">-</div>
+            <div class="stat-label">Wire Contributors</div>
           </div>
           <div class="stat-card" style="border-color: rgba(34, 197, 94, 0.3);">
-            <div class="stat-value" id="stat-radio" style="color: #4ade80;">-</div>
-            <div class="stat-label">Radio Contributors</div>
+            <div class="stat-value" id="stat-feeders" style="color: #4ade80;">-</div>
+            <div class="stat-label">Feeders</div>
           </div>
           <div class="stat-card" style="border-color: rgba(88, 101, 242, 0.3);">
             <div class="stat-value" id="stat-discord" style="color: #818cf8;">-</div>
@@ -2270,7 +2300,7 @@
             <div class="stat-label">Possible Duplicates</div>
           </div>
         </div>
-        
+
         <div class="filter-bar">
           <div class="search-box">
             <i class="fas fa-search"></i>
@@ -2285,6 +2315,8 @@
           <div class="filter-spacer"></div>
           <span class="result-count" id="user-count"></span>
         </div>
+
+        <div class="auth-view-note" id="auth-view-note"></div>
 
         <div id="users-container">
           <div class="loading">
@@ -3083,41 +3115,10 @@
         <label style="display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 0.75rem; font-weight: 600;">
           <i class="fas fa-user-tag"></i> Assign Roles
         </label>
-        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="role-map-editor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📝 Map Editor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Can edit map markers</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="role-pager-contributor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📟 Pager Contributor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Can feed pager data</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="role-radio-contributor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📻 Radio Contributor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Can stream radio</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="role-media-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📸 Media Feeder</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Post to The Wire</span>
-          </label>
-          <!-- Privileged roles - only visible to owners -->
-          <div id="privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-              <input type="checkbox" id="role-team-member" style="width: 16px; height: 16px; accent-color: var(--accent);">
-              <span>👥 Team Member</span>
-              <span style="color: var(--text-soft); font-size: 0.75rem;">- Can approve requests</span>
-            </label>
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-              <input type="checkbox" id="role-dev" style="width: 16px; height: 16px; accent-color: var(--accent);">
-              <span>💻 Developer</span>
-              <span style="color: var(--text-soft); font-size: 0.75rem;">- Dev access</span>
-            </label>
-          </div>
-        </div>
+        <!-- Role checkboxes are generated from ASSIGNABLE_ROLE_GROUPS so the
+             approval + edit-roles modals never drift from the role model. -->
+        <div style="display: flex; flex-direction: column; gap: 0.35rem;" id="approve-roles-box"></div>
+        <div id="privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.6rem 0 0; padding-top: 0.5rem;"></div>
       </div>
       
       <div id="create-account-section" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px;">
@@ -3176,54 +3177,9 @@
         <label style="display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 0.75rem; font-weight: 600;">
           <i class="fas fa-user-tag"></i> Assign Roles
         </label>
-        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="edit-role-map-editor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📝 Map Editor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Can edit map markers</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="edit-role-pager-contributor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📟 Pager Contributor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Can feed pager data</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="edit-role-radio-contributor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📻 Radio Contributor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Can stream radio</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="edit-role-node-monitor" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>👁️ Node Monitor</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- View-only Data + Nodes</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="edit-role-data-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>🗃️ Data Feeder</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Edit agency tables (via approval)</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-            <input type="checkbox" id="edit-role-media-feeder" style="width: 16px; height: 16px; accent-color: var(--accent);">
-            <span>📸 Media Feeder</span>
-            <span style="color: var(--text-soft); font-size: 0.75rem;">- Post to The Wire</span>
-          </label>
-          <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.5rem 0; padding-top: 0.5rem;">
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-              <input type="checkbox" id="edit-role-team-member" style="width: 16px; height: 16px; accent-color: var(--accent);">
-              <span>👥 Team Member</span>
-              <span style="color: var(--text-soft); font-size: 0.75rem;">- General team access</span>
-            </label>
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-              <input type="checkbox" id="edit-role-dev" style="width: 16px; height: 16px; accent-color: var(--accent);">
-              <span>💻 Developer</span>
-              <span style="color: var(--text-soft); font-size: 0.75rem;">- Dev access</span>
-            </label>
-            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--text-primary);">
-              <input type="checkbox" id="edit-role-owner" style="width: 16px; height: 16px; accent-color: var(--accent);">
-              <span>👑 Owner</span>
-              <span style="color: var(--text-soft); font-size: 0.75rem;">- Full admin access</span>
-            </label>
-          </div>
+        <!-- Generated from ASSIGNABLE_ROLE_GROUPS (see renderRoleCheckboxes). -->
+        <div style="display: flex; flex-direction: column; gap: 0.35rem;" id="edit-roles-box"></div>
+        <div id="edit-privileged-roles-section" style="border-top: 1px solid var(--border-subtle); margin: 0.6rem 0 0; padding-top: 0.5rem;">
         </div>
       </div>
       
@@ -9219,7 +9175,9 @@
         // Store permissions. Older backends won't return the `tabs` block
         // or `is_dev`; fall back to legacy semantics so the page still
         // works during a partial deploy.
-        const hasMapEditor = result.roles && result.roles.includes('map_editor');
+        // Accept the current name and the pre-migration one.
+        const hasMapEditor = !!(result.is_map_editor
+          || (result.roles && (result.roles.includes('map:editor') || result.roles.includes('map_editor'))));
         const tabs = result.tabs || {
           requests: !!(result.is_owner || result.is_team_member),
           users:    !!result.can_manage_users,
@@ -9304,12 +9262,13 @@
         switchTab(defaultTab);
       }
 
-      // Role chip next to the wordmark — shows the viewer's own role mix.
-      const roleBits = [];
-      if (userPermissions.is_owner)       roleBits.push('👑 Owner');
-      if (userPermissions.is_team_member) roleBits.push('👥 Team Member');
-      if (userPermissions.is_dev)         roleBits.push('🛠️ Dev');
-      if (userPermissions.is_node_monitor) roleBits.push('👁️ Node Monitor');
+      // Role chip next to the wordmark — shows the viewer's own role mix,
+      // labelled from the canonical role list the backend returned.
+      const myRoles = (result.roles || []).filter(r => r && r !== 'authed');
+      const roleBits = myRoles.map(r => {
+        const info = ROLE_LABELS[r];
+        return info ? `${info.icon} ${info.label}` : r;
+      });
       const chip = document.getElementById('role-chip');
       if (chip) {
         chip.textContent = roleBits.join(' · ') || 'Authenticated';
@@ -9358,6 +9317,45 @@
       if (dd && !dd.contains(e.target)) closeRequestsMenu();
     });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRequestsMenu(); });
+
+    // ---- Auth dropdown-tab: Members (has a real role) / Users (authed only) ----
+    // Mirrors the Requests dropdown pattern. Both views render from the same
+    // GET /api/users payload; _authKind decides which subset renderUsers() shows.
+    let _authKind = 'members';
+    function toggleAuthMenu(event) {
+      if (event) { event.preventDefault(); event.stopPropagation(); }
+      const menu = document.getElementById('auth-dd-menu');
+      if (!menu) return;
+      const open = !menu.classList.contains('open');
+      menu.classList.toggle('open', open);
+      const btn = document.getElementById('auth-tab-btn');
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    function closeAuthMenu() {
+      const menu = document.getElementById('auth-dd-menu');
+      if (menu) menu.classList.remove('open');
+      const btn = document.getElementById('auth-tab-btn');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+    function openAuthView(kind) {
+      _authKind = kind;
+      closeAuthMenu();
+      if (currentTab !== 'users') switchTab('users');
+      document.querySelectorAll('#auth-dd-menu .tab-dd-item').forEach(it =>
+        it.classList.toggle('active', it.dataset.authkind === kind));
+      const note = document.getElementById('auth-view-note');
+      if (note) {
+        note.textContent = kind === 'members'
+          ? 'Members — accounts holding at least one role.'
+          : 'Users — accounts with no role yet. Edit roles to promote one to a member.';
+      }
+      renderUsers();
+    }
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('auth-dd');
+      if (dd && !dd.contains(e.target)) closeAuthMenu();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAuthMenu(); });
     function setDcFilter(status) {
       _dcFilter = status;
       document.querySelectorAll('[data-dcfilter]').forEach(b => b.classList.toggle('active', b.dataset.dcfilter === status));
@@ -9696,22 +9694,147 @@
       return !!key && (groups.get(key) || 0) > 1;
     }
 
+    // ---- role helpers (main:sub model, migration 059) --------------------
+    // Canonical role display map. Roles are "main:sub" — the main part groups
+    // them in the UI, the full string is what grants permission. Legacy names
+    // are listed too so a pre-migration row still renders sensibly.
+    const ROLE_LABELS = {
+      'owner':              { icon: '👑', label: 'Owner',        group: 'Site' },
+      'staff':              { icon: '👥', label: 'Staff',        group: 'Site' },
+      'wire:contributor':   { icon: '📸', label: 'Wire · Contributor', group: 'The Wire' },
+      'wire:manager':       { icon: '📰', label: 'Wire · Manager',     group: 'The Wire' },
+      'feeder:radio':       { icon: '📻', label: 'Feeder · Radio',     group: 'Feeder' },
+      'feeder:pager':       { icon: '📟', label: 'Feeder · Pager',     group: 'Feeder' },
+      'feeder:agency_data': { icon: '🗃️', label: 'Feeder · Agency data', group: 'Feeder' },
+      'feeder:monitor':     { icon: '👁️', label: 'Feeder · Monitor',   group: 'Feeder' },
+      'feeder:manager':     { icon: '🛠️', label: 'Feeder · Manager',   group: 'Feeder' },
+      'map:editor':         { icon: '📝', label: 'Map · Editor',       group: 'Map' },
+      'map:manager':        { icon: '🗺️', label: 'Map · Manager',      group: 'Map' },
+      // Legacy names (pre-migration rows) — shown so nothing renders as raw text.
+      'team_member':        { icon: '👥', label: 'Staff (legacy)',     group: 'Site' },
+      'media_feeder':       { icon: '📸', label: 'Wire · Contributor (legacy)', group: 'The Wire' },
+      'map_editor':         { icon: '📝', label: 'Map · Editor (legacy)',       group: 'Map' },
+      'data_feeder':        { icon: '🗃️', label: 'Feeder · Agency data (legacy)', group: 'Feeder' },
+      'pager_contributor':  { icon: '📟', label: 'Feeder · Pager (legacy)',     group: 'Feeder' },
+      'radio_contributor':  { icon: '📻', label: 'Feeder · Radio (legacy)',     group: 'Feeder' },
+      'node_monitor':       { icon: '👁️', label: 'Feeder · Monitor (legacy)',   group: 'Feeder' },
+    };
+    // Roles offered in the approval + edit-roles modals, grouped for display.
+    // Managers are NOT privileged — any staff may assign them; only owner/staff
+    // are gated behind can_assign_privileged_roles.
+    const ASSIGNABLE_ROLE_GROUPS = [
+      { group: 'The Wire', roles: ['wire:contributor', 'wire:manager'] },
+      { group: 'Feeder',   roles: ['feeder:radio', 'feeder:pager', 'feeder:agency_data', 'feeder:monitor', 'feeder:manager'] },
+      { group: 'Map',      roles: ['map:editor', 'map:manager'] },
+    ];
+    const PRIVILEGED_ASSIGNABLE = ['staff', 'owner'];
+
+    const ROLE_HINTS = {
+      'wire:contributor': 'Post photos/video + articles to The Wire',
+      'wire:manager': 'Approve Wire posts, action takedowns (can post too)',
+      'feeder:radio': 'Run a radio feeder node',
+      'feeder:pager': 'Run a pager feeder node',
+      'feeder:agency_data': 'Edit agency reference tables (via approval)',
+      'feeder:monitor': 'View-only Data + Nodes pages',
+      'feeder:manager': 'Manage feeder nodes/config + review data changes',
+      'map:editor': 'Edit map markers',
+      'map:manager': 'Map editor oversight',
+      'staff': 'Approve signups + manage users/roles',
+      'owner': 'Full admin access',
+    };
+    /** Render grouped role checkboxes into a container. idPrefix keeps the
+     *  approval + edit-roles modals independent. */
+    function renderRoleCheckboxes(containerId, idPrefix, privilegedContainerId) {
+      const box = document.getElementById(containerId);
+      if (box) {
+        box.innerHTML = ASSIGNABLE_ROLE_GROUPS.map(g =>
+          `<div class="role-group-hd">${escapeHtml(g.group)}</div>` +
+          g.roles.map(role => roleCheckboxHtml(idPrefix, role)).join('')
+        ).join('');
+      }
+      const pbox = privilegedContainerId ? document.getElementById(privilegedContainerId) : null;
+      if (pbox) {
+        pbox.innerHTML = `<div class="role-group-hd">Privileged</div>` +
+          PRIVILEGED_ASSIGNABLE.map(role => roleCheckboxHtml(idPrefix, role)).join('');
+      }
+    }
+    function roleCheckboxHtml(idPrefix, role) {
+      const info = ROLE_LABELS[role] || { icon: '•', label: role };
+      const hint = ROLE_HINTS[role] || '';
+      return `<label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;color:var(--text-primary);">
+        <input type="checkbox" data-role="${escapeHtml(role)}" id="${idPrefix}${roleClass(role)}" style="width:16px;height:16px;accent-color:var(--accent);">
+        <span>${info.icon} ${escapeHtml(info.label)}</span>
+        ${hint ? `<span style="color:var(--text-soft);font-size:0.75rem;">- ${escapeHtml(hint)}</span>` : ''}
+      </label>`;
+    }
+    /** Collect the checked roles out of a modal's containers. */
+    function collectRoles(...containerIds) {
+      const out = [];
+      containerIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.querySelectorAll('input[type="checkbox"][data-role]').forEach(cb => {
+          if (cb.checked) out.push(cb.dataset.role);
+        });
+      });
+      return out;
+    }
+    /** Tick the boxes matching a user's current roles (legacy names map across). */
+    function applyRoleChecks(userRoles, ...containerIds) {
+      const want = new Set((userRoles || []).map(r => LEGACY_TO_NEW[r] || r));
+      containerIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.querySelectorAll('input[type="checkbox"][data-role]').forEach(cb => {
+          cb.checked = want.has(cb.dataset.role);
+        });
+      });
+    }
+    // Legacy → current, mirroring ROLE_ALIASES in the backend's roles.ts.
+    const LEGACY_TO_NEW = {
+      team_member: 'staff',
+      radio_contributor: 'feeder:radio',
+      pager_contributor: 'feeder:pager',
+      data_feeder: 'feeder:agency_data',
+      node_monitor: 'feeder:monitor',
+      media_feeder: 'wire:contributor',
+      map_editor: 'map:editor',
+    };
+
+    // 'authed' is the base role EVERY account carries — it doesn't make someone
+    // a member, so it's excluded everywhere we ask "does this user have a role?"
+    const BASE_ROLE = 'authed';
+    function realRoles(user) {
+      return (user.roles || []).map(r => r.role).filter(r => r && r !== BASE_ROLE);
+    }
+    function isMember(user) { return realRoles(user).length > 0; }
+    // Role strings contain ':' which is not valid in a CSS class — swap for '-'
+    // so `.role-badge.wire-contributor` styling works.
+    function roleClass(role) { return String(role).replace(/[^a-z0-9_-]/gi, '-'); }
+
     function updateUserStats() {
-      const editors = allUsers.filter(u => (u.roles || []).some(r => r.role === 'map_editor')).length;
-      const pager = allUsers.filter(u => (u.roles || []).some(r => r.role === 'pager_contributor')).length;
-      const radio = allUsers.filter(u => (u.roles || []).some(r => r.role === 'radio_contributor')).length;
+      const members = allUsers.filter(isMember).length;
+      const plain = allUsers.length - members;
+      const wire = allUsers.filter(u => realRoles(u).some(r => r.startsWith('wire:'))).length;
+      const feeders = allUsers.filter(u => realRoles(u).some(r => r.startsWith('feeder:'))).length;
       const discordLinked = allUsers.filter(u => u.discord_linked).length;
       const groups = _userDupeGroups();
       const dupes = allUsers.filter(u => _isDupeUser(u, groups)).length;
 
       document.getElementById('stat-users').textContent = allUsers.length;
-      document.getElementById('stat-editors').textContent = editors;
-      document.getElementById('stat-pager').textContent = pager;
-      document.getElementById('stat-radio').textContent = radio;
+      document.getElementById('stat-members').textContent = members;
+      document.getElementById('stat-plainusers').textContent = plain;
+      document.getElementById('stat-wire').textContent = wire;
+      document.getElementById('stat-feeders').textContent = feeders;
       document.getElementById('stat-discord').textContent = discordLinked;
       const dupesEl = document.getElementById('stat-dupes');
       dupesEl.textContent = dupes;
       dupesEl.style.color = dupes > 0 ? 'var(--warning)' : 'var(--success)';
+      // Dropdown counts
+      const mb = document.getElementById('dd-members-badge');
+      if (mb) { mb.style.display = members ? '' : 'none'; mb.textContent = members; }
+      const ub = document.getElementById('dd-users-badge');
+      if (ub) { ub.style.display = plain ? '' : 'none'; ub.textContent = plain; }
     }
 
     let dupesOnly = false;
@@ -9759,55 +9882,48 @@
     function renderUsers() {
       const q = (document.getElementById('user-search')?.value || '').trim().toLowerCase();
       const dupeGroups = _userDupeGroups();
+      // Auth tab split: Members hold at least one real role; Users hold only
+      // the base 'authed' role (or nothing yet).
+      const inView = allUsers.filter(u => (_authKind === 'members' ? isMember(u) : !isMember(u)));
       let shown = q
-        ? allUsers.filter(u =>
+        ? inView.filter(u =>
             (u.email || '').toLowerCase().includes(q) ||
             (u.username || '').toLowerCase().includes(q) ||
             (u.discord_id || '').toLowerCase().includes(q) ||
             (u.roles || []).some(r => (r.role || '').toLowerCase().includes(q)))
-        : allUsers;
+        : inView;
       if (dupesOnly) shown = shown.filter(u => _isDupeUser(u, dupeGroups));
 
+      const noun = _authKind === 'members' ? 'members' : 'users';
       const countEl = document.getElementById('user-count');
       if (countEl) {
         countEl.textContent = q
-          ? `${shown.length} of ${allUsers.length} users`
-          : `${allUsers.length} users`;
+          ? `${shown.length} of ${inView.length} ${noun}`
+          : `${inView.length} ${noun}`;
       }
 
       if (shown.length === 0) {
         document.getElementById('users-container').innerHTML = `
           <div class="empty-state">
             <i class="fas fa-users"></i>
-            <p>No ${q ? 'matching ' : ''}users found.</p>
+            <p>No ${q ? 'matching ' : ''}${noun} found.</p>
           </div>
         `;
         return;
       }
 
-      const roleLabels = {
-        'map_editor': { icon: '📝', label: 'Editor' },
-        'pager_contributor': { icon: '📟', label: 'Pager' },
-        'radio_contributor': { icon: '📻', label: 'Radio' },
-        'team_member': { icon: '👥', label: 'Team' },
-        'dev': { icon: '💻', label: 'Dev' },
-        'owner': { icon: '👑', label: 'Owner' },
-        'node_monitor': { icon: '👁️', label: 'Node Monitor' },
-        'data_feeder': { icon: '🗃️', label: 'Data Feeder' },
-        'media_feeder': { icon: '📸', label: 'Media Feeder' }
-      };
-      
       const rows = shown.map(user => {
 
-        // Render roles
+        // Render roles (the base 'authed' role is implicit — never shown).
         let rolesHtml = '';
-        if (user.roles && user.roles.length > 0) {
-          rolesHtml = user.roles.map(r => {
-            const info = roleLabels[r.role] || { icon: '•', label: escapeHtml(r.role) };
-            return `<span class="role-badge ${escapeHtml(r.role)}">${info.icon} ${info.label}</span>`;
+        const shownRoles = realRoles(user);
+        if (shownRoles.length > 0) {
+          rolesHtml = shownRoles.map(role => {
+            const info = ROLE_LABELS[role] || { icon: '•', label: escapeHtml(role) };
+            return `<span class="role-badge ${roleClass(role)}">${info.icon} ${info.label}</span>`;
           }).join('');
         } else {
-          rolesHtml = '<span class="no-roles">No roles</span>';
+          rolesHtml = '<span class="no-roles">User</span>';
         }
         
         // Discord cell: same Discord mark whether the account is OAuth-linked or
@@ -9957,15 +10073,8 @@
 
       // Set checkbox states based on current roles
       const userRoles = (user.roles || []).map(r => r.role);
-      document.getElementById('edit-role-map-editor').checked = userRoles.includes('map_editor');
-      document.getElementById('edit-role-pager-contributor').checked = userRoles.includes('pager_contributor');
-      document.getElementById('edit-role-radio-contributor').checked = userRoles.includes('radio_contributor');
-      document.getElementById('edit-role-node-monitor').checked = userRoles.includes('node_monitor');
-      document.getElementById('edit-role-data-feeder').checked = userRoles.includes('data_feeder');
-      document.getElementById('edit-role-media-feeder').checked = userRoles.includes('media_feeder');
-      document.getElementById('edit-role-team-member').checked = userRoles.includes('team_member');
-      document.getElementById('edit-role-dev').checked = userRoles.includes('dev');
-      document.getElementById('edit-role-owner').checked = userRoles.includes('owner');
+      renderRoleCheckboxes('edit-roles-box', 'edit-role-', 'edit-privileged-roles-section');
+      applyRoleChecks(userRoles, 'edit-roles-box', 'edit-privileged-roles-section');
 
       // Team members can only manage the feature roles — hide the
       // privileged section for them (the checkboxes keep the user's
@@ -9986,15 +10095,7 @@
       if (!currentEditUserId) return;
       
       const roles = [];
-      if (document.getElementById('edit-role-map-editor').checked) roles.push('map_editor');
-      if (document.getElementById('edit-role-pager-contributor').checked) roles.push('pager_contributor');
-      if (document.getElementById('edit-role-radio-contributor').checked) roles.push('radio_contributor');
-      if (document.getElementById('edit-role-node-monitor').checked) roles.push('node_monitor');
-      if (document.getElementById('edit-role-data-feeder').checked) roles.push('data_feeder');
-      if (document.getElementById('edit-role-media-feeder').checked) roles.push('media_feeder');
-      if (document.getElementById('edit-role-team-member').checked) roles.push('team_member');
-      if (document.getElementById('edit-role-dev').checked) roles.push('dev');
-      if (document.getElementById('edit-role-owner').checked) roles.push('owner');
+      roles.push(...collectRoles('edit-roles-box', 'edit-privileged-roles-section'));
       
       try {
         const response = await fetch(`${API_BASE_URL}/api/users/${currentEditUserId}/roles`, {
@@ -10196,11 +10297,16 @@
       document.getElementById('confirm-requested').textContent = requestedTypes;
       
       // Pre-select roles based on what they requested
-      document.getElementById('role-map-editor').checked = (req.request_type || []).includes('editor');
-      document.getElementById('role-pager-contributor').checked = (req.request_type || []).includes('pager_feeder');
-      document.getElementById('role-radio-contributor').checked = (req.request_type || []).includes('radio_feeder');
-      document.getElementById('role-team-member').checked = false;
-      document.getElementById('role-dev').checked = false;
+      // Rebuild the checkboxes, then pre-tick the roles implied by what they
+      // asked for on the signup form (request_type values are unchanged).
+      renderRoleCheckboxes('approve-roles-box', 'role-', 'privileged-roles-section');
+      const reqTypes = req.request_type || [];
+      const preselect = [];
+      if (reqTypes.includes('editor')) preselect.push('map:editor');
+      if (reqTypes.includes('pager_feeder')) preselect.push('feeder:pager');
+      if (reqTypes.includes('radio_feeder')) preselect.push('feeder:radio');
+      if (reqTypes.includes('media_feeder')) preselect.push('wire:contributor');
+      applyRoleChecks(preselect, 'approve-roles-box', 'privileged-roles-section');
       
       // Show/hide privileged roles based on permissions
       const privilegedRolesSection = document.getElementById('privileged-roles-section');
@@ -10235,12 +10341,7 @@
       
       // Collect selected roles
       const roles = [];
-      if (document.getElementById('role-map-editor').checked) roles.push('map_editor');
-      if (document.getElementById('role-pager-contributor').checked) roles.push('pager_contributor');
-      if (document.getElementById('role-radio-contributor').checked) roles.push('radio_contributor');
-      if (document.getElementById('role-media-feeder').checked) roles.push('media_feeder');
-      if (document.getElementById('role-team-member').checked) roles.push('team_member');
-      if (document.getElementById('role-dev').checked) roles.push('dev');
+      roles.push(...collectRoles('approve-roles-box', 'privileged-roles-section'));
       
       const createAccount = document.getElementById('create-account-toggle').checked;
 
@@ -10276,16 +10377,11 @@
         document.getElementById('approved-email').textContent = data.email;
         document.getElementById('approved-discord').textContent = fmtDiscordId(data.discord_id);
         
-        // Format assigned roles
-        const roleLabels = {
-          'map_editor': '📝 Map Editor',
-          'pager_contributor': '📟 Pager Contributor',
-          'radio_contributor': '📻 Radio Contributor',
-          'media_feeder': '📸 Media Feeder',
-          'team_member': '👥 Team Member',
-          'dev': '💻 Developer'
-        };
-        const rolesText = (data.roles || []).map(r => roleLabels[r] || r).join(', ');
+        // Format assigned roles from the shared label map.
+        const rolesText = (data.roles || [])
+          .filter(r => r && r !== 'authed')
+          .map(r => { const i = ROLE_LABELS[r]; return i ? `${i.icon} ${i.label}` : r; })
+          .join(', ');
         document.getElementById('approved-roles').textContent = rolesText || 'None';
         
         // Handle password display
