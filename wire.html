@@ -164,6 +164,12 @@
     .wd-btn:hover { border-color: var(--accent); color: var(--accent); }
     .wd-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
     .wd-btn.ok { border-color: rgba(34,197,94,0.45); color: #22c55e; }
+    .wire-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px); z-index: 9999;
+      background: var(--bg-elevated); color: var(--text-main); border: 1px solid var(--border-subtle);
+      border-radius: 10px; padding: 0.7rem 1.1rem; font-size: 0.88rem; box-shadow: var(--shadow-soft);
+      opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; max-width: min(90vw, 420px); }
+    .wire-toast.err { border-color: rgba(239,68,68,0.5); }
+    .wire-toast.on { opacity: 1; transform: translate(-50%, 0); }
 
     /* Newswire detail treatment (matches the mockup): mono labels/meta, eyebrow,
        bigger stat numbers, uppercase mono buttons, "your post" badge. */
@@ -434,8 +440,18 @@
       return new Date(iso).toLocaleDateString('en-AU');
     }
 
-    function wireCards() {
-      $('#grid').querySelectorAll('.wire-card').forEach((el) => el.addEventListener('click', () => openDetail(el.dataset.kind, el.dataset.key)));
+    // Lightweight non-blocking toast (replaces alert() for transient errors).
+    let _toastT;
+    function toast(text, isErr = true) {
+      let el = document.getElementById('wireToast');
+      if (!el) {
+        el = document.createElement('div'); el.id = 'wireToast';
+        el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite');
+        document.body.appendChild(el);
+      }
+      el.textContent = text;
+      el.className = 'wire-toast' + (isErr ? ' err' : '') + ' on';
+      clearTimeout(_toastT); _toastT = setTimeout(() => el.classList.remove('on'), 3200);
     }
 
     async function loadMine() {
@@ -517,7 +533,7 @@
       const path = kind === 'article' ? `articles/${encodeURIComponent(key)}` : `media/${encodeURIComponent(key)}`;
       try {
         const r = await fetch(`${API_BASE}/api/wire/${path}`, { headers: await userHeaders() });
-        if (!r.ok) { alert('Post not found.'); return; }
+        if (!r.ok) { toast('Post not found.'); return; }
         const j = await r.json();
         if (j.tombstone) {
           renderTombstone();
@@ -726,7 +742,7 @@
       const base = item.kind === 'article' ? 'articles' : 'media';
       const url = `${API_BASE}/api/wire/${base}/${encodeURIComponent(item.id)}${moderate ? '/remove' : ''}`;
       const r = await fetch(url, { method: moderate ? 'POST' : 'DELETE', headers: await userHeaders() });
-      if (r.ok) { closeDetail(); loadFeed(); } else { alert(`Failed to ${verb}.`); }
+      if (r.ok) { closeDetail(); loadFeed(); } else { toast(`Failed to ${verb}.`); }
     }
 
     // ---- section label / filters / routing ----

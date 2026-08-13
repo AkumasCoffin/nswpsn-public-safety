@@ -283,8 +283,8 @@ function isoOrNull(v: unknown): string | null {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function shapeMediaPost(row: any, media: WireMediaRow[]): Record<string, unknown> {
-  const shaped = media.map(shapeMedia);
+function shapeMediaPost(row: any, media: WireMediaRow[], includeKeys = false): Record<string, unknown> {
+  const shaped = media.map((m) => shapeMedia(m, includeKeys));
   const cover = shaped.find((m) => m['is_cover']) ?? shaped[0] ?? null;
   return {
     id: row.id,
@@ -310,8 +310,8 @@ function shapeMediaPost(row: any, media: WireMediaRow[]): Record<string, unknown
   };
 }
 
-function shapeArticle(row: any, media: WireMediaRow[]): Record<string, unknown> {
-  const shaped = media.map(shapeMedia);
+function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Record<string, unknown> {
+  const shaped = media.map((m) => shapeMedia(m, includeKeys));
   const cover = shaped.find((m) => m['is_cover']) ?? shaped.find((m) => m['kind'] === 'image') ?? null;
   return {
     id: row.id,
@@ -423,7 +423,12 @@ wireRouter.get('/api/wire/media', async (c) => {
 
     const vals: unknown[] = [];
     const where: string[] = [];
-    if (mine && uid) { vals.push(uid); where.push(`author_id = $${vals.length}`); }
+    if (mine && uid) {
+      // Author's own posts — including pending/rejected/draft — but NOT content
+      // a moderator removed or that was taken down (DMCA); that's retracted.
+      vals.push(uid);
+      where.push(`author_id = $${vals.length} AND status <> 'removed' AND taken_down_at IS NULL`);
+    }
     else {
       where.push(`status = 'published' AND taken_down_at IS NULL`);
       // Public "posts by this contributor" (their published posts only).
@@ -472,7 +477,8 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'media_post', [id]);
-    return c.json({ post: shapeMediaPost(row, mediaMap.get(id) ?? []) });
+    // Author/admin get storage keys + hash so the compose editor can round-trip.
+    return c.json({ post: shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)) });
   } catch (err) {
     log.error({ err, id }, 'wire: get media failed');
     return c.json({ error: 'failed to fetch media post' }, 500);
@@ -529,7 +535,7 @@ wireRouter.get('/api/wire/og/:type/:key', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, parentType, [row.id]);
-    const shaped = (mediaMap.get(row.id) ?? []).map(shapeMedia);
+    const shaped = (mediaMap.get(row.id) ?? []).map((m) => shapeMedia(m)); // public: no keys
     const cover =
       shaped.find((m) => m['is_cover']) ??
       shaped.find((m) => m['kind'] === 'image') ??
@@ -690,8 +696,22 @@ wireRouter.delete('/api/wire/media/:id', async (c) => {
     }
     const imgIds = await imageIdsFor(pool, 'media_post', id);
     const r2keys = await r2KeysFor(pool, 'media_post', id);
-    await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
-    await pool.query('DELETE FROM media_posts WHERE id = $1', [id]);
+    // Delete the child media rows + the parent atomically so a mid-delete
+    // failure can't leave a post with no media (or vice-versa).
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
+      await client.query('DELETE FROM media_posts WHERE id = $1', [id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    // Storage cleanup is best-effort and runs after the rows are gone (safeDeleteR2
+    // ref-counts against remaining wire_media, so it must follow the delete).
     for (const iid of imgIds) await deleteCfImage(iid);
     for (const k of r2keys) await safeDeleteR2(pool, k);
     return c.json({ success: true });
@@ -729,7 +749,12 @@ wireRouter.get('/api/wire/articles', async (c) => {
 
     const vals: unknown[] = [];
     const where: string[] = [];
-    if (mine && uid) { vals.push(uid); where.push(`author_id = $${vals.length}`); }
+    if (mine && uid) {
+      // Author's own posts — including pending/rejected/draft — but NOT content
+      // a moderator removed or that was taken down (DMCA); that's retracted.
+      vals.push(uid);
+      where.push(`author_id = $${vals.length} AND status <> 'removed' AND taken_down_at IS NULL`);
+    }
     else {
       where.push(`status = 'published' AND taken_down_at IS NULL`);
       // Public "posts by this contributor" (their published posts only).
@@ -775,7 +800,8 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'article', [row.id]);
-    return c.json({ article: shapeArticle(row, mediaMap.get(row.id) ?? []) });
+    // Author/admin get storage keys + hash so the compose editor can round-trip.
+    return c.json({ article: shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)) });
   } catch (err) {
     log.error({ err, slug }, 'wire: get article failed');
     return c.json({ error: 'failed to fetch article' }, 500);
@@ -929,8 +955,19 @@ wireRouter.delete('/api/wire/articles/:id', async (c) => {
     if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) return c.json({ error: 'forbidden' }, 403);
     const imgIds = await imageIdsFor(pool, 'article', id);
     const r2keys = await r2KeysFor(pool, 'article', id);
-    await pool.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
-    await pool.query('DELETE FROM articles WHERE id = $1', [id]);
+    // Delete child media + parent atomically (see media delete for rationale).
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
+      await client.query('DELETE FROM articles WHERE id = $1', [id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
     for (const iid of imgIds) await deleteCfImage(iid);
     for (const k of r2keys) await safeDeleteR2(pool, k);
     return c.json({ success: true });

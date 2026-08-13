@@ -246,7 +246,14 @@ export interface WireMediaRow {
 }
 
 /** Attach delivery URLs so the frontend never constructs storage URLs itself. */
-export function shapeMedia(row: WireMediaRow): Record<string, unknown> {
+/**
+ * Shape a wire_media row for the API. Storage keys + the content hash are only
+ * emitted when `includeKeys` is true — i.e. to the author/admin, so the compose
+ * editor can round-trip existing media on edit without re-uploading. Public
+ * reads omit them: they're not needed to render, and the hash in particular is
+ * internal (used for dedup) and shouldn't be broadcast.
+ */
+export function shapeMedia(row: WireMediaRow, includeKeys = false): Record<string, unknown> {
   const out: Record<string, unknown> = {
     id: row.id,
     kind: row.kind,
@@ -256,15 +263,14 @@ export function shapeMedia(row: WireMediaRow): Record<string, unknown> {
     width: row.width,
     height: row.height,
     duration_seconds: row.duration_seconds,
-    // Storage keys are already derivable from the delivery URL below, so
-    // exposing them is not a leak — and it lets the compose editor round-trip
-    // existing media on edit without re-uploading.
-    cf_image_id: row.cf_image_id,
-    r2_key: row.r2_key,
-    poster_r2_key: row.poster_r2_key,
-    poster_cf_image_id: row.poster_cf_image_id,
-    hash: row.hash ?? null,
   };
+  if (includeKeys) {
+    out['cf_image_id'] = row.cf_image_id;
+    out['r2_key'] = row.r2_key;
+    out['poster_r2_key'] = row.poster_r2_key;
+    out['poster_cf_image_id'] = row.poster_cf_image_id;
+    out['hash'] = row.hash ?? null;
+  }
   if (row.kind === 'image') {
     // New images live in R2 (single optimised WebP). Legacy Cloudflare-Images
     // rows fall back to variant URLs.

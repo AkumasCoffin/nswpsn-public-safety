@@ -49,8 +49,8 @@ describe('wire.license', () => {
 });
 
 describe('wire.shapeMedia', () => {
-  it('serves R2 images (single optimised size) and round-trips the key', () => {
-    const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp', is_cover: true, unit: 'P421' }));
+  it('serves R2 images (single optimised size) and round-trips the key when includeKeys', () => {
+    const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp', is_cover: true, unit: 'P421' }), true);
     expect(out['kind']).toBe('image');
     expect(out['is_cover']).toBe(true);
     expect(out['unit']).toBe('P421');
@@ -58,12 +58,22 @@ describe('wire.shapeMedia', () => {
     expect(String(out['url'])).toContain('abc.webp');
     expect(out['thumb_url']).toBe(out['url']);
   });
+  it('hides storage keys + hash from public (default) responses', () => {
+    const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp', hash: 'deadbeef' }));
+    // Delivery URL is still present so the image renders...
+    expect(String(out['url'])).toContain('abc.webp');
+    // ...but the internal storage key, cf id and content hash are NOT exposed.
+    expect(out).not.toHaveProperty('r2_key');
+    expect(out).not.toHaveProperty('cf_image_id');
+    expect(out).not.toHaveProperty('hash');
+    expect(out).not.toHaveProperty('poster_r2_key');
+  });
   it('falls back to Cloudflare variants for legacy cf-only image rows', () => {
     const out = shapeMedia(mediaRow({ kind: 'image', cf_image_id: 'abc' }));
     expect(String(out['url'])).toContain('/abc/public');
   });
   it('shapes a video with its r2 public url', () => {
-    const out = shapeMedia(mediaRow({ kind: 'video', r2_key: 'vids/x.mp4' }));
+    const out = shapeMedia(mediaRow({ kind: 'video', r2_key: 'vids/x.mp4' }), true);
     expect(out['kind']).toBe('video');
     expect(out['r2_key']).toBe('vids/x.mp4');
     // url is present (exact host depends on R2_PUBLIC_BASE env; may be undefined base)
