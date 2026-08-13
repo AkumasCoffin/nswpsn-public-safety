@@ -3417,6 +3417,7 @@
       // but NOT this — every mutating control is hidden when it's false.
       can_manage_nodes: false,
       can_assign_privileged_roles: false,
+      roles: [],
       tabs: { requests: false, users: false, dev: false, nodes: false, data: false }
     };
 
@@ -9203,6 +9204,8 @@
           can_manage_users: !!result.can_manage_users,
           can_manage_nodes: canManageNodes,
           can_assign_privileged_roles: !!result.can_assign_privileged_roles,
+          // Canonical role list — drives the role chip next to the wordmark.
+          roles: Array.isArray(result.roles) ? result.roles : [],
           tabs: tabs,
         };
 
@@ -9264,7 +9267,7 @@
 
       // Role chip next to the wordmark — shows the viewer's own role mix,
       // labelled from the canonical role list the backend returned.
-      const myRoles = (result.roles || []).filter(r => r && r !== 'authed');
+      const myRoles = (userPermissions.roles || []).filter(r => r && r !== 'authed');
       const roleBits = myRoles.map(r => {
         const info = ROLE_LABELS[r];
         return info ? `${info.icon} ${info.label}` : r;
