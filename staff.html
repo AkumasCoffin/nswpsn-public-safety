@@ -1728,6 +1728,26 @@
        values (.nd-table th's left-align otherwise outranks .nd2-num). */
     .nd-table th.nd2-num { text-align: right; }
     .nd2-empty { padding: 0.9rem 1rem 1rem; color: var(--text-soft); font-size: 0.78rem; }
+    /* --- per-node pager drill-down --- */
+    .nd2-node-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted rgba(249,115,22,0.45); }
+    .nd2-node-link:hover { color: #fdba74; border-bottom-color: #fdba74; }
+    .nd2-back {
+      background: rgba(148,163,184,0.12); border: 1px solid var(--border-subtle);
+      color: var(--text-soft); border-radius: 6px; cursor: pointer;
+      width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; flex-shrink: 0;
+    }
+    .nd2-back:hover { color: var(--accent); border-color: var(--accent); }
+    .nd2-node-stats {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 0.75rem; padding: 0.9rem 1rem 0;
+    }
+    .nd2-node-stat {
+      background: rgba(2,6,23,0.4); border: 1px solid var(--border-subtle);
+      border-radius: 8px; padding: 0.7rem 0.85rem;
+    }
+    .nd2-node-stat .v { font-size: 1.35rem; font-weight: 700; line-height: 1.1; }
+    .nd2-node-stat .k { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-soft); margin-top: 0.2rem; }
 
     /* Events table shell — table scrolls inside the card, never the page. */
     .nd2-table-wrap {
@@ -2764,8 +2784,39 @@
               <div id="nd2-pov-top-caps"><div class="nd2-empty">—</div></div>
             </div>
             <div class="nd2-card">
-              <div class="nd2-card-h"><i class="fas fa-server"></i> Top Nodes</div>
+              <div class="nd2-card-h"><i class="fas fa-server"></i> Top Nodes <span class="nd-sub" style="font-weight:400;text-transform:none;letter-spacing:0;">— click a node to see what it's receiving</span></div>
               <div id="nd2-pov-top-nodes"><div class="nd2-empty">—</div></div>
+            </div>
+          </div>
+
+          <!-- Per-node drill-down: what THIS node is hearing. Hidden until a
+               node is picked from Top Nodes. -->
+          <div id="nd2-node-panel" style="display:none; margin-top:1.25rem;">
+            <div class="nd2-card">
+              <div class="nd2-card-h" style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+                <button class="nd2-back" onclick="nd2CloseNodeView()" title="Back to overview"><i class="fas fa-arrow-left"></i></button>
+                <i class="fas fa-satellite-dish"></i>
+                <span id="nd2-node-title">Node</span>
+                <span class="nd-sub" id="nd2-node-sub" style="font-weight:400;text-transform:none;letter-spacing:0;"></span>
+              </div>
+
+              <div class="nd2-node-stats" id="nd2-node-stats"></div>
+
+              <div class="nd2-chart-wrap" style="margin:1rem 0;">
+                <canvas id="nd2-node-chart" height="90"></canvas>
+                <div class="nd2-empty" id="nd2-node-chart-empty" style="display:none;">No pages in this window yet.</div>
+              </div>
+
+              <div class="nd2-top-grid">
+                <div class="nd2-card" style="background:transparent;border:0;padding:0;">
+                  <div class="nd2-card-h"><i class="fas fa-hashtag"></i> Top Capcodes on this node</div>
+                  <div id="nd2-node-caps"><div class="nd2-empty">—</div></div>
+                </div>
+                <div class="nd2-card" style="background:transparent;border:0;padding:0;">
+                  <div class="nd2-card-h"><i class="fas fa-list"></i> Recent pages</div>
+                  <div id="nd2-node-recent"><div class="nd2-empty">—</div></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -4946,6 +4997,8 @@
         nd2ShowError(e.status, e.message);
       }
       nd2RenderPagerOverview();
+      // Keep an open per-node drill-down in step with the window selector.
+      if (_nd2NodeId) nd2OpenNodeView(_nd2NodeId);
     }
 
     function nd2RenderPagerOverview() {
@@ -4965,11 +5018,123 @@
           nd2CapCell(c), nd2Num(c.pages), nd2PagerNodeChip(c.topNode),
         ]));
       const nodesEl = document.getElementById('nd2-pov-top-nodes');
-      if (nodesEl) nodesEl.innerHTML = nd2MiniTable(
-        [{ label: 'Node' }, { label: 'Pages', num: true }],
-        ((ov && ov.topNodes) || []).map(n => [
-          escapeHtml(n.name || String(n.nodeId)), nd2Num(n.pages),
+      if (nodesEl) {
+        nodesEl.innerHTML = nd2MiniTable(
+          [{ label: 'Node' }, { label: 'Pages', num: true }],
+          ((ov && ov.topNodes) || []).map(n => [
+            `<a href="#" class="nd2-node-link" data-node-id="${escapeHtml(String(n.nodeId))}">${escapeHtml(n.name || String(n.nodeId))}</a>`,
+            nd2Num(n.pages),
+          ]));
+        // Delegated so it survives re-renders.
+        nodesEl.onclick = (e) => {
+          const a = e.target.closest('.nd2-node-link');
+          if (!a) return;
+          e.preventDefault();
+          nd2OpenNodeView(a.dataset.nodeId);
+        };
+      }
+    }
+
+    // ---- per-node pager drill-down -------------------------------------
+    let _nd2NodeChart = null;
+    let _nd2NodeId = null;
+    function nd2CloseNodeView() {
+      _nd2NodeId = null;
+      const p = document.getElementById('nd2-node-panel');
+      if (p) p.style.display = 'none';
+    }
+    async function nd2OpenNodeView(nodeId) {
+      if (!nodeId) return;
+      _nd2NodeId = nodeId;
+      const panel = document.getElementById('nd2-node-panel');
+      if (panel) panel.style.display = '';
+      const statsEl = document.getElementById('nd2-node-stats');
+      if (statsEl) statsEl.innerHTML = '<div class="nd2-empty">Loading…</div>';
+      try {
+        const d = await nd2Fetch(`/api/node-data/pager-node?nodeId=${encodeURIComponent(nodeId)}&window=${encodeURIComponent(nd2.window)}&limit=50`);
+        if (!d || _nd2NodeId !== nodeId) return; // superseded by a newer click
+        nd2RenderNodeView(d);
+        if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (e) {
+        if (statsEl) statsEl.innerHTML = '<div class="nd2-empty">Could not load this node.</div>';
+      }
+    }
+    function nd2RenderNodeView(d) {
+      const t = (d && d.totals) || {};
+      const titleEl = document.getElementById('nd2-node-title');
+      if (titleEl) titleEl.textContent = (d.node && (d.node.name || d.node.id)) || 'Node';
+      const subEl = document.getElementById('nd2-node-sub');
+      if (subEl) {
+        subEl.textContent = t.lastHeard ? `last heard ${nd2Ago(t.lastHeard)}` : 'nothing heard in this window';
+      }
+      // "Only this node" is the node's real coverage contribution — pages no
+      // other node picked up. A node with lots of pages but ~0 unique is
+      // redundant; one with few pages but high unique is covering a gap.
+      const statsEl = document.getElementById('nd2-node-stats');
+      if (statsEl) {
+        statsEl.innerHTML = [
+          ['Pages', nd2Num(t.pages)],
+          ['Receptions', nd2Num(t.receptions)],
+          ['Capcodes', nd2Num(t.capcodes)],
+          ['Only this node', nd2Num(t.unique)],
+        ].map(([k, v]) => `<div class="nd2-node-stat"><div class="v">${v}</div><div class="k">${escapeHtml(k)}</div></div>`).join('');
+      }
+      // Hourly chart, same options as the overview pager chart.
+      const series = (d.series || []).map(p => ({ x: new Date(p.hour), y: p.pages }));
+      const cv = document.getElementById('nd2-node-chart');
+      const empty = document.getElementById('nd2-node-chart-empty');
+      if (cv && empty) {
+        const has = series.length > 0;
+        cv.style.display = has ? '' : 'none';
+        empty.style.display = has ? 'none' : '';
+        if (_nd2NodeChart) { _nd2NodeChart.destroy(); _nd2NodeChart = null; }
+        if (has && window.Chart) {
+          _nd2NodeChart = new Chart(cv.getContext('2d'), {
+            type: 'line',
+            data: { datasets: [{ label: 'Pages', data: series, borderColor: '#f97316',
+              backgroundColor: 'rgba(249,115,22,0.15)', fill: true, tension: 0.35,
+              pointRadius: 0, borderWidth: 2 }] },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                x: { type: 'time', time: { unit: 'hour' }, grid: { color: 'rgba(148,163,184,0.08)' },
+                     ticks: { color: '#64748b', maxTicksLimit: 8 } },
+                y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,0.08)' },
+                     ticks: { color: '#64748b', precision: 0 } },
+              },
+            },
+          });
+        }
+      }
+      const capsEl = document.getElementById('nd2-node-caps');
+      if (capsEl) capsEl.innerHTML = nd2MiniTable(
+        [{ label: 'Capcode' }, { label: 'Pages', num: true }],
+        (d.topCapcodes || []).map(c => [nd2CapCell(c), nd2Num(c.pages)]));
+      const recEl = document.getElementById('nd2-node-recent');
+      const msgs = (d.recent && d.recent.messages) || [];
+      if (recEl) recEl.innerHTML = nd2MiniTable(
+        [{ label: 'Time' }, { label: 'Capcode' }, { label: 'Message' }],
+        msgs.map(m => [
+          `<span class="nd-sub">${escapeHtml(nd2Time(m.at))}</span>`,
+          nd2CapCell(m),
+          `<span title="${escapeHtml(m.message || '')}">${escapeHtml((m.message || '').slice(0, 90))}${(m.message || '').length > 90 ? '…' : ''}</span>`,
         ]));
+    }
+    /** Short "5m ago" style age for a timestamp. */
+    function nd2Ago(iso) {
+      const ms = Date.now() - new Date(iso).getTime();
+      if (!isFinite(ms) || ms < 0) return '';
+      const m = Math.floor(ms / 60000);
+      if (m < 1) return 'just now';
+      if (m < 60) return m + 'm ago';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + 'h ago';
+      return Math.floor(h / 24) + 'd ago';
+    }
+    function nd2Time(iso) {
+      try { return new Date(iso).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+      catch (e) { return ''; }
     }
 
     // Single-series pages-over-time line — same chart options as the radio

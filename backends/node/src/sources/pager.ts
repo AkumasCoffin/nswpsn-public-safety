@@ -20,6 +20,7 @@ import { liveStore } from '../store/live.js';
 import type { ArchiveRow } from '../store/archive.js';
 import { log } from '../lib/log.js';
 import { formatSydneyNaive } from '../lib/sydneyTime.js';
+import { learnAliasesFromMessages } from '../services/capcodeAliasSync.js';
 
 export interface PagerMessage {
   id: number | string;
@@ -357,6 +358,12 @@ export async function fetchPager(): Promise<PagerSnapshot> {
       });
     }
   }
+
+  // Teach the capcode->alias table what this poll saw. Pagermon owns the
+  // mapping and every message carries it, so this keeps the staff Data tab's
+  // alias lookup current without anyone re-exporting a CSV. Fire-and-forget:
+  // a failure here must never break the pager snapshot.
+  void learnAliasesFromMessages(out);
 
   return { messages: out, count: out.length };
 }
