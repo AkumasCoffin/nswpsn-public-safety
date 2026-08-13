@@ -249,14 +249,14 @@ export async function canReviewAgencyData(userId: string): Promise<boolean> {
 }
 
 /**
- * Owner OR wire:contributor — may publish/edit The Wire media posts and
- * articles. Note wire:manager is NOT included: managers moderate the queue but
- * don't implicitly post — grant both roles to someone who should do both.
- * Per-item edit/delete is further restricted to the author (or an admin
- * override via canManageUsers) inside the handlers.
+ * Owner, wire:contributor, OR wire:manager — may publish/edit The Wire media
+ * posts and articles. Managers post as well as moderate (and their own posts
+ * skip the approval queue — see canModerateWire, which the create handlers use
+ * to decide published-vs-pending). Per-item edit/delete is further restricted
+ * to the author (or an admin override via canManageUsers) inside the handlers.
  */
 export async function canFeedMedia(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'wire:contributor']);
+  return hasRole(userId, ['owner', 'wire:contributor', 'wire:manager']);
 }
 
 /**
