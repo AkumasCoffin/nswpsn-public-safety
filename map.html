@@ -6168,13 +6168,17 @@ function initPagerHoursFromStorage() {
       `;
 
       // --- MESSAGE CARDS ------------------------------------------------
-      // Identical messages paged to several units (SHMITTA + SHMITTA1 etc.)
-      // collapse into ONE card listing every unit that received it, instead
-      // of repeating the same text per device.
+      // Each transmission is addressed to ONE capcode, so every (capcode,
+      // message) pair is its own card. Dedup is on that pair only — which
+      // collapses the SAME message re-reported for the same capcode (multiple
+      // receiving nodes / repeated polls) into one card, while keeping separate
+      // pages to different units visible as separate entries.
       const groups = new Map();
       enriched.forEach(({ hit, parsed, ms }) => {
-        const key = (parsed.messageNoCoords || '')
-          .toUpperCase().replace(/\s+/g, ' ').replace(/\s*-\s*$/, '').trim() || `__empty:${groups.size}`;
+        const msgKey = (parsed.messageNoCoords || '')
+          .toUpperCase().replace(/\s+/g, ' ').replace(/\s*-\s*$/, '').trim();
+        const capKey = String(hit.capcode || hit.address || '').trim();
+        const key = `${capKey} ${msgKey}` || `__empty:${groups.size}`;
         let g = groups.get(key);
         if (!g) {
           g = { parsed, ms, aliases: [] };
@@ -6210,7 +6214,7 @@ function initPagerHoursFromStorage() {
               <span class="pager-hit-time">${escapeHtml(timeStr)}</span>
             </div>
             ${bodyHtml}
-            <div class="pager-hit-paged">Paged: ${aliasChips}</div>
+            <div class="pager-hit-paged">Unit: ${aliasChips}</div>
             ${raw ? `
               <details class="pager-raw">
                 <summary>Raw message</summary>
@@ -6227,7 +6231,7 @@ function initPagerHoursFromStorage() {
           ${cardsHtml}
         </div>
         <div class="pager-footnote">
-          Hits are grouped by GPS location; identical messages paged to multiple units are shown once. Map shows pager calls from the last ${pagerHours} hours.
+          Hits are grouped by GPS location; each page is listed per unit, with repeat receptions of the same message collapsed. Map shows pager calls from the last ${pagerHours} hours.
         </div>
       `;
     }
