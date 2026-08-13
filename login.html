@@ -593,7 +593,9 @@
         // "Continue with Discord" without an existing account). Send them to the
         // signup form to finish — a request is only created when they submit it,
         // so this is the only way they end up in the approval queue.
-        if (Array.isArray(d.roles) && d.roles.length === 0) return 'signup.html';
+        // 'authed' is the base role EVERY account carries — it doesn't mean the
+        // signup completed, so exclude it when asking "has no roles".
+        if (Array.isArray(d.roles) && d.roles.filter(r => r !== 'authed').length === 0) return 'signup.html';
         return 'map.html';
       } catch (e) {
         return 'map.html';
@@ -615,7 +617,7 @@
         const r = await fetch(`${API_BASE_URL}/api/check-editor/${userId}`);
         if (r.ok) {
           const d = await r.json();
-          const noRoles = Array.isArray(d.roles) ? d.roles.length === 0 : (!d.has_access && !d.is_team_member);
+          const noRoles = Array.isArray(d.roles) ? d.roles.filter(r => r !== 'authed').length === 0 : (!d.has_access && !d.is_team_member);
           // Require an EXPLICIT has_request:false — during a deploy window the
           // frontend can be live before the backend adds this field, and an
           // `undefined` here would wrongly sign out a pending (no-roles-yet) user.

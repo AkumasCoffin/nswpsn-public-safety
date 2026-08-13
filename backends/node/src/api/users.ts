@@ -20,7 +20,7 @@
  * unauthenticated). Reads require owner|team_member (canManageUsers).
  *
  * Role mutations are tiered: owners and team members can add/remove the
- * feature roles (map_editor, pager_contributor, radio_contributor), but
+ * feature roles (map:editor, feeder:pager, feeder:radio, wire:*), but
  * ONLY owners may add or remove the privileged roles (team_member, dev,
  * owner). Each mutating handler checks the specific roles being touched
  * against the actor's ownership, so a team member's PUT that carries an
@@ -47,7 +47,7 @@ export const usersRouter = new Hono();
 
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
 const PRIVILEGED_ONLY = {
-  error: 'Only owners can add or remove the team_member, dev, or owner roles.',
+  error: 'Only owners can add or remove the staff or owner roles.',
 } as const;
 
 interface SupabaseIdentity {
@@ -350,8 +350,11 @@ usersRouter.put('/api/users/:userId/roles', requireRole(canManageUsers), async (
         'SELECT role FROM user_roles WHERE user_id = $1',
         [userId],
       );
+      // Canonicalise the stored names before comparing — otherwise an
+      // un-migrated 'team_member' row wouldn't match the incoming 'staff' and
+      // a staff actor would get a spurious 403 for an unchanged privileged set.
       const currentPriv = existing.rows
-        .map((r) => r.role)
+        .map((r) => canonicalRole(r.role))
         .filter(isPrivilegedRole)
         .sort();
       const newPriv = [...new Set(newRoles.filter(isPrivilegedRole))].sort();

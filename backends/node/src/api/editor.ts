@@ -655,7 +655,7 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
       // Owner OR wire:contributor may publish to The Wire; owner|staff|
       // wire:manager may moderate any post. Surfaced so wire.html /
       // wire-compose.html can show the compose + remove controls directly.
-      can_feed_media: isOwner || isWireContributor,
+      can_feed_media: isOwner || isWireContributor || isWireManager,
       can_moderate_wire: isOwner || isStaff || isWireManager,
       has_request: hasRequest,
       roles: rawRoles,

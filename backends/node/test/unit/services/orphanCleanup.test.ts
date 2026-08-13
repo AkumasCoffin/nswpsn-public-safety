@@ -58,3 +58,29 @@ describe('selectOrphans — never removes a signed-up user', () => {
     expect(out.map((o) => o.id)).toEqual(['orphan']);
   });
 });
+
+/**
+ * Regression guard for the migration-059 base role. EVERY account now holds
+ * 'authed' (granted on login by /api/profiles/sync), so any "does this user
+ * have a role?" query MUST exclude it — otherwise no account ever looks
+ * incomplete again and orphan cleanup silently becomes a no-op.
+ */
+describe('authed base role must not count as "has a role"', () => {
+  it('accountIsIncomplete ignores an authed-only account', async () => {
+    const seen: string[] = [];
+    const pool = {
+      query: async (sql: string) => {
+        seen.push(sql);
+        // 1st call = the role lookup, 2nd = the editor_requests lookup.
+        return { rowCount: 0, rows: [] };
+      },
+    };
+    const { accountIsIncomplete } = await import('../../../src/services/orphanCleanup.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const out = await accountIsIncomplete(pool as any, 'u1', 'a@b.com');
+    expect(out).toBe(true); // no real roles + no request → incomplete
+    // The role query must filter the base role out.
+    expect(seen[0]).toContain('user_roles');
+    expect(seen[0]).toContain("role <> 'authed'");
+  });
+});

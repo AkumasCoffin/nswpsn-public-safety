@@ -1572,9 +1572,26 @@
 
     .no-roles { color: var(--text-soft); font-style: italic; font-size: 0.8rem; }
     .auth-view-note { color: var(--text-soft); font-size: 0.82rem; margin: 0 0 0.75rem; }
-    /* Grouped role checkboxes in the approval / edit-roles modals */
-    .role-group-hd { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); font-weight: 700; margin: 0.75rem 0 0.35rem; }
+    /* Grouped role checkboxes in the approval / edit-roles modals.
+       Row layout: [checkbox] [name (never wraps)] [hint (takes the rest)] —
+       mirrors the signup "I want to be a…" rows so long labels like
+       "Feeder · Agency data" stay on one line instead of breaking mid-name. */
+    .role-group-hd { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); font-weight: 700; margin: 0.9rem 0 0.4rem; }
     .role-group-hd:first-child { margin-top: 0; }
+    .role-row {
+      display: flex; align-items: flex-start; gap: 0.55rem;
+      cursor: pointer; color: var(--text-primary);
+      padding: 0.3rem 0.4rem; border-radius: 6px; line-height: 1.35;
+      transition: background 0.15s;
+    }
+    .role-row:hover { background: rgba(148, 163, 184, 0.08); }
+    .role-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; margin-top: 0.15rem; }
+    .role-row .role-name { white-space: nowrap; font-size: 0.88rem; font-weight: 600; }
+    .role-row .role-hint { flex: 1 1 auto; min-width: 0; color: var(--text-soft); font-size: 0.75rem; align-self: center; }
+    @media (max-width: 520px) {
+      .role-row { flex-wrap: wrap; }
+      .role-row .role-hint { flex-basis: 100%; margin-left: 2.1rem; align-self: auto; }
+    }
 
     /* === Toasts ======================================================== */
     #toast-stack {
@@ -2110,7 +2127,7 @@
       
       <div style="border-top: 1px solid var(--border-subtle); margin-top: 1.5rem; padding-top: 1.5rem; text-align: center;">
         <p style="color: var(--text-soft); font-size: 0.8rem;">
-          <i class="fas fa-lock"></i> Owner, Team Member, or Dev role required
+          <i class="fas fa-lock"></i> Staff access required
         </p>
       </div>
     </div>
@@ -9146,7 +9163,7 @@
         });
         
         if (!response.ok) {
-          document.getElementById('login-message').textContent = 'Access denied. Owner, Team Member, or Dev role required.';
+          document.getElementById('login-message').textContent = 'Access denied. You need a staff or manager role to open this page.';
           return;
         }
         
@@ -9157,10 +9174,13 @@
               <i class="fas fa-exclamation-triangle"></i> Access Denied
             </div>
             <div style="font-size: 0.85rem;">
-              You need the <strong>Owner</strong>, <strong>Team Member</strong>, or <strong>Dev</strong> role to access this page.
-              ${result.roles && result.roles.length > 0 
-                ? `<br><br>Your current roles: ${escapeHtml(result.roles.join(', '))}`
-                : '<br><br>You have no assigned roles.'}
+              You need the <strong>Owner</strong>, <strong>Staff</strong>, or a <strong>manager</strong> role to access this page.
+              ${(() => {
+                const rs = (result.roles || []).filter(r => r !== 'authed');
+                return rs.length
+                  ? `<br><br>Your current roles: ${escapeHtml(rs.join(', '))}`
+                  : '<br><br>You have no assigned roles.';
+              })()}
             </div>
           `;
           // Show logout button
@@ -9764,10 +9784,10 @@
     function roleCheckboxHtml(idPrefix, role) {
       const info = ROLE_LABELS[role] || { icon: '•', label: role };
       const hint = ROLE_HINTS[role] || '';
-      return `<label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;color:var(--text-primary);">
-        <input type="checkbox" data-role="${escapeHtml(role)}" id="${idPrefix}${roleClass(role)}" style="width:16px;height:16px;accent-color:var(--accent);">
-        <span>${info.icon} ${escapeHtml(info.label)}</span>
-        ${hint ? `<span style="color:var(--text-soft);font-size:0.75rem;">- ${escapeHtml(hint)}</span>` : ''}
+      return `<label class="role-row">
+        <input type="checkbox" data-role="${escapeHtml(role)}" id="${idPrefix}${roleClass(role)}">
+        <span class="role-name">${info.icon} ${escapeHtml(info.label)}</span>
+        ${hint ? `<span class="role-hint">${escapeHtml(hint)}</span>` : ''}
       </label>`;
     }
     /** Collect the checked roles out of a modal's containers. */

@@ -282,7 +282,7 @@ async function cleanCoAuthors(pool: Pool, raw: unknown, authorId: string): Promi
     `SELECT DISTINCT ur.user_id, up.display_name
        FROM user_roles ur
        LEFT JOIN user_profiles up ON up.user_id = ur.user_id
-      WHERE ur.user_id = ANY($1::text[]) AND ur.role IN ('wire:contributor','media_feeder','owner')`,
+      WHERE ur.user_id = ANY($1::text[]) AND ur.role IN ('wire:contributor','wire:manager','media_feeder','owner')`,
     [ids],
   );
   const byId = new Map(r.rows.map((row) => [row.user_id, row.display_name] as const));
@@ -441,7 +441,7 @@ wireRouter.get('/api/wire/contributors', requireRole(canFeedMedia), async (c) =>
       `SELECT DISTINCT ur.user_id, up.display_name, up.avatar_key, up.discord_avatar_url
          FROM user_roles ur
          JOIN user_profiles up ON up.user_id = ur.user_id
-        WHERE ur.role IN ('wire:contributor','media_feeder','owner')
+        WHERE ur.role IN ('wire:contributor','wire:manager','media_feeder','owner')
           AND ur.user_id <> $1
           AND up.display_name IS NOT NULL
           AND up.display_name ILIKE $2

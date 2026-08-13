@@ -162,8 +162,11 @@ export async function accountIsIncomplete(
   userId: string,
   email: string | null,
 ): Promise<boolean> {
+  // 'authed' is the base role EVERY account carries (migration 059) — it does
+  // NOT mean the signup completed, so it must be excluded here or no account
+  // would ever look incomplete again.
   const roleRes = await pool.query(
-    'SELECT 1 FROM user_roles WHERE user_id = $1 LIMIT 1',
+    "SELECT 1 FROM user_roles WHERE user_id = $1 AND role <> 'authed' LIMIT 1",
     [userId],
   );
   if ((roleRes.rowCount ?? 0) > 0) return false; // approved user — keep
@@ -185,7 +188,10 @@ export async function findOrphanSignups(pool: Pool, respectRaceGuard = true): Pr
   const users = await listAllSupabaseUsers();
   if (!users.length) return [];
 
-  const roleRows = await pool.query<{ user_id: string }>('SELECT DISTINCT user_id FROM user_roles');
+  // Exclude the base 'authed' role — see accountIsIncomplete().
+  const roleRows = await pool.query<{ user_id: string }>(
+    "SELECT DISTINCT user_id FROM user_roles WHERE role <> 'authed'",
+  );
   const roleIds = new Set(roleRows.rows.map((r) => r.user_id));
 
   const reqRows = await pool.query<{ supabase_user_id: string | null; email: string | null }>(
