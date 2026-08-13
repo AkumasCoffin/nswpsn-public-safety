@@ -655,11 +655,14 @@ async function checkAuthState() {
       // for signed-in editors, so the normal Incident Map link covers it.)
 
       // Staff chip - anyone who can load the staff page. Mirrors the backend
-      // is_admin gate in /api/check-admin: owner, team_member, dev, or the
-      // view-only node_monitor role (reaches the read-only Data + Nodes tabs).
+      // is_admin gate in /api/check-admin: owner, staff, any area manager, or
+      // the view-only feeder:monitor role (read-only Data + Nodes tabs).
+      // Legacy names are accepted too, for pre-migration-059 rows.
       const _roles = Array.isArray(roleData.roles) ? roleData.roles : [];
+      const _hasAny = (...names) => names.some((n) => _roles.includes(n));
       if (roleData.is_team_member || roleData.is_owner ||
-          _roles.includes('dev') || _roles.includes('node_monitor')) {
+          _hasAny('staff', 'team_member', 'feeder:monitor', 'node_monitor',
+                  'feeder:manager', 'wire:manager', 'map:manager')) {
         buttons += `<a href="staff.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:#fb923c; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
           <i class="fas fa-users-cog"></i> Staff
         </a>`;
@@ -668,7 +671,7 @@ async function checkAuthState() {
       // Radio Feeder chip - for radio contributors (links to their node
       // download + status page). Same shape/placement as the Staff chip,
       // distinct sky accent so the two are easy to tell apart.
-      if (Array.isArray(roleData.roles) && roleData.roles.includes('radio_contributor')) {
+      if (_hasAny('feeder:radio', 'radio_contributor', 'feeder:pager', 'pager_contributor')) {
         buttons += `<a href="feeder.html" style="flex:1; display:flex; align-items:center; justify-content:center; gap:0.35rem; padding:0.35rem 0.5rem; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.3); border-radius:6px; color:#38bdf8; font-size:0.72rem; text-decoration:none; white-space:nowrap;">
           <i class="fas fa-satellite-dish"></i> Feeder
         </a>`;

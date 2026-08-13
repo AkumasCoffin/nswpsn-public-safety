@@ -330,23 +330,48 @@
         </a>
         <div class="card-title">
           <i class="fas fa-user-plus"></i>
-          Request Editor Access
+          <span id="signup-card-title">Create an account</span>
         </div>
-        <p class="card-description">
-          Join our team of contributors helping map emergency incidents across NSW. 
-          Fill out the form below and we'll review your request.
+        <p class="card-description" id="signup-card-desc">
+          Join NSW PSN. Pick a plain account, or apply to contribute.
         </p>
-        
-        <div class="info-box">
+
+        <!-- Step 0: account type. A plain User account is created immediately
+             with no roles; the Contributor path runs the existing request +
+             approval flow. -->
+        <div id="account-type-chooser">
+          <button type="button" onclick="chooseAccountType('user')" style="width:100%; text-align:left; padding:1rem 1.1rem; background:rgba(255,255,255,0.05); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:10px; cursor:pointer; font-family:inherit; transition:border-color 0.2s;">
+            <div style="display:flex; align-items:center; gap:0.6rem; font-weight:700; font-size:0.98rem;">
+              <i class="fas fa-user" style="color:var(--text-soft);"></i> Join as a User
+            </div>
+            <div style="color:#94a3b8; font-size:0.82rem; margin-top:0.35rem; line-height:1.5;">
+              Browse the map, logs and The Wire with an account. No approval needed —
+              you're in straight away.
+            </div>
+          </button>
+          <button type="button" onclick="chooseAccountType('contributor')" style="width:100%; text-align:left; margin-top:0.8rem; padding:1rem 1.1rem; background:rgba(249,115,22,0.1); color:var(--text-primary); border:1px solid rgba(249,115,22,0.35); border-radius:10px; cursor:pointer; font-family:inherit; transition:border-color 0.2s;">
+            <div style="display:flex; align-items:center; gap:0.6rem; font-weight:700; font-size:0.98rem;">
+              <i class="fas fa-user-tag" style="color:var(--accent);"></i> Apply as a Contributor
+            </div>
+            <div style="color:#94a3b8; font-size:0.82rem; margin-top:0.35rem; line-height:1.5;">
+              Map editor, radio/pager feeder, or post to The Wire. Your application is
+              reviewed by our team before access is granted.
+            </div>
+          </button>
+        </div>
+
+        <div class="info-box" id="contributor-info-box" style="display:none;">
           <i class="fas fa-info-circle"></i>
-          Editors can add and update incident markers on the live map.
-          Your request will be reviewed and you'll be contacted via Discord.
+          Contributor access is reviewed by our team — you'll be contacted via Discord.
         </div>
 
         <!-- Step 1: pick a signup method. The request form stays hidden
              until a method is chosen (or an existing session is found). -->
-        <div id="signup-method-chooser" style="margin-bottom: 0.5rem;">
-          <p style="color: var(--text-soft); font-size: 0.85rem; margin-bottom: 1rem;">
+        <div id="signup-method-chooser" style="margin-bottom: 0.5rem; display: none;">
+          <a href="#" onclick="backToAccountType(); return false;" style="display:inline-flex; align-items:center; gap:0.4rem; color:var(--text-soft); text-decoration:none; font-size:0.8rem; margin-bottom:0.9rem;">
+            <i class="fas fa-arrow-left"></i> Choose a different account type
+          </a>
+          <p style="color: var(--text-soft); font-size: 0.85rem; margin-bottom: 1rem;" id="method-chooser-hint">
             First, choose how you'd like to create your account — then fill out the request form.
           </p>
           <button type="button" id="discord-signup-btn" onclick="chooseDiscordSignup()" style="width:100%; padding:0.9rem 1.5rem; background:#5865F2; color:#fff; border:none; border-radius:8px; font-weight:700; font-size:0.95rem; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.5rem; font-family:inherit; transition:background 0.2s;">
@@ -374,7 +399,7 @@
             <i class="fas fa-arrow-left"></i> Choose a different signup method
           </a>
           <!-- Request Type -->
-          <div class="form-group">
+          <div class="form-group" data-contributor-only>
             <label class="form-label">
               I want to be a... <span class="required">*</span>
             </label>
@@ -521,7 +546,7 @@
           </div>
 
           <!-- Region -->
-          <div class="form-group">
+          <div class="form-group" data-contributor-only>
             <label class="form-label">
               Location / Region <span class="required">*</span>
             </label>
@@ -544,7 +569,7 @@
           </div>
           
           <!-- Background -->
-          <div class="form-group">
+          <div class="form-group" data-contributor-only>
             <label class="form-label">
               Emergency Services Background <span class="optional">(optional)</span>
             </label>
@@ -563,21 +588,21 @@
           </div>
           
           <!-- Background Details (shown when background selected) -->
-          <div class="form-group" id="background-details-group" style="display: none;">
+          <div class="form-group" id="background-details-group" data-contributor-only style="display: none;">
             <label class="form-label">
               Tell us more about your experience <span class="required">*</span>
             </label>
             <textarea id="background-details" class="form-input" placeholder="Are you currently active or past member? What's your role/experience? How long have you been involved?"></textarea>
           </div>
           
-          <div class="form-group">
+          <div class="form-group" data-contributor-only>
             <label class="form-label">
               Website / Portfolio <span class="optional">(optional)</span>
             </label>
             <input type="url" id="website" class="form-input" placeholder="https://yourwebsite.com">
           </div>
           
-          <div class="form-group">
+          <div class="form-group" data-contributor-only>
             <label class="form-label">
               About You <span class="required">*</span>
             </label>
@@ -595,8 +620,8 @@
       
       <div id="success-container" class="success-state" style="display: none;">
         <i class="fas fa-check-circle"></i>
-        <h2>Request Submitted!</h2>
-        <p>Thanks for your interest! We'll review your request and contact you via Discord.
+        <h2 id="success-title">Request Submitted!</h2>
+        <p id="success-message">Thanks for your interest! We'll review your request and contact you via Discord.
            Your account is ready to sign in with now — editor/feeder features switch on once you're approved.</p>
         <p id="success-confirm-note" style="display:none; color: var(--accent); margin-top:0.5rem;"><i class="fas fa-envelope"></i> One more step: check your email and confirm your address so you can sign in.</p>
         <div style="margin-top: 1.5rem;">
@@ -659,6 +684,52 @@
 
     // Step-1 chooser → email path: reveal the form with the account
     // fields (username + password) visible.
+    // ---- Step 0: account type -------------------------------------------
+    // 'user'        → plain account, no roles, no request. Created immediately.
+    // 'contributor' → the existing request + approval flow.
+    // Public signup NEVER grants a role: a User account gets only the base
+    // 'authed' role (server-side, via POST /api/profiles/sync on first load).
+    let _accountType = 'contributor';
+    function chooseAccountType(type) {
+      _accountType = type;
+      const isUser = type === 'user';
+      document.getElementById('account-type-chooser').style.display = 'none';
+      document.getElementById('signup-method-chooser').style.display = 'block';
+      const infoBox = document.getElementById('contributor-info-box');
+      if (infoBox) infoBox.style.display = isUser ? 'none' : '';
+      const title = document.getElementById('signup-card-title');
+      if (title) title.textContent = isUser ? 'Create your account' : 'Apply as a contributor';
+      const desc = document.getElementById('signup-card-desc');
+      if (desc) {
+        desc.textContent = isUser
+          ? 'Pick how you want to sign in. Your account is ready straight away.'
+          : 'Tell us how you want to contribute — our team reviews every application.';
+      }
+      const hint = document.getElementById('method-chooser-hint');
+      if (hint) {
+        hint.textContent = isUser
+          ? 'Choose how you would like to create your account.'
+          : "First, choose how you'd like to create your account — then fill out the request form.";
+      }
+      // Contributor-only form sections are hidden for the plain User path.
+      document.querySelectorAll('[data-contributor-only]').forEach((el) => {
+        el.style.display = isUser ? 'none' : '';
+      });
+    }
+    function backToAccountType() {
+      document.getElementById('signup-method-chooser').style.display = 'none';
+      document.getElementById('signup-form').style.display = 'none';
+      document.getElementById('account-type-chooser').style.display = 'block';
+      const infoBox = document.getElementById('contributor-info-box');
+      if (infoBox) infoBox.style.display = 'none';
+      const title = document.getElementById('signup-card-title');
+      if (title) title.textContent = 'Create an account';
+      const desc = document.getElementById('signup-card-desc');
+      if (desc) desc.textContent = 'Join NSW PSN. Pick a plain account, or apply to contribute.';
+    }
+    /** True when the visitor is creating a plain (roleless) User account. */
+    function isPlainUserSignup() { return _accountType === 'user'; }
+
     function chooseEmailSignup() {
       _signupMode = 'email';
       document.getElementById('signup-method-chooser').style.display = 'none';
@@ -669,7 +740,9 @@
       if (eg) eg.style.display = 'block';
       document.getElementById('choose-method-back').style.display = 'inline-flex';
       const btn = document.getElementById('submit-btn');
-      if (btn) btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+      if (btn) btn.innerHTML = isPlainUserSignup()
+        ? '<i class="fas fa-user-plus"></i> Create account'
+        : '<i class="fas fa-paper-plane"></i> Submit Request';
       document.getElementById('email').focus();
     }
 
@@ -685,6 +758,9 @@
     // Where the completed form is stashed across the Discord OAuth redirect, so
     // it can be auto-submitted on return.
     const PENDING_DISCORD_KEY = 'nswpsn:pendingDiscordSignup';
+    // Set when a PLAIN USER signup hands off to Discord OAuth — on return we
+    // just grant 'authed' and finish (there's no request form to replay).
+    const PLAIN_USER_KEY = 'nswpsn:pendingPlainUserSignup';
 
     // Step-1 chooser → Discord path: reveal the form WITHOUT signing in. The
     // Discord account is created only when the user submits (see submitRequest),
@@ -700,6 +776,8 @@
       document.getElementById('choose-method-back').style.display = 'inline-flex';
       const btn = document.getElementById('submit-btn');
       if (btn) btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord';
+      // The plain User path has no form fields to fill — submit straight away.
+      if (isPlainUserSignup()) { submitPlainUser(); return; }
       const about = document.getElementById('about');
       if (about) about.focus();
     }
@@ -746,6 +824,17 @@
     // redirect. The Supabase account now exists (created during OAuth), so this
     // is the moment the request is created — linked to that account via the JWT.
     async function maybeSubmitPendingDiscordSignup(session) {
+      // Plain User path returning from Discord OAuth: the account now exists,
+      // so just record the base role and show the done state. No request.
+      try {
+        if (localStorage.getItem(PLAIN_USER_KEY) && session && session.access_token) {
+          localStorage.removeItem(PLAIN_USER_KEY);
+          await grantAuthedRole(session);
+          showPlainUserDone(false);
+          return;
+        }
+      } catch (e) { /* localStorage blocked — fall through */ }
+
       const raw = localStorage.getItem(PENDING_DISCORD_KEY);
       if (!raw || !session || !session.access_token) return;
       // Claim the stash immediately so the two applySession callers (getSession +
@@ -952,9 +1041,120 @@
       }
     }
     
+    /**
+     * Plain User signup — create the account only. No editor-request is
+     * submitted and no role is requested; the account carries just the base
+     * 'authed' role, granted server-side by POST /api/profiles/sync (which we
+     * call immediately so the account is "complete" and the orphan-signup
+     * cleanup can never sweep it).
+     */
+    async function submitPlainUser() {
+      const messageEl = document.getElementById('message');
+      const submitBtn = document.getElementById('submit-btn');
+      const email = document.getElementById('email').value.trim();
+
+      // Discord path: no account exists yet — OAuth creates it on return.
+      // Nothing to stash (there's no form to replay), so flag the intent and go.
+      let existingSession = null;
+      try {
+        const { data: sess0 } = await sb.auth.getSession();
+        existingSession = sess0?.session || null;
+      } catch (e) { /* treat as signed out */ }
+
+      if (_signupMode === 'discord' && !existingSession) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting to Discord…';
+        messageEl.textContent = '';
+        try { localStorage.setItem(PLAIN_USER_KEY, '1'); } catch (e) { /* non-fatal */ }
+        const { error: oauthErr } = await startDiscordOAuth();
+        if (oauthErr) {
+          try { localStorage.removeItem(PLAIN_USER_KEY); } catch (e) {}
+          messageEl.textContent = oauthErr.message || 'Could not start Discord sign-in.';
+          messageEl.className = 'message error';
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord';
+        }
+        return;
+      }
+
+      if (!existingSession) {
+        const username = document.getElementById('signup-username').value.trim();
+        if (username.length < 2) {
+          messageEl.textContent = 'Please choose a username (at least 2 characters).';
+          messageEl.className = 'message error'; return;
+        }
+        if (!email) {
+          messageEl.textContent = 'Please enter your email address.';
+          messageEl.className = 'message error'; return;
+        }
+        const pw = document.getElementById('signup-password').value;
+        const pw2 = document.getElementById('signup-password-confirm').value;
+        const pwProblem = passwordProblem(pw);
+        if (pwProblem) { messageEl.textContent = pwProblem; messageEl.className = 'message error'; return; }
+        if (pw !== pw2) { messageEl.textContent = 'Passwords do not match.'; messageEl.className = 'message error'; return; }
+
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating your account…';
+        messageEl.textContent = '';
+        const { data: suData, error: suError } = await sb.auth.signUp({
+          email, password: pw,
+          options: { data: { username, display_name: username } },
+        });
+        if (suError) {
+          const already = /already|registered|exists/i.test(suError.message || '');
+          messageEl.innerHTML = already
+            ? 'This email already has an account — <a href="login.html" style="color:var(--accent);">sign in</a> instead.'
+            : escapeHtmlSignup(suError.message || 'Could not create your account.');
+          messageEl.className = 'message error';
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="fas fa-user-plus"></i> Create account';
+          return;
+        }
+        existingSession = suData?.session || null;
+        if (!existingSession) {
+          // Email confirmation required — the account exists but has no session
+          // yet, so the 'authed' grant happens on their first signed-in load.
+          showPlainUserDone(true);
+          return;
+        }
+      }
+
+      await grantAuthedRole(existingSession);
+      showPlainUserDone(false);
+    }
+
+    /** Ask the backend to record the base 'authed' role for this session. */
+    async function grantAuthedRole(session) {
+      try {
+        const jwt = session?.access_token;
+        if (!jwt) return;
+        await fetch(`${API_BASE_URL}/api/profiles/sync`, {
+          method: 'POST', headers: { Authorization: 'Bearer ' + jwt },
+        });
+      } catch (e) { /* non-fatal: the next page load syncs it */ }
+    }
+
+    function showPlainUserDone(needsConfirm) {
+      document.getElementById('form-container').style.display = 'none';
+      const sc = document.getElementById('success-container');
+      if (sc) sc.style.display = 'block';
+      const t = document.getElementById('success-title');
+      if (t) t.textContent = needsConfirm ? 'Confirm your email' : "You're all set";
+      const m = document.getElementById('success-message');
+      if (m) {
+        m.innerHTML = needsConfirm
+          ? 'Account created. Check your inbox for a confirmation link, then sign in.'
+          : 'Your account is ready. <a href="index.html" style="color:var(--accent);">Start exploring</a>, or apply to contribute any time from your profile.';
+      }
+    }
+
     async function submitRequest(event) {
       event.preventDefault();
-      
+
+      // Plain User signup: create the account and stop. No editor-request, no
+      // roles — the server grants only the base 'authed' role on first load.
+      if (isPlainUserSignup()) return submitPlainUser();
+
       const requestTypes = Array.from(document.querySelectorAll('input[name="request-type"]:checked')).map(cb => cb.value);
       const email = document.getElementById('email').value.trim();
       const region = document.getElementById('region').value;
