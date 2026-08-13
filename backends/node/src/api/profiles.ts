@@ -11,6 +11,7 @@ import { Hono } from 'hono';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
+import { invalidateUserRolesCache } from '../services/auth/roles.js';
 import { createImageUploadUrl, r2Configured, r2PublicUrl } from '../services/wire.js';
 
 export const profilesRouter = new Hono();
@@ -119,8 +120,20 @@ profilesRouter.post('/api/profiles/sync', requireSupabaseJwt, async (c) => {
   const uid = c.get('userId') as string;
   const discordAvatar = normUrl(c.get('userAvatar'));
   const jwtName = (c.get('userName') as string | undefined)?.trim().slice(0, 60) || null;
-  if (!discordAvatar && !jwtName) return c.json({ success: true, skipped: 'nothing to sync' });
   try {
+    // Base role: every authenticated account carries 'authed' (see migration
+    // 059). This runs on every logged-in page load, so it's how existing and
+    // brand-new accounts alike acquire it. It's also what separates the staff
+    // "Users" tab (authed only) from "Members" (authed + a real role).
+    const granted = await pool.query(
+      `INSERT INTO user_roles (user_id, role, granted_by)
+       VALUES ($1, 'authed', 'sync')
+       ON CONFLICT (user_id, role) DO NOTHING`,
+      [uid],
+    );
+    if ((granted.rowCount ?? 0) > 0) invalidateUserRolesCache(uid);
+
+    if (!discordAvatar && !jwtName) return c.json({ success: true, skipped: 'nothing to sync' });
     await pool.query(
       `INSERT INTO user_profiles (user_id, discord_avatar_url, display_name, updated_at)
        VALUES ($1, $2, $3, now())

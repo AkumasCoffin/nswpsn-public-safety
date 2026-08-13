@@ -39,12 +39,15 @@ import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import {
   getUserRoles,
+  canonicalRoles,
   invalidateUserRolesCache,
   requireRole,
   canManageUsers,
   canAssignPrivilegedRoles,
   isPrivilegedRole,
   isOwner,
+  canonicalRole,
+  isKnownRole,
 } from '../services/auth/roles.js';
 import { accountIsIncomplete, deleteAccount } from '../services/orphanCleanup.js';
 
@@ -288,19 +291,31 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
   const requestId = Number.parseInt(requestIdRaw, 10);
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const roles = asArrayOfString(data['roles']);
+    // Canonicalise legacy names to their current equivalents, then reject
+    // anything not in the known set — user_roles.role is free-form TEXT, so
+    // without this a typo'd/hand-crafted role name would be stored verbatim.
+    const rawRoles = asArrayOfString(data['roles']);
+    const unknown = rawRoles.filter((r) => !isKnownRole(r));
+    if (unknown.length > 0) {
+      return c.json({ error: `Unknown role(s): ${unknown.join(', ')}` }, 400);
+    }
+    // The roles actually requested/approved (used for the audit note).
+    const approvedRoles = [...new Set(rawRoles.map(canonicalRole))];
+    // Every account also carries the base 'authed' role (see migration 059) —
+    // granted alongside so an approved user is complete even before their first
+    // page load triggers /api/profiles/sync.
+    const roles = [...new Set([...approvedRoles, 'authed'])];
     const createAccount = data['create_account'] === true;
 
-    // Team members can approve with the feature roles only — assigning
-    // team_member / dev / owner during approval is owner-only. The UI
-    // hides those checkboxes for team members; this enforces it server-
-    // side so a hand-crafted request can't escalate.
+    // Staff can approve with the feature roles only — assigning staff / owner
+    // during approval is owner-only. The UI hides those checkboxes for staff;
+    // this enforces it server-side so a hand-crafted request can't escalate.
     if (
       roles.some(isPrivilegedRole) &&
       !(await canAssignPrivilegedRoles(c.get('userId') as string))
     ) {
       return c.json(
-        { error: 'Only owners can assign the team_member, dev, or owner roles.' },
+        { error: 'Only owners can assign the staff or owner roles.' },
         403,
       );
     }
@@ -433,7 +448,9 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     }
 
     const reviewedAt = Math.floor(Date.now() / 1000);
-    const rolesStr = roles.join(',');
+    // Note lists the roles that were actually approved — the implicit base
+    // 'authed' grant is noise in an audit trail.
+    const rolesStr = approvedRoles.join(',');
     let notes = `Roles: ${rolesStr}`;
     if (tempPassword) notes += ` | Temp password: ${tempPassword}`;
     if (rolesAssignedToLinked) {
@@ -462,7 +479,9 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
       success: true,
       email: req.email,
       discord_id: req.discord_id,
-      roles,
+      // Report the roles that were APPROVED — the implicit base 'authed' grant
+      // is an internal detail, not part of the approval decision.
+      roles: approvedRoles,
       supabase_account_created: supabaseAccountCreated,
       roles_assigned_to_linked_account: rolesAssignedToLinked,
     };
@@ -600,10 +619,14 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
 
+    // Permission checks run against the ALIAS-EXPANDED list (legacy + current
+    // names both resolve during the migration-059 cutover); the `roles` array
+    // returned for display uses the raw stored names.
     const userRoles = await getUserRoles(userId);
+    const rawRoles = canonicalRoles(userRoles);
     const isOwner = userRoles.includes('owner');
-    const isTeamMember = userRoles.includes('team_member');
-    const isMapEditor = userRoles.includes('map_editor');
+    const isStaff = userRoles.includes('staff');
+    const isMapEditor = userRoles.includes('map:editor') || userRoles.includes('map:manager');
     const hasAccess = isMapEditor || isOwner;
     // Whether this account has ever submitted an editor request (linked by id).
     // The login guard uses no-roles + no-request to spot an "incomplete signup".
@@ -612,27 +635,30 @@ editorRouter.get('/api/check-editor/:userId', async (c) => {
       [userId],
     );
     const hasRequest = (reqRes.rowCount ?? 0) > 0;
-    const isDataFeeder = userRoles.includes('data_feeder');
-    const isMediaFeeder = userRoles.includes('media_feeder');
+    const isDataFeeder = userRoles.includes('feeder:agency_data');
+    const isWireContributor = userRoles.includes('wire:contributor');
+    const isWireManager = userRoles.includes('wire:manager');
+    // Flag NAMES are kept stable (is_team_member, is_media_feeder, …) so every
+    // existing frontend consumer keeps working across the rename.
     return c.json({
       user_id: userId,
       has_access: hasAccess,
       is_owner: isOwner,
-      is_team_member: isTeamMember,
+      is_team_member: isStaff,
       is_map_editor: isMapEditor,
       is_data_feeder: isDataFeeder,
-      is_media_feeder: isMediaFeeder,
-      // Owner OR data_feeder may edit agency reference tables (owner instant,
-      // feeder via approval). Surfaced here so the public agency page can show
-      // the edit controls without a second round-trip.
+      is_media_feeder: isWireContributor,
+      // Owner OR feeder:agency_data may edit agency reference tables (owner
+      // instant, contributor via approval). Surfaced here so the public agency
+      // page can show the edit controls without a second round-trip.
       can_edit_agency_data: isOwner || isDataFeeder,
-      // Owner OR media_feeder may publish to The Wire; owner|team_member may
-      // moderate (remove) any post. Surfaced so wire.html/wire-compose.html can
-      // show the compose + remove controls without a second round-trip.
-      can_feed_media: isOwner || isMediaFeeder,
-      can_moderate_wire: isOwner || isTeamMember,
+      // Owner OR wire:contributor may publish to The Wire; owner|staff|
+      // wire:manager may moderate any post. Surfaced so wire.html /
+      // wire-compose.html can show the compose + remove controls directly.
+      can_feed_media: isOwner || isWireContributor,
+      can_moderate_wire: isOwner || isStaff || isWireManager,
       has_request: hasRequest,
-      roles: userRoles,
+      roles: rawRoles,
     });
   } catch (err) {
     log.error({ err, userId }, 'Error checking editor status');
@@ -649,14 +675,19 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
 
+    // Checks use the alias-expanded list; `roles` (display) uses raw names.
     const userRoles = await getUserRoles(userId);
+    const rawRoles = canonicalRoles(userRoles);
     let isOwner = userRoles.includes('owner');
-    const isTeamMember = userRoles.includes('team_member');
-    const isDev = userRoles.includes('dev');
-    const isNodeMonitor = userRoles.includes('node_monitor');
-    // node_monitor is a view-only feature role: it can load the staff page
-    // (is_admin) purely to reach the read-only Data + Nodes tabs.
-    let isAdmin = isOwner || isTeamMember || isDev || isNodeMonitor;
+    const isStaff = userRoles.includes('staff');
+    const isNodeMonitor = userRoles.includes('feeder:monitor');
+    const isFeederManager = userRoles.includes('feeder:manager');
+    const isWireManager = userRoles.includes('wire:manager');
+    const isMapManager = userRoles.includes('map:manager');
+    // feeder:monitor is view-only: it can load the staff page (is_admin) purely
+    // to reach the read-only Data + Nodes tabs. Managers likewise get in to
+    // reach their own area's screens.
+    let isAdmin = isOwner || isStaff || isNodeMonitor || isFeederManager || isWireManager || isMapManager;
 
     // First-run lockout-prevention: if no owner exists anywhere, grant
     // owner to the requesting user. Mirrors python at 13941-13955.
@@ -671,31 +702,37 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
       }
     }
 
-    const isDataFeeder = userRoles.includes('data_feeder');
-    const canViewRequests = isOwner || isTeamMember;
-    const canViewUsers = isOwner || isTeamMember;
-    const canViewDev = isOwner || isDev;
-    // Read access to the Data + Nodes pages. node_monitor gets the views but
-    // NOT write access (can_manage_nodes stays owner|dev).
-    const canViewNodeData = isOwner || isDev || isNodeMonitor;
-    // Owner|team_member review agency data-change requests (Requests tab
-    // dropdown). Owner|data_feeder EDIT the agency tables (on the agency page).
-    const canReviewAgencyData = isOwner || isTeamMember;
+    const isDataFeeder = userRoles.includes('feeder:agency_data');
+    const canViewRequests = isOwner || isStaff || isWireManager || isFeederManager;
+    const canViewUsers = isOwner || isStaff;
+    // 'dev' was removed in the migration-059 refactor — the Dev tab is now
+    // owner-only. is_dev stays in the payload (always false) so any frontend
+    // still reading it keeps working.
+    const canViewDev = isOwner;
+    const canManageNodes = isOwner || isFeederManager;
+    // Read access to the Data + Nodes pages. feeder:monitor gets the views but
+    // NOT write access (can_manage_nodes stays owner|feeder:manager).
+    const canViewNodeData = canManageNodes || isNodeMonitor;
+    // Owner|staff|feeder:manager review agency data-change requests (Requests
+    // tab dropdown). Owner|feeder:agency_data EDIT the agency tables.
+    const canReviewAgencyData = isOwner || isStaff || isFeederManager;
     const canEditAgencyData = isOwner || isDataFeeder;
 
     return c.json({
       user_id: userId,
       is_admin: isAdmin,
       is_owner: isOwner,
-      is_team_member: isTeamMember,
-      is_dev: isDev,
+      is_team_member: isStaff,
+      is_dev: false,
       is_node_monitor: isNodeMonitor,
       is_data_feeder: isDataFeeder,
       can_manage_users: canViewUsers,
-      can_manage_nodes: isOwner || isDev,
+      can_manage_nodes: canManageNodes,
       can_assign_privileged_roles: isOwner,
       can_review_agency_data: canReviewAgencyData,
       can_edit_agency_data: canEditAgencyData,
+      // Wire moderation queue (Requests → Wire approvals/takedowns).
+      can_moderate_wire: isOwner || isStaff || isWireManager,
       tabs: {
         requests: canViewRequests,
         users: canViewUsers,
@@ -704,7 +741,7 @@ editorRouter.get('/api/check-admin/:userId', async (c) => {
         data: canViewNodeData,
         data_changes: canReviewAgencyData,
       },
-      roles: userRoles,
+      roles: rawRoles,
     });
   } catch (err) {
     log.error({ err, userId }, 'Error checking admin status');

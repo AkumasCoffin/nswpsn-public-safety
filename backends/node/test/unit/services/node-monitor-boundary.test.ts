@@ -1,6 +1,12 @@
 /**
  * SECURITY boundary test for the view-only `node_monitor` role.
  *
+ * NOTE (migration-059 role refactor): this suite deliberately still drives the
+ * LEGACY role name. `node_monitor` was renamed to `feeder:monitor`, and these
+ * tests passing unchanged is the end-to-end proof that the ROLE_ALIASES shim in
+ * services/auth/roles.ts resolves old names through a real router — i.e. an
+ * un-migrated row or stale cache can't silently lock a monitor out.
+ *
  * node_monitor grants READ access to the staff Data + Nodes pages and NOTHING
  * else. This test pins the read/write split:
  *   - permission fns:  canViewNodeData(node_monitor) === true

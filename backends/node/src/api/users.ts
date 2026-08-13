@@ -39,6 +39,8 @@ import {
   canManageUsers,
   canAssignPrivilegedRoles,
   isOwner,
+  canonicalRole,
+  isKnownRole,
 } from '../services/auth/roles.js';
 
 export const usersRouter = new Hono();
@@ -323,9 +325,18 @@ usersRouter.put('/api/users/:userId/roles', requireRole(canManageUsers), async (
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const newRolesRaw = data['roles'];
-    const newRoles = Array.isArray(newRolesRaw)
+    const submitted = Array.isArray(newRolesRaw)
       ? newRolesRaw.filter((x): x is string => typeof x === 'string')
       : [];
+    // Canonicalise legacy names then reject unknown ones (user_roles.role is
+    // free-form TEXT, so an unvalidated name would be stored verbatim).
+    const unknown = submitted.filter((r) => !isKnownRole(r));
+    if (unknown.length > 0) {
+      return c.json({ error: `Unknown role(s): ${unknown.join(', ')}` }, 400);
+    }
+    // This replace is atomic over ALL roles, so keep the base 'authed' role —
+    // dropping it would make the account look like a deleted/incomplete signup.
+    const newRoles = [...new Set([...submitted.map(canonicalRole), 'authed'])];
 
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
@@ -390,10 +401,14 @@ usersRouter.post('/api/users/:userId/roles', requireRole(canManageUsers), async 
   const userId = c.req.param('userId');
   try {
     const data = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const role = data['role'];
-    if (typeof role !== 'string' || !role) {
+    const submitted = data['role'];
+    if (typeof submitted !== 'string' || !submitted) {
       return c.json({ error: 'Role is required' }, 400);
     }
+    if (!isKnownRole(submitted)) {
+      return c.json({ error: `Unknown role: ${submitted}` }, 400);
+    }
+    const role = canonicalRole(submitted);
     if (isPrivilegedRole(role) && !(await canAssignPrivilegedRoles(c.get('userId') as string))) {
       return c.json(PRIVILEGED_ONLY, 403);
     }
@@ -422,8 +437,13 @@ usersRouter.post('/api/users/:userId/roles', requireRole(canManageUsers), async 
 // ---------------------------------------------------------------------------
 usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canManageUsers), async (c) => {
   const userId = c.req.param('userId');
-  const role = c.req.param('role');
+  const submitted = c.req.param('role');
+  // Canonicalise so removing by either the legacy or current name works.
+  const role = canonicalRole(submitted);
   try {
+    if (role === 'authed') {
+      return c.json({ error: 'The base authed role cannot be removed.' }, 400);
+    }
     if (isPrivilegedRole(role) && !(await canAssignPrivilegedRoles(c.get('userId') as string))) {
       return c.json(PRIVILEGED_ONLY, 403);
     }
@@ -431,9 +451,10 @@ usersRouter.delete('/api/users/:userId/roles/:role', requireRole(canManageUsers)
     const pool = await getPool();
     if (!pool) return c.json(DB_UNAVAILABLE, 503);
 
+    // Delete BOTH names so a pre-migration row is cleared too.
     await pool.query(
-      'DELETE FROM user_roles WHERE user_id = $1 AND role = $2',
-      [userId, role],
+      'DELETE FROM user_roles WHERE user_id = $1 AND role = ANY($2::text[])',
+      [userId, [...new Set([role, submitted])]],
     );
 
     invalidateUserRolesCache(userId);

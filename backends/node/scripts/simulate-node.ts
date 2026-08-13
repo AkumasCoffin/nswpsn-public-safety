@@ -87,7 +87,7 @@ async function main() {
     if (!pool) { console.error('DATABASE_URL not set — cannot --grant-role'); process.exit(1); }
     await pool.query(
       `INSERT INTO user_roles (user_id, role, granted_by)
-       VALUES ($1, 'radio_contributor', 'simulate-node')
+       VALUES ($1, 'feeder:radio', 'simulate-node')
        ON CONFLICT (user_id, role) DO NOTHING`,
       [userId],
     );

@@ -64,7 +64,7 @@ function psSingleQuote(v: string): string {
 // KIND needs is checked per-action (see roleForKind + the create handler).
 const requireContributor: MiddlewareHandler = async (c, next) => {
   const userId = c.get('userId');
-  if (!userId || !(await hasRole(userId, ['radio_contributor', 'pager_contributor']))) {
+  if (!userId || !(await hasRole(userId, ['feeder:radio', 'feeder:pager']))) {
     return c.json({ error: 'not a feeder contributor' }, 403);
   }
   await next();
@@ -73,10 +73,10 @@ const requireContributor: MiddlewareHandler = async (c, next) => {
 feederRouter.use('/api/feeder/*', requireSupabaseJwt, requireContributor);
 
 /** The contributor role that gates a given node kind: pager nodes need
- *  pager_contributor; radio (and adsb, until it has its own role) need
- *  radio_contributor. Mirrored in resolveNodeToken so the ongoing gate matches. */
-export function roleForKind(kind: string): 'radio_contributor' | 'pager_contributor' {
-  return kind === 'pager' ? 'pager_contributor' : 'radio_contributor';
+ *  feeder:pager; radio (and adsb, until it has its own role) need feeder:radio.
+ *  Mirrored in resolveNodeToken so the ongoing gate matches. */
+export function roleForKind(kind: string): 'feeder:radio' | 'feeder:pager' {
+  return kind === 'pager' ? 'feeder:pager' : 'feeder:radio';
 }
 
 /** The volunteer-facing view of one of their nodes (name/type/key-prefix +
@@ -163,8 +163,8 @@ feederRouter.get('/api/feeder/me', async (c) => {
     // Which node kinds this user may create, by role — so the UI can offer only
     // what they're allowed (backend still enforces it on create).
     const [radio, pager] = await Promise.all([
-      hasRole(userId, ['radio_contributor']),
-      hasRole(userId, ['pager_contributor']),
+      hasRole(userId, ['feeder:radio']),
+      hasRole(userId, ['feeder:pager']),
     ]);
     return c.json({ role: true, nodes, canCreate: { radio, pager } });
   } catch (err) {

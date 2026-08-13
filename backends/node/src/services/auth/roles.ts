@@ -1,25 +1,107 @@
 /**
  * Role helpers backed by the user_roles table.
  *
- * Mirrors the role-checking logic spread across python
- * external_api_proxy.py:13860-13993. The python version maintains a
- * 60s in-process cache (`_role_cache`) keyed by `editor_<uid>` /
- * `admin_<uid>` — we replicate that cache here so repeated checks
- * inside the same process don't hammer the DB.
+ * Role model (2026-08 refactor, migration 059): a role is either top-level or a
+ * namespaced "main:sub" string. The MAIN part is a grouping label for the UI —
+ * permissions are granted by the FULL string (the subrole), never by the main
+ * part alone.
  *
- * Privilege model (from python comment block at 13957-13965):
- *   - owner        : everything, including assigning privileged roles.
- *   - team_member  : editor-request approvals + user management; cannot
- *                    assign privileged roles (team_member / dev / owner).
- *   - dev          : Dev tab visibility only.
- *   - map_editor   : Map editor page access.
- *   - node_monitor : view-only Data + Nodes pages (reads, no editing).
- *   - pager_contributor / radio_contributor : feature roles, no admin.
+ *   - authed             : base role every account gets on login (future
+ *                          comment/like gate). Staff "Users" tab = only authed;
+ *                          "Members" = authed + at least one real role.
+ *   - owner              : everything, including assigning privileged roles.
+ *   - staff              : user/role management + request review (was
+ *                          team_member); cannot assign privileged roles.
+ *   - feeder:radio       : radio feeder node (was radio_contributor)
+ *   - feeder:pager       : pager feeder node (was pager_contributor)
+ *   - feeder:agency_data : agency reference-table editing (was data_feeder)
+ *   - feeder:monitor     : view-only Data/Nodes pages (was node_monitor)
+ *   - feeder:manager     : feeder node/config management + data-change review
+ *   - wire:contributor   : posts to The Wire (was media_feeder)
+ *   - wire:manager       : Wire approvals + takedowns
+ *   - map:editor         : map-editor page access (was map_editor)
+ *   - map:manager        : map-editor oversight
+ *
+ * The 'dev' role was REMOVED in this refactor; its powers moved to owner +
+ * feeder:manager. Managers manage their AREA's content/config only — approving
+ * signups and assigning roles stays with staff/owner.
+ *
+ * A 60s in-process cache mirrors the old python backend (_role_cache) so
+ * repeated checks inside one process don't hammer the DB.
  */
 import type { MiddlewareHandler } from 'hono';
 import { getPool } from '../../db/pool.js';
 
-const PRIVILEGED_ROLES: ReadonlySet<string> = new Set(['owner', 'team_member', 'dev']);
+/**
+ * Legacy-name compatibility shim for the migration-059 rename. The migration
+ * rewrites the stored rows, but this keeps BOTH names resolving during the
+ * cutover — so a stale cached role list, an un-migrated database, or any
+ * literal old name still passed to hasRole() keeps working instead of silently
+ * locking someone out. getUserRoles() expands each stored role to include its
+ * counterpart. Remove once the rename has fully settled.
+ */
+const ROLE_ALIASES: Readonly<Record<string, string>> = {
+  team_member: 'staff',
+  radio_contributor: 'feeder:radio',
+  pager_contributor: 'feeder:pager',
+  data_feeder: 'feeder:agency_data',
+  node_monitor: 'feeder:monitor',
+  media_feeder: 'wire:contributor',
+  map_editor: 'map:editor',
+};
+const ROLE_ALIASES_REVERSE: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(ROLE_ALIASES).map(([oldName, newName]) => [newName, oldName]),
+);
+
+/** Expand a stored role list so old and new names both resolve. */
+function expandAliases(roles: readonly string[]): string[] {
+  const out = new Set(roles);
+  for (const r of roles) {
+    const fwd = ROLE_ALIASES[r];
+    if (fwd) out.add(fwd);
+    const rev = ROLE_ALIASES_REVERSE[r];
+    if (rev) out.add(rev);
+  }
+  return [...out];
+}
+
+/**
+ * Canonicalise a role name (legacy → current). Use at every ASSIGNMENT site so
+ * newly granted roles are always stored under the new name.
+ */
+export function canonicalRole(role: string): string {
+  return ROLE_ALIASES[role] ?? role;
+}
+
+/**
+ * Every role that may be assigned. Assignment endpoints validate against this
+ * so a typo'd or junk role name can't be written into user_roles (the column is
+ * free-form TEXT with no DB-level constraint). Legacy names are accepted too —
+ * canonicalRole() maps them to the new name before the check.
+ */
+export const KNOWN_ROLES: ReadonlySet<string> = new Set([
+  'authed',
+  'owner',
+  'staff',
+  'feeder:radio',
+  'feeder:pager',
+  'feeder:agency_data',
+  'feeder:monitor',
+  'feeder:manager',
+  'wire:contributor',
+  'wire:manager',
+  'map:editor',
+  'map:manager',
+]);
+
+/** True if `role` (after canonicalisation) is assignable. */
+export function isKnownRole(role: string): boolean {
+  return KNOWN_ROLES.has(canonicalRole(role));
+}
+
+// 'team_member' stays listed so the legacy name is still treated as privileged
+// if it ever reaches these checks pre-migration. 'dev' removed with the role.
+const PRIVILEGED_ROLES: ReadonlySet<string> = new Set(['owner', 'staff', 'team_member']);
 const ROLE_CACHE_TTL_MS = 60_000;
 
 interface CacheEntry {
@@ -37,11 +119,30 @@ export function invalidateUserRolesCache(userId: string): void {
 }
 
 /**
- * Fetch all role strings assigned to a user. Returns [] if the user
- * has none, or if the DB is unavailable (caller is responsible for
- * deciding what "no roles" means in their context — for the public
- * /api/check-editor endpoint, no roles == no access, which is the
- * correct fallback).
+ * The CANONICAL (current-name) view of a role list, for DISPLAY — e.g. the
+ * `roles` array returned to the staff UI. Drops legacy names from an expanded
+ * list so a user isn't shown both `team_member` and `staff` for the same grant
+ * (expansion always adds the current name alongside a legacy one). Derived from
+ * the already-fetched list, so it costs no extra query.
+ */
+export function canonicalRoles(roles: readonly string[]): string[] {
+  return roles.filter((r) => !ROLE_ALIASES[r]);
+}
+
+/**
+ * Fetch a user's roles as CANONICAL current names (one query, alias-collapsed).
+ * Convenience wrapper over getUserRoles + canonicalRoles for display callers.
+ */
+export async function getUserRolesRaw(userId: string): Promise<string[]> {
+  return canonicalRoles(await getUserRoles(userId));
+}
+
+/**
+ * Fetch all role strings assigned to a user, EXPANDED so legacy and current
+ * names both resolve (see ROLE_ALIASES) — this is what permission checks run
+ * against. Returns [] if the user has none, or if the DB is unavailable
+ * (caller decides what "no roles" means in their context — for the public
+ * /api/check-editor endpoint, no roles == no access, the correct fallback).
  */
 export async function getUserRoles(userId: string): Promise<string[]> {
   if (!userId) return [];
@@ -59,7 +160,9 @@ export async function getUserRoles(userId: string): Promise<string[]> {
     'SELECT role FROM user_roles WHERE user_id = $1',
     [userId],
   );
-  const roles = result.rows.map((r) => r.role);
+  // Expand legacy<->current names so a check for either passes during the
+  // migration-059 cutover (see ROLE_ALIASES).
+  const roles = expandAliases(result.rows.map((r) => r.role));
   roleCache.set(userId, { ts: Date.now(), roles });
   // Return a copy so callers can't mutate the array now held in cache.
   return [...roles];
@@ -83,86 +186,85 @@ export async function isOwner(userId: string): Promise<boolean> {
 }
 
 /**
- * Owner OR team_member — gates the editor-request management screens
- * and the Users tab. Mirrors python's
- *   can_view_users = is_owner or is_team_member
+ * Owner OR staff — gates the editor-request management screens and the Auth
+ * (Members/Users) tab. Managers deliberately do NOT get this: they manage their
+ * area's content/config, not user accounts or role grants.
  */
 export async function canManageUsers(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'team_member']);
+  return hasRole(userId, ['owner', 'staff']);
 }
 
 /**
- * Owner OR dev — gates the feeder-node management screens (Nodes tab) and
- * the staff /api/nodes endpoints. Mirrors the check-admin `can_view_dev`
- * flag (isOwner || isDev).
+ * Owner OR feeder:manager — gates the feeder-node management screens (Nodes
+ * tab) and the staff /api/nodes endpoints. (Was owner|dev; 'dev' was removed
+ * in the migration-059 refactor and its node powers moved to feeder:manager.)
  */
 export async function canManageNodes(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'dev']);
+  return hasRole(userId, ['owner', 'feeder:manager']);
 }
 
 /**
- * Owner, dev, OR node_monitor — gates READ access to the staff Data page and
- * the Nodes-page views (GET /api/node-data/* and the GET /api/nodes/*
- * endpoints). node_monitor is a view-only feature role: it can see this data
- * but every mutating node route stays on canManageNodes (owner|dev). Mirrors
- * the check-admin `can_view_node_data` flag (isOwner || isDev || isNodeMonitor).
+ * Owner, feeder:manager, OR feeder:monitor — gates READ access to the staff
+ * Data page and the Nodes-page views (GET /api/node-data/*, GET /api/nodes/*).
+ * feeder:monitor is view-only: every mutating node route stays on
+ * canManageNodes.
  */
 export async function canViewNodeData(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'dev', 'node_monitor']);
+  return hasRole(userId, ['owner', 'feeder:manager', 'feeder:monitor']);
 }
 
 /**
- * Only owners can grant the privileged roles (team_member, dev, owner).
- * Team members can edit users but not promote them. Mirrors python's
- *   'can_assign_privileged_roles': is_owner
+ * Only owners can grant the privileged roles (staff, owner). Staff can edit
+ * users but not promote them.
  */
 export async function canAssignPrivilegedRoles(userId: string): Promise<boolean> {
   return isOwner(userId);
 }
 
 /**
- * Owner, team_member, or map_editor — gates the incident CRUD used by
+ * Owner, staff, map:editor, or map:manager — gates the incident CRUD used by
  * map-editor.html. Key-only gating was effectively unauthenticated
  * (NSWPSN_API_KEY is public via /api/config), so mutating incidents
  * requires a real editor login like the other privileged routes.
  */
 export async function canEditIncidents(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'team_member', 'map_editor']);
+  return hasRole(userId, ['owner', 'staff', 'map:editor', 'map:manager']);
 }
 
 /**
- * Owner OR data_feeder — may edit agency reference tables (add/update/delete
- * rows) on the agency page. Owner edits apply instantly; data_feeder edits
- * become pending data-change requests needing review (see canReviewAgencyData).
+ * Owner OR feeder:agency_data — may edit agency reference tables (add/update/
+ * delete rows) on the agency page. Owner edits apply instantly; contributor
+ * edits become pending data-change requests (see canReviewAgencyData).
  */
 export async function canEditAgencyData(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'data_feeder']);
+  return hasRole(userId, ['owner', 'feeder:agency_data']);
 }
 
 /**
- * Owner OR team_member — may review (approve/reject) pending agency data-change
- * requests. Mirrors the editor-request reviewer set.
+ * Owner, staff, OR feeder:manager — may review (approve/reject) pending agency
+ * data-change requests. The feeder manager owns that area's data.
  */
 export async function canReviewAgencyData(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'team_member']);
+  return hasRole(userId, ['owner', 'staff', 'feeder:manager']);
 }
 
 /**
- * Owner OR media_feeder — may publish/edit The Wire media posts and articles.
- * Post-moderation: there is no approval queue, the role is vetted at signup.
+ * Owner OR wire:contributor — may publish/edit The Wire media posts and
+ * articles. Note wire:manager is NOT included: managers moderate the queue but
+ * don't implicitly post — grant both roles to someone who should do both.
  * Per-item edit/delete is further restricted to the author (or an admin
  * override via canManageUsers) inside the handlers.
  */
 export async function canFeedMedia(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'media_feeder']);
+  return hasRole(userId, ['owner', 'wire:contributor']);
 }
 
 /**
- * Owner OR team_member — may soft-remove any Wire post/article (moderation).
- * Mirrors the reviewer set used elsewhere (canReviewAgencyData / canManageUsers).
+ * Owner, staff, OR wire:manager — may approve/reject pending Wire posts, soft-
+ * remove any post/article, and action takedown notices.
  */
 export async function canModerateWire(userId: string): Promise<boolean> {
-  return hasRole(userId, ['owner', 'team_member']);
+  return hasRole(userId, ['owner', 'staff', 'wire:manager']);
 }
 
 export function isPrivilegedRole(role: string): boolean {

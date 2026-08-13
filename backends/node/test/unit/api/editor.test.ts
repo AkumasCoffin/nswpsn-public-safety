@@ -235,7 +235,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
     const res = await app.request('/api/editor-requests/1/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['map_editor', 'team_member'] }),
+      body: JSON.stringify({ roles: ['map:editor', 'staff'] }),
     });
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: string }).error).toContain('Only owners');
@@ -274,16 +274,16 @@ describe('POST /api/editor-requests/:id/approve', () => {
     const res = await app.request('/api/editor-requests/1/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['map_editor', 'pager_contributor'] }),
+      body: JSON.stringify({ roles: ['map:editor', 'feeder:pager'] }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['success']).toBe(true);
     expect(body['email']).toBe('a@b.com');
-    expect(body['roles']).toEqual(['map_editor', 'pager_contributor']);
+    expect(body['roles']).toEqual(['map:editor', 'feeder:pager']);
     const updateCall = calls[1];
     expect(updateCall?.sql).toContain("status = 'approved'");
-    expect(updateCall?.params?.[1]).toContain('Roles: map_editor,pager_contributor');
+    expect(updateCall?.params?.[1]).toContain('Roles: map:editor,feeder:pager');
   });
 
   it('assigns roles to the linked account and skips account creation', async () => {
@@ -300,7 +300,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // create_account true must NOT create an account for linked requests
-        body: JSON.stringify({ roles: ['map_editor', 'radio_contributor'], create_account: true }),
+        body: JSON.stringify({ roles: ['map:editor', 'feeder:radio'], create_account: true }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown>;
@@ -311,7 +311,9 @@ describe('POST /api/editor-requests/:id/approve', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
       // Roles inserted for the linked user id.
       const roleInserts = calls.filter((c2) => c2.sql.includes('INSERT INTO user_roles'));
-      expect(roleInserts).toHaveLength(2);
+      // Approved roles + the implicit base 'authed' grant.
+      expect(roleInserts).toHaveLength(3);
+      expect(roleInserts.map((r) => r.params?.[1])).toContain('authed');
       expect(roleInserts[0]?.params?.[0]).toBe('linked-uid-1');
       // Notes record the linked assignment.
       const updateCall = calls.find((c2) => c2.sql.includes("status = 'approved'"));
@@ -361,7 +363,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          roles: ['map_editor', 'pager_contributor'],
+          roles: ['map:editor', 'feeder:pager'],
           create_account: true,
         }),
       });
@@ -386,11 +388,14 @@ describe('POST /api/editor-requests/:id/approve', () => {
       // Two role INSERTs landed against the new Supabase user id.
       expect(calls[1]?.sql).toContain('INSERT INTO user_roles');
       expect(calls[1]?.params?.[0]).toBe('uuid-of-new-user');
-      expect(calls[1]?.params?.[1]).toBe('map_editor');
-      expect(calls[2]?.params?.[1]).toBe('pager_contributor');
+      expect(calls[1]?.params?.[1]).toBe('map:editor');
+      expect(calls[2]?.params?.[1]).toBe('feeder:pager');
+      // Base role granted alongside the approved ones.
+      expect(calls.map((c2) => c2.params?.[1])).toContain('authed');
 
       // Notes string captures the temp password and the success line.
-      const updateCall = calls[3];
+      // Find by content, not index — the implicit 'authed' grant adds an insert.
+      const updateCall = calls.find((c2) => c2.sql.includes("status = 'approved'"));
       expect(updateCall?.sql).toContain("status = 'approved'");
       const notes = updateCall?.params?.[1] as string;
       expect(notes).toContain('Temp password: Changeme-');
@@ -427,7 +432,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
       const res = await app.request('/api/editor-requests/1/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: ['map_editor'], create_account: true }),
+        body: JSON.stringify({ roles: ['map:editor'], create_account: true }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown>;
@@ -465,7 +470,7 @@ describe('POST /api/editor-requests/:id/approve', () => {
       const res = await app.request('/api/editor-requests/1/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: ['map_editor'], create_account: true }),
+        body: JSON.stringify({ roles: ['map:editor'], create_account: true }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown>;
@@ -516,7 +521,7 @@ describe('POST /api/editor-requests/:id/reject', () => {
 
 describe('GET /api/check-editor/:userId', () => {
   it('returns role booleans + has_access', async () => {
-    resultQueue = [{ rows: [{ role: 'map_editor' }, { role: 'pager_contributor' }] }];
+    resultQueue = [{ rows: [{ role: 'map:editor' }, { role: 'feeder:pager' }] }];
     const app = makeApp();
     const res = await app.request('/api/check-editor/user-1');
     expect(res.status).toBe(200);
@@ -526,11 +531,11 @@ describe('GET /api/check-editor/:userId', () => {
     expect(body['is_owner']).toBe(false);
     expect(body['is_team_member']).toBe(false);
     expect(body['is_map_editor']).toBe(true);
-    expect(body['roles']).toEqual(['map_editor', 'pager_contributor']);
+    expect(body['roles']).toEqual(['map:editor', 'feeder:pager']);
   });
 
   it('team_member alone does NOT grant has_access', async () => {
-    resultQueue = [{ rows: [{ role: 'team_member' }] }];
+    resultQueue = [{ rows: [{ role: 'staff' }] }];
     const app = makeApp();
     const res = await app.request('/api/check-editor/u2');
     const body = (await res.json()) as Record<string, unknown>;
@@ -554,7 +559,7 @@ describe('GET /api/check-admin/:userId', () => {
   });
 
   it('team_member sees requests + users but NOT dev', async () => {
-    resultQueue = [{ rows: [{ role: 'team_member' }] }];
+    resultQueue = [{ rows: [{ role: 'staff' }] }];
     const app = makeApp();
     const res = await app.request('/api/check-admin/u-tm');
     const body = (await res.json()) as Record<string, unknown>;
@@ -562,12 +567,14 @@ describe('GET /api/check-admin/:userId', () => {
     expect(body['tabs']).toEqual({ requests: true, users: true, dev: false, nodes: false, data: false, data_changes: true });
   });
 
-  it('dev sees only the Dev tab', async () => {
-    resultQueue = [{ rows: [{ role: 'dev' }] }];
+  it('feeder:manager sees node/data tabs but not users (dev role removed)', async () => {
+    resultQueue = [{ rows: [{ role: 'feeder:manager' }] }];
     const app = makeApp();
-    const res = await app.request('/api/check-admin/u-dev');
+    const res = await app.request('/api/check-admin/u-fm');
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body['tabs']).toEqual({ requests: false, users: false, dev: true, nodes: true, data: true, data_changes: false });
+    expect(body['tabs']).toEqual({ requests: true, users: false, dev: false, nodes: true, data: true, data_changes: true });
+    expect(body['is_dev']).toBe(false);
+    expect(body['can_manage_nodes']).toBe(true);
   });
 
   it('grants first-time owner when no owners exist anywhere', async () => {
@@ -686,7 +693,7 @@ describe('POST /api/account/discard-incomplete (self-service)', () => {
     await withSupabaseConfigured();
     try {
       // First query (user_roles) returns a row → short-circuits as "has role".
-      resultQueue = [{ rows: [{ role: 'map_editor' }], rowCount: 1 }];
+      resultQueue = [{ rows: [{ role: 'map:editor' }], rowCount: 1 }];
       const app = makeApp();
       const res = await app.request('/api/account/discard-incomplete', { method: 'POST' });
       expect(res.status).toBe(200);

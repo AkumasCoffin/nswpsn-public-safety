@@ -122,7 +122,7 @@ export function attachNodeWebSockets(server: Server): void {
     void (async () => {
       for (const a of hub.agentList()) {
         try {
-          if (!(await hasRole(a.userId, ['radio_contributor']))) {
+          if (!(await hasRole(a.userId, ['feeder:radio']))) {
             hub.forceDisconnectAgent(a.nodeId, 'role revoked');
             continue;
           }
@@ -362,16 +362,16 @@ async function handleStaffMessage(
   if (t === 'auth') {
     const token = (data as { token?: string } | undefined)?.token ?? '';
     const verified = await verifySupabaseToken(token);
-    // Viewer auth: owner|dev|node_monitor may connect to READ live status.
-    // node_monitor is view-only — canManage (owner|dev) gates the write paths.
-    if (!verified || !(await hasRole(verified.userId, ['owner', 'dev', 'node_monitor']))) {
+    // Viewer auth: owner|feeder:manager|feeder:monitor may connect to READ live
+    // status. feeder:monitor is view-only — canManage gates the write paths.
+    if (!verified || !(await hasRole(verified.userId, ['owner', 'feeder:manager', 'feeder:monitor']))) {
       ws.send(envelope('authError', { message: 'forbidden' }));
       try { ws.close(4003, 'forbidden'); } catch { /* ignore */ }
       return;
     }
     state.authed = true;
     state.userId = verified.userId;
-    state.canManage = await hasRole(verified.userId, ['owner', 'dev']);
+    state.canManage = await hasRole(verified.userId, ['owner', 'feeder:manager']);
     clearTimeout(authTimer);
     ws.send(envelope('authOk', { userId: verified.userId }));
     return;

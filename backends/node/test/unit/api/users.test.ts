@@ -137,19 +137,21 @@ describe('PUT /api/users/:userId/roles', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['map_editor', 'pager_contributor'] }),
+      body: JSON.stringify({ roles: ['map:editor', 'feeder:pager'] }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['user_id']).toBe('abc');
-    expect(body['roles']).toEqual(['map_editor', 'pager_contributor']);
+    // The base 'authed' role is always preserved by an atomic replace.
+    expect(body['roles']).toEqual(['map:editor', 'feeder:pager', 'authed']);
 
     // Verify the transaction shape.
     expect(txCalls[0]?.sql).toBe('BEGIN');
     expect(txCalls[1]?.sql).toContain('DELETE FROM user_roles WHERE user_id = $1');
     expect(txCalls[2]?.sql).toContain('INSERT INTO user_roles');
     expect(txCalls[3]?.sql).toContain('INSERT INTO user_roles');
-    expect(txCalls[4]?.sql).toBe('COMMIT');
+    expect(txCalls[4]?.sql).toContain('INSERT INTO user_roles'); // authed
+    expect(txCalls[5]?.sql).toBe('COMMIT');
     expect(fakeClient.release).toHaveBeenCalledOnce();
   });
 
@@ -165,7 +167,7 @@ describe('PUT /api/users/:userId/roles', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['map_editor'] }),
+      body: JSON.stringify({ roles: ['map:editor'] }),
     });
     expect(res.status).toBe(500);
     expect(fakeClient.release).toHaveBeenCalledOnce();
@@ -190,13 +192,13 @@ describe('POST /api/users/:userId/roles', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'map_editor' }),
+      body: JSON.stringify({ role: 'map:editor' }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, user_id: 'abc', added_role: 'map_editor' });
+    expect(await res.json()).toEqual({ success: true, user_id: 'abc', added_role: 'map:editor' });
     expect(calls[0]?.sql).toContain('INSERT INTO user_roles');
     expect(calls[0]?.sql).toContain('ON CONFLICT (user_id, role) DO NOTHING');
-    expect(calls[0]?.params).toEqual(['abc', 'map_editor']);
+    expect(calls[0]?.params).toEqual(['abc', 'map:editor']);
   });
 });
 
@@ -204,13 +206,15 @@ describe('DELETE /api/users/:userId/roles/:role', () => {
   it('issues a single-row delete', async () => {
     resultQueue = [{ rows: [] }];
     const app = makeApp();
-    const res = await app.request('/api/users/abc/roles/map_editor', {
+    const res = await app.request('/api/users/abc/roles/map:editor', {
       method: 'DELETE',
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ success: true, user_id: 'abc', removed_role: 'map_editor' });
-    expect(calls[0]?.sql).toContain('DELETE FROM user_roles WHERE user_id = $1 AND role = $2');
-    expect(calls[0]?.params).toEqual(['abc', 'map_editor']);
+    expect(await res.json()).toEqual({ success: true, user_id: 'abc', removed_role: 'map:editor' });
+    // Deletes by ANY() so a pre-migration row under the legacy name goes too.
+    expect(calls[0]?.sql).toContain('DELETE FROM user_roles WHERE user_id = $1 AND role = ANY($2::text[])');
+    expect(calls[0]?.params?.[0]).toBe('abc');
+    expect(calls[0]?.params?.[1]).toContain('map:editor');
   });
 });
 
@@ -233,7 +237,7 @@ describe('auth gate', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'map_editor' }),
+      body: JSON.stringify({ role: 'map:editor' }),
     });
     expect(res.status).toBe(401);
   });
@@ -244,7 +248,7 @@ describe('auth gate', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'map_editor' }),
+      body: JSON.stringify({ role: 'map:editor' }),
     });
     expect(res.status).toBe(403);
   });
@@ -266,7 +270,7 @@ describe('team member role tiering', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'pager_contributor' }),
+      body: JSON.stringify({ role: 'feeder:pager' }),
     });
     expect(res.status).toBe(200);
     vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValue(true);
@@ -278,7 +282,7 @@ describe('team member role tiering', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'dev' }),
+      body: JSON.stringify({ role: 'staff' }),
     });
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: string }).error).toContain('Only owners');
@@ -299,12 +303,12 @@ describe('team member role tiering', () => {
   it('PUT: team member replace succeeds when the privileged set is unchanged', async () => {
     vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
     // First pool.query = current-roles SELECT; target already holds team_member.
-    resultQueue = [{ rows: [{ role: 'team_member' }, { role: 'map_editor' }] }];
+    resultQueue = [{ rows: [{ role: 'staff' }, { role: 'map:editor' }] }];
     const app = makeApp();
     const res = await app.request('/api/users/abc/roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['team_member', 'pager_contributor'] }),
+      body: JSON.stringify({ roles: ['staff', 'feeder:pager'] }),
     });
     expect(res.status).toBe(200);
     expect(txCalls[0]?.sql).toBe('BEGIN');
@@ -313,12 +317,12 @@ describe('team member role tiering', () => {
 
   it('PUT: team member replace 403s when it would drop a privileged role', async () => {
     vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
-    resultQueue = [{ rows: [{ role: 'dev' }, { role: 'map_editor' }] }];
+    resultQueue = [{ rows: [{ role: 'staff' }, { role: 'map:editor' }] }];
     const app = makeApp();
     const res = await app.request('/api/users/abc/roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['map_editor'] }),
+      body: JSON.stringify({ roles: ['map:editor'] }),
     });
     expect(res.status).toBe(403);
     expect(txCalls).toHaveLength(0);
@@ -326,12 +330,12 @@ describe('team member role tiering', () => {
 
   it('PUT: team member replace 403s when it would add a privileged role', async () => {
     vi.mocked(roles.canAssignPrivilegedRoles).mockResolvedValueOnce(false);
-    resultQueue = [{ rows: [{ role: 'map_editor' }] }];
+    resultQueue = [{ rows: [{ role: 'map:editor' }] }];
     const app = makeApp();
     const res = await app.request('/api/users/abc/roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['map_editor', 'owner'] }),
+      body: JSON.stringify({ roles: ['map:editor', 'owner'] }),
     });
     expect(res.status).toBe(403);
     expect(txCalls).toHaveLength(0);
@@ -342,7 +346,7 @@ describe('team member role tiering', () => {
     const res = await app.request('/api/users/abc/roles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: ['owner', 'dev'] }),
+      body: JSON.stringify({ roles: ['owner', 'staff'] }),
     });
     expect(res.status).toBe(200);
     expect(calls.some((q) => q.sql.includes('SELECT role FROM user_roles'))).toBe(false);
