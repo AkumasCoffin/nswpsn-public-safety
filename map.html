@@ -6177,14 +6177,14 @@ function initPagerHoursFromStorage() {
       enriched.forEach(({ hit, parsed, ms }) => {
         const msgKey = (parsed.messageNoCoords || '')
           .toUpperCase().replace(/\s+/g, ' ').replace(/\s*-\s*$/, '').trim();
-        // Identity of the RECIPIENT. Key on the capcode AND the displayed
-        // alias: whichever field the feed actually populates, two different
-        // units can never land in the same group (that is what merged four
-        // brigades onto one card). Same unit + same text = the same page
-        // re-reported by another receiving node, which we DO want collapsed.
-        const capKey = String(hit.capcode || hit.address || '').trim().toUpperCase();
-        const aliasKey = String(hit.alias || '').trim().toUpperCase();
-        const key = capKey + '|' + aliasKey + '|' + msgKey;
+        // Identity of the RECIPIENT is the CAPCODE (the feed's `address`
+        // column) — every hit has one, and it's what makes two pages to
+        // different units distinct. Deliberately NOT keyed on the alias:
+        // aliases are optional, so the same page arriving from two nodes with
+        // the alias resolved on only one of them would split into two cards.
+        // Same capcode + same text = one page re-reported, which we collapse.
+        const capKey = String(hit.capcode ?? hit.address ?? '').trim().toUpperCase();
+        const key = capKey + '|' + msgKey;
         let g = groups.get(key);
         if (!g) {
           g = { parsed, ms, aliases: [] };
