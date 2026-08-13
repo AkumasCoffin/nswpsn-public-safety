@@ -611,6 +611,12 @@
           if (r.status === 503) { setMsg("Video uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
           if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'video-upload-url ' + r.status); }
           const { uploadURL, key, publicUrl } = await r.json();
+          // NOTE: video is uploaded as-is — its EXIF/GPS/device metadata is NOT
+          // stripped. This is a deliberate deferral (owner decision, 2026-08-14:
+          // "images only for now"), NOT an oversight: unlike photos (re-encoded
+          // via canvas, which drops metadata), stripping video needs a transcode
+          // (ffmpeg.wasm / server-side), rejected as too heavy for now. Don't
+          // flag as a privacy bug — revisit only if the owner asks.
           const up = await fetch(uploadURL, { method: 'PUT', headers: { 'Content-Type': 'video/mp4' }, body: file });
           if (!up.ok) throw new Error('r2 put ' + up.status);
           item.r2_key = key; item.url = publicUrl; item.uploading = false;
