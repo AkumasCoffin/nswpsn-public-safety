@@ -3395,6 +3395,14 @@
 
     // Shared label maps for the signup region + emergency-services background,
     // used by both the request-details modal and the user (edit-roles) modal.
+    // A real Discord ID is a numeric snowflake (17-20 digits, no hyphens). For
+    // email signups the field holds the Supabase user UUID (has hyphens) — show
+    // "Not linked" rather than a meaningless UUID.
+    function fmtDiscordId(v) {
+      const s = (v || '').toString().trim();
+      return /^\d{15,20}$/.test(s) ? s : 'Not linked';
+    }
+
     const REGION_LABELS = {
       sydney_metro: 'Sydney Metro',
       greater_sydney: 'Greater Sydney',
@@ -10266,7 +10274,7 @@
         // Show approval modal with credentials
         currentApproval = data;
         document.getElementById('approved-email').textContent = data.email;
-        document.getElementById('approved-discord').textContent = data.discord_id;
+        document.getElementById('approved-discord').textContent = fmtDiscordId(data.discord_id);
         
         // Format assigned roles
         const roleLabels = {
@@ -10428,7 +10436,7 @@
 
       document.getElementById('detail-type').textContent = typesFormatted;
       document.getElementById('detail-email').textContent = req.email;
-      document.getElementById('detail-discord').textContent = req.discord_id;
+      document.getElementById('detail-discord').textContent = fmtDiscordId(req.discord_id);
       document.getElementById('detail-region').textContent = regionLabels[req.region] || req.region || 'Not specified';
       
       // Format setup info for pager/radio feeders

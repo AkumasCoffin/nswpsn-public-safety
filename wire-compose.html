@@ -115,6 +115,8 @@
     .agency-check label { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.4rem; font-size: 0.82rem; border-radius: 6px; cursor: pointer; }
     .agency-check label:hover { background: rgba(148,163,184,0.08); }
     .agency-check input { width: auto; }
+    .agency-cat-hd { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); font-weight: 700; padding: 0.5rem 0.4rem 0.25rem; position: sticky; top: -0.4rem; background: var(--bg-elevated); }
+    .agency-cat-hd:first-child { padding-top: 0.2rem; }
     /* Co-author picker */
     .coauth-wrap { position: relative; }
     .coauth-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-soft); max-height: 240px; overflow-y: auto; }
@@ -738,15 +740,19 @@
     // traffic, pager, user incidents, etc. — not just user-created ones. full=1
     // so titles/locations are populated; keep only rows we can link (source_id).
     // Sources that aren't scene "incidents" you'd link a photo to (power
-    // outages, weather/BoM, news) — dropped so the list stays incident-focused.
-    const INCIDENT_BLOCK = /endeavour|essential|ausgrid|power|outage|\bbom\b|weather|news/i;
+    // outages, weather/BoM, news, and planned/scheduled roadwork) — dropped so
+    // the list stays incident-focused. Roadwork is planned works, not a scene.
+    const INCIDENT_BLOCK = /endeavour|essential|ausgrid|power|outage|\bbom\b|weather|news|roadwork/i;
+    // Also drop rows whose title marks them as scheduled/planned works, in case
+    // a scheduled item arrives on a non-roadwork source.
+    const SCHEDULED_TITLE = /^\s*(scheduled|planned)\b/i;
     async function loadIncidents() {
       try {
         const r = await fetch(`${API_BASE}/api/data/history?limit=300&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
         const j = await r.json();
         const recs = (j && Array.isArray(j.records)) ? j.records : [];
         allIncidents = recs
-          .filter((x) => x && x.source_id && !INCIDENT_BLOCK.test(x.source || ''))
+          .filter((x) => x && x.source_id && !INCIDENT_BLOCK.test(x.source || '') && !SCHEDULED_TITLE.test(x.title || x.location_text || ''))
           .map((x) => ({
             source: x.source, source_id: x.source_id,
             title: x.title || x.location_text || sourceLabel(x.source),
@@ -826,15 +832,27 @@
         const data = await window.AgencyJSON.loadData();
         agencyList = (data.agencies ? Object.values(data.agencies) : [])
           .filter((a) => !AGENCY_HIDE.has((a.name || '').toLowerCase()) && !AGENCY_HIDE.has((a.category || '').toLowerCase()))
-          .map((a) => ({ slug: a.slug, name: a.name })).sort((a, b) => a.name.localeCompare(b.name));
+          .map((a) => ({ slug: a.slug, name: a.name, category: a.category || 'Other' })).sort((a, b) => a.name.localeCompare(b.name));
       } catch (e) {}
       renderAgencyCheck('');
       $('#agencyFilter').addEventListener('input', (e) => renderAgencyCheck(e.target.value.trim().toLowerCase()));
     }
+    // Preferred category order; anything else falls to the end alphabetically.
+    const AGENCY_CAT_ORDER = ['Emergency Services', 'Enforcement', 'Transport', 'Utilities', 'Aviation', 'Miscellaneous'];
     function renderAgencyCheck(filter) {
       const box = $('#agencyCheck');
-      box.innerHTML = agencyList.filter((a) => !filter || a.name.toLowerCase().includes(filter)).map((a) =>
-        `<label><input type="checkbox" value="${esc(a.slug)}" ${state.agencies.has(a.slug) ? 'checked' : ''}> ${esc(a.name)}</label>`).join('');
+      const matches = agencyList.filter((a) => !filter || a.name.toLowerCase().includes(filter));
+      // Group the matches by category, then render each group under a header.
+      const groups = new Map();
+      matches.forEach((a) => { const k = a.category || 'Other'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
+      const cats = [...groups.keys()].sort((a, b) => {
+        const ia = AGENCY_CAT_ORDER.indexOf(a), ib = AGENCY_CAT_ORDER.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+      });
+      box.innerHTML = cats.map((cat) =>
+        `<div class="agency-cat-hd">${esc(cat)}</div>` + groups.get(cat).map((a) =>
+          `<label><input type="checkbox" value="${esc(a.slug)}" ${state.agencies.has(a.slug) ? 'checked' : ''}> ${esc(a.name)}</label>`).join('')
+      ).join('') || `<div class="agency-cat-hd" style="opacity:0.6">No agencies match.</div>`;
       box.querySelectorAll('input').forEach((c) => c.addEventListener('change', () => { c.checked ? state.agencies.add(c.value) : state.agencies.delete(c.value); }));
     }
 

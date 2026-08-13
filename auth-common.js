@@ -388,15 +388,17 @@ function closeProfileModal() {
   if (modal) modal.style.display = 'none';
 }
 
-// Publish the user's Discord avatar to their public profile, at most once per
-// browser session per (user, avatar). Safe partial write — touches only
-// discord_avatar_url server-side.
+// Publish the user's display name (+ Discord avatar, if any) to their public
+// profile, at most once per browser session. Safe partial write — the backend
+// only fills discord_avatar_url and (when empty) display_name. Runs for EVERY
+// logged-in user so email-signup users (no Discord avatar) are still captured
+// and become searchable as co-authors.
 let _avatarSynced = false;
 async function syncProfileAvatarOnce(session) {
   if (_avatarSynced) return;
   const uid = session.user?.id;
-  const av = session.user?.user_metadata?.avatar_url;
-  if (!uid || !av) return;
+  if (!uid) return;
+  const av = session.user?.user_metadata?.avatar_url || '';
   const flag = 'pfpsync:' + uid + ':' + av;
   try { if (sessionStorage.getItem(flag)) { _avatarSynced = true; return; } } catch (e) { /* ignore */ }
   _avatarSynced = true;
@@ -601,10 +603,12 @@ async function checkAuthState() {
       }
     }
 
-    // Publish the Discord avatar to the public profile (once per session) so it
-    // shows when others open this user's profile from a post. The backend reads
-    // the avatar from the verified JWT — the body carries nothing sensitive.
-    if (meta.avatar_url) syncProfileAvatarOnce(session);
+    // Publish the user's display name (+ Discord avatar, if any) to the public
+    // profile once per session, so their name/picture show when others open
+    // their profile from a post AND so they're findable in the co-author search.
+    // Runs for every logged-in user, not just Discord ones. The backend reads
+    // both from the verified JWT — the body carries nothing sensitive.
+    syncProfileAvatarOnce(session);
 
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
