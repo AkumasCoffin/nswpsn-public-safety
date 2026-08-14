@@ -153,6 +153,12 @@
     .wd-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.2rem 1.8rem; align-items: start; }
     .wd-info .wd-block { border-top: 0; margin-top: 0; padding-top: 0.6rem; }
     .wd-block { border-top: 1px solid var(--border-subtle); padding-top: 0.9rem; margin-top: 1.1rem; }
+    /* Units / Agencies / Location share ONE block as label:value rows — three
+       separate blocks wasted most of the rail on headings and dividers. */
+    .wd-meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.45rem 0.7rem; align-items: baseline; }
+    .wd-meta-grid .wd-lbl { margin-bottom: 0; white-space: nowrap; }
+    .wd-meta-grid .wire-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .wd-meta-val { font-size: 0.85rem; color: var(--text-muted); }
     .wd-lbl { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); margin-bottom: 0.5rem; }
     .wd-stats { display: flex; gap: 1.4rem; }
     .wd-stats .n { font-size: 1.3rem; font-weight: 700; }
@@ -701,9 +707,11 @@
             ${notices}
             ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
             ${statsBlock}
-            <div class="wd-block"><div class="wd-lbl">Units</div><div class="wire-chips">${units}</div></div>
-            <div class="wd-block"><div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div></div>
-            <div class="wd-block"><div class="wd-lbl">Location</div><div style="font-size:0.85rem;color:var(--text-muted)"><i class="fa-solid fa-location-dot"></i> ${loc}</div></div>
+            <div class="wd-block wd-meta-grid">
+              <div class="wd-lbl">Units</div><div class="wire-chips">${units}</div>
+              <div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div>
+              <div class="wd-lbl">Location</div><div class="wd-meta-val"><i class="fa-solid fa-location-dot"></i> ${loc}</div>
+            </div>
             ${licenseBlock}
             ${incidentBlock}
             ${actions}
