@@ -39,6 +39,10 @@ function injectAuthSection() {
         <div style="display:flex; align-items:center; gap:0.5rem;">
           <div id="auth-avatar" style="width:26px; height:26px; border-radius:50%; background:rgba(249,115,22,0.2); display:flex; align-items:center; justify-content:center; color:#f97316; font-weight:700; font-size:0.75rem; overflow:hidden; flex-shrink:0;"></div>
           <div id="auth-user-email" style="flex:1; min-width:0; font-size:0.82rem; color:#fff; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+          <button onclick="toggleNotifications(event)" id="notif-btn" title="Notifications" aria-label="Notifications" style="position:relative; width:28px; height:28px; padding:0; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
+            <i class="fas fa-bell"></i>
+            <span id="notif-badge" style="display:none; position:absolute; top:-5px; right:-5px; min-width:15px; height:15px; padding:0 3px; box-sizing:border-box; background:#ef4444; color:#fff; border-radius:999px; font-size:0.6rem; font-weight:700; line-height:15px; text-align:center;"></span>
+          </button>
           <button onclick="openProfileModal()" title="Profile" aria-label="Profile" style="width:28px; height:28px; padding:0; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#cbd5e1; font-size:0.75rem; cursor:pointer; display:flex; align-items:center; justify-content:center; font-family:inherit; flex-shrink:0;">
             <i class="fas fa-user-cog"></i>
           </button>
@@ -285,6 +289,136 @@ function createProfileModal() {
   const avInput = document.getElementById('profile-avatar-input');
   if (avInput) avInput.addEventListener('change', handleProfileAvatar);
 }
+
+// ===================== NOTIFICATIONS (sidebar bell) =====================
+// Polling is paused while the tab is hidden — a background tab shouldn't keep
+// hitting the API, and the count is refreshed the moment it becomes visible.
+let _notifTimer = null;
+let _notifPanel = null;
+const NOTIF_POLL_MS = 60_000;
+
+function escNotif(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function notifHeaders() {
+  const { data } = await sb.auth.getSession();
+  const t = data.session?.access_token;
+  return t ? { Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } : null;
+}
+
+/** Unread count only — cheap enough to poll. */
+async function refreshNotifBadge() {
+  const badge = document.getElementById('notif-badge');
+  if (!badge) return;
+  try {
+    const h = await notifHeaders();
+    if (!h) return;
+    const r = await fetch(`${API_BASE_URL}/api/notifications?limit=1`, { headers: h });
+    if (!r.ok) return;
+    const j = await r.json();
+    const n = Number(j.unreadCount) || 0;
+    if (n > 0) { badge.style.display = ''; badge.textContent = n > 99 ? '99+' : String(n); }
+    else badge.style.display = 'none';
+  } catch (e) { /* transient — try again next tick */ }
+}
+
+function startNotifPolling() {
+  stopNotifPolling();
+  if (document.hidden) return;
+  _notifTimer = setInterval(refreshNotifBadge, NOTIF_POLL_MS);
+}
+function stopNotifPolling() {
+  if (_notifTimer) { clearInterval(_notifTimer); _notifTimer = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopNotifPolling(); return; }
+  // Coming back: refresh immediately, then resume the interval.
+  if (document.getElementById('notif-btn')) { refreshNotifBadge(); startNotifPolling(); }
+});
+
+function closeNotifPanel() {
+  if (_notifPanel) { _notifPanel.remove(); _notifPanel = null; }
+}
+
+async function toggleNotifications(event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  if (_notifPanel) { closeNotifPanel(); return; }
+  const btn = document.getElementById('notif-btn');
+  if (!btn) return;
+
+  const panel = document.createElement('div');
+  _notifPanel = panel;
+  panel.id = 'notif-panel';
+  panel.style.cssText = 'position:absolute; z-index:10001; width:min(320px, calc(100vw - 2rem)); max-height:60vh; overflow-y:auto; background:#1e293b; border:1px solid rgba(148,163,184,0.25); border-radius:10px; box-shadow:0 20px 40px -12px rgba(0,0,0,0.7); padding:0.5rem;';
+  panel.innerHTML = '<div style="padding:0.7rem; color:#94a3b8; font-size:0.8rem;">Loading…</div>';
+  document.body.appendChild(panel);
+  // Anchor under the bell, clamped to the viewport.
+  const r = btn.getBoundingClientRect();
+  panel.style.top = `${Math.round(r.bottom + window.scrollY + 6)}px`;
+  panel.style.left = `${Math.round(Math.max(8, Math.min(r.left + window.scrollX, window.innerWidth - panel.offsetWidth - 8)))}px`;
+
+  try {
+    const h = await notifHeaders();
+    if (!h) { panel.innerHTML = '<div style="padding:0.7rem; color:#94a3b8; font-size:0.8rem;">Sign in to see notifications.</div>'; return; }
+    const res = await fetch(`${API_BASE_URL}/api/notifications?limit=20`, { headers: h });
+    const j = await res.json().catch(() => ({}));
+    const list = j.notifications || [];
+    const head = `<div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; padding:0.45rem 0.6rem 0.6rem; border-bottom:1px solid rgba(148,163,184,0.15);">
+        <span style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#94a3b8; font-weight:700;">Notifications</span>
+        ${list.some((n) => !n.read) ? '<button id="notif-readall" style="background:none;border:0;color:#f97316;font:inherit;font-size:0.72rem;cursor:pointer;">Mark all read</button>' : ''}
+      </div>`;
+    if (!list.length) {
+      panel.innerHTML = head + '<div style="padding:0.9rem 0.7rem; color:#64748b; font-size:0.8rem;">Nothing yet.</div>';
+    } else {
+      panel.innerHTML = head + list.map((n) => `
+        <a href="${escNotif(n.link || '#')}" data-nid="${escNotif(n.id)}" style="display:block; padding:0.6rem; border-radius:8px; text-decoration:none; color:inherit; background:${n.read ? 'transparent' : 'rgba(249,115,22,0.09)'};">
+          <div style="font-size:0.8rem; font-weight:600; color:#e2e8f0;">${escNotif(n.title)}</div>
+          ${n.body ? `<div style="font-size:0.75rem; color:#94a3b8; margin-top:0.15rem;">${escNotif(n.body)}</div>` : ''}
+          <div style="font-size:0.68rem; color:#64748b; margin-top:0.2rem;">${escNotif(notifAgo(n.created_at))}</div>
+        </a>`).join('');
+    }
+    const readAll = panel.querySelector('#notif-readall');
+    if (readAll) readAll.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      await markNotificationsRead(null);
+      closeNotifPanel();
+    });
+    // Clicking an item marks just that one read, then follows the link.
+    panel.querySelectorAll('[data-nid]').forEach((a) => a.addEventListener('click', () => {
+      markNotificationsRead([Number(a.dataset.nid)]);
+    }));
+  } catch (e) {
+    panel.innerHTML = '<div style="padding:0.7rem; color:#ef4444; font-size:0.8rem;">Could not load notifications.</div>';
+  }
+}
+
+async function markNotificationsRead(ids) {
+  try {
+    const h = await notifHeaders();
+    if (!h) return;
+    await fetch(`${API_BASE_URL}/api/notifications/read`, {
+      method: 'POST', headers: h, body: JSON.stringify(ids ? { ids } : {}),
+    });
+    refreshNotifBadge();
+  } catch (e) { /* non-fatal */ }
+}
+
+function notifAgo(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+document.addEventListener('click', (e) => {
+  if (_notifPanel && !e.target.closest('#notif-panel') && !e.target.closest('#notif-btn')) closeNotifPanel();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNotifPanel(); });
 
 /** Live "n/500" counter under the bio field. */
 function updateBioCount() {
@@ -630,6 +764,10 @@ async function checkAuthState() {
     // both from the verified JWT — the body carries nothing sensitive.
     syncProfileAvatarOnce(session);
 
+    // Notification bell: show the unread count and poll while the tab is visible.
+    refreshNotifBadge();
+    startNotifPolling();
+
     // Fetch roles with retry logic
     const fetchRolesWithRetry = async (retries = 2) => {
       const userId = session.user?.id;
@@ -712,6 +850,11 @@ async function checkAuthState() {
     loggedOutDiv.style.display = 'block';
     loggedInDiv.style.display = 'none';
     if (buttonsDiv) buttonsDiv.innerHTML = '';
+    // Logged out: no bell activity.
+    stopNotifPolling();
+    closeNotifPanel();
+    const nb = document.getElementById('notif-badge');
+    if (nb) nb.style.display = 'none';
   }
 }
 

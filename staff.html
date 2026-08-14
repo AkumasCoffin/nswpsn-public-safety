@@ -2186,6 +2186,7 @@
             <button class="tab-dd-item" role="menuitem" data-kind="data" onclick="openRequestsView('data')"><i class="fas fa-table"></i> Data changes <span class="dd-count" id="dd-data-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="approvals" onclick="openRequestsView('approvals')"><i class="fas fa-clock"></i> Wire approvals <span class="dd-count" id="dd-approvals-badge" style="display:none;"></span></button>
             <button class="tab-dd-item" role="menuitem" data-kind="takedowns" onclick="openRequestsView('takedowns')"><i class="fas fa-flag"></i> Wire takedowns <span class="dd-count" id="dd-takedowns-badge" style="display:none;"></span></button>
+            <button class="tab-dd-item" role="menuitem" data-kind="restrictions" onclick="openRequestsView('restrictions')"><i class="fas fa-comment-slash"></i> Comment restrictions <span class="dd-count" id="dd-restrictions-badge" style="display:none;"></span></button>
           </div>
         </div>
         <div class="tab-dd" id="auth-dd">
@@ -2274,6 +2275,13 @@
         </div>
 
         <!-- Wire takedowns (DMCA notice-and-takedown) -->
+        <!-- Comment restrictions: active timeouts/pauses, with Lift. -->
+        <div id="requests-restrictions-view" style="display:none;">
+          <div id="restrictions-container">
+            <div class="loading"><i class="fas fa-spinner"></i></div>
+          </div>
+        </div>
+
         <div id="requests-takedowns-view" style="display:none;">
           <div class="filter-bar">
             <button class="filter-btn active" data-tdfilter="pending" onclick="setTdFilter('pending')">Pending</button>
@@ -9471,11 +9479,12 @@
     let _dcFilter = 'pending';
     let _reqKind = 'signup';
     function switchRequestsView(kind) {
-      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view' };
+      const views = { signup: 'requests-signup-view', data: 'requests-datachanges-view', approvals: 'requests-approvals-view', takedowns: 'requests-takedowns-view', restrictions: 'requests-restrictions-view' };
       Object.entries(views).forEach(([k, id]) => { const el = document.getElementById(id); if (el) el.style.display = (k === kind) ? 'block' : 'none'; });
       if (kind === 'data') loadDataChanges();
       else if (kind === 'approvals') loadApprovals();
       else if (kind === 'takedowns') loadTakedowns();
+      else if (kind === 'restrictions') loadRestrictions();
     }
     // Requests dropdown lives in the tab bar and behaves exactly like the Data
     // tab dropdown (toggleDataMenu/openDataMode).
@@ -9641,6 +9650,51 @@
         _tdUpdateBadge(d.pendingCount);
       } catch (e) { /* ignore */ }
     }
+    // ---- Comment restrictions (active timeouts / pauses) ----------------
+    async function loadRestrictions() {
+      const el = document.getElementById('restrictions-container');
+      if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/comment-restrictions`, { headers: { 'Authorization': await authHeader() } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const d = await res.json();
+        const items = d.restrictions || [];
+        const badge = document.getElementById('dd-restrictions-badge');
+        if (badge) { if (items.length) { badge.style.display = ''; badge.textContent = items.length; } else badge.style.display = 'none'; }
+        if (!items.length) {
+          el.innerHTML = `<div class="empty-state"><i class="fas fa-comment-slash"></i><p>No active comment restrictions.</p></div>`;
+          return;
+        }
+        el.innerHTML = `<table class="nd-table"><thead><tr>
+            <th>User</th><th>Type</th><th>Reason</th><th>Expires</th><th>Applied by</th><th></th>
+          </tr></thead><tbody>` +
+          items.map(r => `<tr>
+            <td style="font-family:ui-monospace,monospace;font-size:0.78rem;">${escapeHtml(r.userId)}</td>
+            <td>${r.kind === 'pause'
+                  ? '<span class="status-badge rejected">Paused</span>'
+                  : '<span class="status-badge pending">Timeout</span>'}</td>
+            <td>${escapeHtml(r.reasonLabel || r.reason)}${r.note ? `<div class="nd-sub">${escapeHtml(r.note)}</div>` : ''}</td>
+            <td>${r.expiresAt ? escapeHtml(new Date(r.expiresAt).toLocaleString('en-AU')) : '<span class="nd-sub">Indefinite</span>'}</td>
+            <td>${escapeHtml(r.createdByName || '-')}</td>
+            <td style="text-align:right;"><button class="btn btn-secondary btn-sm" title="Lift this restriction" onclick="liftRestriction(${Number(r.id)})"><i class="fas fa-unlock"></i> Lift</button></td>
+          </tr>`).join('') + '</tbody></table>';
+      } catch (e) {
+        if (el) el.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>Couldn't load restrictions.</p></div>`;
+      }
+    }
+
+    async function liftRestriction(id) {
+      if (!confirm('Lift this restriction? The user will be able to comment again and will be notified.')) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/comment-restrictions/${id}`, {
+          method: 'DELETE', headers: { 'Authorization': await authHeader() },
+        });
+        if (!res.ok) { const j = await res.json().catch(() => ({})); showToast(j.error || 'Could not lift it.', 'error'); return; }
+        showToast('Restriction lifted.', 'success');
+        loadRestrictions();
+      } catch (e) { showToast('Network error.', 'error'); }
+    }
+
     async function loadTakedowns() {
       const el = document.getElementById('takedowns-container');
       if (el) el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
