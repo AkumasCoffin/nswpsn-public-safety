@@ -30,6 +30,7 @@ import {
   notifyMany,
   notifyLikeBatched,
   commenterIds,
+  avatarMap,
 } from '../services/wireComments.js';
 
 export const wireCommentsRouter = new Hono();
@@ -113,13 +114,15 @@ wireCommentsRouter.get('/api/wire/comments', async (c) => {
         LIMIT $3`,
       [parentType, parentId, limit],
     );
+    // One batched lookup for every author on the page (no N+1).
+    const avatars = await avatarMap(pool, r.rows.map((row) => row.author_id));
     // A deleted comment is tombstoned for everyone; only a moderator sees who
     // removed it and why (and never the original body).
     const comments = r.rows
       .filter((row) => !row.deleted_at || isMod)
       .map((row) => ({
         id: row.id,
-        author: { id: row.author_id, name: row.author_name },
+        author: { id: row.author_id, name: row.author_name, avatar_url: avatars.get(row.author_id) ?? null },
         body: row.deleted_at ? null : row.body,
         deleted: !!row.deleted_at,
         deleted_by_name: isMod ? (row.deleted_by_name ?? null) : null,
@@ -203,7 +206,7 @@ wireCommentsRouter.post('/api/wire/comments', requireSupabaseJwt, async (c) => {
       success: true,
       comment: {
         id: row.id,
-        author: { id: uid, name: currentUserName(c) },
+        author: { id: uid, name: currentUserName(c), avatar_url: (await avatarMap(pool, [uid])).get(uid) ?? null },
         body,
         deleted: false,
         created_at: isoOrNull(row.created_at),

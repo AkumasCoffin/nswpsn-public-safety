@@ -185,3 +185,31 @@ export async function commenterIds(pool: Pool, parentType: string, parentId: str
     return [];
   }
 }
+
+/**
+ * user_id -> public avatar URL, for a batch of users.
+ *
+ * Same precedence as the profile page (api/profiles.ts): a custom uploaded pfp
+ * wins, otherwise the stored Discord avatar. Batched so rendering a comment
+ * thread or a feed page stays one query instead of one per author.
+ */
+export async function avatarMap(pool: Pool, userIds: readonly string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const ids = [...new Set(userIds.filter(Boolean))];
+  if (ids.length === 0) return map;
+  try {
+    const { r2PublicUrl } = await import('./wire.js');
+    const r = await pool.query<{ user_id: string; avatar_key: string | null; discord_avatar_url: string | null }>(
+      'SELECT user_id, avatar_key, discord_avatar_url FROM user_profiles WHERE user_id = ANY($1::text[])',
+      [ids],
+    );
+    for (const row of r.rows) {
+      const url = row.avatar_key ? r2PublicUrl(row.avatar_key) : row.discord_avatar_url;
+      if (url) map.set(row.user_id, url);
+    }
+  } catch (err) {
+    // Avatars are decoration — never fail a read over them.
+    log.debug({ err }, 'avatarMap failed');
+  }
+  return map;
+}

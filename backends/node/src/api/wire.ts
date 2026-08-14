@@ -27,6 +27,7 @@ import {
   isOwner,
 } from '../services/auth/roles.js';
 import { rememberCallsigns, normaliseCallsign } from '../services/callsigns.js';
+import { avatarMap } from '../services/wireComments.js';
 import {
   createImageUploadUrl,
   deleteCfImage,
@@ -342,6 +343,38 @@ async function engagementFor(
   return map;
 }
 
+/**
+ * Fold author avatar URLs onto a shaped post (author + credited co-authors), so
+ * the feed and detail can show a pfp beside each name without a second request.
+ */
+function withAvatars(
+  shaped: Record<string, unknown>,
+  avatars: Map<string, string>,
+): Record<string, unknown> {
+  const a = shaped['author'] as { id?: string } | undefined;
+  if (a?.id) (a as Record<string, unknown>)['avatar_url'] = avatars.get(a.id) ?? null;
+  const cos = shaped['co_authors'];
+  if (Array.isArray(cos)) {
+    for (const co of cos as Record<string, unknown>[]) {
+      const id = typeof co?.['id'] === 'string' ? (co['id'] as string) : null;
+      if (id) co['avatar_url'] = avatars.get(id) ?? null;
+    }
+  }
+  return shaped;
+}
+
+/** Every user id credited across a set of rows (author + co-authors). */
+function creditedIds(rows: { author_id?: string; co_authors?: unknown }[]): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    if (r.author_id) out.push(r.author_id);
+    if (Array.isArray(r.co_authors)) {
+      for (const co of r.co_authors as { id?: string }[]) if (co?.id) out.push(co.id);
+    }
+  }
+  return out;
+}
+
 /** Fold engagement counts onto an already-shaped post object. */
 function withEngagement(
   shaped: Record<string, unknown>,
@@ -589,8 +622,9 @@ wireRouter.get('/api/wire/media', async (c) => {
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'media_post', ids);
     const eng = await engagementFor(pool, 'media_post', ids, currentUserId(c));
+    const avatars = await avatarMap(pool, creditedIds(r.rows));
     const posts = r.rows.map((row) =>
-      withEngagement(shapeMediaPost(row, mediaMap.get(row.id) ?? []), eng.get(row.id)));
+      withAvatars(withEngagement(shapeMediaPost(row, mediaMap.get(row.id) ?? []), eng.get(row.id)), avatars));
     return c.json({ posts });
   } catch (err) {
     log.error({ err }, 'wire: list media failed');
@@ -619,8 +653,12 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
     const mediaMap = await fetchMediaFor(pool, 'media_post', [id]);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const eng = await engagementFor(pool, 'media_post', [id], uid);
+    const avatars = await avatarMap(pool, creditedIds([row]));
     return c.json({
-      post: withEngagement(shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)), eng.get(id)),
+      post: withAvatars(
+        withEngagement(shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)), eng.get(id)),
+        avatars,
+      ),
     });
   } catch (err) {
     log.error({ err, id }, 'wire: get media failed');
@@ -922,8 +960,9 @@ wireRouter.get('/api/wire/articles', async (c) => {
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'article', ids);
     const engA = await engagementFor(pool, 'article', ids, currentUserId(c));
+    const avatarsA = await avatarMap(pool, creditedIds(r.rows));
     const articles = r.rows.map((row) =>
-      withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)));
+      withAvatars(withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)), avatarsA));
     return c.json({ articles });
   } catch (err) {
     log.error({ err }, 'wire: list articles failed');
@@ -953,8 +992,12 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
     const mediaMap = await fetchMediaFor(pool, 'article', [row.id]);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const engA = await engagementFor(pool, 'article', [row.id], uid);
+    const avatarsA = await avatarMap(pool, creditedIds([row]));
     return c.json({
-      article: withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
+      article: withAvatars(
+        withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
+        avatarsA,
+      ),
     });
   } catch (err) {
     log.error({ err, slug }, 'wire: get article failed');
