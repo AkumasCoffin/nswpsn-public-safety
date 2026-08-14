@@ -36,7 +36,7 @@ import {
 export const wireCommentsRouter = new Hono();
 
 const DB_UNAVAILABLE = { error: 'database unavailable' } as const;
-const MAX_COMMENT_LEN = 2000;
+const MAX_COMMENT_LEN = 280;
 
 const TABLE_FOR: Record<string, string> = { media_post: 'media_posts', article: 'articles' };
 

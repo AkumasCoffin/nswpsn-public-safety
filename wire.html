@@ -816,14 +816,14 @@
       }
       box.innerHTML = `
         <div class="wd-composer">
-          <textarea id="commentBody" maxlength="2000" rows="3" placeholder="Add a comment…"></textarea>
+          <textarea id="commentBody" maxlength="280" rows="3" placeholder="Add a comment…"></textarea>
           <div class="wd-composer-row">
-            <span class="sub" id="commentCount">0/2000</span>
+            <span class="sub" id="commentCount">0/280</span>
             <button class="wd-btn" id="commentPost"><i class="fa-solid fa-paper-plane"></i> Post</button>
           </div>
         </div>`;
       const ta = $('#commentBody');
-      ta.addEventListener('input', () => { $('#commentCount').textContent = `${ta.value.length}/2000`; });
+      ta.addEventListener('input', () => { $('#commentCount').textContent = `${ta.value.length}/280`; });
       $('#commentPost').addEventListener('click', postComment);
     }
 
