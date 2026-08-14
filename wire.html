@@ -168,21 +168,25 @@
     .wd-btn.like-btn.on { border-color: rgba(244,63,94,0.55); color: #fb7185; }
 
     /* --- comments --------------------------------------------------------- */
-    .wd-comments { margin-top: 2rem; border-top: 1px solid var(--border-subtle); padding-top: 1.2rem; max-width: 760px; }
+    /* Comments live in the info rail under the post details, so they inherit
+       the rail's width rather than spanning the page. */
+    .wd-comments { margin-top: 0.4rem; }
+    .wd-comments #commentList { max-height: 480px; overflow-y: auto; margin-top: 0.6rem; }
     .wd-comment-note { color: var(--text-soft); font-size: 0.85rem; padding: 0.9rem 1rem; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; }
     .wd-comment-note.restricted { border-color: rgba(239,68,68,0.45); color: #fca5a5; }
     .wd-comment-note .sub { color: var(--text-soft); font-size: 0.78rem; margin-top: 0.3rem; }
     .wd-composer textarea {
-      width: 100%; box-sizing: border-box; padding: 0.7rem 0.85rem; font: inherit; font-size: 0.9rem;
+      width: 100%; box-sizing: border-box; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.85rem;
       background: var(--bg-elevated); color: var(--text-main);
       border: 1px solid var(--border-subtle); border-radius: 10px; resize: vertical; line-height: 1.5;
     }
     .wd-composer textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
     .wd-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-top: 0.5rem; }
     .wd-composer-row .sub { color: var(--text-soft); font-size: 0.72rem; }
-    .wd-comment { padding: 0.85rem 0; border-bottom: 1px solid var(--border-subtle); }
+    .wd-comment { padding: 0.7rem 0; border-bottom: 1px solid var(--border-subtle); }
     .wd-comment:last-child { border-bottom: 0; }
-    .wd-comment-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+    .wd-comment-head { display: flex; align-items: center; gap: 0.45rem; font-size: 0.78rem; flex-wrap: wrap; }
+    .wd-comment-head .wire-author { overflow: hidden; text-overflow: ellipsis; max-width: 60%; white-space: nowrap; }
     .wd-comment-head .sub { color: var(--text-soft); font-size: 0.72rem; }
     .wd-comment-actions { margin-left: auto; display: flex; gap: 0.3rem; }
     .wd-mini {
@@ -192,7 +196,7 @@
     .wd-mini:hover { color: #ef4444; border-color: rgba(239,68,68,0.4); }
     /* Comment bodies are user text: escaped on render, wrapped here so long
        words or pasted URLs can't blow out the column. */
-    .wd-comment-body { margin-top: 0.35rem; font-size: 0.9rem; line-height: 1.6; color: var(--text-main); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .wd-comment-body { margin-top: 0.3rem; font-size: 0.85rem; line-height: 1.55; color: var(--text-main); white-space: pre-wrap; overflow-wrap: anywhere; }
     .wd-comment.deleted .wd-comment-body { color: var(--text-soft); font-style: italic; font-size: 0.82rem; }
 
     /* --- small modal (reason picker / restrict) --------------------------- */
@@ -684,13 +688,13 @@
             ${licenseBlock}
             ${incidentBlock}
             ${actions}
+            <section class="wd-comments wd-block" id="wdComments">
+              <div class="wd-lbl" id="commentsHead">Comments</div>
+              <div id="commentComposer"></div>
+              <div id="commentList"><div class="wire-loading">Loading comments…</div></div>
+            </section>
           </div>
-        </div>
-        <section class="wd-comments" id="wdComments">
-          <div class="wd-lbl" id="commentsHead">Comments</div>
-          <div id="commentComposer"></div>
-          <div id="commentList"><div class="wire-loading">Loading comments…</div></div>
-        </section>`;
+        </div>`;
 
       $('#backBtn').addEventListener('click', () => closeDetail());
       wireGallery();
