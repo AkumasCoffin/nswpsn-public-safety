@@ -313,6 +313,17 @@
     .rp-card input[type=text], .rp-card textarea { width: 100%; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); color: var(--text-main); border-radius: 8px; padding: 0.6rem 0.7rem; font: inherit; font-size: 0.88rem; }
     .rp-card textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
     .rp-card label.chk { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.8rem; color: var(--text-muted); cursor: pointer; }
+    /* Edit history. One block per edit, newest first. */
+    .ed-list { display: flex; flex-direction: column; gap: 0.9rem; }
+    .ed-item { border-left: 2px solid var(--border-subtle); padding-left: 0.85rem; }
+    .ed-when { font-size: 0.75rem; color: var(--text-soft); display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.35rem; }
+    .ed-when img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
+    .ed-who { font-weight: 600; color: var(--text-muted); }
+    .ed-changes { display: flex; flex-direction: column; gap: 0.3rem; margin: 0; padding: 0; list-style: none; }
+    .ed-changes li { font-size: 0.82rem; color: var(--text-muted); line-height: 1.45; }
+    .ed-field { font-weight: 600; color: var(--text-main); }
+    .ed-from { text-decoration: line-through; opacity: 0.7; }
+    .ed-detail { font-style: italic; color: var(--text-soft); }
     .rp-card label.chk input { width: auto; margin-top: 0.15rem; accent-color: var(--accent); }
   </style>
 </head>
@@ -393,6 +404,17 @@
   </main>
 
   <div class="wire-lb" id="lightbox"><button class="x" aria-label="Close">&times;</button></div>
+
+  <div class="rp-modal" id="editsModal">
+    <div class="rp-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+        <h2>Change history</h2>
+        <button id="editsClose" style="background:none;border:0;color:var(--text-muted);font-size:1.6rem;cursor:pointer;line-height:1">&times;</button>
+      </div>
+      <p style="color:var(--text-soft);font-size:0.8rem;margin:0 0 1rem">Edits made to this post after it was published. Drafts and unpublished revisions aren't recorded.</p>
+      <div id="editsBody"><div class="wire-empty">Loading…</div></div>
+    </div>
+  </div>
 
   <div class="rp-modal" id="reportModal">
     <div class="rp-card">
@@ -777,6 +799,13 @@
           <a class="wd-btn" style="font-size:0.75rem" href="wire-compose?type=article&parent=${encodeURIComponent(item.id)}"><i class="fa-solid fa-layer-group"></i> Add a follow-up</a>
         </div>`;
       }
+      // Only offered when the post has actually been edited since publishing —
+      // edit_count is 0 for everything else, so there's no button to press and
+      // no empty modal to open.
+      const nEdits = Number(item.edit_count) || 0;
+      const editsBtn = nEdits > 0
+        ? `<button class="wd-btn" id="editsBtn" style="margin:0.55rem 0 0.2rem 0.4rem;font-size:0.75rem"><i class="fa-solid fa-clock-rotate-left"></i> Changes (${nEdits})</button>`
+        : '';
       const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
       const hasVideo = galleryMedia.some((m) => m.kind === 'video');
       const eyebrow = `<div class="wd-eyebrow">Dispatch · ${isArticle ? 'Article' : (hasVideo ? 'Video' : 'Photo set')}</div>`;
@@ -793,6 +822,7 @@
             <h1 class="wd-title">${esc(item.title)}</h1>
             <div class="wd-meta">${byline}</div>
             <button class="wd-btn" id="shareBtn" style="margin:0.55rem 0 0.2rem;font-size:0.75rem"><i class="fa-solid fa-share-nodes"></i> <span>Share</span></button>
+            ${editsBtn}
             ${notices}
             ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
             ${statsBlock}
@@ -818,6 +848,7 @@
       const del = $('#detail [data-act="delete"]'); if (del) del.addEventListener('click', () => mutateDelete(item, false));
       const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
       const rep = $('#reportBtn'); if (rep) rep.addEventListener('click', openReportModal);
+      const edb = $('#editsBtn'); if (edb) edb.addEventListener('click', openEditsModal);
       const shr = $('#shareBtn'); if (shr) shr.addEventListener('click', () => sharePost(item, shr));
       const lk = $('#likeBtn'); if (lk) lk.addEventListener('click', () => toggleLike(item, lk));
       loadComments(item);
@@ -1152,6 +1183,48 @@
         } catch (e) { toast('Network error.'); }
       });
     }
+
+    // ---- change history ----
+    function changeText(ch) {
+      const label = `<span class="ed-field">${esc(ch.label || ch.field || 'Field')}</span>`;
+      // Prose changes carry a detail string instead of values — the log never
+      // stores article/caption text, so there's nothing to show a diff of.
+      if (ch.detail) return `${label} <span class="ed-detail">${esc(ch.detail)}</span>`;
+      const from = ch.from ? `<span class="ed-from">${esc(ch.from)}</span>` : '<span class="ed-detail">nothing</span>';
+      const to = ch.to ? esc(ch.to) : '<span class="ed-detail">nothing</span>';
+      return `${label} ${from} → ${to}`;
+    }
+    function renderEdits(edits) {
+      const body = $('#editsBody'); if (!body) return;
+      if (!edits.length) { body.innerHTML = '<div class="wire-empty">No changes recorded.</div>'; return; }
+      body.innerHTML = `<div class="ed-list">${edits.map((e) => {
+        const who = esc((e.editor && e.editor.name) || 'A contributor');
+        const av = e.editor && e.editor.avatar_url
+          ? `<img src="${esc(e.editor.avatar_url)}" alt="" loading="lazy">` : '';
+        const when = e.created_at ? new Date(e.created_at).toLocaleString('en-AU') : '';
+        const rows = (e.changes || []).map((ch) => `<li>${changeText(ch)}</li>`).join('');
+        return `<div class="ed-item">
+          <div class="ed-when">${av}<span class="ed-who">${who}</span> · ${esc(when)}</div>
+          <ul class="ed-changes">${rows}</ul>
+        </div>`;
+      }).join('')}</div>`;
+    }
+    async function openEditsModal() {
+      if (!currentItem) return;
+      $('#editsBody').innerHTML = '<div class="wire-empty">Loading…</div>';
+      $('#editsModal').classList.add('on');
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/edits/${encodeURIComponent(currentItem.kind)}/${encodeURIComponent(currentItem.id)}`, { headers: await userHeaders() });
+        if (!r.ok) throw new Error('http ' + r.status);
+        const j = await r.json();
+        renderEdits(Array.isArray(j.edits) ? j.edits : []);
+      } catch (e) {
+        $('#editsBody').innerHTML = `<div class="wire-empty">Couldn't load the change history.</div>`;
+      }
+    }
+    function closeEditsModal() { $('#editsModal').classList.remove('on'); }
+    $('#editsClose').addEventListener('click', closeEditsModal);
+    $('#editsModal').addEventListener('click', (e) => { if (e.target.id === 'editsModal') closeEditsModal(); });
 
     // ---- takedown / report ----
     function openReportModal() { if (!currentItem) return; ['rp-name', 'rp-email', 'rp-org', 'rp-url', 'rp-complaint'].forEach((i) => ($('#' + i).value = '')); $('#rp-good').checked = false; $('#rp-acc').checked = false; $('#rp-msg').textContent = ''; $('#reportModal').classList.add('on'); }

@@ -28,6 +28,7 @@ import {
 } from '../services/auth/roles.js';
 import { rememberCallsigns, normaliseCallsign } from '../services/callsigns.js';
 import { ffmpegAvailable } from '../services/videoTranscode.js';
+import { diffSnapshots, mediaKeyOf, type EditSnapshot } from '../services/wireEdits.js';
 import { avatarMap } from '../services/wireComments.js';
 import {
   createImageUploadUrl,
@@ -490,6 +491,61 @@ async function fetchMediaFor(pool: Pool, parentType: string, ids: string[]): Pro
   return map;
 }
 
+/**
+ * Record an edit against a post — but ONLY if it was already public.
+ *
+ * Editing a draft, a pending submission or a rejected post changes nothing a
+ * reader has seen, so there's nothing to disclose and nothing is written. That
+ * also means the first publish never appears as a "change".
+ *
+ * Best-effort: a failure here logs and moves on. The edit itself is already
+ * committed, and losing a history row is not a reason to hand the contributor
+ * a 500 for a save that actually succeeded.
+ */
+async function recordEdit(
+  pool: Pool,
+  parentType: 'media_post' | 'article',
+  parentId: string,
+  previousStatus: string,
+  editorId: string,
+  editorName: string | null,
+  before: EditSnapshot,
+  after: EditSnapshot,
+): Promise<void> {
+  if (previousStatus !== 'published') return;
+  try {
+    const changes = diffSnapshots(before, after);
+    // A save that changed nothing isn't an edit.
+    if (changes.length === 0) return;
+    await pool.query(
+      `INSERT INTO wire_edits (parent_type, parent_id, editor_id, editor_name, changes)
+       VALUES ($1,$2,$3,$4,$5::jsonb)`,
+      [parentType, parentId, editorId, editorName, JSON.stringify(changes)],
+    );
+  } catch (err) {
+    log.warn({ err, parentType, parentId }, 'wire: failed to record edit');
+  }
+}
+
+/** How many post-publication edits this item has. 0 hides the Changes button. */
+async function editCountFor(pool: Pool, parentType: string, parentId: string): Promise<number> {
+  try {
+    const r = await pool.query<{ n: number }>(
+      'SELECT COUNT(*)::int AS n FROM wire_edits WHERE parent_type = $1 AND parent_id = $2',
+      [parentType, parentId],
+    );
+    return r.rows[0]?.n ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Storage identities of a post's current attachments, for the edit diff. */
+async function mediaKeysFor(pool: Pool, parentType: string, parentId: string): Promise<string[]> {
+  const map = await fetchMediaFor(pool, parentType, [parentId]);
+  return (map.get(parentId) ?? []).map(mediaKeyOf).filter(Boolean);
+}
+
 function deriveUnits(media: WireMediaRow[]): string[] {
   return [...new Set(media.map((m) => m.unit).filter((u): u is string => !!u))];
 }
@@ -522,6 +578,9 @@ function shapeMediaPost(row: any, media: WireMediaRow[], includeKeys = false): R
     views: Number(row.views) || 0,
     status: row.status,
     review_note: row.review_note ?? null,
+    // Only the detail queries fill this in; list responses leave it 0, which is
+    // also the honest answer for "does this need a Changes button?" in a feed.
+    edit_count: Number(row.edit_count) || 0,
     author: { id: row.author_id, name: row.author_name },
     co_authors: Array.isArray(row.co_authors) ? row.co_authors : [],
     media: shaped,
@@ -555,6 +614,7 @@ function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Rec
     views: Number(row.views) || 0,
     status: row.status,
     review_note: row.review_note ?? null,
+    edit_count: Number(row.edit_count) || 0,
     author: { id: row.author_id, name: row.author_name },
     co_authors: Array.isArray(row.co_authors) ? row.co_authors : [],
     media: shaped,
@@ -743,6 +803,7 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'media_post', [id]);
+    row.edit_count = await editCountFor(pool, 'media_post', id);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const eng = await engagementFor(pool, 'media_post', [id], uid);
     const avatars = await avatarMap(pool, creditedIds([row]));
@@ -892,7 +953,11 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
   const uid = currentUserId(c);
   if (!uid) return c.json({ error: 'authentication required' }, 401);
   try {
-    const existing = await pool.query<{ author_id: string; taken_down_at: unknown; status: string }>('SELECT author_id, taken_down_at, status FROM media_posts WHERE id = $1', [id]);
+    // Enough of the old row to diff against for the edit log (below).
+    const existing = await pool.query<any>(
+      `SELECT author_id, taken_down_at, status, title, caption, location_type, region, lat, lng,
+              agencies, incident_id, license, credit, watermark, co_authors
+         FROM media_posts WHERE id = $1`, [id]);
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     if (existing.rows[0]!.author_id !== uid && !(await canManageUsers(uid))) {
       return c.json({ error: 'forbidden' }, 403);
@@ -923,6 +988,17 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
 
     const oldImageIds = await imageIdsFor(pool, 'media_post', id);
     const oldR2Keys = await r2KeysFor(pool, 'media_post', id);
+    const prevRow = existing.rows[0]!;
+    // Snapshot BEFORE the update — cheap, and only used when the post is public.
+    const beforeSnap: EditSnapshot = prevRow.status === 'published' ? {
+      title: prevRow.title, caption: prevRow.caption,
+      location: { type: prevRow.location_type, region: prevRow.region, lat: prevRow.lat, lng: prevRow.lng },
+      agencies: Array.isArray(prevRow.agencies) ? prevRow.agencies : [],
+      incidentId: prevRow.incident_id, license: prevRow.license, credit: prevRow.credit,
+      watermark: prevRow.watermark === true,
+      coAuthors: Array.isArray(prevRow.co_authors) ? prevRow.co_authors : [],
+      mediaKeys: await mediaKeysFor(pool, 'media_post', id),
+    } : {};
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -940,6 +1016,12 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     } finally {
       client.release();
     }
+    await recordEdit(pool, 'media_post', id, prevRow.status, uid, currentUserName(c), beforeSnap, {
+      title, caption,
+      location: { type: loc.location_type, region: loc.region, lat: loc.lat, lng: loc.lng },
+      agencies, incidentId, license, credit, watermark, coAuthors,
+      mediaKeys: mv.items.map(mediaKeyOf).filter(Boolean),
+    });
     await rememberCallsigns(pool, mv.units);
     // Best-effort: delete CF images no longer referenced.
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
@@ -1085,6 +1167,7 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
       return c.json({ error: 'not found' }, 404);
     }
     const mediaMap = await fetchMediaFor(pool, 'article', [row.id]);
+    row.edit_count = await editCountFor(pool, 'article', row.id);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const engA = await engagementFor(pool, 'article', [row.id], uid);
     const avatarsA = await avatarMap(pool, creditedIds([row]));
@@ -1218,8 +1301,12 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
   const uid = currentUserId(c);
   if (!uid) return c.json({ error: 'authentication required' }, 401);
   try {
-    const existing = await pool.query<{ author_id: string; status: string; published_at: unknown; taken_down_at: unknown }>(
-      'SELECT author_id, status, published_at, taken_down_at FROM articles WHERE id = $1', [id]);
+    // Enough of the old row to diff against for the edit log (below).
+    const existing = await pool.query<any>(
+      `SELECT author_id, status, published_at, taken_down_at, title, excerpt, body, location_type,
+              region, lat, lng, agencies, incident_id, license, credit, watermark, co_authors,
+              parent_article_id
+         FROM articles WHERE id = $1`, [id]);
     if (existing.rowCount === 0) return c.json({ error: 'not found' }, 404);
     const prev = existing.rows[0]!;
     const isAdmin = await canManageUsers(uid);
@@ -1265,6 +1352,17 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
 
     const oldImageIds = await imageIdsFor(pool, 'article', id);
     const oldR2Keys = await r2KeysFor(pool, 'article', id);
+    // Snapshot BEFORE the update — cheap, and only used when the post is public.
+    const beforeSnap: EditSnapshot = prev.status === 'published' ? {
+      title: prev.title, excerpt: prev.excerpt, body: prev.body,
+      location: { type: prev.location_type, region: prev.region, lat: prev.lat, lng: prev.lng },
+      agencies: Array.isArray(prev.agencies) ? prev.agencies : [],
+      incidentId: prev.incident_id, license: prev.license, credit: prev.credit,
+      watermark: prev.watermark === true,
+      coAuthors: Array.isArray(prev.co_authors) ? prev.co_authors : [],
+      parentArticleId: prev.parent_article_id,
+      mediaKeys: await mediaKeysFor(pool, 'article', id),
+    } : {};
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1282,6 +1380,13 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     } finally {
       client.release();
     }
+    await recordEdit(pool, 'article', id, prev.status, uid, currentUserName(c), beforeSnap, {
+      title, excerpt, body,
+      location: { type: loc.location_type, region: loc.region, lat: loc.lat, lng: loc.lng },
+      agencies, incidentId, license, credit, watermark, coAuthors,
+      parentArticleId: parentRes.parentId,
+      mediaKeys: mv.items.map(mediaKeyOf).filter(Boolean),
+    });
     await rememberCallsigns(pool, mv.units);
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
@@ -1339,6 +1444,51 @@ wireRouter.post('/api/wire/articles/:id/view', async (c) => {
 // ===========================================================================
 // PENDING REVIEW (pre-moderation queue)
 // ===========================================================================
+
+// Per-post edit history. Public, because the point of it is disclosure: a
+// reader who saw the original should be able to see that (and what) it changed.
+// Only edits made AFTER publication are ever recorded — see recordEdit — so
+// nothing here reveals a draft or a rejected submission.
+//
+// Visibility mirrors the detail endpoint: if the post itself isn't visible to
+// this caller, neither is its history.
+wireRouter.get('/api/wire/edits/:type/:id', async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  if (!(await wireReadable(c))) return c.json({ error: 'not found' }, 404);
+  const type = c.req.param('type') === 'article' ? 'article' : 'media_post';
+  const id = c.req.param('id');
+  try {
+    const table = type === 'article' ? 'articles' : 'media_posts';
+    const parent = await pool.query<{ author_id: string; status: string; taken_down_at: unknown }>(
+      `SELECT author_id, status, taken_down_at FROM ${table} WHERE id = $1`, [id]);
+    if (parent.rowCount === 0) return c.json({ error: 'not found' }, 404);
+    const row = parent.rows[0]!;
+    const uid = currentUserId(c);
+    const isAuthor = !!(uid && row.author_id === uid);
+    const isAdmin = !!(uid && (await canManageUsers(uid)));
+    if ((row.taken_down_at || row.status !== 'published') && !isAuthor && !isAdmin) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    const r = await pool.query(
+      `SELECT id, editor_id, editor_name, changes, created_at
+         FROM wire_edits WHERE parent_type = $1 AND parent_id = $2
+        ORDER BY created_at DESC LIMIT 100`,
+      [type, id],
+    );
+    const avatars = await avatarMap(pool, r.rows.map((e) => e.editor_id));
+    const edits = r.rows.map((e) => ({
+      id: e.id,
+      editor: { id: e.editor_id, name: e.editor_name, avatar_url: avatars.get(e.editor_id) ?? null },
+      changes: Array.isArray(e.changes) ? e.changes : [],
+      created_at: isoOrNull(e.created_at),
+    }));
+    return c.json({ edits });
+  } catch (err) {
+    log.error({ err, id }, 'wire: list edits failed');
+    return c.json({ error: 'failed to load edit history' }, 500);
+  }
+});
 
 wireRouter.get('/api/wire/pending', requireRole(canModerateWire), async (c) => {
   const pool = await getPool();
