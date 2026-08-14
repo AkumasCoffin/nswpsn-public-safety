@@ -166,6 +166,18 @@
     .wd-meta-grid .wd-lbl { margin-bottom: 0; white-space: nowrap; }
     .wd-meta-grid .wire-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
     .wd-meta-val { font-size: 0.85rem; color: var(--text-muted); }
+    /* Article series list */
+    .ws-list { display: flex; flex-direction: column; gap: 0.25rem; }
+    .ws-row {
+      display: flex; align-items: baseline; gap: 0.5rem; padding: 0.4rem 0.5rem;
+      border-radius: 7px; text-decoration: none; color: var(--text-muted);
+      font-size: 0.82rem; border: 1px solid transparent;
+    }
+    .ws-row:hover { background: var(--accent-soft); color: var(--accent); }
+    .ws-row.here { background: var(--bg-elevated); border-color: var(--border-subtle); color: var(--text-main); font-weight: 600; }
+    .ws-num { font-family: var(--wmono, ui-monospace, monospace); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-soft); white-space: nowrap; }
+    .ws-row.here .ws-num { color: var(--accent); }
+    .ws-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .wd-lbl { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); margin-bottom: 0.5rem; }
     .wd-stats { display: flex; gap: 1.4rem; }
     .wd-stats .n { font-size: 1.3rem; font-weight: 700; }
@@ -695,6 +707,32 @@
             <i class="${item.liked_by_me ? 'fa-solid' : 'fa-regular'} fa-heart"></i>
             <span>${item.liked_by_me ? 'Liked' : 'Like'}</span>
           </button></div>`;
+      // Article series: the lead plus its follow-up parts, oldest first. Parts
+      // don't appear in the feed, so this is how readers move between them.
+      const ser = item.series;
+      let seriesBlock = '';
+      if (isArticle && ser && ser.parts && ser.parts.length > 1) {
+        const rows = ser.parts.map((p) => {
+          const here = p.id === item.id;
+          const label = p.is_lead ? 'Lead' : `Part ${p.part}`;
+          const inner = `<span class="ws-num">${esc(label)}</span><span class="ws-title">${esc(p.title)}</span>`;
+          return here
+            ? `<div class="ws-row here" aria-current="true">${inner}</div>`
+            : `<a class="ws-row" href="wire?tab=articles&article=${encodeURIComponent(p.slug || p.id)}">${inner}</a>`;
+        }).join('');
+        const canAdd = ME.canFeed && ser.parts.length <= 5;
+        seriesBlock = `<div class="wd-block">
+          <div class="wd-lbl">Series · ${ser.parts.length} parts</div>
+          <div class="ws-list">${rows}</div>
+          ${canAdd ? `<a class="wd-btn" style="margin-top:0.6rem;font-size:0.75rem" href="wire-compose?type=article&parent=${encodeURIComponent(ser.leadId)}"><i class="fa-solid fa-plus"></i> Add update</a>` : ''}
+        </div>`;
+      } else if (isArticle && ME.canFeed && canEdit) {
+        // A standalone article you own can start a series.
+        seriesBlock = `<div class="wd-block">
+          <div class="wd-lbl">Series</div>
+          <a class="wd-btn" style="font-size:0.75rem" href="wire-compose?type=article&parent=${encodeURIComponent(item.id)}"><i class="fa-solid fa-layer-group"></i> Add a follow-up</a>
+        </div>`;
+      }
       const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
       const hasVideo = galleryMedia.some((m) => m.kind === 'video');
       const eyebrow = `<div class="wd-eyebrow">Dispatch · ${isArticle ? 'Article' : (hasVideo ? 'Video' : 'Photo set')}</div>`;
@@ -714,6 +752,7 @@
             ${notices}
             ${isArticle && item.excerpt ? `<p class="wd-caption">${esc(item.excerpt)}</p>` : ''}
             ${statsBlock}
+            ${seriesBlock}
             <div class="wd-block wd-meta-grid">
               <div class="wd-lbl">Units</div><div class="wire-chips">${units}</div>
               <div class="wd-lbl">Agencies</div><div class="wire-chips">${agencies}</div>

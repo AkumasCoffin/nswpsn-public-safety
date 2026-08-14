@@ -230,6 +230,21 @@
         <label for="excerpt">Excerpt / standfirst</label>
         <textarea id="excerpt" maxlength="600" placeholder="One-sentence summary shown on the article card"></textarea>
       </div>
+      <!-- Article series: attach this piece as a follow-up to an existing lead
+           article, so multi-day coverage stays connected. Article-only. -->
+      <div class="field" id="seriesField" style="display:none">
+        <label for="seriesSearch">Part of a series · optional</label>
+        <div id="seriesChosen"></div>
+        <div class="coauth-wrap">
+          <input type="text" id="seriesSearch" placeholder="Search articles to continue…" autocomplete="off">
+          <div class="coauth-results" id="seriesResults" style="display:none"></div>
+        </div>
+        <div class="hint">
+          Attach this as a follow-up and it won't appear in the feed on its own —
+          readers reach it from the lead article. A series holds up to 5 parts.
+        </div>
+      </div>
+
       <div class="field" id="bodyField" style="display:none">
         <label for="body" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
           <span>Article body · Markdown
@@ -442,6 +457,7 @@
       incident: null, // { source, source_id, title }
       agencies: new Set(),
       coAuthors: [],  // [{ id, name, avatar_url }]
+      parentArticle: null, // { id, title } when this is a follow-up part
     };
     // Watermark: a per-post choice, remembered locally so it doesn't have to be
     // re-ticked each time. `_meName` is the username burned into photos.
@@ -531,6 +547,7 @@
       $('#draftBtn').style.display = isArt ? 'inline-block' : 'none';
       $('#publishBtn').textContent = (isModerator || !approvalRequired) ? 'Publish' : 'Submit for review';
       $('#formTitle').textContent = editId ? (isArt ? 'Edit article' : 'Edit media post') : (isArt ? 'Write an article' : 'Compose a media post');
+      const sf = $('#seriesField'); if (sf) sf.style.display = isArt ? '' : 'none';
       renderMedia();
     }
     $('#typeSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { if (editId) return; type = b.dataset.type; applyType(); }));
@@ -963,6 +980,56 @@
       document.addEventListener('click', (e) => { if (!e.target.closest('#coAuthorField')) hide(); });
     })();
 
+    // ---- article series picker ----
+    function renderSeriesChosen() {
+      const box = $('#seriesChosen'); if (!box) return;
+      const p = state.parentArticle;
+      box.innerHTML = p
+        ? `<span class="coauth-chip"><i class="fa-solid fa-layer-group"></i> Follow-up to: ${esc(p.title)}<button type="button" data-clear-series aria-label="Remove">✕</button></span>`
+        : '';
+      const b = box.querySelector('[data-clear-series]');
+      if (b) b.addEventListener('click', () => { state.parentArticle = null; renderSeriesChosen(); });
+      // Hide the search once a lead is chosen — only one parent is possible.
+      const wrap = $('#seriesSearch'); if (wrap) wrap.parentElement.style.display = p ? 'none' : '';
+    }
+
+    (function initSeriesPicker() {
+      const input = $('#seriesSearch'), box = $('#seriesResults');
+      if (!input || !box) return;
+      let t;
+      const hide = () => { box.style.display = 'none'; box.innerHTML = ''; };
+      async function search() {
+        try {
+          const q = input.value.trim();
+          const r = await fetch(`${API_BASE}/api/wire/article-leads?q=${encodeURIComponent(q)}${editId ? `&exclude=${encodeURIComponent(editId)}` : ''}`, { headers: await userHeaders() });
+          if (!r.ok) { hide(); return; }
+          const j = await r.json();
+          const leads = j.leads || [];
+          if (!leads.length) {
+            box.innerHTML = `<div class="row muted">No articles available to continue.</div>`;
+            box.style.display = 'block'; return;
+          }
+          box.innerHTML = leads.map((l) => `
+            <div class="row" data-lead-id="${esc(l.id)}" data-lead-title="${esc(l.title)}">
+              <div style="min-width:0;flex:1">
+                <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(l.title)}</div>
+                <div style="font-size:0.72rem;color:var(--text-soft);margin-top:2px">
+                  ${l.parts} part${l.parts === 1 ? '' : 's'} · ${l.remaining} slot${l.remaining === 1 ? '' : 's'} left
+                </div>
+              </div>
+            </div>`).join('');
+          box.style.display = 'block';
+          box.querySelectorAll('[data-lead-id]').forEach((row) => row.addEventListener('click', () => {
+            state.parentArticle = { id: row.dataset.leadId, title: row.dataset.leadTitle };
+            renderSeriesChosen(); input.value = ''; hide();
+          }));
+        } catch (e) { hide(); }
+      }
+      input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(search, 250); });
+      input.addEventListener('focus', search);
+      document.addEventListener('click', (e) => { if (!e.target.closest('#seriesField')) hide(); });
+    })();
+
     // ---- callsign dict ----
     async function loadCallsigns() {
       try {
@@ -986,6 +1053,7 @@
         agencies: [...state.agencies], incident: state.incident, media,
         watermark: wantsWatermark(),
         co_authors: state.coAuthors.map((c) => ({ id: c.id, name: c.name })),
+        parent_article_id: state.parentArticle ? state.parentArticle.id : null,
       };
       base.license = $('#license').value;
       base.credit = $('#credit').value.trim() || null;
@@ -1033,6 +1101,15 @@
       (it.agencies || []).forEach((a) => state.agencies.add(a));
       state.coAuthors = (it.co_authors || []).map((c) => ({ id: c.id, name: c.name, avatar_url: c.avatar_url || null }));
       const wmEl = $('#watermarkToggle'); if (wmEl) wmEl.checked = it.watermark === true;
+      if (it.parent_article_id) {
+        // Resolve the lead's title for the chip (the article payload carries only the id).
+        state.parentArticle = { id: it.parent_article_id, title: 'Lead article' };
+        try {
+          const lr = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(it.parent_article_id)}`, { headers: await userHeaders() });
+          if (lr.ok) { const lj = await lr.json(); if (lj.article) state.parentArticle.title = lj.article.title; }
+        } catch (e) { /* keep the placeholder */ }
+        renderSeriesChosen();
+      }
       $('#license').value = it.license || 'credit';
       $('#credit').value = it.credit || '';
       $('#rightsAffirm').checked = true; // already affirmed when first published
@@ -1055,6 +1132,16 @@
       if (editId) { $('#typeSeg').style.display = 'none'; }
       initMap();
       await Promise.all([loadRegions(), loadIncidents(), loadAgencies(), loadCallsigns()]);
+      // Launched from an article's "Add update" button: preselect that lead.
+      const parentParam = qs.get('parent');
+      if (parentParam && type === 'article' && !editId) {
+        state.parentArticle = { id: parentParam, title: 'Lead article' };
+        try {
+          const lr = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(parentParam)}`, { headers: await userHeaders() });
+          if (lr.ok) { const lj = await lr.json(); if (lj.article) state.parentArticle = { id: lj.article.id, title: lj.article.title }; }
+        } catch (e) { /* keep the placeholder */ }
+        renderSeriesChosen();
+      }
       if (editId) await prefill();
       refreshLocReadout();
     })();

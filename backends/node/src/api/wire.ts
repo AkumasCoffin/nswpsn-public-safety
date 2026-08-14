@@ -264,6 +264,87 @@ const DUPLICATE_IMAGE_MSG = 'One or more of these images has already been posted
 // Max co-authors creditable on one post.
 const MAX_CO_AUTHORS = 6;
 
+// Article series: a lead plus at most this many follow-up parts.
+const MAX_SERIES_PARTS = 5;
+
+/**
+ * Validate a requested parent for an article, returning the id to store or an
+ * { error } to reject with. A series is deliberately ONE level deep:
+ *   - the parent must exist and must itself be a lead (no nesting/chains)
+ *   - an article can't be its own parent
+ *   - the lead can't already hold MAX_SERIES_PARTS
+ * `selfId` is set when editing, so a post doesn't count itself.
+ */
+async function resolveSeriesParent(
+  pool: Pool,
+  raw: unknown,
+  selfId: string | null,
+): Promise<{ parentId: string | null } | { error: string }> {
+  const parentId = typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+  if (!parentId) return { parentId: null };
+  if (selfId && parentId === selfId) return { error: 'an article cannot be part of itself' };
+
+  const r = await pool.query<{ id: string; parent_article_id: string | null }>(
+    'SELECT id, parent_article_id FROM articles WHERE id = $1 OR slug = $1',
+    [parentId],
+  );
+  const parent = r.rows[0];
+  if (!parent) return { error: 'the article you selected does not exist' };
+  if (parent.parent_article_id) {
+    return { error: 'that article is already part of a series — attach to the lead article instead' };
+  }
+  if (selfId && parent.id === selfId) return { error: 'an article cannot be part of itself' };
+
+  // An article that already HAS parts can't become a part itself.
+  if (selfId) {
+    const kids = await pool.query<{ n: string }>(
+      'SELECT COUNT(*)::int AS n FROM articles WHERE parent_article_id = $1',
+      [selfId],
+    );
+    if (Number(kids.rows[0]?.n ?? 0) > 0) {
+      return { error: 'this article already leads a series, so it cannot become part of another' };
+    }
+  }
+
+  const cnt = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::int AS n FROM articles
+      WHERE parent_article_id = $1 AND ($2::text IS NULL OR id <> $2)`,
+    [parent.id, selfId],
+  );
+  if (Number(cnt.rows[0]?.n ?? 0) >= MAX_SERIES_PARTS) {
+    return { error: `a series can have at most ${MAX_SERIES_PARTS} follow-up parts` };
+  }
+  return { parentId: parent.id };
+}
+
+/** The other articles in this article's series, oldest first. */
+async function seriesFor(
+  pool: Pool,
+  row: { id: string; parent_article_id: string | null },
+): Promise<{ leadId: string; parts: Record<string, unknown>[] } | null> {
+  const leadId = row.parent_article_id ?? row.id;
+  const r = await pool.query(
+    `SELECT id, slug, title, published_at, created_at, status, parent_article_id
+       FROM articles
+      WHERE (id = $1 OR parent_article_id = $1)
+        AND status = 'published' AND taken_down_at IS NULL
+      ORDER BY parent_article_id NULLS FIRST, published_at ASC NULLS LAST, created_at ASC`,
+    [leadId],
+  );
+  if (r.rows.length <= 1) return null; // not a series
+  return {
+    leadId,
+    parts: r.rows.map((p, i) => ({
+      id: p.id,
+      slug: p.slug,
+      title: p.title,
+      is_lead: !p.parent_article_id,
+      part: i, // 0 = lead, then 1..n
+      published_at: isoOrNull(p.published_at ?? p.created_at),
+    })),
+  };
+}
+
 /**
  * Validate + canonicalise the client-supplied co-authors into a stored
  * [{id, name}] array. Only real media_feeder contributors may be credited, the
@@ -459,6 +540,7 @@ function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Rec
     incident: row.incident || (row.incident_id ? { source: 'user_incident', source_id: row.incident_id, title: null } : null),
     units: deriveUnits(media),
     watermark: row.watermark === true,
+    parent_article_id: row.parent_article_id ?? null,
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
     credit: row.credit || null,
@@ -948,6 +1030,9 @@ wireRouter.get('/api/wire/articles', async (c) => {
     }
     else {
       where.push(`status = 'published' AND taken_down_at IS NULL`);
+      // Series parts are reachable from their lead article, not the feed — so a
+      // multi-day event occupies one slot instead of five.
+      where.push(`parent_article_id IS NULL`);
       // Public "posts by this contributor" — as author OR credited co-author.
       const author = new URL(c.req.url).searchParams.get('author');
       if (author) {
@@ -1001,15 +1086,61 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const engA = await engagementFor(pool, 'article', [row.id], uid);
     const avatarsA = await avatarMap(pool, creditedIds([row]));
-    return c.json({
-      article: withAvatars(
-        withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
-        avatarsA,
-      ),
-    });
+    const shapedA = withAvatars(
+      withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
+      avatarsA,
+    );
+    // Series context: every published part (including the lead), oldest first,
+    // so the page can show "Part 2 of 4" and link the rest.
+    shapedA['series'] = await seriesFor(pool, row);
+    return c.json({ article: shapedA });
   } catch (err) {
     log.error({ err, slug }, 'wire: get article failed');
     return c.json({ error: 'failed to fetch article' }, 500);
+  }
+});
+
+/**
+ * Lead articles this contributor could attach a follow-up to. Only leads with
+ * room left are offered, so the composer can't present a choice the write would
+ * then reject. `exclude` is the article being edited.
+ */
+wireRouter.get('/api/wire/article-leads', requireRole(canFeedMedia), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const url = new URL(c.req.url);
+  const q = (url.searchParams.get('q') ?? '').trim();
+  const exclude = (url.searchParams.get('exclude') ?? '').trim() || null;
+  try {
+    const vals: unknown[] = [MAX_SERIES_PARTS, exclude];
+    let where = `a.parent_article_id IS NULL
+                 AND a.status = 'published' AND a.taken_down_at IS NULL
+                 AND ($2::text IS NULL OR a.id <> $2)
+                 AND (SELECT COUNT(*) FROM articles k WHERE k.parent_article_id = a.id) < $1`;
+    if (q) { vals.push(`%${q}%`); where += ` AND a.title ILIKE $${vals.length}`; }
+    const r = await pool.query(
+      `SELECT a.id, a.slug, a.title, a.published_at, a.created_at,
+              (SELECT COUNT(*)::int FROM articles k WHERE k.parent_article_id = a.id) AS parts
+         FROM articles a
+        WHERE ${where}
+        ORDER BY COALESCE(a.published_at, a.created_at) DESC
+        LIMIT 20`,
+      vals,
+    );
+    return c.json({
+      leads: r.rows.map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        parts: Number(row.parts) || 0,
+        remaining: MAX_SERIES_PARTS - (Number(row.parts) || 0),
+        published_at: isoOrNull(row.published_at ?? row.created_at),
+      })),
+      maxParts: MAX_SERIES_PARTS,
+    });
+  } catch (err) {
+    log.error({ err }, 'wire: article leads failed');
+    return c.json({ error: 'failed to load articles' }, 500);
   }
 });
 
@@ -1044,6 +1175,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       return c.json({ error: DUPLICATE_IMAGE_MSG, code: 'duplicate_image' }, 409);
     }
     const slug = await uniqueSlug(pool, title);
+    // Optional: attach this article as a follow-up part of an existing series.
+    const parentRes = await resolveSeriesParent(pool, data['parent_article_id'], null);
+    if ('error' in parentRes) return c.json({ error: parentRes.error }, 400);
 
     const authorName = currentUserName(c);
     const rightsAffirmed = data['rights_affirmed'] === true;
@@ -1054,9 +1188,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
         `INSERT INTO articles (author_id, author_name, title, slug, excerpt, body, status, published_at,
-           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident, co_authors, watermark)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19) RETURNING id`,
-        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson, JSON.stringify(coAuthors), watermark],
+           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident, co_authors, watermark, parent_article_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19,$20) RETURNING id`,
+        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson, JSON.stringify(coAuthors), watermark, parentRes.parentId],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, ARTICLE, newId, mv.items);
@@ -1121,6 +1255,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     }
     const slug = await uniqueSlug(pool, title, id);
     const coAuthors = await cleanCoAuthors(pool, data['co_authors'], prev.author_id);
+    const parentRes = await resolveSeriesParent(pool, data['parent_article_id'], id);
+    if ('error' in parentRes) return c.json({ error: parentRes.error }, 400);
     // First publish stamps published_at; keep the original on re-publish.
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';
     const affirmSet = data['rights_affirmed'] === true ? ', rights_affirmed = true' : '';
@@ -1132,8 +1268,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE articles SET title=$1, slug=$2, excerpt=$3, body=$4, status=$5, location_type=$6, region=$7,
-           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, co_authors=$16::jsonb, watermark=$17, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
-        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors), watermark],
+           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, co_authors=$16::jsonb, watermark=$17, parent_article_id=$18, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
+        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors), watermark, parentRes.parentId],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
       await insertMediaRows(client, ARTICLE, id, mv.items);
