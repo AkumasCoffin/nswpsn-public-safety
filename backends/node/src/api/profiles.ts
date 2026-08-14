@@ -33,6 +33,7 @@ function normUrl(v: unknown): string | null {
 interface ProfileRow {
   user_id: string;
   display_name: string | null;
+  bio: string | null;
   avatar_key: string | null;
   discord_avatar_url: string | null;
   twitter: string | null;
@@ -46,6 +47,7 @@ function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown>
   return {
     user_id: userId,
     display_name: row?.display_name ?? null,
+    bio: row?.bio ?? null,
     // Custom pfp wins; otherwise fall back to the stored Discord avatar so the
     // picture shows to other viewers (who can't read the user's Supabase metadata).
     avatar_url: row?.avatar_key ? r2PublicUrl(row.avatar_key) : (row?.discord_avatar_url ?? null),
@@ -77,6 +79,8 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
   try {
     const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     const displayName = typeof d['display_name'] === 'string' ? d['display_name'].trim().slice(0, 60) || null : null;
+    // Short public bio. Plain text, capped; rendered escaped by the frontend.
+    const bio = typeof d['bio'] === 'string' ? d['bio'].trim().slice(0, 500) || null : null;
     const twitter = normUrl(d['twitter']);
     const facebook = normUrl(d['facebook']);
     const instagram = normUrl(d['instagram']);
@@ -91,15 +95,16 @@ profilesRouter.put('/api/profiles', requireSupabaseJwt, async (c) => {
     const jwtAvatar = c.get('userAvatar');
     const discordAvatar = normUrl(jwtAvatar) ?? normUrl(d['discord_avatar_url']);
     const r = await pool.query<ProfileRow>(
-      `INSERT INTO user_profiles (user_id, display_name, avatar_key, discord_avatar_url, twitter, facebook, instagram, youtube, website, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
+      `INSERT INTO user_profiles (user_id, display_name, bio, avatar_key, discord_avatar_url, twitter, facebook, instagram, youtube, website, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
        ON CONFLICT (user_id) DO UPDATE SET
          display_name = $2,
-         avatar_key   = COALESCE($3, user_profiles.avatar_key),
-         discord_avatar_url = COALESCE($4, user_profiles.discord_avatar_url),
-         twitter = $5, facebook = $6, instagram = $7, youtube = $8, website = $9, updated_at = now()
+         bio          = $3,
+         avatar_key   = COALESCE($4, user_profiles.avatar_key),
+         discord_avatar_url = COALESCE($5, user_profiles.discord_avatar_url),
+         twitter = $6, facebook = $7, instagram = $8, youtube = $9, website = $10, updated_at = now()
        RETURNING *`,
-      [uid, displayName, avatarKey, discordAvatar, twitter, facebook, instagram, youtube, website],
+      [uid, displayName, bio, avatarKey, discordAvatar, twitter, facebook, instagram, youtube, website],
     );
     return c.json({ success: true, profile: shapeProfile(uid, r.rows[0]) });
   } catch (err) {

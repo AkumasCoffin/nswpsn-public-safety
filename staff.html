@@ -9459,7 +9459,9 @@
       });
       const chip = document.getElementById('role-chip');
       if (chip) {
-        chip.textContent = roleBits.join(' · ') || 'Authenticated';
+        // roleBits contain <i> icon markup (labels are escaped above), so this
+        // must be innerHTML — textContent would print the tags literally.
+        chip.innerHTML = roleBits.join(' · ') || 'Authenticated';
         chip.style.display = '';
       }
     }
@@ -10577,7 +10579,8 @@
           .filter(r => r && r !== 'authed')
           .map(r => { const i = ROLE_LABELS[r]; return i ? `${roleIcon(r)} ${escapeHtml(i.label)}` : escapeHtml(r); })
           .join(', ');
-        document.getElementById('approved-roles').textContent = rolesText || 'None';
+        // Contains <i> icon markup (labels escaped above) — innerHTML, not text.
+        document.getElementById('approved-roles').innerHTML = rolesText || 'None';
         
         // Handle password display
         const passwordBox = document.getElementById('password-box');

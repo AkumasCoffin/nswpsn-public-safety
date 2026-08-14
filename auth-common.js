@@ -235,6 +235,15 @@ function createProfileModal() {
       </div>
 
       <div style="margin-bottom:1.2rem;">
+        <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Bio</label>
+        <textarea id="profile-bio" maxlength="500" rows="3" placeholder="A line or two about you — shown on your public profile." style="width:100%; padding:0.65rem 0.75rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.9rem; box-sizing:border-box; font-family:inherit; resize:vertical;"></textarea>
+        <div style="display:flex; justify-content:space-between; gap:0.5rem; color:#64748b; font-size:0.75rem; margin-top:0.35rem;">
+          <span>Shown on your contributor profile.</span>
+          <span id="profile-bio-count">0/500</span>
+        </div>
+      </div>
+
+      <div style="margin-bottom:1.2rem;">
         <label style="display:block; color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; font-weight:600;">Social links</label>
         <div style="display:flex; flex-direction:column; gap:0.45rem;">
           <div style="display:flex; align-items:center; gap:0.6rem;"><i class="fab fa-x-twitter" style="color:#94a3b8; width:18px; text-align:center;"></i><input type="text" id="profile-twitter" placeholder="X / Twitter link" style="flex:1; padding:0.55rem 0.7rem; background:rgba(2,6,23,0.5); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#fff; font-size:0.85rem; box-sizing:border-box; font-family:inherit;"></div>
@@ -271,8 +280,17 @@ function createProfileModal() {
   modal.addEventListener('click', (e) => {
     if (e.target.id === 'profile-modal') closeProfileModal();
   });
+  const bioInput = document.getElementById('profile-bio');
+  if (bioInput) bioInput.addEventListener('input', updateBioCount);
   const avInput = document.getElementById('profile-avatar-input');
   if (avInput) avInput.addEventListener('change', handleProfileAvatar);
+}
+
+/** Live "n/500" counter under the bio field. */
+function updateBioCount() {
+  const el = document.getElementById('profile-bio');
+  const out = document.getElementById('profile-bio-count');
+  if (el && out) out.textContent = `${el.value.length}/500`;
 }
 
 // Pending avatar (uploaded to R2 but not yet saved to the profile).
@@ -316,7 +334,7 @@ async function handleProfileAvatar(e) {
       await sb.auth.updateUser({ data: { custom_avatar_url: publicUrl } });
       const v = (id) => (document.getElementById(id)?.value || '').trim();
       const uname = (document.getElementById('profile-username')?.value || '').trim();
-      const body = { display_name: uname || null, avatar_key: key, twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
+      const body = { display_name: uname || null, bio: v('profile-bio'), avatar_key: key, twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
       await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       _pendingAvatarKey = null; _pendingAvatarUrl = null;
       if (typeof checkAuthState === 'function') checkAuthState();
@@ -374,6 +392,8 @@ async function openProfileModal() {
     if (pr.ok) {
       const { profile } = await pr.json();
       ['twitter', 'facebook', 'instagram', 'youtube', 'website'].forEach((k) => { const el = document.getElementById('profile-' + k); if (el) el.value = (profile && profile[k]) || ''; });
+      const bioEl = document.getElementById('profile-bio');
+      if (bioEl) { bioEl.value = (profile && profile.bio) || ''; updateBioCount(); }
       if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
     }
   } catch (e) { /* ignore */ }
@@ -432,7 +452,7 @@ async function saveProfile() {
     // 2) Backend profile: social links + custom avatar.
     if (jwt) {
       const v = (id) => (document.getElementById(id)?.value || '').trim();
-      const body = { display_name: username || null, twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
+      const body = { display_name: username || null, bio: v('profile-bio'), twitter: v('profile-twitter'), facebook: v('profile-facebook'), instagram: v('profile-instagram'), youtube: v('profile-youtube'), website: v('profile-website') };
       if (_pendingAvatarKey) body.avatar_key = _pendingAvatarKey;
       await fetch(`${API_BASE_URL}/api/profiles`, { method: 'PUT', headers: { Authorization: 'Bearer ' + jwt, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
     }

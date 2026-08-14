@@ -20,6 +20,8 @@
     .prof-avatar img { width: 100%; height: 100%; object-fit: cover; }
     .prof-name { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; margin: 0; }
     .prof-role { color: var(--text-soft); font-size: 0.85rem; margin-top: 0.3rem; }
+    /* Bio is plain text; preserve the author's line breaks without allowing HTML. */
+    .prof-bio { color: var(--text-muted); font-size: 0.92rem; line-height: 1.6; margin: 0.9rem auto 0; max-width: 46ch; white-space: pre-wrap; overflow-wrap: anywhere; }
     .prof-socials { display: flex; justify-content: center; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.5rem; }
     .prof-socials a { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 1.15rem; text-decoration: none; transition: border-color .15s, color .15s, transform .15s; }
     .prof-socials a:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
@@ -117,11 +119,14 @@
         : esc((name || '?').charAt(0).toUpperCase());
       const links = SOCIALS.filter((s) => p && p[s.key]).map((s) =>
         `<a href="${esc(safeUrl(p[s.key]))}" target="_blank" rel="noopener noreferrer" title="${s.label}"><i class="${s.icon}"></i></a>`).join('');
+      // Bio is plain text — escaped, with newlines preserved via CSS.
+      const bio = p && p.bio ? `<p class="prof-bio">${esc(p.bio)}</p>` : '';
       document.getElementById('profContent').innerHTML = `
         <div class="prof-card">
           <div class="prof-avatar">${avatar}</div>
           <h1 class="prof-name">${esc(name)}</h1>
           <div class="prof-role">Contributor to The Wire</div>
+          ${bio}
           ${links ? `<div class="prof-socials">${links}</div>` : `<div class="prof-empty">No links shared yet.</div>`}
         </div>`;
     }
