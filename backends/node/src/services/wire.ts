@@ -183,6 +183,70 @@ export async function deleteR2Object(key: string): Promise<void> {
   }
 }
 
+/**
+ * Stream an R2 object to a local file.
+ *
+ * Streamed, never buffered — a 50MB clip must not become 50MB of RSS on a box
+ * that's also serving the API (same discipline as services/incidentImages.ts,
+ * which streams uploads to disk rather than holding request bodies in memory).
+ * Returns false if R2 isn't configured or the object can't be read.
+ */
+export async function downloadR2ToFile(key: string, destPath: string): Promise<boolean> {
+  if (!key || !r2Configured()) return false;
+  try {
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const { createWriteStream } = await import('node:fs');
+    const { pipeline } = await import('node:stream/promises');
+    const s3 = await r2Client();
+    const res = await s3.send(new GetObjectCommand({ Bucket: config.R2_BUCKET as string, Key: key }));
+    const body = res.Body as NodeJS.ReadableStream | undefined;
+    if (!body) return false;
+    await pipeline(body, createWriteStream(destPath));
+    return true;
+  } catch (err) {
+    log.warn({ err, key }, 'wire: R2 download failed');
+    return false;
+  }
+}
+
+/**
+ * Upload a local file to R2 under `key`. Streamed from disk for the same reason
+ * as above. Returns false on any failure — callers treat that as "leave the
+ * original in place" rather than losing content.
+ */
+export async function uploadFileToR2(
+  filePath: string,
+  key: string,
+  contentType: string,
+): Promise<boolean> {
+  if (!key || !r2Configured()) return false;
+  try {
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+    const { createReadStream, statSync } = await import('node:fs');
+    const s3 = await r2Client();
+    await s3.send(new PutObjectCommand({
+      Bucket: config.R2_BUCKET as string,
+      Key: key,
+      Body: createReadStream(filePath),
+      // R2 needs an explicit length for a stream body.
+      ContentLength: statSync(filePath).size,
+      ContentType: contentType,
+    }));
+    return true;
+  } catch (err) {
+    log.warn({ err, key }, 'wire: R2 upload failed');
+    return false;
+  }
+}
+
+/** A fresh R2 key alongside an existing one, e.g. the transcoded output. */
+export function newVideoKey(): string {
+  return `wire/videos/${randomUUID()}.mp4`;
+}
+export function newPosterKey(): string {
+  return `wire/img/${randomUUID()}.jpg`;
+}
+
 // ---- Licensing -------------------------------------------------------------
 
 /** The offered license set (code -> human label). Plain-language rather than
@@ -243,6 +307,7 @@ export interface WireMediaRow {
   width: number | null;
   height: number | null;
   bytes: number | null;
+  process_state?: string | null;
 }
 
 /** Attach delivery URLs so the frontend never constructs storage URLs itself. */
@@ -283,6 +348,10 @@ export function shapeMedia(row: WireMediaRow, includeKeys = false): Record<strin
       out['thumb_url'] = imageVariantUrl(row.cf_image_id, 'thumb');
     }
   } else if (row.kind === 'video' && row.r2_key) {
+    // Still queued for the ffmpeg pass: the file IS playable (it's the raw
+    // upload) but it's un-normalised and unwatermarked, and its poster may not
+    // exist yet — so the UI shows a placeholder rather than the wrong thing.
+    if (row.process_state === 'pending') out['processing'] = true;
     out['url'] = r2PublicUrl(row.r2_key);
     if (row.poster_r2_key) out['poster_url'] = r2PublicUrl(row.poster_r2_key);
     else if (row.poster_cf_image_id) out['poster_url'] = imageVariantUrl(row.poster_cf_image_id, 'public');

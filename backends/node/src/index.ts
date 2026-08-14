@@ -88,6 +88,10 @@ import {
   startNodeEventsPruner,
   stopNodeEventsPruner,
 } from './services/nodeEventsPruner.js';
+import {
+  startVideoProcessor,
+  stopVideoProcessor,
+} from './services/videoProcessor.js';
 
 // Pre-flight: hydrate the live store, run migrations, register every
 // source, and start the persist + flush + poll + activity-mode loops
@@ -135,6 +139,7 @@ async function preflight(): Promise<void> {
   scheduleArchiveLatestRecompute(); // one-shot recompute of latest_fetched_at to reflect actual change times
   startRdioIncidentAlertLoop(); // rdio burst → ntfy push (gated by RDIO_INCIDENT_ALERTS_ENABLED)
   startNodeEventsPruner(); // hourly 30-day prune of node_radio_events / node_pager_events
+  startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
 
   // Prewarm: fire every source's first poll in parallel and await with
   // a bounded timeout. Mirrors python's `prewarm_loop` initial pass —
@@ -253,6 +258,7 @@ async function shutdown(signal: string) {
     stopRdioSummaryScheduler();
     stopRdioIncidentAlertLoop();
     stopNodeEventsPruner();
+    stopVideoProcessor();
     // Centralwatch: stop the loops first so they don't enqueue more
     // browser jobs, then close the browser worker.
     stopCentralwatchRefreshLoop();

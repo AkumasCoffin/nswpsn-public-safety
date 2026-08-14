@@ -114,13 +114,18 @@
     .wd-grid-article .wd-gallery-main { aspect-ratio: auto; height: min(52vh, 460px); }
     .wd-gallery-main img { width: 100%; height: 100%; object-fit: contain; background: #000; cursor: zoom-in; }
     .wd-gallery-main video { width: 100%; height: 100%; background: #000; }
-    /* Video watermark overlay. pointer-events:none so it never blocks the
-       player controls underneath. */
-    .wd-video-wm {
-      position: absolute; right: 10px; bottom: 44px; pointer-events: none;
-      font-size: 0.8rem; font-weight: 600; color: rgba(255,255,255,0.82);
-      text-shadow: 0 1px 3px rgba(0,0,0,0.75); letter-spacing: 0.01em;
+    /* Shown while a clip is still queued for the server-side ffmpeg pass. The
+       raw upload IS playable underneath, so this is a badge over the player,
+       not a replacement for it. */
+    .wd-video-proc {
+      position: absolute; left: 10px; top: 10px; pointer-events: none;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.72rem; font-weight: 600; color: #fff;
+      background: rgba(0,0,0,0.66); padding: 4px 9px; border-radius: 6px;
     }
+    .wd-video-proc i { animation: wd-spin 1.4s linear infinite; }
+    @keyframes wd-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .wd-video-proc i { animation: none; } }
     .wd-unit-tag { position: absolute; bottom: 10px; left: 10px; font-size: 0.72rem; background: rgba(0,0,0,0.66); color: #fff; padding: 3px 9px; border-radius: 6px; font-weight: 600; }
     .wd-strip { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
     .wd-thumb { width: 76px; aspect-ratio: 3/2; border-radius: 7px; overflow: hidden; border: 2px solid transparent; cursor: pointer; background: var(--bg-elevated-soft); position: relative; }
@@ -671,7 +676,9 @@
           return;
         }
         const item = j.post || j.article;
-        currentItem = { id: item.id, kind: item.kind === 'article' ? 'article' : 'media_post', title: item.title, watermark: item.watermark === true, authorName: item.author?.name || '' };
+        // Only what the takedown form needs. The watermark isn't tracked here
+        // any more — it's burned into the file itself, for photos and video alike.
+        currentItem = { id: item.id, kind: item.kind === 'article' ? 'article' : 'media_post', title: item.title };
         renderDetail(item);
         $('#feedView').style.display = 'none';
         feedChrome(false);
@@ -1024,12 +1031,13 @@
     function renderGalleryMain() {
       const m = galleryMedia[galleryIdx]; const main = $('#galMain'); if (!m || !main) return;
       if (m.kind === 'video') {
-        // Photos are watermarked at upload (burned in). Video can't be without a
-        // transcode, so the mark is drawn over the player instead — cosmetic by
-        // nature, which the composer tells contributors up front.
-        const wm = currentItem && currentItem.watermark && currentItem.authorName
-          ? `<span class="wd-video-wm">${esc(currentItem.authorName)}</span>` : '';
-        main.innerHTML = `<video controls playsinline ${m.poster_url ? `poster="${esc(m.poster_url)}"` : ''} src="${esc(m.url)}"></video>${wm}`;
+        // `processing` means the server hasn't run its ffmpeg pass yet. What's
+        // playing is the raw upload — correct footage, just not yet normalised
+        // or watermarked — so it still plays, with a badge explaining why the
+        // poster may be missing and the mark absent.
+        const proc = m.processing
+          ? `<span class="wd-video-proc"><i class="fa-solid fa-circle-notch"></i>Processing</span>` : '';
+        main.innerHTML = `<video controls playsinline ${m.poster_url ? `poster="${esc(m.poster_url)}"` : ''} src="${esc(m.url)}"></video>${proc}`;
       } else {
         main.innerHTML = `<img src="${esc(m.url)}" alt="">${m.unit ? `<span class="wd-unit-tag">${esc(m.unit)}</span>` : ''}`;
         main.querySelector('img').addEventListener('click', () => openLightbox(m.url));

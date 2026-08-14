@@ -27,6 +27,7 @@ import {
   isOwner,
 } from '../services/auth/roles.js';
 import { rememberCallsigns, normaliseCallsign } from '../services/callsigns.js';
+import { ffmpegAvailable } from '../services/videoTranscode.js';
 import { avatarMap } from '../services/wireComments.js';
 import {
   createImageUploadUrl,
@@ -224,10 +225,14 @@ async function insertMediaRows(client: PoolClient, cfg: EntityCfg, parentId: str
     await client.query(
       `INSERT INTO wire_media
          (parent_type, parent_id, kind, cf_image_id, r2_key, poster_cf_image_id, poster_r2_key,
-          duration_seconds, is_cover, unit, sort_order, width, height, bytes, hash)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          duration_seconds, is_cover, unit, sort_order, width, height, bytes, hash, process_state)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [cfg.parentType, parentId, m.kind, m.cf_image_id, m.r2_key, m.poster_cf_image_id, m.poster_r2_key,
-        m.duration_seconds, m.is_cover, m.unit, i, m.width, m.height, m.bytes, m.hash],
+        m.duration_seconds, m.is_cover, m.unit, i, m.width, m.height, m.bytes, m.hash,
+        // Videos queue for the ffmpeg pass (watermark + bitrate normalisation +
+        // metadata strip + poster). Images are already optimised client-side,
+        // and if ffmpeg isn't available the clip is simply served as uploaded.
+        m.kind === 'video' && ffmpegAvailable() ? 'pending' : null],
     );
   }
 }

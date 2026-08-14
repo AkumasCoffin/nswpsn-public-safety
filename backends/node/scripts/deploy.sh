@@ -49,6 +49,18 @@ npm install --no-audit --no-fund
 echo "[deploy] playwright install chromium…"
 npx playwright install chromium || echo "[deploy] WARNING: playwright chromium install failed — marinetraffic/centralwatch browser may not start"
 
+# The Wire's video pipeline (watermark burn-in + bitrate normalisation + EXIF
+# strip + poster) shells out to the ffmpeg binary that `ffmpeg-static` unpacks
+# during npm install. Surface a broken/missing install HERE rather than at the
+# first video upload — without it, videos are silently served exactly as
+# uploaded. Non-fatal: everything else still works.
+FFMPEG_BIN="$(node -e 'try{const m=require("ffmpeg-static");process.stdout.write(String((typeof m==="string"?m:m&&m.default)||""))}catch(e){}' 2>/dev/null || true)"
+if [ -n "$FFMPEG_BIN" ] && [ -x "$FFMPEG_BIN" ]; then
+  echo "[deploy] ffmpeg: $("$FFMPEG_BIN" -version 2>/dev/null | head -1)"
+else
+  echo "[deploy] WARNING: ffmpeg-static unusable — Wire videos will be served un-transcoded (no watermark, no bitrate normalisation)"
+fi
+
 echo "[deploy] npm run build…"
 npm run build
 

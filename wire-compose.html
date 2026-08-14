@@ -342,8 +342,8 @@
         <span>
           Watermark my media with my username
           <span class="hint" style="display:block;margin-top:0.2rem">
-            Photos are watermarked permanently as they upload. Videos show it over the
-            player and on their thumbnail — the downloaded file itself isn't marked.
+            Burned into the file itself, so it survives download. Photos are marked as
+            they upload; videos are marked while they're processed, a moment after you publish.
           </span>
         </span>
       </label>
@@ -722,52 +722,23 @@
           if (r.status === 503) { setMsg("Video uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
           if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'video-upload-url ' + r.status); }
           const { uploadURL, key, publicUrl } = await r.json();
-          // NOTE: video is uploaded as-is — its EXIF/GPS/device metadata is NOT
-          // stripped. This is a deliberate deferral (owner decision, 2026-08-14:
-          // "images only for now"), NOT an oversight: unlike photos (re-encoded
-          // via canvas, which drops metadata), stripping video needs a transcode
-          // (ffmpeg.wasm / server-side), rejected as too heavy for now. Don't
-          // flag as a privacy bug — revisit only if the owner asks.
+          // The video goes up untouched — no metadata strip, no watermark, no
+          // poster from this end. All three happen server-side in one ffmpeg
+          // pass after publish (backends/node/src/services/videoProcessor.ts),
+          // which is also what normalises the bitrate. Doing it here would mean
+          // ffmpeg.wasm, and the browser can't reliably decode what it's handed
+          // anyway — the old canvas poster silently produced nothing for iPhone
+          // HEVC clips.
           const up = await fetch(uploadURL, { method: 'PUT', headers: { 'Content-Type': 'video/mp4' }, body: file });
           if (!up.ok) throw new Error('r2 put ' + up.status);
           item.r2_key = key; item.url = publicUrl; item.uploading = false;
           renderMedia();
-          capturePoster(file).then((pid) => { if (pid) item.poster_r2_key = pid; }).catch(() => {});
         } catch (e) {
           setMsg('A video failed to upload (' + e.message + ').', true);
           state.media = state.media.filter((m) => m !== item); renderMedia();
         }
       }
     }
-    // Best-effort: grab the first frame and store it as a Cloudflare Images poster.
-    function capturePoster(file) {
-      return new Promise((resolve) => {
-        const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = URL.createObjectURL(file);
-        const bail = () => resolve(null);
-        v.onloadeddata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch (e) { bail(); } };
-        v.onerror = bail;
-        v.onseeked = () => {
-          try {
-            const c = document.createElement('canvas'); c.width = v.videoWidth || 640; c.height = v.videoHeight || 360;
-            const pctx = c.getContext('2d');
-            pctx.drawImage(v, 0, 0, c.width, c.height);
-            // The poster IS a still image, so it can be burned in like a photo.
-            drawWatermark(pctx, c.width, c.height, watermarkText());
-            c.toBlob(async (blob) => {
-              if (!blob) return bail();
-              try {
-                const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders() });
-                if (!r.ok) return bail();
-                const { uploadURL, key } = await r.json();
-                const up = await fetch(uploadURL, { method: 'PUT', body: blob });
-                resolve(up.ok ? key : null);
-              } catch (e) { bail(); }
-            }, 'image/webp', 0.8);
-          } catch (e) { bail(); }
-        };
-      });
-    }
-
     // ---- location ----
     $('#locToggle').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => setLocMode(b.dataset.loc)));
     function setLocMode(mode) {
@@ -1104,7 +1075,7 @@
       const media = state.media
         .filter((m) => m.r2_key)
         .map((m) => m.kind === 'video'
-          ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || null, poster_r2_key: m.poster_r2_key || null }
+          ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || null }
           : { kind: 'image', r2_key: m.r2_key, unit: m.unit || null, is_cover: !!m.is_cover, hash: m.hash || null });
       const base = {
         title: $('#title').value.trim(),
@@ -1156,7 +1127,7 @@
       $('#title').value = it.title || '';
       if (isArt) { $('#excerpt').value = it.excerpt || ''; $('#body').value = it.body || ''; } else { $('#caption').value = it.caption || ''; }
       state.media = (it.media || []).map((m) => m.kind === 'video'
-        ? { kind: 'video', r2_key: m.r2_key, poster_r2_key: m.poster_r2_key || null, unit: m.unit || '', url: m.url, previewUrl: m.url }
+        ? { kind: 'video', r2_key: m.r2_key, unit: m.unit || '', url: m.url, previewUrl: m.url }
         : { kind: 'image', r2_key: m.r2_key, hash: m.hash || null, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
       (it.agencies || []).forEach((a) => state.agencies.add(a));
       state.coAuthors = (it.co_authors || []).map((c) => ({ id: c.id, name: c.name, avatar_url: c.avatar_url || null }));
