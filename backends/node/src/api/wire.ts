@@ -36,6 +36,8 @@ import {
   createVideoUploadUrl,
   deleteR2Object,
   r2PublicUrl,
+  avatarUrl,
+  ogImageUrl,
   MAX_VIDEO_BYTES,
   normaliseLicense,
   licenseLabel,
@@ -638,7 +640,7 @@ wireRouter.get('/api/wire/contributors', requireRole(canFeedMedia), async (c) =>
     const contributors = r.rows.map((row) => ({
       id: row.user_id,
       name: row.display_name,
-      avatar_url: row.avatar_key ? r2PublicUrl(row.avatar_key) : (row.discord_avatar_url ?? null),
+      avatar_url: avatarUrl(row.avatar_key, row.discord_avatar_url),
     }));
     return c.json({ contributors });
   } catch (err) {
@@ -759,16 +761,6 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
 // Canonical public site origin (the static frontend behind Cloudflare). Used
 // to build the canonical share URL that the OG tags point back to.
 const SITE_BASE = 'https://nswpsn.forcequit.xyz';
-
-// og:image: serve the plain stored image URL. It's a clean https URL (no query
-// params, no /cdn-cgi/ path) that returns 200 image/webp to every fetcher, and
-// Discord / Facebook / X all support WebP. Earlier attempts used a Cloudflare
-// image-transform URL to hand crawlers a JPEG, but the comma-laden /cdn-cgi/
-// URL (and its nested-https full-URL form) tripped up Discord's image proxy —
-// the plain URL avoids that entirely.
-function ogImageUrl(rawUrl: string | null): string | null {
-  return rawUrl || null;
-}
 
 // Public Open Graph metadata for link unfurls. The Cloudflare Worker on
 // nswpsn.forcequit.xyz/wire* calls this to inject per-post OG/Twitter tags for

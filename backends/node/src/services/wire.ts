@@ -86,6 +86,22 @@ export function imageVariantUrl(id: string, variant = 'public'): string {
   return `https://imagedelivery.net/${config.CF_IMAGES_HASH}/${id}/${variant}`;
 }
 
+// og:image: serve the plain stored image URL. It's a clean https URL (no query
+// params, no /cdn-cgi/ path) that returns 200 image/webp to every fetcher, and
+// Discord / Facebook / X all support WebP. Earlier attempts used a Cloudflare
+// image-transform URL to hand crawlers a JPEG, but the comma-laden /cdn-cgi/
+// URL (and its nested-https full-URL form) tripped up Discord's image proxy —
+// the plain URL avoids that entirely.
+//
+// So this strips a transform prefix rather than assuming there isn't one:
+// shapeMedia hands out /cdn-cgi/ URLs for video posters (and could for more
+// later), and a crawler must never be given one. Undoing it here keeps that
+// guarantee in the one place that actually depends on it.
+export function ogImageUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) return null;
+  return rawUrl.replace(/\/cdn-cgi\/image\/[^/]+\//, '/');
+}
+
 // ---- R2 video --------------------------------------------------------------
 
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 50 MB per clip
@@ -104,6 +120,71 @@ export function r2Configured(): boolean {
 export function r2PublicUrl(key: string): string {
   const base = (config.R2_PUBLIC_BASE ?? '').replace(/\/$/, '');
   return `${base}/${key.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/**
+ * Cloudflare Image Transformations URL for an R2 object.
+ *
+ * Everything in R2 is stored ONCE at full size; the CDN cuts the smaller
+ * variants on demand at /cdn-cgi/image/<opts>/<key>. Same mechanism the map
+ * already uses for incident photos (services/incidentImages.ts), just pointed
+ * at the media host instead of the webroot.
+ *
+ * Worth being precise about the failure mode: if Transformations were ever
+ * turned off for the zone, the resizer path 404s rather than serving the
+ * original — hence CF_TRANSFORMS_DISABLED, which puts every consumer straight
+ * back on the untransformed URL.
+ *
+ * `format=auto` is where most of the saving comes from: the stored file is
+ * WebP, but a browser that accepts AVIF gets AVIF.
+ */
+export function r2TransformUrl(
+  key: string,
+  opts: { width: number; quality?: number },
+): string {
+  const base = (config.R2_PUBLIC_BASE ?? '').replace(/\/$/, '');
+  const path = key.split('/').map(encodeURIComponent).join('/');
+  if (config.CF_TRANSFORMS_DISABLED) return `${base}/${path}`;
+  // fit=scale-down is the default, but state it: a small source must never be
+  // upscaled into a LARGER file than the original.
+  const params = `width=${opts.width},quality=${opts.quality ?? 82},format=auto,fit=scale-down`;
+  return `${base}/cdn-cgi/image/${params}/${path}`;
+}
+
+/**
+ * Rendered widths, doubled-ish for retina. Kept here rather than at each call
+ * site so the set of distinct transformations stays small — Cloudflare bills
+ * per UNIQUE (url + options) pair, so every extra width is a new billable
+ * variant of every image.
+ */
+export const IMG_WIDTHS = {
+  /** 76px gallery strip + staff list thumbs. */
+  thumb: 160,
+  /** ~270-400px feed/profile cards. */
+  feed: 640,
+  /** ~28px avatar chips beside usernames and in pickers. */
+  avatar: 80,
+  /** 116px profile-page header portrait. */
+  avatarLarge: 256,
+  /** Video poster behind the detail player. */
+  poster: 1280,
+} as const;
+
+/**
+ * Avatar URL for a stored R2 key, sized for where it's rendered — or a Discord
+ * CDN URL passed straight through, since only objects on our own zone can be
+ * transformed.
+ */
+export function avatarUrl(
+  avatarKey: string | null | undefined,
+  discordUrl: string | null | undefined,
+  size: 'chip' | 'large' = 'chip',
+): string | null {
+  if (avatarKey) {
+    const width = size === 'large' ? IMG_WIDTHS.avatarLarge : IMG_WIDTHS.avatar;
+    return r2TransformUrl(avatarKey, { width, quality: 85 });
+  }
+  return discordUrl ?? null;
 }
 
 // The S3 SDK is heavy and only needed when video is actually used, so it's
@@ -340,8 +421,12 @@ export function shapeMedia(row: WireMediaRow, includeKeys = false): Record<strin
     // New images live in R2 (single optimised WebP). Legacy Cloudflare-Images
     // rows fall back to variant URLs.
     if (row.r2_key) {
-      const u = r2PublicUrl(row.r2_key);
-      out['url'] = u; out['feed_url'] = u; out['thumb_url'] = u;
+      // `url` stays the stored original: it's already capped at 1600px WebP by
+      // the composer, so a transform at that size would cost a billable variant
+      // to save nothing. The smaller cuts are where the bandwidth actually is.
+      out['url'] = r2PublicUrl(row.r2_key);
+      out['feed_url'] = r2TransformUrl(row.r2_key, { width: IMG_WIDTHS.feed });
+      out['thumb_url'] = r2TransformUrl(row.r2_key, { width: IMG_WIDTHS.thumb, quality: 80 });
     } else if (row.cf_image_id) {
       out['url'] = imageVariantUrl(row.cf_image_id, 'public');
       out['feed_url'] = imageVariantUrl(row.cf_image_id, 'feed');
@@ -353,8 +438,14 @@ export function shapeMedia(row: WireMediaRow, includeKeys = false): Record<strin
     // exist yet — so the UI shows a placeholder rather than the wrong thing.
     if (row.process_state === 'pending') out['processing'] = true;
     out['url'] = r2PublicUrl(row.r2_key);
-    if (row.poster_r2_key) out['poster_url'] = r2PublicUrl(row.poster_r2_key);
-    else if (row.poster_cf_image_id) out['poster_url'] = imageVariantUrl(row.poster_cf_image_id, 'public');
+    if (row.poster_r2_key) {
+      // ffmpeg cuts the poster at the video's own resolution (up to 1080p), so
+      // unlike photos it genuinely needs scaling down for both consumers.
+      out['poster_url'] = r2TransformUrl(row.poster_r2_key, { width: IMG_WIDTHS.poster });
+      out['poster_feed_url'] = r2TransformUrl(row.poster_r2_key, { width: IMG_WIDTHS.feed });
+    } else if (row.poster_cf_image_id) {
+      out['poster_url'] = imageVariantUrl(row.poster_cf_image_id, 'public');
+    }
   }
   return out;
 }

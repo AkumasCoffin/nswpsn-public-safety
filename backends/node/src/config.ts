@@ -413,6 +413,16 @@ const Schema = z.object({
   R2_ENDPOINT: z.string().url().optional(),
   R2_PUBLIC_BASE: z.string().url().optional(),
 
+  // Kill switch for Cloudflare Image Transformations on R2-hosted media
+  // (/cdn-cgi/image/... on R2_PUBLIC_BASE, same trick the map already uses for
+  // incident photos). When true, every consumer falls back to the stored
+  // original — correct, just bigger. Flip this if Transformations get disabled
+  // on the zone, since the resizer 404s rather than passing through.
+  CF_TRANSFORMS_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
   // Salt for the per-day view de-dupe hash (hash(ip + ua + salt)). Defaulted
   // so view counting works out of the box; override to rotate.
   VIEW_HASH_SALT: z.string().default('nswpsn-wire-views'),

@@ -12,7 +12,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { invalidateUserRolesCache } from '../services/auth/roles.js';
-import { createImageUploadUrl, r2Configured, r2PublicUrl } from '../services/wire.js';
+import { avatarUrl, createImageUploadUrl, r2Configured } from '../services/wire.js';
 
 export const profilesRouter = new Hono();
 
@@ -50,7 +50,7 @@ function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown>
     bio: row?.bio ?? null,
     // Custom pfp wins; otherwise fall back to the stored Discord avatar so the
     // picture shows to other viewers (who can't read the user's Supabase metadata).
-    avatar_url: row?.avatar_key ? r2PublicUrl(row.avatar_key) : (row?.discord_avatar_url ?? null),
+    avatar_url: avatarUrl(row?.avatar_key, row?.discord_avatar_url, 'large'),
     twitter: row?.twitter ?? null,
     facebook: row?.facebook ?? null,
     instagram: row?.instagram ?? null,

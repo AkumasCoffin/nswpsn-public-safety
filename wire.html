@@ -517,7 +517,10 @@
         const src = cover.feed_url || cover.url;
         media = `<img src="${esc(src)}" alt="" loading="lazy" data-fb="${esc(cover.url || '')}" onerror="this.onerror=null;this.src=this.dataset.fb">`;
       } else if (cover && cover.kind === 'video') {
-        media = (cover.poster_url ? `<img src="${esc(cover.poster_url)}" alt="">` : `<div class="placeholder"><i class="fa-solid fa-film"></i></div>`) + `<span class="wire-play"><i class="fa-solid fa-play"></i></span>`;
+        // poster_feed_url is the card-sized cut; poster_url is the big one the
+        // detail player uses. Fall back for rows served before both existed.
+        const pf = cover.poster_feed_url || cover.poster_url;
+        media = (pf ? `<img src="${esc(pf)}" alt="">` : `<div class="placeholder"><i class="fa-solid fa-film"></i></div>`) + `<span class="wire-play"><i class="fa-solid fa-play"></i></span>`;
       } else {
         media = `<div class="placeholder"><i class="fa-regular fa-${isArticle ? 'newspaper' : 'image'}"></i></div>`;
       }
@@ -1046,7 +1049,8 @@
     function wireGallery() {
       const strip = $('#galStrip'); if (!strip) return;
       strip.innerHTML = galleryMedia.map((m, i) => {
-        const thumb = m.kind === 'image' ? `<img src="${esc(m.thumb_url || m.url)}" alt="" data-fb="${esc(m.url || '')}" onerror="this.onerror=null;this.src=this.dataset.fb">` : (m.poster_url ? `<img src="${esc(m.poster_url)}">` : '') + `<span class="vico"><i class="fa-solid fa-play"></i></span>`;
+        const vposter = m.poster_feed_url || m.poster_url;
+        const thumb = m.kind === 'image' ? `<img src="${esc(m.thumb_url || m.url)}" alt="" data-fb="${esc(m.url || '')}" onerror="this.onerror=null;this.src=this.dataset.fb">` : (vposter ? `<img src="${esc(vposter)}">` : '') + `<span class="vico"><i class="fa-solid fa-play"></i></span>`;
         return `<div class="wd-thumb" data-i="${i}" aria-current="${i === galleryIdx}">${thumb}</div>`;
       }).join('');
       strip.querySelectorAll('.wd-thumb').forEach((t) => t.addEventListener('click', () => {

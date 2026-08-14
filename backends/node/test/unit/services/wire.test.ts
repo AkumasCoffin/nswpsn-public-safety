@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugify, viewerHash, shapeMedia, normaliseLicense, licenseLabel, WIRE_LICENSES, type WireMediaRow } from '../../../src/services/wire.js';
+import { slugify, viewerHash, shapeMedia, normaliseLicense, licenseLabel, WIRE_LICENSES, r2TransformUrl, avatarUrl, ogImageUrl, type WireMediaRow } from '../../../src/services/wire.js';
 
 function mediaRow(over: Partial<WireMediaRow>): WireMediaRow {
   return {
@@ -49,14 +49,22 @@ describe('wire.license', () => {
 });
 
 describe('wire.shapeMedia', () => {
-  it('serves R2 images (single optimised size) and round-trips the key when includeKeys', () => {
+  it('serves R2 images and round-trips the key when includeKeys', () => {
     const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp', is_cover: true, unit: 'P421' }), true);
     expect(out['kind']).toBe('image');
     expect(out['is_cover']).toBe(true);
     expect(out['unit']).toBe('P421');
     expect(out['r2_key']).toBe('wire/img/abc.webp');
     expect(String(out['url'])).toContain('abc.webp');
-    expect(out['thumb_url']).toBe(out['url']);
+  });
+  it('cuts smaller variants via Cloudflare, leaving the full size untransformed', () => {
+    const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp' }));
+    // The stored file is already capped at 1600px, so transforming it at full
+    // size would buy nothing and cost a billable variant.
+    expect(String(out['url'])).not.toContain('/cdn-cgi/');
+    expect(String(out['feed_url'])).toContain('/cdn-cgi/image/width=640');
+    expect(String(out['thumb_url'])).toContain('/cdn-cgi/image/width=160');
+    expect(String(out['thumb_url'])).toContain('abc.webp');
   });
   it('hides storage keys + hash from public (default) responses', () => {
     const out = shapeMedia(mediaRow({ kind: 'image', r2_key: 'wire/img/abc.webp', hash: 'deadbeef' }));
@@ -78,5 +86,59 @@ describe('wire.shapeMedia', () => {
     expect(out['r2_key']).toBe('vids/x.mp4');
     // url is present (exact host depends on R2_PUBLIC_BASE env; may be undefined base)
     expect(out).toHaveProperty('url');
+    // The video itself is never transformed — only its poster still image is.
+    expect(String(out['url'])).not.toContain('/cdn-cgi/');
+  });
+  it('sizes a video poster for both the player and the card', () => {
+    const out = shapeMedia(mediaRow({ kind: 'video', r2_key: 'vids/x.mp4', poster_r2_key: 'wire/img/p.jpg' }));
+    expect(String(out['poster_url'])).toContain('/cdn-cgi/image/width=1280');
+    expect(String(out['poster_feed_url'])).toContain('/cdn-cgi/image/width=640');
+  });
+  it('flags a video that is still awaiting the ffmpeg pass', () => {
+    expect(shapeMedia(mediaRow({ kind: 'video', r2_key: 'v.mp4', process_state: 'pending' }))['processing']).toBe(true);
+    expect(shapeMedia(mediaRow({ kind: 'video', r2_key: 'v.mp4', process_state: 'done' }))).not.toHaveProperty('processing');
+    expect(shapeMedia(mediaRow({ kind: 'video', r2_key: 'v.mp4' }))).not.toHaveProperty('processing');
+  });
+});
+
+describe('wire.r2TransformUrl', () => {
+  it('builds a /cdn-cgi/image path that never upscales', () => {
+    const u = r2TransformUrl('wire/img/a b.webp', { width: 320, quality: 70 });
+    expect(u).toContain('/cdn-cgi/image/width=320,quality=70,format=auto,fit=scale-down/');
+    // Key segments stay percent-encoded, as in r2PublicUrl.
+    expect(u).toContain('a%20b.webp');
+  });
+});
+
+describe('wire.avatarUrl', () => {
+  it('sizes an own-R2 avatar for where it renders', () => {
+    expect(String(avatarUrl('av/a.webp', null))).toContain('width=80');
+    expect(String(avatarUrl('av/a.webp', null, 'large'))).toContain('width=256');
+  });
+  it('passes a Discord CDN url through untouched — it is not on our zone', () => {
+    const d = 'https://cdn.discordapp.com/avatars/1/2.png';
+    expect(avatarUrl(null, d)).toBe(d);
+    expect(avatarUrl(null, null)).toBeNull();
+  });
+  it('prefers the uploaded avatar over the Discord fallback', () => {
+    expect(String(avatarUrl('av/a.webp', 'https://cdn.discordapp.com/x.png'))).toContain('av/a.webp');
+  });
+});
+
+describe('wire.ogImageUrl', () => {
+  // Link-preview crawlers get the RAW object URL, never a transform. Discord's
+  // image proxy choked on the comma-laden /cdn-cgi/ form, which is why embeds
+  // showed no image at all — the pages keep using transforms, the crawlers don't.
+  it('strips a Cloudflare transform prefix', () => {
+    expect(ogImageUrl('https://media.forcequit.xyz/cdn-cgi/image/width=640,quality=82,format=auto,fit=scale-down/wire/img/a.webp'))
+      .toBe('https://media.forcequit.xyz/wire/img/a.webp');
+  });
+  it('leaves an already-plain url alone', () => {
+    const u = 'https://media.forcequit.xyz/wire/img/a.webp';
+    expect(ogImageUrl(u)).toBe(u);
+  });
+  it('passes through null', () => {
+    expect(ogImageUrl(null)).toBeNull();
+    expect(ogImageUrl('')).toBeNull();
   });
 });

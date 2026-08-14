@@ -150,7 +150,7 @@
       const isArticle = item.kind === 'article';
       const cover = item.cover;
       const media = cover && cover.kind === 'image' ? `<img src="${esc(cover.feed_url || cover.url)}" alt="" loading="lazy">`
-        : (cover && cover.poster_url ? `<img src="${esc(cover.poster_url)}">` : `<div class="ph"><i class="fa-regular fa-${isArticle ? 'newspaper' : 'image'}"></i></div>`);
+        : (cover && (cover.poster_feed_url || cover.poster_url) ? `<img src="${esc(cover.poster_feed_url || cover.poster_url)}">` : `<div class="ph"><i class="fa-regular fa-${isArticle ? 'newspaper' : 'image'}"></i></div>`);
       const key = isArticle ? item.slug : item.id;
       const href = `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
       return `<article class="pp-card" data-href="${esc(href)}">
