@@ -322,6 +322,17 @@
         <div class="hint">Overrides your username as the attribution shown on the post.</div>
       </div>
 
+      <label style="display:flex;gap:0.6rem;align-items:flex-start;font-size:0.85rem;color:var(--text-muted);background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:9px;padding:0.75rem 0.9rem;margin-bottom:0.9rem;cursor:pointer">
+        <input type="checkbox" id="watermarkToggle" style="width:auto;margin-top:0.15rem;accent-color:var(--accent)">
+        <span>
+          Watermark my media with my username
+          <span class="hint" style="display:block;margin-top:0.2rem">
+            Photos are watermarked permanently as they upload. Videos show it over the
+            player and on their thumbnail — the downloaded file itself isn't marked.
+          </span>
+        </span>
+      </label>
+
       <label style="display:flex;gap:0.6rem;align-items:flex-start;font-size:0.85rem;color:var(--text-muted);background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:9px;padding:0.75rem 0.9rem;margin-bottom:1rem;cursor:pointer">
         <input type="checkbox" id="rightsAffirm" style="width:auto;margin-top:0.15rem;accent-color:var(--accent)">
         <span>I own or have the rights to publish this content, and understand it may be removed in response to a valid rights complaint.</span>
@@ -432,6 +443,11 @@
       agencies: new Set(),
       coAuthors: [],  // [{ id, name, avatar_url }]
     };
+    // Watermark: a per-post choice, remembered locally so it doesn't have to be
+    // re-ticked each time. `_meName` is the username burned into photos.
+    const WM_KEY = 'nswpsn:wireWatermark';
+    let _meName = '';
+    function wantsWatermark() { const el = $('#watermarkToggle'); return !!(el && el.checked); }
     let isModerator = false; // owner/team_member → posts publish instantly
     let approvalRequired = true; // site toggle: contributor posts need approval
     let allIncidents = [];   // {id,title,lat,lng,location}
@@ -483,6 +499,19 @@
         }
         if (!j.can_feed_media) { showGate(); return false; }
         isModerator = !!j.can_moderate_wire;
+        // Name burned into photos. Prefer the profile/display name the rest of
+        // the site shows; fall back to the email local part.
+        const meta = data.session?.user?.user_metadata || {};
+        _meName = (meta.display_name || meta.username || meta.full_name || meta.name
+                   || (data.session?.user?.email || '').split('@')[0] || '').trim();
+        // Restore the last watermark choice (per-post, but remembered).
+        try {
+          const wm = $('#watermarkToggle');
+          if (wm && localStorage.getItem(WM_KEY) === '1') wm.checked = true;
+          if (wm) wm.addEventListener('change', () => {
+            try { localStorage.setItem(WM_KEY, wm.checked ? '1' : '0'); } catch (e) {}
+          });
+        } catch (e) { /* storage blocked — the toggle still works per-post */ }
         try { const s = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() }); if (s.ok) approvalRequired = (await s.json()).approval_required !== false; } catch (e) {}
         if (isModerator || !approvalRequired) $('#composeSub').textContent = 'Your post publishes instantly. You can edit or delete it any time.';
         else $('#composeSub').textContent = 'Your post is reviewed by our team before it goes public. You can edit or delete it any time.';
@@ -530,13 +559,45 @@
     // strips all EXIF/GPS/device metadata — the canvas export contains only
     // pixels. Returns null on failure; the caller must then REFUSE the upload
     // rather than send the original file (which would carry its EXIF/GPS).
+    /**
+     * Burn the contributor's name into the bottom-right of a canvas.
+     *
+     * Drawn AFTER the downscale so the text is sized to the final image, and
+     * scaled to the image's own dimensions so it reads the same on a phone
+     * photo and a DSLR frame. Because it's painted onto the canvas the export
+     * is a genuine watermark — it survives download, unlike a CSS overlay.
+     */
+    function drawWatermark(ctx, w, h, text) {
+      if (!text) return;
+      const pad = Math.max(8, Math.round(Math.min(w, h) * 0.025));
+      const size = Math.max(12, Math.round(Math.min(w, h) * 0.032));
+      ctx.save();
+      ctx.font = `600 ${size}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      // Shadow first so the text stays legible over a light background.
+      ctx.shadowColor = 'rgba(0,0,0,0.65)';
+      ctx.shadowBlur = Math.max(2, Math.round(size * 0.25));
+      ctx.shadowOffsetY = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.82)';
+      ctx.fillText(text, w - pad, h - pad);
+      ctx.restore();
+    }
+
+    /** The watermark text for this post — the contributor's own username. */
+    function watermarkText() {
+      return wantsWatermark() ? (_meName || '') : '';
+    }
+
     async function optimizeImage(file, maxDim, quality) {
       try {
         const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
         const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
         const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
         const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bmp, 0, 0, w, h);
+        drawWatermark(ctx, w, h, watermarkText());
         bmp.close && bmp.close();
         const webp = await new Promise((res) => canvas.toBlob(res, 'image/webp', quality));
         if (webp) return webp;
@@ -644,7 +705,10 @@
         v.onseeked = () => {
           try {
             const c = document.createElement('canvas'); c.width = v.videoWidth || 640; c.height = v.videoHeight || 360;
-            c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+            const pctx = c.getContext('2d');
+            pctx.drawImage(v, 0, 0, c.width, c.height);
+            // The poster IS a still image, so it can be burned in like a photo.
+            drawWatermark(pctx, c.width, c.height, watermarkText());
             c.toBlob(async (blob) => {
               if (!blob) return bail();
               try {
@@ -920,6 +984,7 @@
         location_type: state.location.type, region: state.location.region,
         lat: state.location.lat, lng: state.location.lng,
         agencies: [...state.agencies], incident: state.incident, media,
+        watermark: wantsWatermark(),
         co_authors: state.coAuthors.map((c) => ({ id: c.id, name: c.name })),
       };
       base.license = $('#license').value;
@@ -967,6 +1032,7 @@
         : { kind: 'image', r2_key: m.r2_key, hash: m.hash || null, unit: m.unit || '', is_cover: !!m.is_cover, deliveredUrl: m.url });
       (it.agencies || []).forEach((a) => state.agencies.add(a));
       state.coAuthors = (it.co_authors || []).map((c) => ({ id: c.id, name: c.name, avatar_url: c.avatar_url || null }));
+      const wmEl = $('#watermarkToggle'); if (wmEl) wmEl.checked = it.watermark === true;
       $('#license').value = it.license || 'credit';
       $('#credit').value = it.credit || '';
       $('#rightsAffirm').checked = true; // already affirmed when first published

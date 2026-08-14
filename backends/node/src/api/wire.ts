@@ -427,6 +427,7 @@ function shapeMediaPost(row: any, media: WireMediaRow[], includeKeys = false): R
     incident_id: row.incident_id,
     incident: row.incident || (row.incident_id ? { source: 'user_incident', source_id: row.incident_id, title: null } : null),
     units: deriveUnits(media),
+    watermark: row.watermark === true,
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
     credit: row.credit || null,
@@ -457,6 +458,7 @@ function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Rec
     incident_id: row.incident_id,
     incident: row.incident || (row.incident_id ? { source: 'user_incident', source_id: row.incident_id, title: null } : null),
     units: deriveUnits(media),
+    watermark: row.watermark === true,
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
     credit: row.credit || null,
@@ -760,6 +762,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    // Photos are burned in client-side; this records the choice and drives the
+    // video player's overlay (video can't be burned in without a transcode).
+    const watermark = data['watermark'] === true;
     if (data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], MEDIA);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
@@ -779,9 +784,9 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
     try {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
-        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status, incident, co_authors)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13,$14::jsonb,$15::jsonb) RETURNING id`,
-        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status, incidentJson, JSON.stringify(coAuthors)],
+        `INSERT INTO media_posts (author_id, author_name, title, caption, location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, status, incident, co_authors, watermark)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,true,$13,$14::jsonb,$15::jsonb,$16) RETURNING id`,
+        [authorId, authorName, title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, status, incidentJson, JSON.stringify(coAuthors), watermark],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, MEDIA, newId, mv.items);
@@ -826,6 +831,9 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
     const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    // Photos are burned in client-side; this records the choice and drives the
+    // video player's overlay (video can't be burned in without a transcode).
+    const watermark = data['watermark'] === true;
     const mv = validateMedia(data['media'], MEDIA);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
     if (await findDuplicateImageHash(pool, mv.items, id)) {
@@ -840,8 +848,8 @@ wireRouter.put('/api/wire/media/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE media_posts SET title=$1, caption=$2, location_type=$3, region=$4, lat=$5, lng=$6,
-           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, incident=$12::jsonb, co_authors=$13::jsonb, updated_at=now()${statusSet} WHERE id=$11`,
-        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors)],
+           agencies=$7::jsonb, incident_id=$8, license=$9, credit=$10, incident=$12::jsonb, co_authors=$13::jsonb, watermark=$14, updated_at=now()${statusSet} WHERE id=$11`,
+        [title, caption, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors), watermark],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['media_post', id]);
       await insertMediaRows(client, MEDIA, id, mv.items);
@@ -1026,6 +1034,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    // Photos are burned in client-side; this records the choice and drives the
+    // video player's overlay (video can't be burned in without a transcode).
+    const watermark = data['watermark'] === true;
     if (wantPublish && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
@@ -1043,9 +1054,9 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       await client.query('BEGIN');
       const ins = await client.query<{ id: string }>(
         `INSERT INTO articles (author_id, author_name, title, slug, excerpt, body, status, published_at,
-           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident, co_authors)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,$18::jsonb) RETURNING id`,
-        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson, JSON.stringify(coAuthors)],
+           location_type, region, lat, lng, agencies, incident_id, license, credit, rights_affirmed, incident, co_authors, watermark)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,${status === 'published' ? 'now()' : 'NULL'},$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19) RETURNING id`,
+        [authorId, authorName, title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, rightsAffirmed, incidentJson, JSON.stringify(coAuthors), watermark],
       );
       newId = ins.rows[0]!.id;
       await insertMediaRows(client, ARTICLE, newId, mv.items);
@@ -1099,6 +1110,9 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     const incidentJson = incident ? JSON.stringify(incident) : null;
     const license = normaliseLicense(data['license']);
     const credit = typeof data['credit'] === 'string' ? data['credit'].trim().slice(0, 200) || null : null;
+    // Photos are burned in client-side; this records the choice and drives the
+    // video player's overlay (video can't be burned in without a transcode).
+    const watermark = data['watermark'] === true;
     if (data['status'] === 'published' && data['rights_affirmed'] !== true) return c.json({ error: 'you must confirm you own or have the rights to publish this' }, 400);
     const mv = validateMedia(data['media'], ARTICLE);
     if ('error' in mv) return c.json({ error: mv.error }, 400);
@@ -1118,8 +1132,8 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       await client.query('BEGIN');
       await client.query(
         `UPDATE articles SET title=$1, slug=$2, excerpt=$3, body=$4, status=$5, location_type=$6, region=$7,
-           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, co_authors=$16::jsonb, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
-        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors)],
+           lat=$8, lng=$9, agencies=$10::jsonb, incident_id=$11, license=$12, credit=$13, incident=$15::jsonb, co_authors=$16::jsonb, watermark=$17, updated_at=now()${setPublished}${affirmSet} WHERE id=$14`,
+        [title, slug, excerpt, body, status, loc.location_type, loc.region, loc.lat, loc.lng, JSON.stringify(agencies), incidentId, license, credit, id, incidentJson, JSON.stringify(coAuthors), watermark],
       );
       await client.query('DELETE FROM wire_media WHERE parent_type=$1 AND parent_id=$2', ['article', id]);
       await insertMediaRows(client, ARTICLE, id, mv.items);
