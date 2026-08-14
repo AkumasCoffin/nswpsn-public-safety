@@ -301,6 +301,13 @@ editorRouter.post('/api/editor-requests/:id/approve', requireRole(canManageUsers
     }
     // The roles actually requested/approved (used for the audit note).
     const approvedRoles = [...new Set(rawRoles.map(canonicalRole))];
+    // Approving is what GRANTS access, so it must actually grant something —
+    // otherwise the request is marked approved and the applicant still can't do
+    // anything. The UI blocks this too; enforced here so a hand-crafted request
+    // can't slip an empty approval through. Use Reject to decline instead.
+    if (approvedRoles.length === 0) {
+      return c.json({ error: 'Select at least one role to approve this request.' }, 400);
+    }
     // Every account also carries the base 'authed' role (see migration 059) —
     // granted alongside so an approved user is complete even before their first
     // page load triggers /api/profiles/sync.

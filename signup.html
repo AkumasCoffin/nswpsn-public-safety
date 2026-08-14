@@ -36,6 +36,12 @@
   <script src="config.js"></script>
 
   <style>
+    /* Plain-User signup hides the contributor-only sections. Done with a class
+       on the form, NOT by writing inline display, so a section with its own
+       display:none (e.g. #background-details-group, which only appears once an
+       emergency-services background is chosen) keeps its own visibility rule. */
+    #signup-form.user-mode [data-contributor-only] { display: none !important; }
+
     /* "I want to be a…" role rows: keep the role name on one line and let the
        description take the remaining width (wrapping instead of squeezing the
        name onto two lines — e.g. "Media Feeder", "Other"). */
@@ -715,9 +721,8 @@
       // Their `required` fields must also be DISABLED: a hidden-but-required
       // control blocks form submission and can't be focused to show the
       // validation message, so "Create account" would silently do nothing.
-      document.querySelectorAll('[data-contributor-only]').forEach((el) => {
-        el.style.display = isUser ? 'none' : '';
-      });
+      const form = document.getElementById('signup-form');
+      if (form) form.classList.toggle('user-mode', isUser);
       syncHiddenFieldValidation();
     }
     function backToAccountType() {
@@ -1041,9 +1046,13 @@
       if (background && background !== 'none') {
         detailsGroup.style.display = 'block';
         detailsInput.required = true;
+        // Keep syncHiddenFieldValidation's snapshot honest — otherwise a later
+        // visibility sync would restore the stale "not required" state.
+        detailsInput.dataset.wasRequired = '1';
       } else {
         detailsGroup.style.display = 'none';
         detailsInput.required = false;
+        detailsInput.dataset.wasRequired = '0';
         detailsInput.value = '';
       }
     }

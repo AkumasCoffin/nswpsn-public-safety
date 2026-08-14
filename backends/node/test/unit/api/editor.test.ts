@@ -249,9 +249,23 @@ describe('POST /api/editor-requests/:id/approve', () => {
     const res = await app.request('/api/editor-requests/99/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      // A role is required to approve, so send one — otherwise this 400s on
+      // validation before it ever looks the request up.
+      body: JSON.stringify({ roles: ['map:editor'] }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it('400s when approving with no roles selected', async () => {
+    const app = makeApp();
+    const res = await app.request('/api/editor-requests/1/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: [] }),
+    });
+    expect(res.status).toBe(400);
+    // Must not have touched the request row.
+    expect(calls.some((c) => c.sql.includes("status = 'approved'"))).toBe(false);
   });
 
   it('400 when already approved', async () => {
