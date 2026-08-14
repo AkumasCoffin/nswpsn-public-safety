@@ -125,7 +125,11 @@ editorRouter.post('/api/editor-requests', async (c) => {
   }
 
   const email = ((data['email'] as string | undefined) ?? '').trim().toLowerCase();
-  const discordId = ((data['discord_id'] as string | undefined) ?? '').trim();
+  // A real Discord id is a numeric snowflake. Anything else — most importantly a
+  // Supabase user UUID, which an email signup used to send here — is dropped, so
+  // an email account can never be recorded (or displayed) as Discord-linked.
+  const rawDiscordId = ((data['discord_id'] as string | undefined) ?? '').trim();
+  const discordId = /^\d{15,20}$/.test(rawDiscordId) ? rawDiscordId : '';
   const website = data['website'] ? String(data['website']).trim() : null;
   const about = data['about'] ? String(data['about']).trim() : null;
   const region = data['region'] ? String(data['region']).trim() : null;

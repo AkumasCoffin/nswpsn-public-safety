@@ -3208,10 +3208,10 @@
       </div>
       <div id="linked-account-section" style="display: none; margin-bottom: 1.5rem; padding: 1rem; background: rgba(88, 101, 242, 0.1); border: 1px solid rgba(88, 101, 242, 0.35); border-radius: 8px;">
         <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary); font-weight: 600;">
-          <i class="fab fa-discord" style="color: #5865F2;"></i> Linked account
+          <i class="fas fa-link" id="linked-account-icon" style="color: #5865F2;"></i> <span id="linked-account-title">Linked account</span>
         </div>
         <p style="color: var(--text-soft); font-size: 0.8rem; margin: 0.5rem 0 0 1.6rem;">
-          This request was submitted while signed in (Discord signup). Approving assigns the
+          This request was submitted while signed in, so it's already tied to an account. Approving assigns the
           selected roles directly to that existing account — no new account or temp password.
         </p>
       </div>
@@ -10421,7 +10421,9 @@
       const discordCounts = new Map();
       for (const r of allRequests) {
         const e = (r.email || '').trim().toLowerCase();
-        const d = (r.discord_id || '').trim().toLowerCase();
+        // Only real Discord ids can indicate the same person twice; a UUID or
+        // blank must never group accounts together.
+        const d = fmtDiscordId(r.discord_id) === 'Not linked' ? '' : (r.discord_id || '').trim().toLowerCase();
         if (e) emailCounts.set(e, (emailCounts.get(e) || 0) + 1);
         if (d) discordCounts.set(d, (discordCounts.get(d) || 0) + 1);
       }
@@ -10498,7 +10500,9 @@
             <td><span class="status-badge ${escapeHtml(req.status)}">${escapeHtml(req.status)}</span></td>
             <td>${typesHtml}</td>
             <td>${escapeHtml(req.email)}${emailChip}</td>
-            <td><span class="discord-id">${escapeHtml(req.discord_id)}</span>${discordChip}</td>
+            <td>${req.discord_id && fmtDiscordId(req.discord_id) !== 'Not linked'
+                  ? `<span class="discord-id">${escapeHtml(req.discord_id)}</span>${discordChip}`
+                  : '<span class="nd-sub">Not linked</span>'}</td>
             <td>${regionHtml}</td>
             <td><span class="timestamp">${fmtDate(req.created_at)}</span></td>
             <td>${actionsHtml}</td>
@@ -10567,9 +10571,16 @@
         privilegedRolesSection.style.display = 'none';
       }
       
-      // Linked-account requests (Discord signup) skip account creation —
-      // approval assigns roles straight to the existing account.
+      // Linked-account requests skip account creation — approval assigns roles
+      // straight to the existing account. This covers BOTH Discord signups and
+      // email signups (which also create their account before submitting), so
+      // label it by what the request actually carries rather than assuming.
       const isLinked = !!req.supabase_user_id;
+      const viaDiscord = fmtDiscordId(req.discord_id) !== 'Not linked';
+      const lIcon = document.getElementById('linked-account-icon');
+      const lTitle = document.getElementById('linked-account-title');
+      if (lIcon) lIcon.className = viaDiscord ? 'fab fa-discord' : 'fas fa-envelope';
+      if (lTitle) lTitle.textContent = viaDiscord ? 'Linked Discord account' : 'Linked email account';
       document.getElementById('create-account-section').style.display = isLinked ? 'none' : 'block';
       document.getElementById('linked-account-section').style.display = isLinked ? 'block' : 'none';
 

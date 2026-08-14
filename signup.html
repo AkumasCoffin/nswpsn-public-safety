@@ -960,14 +960,15 @@
       const emailGroup = document.getElementById('email-group');
       if (emailGroup) emailGroup.style.display = 'none';
 
-      // Capture the numeric Discord user ID from the OAuth identity to send with
-      // the request (the Discord ID field was removed — it was only for the old
-      // manual-linking flow). Robust fallback across where Supabase stashes it.
-      _discordId = String(
-        idData.provider_id || idData.sub
-        || meta.provider_id || meta.sub
-        || '',
-      );
+      // Capture the numeric Discord user ID — ONLY when a Discord identity is
+      // actually present. The old fallback read meta.sub, which on an EMAIL
+      // signup is the Supabase user UUID, so email accounts were submitting
+      // their own UUID as a "Discord ID" (and then showing as Discord-linked).
+      // A real Discord id is a numeric snowflake, so require that shape too.
+      const rawDiscordId = discordIdentity
+        ? String(idData.provider_id || idData.sub || meta.provider_id || meta.sub || '')
+        : '';
+      _discordId = /^\d{15,20}$/.test(rawDiscordId) ? rawDiscordId : '';
       // Signed in via Discord → this is a Discord signup (email is the account's
       // own, so don't require a typed one on submit).
       if (discordIdentity) _signupMode = 'discord';
