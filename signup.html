@@ -712,9 +712,13 @@
           : "First, choose how you'd like to create your account — then fill out the request form.";
       }
       // Contributor-only form sections are hidden for the plain User path.
+      // Their `required` fields must also be DISABLED: a hidden-but-required
+      // control blocks form submission and can't be focused to show the
+      // validation message, so "Create account" would silently do nothing.
       document.querySelectorAll('[data-contributor-only]').forEach((el) => {
         el.style.display = isUser ? 'none' : '';
       });
+      syncHiddenFieldValidation();
     }
     function backToAccountType() {
       document.getElementById('signup-method-chooser').style.display = 'none';
@@ -730,6 +734,32 @@
     /** True when the visitor is creating a plain (roleless) User account. */
     function isPlainUserSignup() { return _accountType === 'user'; }
 
+    /**
+     * Keep constraint validation in step with what's actually on screen.
+     *
+     * A control that is `required` but hidden blocks form submission AND can't
+     * be focused to show the message, so the submit button just silently does
+     * nothing (Chrome logs "not focusable"). Any group we hide must therefore
+     * have its fields disabled, and re-enabled when shown. Called after every
+     * change to which sections are visible.
+     */
+    function syncHiddenFieldValidation() {
+      const form = document.getElementById('signup-form');
+      if (!form) return;
+      form.querySelectorAll('input, select, textarea').forEach((f) => {
+        // offsetParent is null for anything inside a display:none ancestor.
+        const hidden = f.offsetParent === null && f.type !== 'hidden';
+        if (f.dataset.wasRequired === undefined) f.dataset.wasRequired = f.required ? '1' : '0';
+        if (hidden) {
+          f.required = false;
+          f.disabled = true;
+        } else {
+          f.disabled = false;
+          f.required = f.dataset.wasRequired === '1';
+        }
+      });
+    }
+
     function chooseEmailSignup() {
       _signupMode = 'email';
       document.getElementById('signup-method-chooser').style.display = 'none';
@@ -743,6 +773,7 @@
       if (btn) btn.innerHTML = isPlainUserSignup()
         ? '<i class="fas fa-user-plus"></i> Create account'
         : '<i class="fas fa-paper-plane"></i> Submit Request';
+      syncHiddenFieldValidation();
       document.getElementById('email').focus();
     }
 
@@ -776,6 +807,9 @@
       document.getElementById('choose-method-back').style.display = 'inline-flex';
       const btn = document.getElementById('submit-btn');
       if (btn) btn.innerHTML = '<i class="fab fa-discord"></i> Continue with Discord';
+      // Discord hides the email + password groups; #email is required, and a
+      // hidden required control silently blocks submit — re-sync validation.
+      syncHiddenFieldValidation();
       // The plain User path has no form fields to fill — submit straight away.
       if (isPlainUserSignup()) { submitPlainUser(); return; }
       const about = document.getElementById('about');
