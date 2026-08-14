@@ -606,6 +606,19 @@
       return wantsWatermark() ? (_meName || '') : '';
     }
 
+    /**
+     * Downscale + re-encode, returning BOTH the blob to upload and the identity
+     * hash of the image.
+     *
+     * The hash is taken BEFORE the watermark is drawn, deliberately: the
+     * watermark is our own post-processing, not part of the photograph. Hashing
+     * after it would mean the same photo counted as "different" depending on who
+     * uploaded it or whether the toggle was on — defeating the point of the
+     * once-per-image rule. Pre-watermark, the check answers the question it's
+     * actually asking: is this the same photograph?
+     *
+     * Costs one extra encode, and only when watermarking is on.
+     */
     async function optimizeImage(file, maxDim, quality) {
       try {
         const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -614,12 +627,25 @@
         const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(bmp, 0, 0, w, h);
-        drawWatermark(ctx, w, h, watermarkText());
         bmp.close && bmp.close();
-        const webp = await new Promise((res) => canvas.toBlob(res, 'image/webp', quality));
-        if (webp) return webp;
-        const jpg = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
-        return jpg || null; // never fall back to the raw file (would keep EXIF)
+
+        const encode = async () => {
+          const webp = await new Promise((res) => canvas.toBlob(res, 'image/webp', quality));
+          if (webp) return webp;
+          // JPEG fallback for browsers without WebP encoding. Never fall back to
+          // the raw file — that would keep the EXIF/GPS the re-encode strips.
+          return await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
+        };
+
+        const plain = await encode();
+        if (!plain) return null;
+        const hash = await sha256Hex(plain);
+
+        const mark = watermarkText();
+        if (!mark) return { blob: plain, hash };
+        drawWatermark(ctx, w, h, mark);
+        const marked = await encode();
+        return { blob: marked || plain, hash };
       } catch (e) { return null; }
     }
     async function handleFiles(files) {
@@ -630,11 +656,12 @@
         const item = { kind: 'image', r2_key: null, unit: '', is_cover: state.media.length === 0, previewUrl: URL.createObjectURL(file), uploading: true };
         state.media.push(item); renderMedia();
         try {
-          const blob = await optimizeImage(file, 1600, 0.82);
+          const opt = await optimizeImage(file, 1600, 0.82);
           // If re-encoding failed we can't guarantee EXIF/GPS was stripped —
           // refuse rather than upload the original with its metadata intact.
-          if (!blob) { setMsg("Couldn't process that image — please try a different file.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); continue; }
-          const hash = await sha256Hex(blob);
+          if (!opt) { setMsg("Couldn't process that image — please try a different file.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); continue; }
+          const blob = opt.blob;
+          const hash = opt.hash; // identity of the PHOTO, taken pre-watermark
           const r = await fetch(`${API_BASE}/api/wire/upload-url`, { method: 'POST', headers: await userHeaders(true), body: JSON.stringify({ hash, exclude_id: editId || '' }) });
           if (r.status === 503) { setMsg("Image uploads aren't configured on the server yet.", true); state.media = state.media.filter((m) => m !== item); renderMedia(); break; }
           if (!r.ok) throw new Error('upload-url ' + r.status);
