@@ -180,8 +180,20 @@
       padding: 0.4rem 0.45rem; border-radius: 8px; text-decoration: none;
       color: var(--text-muted); font-size: 0.82rem;
     }
-    .ws-row:hover { background: var(--accent-soft); color: var(--accent); }
+    /* Hover: a quiet lift, not a colour change. The global `a:hover` adds an
+       underline, which looked broken across a two-line row — killed here. */
+    .ws-row { transition: background 0.15s ease, color 0.15s ease; }
+    .ws-row:hover {
+      background: rgba(148, 163, 184, 0.1);
+      color: var(--text-main);
+      text-decoration: none;
+    }
+    .ws-row:hover .ws-title { text-decoration: none; }
+    /* Only the number picks up the accent on hover — enough to show it's live. */
+    .ws-row:hover .ws-dot { border-color: var(--accent); color: var(--accent); }
+    .ws-row:hover .ws-when { color: var(--text-muted); }
     .ws-row.here { color: var(--text-main); }
+    .ws-row.here:hover { background: transparent; }
     .ws-dot {
       flex-shrink: 0; width: 21px; height: 21px; border-radius: 50%;
       display: grid; place-items: center; font-size: 0.68rem; font-weight: 700;
