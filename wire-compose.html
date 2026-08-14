@@ -980,6 +980,34 @@
       document.addEventListener('click', (e) => { if (!e.target.closest('#coAuthorField')) hide(); });
     })();
 
+    /**
+     * A follow-up covers the same event as its lead, so inherit the lead's
+     * location and linked incident rather than making the author re-enter them.
+     * Only fills EMPTY fields — anything already set (e.g. when editing, or if
+     * the author picked a different spot) is left alone.
+     */
+    function inheritFromLead(lead) {
+      if (!lead) return;
+      const haveLoc = (state.location.type === 'region' && state.location.region)
+        || (state.location.type === 'pin' && state.location.lat != null);
+      if (!haveLoc && lead.location) {
+        state.location = {
+          type: lead.location.type || 'pin',
+          region: lead.location.region || null,
+          lat: lead.location.lat, lng: lead.location.lng,
+        };
+        const isRegion = state.location.type === 'region' && state.location.region;
+        setLocMode(isRegion ? 'region' : (state.location.lat != null ? 'pin' : 'none'));
+        if (isRegion) { $('#regionSelect').value = state.location.region; refreshLocReadout(); }
+        else if (state.location.lat != null) setPin(state.location.lat, state.location.lng);
+      }
+      if (!state.incident && lead.incident) {
+        state.incident = lead.incident;
+        renderIncidentChosen();
+      }
+      refreshIncidentSuggestions();
+    }
+
     // ---- article series picker ----
     function renderSeriesChosen() {
       const box = $('#seriesChosen'); if (!box) return;
@@ -1019,9 +1047,14 @@
               </div>
             </div>`).join('');
           box.style.display = 'block';
-          box.querySelectorAll('[data-lead-id]').forEach((row) => row.addEventListener('click', () => {
+          box.querySelectorAll('[data-lead-id]').forEach((row) => row.addEventListener('click', async () => {
             state.parentArticle = { id: row.dataset.leadId, title: row.dataset.leadTitle };
             renderSeriesChosen(); input.value = ''; hide();
+            // Pull the lead's LGA/pin + linked incident across.
+            try {
+              const lr = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(row.dataset.leadId)}`, { headers: await userHeaders() });
+              if (lr.ok) { const lj = await lr.json(); inheritFromLead(lj.article); }
+            } catch (e) { /* author can still fill them in manually */ }
           }));
         } catch (e) { hide(); }
       }
@@ -1138,7 +1171,10 @@
         state.parentArticle = { id: parentParam, title: 'Lead article' };
         try {
           const lr = await fetch(`${API_BASE}/api/wire/articles/${encodeURIComponent(parentParam)}`, { headers: await userHeaders() });
-          if (lr.ok) { const lj = await lr.json(); if (lj.article) state.parentArticle = { id: lj.article.id, title: lj.article.title }; }
+          if (lr.ok) {
+            const lj = await lr.json();
+            if (lj.article) { state.parentArticle = { id: lj.article.id, title: lj.article.title }; inheritFromLead(lj.article); }
+          }
         } catch (e) { /* keep the placeholder */ }
         renderSeriesChosen();
       }

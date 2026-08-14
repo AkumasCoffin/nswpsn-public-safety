@@ -83,6 +83,7 @@
     .wire-thumb .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-soft); font-size: 2rem; }
     .wire-badge { position: absolute; top: 8px; left: 8px; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 7px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; backdrop-filter: blur(2px); }
     .wire-badge.article { background: rgba(249,115,22,0.85); }
+    .wire-badge.series { background: rgba(56,189,248,0.85); color: #05202e; }
     .wire-views { position: absolute; bottom: 8px; right: 8px; font-size: 0.7rem; background: rgba(0,0,0,0.62); color: #fff; padding: 2px 7px; border-radius: 6px; display: flex; align-items: center; gap: 4px; }
     .wire-play { position: absolute; inset: 0; margin: auto; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 50%; background: rgba(0,0,0,0.5); color: #fff; pointer-events: none; }
     .wire-card-body { padding: 0.75rem 0.85rem 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
@@ -166,18 +167,32 @@
     .wd-meta-grid .wd-lbl { margin-bottom: 0; white-space: nowrap; }
     .wd-meta-grid .wire-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
     .wd-meta-val { font-size: 0.85rem; color: var(--text-muted); }
-    /* Article series list */
-    .ws-list { display: flex; flex-direction: column; gap: 0.25rem; }
+    /* Article series — a numbered timeline. Every entry gets the same shape so
+       the lead doesn't read as a different kind of thing from its updates. */
+    .ws-list { position: relative; display: flex; flex-direction: column; }
+    /* Connecting rail behind the numbers. */
+    .ws-list::before {
+      content: ""; position: absolute; left: 10px; top: 14px; bottom: 14px;
+      width: 1px; background: var(--border-subtle);
+    }
     .ws-row {
-      display: flex; align-items: baseline; gap: 0.5rem; padding: 0.4rem 0.5rem;
-      border-radius: 7px; text-decoration: none; color: var(--text-muted);
-      font-size: 0.82rem; border: 1px solid transparent;
+      position: relative; display: flex; align-items: flex-start; gap: 0.6rem;
+      padding: 0.4rem 0.45rem; border-radius: 8px; text-decoration: none;
+      color: var(--text-muted); font-size: 0.82rem;
     }
     .ws-row:hover { background: var(--accent-soft); color: var(--accent); }
-    .ws-row.here { background: var(--bg-elevated); border-color: var(--border-subtle); color: var(--text-main); font-weight: 600; }
-    .ws-num { font-family: var(--wmono, ui-monospace, monospace); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-soft); white-space: nowrap; }
-    .ws-row.here .ws-num { color: var(--accent); }
+    .ws-row.here { color: var(--text-main); }
+    .ws-dot {
+      flex-shrink: 0; width: 21px; height: 21px; border-radius: 50%;
+      display: grid; place-items: center; font-size: 0.68rem; font-weight: 700;
+      background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+      color: var(--text-soft); position: relative; z-index: 1;
+    }
+    .ws-row.here .ws-dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .ws-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; padding-top: 1px; }
     .ws-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ws-row.here .ws-title { font-weight: 600; }
+    .ws-when { font-size: 0.68rem; color: var(--text-soft); }
     .wd-lbl { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-soft); margin-bottom: 0.5rem; }
     .wd-stats { display: flex; gap: 1.4rem; }
     .wd-stats .n { font-size: 1.3rem; font-weight: 700; }
@@ -491,7 +506,12 @@
       }
       const imgs = (item.media || []).filter((m) => m.kind === 'image').length;
       const vids = (item.media || []).filter((m) => m.kind === 'video').length;
-      const badge = isArticle ? 'Article' : (vids ? `${vids} video${vids > 1 ? 's' : ''}` : `${imgs} photo${imgs !== 1 ? 's' : ''}`);
+      // A lead article advertises its series so readers know there's more than
+      // one instalment before they open it (parts aren't in the feed).
+      const parts = Number(item.series_parts) || 0;
+      const badge = isArticle
+        ? (parts ? `Series · ${parts + 1} parts` : 'Article')
+        : (vids ? `${vids} video${vids > 1 ? 's' : ''}` : `${imgs} photo${imgs !== 1 ? 's' : ''}`);
       const units = (item.units || []).slice(0, 3).map((u) => `<span class="wire-chip">${esc(u)}</span>`).join('');
       const hasLoc = item.location && (item.location.region || item.location.lat != null);
       const loc = hasLoc
@@ -503,7 +523,7 @@
       const coPart = nCo ? ` <span class="wire-co">+${nCo}</span>` : '';
       const caption = isArticle ? (item.excerpt || '') : (item.caption || '');
       return `<article class="wire-card" data-kind="${item.kind}" data-key="${esc(key)}">
-        <div class="wire-thumb">${media}<span class="wire-badge ${isArticle ? 'article' : ''}">${esc(badge)}</span>
+        <div class="wire-thumb">${media}<span class="wire-badge ${isArticle ? (parts ? 'series' : 'article') : ''}">${parts && isArticle ? '<i class="fa-solid fa-layer-group"></i> ' : ''}${esc(badge)}</span>
           <span class="wire-views"><i class="fa-regular fa-eye"></i> ${fmtViews(item.views)}${
             item.like_count ? ` <i class="fa-solid fa-heart" style="margin-left:4px"></i> ${fmtViews(item.like_count)}` : ''
           }${
@@ -714,8 +734,10 @@
       if (isArticle && ser && ser.parts && ser.parts.length > 1) {
         const rows = ser.parts.map((p) => {
           const here = p.id === item.id;
-          const label = p.is_lead ? 'Lead' : `Part ${p.part}`;
-          const inner = `<span class="ws-num">${esc(label)}</span><span class="ws-title">${esc(p.title)}</span>`;
+          const n = p.is_lead ? '1' : String(p.part + 1);
+          const when = p.published_at ? new Date(p.published_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : '';
+          const inner = `<span class="ws-dot">${esc(n)}</span>
+            <span class="ws-body"><span class="ws-title">${esc(p.title)}</span>${when ? `<span class="ws-when">${esc(when)}</span>` : ''}</span>`;
           return here
             ? `<div class="ws-row here" aria-current="true">${inner}</div>`
             : `<a class="ws-row" href="wire?tab=articles&article=${encodeURIComponent(p.slug || p.id)}">${inner}</a>`;

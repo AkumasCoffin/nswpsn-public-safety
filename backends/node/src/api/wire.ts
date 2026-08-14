@@ -541,6 +541,7 @@ function shapeArticle(row: any, media: WireMediaRow[], includeKeys = false): Rec
     units: deriveUnits(media),
     watermark: row.watermark === true,
     parent_article_id: row.parent_article_id ?? null,
+    series_parts: Number(row.series_parts) || 0,
     license: row.license || 'credit',
     license_label: licenseLabel(row.license || 'credit'),
     credit: row.credit || null,
@@ -1032,7 +1033,7 @@ wireRouter.get('/api/wire/articles', async (c) => {
       where.push(`status = 'published' AND taken_down_at IS NULL`);
       // Series parts are reachable from their lead article, not the feed — so a
       // multi-day event occupies one slot instead of five.
-      where.push(`parent_article_id IS NULL`);
+      where.push(`a.parent_article_id IS NULL`);
       // Public "posts by this contributor" — as author OR credited co-author.
       const author = new URL(c.req.url).searchParams.get('author');
       if (author) {
@@ -1047,7 +1048,11 @@ wireRouter.get('/api/wire/articles', async (c) => {
     vals.push(limit, offset);
     const order = mine ? 'updated_at DESC' : 'published_at DESC NULLS LAST';
     const r = await pool.query(
-      `SELECT * FROM articles WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
+      `SELECT a.*,
+              (SELECT COUNT(*)::int FROM articles k
+                WHERE k.parent_article_id = a.id AND k.status = 'published' AND k.taken_down_at IS NULL
+              ) AS series_parts
+         FROM articles a WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
       vals,
     );
     const ids = r.rows.map((row) => row.id);
