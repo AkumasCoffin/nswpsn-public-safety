@@ -959,6 +959,13 @@
       if (event === 'SIGNED_IN') applySession(session);
     });
 
+    // ?as=user | ?as=contributor — the login page links straight to a path, so
+    // skip the account-type chooser and go to the method step.
+    (function applyAccountTypeParam() {
+      const as = new URLSearchParams(location.search).get('as');
+      if (as === 'user' || as === 'contributor') chooseAccountType(as);
+    })();
+
     // Sent here from the login page's orphan guard (tried to log in without an
     // account) — explain they need to sign up.
     if (new URLSearchParams(location.search).get('welcome') === '1') {

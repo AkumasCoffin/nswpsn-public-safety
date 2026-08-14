@@ -9455,7 +9455,7 @@
       const myRoles = (userPermissions.roles || []).filter(r => r && r !== 'authed');
       const roleBits = myRoles.map(r => {
         const info = ROLE_LABELS[r];
-        return info ? `${info.icon} ${info.label}` : r;
+        return info ? `${roleIcon(r)} ${escapeHtml(info.label)}` : escapeHtml(r);
       });
       const chip = document.getElementById('role-chip');
       if (chip) {
@@ -9886,27 +9886,34 @@
     // Canonical role display map. Roles are "main:sub" — the main part groups
     // them in the UI, the full string is what grants permission. Legacy names
     // are listed too so a pre-migration row still renders sensibly.
+    // `icon` is a Font Awesome class (rendered via roleIcon()), not an emoji —
+    // emoji render inconsistently across platforms and don't inherit colour.
     const ROLE_LABELS = {
-      'owner':              { icon: '👑', label: 'Owner',        group: 'Site' },
-      'staff':              { icon: '👥', label: 'Staff',        group: 'Site' },
-      'wire:contributor':   { icon: '📸', label: 'Wire · Contributor', group: 'The Wire' },
-      'wire:manager':       { icon: '📰', label: 'Wire · Manager',     group: 'The Wire' },
-      'feeder:radio':       { icon: '📻', label: 'Feeder · Radio',     group: 'Feeder' },
-      'feeder:pager':       { icon: '📟', label: 'Feeder · Pager',     group: 'Feeder' },
-      'feeder:agency_data': { icon: '🗃️', label: 'Feeder · Agency data', group: 'Feeder' },
-      'feeder:monitor':     { icon: '👁️', label: 'Feeder · Monitor',   group: 'Feeder' },
-      'feeder:manager':     { icon: '🛠️', label: 'Feeder · Manager',   group: 'Feeder' },
-      'map:editor':         { icon: '📝', label: 'Map · Editor',       group: 'Map' },
-      'map:manager':        { icon: '🗺️', label: 'Map · Manager',      group: 'Map' },
+      'owner':              { icon: 'fa-solid fa-crown',          label: 'Owner',        group: 'Site' },
+      'staff':              { icon: 'fa-solid fa-user-shield',    label: 'Staff',        group: 'Site' },
+      'wire:contributor':   { icon: 'fa-solid fa-camera',         label: 'Wire · Contributor', group: 'The Wire' },
+      'wire:manager':       { icon: 'fa-solid fa-newspaper',      label: 'Wire · Manager',     group: 'The Wire' },
+      'feeder:radio':       { icon: 'fa-solid fa-walkie-talkie',  label: 'Feeder · Radio',     group: 'Feeder' },
+      'feeder:pager':       { icon: 'fa-solid fa-pager',          label: 'Feeder · Pager',     group: 'Feeder' },
+      'feeder:agency_data': { icon: 'fa-solid fa-table',          label: 'Feeder · Agency data', group: 'Feeder' },
+      'feeder:monitor':     { icon: 'fa-solid fa-eye',            label: 'Feeder · Monitor',   group: 'Feeder' },
+      'feeder:manager':     { icon: 'fa-solid fa-screwdriver-wrench', label: 'Feeder · Manager', group: 'Feeder' },
+      'map:editor':         { icon: 'fa-solid fa-pen-to-square',  label: 'Map · Editor',       group: 'Map' },
+      'map:manager':        { icon: 'fa-solid fa-map-location-dot', label: 'Map · Manager',    group: 'Map' },
       // Legacy names (pre-migration rows) — shown so nothing renders as raw text.
-      'team_member':        { icon: '👥', label: 'Staff (legacy)',     group: 'Site' },
-      'media_feeder':       { icon: '📸', label: 'Wire · Contributor (legacy)', group: 'The Wire' },
-      'map_editor':         { icon: '📝', label: 'Map · Editor (legacy)',       group: 'Map' },
-      'data_feeder':        { icon: '🗃️', label: 'Feeder · Agency data (legacy)', group: 'Feeder' },
-      'pager_contributor':  { icon: '📟', label: 'Feeder · Pager (legacy)',     group: 'Feeder' },
-      'radio_contributor':  { icon: '📻', label: 'Feeder · Radio (legacy)',     group: 'Feeder' },
-      'node_monitor':       { icon: '👁️', label: 'Feeder · Monitor (legacy)',   group: 'Feeder' },
+      'team_member':        { icon: 'fa-solid fa-user-shield',    label: 'Staff (legacy)',     group: 'Site' },
+      'media_feeder':       { icon: 'fa-solid fa-camera',         label: 'Wire · Contributor (legacy)', group: 'The Wire' },
+      'map_editor':         { icon: 'fa-solid fa-pen-to-square',  label: 'Map · Editor (legacy)',       group: 'Map' },
+      'data_feeder':        { icon: 'fa-solid fa-table',          label: 'Feeder · Agency data (legacy)', group: 'Feeder' },
+      'pager_contributor':  { icon: 'fa-solid fa-pager',          label: 'Feeder · Pager (legacy)',     group: 'Feeder' },
+      'radio_contributor':  { icon: 'fa-solid fa-walkie-talkie',  label: 'Feeder · Radio (legacy)',     group: 'Feeder' },
+      'node_monitor':       { icon: 'fa-solid fa-eye',            label: 'Feeder · Monitor (legacy)',   group: 'Feeder' },
     };
+    /** <i> markup for a role's icon; falls back to a neutral dot. */
+    function roleIcon(role) {
+      const info = ROLE_LABELS[role];
+      return `<i class="${info ? info.icon : 'fa-solid fa-circle-dot'}" aria-hidden="true"></i>`;
+    }
     // Roles offered in the approval + edit-roles modals, grouped for display.
     // Managers are NOT privileged — any staff may assign them; only owner/staff
     // are gated behind can_assign_privileged_roles.
@@ -9947,11 +9954,11 @@
       }
     }
     function roleCheckboxHtml(idPrefix, role) {
-      const info = ROLE_LABELS[role] || { icon: '•', label: role };
+      const info = ROLE_LABELS[role] || { label: role }; // icon comes from roleIcon()
       const hint = ROLE_HINTS[role] || '';
       return `<label class="role-row">
         <input type="checkbox" data-role="${escapeHtml(role)}" id="${idPrefix}${roleClass(role)}">
-        <span class="role-name">${info.icon} ${escapeHtml(info.label)}</span>
+        <span class="role-name">${roleIcon(role)} ${escapeHtml(info.label)}</span>
         ${hint ? `<span class="role-hint">${escapeHtml(hint)}</span>` : ''}
       </label>`;
     }
@@ -10107,8 +10114,8 @@
         const shownRoles = realRoles(user);
         if (shownRoles.length > 0) {
           rolesHtml = shownRoles.map(role => {
-            const info = ROLE_LABELS[role] || { icon: '•', label: escapeHtml(role) };
-            return `<span class="role-badge ${roleClass(role)}">${info.icon} ${info.label}</span>`;
+            const info = ROLE_LABELS[role] || { label: role }; // icon comes from roleIcon()
+            return `<span class="role-badge ${roleClass(role)}">${roleIcon(role)} ${escapeHtml(info.label)}</span>`;
           }).join('');
         } else {
           rolesHtml = '<span class="no-roles">User</span>';
@@ -10568,7 +10575,7 @@
         // Format assigned roles from the shared label map.
         const rolesText = (data.roles || [])
           .filter(r => r && r !== 'authed')
-          .map(r => { const i = ROLE_LABELS[r]; return i ? `${i.icon} ${i.label}` : r; })
+          .map(r => { const i = ROLE_LABELS[r]; return i ? `${roleIcon(r)} ${escapeHtml(i.label)}` : escapeHtml(r); })
           .join(', ');
         document.getElementById('approved-roles').textContent = rolesText || 'None';
         
