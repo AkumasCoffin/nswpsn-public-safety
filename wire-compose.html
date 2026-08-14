@@ -476,7 +476,11 @@
       try {
         const r = await fetch(`${API_BASE}/api/check-editor/${uid}`);
         const j = await r.json();
-        if (!j.is_owner) { $('#comingSoon').style.display = 'block'; $('#form').style.display = 'none'; $('#gate').style.display = 'none'; return false; }
+        // Anyone who can post to (or moderate) The Wire bypasses the
+        // soft-launch banner — mirrors the server-side wireReadable() gate.
+        if (!(j.is_owner || j.can_feed_media || j.can_moderate_wire)) {
+          $('#comingSoon').style.display = 'block'; $('#form').style.display = 'none'; $('#gate').style.display = 'none'; return false;
+        }
         if (!j.can_feed_media) { showGate(); return false; }
         isModerator = !!j.can_moderate_wire;
         try { const s = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() }); if (s.ok) approvalRequired = (await s.json()).approval_required !== false; } catch (e) {}

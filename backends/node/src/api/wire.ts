@@ -81,13 +81,17 @@ async function wireApprovalRequired(pool: Pool): Promise<boolean> {
   }
 }
 
-// Soft launch: while WIRE_PUBLIC !== 'true', only the owner may read the feed —
-// this enforces the "coming soon for everyone except owner" gate server-side
-// (the frontend banner alone is cosmetic). Flip WIRE_PUBLIC=true at launch.
+// Soft launch: while WIRE_PUBLIC !== 'true', The Wire is hidden behind a
+// "coming soon" banner for the public. The people who BUILD it still need to
+// see it, so contributors and moderators bypass the gate — canFeedMedia covers
+// owner + wire:contributor + wire:manager, canModerateWire adds staff.
+// This is enforced server-side; the frontend banner alone is cosmetic.
+// Flip WIRE_PUBLIC=true at launch and the gate stops applying to anyone.
 async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean> {
   if (config.WIRE_PUBLIC === 'true') return true;
   const uid = currentUserId(c);
-  return !!(uid && (await isOwner(uid)));
+  if (!uid) return false;
+  return (await canFeedMedia(uid)) || (await canModerateWire(uid));
 }
 
 // ---- validation ------------------------------------------------------------

@@ -1097,8 +1097,10 @@
     (async function init() {
       applySection();
       await Promise.all([loadKey(), loadMe(), loadFilterOptions()]);
-      // Soft launch: only the owner sees The Wire; everyone else gets a banner.
-      if (!ME.isOwner) { showComingSoon(); return; }
+      // Soft launch: the public gets a banner until WIRE_PUBLIC=true.
+      // Contributors and moderators build/curate The Wire, so they see it
+      // during soft launch too — mirrors the server-side wireReadable() gate.
+      if (!(ME.isOwner || ME.canFeed || ME.canModerate)) { showComingSoon(); return; }
       // My posts = combined media + articles with an All/Media/Articles filter;
       // the public agency/region filters don't apply there.
       if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }

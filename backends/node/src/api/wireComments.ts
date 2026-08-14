@@ -20,7 +20,7 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
-import { requireRole, canModerateWire, isOwner } from '../services/auth/roles.js';
+import { requireRole, canModerateWire, canFeedMedia } from '../services/auth/roles.js';
 import {
   RESTRICTION_REASONS,
   TIMEOUT_HOURS,
@@ -56,7 +56,8 @@ function isoOrNull(v: unknown): string | null {
 async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean> {
   if (config.WIRE_PUBLIC === 'true') return true;
   const uid = currentUserId(c);
-  return !!(uid && (await isOwner(uid)));
+  if (!uid) return false;
+  return (await canFeedMedia(uid)) || (await canModerateWire(uid));
 }
 
 /** Normalise the ?type= param to a stored parent_type. */
