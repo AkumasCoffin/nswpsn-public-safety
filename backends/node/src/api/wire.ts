@@ -287,17 +287,28 @@ async function resolveSeriesParent(
   pool: Pool,
   raw: unknown,
   selfId: string | null,
+  viewer?: { uid: string | null; isAdmin: boolean },
 ): Promise<{ parentId: string | null } | { error: string }> {
   const parentId = typeof raw === 'string' && raw.trim() ? raw.trim() : null;
   if (!parentId) return { parentId: null };
   if (selfId && parentId === selfId) return { error: 'an article cannot be part of itself' };
 
-  const r = await pool.query<{ id: string; parent_article_id: string | null }>(
-    'SELECT id, parent_article_id FROM articles WHERE id = $1 OR slug = $1',
+  const r = await pool.query<{ id: string; parent_article_id: string | null; status: string; author_id: string; taken_down_at: unknown }>(
+    'SELECT id, parent_article_id, status, author_id, taken_down_at FROM articles WHERE id = $1 OR slug = $1',
     [parentId],
   );
   const parent = r.rows[0];
   if (!parent) return { error: 'the article you selected does not exist' };
+  // Match what article-leads offers: anyone's published article, or your own
+  // unpublished one. Without this, a guessed id could attach a part to someone
+  // else's draft — and the id is the only thing standing in the way.
+  if (viewer) {
+    const mine = !!viewer.uid && parent.author_id === viewer.uid;
+    const visible = parent.status === 'published' && !parent.taken_down_at;
+    if (!visible && !mine && !viewer.isAdmin) {
+      return { error: 'the article you selected does not exist' };
+    }
+  }
   if (parent.parent_article_id) {
     return { error: 'that article is already part of a series — attach to the lead article instead' };
   }
@@ -1197,14 +1208,20 @@ wireRouter.get('/api/wire/article-leads', requireRole(canFeedMedia), async (c) =
   const q = (url.searchParams.get('q') ?? '').trim();
   const exclude = (url.searchParams.get('exclude') ?? '').trim() || null;
   try {
-    const vals: unknown[] = [MAX_SERIES_PARTS, exclude];
+    // Your OWN drafts and pending articles are offered too, not just published
+    // ones: a series is usually written as a set, so the lead frequently isn't
+    // public yet when its first follow-up is being drafted. Other people's
+    // unpublished work stays invisible.
+    const uid = currentUserId(c);
+    const vals: unknown[] = [MAX_SERIES_PARTS, exclude, uid ?? ''];
     let where = `a.parent_article_id IS NULL
-                 AND a.status = 'published' AND a.taken_down_at IS NULL
+                 AND a.taken_down_at IS NULL
+                 AND (a.status = 'published' OR (a.author_id = $3 AND a.status IN ('draft','pending')))
                  AND ($2::text IS NULL OR a.id <> $2)
                  AND (SELECT COUNT(*) FROM articles k WHERE k.parent_article_id = a.id) < $1`;
     if (q) { vals.push(`%${q}%`); where += ` AND a.title ILIKE $${vals.length}`; }
     const r = await pool.query(
-      `SELECT a.id, a.slug, a.title, a.published_at, a.created_at,
+      `SELECT a.id, a.slug, a.title, a.status, a.published_at, a.created_at,
               (SELECT COUNT(*)::int FROM articles k WHERE k.parent_article_id = a.id) AS parts
          FROM articles a
         WHERE ${where}
@@ -1217,6 +1234,9 @@ wireRouter.get('/api/wire/article-leads', requireRole(canFeedMedia), async (c) =
         id: row.id,
         slug: row.slug,
         title: row.title,
+        // The picker labels anything not yet public, so it's obvious you're
+        // attaching to something readers can't see yet.
+        status: row.status,
         parts: Number(row.parts) || 0,
         remaining: MAX_SERIES_PARTS - (Number(row.parts) || 0),
         published_at: isoOrNull(row.published_at ?? row.created_at),
@@ -1261,7 +1281,8 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
     }
     const slug = await uniqueSlug(pool, title);
     // Optional: attach this article as a follow-up part of an existing series.
-    const parentRes = await resolveSeriesParent(pool, data['parent_article_id'], null);
+    const parentRes = await resolveSeriesParent(pool, data['parent_article_id'], null,
+      { uid: authorId, isAdmin: await canManageUsers(authorId) });
     if ('error' in parentRes) return c.json({ error: parentRes.error }, 400);
 
     const authorName = currentUserName(c);
@@ -1344,7 +1365,7 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
     }
     const slug = await uniqueSlug(pool, title, id);
     const coAuthors = await cleanCoAuthors(pool, data['co_authors'], prev.author_id);
-    const parentRes = await resolveSeriesParent(pool, data['parent_article_id'], id);
+    const parentRes = await resolveSeriesParent(pool, data['parent_article_id'], id, { uid, isAdmin });
     if ('error' in parentRes) return c.json({ error: parentRes.error }, 400);
     // First publish stamps published_at; keep the original on re-publish.
     const setPublished = status === 'published' && !prev.published_at ? ', published_at = now()' : '';

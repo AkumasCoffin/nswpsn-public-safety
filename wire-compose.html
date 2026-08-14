@@ -358,6 +358,7 @@
       <div class="actions" id="actions">
         <button class="btn primary" id="publishBtn" type="button">Publish</button>
         <button class="btn" id="draftBtn" type="button" style="display:none">Save draft</button>
+        <button class="btn" id="partBtn" type="button" style="display:none" title="Save this as a draft, then start its next part">Save draft &amp; add part</button>
         <button class="btn" id="cancelBtn" type="button">Cancel</button>
       </div>
       <div class="msg" id="msg"></div>
@@ -458,6 +459,7 @@
       agencies: new Set(),
       coAuthors: [],  // [{ id, name, avatar_url }]
       parentArticle: null, // { id, title } when this is a follow-up part
+      savedStatus: null,   // status of the article being edited, if any
     };
     // Watermark: a per-post choice, remembered locally so it doesn't have to be
     // re-ticked each time. `_meName` is the username burned into photos.
@@ -545,6 +547,7 @@
       $('#bodyField').style.display = isArt ? 'block' : 'none';
       $('#mediaLabel').textContent = isArt ? 'Images · up to 4 (pick a cover)' : 'Photos · up to 6';
       $('#draftBtn').style.display = isArt ? 'inline-block' : 'none';
+      syncPartBtn();
       $('#publishBtn').textContent = (isModerator || !approvalRequired) ? 'Publish' : 'Submit for review';
       $('#formTitle').textContent = editId ? (isArt ? 'Edit article' : 'Edit media post') : (isArt ? 'Write an article' : 'Compose a media post');
       const sf = $('#seriesField'); if (sf) sf.style.display = isArt ? '' : 'none';
@@ -1015,6 +1018,7 @@
         : '';
       const b = box.querySelector('[data-clear-series]');
       if (b) b.addEventListener('click', () => { state.parentArticle = null; renderSeriesChosen(); });
+      syncPartBtn();
       // Hide the search once a lead is chosen — only one parent is possible.
       const wrap = $('#seriesSearch'); if (wrap) wrap.parentElement.style.display = p ? 'none' : '';
     }
@@ -1038,7 +1042,7 @@
           box.innerHTML = leads.map((l) => `
             <div class="row" data-lead-id="${esc(l.id)}" data-lead-title="${esc(l.title)}">
               <div style="min-width:0;flex:1">
-                <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(l.title)}</div>
+                <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(l.title)}${l.status && l.status !== 'published' ? ` <span style="font-weight:600;font-size:0.66rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--accent)">${esc(l.status)}</span>` : ''}</div>
                 <div style="font-size:0.72rem;color:var(--text-soft);margin-top:2px">
                   ${l.parts} part${l.parts === 1 ? '' : 's'} · ${l.remaining} slot${l.remaining === 1 ? '' : 's'} left
                 </div>
@@ -1092,7 +1096,7 @@
       if (type === 'article') return { ...base, excerpt: $('#excerpt').value.trim(), body: $('#body').value, status };
       return { ...base, caption: $('#caption').value.trim() };
     }
-    async function submit(status) {
+    async function submit(status, next) {
       if (!$('#title').value.trim()) { setMsg('A headline is required.', true); return; }
       if (status === 'published' && !$('#rightsAffirm').checked) { setMsg('Please confirm you hold the rights before publishing.', true); return; }
       if (state.media.some((m) => m.uploading)) { setMsg('Wait for images to finish uploading.', true); return; }
@@ -1106,15 +1110,35 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { setMsg(j.error || 'Save failed.', true); setBusy(false); return; }
         if (typeof umami !== 'undefined') umami.track('wire-publish', { type, status, edit: !!editId });
+        // "Save draft & add part" continues into a fresh compose for the next
+        // part rather than bouncing to the (still unpublished) article.
+        if (next === 'part') {
+          const leadId = j.id || editId;
+          if (leadId) { location.href = `wire-compose?type=article&parent=${encodeURIComponent(leadId)}`; return; }
+        }
         const key = isArt ? (j.slug || editId) : (j.id || editId);
         location.href = `wire?tab=${isArt ? 'articles' : 'media'}&${isArt ? 'article' : 'post'}=${encodeURIComponent(key)}`;
       } catch (e) { setMsg('Network error.', true); setBusy(false); }
     }
-    function setBusy(b) { $('#publishBtn').disabled = b; $('#draftBtn').disabled = b; }
+    // A series is one level deep, so only a LEAD can gain parts — hide this the
+    // moment the article is itself a follow-up. Series only exist on articles.
+    //
+    // Also hidden once the article is public: this button saves as a DRAFT, and
+    // on an already-published article that would quietly unpublish it. Adding a
+    // part to a live article is what the "Add a follow-up" button on the
+    // article page is for.
+    function syncPartBtn() {
+      const b = $('#partBtn'); if (!b) return;
+      // Fail closed while editing: stay hidden until prefill confirms it's a draft.
+      const canDraft = !editId || state.savedStatus === 'draft';
+      b.style.display = (type === 'article' && !state.parentArticle && canDraft) ? 'inline-block' : 'none';
+    }
+    function setBusy(b) { $('#publishBtn').disabled = b; $('#draftBtn').disabled = b; const p = $('#partBtn'); if (p) p.disabled = b; }
     function setMsg(m, err) { const el = $('#msg'); el.textContent = m; el.style.color = err ? '#ef4444' : 'var(--text-muted)'; }
 
     $('#publishBtn').addEventListener('click', () => submit('published'));
     $('#draftBtn').addEventListener('click', () => submit('draft'));
+    $('#partBtn').addEventListener('click', () => submit('draft', 'part'));
     $('#cancelBtn').addEventListener('click', () => (location.href = 'wire'));
 
     // ---- edit prefill ----
@@ -1132,6 +1156,8 @@
       (it.agencies || []).forEach((a) => state.agencies.add(a));
       state.coAuthors = (it.co_authors || []).map((c) => ({ id: c.id, name: c.name, avatar_url: c.avatar_url || null }));
       const wmEl = $('#watermarkToggle'); if (wmEl) wmEl.checked = it.watermark === true;
+      state.savedStatus = it.status || null;
+      syncPartBtn();
       if (it.parent_article_id) {
         // Resolve the lead's title for the chip (the article payload carries only the id).
         state.parentArticle = { id: it.parent_article_id, title: 'Lead article' };
