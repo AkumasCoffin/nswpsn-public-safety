@@ -34,6 +34,7 @@ import { statsRouter } from './api/stats.js';
 // Incidents / editor / users (W5).
 import { incidentsRouter } from './api/incidents.js';
 import { wireRouter } from './api/wire.js';
+import { wireCommentsRouter } from './api/wireComments.js';
 import { profilesRouter } from './api/profiles.js';
 import { editorRouter } from './api/editor.js';
 import { usersRouter } from './api/users.js';
@@ -318,6 +319,7 @@ export function createApp() {
   // Incidents + editor + users (W5)
   app.route('/', incidentsRouter);
   app.route('/', wireRouter);
+  app.route('/', wireCommentsRouter);
   app.route('/', profilesRouter);
   app.route('/', editorRouter);
   app.route('/', usersRouter);

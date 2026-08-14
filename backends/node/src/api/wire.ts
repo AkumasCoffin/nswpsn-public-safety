@@ -290,6 +290,65 @@ async function cleanCoAuthors(pool: Pool, raw: unknown, authorId: string): Promi
   return ids.filter((id) => byId.has(id)).map((id) => ({ id, name: byId.get(id) ?? null }));
 }
 
+/**
+ * Comment + like counts for a batch of posts, and whether the CALLER liked each
+ * one. Two grouped queries rather than per-row lookups, so the feed stays a
+ * fixed number of round-trips regardless of page size.
+ */
+async function engagementFor(
+  pool: Pool,
+  parentType: string,
+  ids: string[],
+  viewerId?: string,
+): Promise<Map<string, { comments: number; likes: number; liked: boolean }>> {
+  const map = new Map<string, { comments: number; likes: number; liked: boolean }>();
+  if (ids.length === 0) return map;
+  const get = (id: string) => {
+    let v = map.get(id);
+    if (!v) { v = { comments: 0, likes: 0, liked: false }; map.set(id, v); }
+    return v;
+  };
+  try {
+    const [cq, lq] = await Promise.all([
+      pool.query<{ parent_id: string; n: string }>(
+        `SELECT parent_id, COUNT(*)::int AS n FROM wire_comments
+          WHERE parent_type = $1 AND parent_id = ANY($2::text[]) AND deleted_at IS NULL
+          GROUP BY parent_id`,
+        [parentType, ids],
+      ),
+      pool.query<{ parent_id: string; n: string; mine: boolean }>(
+        `SELECT parent_id, COUNT(*)::int AS n,
+                BOOL_OR(user_id = $3) AS mine
+           FROM wire_likes
+          WHERE parent_type = $1 AND parent_id = ANY($2::text[])
+          GROUP BY parent_id`,
+        [parentType, ids, viewerId ?? ''],
+      ),
+    ]);
+    for (const row of cq.rows) get(row.parent_id).comments = Number(row.n) || 0;
+    for (const row of lq.rows) {
+      const v = get(row.parent_id);
+      v.likes = Number(row.n) || 0;
+      v.liked = !!viewerId && row.mine === true;
+    }
+  } catch (err) {
+    // Engagement is decoration — never fail a feed/detail read over it.
+    log.debug({ err, parentType }, 'wire: engagement counts failed');
+  }
+  return map;
+}
+
+/** Fold engagement counts onto an already-shaped post object. */
+function withEngagement(
+  shaped: Record<string, unknown>,
+  e?: { comments: number; likes: number; liked: boolean },
+): Record<string, unknown> {
+  shaped['comment_count'] = e?.comments ?? 0;
+  shaped['like_count'] = e?.likes ?? 0;
+  shaped['liked_by_me'] = e?.liked ?? false;
+  return shaped;
+}
+
 /** Fetch wire_media for a set of parents, grouped by parent_id (avoids N+1). */
 async function fetchMediaFor(pool: Pool, parentType: string, ids: string[]): Promise<Map<string, WireMediaRow[]>> {
   const map = new Map<string, WireMediaRow[]>();
@@ -525,7 +584,9 @@ wireRouter.get('/api/wire/media', async (c) => {
     );
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'media_post', ids);
-    const posts = r.rows.map((row) => shapeMediaPost(row, mediaMap.get(row.id) ?? []));
+    const eng = await engagementFor(pool, 'media_post', ids, currentUserId(c));
+    const posts = r.rows.map((row) =>
+      withEngagement(shapeMediaPost(row, mediaMap.get(row.id) ?? []), eng.get(row.id)));
     return c.json({ posts });
   } catch (err) {
     log.error({ err }, 'wire: list media failed');
@@ -553,7 +614,10 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
     }
     const mediaMap = await fetchMediaFor(pool, 'media_post', [id]);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
-    return c.json({ post: shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)) });
+    const eng = await engagementFor(pool, 'media_post', [id], uid);
+    return c.json({
+      post: withEngagement(shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)), eng.get(id)),
+    });
   } catch (err) {
     log.error({ err, id }, 'wire: get media failed');
     return c.json({ error: 'failed to fetch media post' }, 500);
@@ -853,7 +917,9 @@ wireRouter.get('/api/wire/articles', async (c) => {
     );
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'article', ids);
-    const articles = r.rows.map((row) => shapeArticle(row, mediaMap.get(row.id) ?? []));
+    const engA = await engagementFor(pool, 'article', ids, currentUserId(c));
+    const articles = r.rows.map((row) =>
+      withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)));
     return c.json({ articles });
   } catch (err) {
     log.error({ err }, 'wire: list articles failed');
@@ -882,7 +948,10 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
     }
     const mediaMap = await fetchMediaFor(pool, 'article', [row.id]);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
-    return c.json({ article: shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)) });
+    const engA = await engagementFor(pool, 'article', [row.id], uid);
+    return c.json({
+      article: withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
+    });
   } catch (err) {
     log.error({ err, slug }, 'wire: get article failed');
     return c.json({ error: 'failed to fetch article' }, 500);
