@@ -165,6 +165,48 @@
     .wd-btn:hover { border-color: var(--accent); color: var(--accent); }
     .wd-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
     .wd-btn.ok { border-color: rgba(34,197,94,0.45); color: #22c55e; }
+    .wd-btn.like-btn.on { border-color: rgba(244,63,94,0.55); color: #fb7185; }
+
+    /* --- comments --------------------------------------------------------- */
+    .wd-comments { margin-top: 2rem; border-top: 1px solid var(--border-subtle); padding-top: 1.2rem; max-width: 760px; }
+    .wd-comment-note { color: var(--text-soft); font-size: 0.85rem; padding: 0.9rem 1rem; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; }
+    .wd-comment-note.restricted { border-color: rgba(239,68,68,0.45); color: #fca5a5; }
+    .wd-comment-note .sub { color: var(--text-soft); font-size: 0.78rem; margin-top: 0.3rem; }
+    .wd-composer textarea {
+      width: 100%; box-sizing: border-box; padding: 0.7rem 0.85rem; font: inherit; font-size: 0.9rem;
+      background: var(--bg-elevated); color: var(--text-main);
+      border: 1px solid var(--border-subtle); border-radius: 10px; resize: vertical; line-height: 1.5;
+    }
+    .wd-composer textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    .wd-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-top: 0.5rem; }
+    .wd-composer-row .sub { color: var(--text-soft); font-size: 0.72rem; }
+    .wd-comment { padding: 0.85rem 0; border-bottom: 1px solid var(--border-subtle); }
+    .wd-comment:last-child { border-bottom: 0; }
+    .wd-comment-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+    .wd-comment-head .sub { color: var(--text-soft); font-size: 0.72rem; }
+    .wd-comment-actions { margin-left: auto; display: flex; gap: 0.3rem; }
+    .wd-mini {
+      background: none; border: 1px solid transparent; color: var(--text-soft);
+      border-radius: 6px; cursor: pointer; font-size: 0.72rem; padding: 0.2rem 0.4rem; line-height: 1;
+    }
+    .wd-mini:hover { color: #ef4444; border-color: rgba(239,68,68,0.4); }
+    /* Comment bodies are user text: escaped on render, wrapped here so long
+       words or pasted URLs can't blow out the column. */
+    .wd-comment-body { margin-top: 0.35rem; font-size: 0.9rem; line-height: 1.6; color: var(--text-main); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .wd-comment.deleted .wd-comment-body { color: var(--text-soft); font-style: italic; font-size: 0.82rem; }
+
+    /* --- small modal (reason picker / restrict) --------------------------- */
+    .wd-modal { position: fixed; inset: 0; background: rgba(2,6,23,0.72); z-index: 10000; display: none; align-items: center; justify-content: center; padding: 1rem; }
+    .wd-modal.on { display: flex; }
+    .wd-modal-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1.3rem; width: 100%; max-width: 420px; box-shadow: var(--shadow-soft); }
+    .wd-modal-card h2 { font-size: 1.05rem; margin: 0 0 0.3rem; }
+    .wd-modal-card .sub { color: var(--text-soft); font-size: 0.8rem; margin: 0 0 0.8rem; }
+    .wd-modal-card select, .wd-modal-card input[type="text"] {
+      width: 100%; box-sizing: border-box; padding: 0.55rem 0.7rem; font: inherit; font-size: 0.88rem;
+      background: var(--bg-elevated-soft); color: var(--text-main);
+      border: 1px solid var(--border-subtle); border-radius: 8px;
+    }
+    .wd-modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.1rem; }
     .wire-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px); z-index: 9999;
       background: var(--bg-elevated); color: var(--text-main); border: 1px solid var(--border-subtle);
       border-radius: 10px; padding: 0.7rem 1.1rem; font-size: 0.88rem; box-shadow: var(--shadow-soft);
@@ -425,7 +467,11 @@
       const caption = isArticle ? (item.excerpt || '') : (item.caption || '');
       return `<article class="wire-card" data-kind="${item.kind}" data-key="${esc(key)}">
         <div class="wire-thumb">${media}<span class="wire-badge ${isArticle ? 'article' : ''}">${esc(badge)}</span>
-          <span class="wire-views"><i class="fa-regular fa-eye"></i> ${fmtViews(item.views)}</span></div>
+          <span class="wire-views"><i class="fa-regular fa-eye"></i> ${fmtViews(item.views)}${
+            item.like_count ? ` <i class="fa-solid fa-heart" style="margin-left:4px"></i> ${fmtViews(item.like_count)}` : ''
+          }${
+            item.comment_count ? ` <i class="fa-solid fa-comment" style="margin-left:4px"></i> ${fmtViews(item.comment_count)}` : ''
+          }</span></div>
         <div class="wire-card-body">
           <h3>${esc(item.title)} ${draft}</h3>
           <div class="wire-byline">by ${authorLink}${coPart}${item.created_at ? ' · ' + timeAgo(item.created_at) : ''}</div>
@@ -607,7 +653,12 @@
       const byline = `by ${authorLink}${withPart}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}`;
       const statsBlock = `<div class="wd-block"><div class="wd-stats">
           <div><div class="n">${fmtViews(item.views)}</div><div class="k">Views</div></div>
-          <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div></div></div>`;
+          <div><div class="n" id="likeCount">${fmtViews(item.like_count || 0)}</div><div class="k">Likes</div></div>
+          <div><div class="n">${galleryMedia.length}</div><div class="k">Media</div></div></div>
+          <button class="wd-btn like-btn${item.liked_by_me ? ' on' : ''}" id="likeBtn" style="margin-top:0.7rem;font-size:0.75rem">
+            <i class="${item.liked_by_me ? 'fa-solid' : 'fa-regular'} fa-heart"></i>
+            <span>${item.liked_by_me ? 'Liked' : 'Like'}</span>
+          </button></div>`;
       const back = `<button class="wire-back" id="backBtn"><i class="fa-solid fa-arrow-left"></i> Back to The Wire</button>`;
       const hasVideo = galleryMedia.some((m) => m.kind === 'video');
       const eyebrow = `<div class="wd-eyebrow">Dispatch · ${isArticle ? 'Article' : (hasVideo ? 'Video' : 'Photo set')}</div>`;
@@ -634,7 +685,12 @@
             ${incidentBlock}
             ${actions}
           </div>
-        </div>`;
+        </div>
+        <section class="wd-comments" id="wdComments">
+          <div class="wd-lbl" id="commentsHead">Comments</div>
+          <div id="commentComposer"></div>
+          <div id="commentList"><div class="wire-loading">Loading comments…</div></div>
+        </section>`;
 
       $('#backBtn').addEventListener('click', () => closeDetail());
       wireGallery();
@@ -642,6 +698,169 @@
       const rem = $('#detail [data-act="remove"]'); if (rem) rem.addEventListener('click', () => mutateDelete(item, true));
       const rep = $('#reportBtn'); if (rep) rep.addEventListener('click', openReportModal);
       const shr = $('#shareBtn'); if (shr) shr.addEventListener('click', () => sharePost(item, shr));
+      const lk = $('#likeBtn'); if (lk) lk.addEventListener('click', () => toggleLike(item, lk));
+      loadComments(item);
+    }
+
+    // ---- likes ----
+    async function toggleLike(item, btn) {
+      if (!ME.userId) { toast('Sign in to like posts.'); return; }
+      btn.disabled = true;
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/like`, {
+          method: 'POST', headers: await userHeaders(),
+          body: JSON.stringify({ type: item.kind === 'article' ? 'article' : 'media', id: item.id }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { toast(j.error || 'Could not update like.'); return; }
+        btn.classList.toggle('on', !!j.liked);
+        btn.querySelector('i').className = (j.liked ? 'fa-solid' : 'fa-regular') + ' fa-heart';
+        btn.querySelector('span').textContent = j.liked ? 'Liked' : 'Like';
+        const cnt = $('#likeCount'); if (cnt) cnt.textContent = fmtViews(j.count || 0);
+        if (typeof umami !== 'undefined') umami.track('wire-like', { liked: !!j.liked });
+      } catch (e) { toast('Network error.'); }
+      finally { btn.disabled = false; }
+    }
+
+    // ---- comments ----
+    let commentState = { item: null, canComment: false, restriction: null };
+
+    async function loadComments(item) {
+      commentState.item = item;
+      const type = item.kind === 'article' ? 'article' : 'media';
+      try {
+        // Comment list is public; the composer's state needs the caller's own
+        // restriction, which only exists when signed in.
+        const [listRes, statusRes] = await Promise.all([
+          fetch(`${API_BASE}/api/wire/comments?type=${type}&id=${encodeURIComponent(item.id)}`, { headers: await userHeaders() }),
+          ME.userId
+            ? fetch(`${API_BASE}/api/wire/my-comment-status`, { headers: await userHeaders() }).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        const list = await listRes.json().catch(() => ({ comments: [] }));
+        if (statusRes && statusRes.ok) {
+          const st = await statusRes.json().catch(() => ({}));
+          commentState.canComment = !!st.canComment;
+          commentState.restriction = st.restriction || null;
+        } else {
+          commentState.canComment = !!ME.userId;
+          commentState.restriction = null;
+        }
+        renderComposer();
+        renderComments(list.comments || []);
+        const head = $('#commentsHead');
+        if (head) head.textContent = `Comments (${(list.comments || []).filter((c) => !c.deleted).length})`;
+      } catch (e) {
+        const el = $('#commentList');
+        if (el) el.innerHTML = `<div class="wire-empty">Couldn't load comments.</div>`;
+      }
+    }
+
+    function renderComposer() {
+      const box = $('#commentComposer'); if (!box) return;
+      if (!ME.userId) {
+        box.innerHTML = `<div class="wd-comment-note">
+          <a href="login.html" class="wire-author">Sign in</a> to join the conversation.</div>`;
+        return;
+      }
+      const r = commentState.restriction;
+      if (r) {
+        // Tell the user exactly why and (for a timeout) until when.
+        const until = r.expiresAt
+          ? ` until ${new Date(r.expiresAt).toLocaleString('en-AU')}`
+          : ' until a moderator lifts it';
+        box.innerHTML = `<div class="wd-comment-note restricted">
+          <i class="fa-solid fa-ban"></i>
+          ${r.kind === 'pause' ? 'Your commenting is paused' : 'You are timed out from commenting'}${esc(until)}.
+          <div class="sub">Reason: ${esc(r.reasonLabel || 'Other')}${r.note ? ' — ' + esc(r.note) : ''}</div>
+        </div>`;
+        return;
+      }
+      box.innerHTML = `
+        <div class="wd-composer">
+          <textarea id="commentBody" maxlength="2000" rows="3" placeholder="Add a comment…"></textarea>
+          <div class="wd-composer-row">
+            <span class="sub" id="commentCount">0/2000</span>
+            <button class="wd-btn" id="commentPost"><i class="fa-solid fa-paper-plane"></i> Post</button>
+          </div>
+        </div>`;
+      const ta = $('#commentBody');
+      ta.addEventListener('input', () => { $('#commentCount').textContent = `${ta.value.length}/2000`; });
+      $('#commentPost').addEventListener('click', postComment);
+    }
+
+    function renderComments(list) {
+      const el = $('#commentList'); if (!el) return;
+      if (!list.length) { el.innerHTML = `<div class="wire-empty" style="padding:1.2rem 0">No comments yet.</div>`; return; }
+      el.innerHTML = list.map((c) => {
+        if (c.deleted) {
+          return `<div class="wd-comment deleted">
+            <div class="wd-comment-body"><i class="fa-solid fa-trash"></i> Comment removed${c.delete_reason ? ` — ${esc(c.delete_reason)}` : ''}${c.deleted_by_name ? ` by ${esc(c.deleted_by_name)}` : ''}</div>
+          </div>`;
+        }
+        const who = `<a class="wire-author" href="profile?u=${encodeURIComponent(c.author?.id || '')}&name=${encodeURIComponent(c.author?.name || '')}">${esc(c.author?.name || 'user')}</a>`;
+        // Body is USER TEXT — escaped, never innerHTML'd raw. pre-wrap keeps
+        // the author's line breaks without allowing markup.
+        return `<div class="wd-comment" data-id="${esc(c.id)}">
+          <div class="wd-comment-head">
+            ${who}<span class="sub">${esc(timeAgo(c.created_at))}</span>
+            <span class="wd-comment-actions">
+              ${c.can_delete ? `<button class="wd-mini" data-cdel="${esc(c.id)}" title="Delete"><i class="fa-solid fa-trash"></i></button>` : ''}
+              ${ME.canModerate && c.author?.id && c.author.id !== ME.userId
+                ? `<button class="wd-mini" data-crestrict="${esc(c.author.id)}" data-cname="${esc(c.author?.name || 'user')}" title="Timeout or pause this user"><i class="fa-solid fa-user-slash"></i></button>` : ''}
+            </span>
+          </div>
+          <div class="wd-comment-body">${esc(c.body || '')}</div>
+        </div>`;
+      }).join('');
+      el.querySelectorAll('[data-cdel]').forEach((b) =>
+        b.addEventListener('click', () => deleteComment(b.dataset.cdel)));
+      el.querySelectorAll('[data-crestrict]').forEach((b) =>
+        b.addEventListener('click', () => openRestrictModal(b.dataset.crestrict, b.dataset.cname)));
+    }
+
+    async function postComment() {
+      const ta = $('#commentBody'); const btn = $('#commentPost');
+      const body = (ta.value || '').trim();
+      if (!body) return;
+      btn.disabled = true;
+      try {
+        const item = commentState.item;
+        const r = await fetch(`${API_BASE}/api/wire/comments`, {
+          method: 'POST', headers: await userHeaders(),
+          body: JSON.stringify({ type: item.kind === 'article' ? 'article' : 'media', id: item.id, body }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          // A restriction applied since the page loaded — re-render the composer
+          // so the user sees the reason instead of a bare error.
+          if (j.restriction) { commentState.restriction = j.restriction; renderComposer(); }
+          toast(j.error || 'Could not post your comment.');
+          return;
+        }
+        ta.value = '';
+        loadComments(item);
+        if (typeof umami !== 'undefined') umami.track('wire-comment');
+      } catch (e) { toast('Network error.'); }
+      finally { btn.disabled = false; }
+    }
+
+    async function deleteComment(id) {
+      const mod = ME.canModerate;
+      // A moderator deleting someone else's comment must cite a reason.
+      let reason = null;
+      if (mod) {
+        reason = await pickReason('Delete this comment');
+        if (reason === undefined) return; // cancelled
+      } else if (!confirm('Delete your comment?')) return;
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/comments/${encodeURIComponent(id)}`, {
+          method: 'DELETE', headers: await userHeaders(),
+          body: JSON.stringify(reason ? { reason } : {}),
+        });
+        if (!r.ok) { const j = await r.json().catch(() => ({})); toast(j.error || 'Could not delete.'); return; }
+        loadComments(commentState.item);
+      } catch (e) { toast('Network error.'); }
     }
 
     // ---- share ----
@@ -716,6 +935,95 @@
 
     function openLightbox(src) { const lb = $('#lightbox'); lb.querySelectorAll('img').forEach((i) => i.remove()); const img = new Image(); img.src = src; lb.appendChild(img); lb.classList.add('on'); }
     $('#lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox' || e.target.classList.contains('x')) $('#lightbox').classList.remove('on'); });
+
+    // ---- moderator: reason picker + timeout/pause ----
+    // Reasons come from the SERVER so the list can't drift from what the API
+    // will accept (it validates the key and resolves the label itself).
+    let _reasonOptions = null;
+    async function reasonOptions() {
+      if (_reasonOptions) return _reasonOptions;
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/comment-restrictions/options`, { headers: await userHeaders() });
+        if (r.ok) _reasonOptions = await r.json();
+      } catch (e) { /* fall through to a safe default */ }
+      if (!_reasonOptions) _reasonOptions = { reasons: [{ key: 'other', label: 'Other' }], timeoutHours: [1, 24] };
+      return _reasonOptions;
+    }
+
+    /** Resolves to a reason key, or undefined if cancelled. */
+    async function pickReason(title) {
+      const opts = await reasonOptions();
+      return new Promise((resolve) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'wd-modal on';
+        wrap.innerHTML = `<div class="wd-modal-card">
+          <h2>${esc(title)}</h2>
+          <label class="wd-lbl" for="reasonSel">Reason</label>
+          <select id="reasonSel">${opts.reasons.map((o) => `<option value="${esc(o.key)}">${esc(o.label)}</option>`).join('')}</select>
+          <div class="wd-modal-actions">
+            <button class="wd-btn" data-cancel>Cancel</button>
+            <button class="wd-btn danger" data-ok>Confirm</button>
+          </div></div>`;
+        document.body.appendChild(wrap);
+        const done = (v) => { wrap.remove(); resolve(v); };
+        wrap.querySelector('[data-cancel]').addEventListener('click', () => done(undefined));
+        wrap.addEventListener('click', (e) => { if (e.target === wrap) done(undefined); });
+        wrap.querySelector('[data-ok]').addEventListener('click', () => done(wrap.querySelector('#reasonSel').value));
+      });
+    }
+
+    async function openRestrictModal(userId, userName) {
+      const opts = await reasonOptions();
+      const hourLabel = (h) => (h < 24 ? `${h} hour${h > 1 ? 's' : ''}` : `${h / 24} day${h > 24 ? 's' : ''}`);
+      const wrap = document.createElement('div');
+      wrap.className = 'wd-modal on';
+      wrap.innerHTML = `<div class="wd-modal-card">
+        <h2>Restrict ${esc(userName)}</h2>
+        <p class="sub">They'll be told which restriction was applied and why.</p>
+        <label class="wd-lbl" for="rsReason">Reason</label>
+        <select id="rsReason">${opts.reasons.map((o) => `<option value="${esc(o.key)}">${esc(o.label)}</option>`).join('')}</select>
+        <label class="wd-lbl" for="rsKind" style="margin-top:0.7rem">Action</label>
+        <select id="rsKind">
+          <option value="timeout">Timeout — lifts automatically</option>
+          <option value="pause">Pause — until a moderator lifts it</option>
+        </select>
+        <div id="rsHoursWrap">
+          <label class="wd-lbl" for="rsHours" style="margin-top:0.7rem">Duration</label>
+          <select id="rsHours">${(opts.timeoutHours || []).map((h) => `<option value="${h}">${hourLabel(h)}</option>`).join('')}</select>
+        </div>
+        <label class="wd-lbl" for="rsNote" style="margin-top:0.7rem">Note · optional</label>
+        <input type="text" id="rsNote" maxlength="500" placeholder="Context for your records">
+        <div class="wd-modal-actions">
+          <button class="wd-btn" data-cancel>Cancel</button>
+          <button class="wd-btn danger" data-ok>Apply</button>
+        </div></div>`;
+      document.body.appendChild(wrap);
+      const close = () => wrap.remove();
+      wrap.querySelector('[data-cancel]').addEventListener('click', close);
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+      const kindSel = wrap.querySelector('#rsKind');
+      kindSel.addEventListener('change', () => {
+        wrap.querySelector('#rsHoursWrap').style.display = kindSel.value === 'pause' ? 'none' : '';
+      });
+      wrap.querySelector('[data-ok]').addEventListener('click', async () => {
+        const payload = {
+          userId,
+          kind: kindSel.value,
+          reason: wrap.querySelector('#rsReason').value,
+          note: wrap.querySelector('#rsNote').value.trim() || null,
+        };
+        if (payload.kind === 'timeout') payload.hours = Number(wrap.querySelector('#rsHours').value);
+        try {
+          const r = await fetch(`${API_BASE}/api/wire/comment-restrictions`, {
+            method: 'POST', headers: await userHeaders(), body: JSON.stringify(payload),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) { toast(j.error || 'Could not apply the restriction.'); return; }
+          toast(payload.kind === 'pause' ? 'Commenting paused for this user.' : 'User timed out.', false);
+          close();
+        } catch (e) { toast('Network error.'); }
+      });
+    }
 
     // ---- takedown / report ----
     function openReportModal() { if (!currentItem) return; ['rp-name', 'rp-email', 'rp-org', 'rp-url', 'rp-complaint'].forEach((i) => ($('#' + i).value = '')); $('#rp-good').checked = false; $('#rp-acc').checked = false; $('#rp-msg').textContent = ''; $('#reportModal').classList.add('on'); }
