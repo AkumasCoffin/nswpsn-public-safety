@@ -3368,6 +3368,94 @@
       }, ms);
     }
 
+    // In-page confirm — replaces the browser's native confirm(). Resolves true
+    // only if the user confirms. Built from the page's own .modal classes so it
+    // looks like the rest of the admin UI rather than an OS dialog.
+    function confirmDialog(opts) {
+      const o = typeof opts === 'string' ? { message: opts } : (opts || {});
+      const danger = o.danger !== false;
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal';
+        overlay.style.display = 'flex';
+        overlay.innerHTML = [
+          '<div class="modal-content" style="max-width:440px;">',
+          '  <div class="modal-header">',
+          '    <h2><i class="fas ' + (danger ? 'fa-triangle-exclamation' : 'fa-circle-question') + '"',
+          '       style="color: var(--' + (danger ? 'danger' : 'accent') + ');"></i> <span data-title></span></h2>',
+          '  </div>',
+          '  <p data-msg style="margin:0.2rem 0 0;color:var(--text-soft);line-height:1.5;"></p>',
+          '  <div style="display:flex;gap:1rem;margin-top:1.5rem;">',
+          '    <button class="btn btn-secondary" data-cancel style="flex:1;"></button>',
+          '    <button class="btn ' + (danger ? 'btn-danger' : 'btn-primary') + '" data-ok style="flex:1;"></button>',
+          '  </div>',
+          '</div>',
+        ].join('');
+        overlay.querySelector('[data-title]').textContent = o.title || 'Please confirm';
+        overlay.querySelector('[data-msg]').textContent = o.message || '';
+        overlay.querySelector('[data-cancel]').textContent = o.cancelLabel || 'Cancel';
+        overlay.querySelector('[data-ok]').textContent = o.confirmLabel || 'Confirm';
+        document.body.appendChild(overlay);
+        let settled = false;
+        const done = (v) => {
+          if (settled) return;
+          settled = true;
+          document.removeEventListener('keydown', onKey);
+          overlay.remove(); resolve(v);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        overlay.querySelector('[data-cancel]').addEventListener('click', () => done(false));
+        overlay.querySelector('[data-ok]').addEventListener('click', () => done(true));
+        setTimeout(() => overlay.querySelector('[data-ok]').focus(), 30);
+      });
+    }
+
+    // In-page text prompt — replaces the browser's native prompt(). Resolves to
+    // the typed string ('' when left blank), or null if cancelled. Cancelling
+    // and submitting an empty optional note are DIFFERENT answers, so callers
+    // can tell "no reason given" from "changed my mind" — something the native
+    // prompt() made easy to conflate.
+    function promptDialog(opts) {
+      const o = typeof opts === 'string' ? { message: opts } : (opts || {});
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal';
+        overlay.style.display = 'flex';
+        overlay.innerHTML = [
+          '<div class="modal-content" style="max-width:480px;">',
+          '  <div class="modal-header"><h2><span data-title></span></h2></div>',
+          '  <label class="field-label" data-lbl></label>',
+          '  <textarea class="field-input" data-input rows="3"></textarea>',
+          '  <div style="display:flex;gap:1rem;margin-top:1.5rem;">',
+          '    <button class="btn btn-secondary" data-cancel style="flex:1;">Cancel</button>',
+          '    <button class="btn btn-primary" data-ok style="flex:1;"></button>',
+          '  </div>',
+          '</div>',
+        ].join('');
+        overlay.querySelector('[data-title]').textContent = o.title || 'Add a note';
+        overlay.querySelector('[data-lbl]').textContent = o.message || '';
+        overlay.querySelector('[data-input]').placeholder = o.placeholder || '';
+        overlay.querySelector('[data-ok]').textContent = o.confirmLabel || 'Continue';
+        document.body.appendChild(overlay);
+        const input = overlay.querySelector('[data-input]');
+        let settled = false;
+        const done = (v) => {
+          if (settled) return;
+          settled = true;
+          document.removeEventListener('keydown', onKey);
+          overlay.remove(); resolve(v);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') done(null); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+        overlay.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+        overlay.querySelector('[data-ok]').addEventListener('click', () => done(input.value.trim()));
+        setTimeout(() => input.focus(), 30);
+      });
+    }
+
     // Escape user/backend-supplied strings before interpolating into innerHTML.
     function escapeHtml(value) {
       if (value == null) return '';
@@ -9684,7 +9772,11 @@
     }
 
     async function liftRestriction(id) {
-      if (!confirm('Lift this restriction? The user will be able to comment again and will be notified.')) return;
+      if (!(await confirmDialog({
+        title: 'Lift this restriction?',
+        message: 'The user will be able to comment again, and will be notified.',
+        confirmLabel: 'Lift restriction', danger: false,
+      }))) return;
       try {
         const res = await fetch(`${API_BASE_URL}/api/wire/comment-restrictions/${id}`, {
           method: 'DELETE', headers: { 'Authorization': await authHeader() },
@@ -9743,9 +9835,22 @@
       }).join('');
     }
     async function tdAction(id, action) {
-      if (action === 'uphold' && !confirm('Uphold this notice and remove the content? Viewers will see a takedown notice in its place.')) return;
+      if (action === 'uphold' && !(await confirmDialog({
+        title: 'Uphold this notice?',
+        message: 'The content is removed, and viewers see a takedown notice in its place.',
+        confirmLabel: 'Uphold & remove',
+      }))) return;
       let note = null;
-      if (action === 'reject') note = prompt('Reason for rejecting (optional):') || null;
+      if (action === 'reject') {
+        const r = await promptDialog({
+          title: 'Reject this notice', message: 'Reason (optional)',
+          placeholder: 'e.g. Complainant is not the rights holder', confirmLabel: 'Reject notice',
+        });
+        // null is "cancelled" — don't reject the notice just because the
+        // reason box was closed.
+        if (r === null) return;
+        note = r || null;
+      }
       try {
         const res = await fetch(`${API_BASE_URL}/api/wire/takedowns/${id}/${action}`, { method: 'POST', headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) });
         const d = await res.json().catch(() => ({}));
@@ -9851,7 +9956,14 @@
     }
     async function apAction(base, id, action) {
       let note = null;
-      if (action === 'reject') note = prompt('Reason for rejecting (optional — the contributor will see it):') || null;
+      if (action === 'reject') {
+        const r = await promptDialog({
+          title: 'Reject this submission', message: 'Reason (optional) — the contributor will see it',
+          placeholder: 'e.g. Location looks wrong, please check the street name', confirmLabel: 'Reject',
+        });
+        if (r === null) return; // cancelled, not "reject with no reason"
+        note = r || null;
+      }
       try {
         const res = await fetch(`${API_BASE_URL}/api/wire/${base}/${id}/${action}`, { method: 'POST', headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) });
         const d = await res.json().catch(() => ({}));

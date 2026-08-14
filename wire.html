@@ -1004,7 +1004,9 @@
       if (mod) {
         reason = await pickReason('Delete this comment');
         if (reason === undefined) return; // cancelled
-      } else if (!confirm('Delete your comment?')) return;
+      } else if (!(await askConfirm('This removes it from the post for everyone.', {
+        title: 'Delete your comment?', confirmLabel: 'Delete',
+      }))) return;
       try {
         const r = await fetch(`${API_BASE}/api/wire/comments/${encodeURIComponent(id)}`, {
           method: 'DELETE', headers: await userHeaders(),
@@ -1110,6 +1112,38 @@
     }
 
     /** Resolves to a reason key, or undefined if cancelled. */
+    // In-page confirm — replaces the browser's native confirm(). Resolves true
+    // only if the user confirms. The message goes in via textContent, so a post
+    // title can't inject markup.
+    function askConfirm(message, opts = {}) {
+      return new Promise((resolve) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'wd-modal on';
+        wrap.innerHTML = `<div class="wd-modal-card">
+          <h2>${esc(opts.title || 'Please confirm')}</h2>
+          <p class="sub" data-msg></p>
+          <div class="wd-modal-actions">
+            <button class="wd-btn" data-cancel>${esc(opts.cancelLabel || 'Cancel')}</button>
+            <button class="wd-btn${opts.danger === false ? '' : ' danger'}" data-ok>${esc(opts.confirmLabel || 'Confirm')}</button>
+          </div></div>`;
+        wrap.querySelector('[data-msg]').textContent = message || '';
+        document.body.appendChild(wrap);
+        let settled = false;
+        const done = (v) => {
+          if (settled) return;
+          settled = true;
+          document.removeEventListener('keydown', onKey);
+          wrap.remove(); resolve(v);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); };
+        document.addEventListener('keydown', onKey);
+        wrap.querySelector('[data-cancel]').addEventListener('click', () => done(false));
+        wrap.addEventListener('click', (e) => { if (e.target === wrap) done(false); });
+        wrap.querySelector('[data-ok]').addEventListener('click', () => done(true));
+        setTimeout(() => wrap.querySelector('[data-ok]').focus(), 30);
+      });
+    }
+
     async function pickReason(title) {
       const opts = await reasonOptions();
       return new Promise((resolve) => {
@@ -1254,7 +1288,11 @@
 
     async function mutateDelete(item, moderate) {
       const verb = moderate ? 'remove' : 'delete';
-      if (!confirm(`${moderate ? 'Remove' : 'Delete'} "${item.title}"? This can't be undone.`)) return;
+      const ok = await askConfirm(`"${item.title}" — this can't be undone.`, {
+        title: moderate ? 'Remove this post?' : 'Delete this post?',
+        confirmLabel: moderate ? 'Remove' : 'Delete',
+      });
+      if (!ok) return;
       const base = item.kind === 'article' ? 'articles' : 'media';
       const url = `${API_BASE}/api/wire/${base}/${encodeURIComponent(item.id)}${moderate ? '/remove' : ''}`;
       const r = await fetch(url, { method: moderate ? 'POST' : 'DELETE', headers: await userHeaders() });
