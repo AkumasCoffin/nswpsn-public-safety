@@ -165,7 +165,13 @@ class CentralwatchBrowser {
         '--disable-cache',
         '--disk-cache-size=0',
         '--disable-background-networking',
-        '--disable-backing-store-limit',
+        // --disable-backing-store-limit was here to keep offscreen <img>
+        // content rendered for fetchImagesBatchViaDom. That path is dead —
+        // Central Watch now requires an x-wt-token header the DOM loader
+        // can't set, so every caller uses fetchImagesBatch instead. The flag
+        // outlived its purpose and all it does now is remove Chromium's cap
+        // on backing-store memory in a browser we keep alive for the life of
+        // the process. Dropped so the default cap applies again.
         '--aggressive-cache-discard',
       ],
     })) as {
