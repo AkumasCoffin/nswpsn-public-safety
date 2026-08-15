@@ -494,6 +494,22 @@ wireCommentsRouter.get('/api/notifications', requireSupabaseJwt, async (c) => {
   }
 });
 
+// Clear the caller's notification list outright. Distinct from marking read:
+// "read" keeps the history and only quiets the badge, this empties the list.
+// Always scoped by user_id, so there is no way to clear anyone else's.
+wireCommentsRouter.delete('/api/notifications', requireSupabaseJwt, async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json(DB_UNAVAILABLE, 503);
+  const uid = currentUserId(c)!;
+  try {
+    const r = await pool.query('DELETE FROM notifications WHERE user_id = $1', [uid]);
+    return c.json({ success: true, cleared: r.rowCount ?? 0 });
+  } catch (err) {
+    log.error({ err, uid }, 'notifications: clear failed');
+    return c.json({ error: 'failed to clear notifications' }, 500);
+  }
+});
+
 wireCommentsRouter.post('/api/notifications/read', requireSupabaseJwt, async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);

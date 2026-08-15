@@ -214,3 +214,23 @@ describe('POST /api/notifications/read', () => {
     expect(upd?.params?.[0]).toBe('user-1');
   });
 });
+
+describe('DELETE /api/notifications — clear all', () => {
+  it('deletes only the caller\'s notifications', async () => {
+    nextResult = { rows: [], rowCount: 4 };
+    const res = await makeApp().request('/api/notifications', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, cleared: 4 });
+    const del = calls.find((c) => c.sql.includes('DELETE FROM notifications'));
+    // The scoping is the whole security story here — without it, one caller
+    // could wipe everyone's notifications.
+    expect(del?.sql).toContain('user_id = $1');
+    expect(del?.params).toEqual(['user-1']);
+  });
+
+  it('requires a signed-in user', async () => {
+    const res = await makeApp(null).request('/api/notifications', { method: 'DELETE' });
+    expect(res.status).toBe(401);
+    expect(calls.some((c) => c.sql.includes('DELETE FROM notifications'))).toBe(false);
+  });
+});

@@ -216,7 +216,7 @@ function createProfileModal() {
   modal.id = 'profile-modal';
   modal.style.cssText = 'display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:10002; align-items:center; justify-content:center;';
   modal.innerHTML = `
-    <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:2rem; max-width:420px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7); max-height:90vh; overflow-y:auto;">
+    <div style="background:#1e293b; border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:2rem; max-width:560px; width:90%; box-shadow:0 25px 50px -12px rgba(0,0,0,0.7); max-height:90vh; overflow-y:auto;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
         <h2 style="margin:0; font-size:1.25rem; font-weight:700; color:#fff;">Your Profile</h2>
         <button onclick="closeProfileModal()" style="background:none; border:none; color:#94a3b8; font-size:1.5rem; cursor:pointer; padding:0; width:30px; height:30px; display:flex; align-items:center; justify-content:center;">&times;</button>
@@ -227,6 +227,7 @@ function createProfileModal() {
         <button type="button" onclick="pickProfileAvatar()" id="profile-avatar-btn" style="padding:0.45rem 0.9rem; background:rgba(148,163,184,0.12); border:1px solid rgba(148,163,184,0.25); border-radius:8px; color:#e2e8f0; font-size:0.8rem; cursor:pointer; font-family:inherit;"><i class="fas fa-camera"></i> Change picture</button>
         <input type="file" id="profile-avatar-input" accept="image/jpeg,image/png,image/webp" style="display:none">
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Overrides your Discord avatar.</div>
+        <div id="profile-stats" style="display:none; justify-content:center; gap:1.4rem; margin-top:0.9rem;"></div>
       </div>
 
       <div style="margin-bottom:1.2rem;">
@@ -276,6 +277,14 @@ function createProfileModal() {
       <a id="profile-change-password" href="change-password.html" style="display:flex; width:100%; padding:0.55rem; background:rgba(148,163,184,0.1); border:1px solid rgba(148,163,184,0.2); border-radius:6px; color:#94a3b8; font-size:0.8rem; cursor:pointer; align-items:center; justify-content:center; gap:0.4rem; font-family:inherit; text-decoration:none; box-sizing:border-box;">
         <i class="fas fa-key"></i> Change Password
       </a>
+
+      <div id="profile-posts-section" style="display:none; margin-top:1.4rem; border-top:1px solid rgba(148,163,184,0.2); padding-top:1.1rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.7rem;">
+          <label style="color:#cbd5e1; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">My posts</label>
+          <div id="profile-posts-filter" style="display:flex; gap:0.25rem;"></div>
+        </div>
+        <div id="profile-posts-list"></div>
+      </div>
 
       <div id="profile-message" style="margin-top:1rem; font-size:0.85rem; text-align:center; min-height:1.2em;"></div>
     </div>
@@ -364,9 +373,13 @@ async function toggleNotifications(event) {
     const res = await fetch(`${API_BASE_URL}/api/notifications?limit=20`, { headers: h });
     const j = await res.json().catch(() => ({}));
     const list = j.notifications || [];
+    const btn2 = 'background:none;border:0;font:inherit;font-size:0.72rem;cursor:pointer;padding:0;';
     const head = `<div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; padding:0.45rem 0.6rem 0.6rem; border-bottom:1px solid rgba(148,163,184,0.15);">
         <span style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; color:#94a3b8; font-weight:700;">Notifications</span>
-        ${list.some((n) => !n.read) ? '<button id="notif-readall" style="background:none;border:0;color:#f97316;font:inherit;font-size:0.72rem;cursor:pointer;">Mark all read</button>' : ''}
+        <span style="display:flex; gap:0.6rem; align-items:center;">
+          ${list.some((n) => !n.read) ? `<button id="notif-readall" style="${btn2}color:#f97316;">Mark all read</button>` : ''}
+          ${list.length ? `<button id="notif-clear" style="${btn2}color:#94a3b8;">Clear</button>` : ''}
+        </span>
       </div>`;
     if (!list.length) {
       panel.innerHTML = head + '<div style="padding:0.9rem 0.7rem; color:#64748b; font-size:0.8rem;">Nothing yet.</div>';
@@ -384,6 +397,29 @@ async function toggleNotifications(event) {
       await markNotificationsRead(null);
       closeNotifPanel();
     });
+    // Clearing deletes the list rather than just quieting the badge, so it asks
+    // once. Deliberately a second click on the button itself rather than a
+    // dialog: this file is loaded on every page, and ui-dialogs.js is not.
+    const clearBtn = panel.querySelector('#notif-clear');
+    if (clearBtn) {
+      let armed = false;
+      clearBtn.addEventListener('click', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (!armed) {
+          armed = true;
+          clearBtn.textContent = 'Clear all? Tap again';
+          clearBtn.style.color = '#ef4444';
+          setTimeout(() => {
+            if (!armed || !clearBtn.isConnected) return;
+            armed = false; clearBtn.textContent = 'Clear'; clearBtn.style.color = '#94a3b8';
+          }, 4000);
+          return;
+        }
+        armed = false;
+        await clearNotifications();
+        closeNotifPanel();
+      });
+    }
     // Clicking an item marks just that one read, then follows the link.
     panel.querySelectorAll('[data-nid]').forEach((a) => a.addEventListener('click', () => {
       markNotificationsRead([Number(a.dataset.nid)]);
@@ -400,6 +436,17 @@ async function markNotificationsRead(ids) {
     await fetch(`${API_BASE_URL}/api/notifications/read`, {
       method: 'POST', headers: h, body: JSON.stringify(ids ? { ids } : {}),
     });
+    refreshNotifBadge();
+  } catch (e) { /* non-fatal */ }
+}
+
+// Empty the caller's notification list. Server-side this is scoped to the
+// signed-in user, so it can only ever clear your own.
+async function clearNotifications() {
+  try {
+    const h = await notifHeaders();
+    if (!h) return;
+    await fetch(`${API_BASE_URL}/api/notifications`, { method: 'DELETE', headers: h });
     refreshNotifBadge();
   } catch (e) { /* non-fatal */ }
 }
@@ -484,6 +531,115 @@ async function handleProfileAvatar(e) {
   }
 }
 
+
+// ---- "My posts" inside the profile modal ---------------------------------
+// Replaces the separate "My posts" button that used to sit on The Wire. Shows
+// EVERYTHING you've written, including drafts and anything awaiting review —
+// this is your own private view, so unlike a public profile it shouldn't hide
+// your unpublished work from you.
+let _profilePosts = [];
+let _profilePostFilter = 'all';
+
+function profilePostHref(item) {
+  const isArticle = item.kind === 'article';
+  const key = isArticle ? (item.slug || item.id) : item.id;
+  return `wire?tab=${isArticle ? 'articles' : 'media'}&${isArticle ? 'article' : 'post'}=${encodeURIComponent(key)}`;
+}
+
+function renderProfilePostFilter() {
+  const box = document.getElementById('profile-posts-filter');
+  if (!box) return;
+  const counts = {
+    all: _profilePosts.length,
+    media: _profilePosts.filter((i) => i.kind !== 'article').length,
+    articles: _profilePosts.filter((i) => i.kind === 'article').length,
+  };
+  box.innerHTML = [['all', 'All'], ['media', 'Media'], ['articles', 'Articles']].map(([k, label]) => {
+    const on = _profilePostFilter === k;
+    return `<button data-pf="${k}" style="padding:0.25rem 0.55rem; font:inherit; font-size:0.72rem; cursor:pointer; border-radius:6px; font-family:inherit;
+      background:${on ? 'rgba(249,115,22,0.16)' : 'rgba(148,163,184,0.08)'};
+      border:1px solid ${on ? 'rgba(249,115,22,0.45)' : 'rgba(148,163,184,0.2)'};
+      color:${on ? '#f97316' : '#94a3b8'};">${label} ${counts[k]}</button>`;
+  }).join('');
+  box.querySelectorAll('[data-pf]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault();
+    _profilePostFilter = b.dataset.pf;
+    renderProfilePostFilter();
+    renderProfilePosts();
+  }));
+}
+
+function renderProfilePosts() {
+  const list = document.getElementById('profile-posts-list');
+  if (!list) return;
+  const items = _profilePosts.filter((i) =>
+    _profilePostFilter === 'all' ? true
+      : _profilePostFilter === 'articles' ? i.kind === 'article'
+        : i.kind !== 'article');
+  if (!items.length) {
+    list.innerHTML = `<div style="color:#64748b; font-size:0.8rem; padding:0.6rem 0;">Nothing here yet.</div>`;
+    return;
+  }
+  list.innerHTML = items.map((i) => {
+    const cover = i.cover || null;
+    const src = cover && cover.kind === 'image' ? (cover.thumb_url || cover.feed_url || cover.url)
+      : (cover ? (cover.poster_feed_url || cover.poster_url) : null);
+    const thumb = src
+      ? `<img src="${escNotif(src)}" alt="" loading="lazy" style="width:100%; height:100%; object-fit:cover;">`
+      : `<i class="fas fa-${i.kind === 'article' ? 'newspaper' : 'image'}" style="color:#475569;"></i>`;
+    // Only flag what ISN'T live — a published post needs no badge.
+    const st = i.status && i.status !== 'published'
+      ? `<span style="font-size:0.62rem; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; color:#fbbf24;">${escNotif(i.status)}</span>` : '';
+    return `<a href="${escNotif(profilePostHref(i))}" style="display:flex; gap:0.6rem; align-items:center; padding:0.45rem; border-radius:8px; text-decoration:none; color:inherit;">
+      <div style="width:52px; height:36px; flex-shrink:0; border-radius:6px; overflow:hidden; background:rgba(2,6,23,0.5); display:grid; place-items:center;">${thumb}</div>
+      <div style="min-width:0; flex:1;">
+        <div style="font-size:0.82rem; font-weight:600; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escNotif(i.title || 'Untitled')}</div>
+        <div style="font-size:0.7rem; color:#64748b; display:flex; gap:0.5rem; align-items:center;">
+          <span>${i.kind === 'article' ? 'Article' : 'Media'}</span>
+          <span>${escNotif(notifAgo(i.published_at || i.created_at) || '')}</span>
+          ${st}
+        </div>
+      </div>
+    </a>`;
+  }).join('');
+}
+
+async function loadProfilePosts(session) {
+  const section = document.getElementById('profile-posts-section');
+  if (!section) return;
+  const h = { Authorization: 'Bearer ' + session.access_token };
+  try {
+    const [mj, aj] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/wire/media?mine=1`, { headers: h }).then((r) => r.json()).catch(() => ({})),
+      fetch(`${API_BASE_URL}/api/wire/articles?mine=1`, { headers: h }).then((r) => r.json()).catch(() => ({})),
+    ]);
+    _profilePosts = [...(mj.posts || []), ...(aj.articles || [])]
+      .sort((a, b) => new Date(b.published_at || b.created_at || 0) - new Date(a.published_at || a.created_at || 0));
+  } catch (e) {
+    _profilePosts = [];
+  }
+  // Contributors only — a reader with no posts gets no empty section.
+  if (!_profilePosts.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  _profilePostFilter = 'all';
+  renderProfilePostFilter();
+  renderProfilePosts();
+}
+
+/** Likes + views across your published work, same figures the public sees. */
+function renderProfileStats(stats) {
+  const el = document.getElementById('profile-stats');
+  if (!el) return;
+  if (!stats || (!stats.posts && !stats.views && !stats.likes)) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = [
+    ['fa-regular fa-heart', stats.likes, 'likes'],
+    ['fa-regular fa-eye', stats.views, 'views'],
+  ].map(([icon, n, label]) => `<span style="display:flex; align-items:center; gap:0.35rem; color:#94a3b8; font-size:0.8rem;">
+      <i class="${icon}"></i><strong style="color:#e2e8f0;">${Number(n || 0).toLocaleString()}</strong> ${label}
+    </span>`).join('');
+}
+
 async function openProfileModal() {
   createProfileModal();
   const { data } = await sb.auth.getSession();
@@ -524,13 +680,17 @@ async function openProfileModal() {
   try {
     const pr = await fetch(`${API_BASE_URL}/api/profiles/${user.id}`, { headers: { Authorization: 'Bearer ' + session.access_token } });
     if (pr.ok) {
-      const { profile } = await pr.json();
+      const pj = await pr.json();
+      const profile = pj.profile;
       ['twitter', 'facebook', 'instagram', 'youtube', 'website'].forEach((k) => { const el = document.getElementById('profile-' + k); if (el) el.value = (profile && profile[k]) || ''; });
       const bioEl = document.getElementById('profile-bio');
       if (bioEl) { bioEl.value = (profile && profile.bio) || ''; updateBioCount(); }
       if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
+      renderProfileStats(pj.stats);
     }
   } catch (e) { /* ignore */ }
+  // Posts load after the form is populated so the modal isn't held on them.
+  loadProfilePosts(session);
 
   const msg = document.getElementById('profile-message');
   if (msg) msg.textContent = '';

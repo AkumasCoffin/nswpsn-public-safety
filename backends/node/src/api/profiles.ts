@@ -8,6 +8,7 @@
  *   POST /api/profiles/avatar-url     — R2 presigned PUT for the caller's pfp
  */
 import { Hono } from 'hono';
+import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
@@ -59,13 +60,55 @@ function shapeProfile(userId: string, row?: ProfileRow): Record<string, unknown>
   };
 }
 
+/**
+ * Lifetime reach for a contributor: how many posts they have on The Wire, and
+ * the total views and likes those posts have drawn.
+ *
+ * Counts PUBLISHED, non-taken-down work only — on both the public and the
+ * private profile. A private view that also counted drafts would show a bigger
+ * number than anyone else can see, which makes the figure mean two different
+ * things depending on who is looking.
+ *
+ * Likes come from wire_likes rather than a denormalised column, so unliking
+ * is reflected; views are the counters already maintained on each post.
+ * Failure returns zeros rather than throwing — a profile still renders.
+ */
+async function authorStats(pool: Pool, userId: string): Promise<{ posts: number; views: number; likes: number }> {
+  const empty = { posts: 0, views: 0, likes: 0 };
+  try {
+    const r = await pool.query<{ posts: string; views: string; likes: string }>(
+      `WITH mine AS (
+         SELECT 'media_post'::text AS t, id, COALESCE(views, 0) AS views FROM media_posts
+           WHERE author_id = $1 AND status = 'published' AND taken_down_at IS NULL
+         UNION ALL
+         SELECT 'article'::text, id, COALESCE(views, 0) FROM articles
+           WHERE author_id = $1 AND status = 'published' AND taken_down_at IS NULL
+       )
+       SELECT COUNT(*)::int AS posts,
+              COALESCE(SUM(mine.views), 0)::bigint AS views,
+              (SELECT COUNT(*)::int FROM wire_likes l
+                 JOIN mine m ON m.t = l.parent_type AND m.id = l.parent_id) AS likes
+         FROM mine`,
+    [userId]);
+    const row = r.rows[0];
+    if (!row) return empty;
+    return { posts: Number(row.posts) || 0, views: Number(row.views) || 0, likes: Number(row.likes) || 0 };
+  } catch (err) {
+    log.warn({ err, userId }, 'profiles: author stats failed');
+    return empty;
+  }
+}
+
 profilesRouter.get('/api/profiles/:userId', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const userId = c.req.param('userId');
   try {
-    const r = await pool.query<ProfileRow>('SELECT * FROM user_profiles WHERE user_id = $1', [userId]);
-    return c.json({ profile: shapeProfile(userId, r.rows[0]) });
+    const [r, stats] = await Promise.all([
+      pool.query<ProfileRow>('SELECT * FROM user_profiles WHERE user_id = $1', [userId]),
+      authorStats(pool, userId),
+    ]);
+    return c.json({ profile: shapeProfile(userId, r.rows[0]), stats });
   } catch (err) {
     log.error({ err, userId }, 'profiles: get failed');
     return c.json({ error: 'failed to load profile' }, 500);

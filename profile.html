@@ -26,6 +26,10 @@
     .prof-socials a { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; background: var(--bg-elevated-soft); border: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 1.15rem; text-decoration: none; transition: border-color .15s, color .15s, transform .15s; }
     .prof-socials a:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
     .prof-empty { color: var(--text-soft); font-size: 0.85rem; margin-top: 1.3rem; }
+    .prof-stats { display: flex; justify-content: center; gap: 1.8rem; margin-top: 1.1rem; }
+    .prof-stat { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
+    .prof-stat b { font-size: 1.15rem; font-weight: 800; color: var(--text-main); font-variant-numeric: tabular-nums; }
+    .prof-stat span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); }
     .prof-back { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--text-muted); text-decoration: none; font-size: 0.85rem; margin-bottom: 1rem; }
     .prof-back:hover { color: var(--accent); }
     .prof-loading { text-align: center; color: var(--text-muted); padding: 3rem 1rem; }
@@ -112,7 +116,18 @@
       { key: 'website', icon: 'fa-solid fa-globe', label: 'Website' },
     ];
 
-    function render(p) {
+    // Reach across this contributor's published work. Rendered even at zero, so
+    // a new contributor's profile doesn't look broken — but skipped entirely if
+    // the backend couldn't supply them.
+    function statsBlock(st) {
+      if (!st) return '';
+      const item = (n, label) => `<div class="prof-stat"><b>${Number(n || 0).toLocaleString()}</b><span>${label}</span></div>`;
+      return `<div class="prof-stats">
+        ${item(st.posts, 'Posts')}${item(st.likes, 'Likes')}${item(st.views, 'Views')}
+      </div>`;
+    }
+
+    function render(p, stats) {
       const name = (p && p.display_name) || nameHint || 'Contributor';
       const avatar = p && p.avatar_url
         ? `<img src="${esc(p.avatar_url)}" alt="">`
@@ -126,6 +141,7 @@
           <div class="prof-avatar">${avatar}</div>
           <h1 class="prof-name">${esc(name)}</h1>
           <div class="prof-role">Contributor to The Wire</div>
+          ${statsBlock(stats)}
           ${bio}
           ${links ? `<div class="prof-socials">${links}</div>` : `<div class="prof-empty">No links shared yet.</div>`}
         </div>`;
@@ -164,8 +180,8 @@
       try {
         const r = await fetch(`${API_BASE}/api/profiles/${encodeURIComponent(uid)}`, { headers: await keyHeaders() });
         const j = await r.json();
-        render(j.profile || null);
-      } catch (e) { render(null); }
+        render(j.profile || null, j.stats || null);
+      } catch (e) { render(null, null); }
       loadPosts();
     })();
   </script>

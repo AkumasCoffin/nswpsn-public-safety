@@ -507,10 +507,16 @@
       } catch (e) {}
       if (ME.canFeed) {
         $('#postBtn').style.display = 'inline-flex';
+        // Your own posts now live in the sidebar Profile panel, so there's no
+        // "My posts" button here any more. The ?mine=1 view still works for
+        // anyone holding a link to it — it just needs a way back out.
         const mb = $('#mineBtn');
-        mb.style.display = 'inline-flex';
-        if (mineMode) { mb.classList.add('on'); mb.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Public feed'; mb.href = `wire?tab=${currentTab}`; }
-        else { mb.href = `wire?tab=${currentTab}&mine=1`; }
+        if (mineMode) {
+          mb.style.display = 'inline-flex';
+          mb.classList.add('on');
+          mb.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Public feed';
+          mb.href = `wire?tab=${currentTab}`;
+        }
       }
     }
 
