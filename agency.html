@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
+  <script src="ui-dialogs.js"></script>
 </head>
 
 <body>
@@ -266,50 +267,14 @@
       const first = overlay.querySelector('.ag-field'); if (first) first.focus();
     }
 
-    // In-page confirm — replaces the browser's native confirm(). Styled to match
-    // the row editor above rather than the OS dialog. Message is set via
-    // textContent, so a row's own text can't inject markup.
-    function _agConfirm(message, confirmLabel) {
-      return new Promise((resolve) => {
-        const overlay = document.createElement('div');
-        overlay.className = 'ag-modal-overlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:4001;padding:1rem;';
-        overlay.innerHTML = `
-          <div style="background:#0e1728;border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:1.3rem;max-width:420px;width:100%;">
-            <h3 style="margin:0 0 0.6rem;font-size:1.1rem;">Please confirm</h3>
-            <p id="ag-cf-msg" style="margin:0 0 1rem;font-size:0.9rem;color:var(--text-soft);line-height:1.45;"></p>
-            <div style="display:flex;gap:0.5rem;">
-              <button class="ag-add" id="ag-cf-ok"></button>
-              <button class="ag-mini" id="ag-cf-cancel" style="padding:0.45rem 0.8rem;">Cancel</button>
-            </div>
-          </div>`;
-        overlay.querySelector('#ag-cf-msg').textContent = message || '';
-        overlay.querySelector('#ag-cf-ok').textContent = confirmLabel || 'Confirm';
-        document.body.appendChild(overlay);
-        let settled = false;
-        const done = (v) => {
-          if (settled) return;
-          settled = true;
-          document.removeEventListener('keydown', onKey);
-          overlay.remove(); resolve(v);
-        };
-        const onKey = (e) => { if (e.key === 'Escape') done(false); };
-        document.addEventListener('keydown', onKey);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
-        overlay.querySelector('#ag-cf-cancel').addEventListener('click', () => done(false));
-        overlay.querySelector('#ag-cf-ok').addEventListener('click', () => done(true));
-        setTimeout(() => overlay.querySelector('#ag-cf-ok').focus(), 30);
-      });
-    }
-
     async function agDeleteRow(sectionKey, i) {
       const tbl = _agencyTables[sectionKey];
       if (!tbl) return;
       const cells = tbl.rows[i] || [];
       const label = cells[0] || 'this row';
-      const ok = await _agConfirm(
+      const ok = await uiConfirm(
         `${_agencyIsOwner ? 'Delete' : 'Request deletion of'} "${label}"?`,
-        _agencyIsOwner ? 'Delete' : 'Request deletion',
+        { title: 'Please confirm', okText: _agencyIsOwner ? 'Delete' : 'Request deletion', danger: true },
       );
       if (!ok) return;
       await _agSubmit({ op: 'delete', sectionKey, rowKey: cells[0] || '', beforeCells: cells });
