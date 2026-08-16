@@ -38,8 +38,13 @@ import { procMemorySummary } from './procMemory.js';
 // leak — a 60s cadence during firefighting is worth the extra log volume, and
 // nobody wants to redeploy to change a sampling rate.
 /**
- * Percent-of-limit at which to write a heap snapshot, once per process.
- * Off unless MEMORY_SNAPSHOT_AT_PCT is set.
+ * Percent-of-limit thresholds at which to write a heap snapshot. Comma
+ * separated; each fires at most once. Off unless MEMORY_SNAPSHOT_AT_PCT is set.
+ *
+ * Prefer two (MEMORY_SNAPSHOT_AT_PCT=35,70) over one. Chrome DevTools can
+ * compare two snapshots and list exactly what was allocated between them and
+ * never freed, which names a leak far more directly than reading retained
+ * sizes off a single dump.
  *
  * --heapsnapshot-near-heap-limit (see ecosystem.config.js) fires at the very
  * edge, where V8 is already thrashing and the write can fail for want of the
@@ -49,8 +54,13 @@ import { procMemorySummary } from './procMemory.js';
  * The snapshot is roughly heap-sized (~2GB here), so this is opt-in and
  * one-shot: it exists to answer a specific question, not to run forever.
  */
-const SNAPSHOT_AT_PCT = Number(process.env['MEMORY_SNAPSHOT_AT_PCT']) || 0;
-let snapshotWritten = false;
+const SNAPSHOT_AT_PCT = (process.env['MEMORY_SNAPSHOT_AT_PCT'] ?? '')
+  .split(',')
+  .map((x) => Number(x.trim()))
+  .filter((n) => Number.isFinite(n) && n > 0)
+  .sort((a, b) => a - b);
+/** Thresholds already used, so each fires at most once. */
+const snapshotsTaken = new Set<number>();
 
 const SAMPLE_INTERVAL_MS = Math.max(
   10_000,
@@ -107,9 +117,9 @@ async function largestSnapshots(n = 5): Promise<Array<{ source: string; mb: numb
  * stops the world) — acceptable because it happens at most once, and only when
  * the process is already heading for an OOM that would stop it permanently.
  */
-async function writeHeapSnapshot(pctOfLimit: number): Promise<void> {
-  if (snapshotWritten) return;
-  snapshotWritten = true; // set first: a failed attempt must not retry every sample
+async function writeHeapSnapshot(threshold: number, pctOfLimit: number): Promise<void> {
+  if (snapshotsTaken.has(threshold)) return;
+  snapshotsTaken.add(threshold); // first: a failed attempt must not retry every sample
   try {
     const v8 = await import('node:v8');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -165,8 +175,13 @@ export async function sampleMemoryOnce(): Promise<void> {
     // Checked before the early return below: the snapshot threshold is
     // configured independently, and nesting it under DETAIL_THRESHOLD would
     // mean any value under 75 silently never fired.
-    if (SNAPSHOT_AT_PCT > 0 && pct * 100 >= SNAPSHOT_AT_PCT) {
-      await writeHeapSnapshot(Math.round(pct * 100));
+    // Each configured threshold fires once. Two of them (e.g. "35,70") is the
+    // point: DevTools can diff two snapshots and show precisely which objects
+    // grew between them, which is a far more direct answer than eyeballing
+    // retained sizes in a single dump — and the first file arrives hours
+    // sooner than one taken near the ceiling.
+    for (const threshold of SNAPSHOT_AT_PCT) {
+      if (pct * 100 >= threshold) await writeHeapSnapshot(threshold, Math.round(pct * 100));
     }
 
     if (pct < DETAIL_THRESHOLD) {
