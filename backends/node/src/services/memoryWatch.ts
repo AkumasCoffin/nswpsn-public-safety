@@ -59,8 +59,19 @@ const SNAPSHOT_AT_PCT = (process.env['MEMORY_SNAPSHOT_AT_PCT'] ?? '')
   .map((x) => Number(x.trim()))
   .filter((n) => Number.isFinite(n) && n > 0)
   .sort((a, b) => a - b);
-/** Thresholds already used, so each fires at most once. */
-const snapshotsTaken = new Set<number>();
+/**
+ * Absolute RSS ceiling (MB) at which to snapshot, as an alternative trigger.
+ *
+ * The percent-of-heap trigger assumes the growth is IN the JS heap. Observed
+ * on this box: heap oscillates around 50-57% of its limit and never climbs to
+ * 85, while RSS sits near 2GB because ~577MB is ArrayBuffers — external memory
+ * the heap percentage cannot see. A run-away that lives outside the heap would
+ * exhaust the box without ever tripping a heap threshold.
+ */
+const SNAPSHOT_AT_RSS_MB = Number(process.env['MEMORY_SNAPSHOT_AT_RSS_MB']) || 0;
+
+/** Triggers already used, so each fires at most once. */
+const snapshotsTaken = new Set<string>();
 
 const SAMPLE_INTERVAL_MS = Math.max(
   10_000,
@@ -117,14 +128,14 @@ async function largestSnapshots(n = 5): Promise<Array<{ source: string; mb: numb
  * stops the world) — acceptable because it happens at most once, and only when
  * the process is already heading for an OOM that would stop it permanently.
  */
-async function writeHeapSnapshot(threshold: number, pctOfLimit: number): Promise<void> {
-  if (snapshotsTaken.has(threshold)) return;
-  snapshotsTaken.add(threshold); // first: a failed attempt must not retry every sample
+async function writeHeapSnapshot(triggerKey: string, label: string): Promise<void> {
+  if (snapshotsTaken.has(triggerKey)) return;
+  snapshotsTaken.add(triggerKey); // first: a failed attempt must not retry every sample
   try {
     const v8 = await import('node:v8');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const path = join(config.STATE_DIR, `heap-${stamp}-${pctOfLimit}pct.heapsnapshot`);
-    log.warn({ path, pctOfLimit }, 'memory: writing heap snapshot (one-shot) — this pauses the process');
+    const path = join(config.STATE_DIR, `heap-${stamp}-${label}.heapsnapshot`);
+    log.warn({ path, trigger: triggerKey }, 'memory: writing heap snapshot (one-shot) — this pauses the process');
     const written = v8.writeHeapSnapshot(path);
     log.warn({ written }, 'memory: heap snapshot written — open it in Chrome DevTools > Memory');
   } catch (err) {
@@ -181,7 +192,12 @@ export async function sampleMemoryOnce(): Promise<void> {
     // retained sizes in a single dump — and the first file arrives hours
     // sooner than one taken near the ceiling.
     for (const threshold of SNAPSHOT_AT_PCT) {
-      if (pct * 100 >= threshold) await writeHeapSnapshot(threshold, Math.round(pct * 100));
+      if (pct * 100 >= threshold) {
+        await writeHeapSnapshot(`pct:${threshold}`, `${Math.round(pct * 100)}pct`);
+      }
+    }
+    if (SNAPSHOT_AT_RSS_MB > 0 && mb(m.rss) >= SNAPSHOT_AT_RSS_MB) {
+      await writeHeapSnapshot(`rss:${SNAPSHOT_AT_RSS_MB}`, `rss${mb(m.rss)}mb`);
     }
 
     if (pct < DETAIL_THRESHOLD) {
