@@ -37,6 +37,21 @@ import { procMemorySummary } from './procMemory.js';
 // 5 min by default. MEMORY_SAMPLE_SECS turns it down while actively chasing a
 // leak — a 60s cadence during firefighting is worth the extra log volume, and
 // nobody wants to redeploy to change a sampling rate.
+/**
+ * Percent-of-limit at which to write a heap snapshot, once per process.
+ * Off unless MEMORY_SNAPSHOT_AT_PCT is set.
+ *
+ * --heapsnapshot-near-heap-limit (see ecosystem.config.js) fires at the very
+ * edge, where V8 is already thrashing and the write can fail for want of the
+ * memory to serialise it. Firing deliberately at, say, 85% catches the same
+ * retainers with room to actually produce the file.
+ *
+ * The snapshot is roughly heap-sized (~2GB here), so this is opt-in and
+ * one-shot: it exists to answer a specific question, not to run forever.
+ */
+const SNAPSHOT_AT_PCT = Number(process.env['MEMORY_SNAPSHOT_AT_PCT']) || 0;
+let snapshotWritten = false;
+
 const SAMPLE_INTERVAL_MS = Math.max(
   10_000,
   (Number(process.env['MEMORY_SAMPLE_SECS']) || 300) * 1000,
@@ -87,6 +102,26 @@ async function largestSnapshots(n = 5): Promise<Array<{ source: string; mb: numb
   }
 }
 
+/**
+ * Write a heap snapshot to STATE_DIR. Synchronous and slow (seconds, and it
+ * stops the world) — acceptable because it happens at most once, and only when
+ * the process is already heading for an OOM that would stop it permanently.
+ */
+async function writeHeapSnapshot(pctOfLimit: number): Promise<void> {
+  if (snapshotWritten) return;
+  snapshotWritten = true; // set first: a failed attempt must not retry every sample
+  try {
+    const v8 = await import('node:v8');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const path = join(config.STATE_DIR, `heap-${stamp}-${pctOfLimit}pct.heapsnapshot`);
+    log.warn({ path, pctOfLimit }, 'memory: writing heap snapshot (one-shot) — this pauses the process');
+    const written = v8.writeHeapSnapshot(path);
+    log.warn({ written }, 'memory: heap snapshot written — open it in Chrome DevTools > Memory');
+  } catch (err) {
+    log.error({ err }, 'memory: heap snapshot failed');
+  }
+}
+
 /** One sample. Never throws — telemetry must not be able to take the process down. */
 export async function sampleMemoryOnce(): Promise<void> {
   try {
@@ -126,6 +161,13 @@ export async function sampleMemoryOnce(): Promise<void> {
           byProcess: box.groups,
         }
       : base;
+
+    // Checked before the early return below: the snapshot threshold is
+    // configured independently, and nesting it under DETAIL_THRESHOLD would
+    // mean any value under 75 silently never fired.
+    if (SNAPSHOT_AT_PCT > 0 && pct * 100 >= SNAPSHOT_AT_PCT) {
+      await writeHeapSnapshot(Math.round(pct * 100));
+    }
 
     if (pct < DETAIL_THRESHOLD) {
       log.info(withBox, 'memory');

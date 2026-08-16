@@ -121,6 +121,10 @@ export async function fetchBuffer(
       signal: ac.signal,
     });
     if (!res.ok && !opts.allow_non_2xx) {
+      // Cancel the body before bailing. doFetch always reads it, but this path
+      // threw without touching it, which leaves undici holding the response
+      // (and its socket) until GC gets round to it.
+      await res.body?.cancel().catch(() => {});
       throw new HttpError(`HTTP ${res.status} for ${url}`, res.status, url);
     }
     return new Uint8Array(await res.arrayBuffer());
