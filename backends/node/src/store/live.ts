@@ -17,7 +17,7 @@
  * JSON-serializable. Source-specific code (e.g. WazeIngestCache) wraps
  * LiveStore for richer semantics like bbox-keyed sub-snapshots.
  */
-import { mkdir, readFile, rename, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
@@ -86,6 +86,38 @@ export class LiveStore {
         failed += 1;
       }
     }
+    // Sweep orphaned temp files. persistDirty writes
+    // `<source>.json.<pid>.tmp` then renames it over the real file, so a temp
+    // left behind means the process died (OOM, kill -9, a hard pm2 restart)
+    // in the window between the two. They are never read — hydrate only loads
+    // `.json` — so they just accumulate, one per source per death, and each
+    // one is a full snapshot. On a box that has been OOMing they add up to
+    // real disk.
+    //
+    // Safe to remove unconditionally here: this runs once at startup, before
+    // anything writes, and the service is a single pm2 process. Anything
+    // matching the pattern predates us by definition.
+    const stale = entries.filter((f) => /\.json\.\d+\.tmp$/.test(f));
+    if (stale.length > 0) {
+      let removed = 0;
+      let bytes = 0;
+      for (const f of stale) {
+        try {
+          const path = join(this.dir, f);
+          try {
+            const { stat } = await import('node:fs/promises');
+            bytes += (await stat(path)).size;
+          } catch { /* size is only for the log line */ }
+          await unlink(path);
+          removed += 1;
+        } catch { /* someone else got it, or it's not ours to delete */ }
+      }
+      log.info(
+        { removed, mb: +(bytes / 1048576).toFixed(1) },
+        'LiveStore: swept orphaned temp files from earlier crashes',
+      );
+    }
+
     log.info({ loaded, failed, dir: this.dir }, 'LiveStore hydrated');
     return { loaded, failed };
   }
@@ -196,6 +228,10 @@ export class LiveStore {
           written += 1;
         } catch (err) {
           log.error({ err, source }, 'LiveStore: persist failed');
+          // Drop the half-written temp rather than leaving it for the startup
+          // sweep — if the rename is what failed, the file is already complete
+          // and would otherwise sit there until the next restart.
+          try { await unlink(tempPath); } catch { /* already gone */ }
           // Re-mark dirty so the next tick retries.
           this.dirty.add(source);
           errors += 1;
