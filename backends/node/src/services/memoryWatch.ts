@@ -32,8 +32,15 @@ import { join } from 'node:path';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { archiveWriter } from '../store/archive.js';
+import { procMemorySummary } from './procMemory.js';
 
-const SAMPLE_INTERVAL_MS = 5 * 60_000;
+// 5 min by default. MEMORY_SAMPLE_SECS turns it down while actively chasing a
+// leak — a 60s cadence during firefighting is worth the extra log volume, and
+// nobody wants to redeploy to change a sampling rate.
+const SAMPLE_INTERVAL_MS = Math.max(
+  10_000,
+  (Number(process.env['MEMORY_SAMPLE_SECS']) || 300) * 1000,
+);
 /** Fraction of the heap limit above which we log the fuller breakdown. */
 const DETAIL_THRESHOLD = 0.75;
 
@@ -103,13 +110,30 @@ export async function sampleMemoryOnce(): Promise<void> {
       arrayBuffersMB: mb(m.arrayBuffers),
     };
 
+    // Whole-box attribution on every sample: the JS heap is capped at ~2GB by
+    // V8, so it cannot by itself explain the VM going from 6GB to 10GB. This
+    // says which processes hold the rest — Chromium in particular, which
+    // process.memoryUsage() is blind to.
+    const box = await procMemorySummary();
+    const withBox = box
+      ? {
+          ...base,
+          // memAvailable is the figure to trust; sumRss double-counts shared
+          // pages and is only meaningful as a trend against earlier samples.
+          memAvailableMB: box.memAvailableMB,
+          memTotalMB: box.memTotalMB,
+          sumRssMB: box.sumRssMB,
+          byProcess: box.groups,
+        }
+      : base;
+
     if (pct < DETAIL_THRESHOLD) {
-      log.info(base, 'memory');
+      log.info(withBox, 'memory');
       return;
     }
 
     log.warn(
-      { ...base, archiveQueue: archiveWriter.metrics().queue_size, snapshots: await largestSnapshots() },
+      { ...withBox, archiveQueue: archiveWriter.metrics().queue_size, snapshots: await largestSnapshots() },
       'memory: heap above threshold',
     );
   } catch (err) {
