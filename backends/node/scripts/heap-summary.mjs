@@ -23,12 +23,16 @@
 import { createReadStream, statSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 
-const file = process.argv[2];
-if (!file) {
-  console.error('usage: node scripts/heap-summary.mjs <file.heapsnapshot> [topN]');
+// Accept several files so a shell glob (state/heap-*.heapsnapshot) just works
+// — the whole point is comparing two snapshots, and passing both is the
+// obvious thing to type. A bare number anywhere in the args is topN.
+const args = process.argv.slice(2);
+const files = args.filter((a) => !/^\d+$/.test(a));
+const TOP = Number(args.find((a) => /^\d+$/.test(a))) || 25;
+if (files.length === 0) {
+  console.error('usage: node scripts/heap-summary.mjs <file.heapsnapshot>... [topN]');
   process.exit(1);
 }
-const TOP = Number(process.argv[3]) || 25;
 
 async function head(path, n) {
   const fh = await open(path, 'r');
@@ -142,36 +146,70 @@ function scan(path, fieldCount, nameIdx, sizeIdx) {
 
 const mb = (b) => (b / 1048576).toFixed(1);
 
-const header = readHeader(await head(file, 65536));
-const fields = header.meta.node_fields;
-const nameIdx = fields.indexOf('name');
-const sizeIdx = fields.indexOf('self_size');
-if (nameIdx < 0 || sizeIdx < 0) throw new Error('unexpected node_fields: ' + fields.join(','));
+/** Summarise one snapshot; returns the per-constructor totals for diffing. */
+async function summarise(file) {
+  const header = readHeader(await head(file, 65536));
+  const fields = header.meta.node_fields;
+  const nameIdx = fields.indexOf('name');
+  const sizeIdx = fields.indexOf('self_size');
+  if (nameIdx < 0 || sizeIdx < 0) throw new Error('unexpected node_fields: ' + fields.join(','));
 
-console.log(`file           ${file}  (${mb(statSync(file).size)} MB)`);
-console.log(`node_count     ${(header.node_count ?? 0).toLocaleString()}`);
+  console.log(`file           ${file}  (${mb(statSync(file).size)} MB)`);
+  console.log(`node_count     ${(header.node_count ?? 0).toLocaleString()}`);
 
-const { byName, strings } = await scan(file, fields.length, nameIdx, sizeIdx);
+  const { byName, strings } = await scan(file, fields.length, nameIdx, sizeIdx);
 
-let totalSelf = 0, totalCount = 0;
-for (const v of byName.values()) { totalSelf += v.self; totalCount += v.count; }
+  let totalSelf = 0, totalCount = 0;
+  for (const v of byName.values()) { totalSelf += v.self; totalCount += v.count; }
 
-// Sanity check against the header — if these disagree the scan is wrong and
-// every number below it is worthless, so say so rather than print them.
-if (header.node_count && Math.abs(totalCount - header.node_count) > 1) {
-  console.error(`\nWARNING: counted ${totalCount.toLocaleString()} nodes but the header declares ` +
-    `${header.node_count.toLocaleString()} — the scan is unreliable, do not trust the table.`);
+  // Cross-check against the header. If these disagree the scan is wrong and
+  // every number below is worthless, so say so rather than print them.
+  if (header.node_count && Math.abs(totalCount - header.node_count) > 1) {
+    console.error(`\nWARNING: counted ${totalCount.toLocaleString()} nodes but the header declares ` +
+      `${header.node_count.toLocaleString()} — the scan is unreliable, do not trust the table.`);
+  }
+
+  console.log(`objects        ${totalCount.toLocaleString()}`);
+  console.log(`shallow total  ${mb(totalSelf)} MB\n`);
+  console.log('constructor                                       count      self MB      %');
+  console.log('---------------------------------------------------------------------------');
+
+  const named = new Map();
+  for (const [idx, v] of byName) named.set(strings[idx] ?? `<#${idx}>`, v);
+
+  for (const [name, v] of [...named.entries()].sort((a, b) => b[1].self - a[1].self).slice(0, TOP)) {
+    const nm = (name || '(anonymous)').slice(0, 45).padEnd(47);
+    console.log(`${nm}${String(v.count).padStart(10)}  ${mb(v.self).padStart(9)}  ${((v.self / totalSelf) * 100).toFixed(1).padStart(5)}`);
+  }
+  console.log('');
+  return named;
 }
 
-console.log(`objects        ${totalCount.toLocaleString()}`);
-console.log(`shallow total  ${mb(totalSelf)} MB\n`);
-console.log('constructor                                       count      self MB      %');
-console.log('---------------------------------------------------------------------------');
-for (const r of [...byName.entries()]
-  .map(([idx, v]) => ({ name: strings[idx] ?? `<#${idx}>`, ...v }))
-  .sort((a, b) => b.self - a.self)
-  .slice(0, TOP)) {
-  const nm = (r.name || '(anonymous)').slice(0, 45).padEnd(47);
-  console.log(`${nm}${String(r.count).padStart(10)}  ${mb(r.self).padStart(9)}  ${((r.self / totalSelf) * 100).toFixed(1).padStart(5)}`);
+const results = [];
+for (const f of files) {
+  results.push({ file: f, named: await summarise(f) });
 }
-console.log('\nAn implausible count for one constructor is the usual signature.');
+
+// With two or more snapshots the growth between them is the actual answer —
+// a big constant allocation looks identical to a leak in a single snapshot,
+// and only the delta tells them apart.
+if (results.length >= 2) {
+  const first = results[0];
+  const last = results[results.length - 1];
+  console.log(`=== GROWTH: ${first.file}  ->  ${last.file} ===\n`);
+  console.log('constructor                                    +count     +self MB');
+  console.log('---------------------------------------------------------------------------');
+  const rows = [];
+  for (const [name, v] of last.named) {
+    const before = first.named.get(name) ?? { count: 0, self: 0 };
+    rows.push({ name, dc: v.count - before.count, ds: v.self - before.self });
+  }
+  for (const r of rows.sort((a, b) => b.ds - a.ds).slice(0, TOP)) {
+    if (r.ds <= 0) break;
+    console.log(`${(r.name || '(anonymous)').slice(0, 45).padEnd(47)}${String(r.dc).padStart(9)}  ${mb(r.ds).padStart(11)}`);
+  }
+  console.log('\nWhatever tops this list is what grew and was never freed.');
+} else {
+  console.log('An implausible count for one constructor is the usual signature.');
+  console.log('Two snapshots are better: pass both and this prints what grew between them.');
+}
