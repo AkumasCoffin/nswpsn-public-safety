@@ -3485,7 +3485,9 @@
     // for waze markers (null for livetraffic) — drives the per-subtype
     // pill filter under the Traffic Hazards floating menu.
     const _hazardMarkers = []; // [{marker, type, source, subtypeLabel}]
-    const _hazardSelectedSources = new Set(['livetraffic', 'waze']);
+    // 'waze' dropped with the retired ingest. It also gates the Waze subtype
+    // pill block below, which would otherwise render an empty section.
+    const _hazardSelectedSources = new Set(['livetraffic']);
     // Waze subtype labels (formatWazeType output) the user has toggled
     // OFF. Empty = everything visible. Livetraffic markers ignore this
     // set — they have no subtypeLabel and pass through unconditionally.
@@ -3501,7 +3503,7 @@
     const _roadworkMarkers = [];        // [{marker, type, source}]
     const _roadworkAvailableTypes = []; // distinct types in current dataset, ordered
     const _roadworkSelectedTypes = new Set(); // populated from available on first load
-    const _roadworkSelectedSources = new Set(['livetraffic', 'waze']); // both on by default
+    const _roadworkSelectedSources = new Set(['livetraffic']); // 'waze' dropped with the retired ingest
 
     // Camera filter states and sub-layers
     const cameraFilters = {
@@ -10128,9 +10130,11 @@ function initPagerHoursFromStorage() {
           const n = typeCounts[it.key] || 0;
           return _ffPill(hazardFilters[it.key], `${it.label} (${n.toLocaleString()})`, `toggleHazardPill('${it.key}')`);
         }).join('');
+        // Waze source pill removed with the ingest — it would read "Waze (0)"
+        // permanently and toggling it would do nothing. LiveTraffic is now the
+        // only source feeding this layer.
         const sourcePills = `
           ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
-          ${_ffPill(_hazardSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleHazardSourcePill('waze')")}
         `;
         // Waze subtype pills — shown only when Waze is the active source.
         // Counts respect the current source + type filters so totals
@@ -10401,7 +10405,6 @@ function initPagerHoursFromStorage() {
         }).join('');
         const sourcePills = `
           ${_ffPill(_roadworkSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleRoadworkSourcePill('livetraffic')")}
-          ${_ffPill(_roadworkSelectedSources.has('waze'), `Waze (${wzCount.toLocaleString()})`, "toggleRoadworkSourcePill('waze')")}
         `;
         return `
           <h4><i class="fa-solid fa-road" style="color:#eab308;"></i> Roadwork</h4>
