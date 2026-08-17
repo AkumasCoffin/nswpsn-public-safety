@@ -2305,6 +2305,30 @@
               <div id="ap-mode-desc" style="font-size:0.78rem; color:var(--text-soft, #94a3b8);">Loading…</div>
             </div>
           </div>
+
+          <!-- Launch switches. Owner only; rendered disabled for everyone else
+               so a moderator can still see the current state. -->
+          <div class="ap-mode-bar">
+            <label class="ap-switch">
+              <input type="checkbox" id="wire-public-toggle" onchange="toggleWirePublic()" disabled>
+              <span class="ap-slider"></span>
+            </label>
+            <div>
+              <div style="font-weight:600;">The Wire is live <span id="wire-owner-note" style="font-weight:400;font-size:0.72rem;color:var(--text-soft,#94a3b8);"></span></div>
+              <div id="wire-public-desc" style="font-size:0.78rem; color:var(--text-soft, #94a3b8);">Loading…</div>
+            </div>
+          </div>
+
+          <div class="ap-mode-bar">
+            <label class="ap-switch">
+              <input type="checkbox" id="wire-autotags-toggle" onchange="toggleWireAutoTags()" disabled>
+              <span class="ap-slider"></span>
+            </label>
+            <div>
+              <div style="font-weight:600;">Founding-contributor badges</div>
+              <div id="wire-autotags-desc" style="font-size:0.78rem; color:var(--text-soft, #94a3b8);">Loading…</div>
+            </div>
+          </div>
           <div id="approvals-container">
             <div class="loading"><i class="fas fa-spinner"></i></div>
           </div>
@@ -3259,6 +3283,19 @@
         </div>
       </div>
       
+      <!-- Badges. Applied immediately on click rather than on Save, because
+           they are independent of the role set — batching them behind the
+           same button would imply a badge change is part of a role change. -->
+      <div style="margin: 1.5rem 0; padding: 1rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px;">
+        <label style="display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #fbbf24; margin-bottom: 0.25rem; font-weight: 600;">
+          <i class="fas fa-award"></i> Badges
+        </label>
+        <div style="font-size: 0.72rem; color: var(--text-soft, #94a3b8); margin-bottom: 0.7rem;">
+          Decoration only — badges grant no permissions. Applied straight away.
+        </div>
+        <div id="edit-user-tags-box" style="display: flex; flex-wrap: wrap; gap: 0.4rem;"></div>
+      </div>
+
       <div style="display: flex; gap: 1rem;">
         <button class="btn btn-secondary" onclick="closeEditRolesModal()" style="flex: 1;">Cancel</button>
         <button class="btn btn-success" onclick="saveUserRoles()" style="flex: 1;">
@@ -9791,12 +9828,72 @@
         ? 'On — contributor posts go to this queue for approval before they\'re public.'
         : 'Off — contributor posts publish instantly (no approval needed).';
     }
+    function _wireSetLaunchUi(d) {
+      const canEdit = d.can_edit_launch === true;
+      const pub = document.getElementById('wire-public-toggle');
+      const at = document.getElementById('wire-autotags-toggle');
+      if (pub) { pub.checked = d.wire_public === true; pub.disabled = !canEdit; }
+      if (at) { at.checked = d.auto_tags === true; at.disabled = !canEdit; }
+      const note = document.getElementById('wire-owner-note');
+      if (note) note.textContent = canEdit ? '' : '· owner only';
+      const pd = document.getElementById('wire-public-desc');
+      if (pd) pd.textContent = d.wire_public
+        ? 'On — The Wire is public. Anyone can read it, and the OG Contributor badge can no longer be earned.'
+        : 'Off — only contributors and moderators can see The Wire. Posting now earns the OG Contributor badge.';
+      const ad = document.getElementById('wire-autotags-desc');
+      if (ad) ad.textContent = d.auto_tags
+        ? 'On — posting awards OG Contributor (while private), and First Contributor to whoever posts first.'
+        : 'Off — no badges are awarded automatically. Staff can still assign them by hand.';
+    }
+
     async function _apLoadMode() {
       try {
         const res = await fetch(`${API_BASE_URL}/api/wire/settings`, { headers: { 'Authorization': await authHeader() } });
         if (!res.ok) return;
-        _apSetModeUi((await res.json()).approval_required);
+        const d = await res.json();
+        _apSetModeUi(d.approval_required);
+        _wireSetLaunchUi(d);
       } catch (e) { /* ignore */ }
+    }
+
+    /** Shared PUT for the two owner-only switches. */
+    async function _wirePutSetting(field, value, toggleId, okMsg) {
+      const t = document.getElementById(toggleId);
+      if (t) t.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/wire/settings`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [field]: value }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) { showToast(d.error || 'Failed to update', 'error'); await _apLoadMode(); return; }
+        _wireSetLaunchUi({ ...d, can_edit_launch: true });
+        showToast(okMsg(value), 'success');
+      } catch (e) {
+        showToast('Failed to update', 'error');
+        await _apLoadMode();
+      } finally { if (t) t.disabled = false; }
+    }
+
+    async function toggleWirePublic() {
+      const on = document.getElementById('wire-public-toggle').checked;
+      // Going live is the one that's awkward to walk back — readers will have
+      // seen it — so it asks first. Switching back off is not confirmed.
+      if (on && !(await uiConfirm(
+        'Everyone will be able to read The Wire, and the OG Contributor badge will stop being earnable.',
+        { title: 'Take The Wire live?', okText: 'Go live' }))) {
+        document.getElementById('wire-public-toggle').checked = false;
+        return;
+      }
+      await _wirePutSetting('wire_public', on, 'wire-public-toggle',
+        (v) => v ? 'The Wire is now public' : 'The Wire is private again');
+    }
+
+    async function toggleWireAutoTags() {
+      const on = document.getElementById('wire-autotags-toggle').checked;
+      await _wirePutSetting('auto_tags', on, 'wire-autotags-toggle',
+        (v) => v ? 'Automatic badges on' : 'Automatic badges off');
     }
     async function toggleApprovalMode() {
       const t = document.getElementById('ap-mode-toggle');
@@ -10039,6 +10136,66 @@
         ${hint ? `<span class="role-hint">${escapeHtml(hint)}</span>` : ''}
       </label>`;
     }
+    // ---- profile badges -----------------------------------------------------
+    // Vocabulary comes from the backend so it can't drift from what the API
+    // will accept.
+    let USER_TAG_DEFS = [];
+    let _tagEditUserId = null;
+
+    async function loadUserTagDefs() {
+      if (USER_TAG_DEFS.length) return USER_TAG_DEFS;
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/user-tags`, { headers: { 'Authorization': await authHeader() } });
+        if (r.ok) USER_TAG_DEFS = (await r.json()).tags || [];
+      } catch (e) { /* the section just renders empty */ }
+      return USER_TAG_DEFS;
+    }
+
+    function renderUserTagEditor(userId, tags) {
+      _tagEditUserId = userId;
+      const box = document.getElementById('edit-user-tags-box');
+      if (!box) return;
+      const held = new Set((tags || []).map(t => t.key));
+      box.innerHTML = USER_TAG_DEFS.map(def => {
+        const on = held.has(def.key);
+        return `<button type="button" onclick="toggleUserTag('${escapeHtml(def.key)}')"
+          title="${escapeHtml(def.description || '')}"
+          style="display:inline-flex;align-items:center;gap:0.35rem;font-size:0.76rem;font-weight:600;
+                 padding:0.32rem 0.65rem;border-radius:999px;cursor:pointer;font-family:inherit;
+                 border:1px solid ${on ? escapeHtml(def.color) : 'rgba(148,163,184,0.3)'};
+                 color:${on ? escapeHtml(def.color) : 'var(--text-soft,#94a3b8)'};
+                 background:${on ? 'rgba(148,163,184,0.10)' : 'transparent'};">
+          <i class="${escapeHtml(def.icon)}"></i>${escapeHtml(def.label)}
+          ${on ? '<i class="fas fa-check" style="font-size:0.65rem;opacity:0.8"></i>' : ''}
+        </button>`;
+      }).join('') || '<span style="font-size:0.78rem;color:var(--text-soft,#94a3b8)">No badges defined.</span>';
+    }
+
+    async function toggleUserTag(tagKey) {
+      if (!_tagEditUserId) return;
+      const user = allUsers.find(u => u.id === _tagEditUserId);
+      const held = new Set((user?.tags || []).map(t => t.key));
+      const adding = !held.has(tagKey);
+      try {
+        const url = adding
+          ? `${API_BASE_URL}/api/users/${_tagEditUserId}/tags`
+          : `${API_BASE_URL}/api/users/${_tagEditUserId}/tags/${encodeURIComponent(tagKey)}`;
+        const res = await fetch(url, {
+          method: adding ? 'POST' : 'DELETE',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          ...(adding ? { body: JSON.stringify({ tag: tagKey }) } : {}),
+        });
+        const d = await res.json().catch(() => ({}));
+        // 409 is the single-holder conflict on First Contributor — the message
+        // explains it, so show it rather than a generic failure.
+        if (!res.ok) { showToast(d.error || 'Could not update badge', 'error'); return; }
+        if (user) user.tags = d.tags || [];
+        renderUserTagEditor(_tagEditUserId, d.tags || []);
+        renderUsers();
+        showToast(adding ? 'Badge added' : 'Badge removed', 'success');
+      } catch (e) { showToast('Could not update badge', 'error'); }
+    }
+
     /** Collect the checked roles out of a modal's containers. */
     function collectRoles(...containerIds) {
       const out = [];
@@ -10354,6 +10511,9 @@
       // unchanged; the backend enforces this too).
       document.getElementById('edit-privileged-roles-section').style.display =
         userPermissions.can_assign_privileged_roles ? 'block' : 'none';
+
+      // Badges load lazily; the vocabulary is fetched once and cached.
+      loadUserTagDefs().then(() => renderUserTagEditor(userId, user.tags || []));
 
       document.getElementById('edit-roles-modal').style.display = 'flex';
     }
