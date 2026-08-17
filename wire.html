@@ -100,6 +100,16 @@
     .wire-status { font-size: 0.65rem; color: #f59e0b; }
 
     .wire-empty, .wire-loading { color: var(--text-muted); padding: 3rem 1rem; text-align: center; }
+    /* Pre-launch founding-contributor call to action. */
+    .wire-promo { border: 1px solid rgba(245,158,11,0.35); background: linear-gradient(180deg, rgba(245,158,11,0.10), rgba(245,158,11,0.03)); border-radius: var(--radius-md); padding: 1rem 1.1rem; margin-bottom: 1.2rem; }
+    .wire-promo .wp-head { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em; font-weight: 700; color: #fbbf24; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.45rem; }
+    .wire-promo .wp-line { display: flex; align-items: flex-start; gap: 0.55rem; font-size: 0.87rem; line-height: 1.5; color: var(--text-muted); }
+    .wire-promo .wp-line + .wp-line { margin-top: 0.5rem; }
+    .wire-promo .wp-line i { margin-top: 0.2rem; flex-shrink: 0; }
+    .wire-promo .wp-line b { color: var(--text-main); font-weight: 700; }
+    /* Badge chips beside a username. Icon-only in bylines to save room; the
+       title carries the full label for anyone who hovers or uses a reader. */
+    .wire-tag { display: inline-flex; align-items: center; margin-left: 0.28rem; font-size: 0.78em; vertical-align: baseline; }
     .wire-draft-badge { font-size: 0.62rem; background: rgba(148,163,184,0.2); color: var(--text-muted); padding: 2px 6px; border-radius: 5px; text-transform: uppercase; letter-spacing: 0.05em; }
 
     /* Detail */
@@ -393,6 +403,7 @@
     </div>
 
     <div id="feedView">
+      <div id="wirePromo" style="display:none"></div>
       <div class="wire-grid" id="grid"></div>
       <div class="wire-loading" id="loading" style="display:none">Loading…</div>
       <div class="wire-empty" id="empty" style="display:none"></div>
@@ -567,7 +578,7 @@
         ? `<span class="wire-chip loc"><i class="fa-solid fa-location-dot"></i> ${esc(item.location.region || 'Pinned')}</span>` : '';
       const draft = statusBadge(item.status);
       const key = isArticle ? item.slug : item.id;
-      const authorLink = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(item.author?.id || '')}&name=${encodeURIComponent(item.author?.name || '')}" onclick="event.stopPropagation()">${avatarChip(item.author, 18)}${esc(item.author?.name || 'contributor')}</a>`;
+      const authorLink = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(item.author?.id || '')}&name=${encodeURIComponent(item.author?.name || '')}" onclick="event.stopPropagation()">${avatarChip(item.author, 18)}${esc(item.author?.name || 'contributor')}${tagChips(item.author)}</a>`;
       const nCo = (item.co_authors || []).filter((c) => c && c.id).length;
       const coPart = nCo ? ` <span class="wire-co">+${nCo}</span>` : '';
       const caption = isArticle ? (item.excerpt || '') : (item.caption || '');
@@ -595,6 +606,16 @@
         return `<img class="wire-av" src="${esc(person.avatar_url)}" alt="" loading="lazy" style="${style}">`;
       }
       return `<span class="wire-av wire-av-fallback" style="${style}font-size:${Math.round(px * 0.5)}px">${esc(name.charAt(0).toUpperCase())}</span>`;
+    }
+
+    /** Badge icons for a byline. Icon-only by design — a full label per badge
+     *  would push the author name out of a feed card. */
+    function tagChips(person) {
+      const tags = (person && person.tags) || [];
+      if (!tags.length) return '';
+      return tags.map((t) =>
+        `<span class="wire-tag" title="${esc(t.label)} — ${esc(t.description || '')}"><i class="${esc(t.icon)}" style="color:${esc(t.color)}"></i></span>`
+      ).join('');
     }
 
     function timeAgo(iso) {
@@ -765,9 +786,9 @@
           ${ME.canModerate && !canEdit ? `<button class="wd-btn danger" data-act="remove"><i class="fa-solid fa-ban"></i> Remove</button>` : ''}
         </div></div>` : '';
       const notices = `${item.status === 'pending' ? `<div style="color:#f59e0b;font-size:0.82rem;margin-bottom:0.9rem"><i class="fa-regular fa-clock"></i> Awaiting moderator approval — only you can see this until it's approved.</div>` : ''}${item.status === 'rejected' && item.review_note ? `<div style="color:#ef4444;font-size:0.82rem;margin-bottom:0.9rem"><b>Rejected:</b> ${esc(item.review_note)} — edit and re-submit to send it back for review.</div>` : ''}`;
-      const authorLink = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(item.author?.id || '')}&name=${encodeURIComponent(item.author?.name || '')}">${avatarChip(item.author, 20)}${esc(item.author?.name || 'contributor')}</a>`;
+      const authorLink = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(item.author?.id || '')}&name=${encodeURIComponent(item.author?.name || '')}">${avatarChip(item.author, 20)}${esc(item.author?.name || 'contributor')}${tagChips(item.author)}</a>`;
       const coLinks = (item.co_authors || []).filter((c) => c && c.id).map((c) =>
-        `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(c.id)}&name=${encodeURIComponent(c.name || '')}">${avatarChip(c, 18)}${esc(c.name || 'contributor')}</a>`);
+        `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(c.id)}&name=${encodeURIComponent(c.name || '')}">${avatarChip(c, 18)}${esc(c.name || 'contributor')}${tagChips(c)}</a>`);
       const withPart = coLinks.length ? ` with ${coLinks.join(', ')}` : '';
       const byline = `by ${authorLink}${withPart}${item.status && item.status !== 'published' ? ' · ' + statusBadge(item.status) : ''}${(item.published_at || item.created_at) ? ' · ' + new Date(item.published_at || item.created_at).toLocaleString('en-AU') : ''}`;
       const statsBlock = `<div class="wd-block"><div class="wd-stats">
@@ -957,7 +978,7 @@
             <div class="wd-comment-body"><i class="fa-solid fa-trash"></i> Comment removed${c.delete_reason ? ` — ${esc(c.delete_reason)}` : ''}${c.deleted_by_name ? ` by ${esc(c.deleted_by_name)}` : ''}</div>
           </div>`;
         }
-        const who = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(c.author?.id || '')}&name=${encodeURIComponent(c.author?.name || '')}">${avatarChip(c.author, 20)}${esc(c.author?.name || 'user')}</a>`;
+        const who = `<a class="wire-author wire-author-av" href="profile?u=${encodeURIComponent(c.author?.id || '')}&name=${encodeURIComponent(c.author?.name || '')}">${avatarChip(c.author, 20)}${esc(c.author?.name || 'user')}${tagChips(c.author)}</a>`;
         // Body is USER TEXT — escaped, never innerHTML'd raw. pre-wrap keeps
         // the author's line breaks without allowing markup.
         return `<div class="wd-comment" data-id="${esc(c.id)}">
@@ -1302,6 +1323,66 @@
       else closeDetail(false);
     });
 
+    // ---- launch state ----
+    // wire_public is a runtime setting now (owner toggle on the staff page),
+    // not an env var, so roles alone can't tell the client whether the Wire is
+    // live. Contributors/moderators can read the setting directly; everyone
+    // else finds out by asking the feed, which the server gates with the same
+    // wireReadable() check. A 404 there means "not for you yet".
+    let WIRE_IS_PUBLIC = null;   // null = unknown
+    async function loadWireSettings() {
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/settings`, { headers: await userHeaders() });
+        if (!r.ok) return null;
+        const j = await r.json();
+        WIRE_IS_PUBLIC = j.wire_public === true;
+        return j;
+      } catch (e) { return null; }
+    }
+    async function feedVisibleToMe() {
+      try {
+        const r = await fetch(`${API_BASE}/api/wire/media?limit=1`, { headers: await userHeaders() });
+        return r.ok;
+      } catch (e) { return false; }
+    }
+
+    /**
+     * Pre-launch call to action. Both offers only make sense at different
+     * moments, so the card reflects which are actually still available:
+     * "be the first" disappears the instant a post exists, and the whole card
+     * goes when the Wire is public and the badges can no longer be earned.
+     */
+    async function renderWirePromo() {
+      const host = $('#wirePromo');
+      if (!host || WIRE_IS_PUBLIC !== false) return;
+      let hasAnyPost = true;
+      try {
+        const [m, a] = await Promise.all([
+          fetch(`${API_BASE}/api/wire/media?limit=1`, { headers: await userHeaders() }).then((r) => r.json()).catch(() => ({})),
+          fetch(`${API_BASE}/api/wire/articles?limit=1`, { headers: await userHeaders() }).then((r) => r.json()).catch(() => ({})),
+        ]);
+        hasAnyPost = ((m.posts || []).length + (a.articles || []).length) > 0;
+      } catch (e) { /* assume posts exist — the weaker claim */ }
+
+      const first = hasAnyPost ? '' : `
+        <div class="wp-line">
+          <i class="fa-solid fa-medal" style="color:#eab308"></i>
+          <span>Be the first to post to The Wire to receive the
+            <b>First Contributor</b> and <b>OG Contributor</b> badges.</span>
+        </div>`;
+      host.innerHTML = `
+        <div class="wire-promo">
+          <div class="wp-head"><i class="fa-solid fa-award"></i> Founding contributor badges</div>
+          <div class="wp-line">
+            <i class="fa-solid fa-star" style="color:#f59e0b"></i>
+            <span>Post to The Wire before it goes live to receive the
+              <b>OG Contributor</b> badge.</span>
+          </div>
+          ${first}
+        </div>`;
+      host.style.display = 'block';
+    }
+
     // ---- init ----
     function showComingSoon() {
       $('#comingSoon').style.display = 'block';
@@ -1311,10 +1392,16 @@
     (async function init() {
       applySection();
       await Promise.all([loadKey(), loadMe(), loadFilterOptions()]);
-      // Soft launch: the public gets a banner until WIRE_PUBLIC=true.
-      // Contributors and moderators build/curate The Wire, so they see it
-      // during soft launch too — mirrors the server-side wireReadable() gate.
-      if (!(ME.isOwner || ME.canFeed || ME.canModerate)) { showComingSoon(); return; }
+      // Soft launch. Contributors and moderators build/curate The Wire so they
+      // always see it; everyone else depends on the wire_public setting, which
+      // the client can't read — so ask the feed, which the server gates with
+      // the same wireReadable() check. Previously this was a roles-only test,
+      // which meant flipping the Wire live would NOT have revealed it to the
+      // public: they'd have kept getting the coming-soon banner.
+      await loadWireSettings();
+      const privileged = ME.isOwner || ME.canFeed || ME.canModerate;
+      if (!privileged && !(await feedVisibleToMe())) { showComingSoon(); return; }
+      renderWirePromo();
       // My posts = combined media + articles with an All/Media/Articles filter;
       // the public agency/region filters don't apply there.
       if (mineMode) { $('#mineFilters').style.display = 'inline-flex'; $('#filters').style.display = 'none'; }

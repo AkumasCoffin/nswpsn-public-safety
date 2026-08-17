@@ -228,6 +228,7 @@ function createProfileModal() {
         <input type="file" id="profile-avatar-input" accept="image/jpeg,image/png,image/webp" style="display:none">
         <div style="color:#64748b; font-size:0.72rem; margin-top:0.4rem;">Overrides your Discord avatar.</div>
         <div id="profile-stats" style="display:none; justify-content:center; gap:1.4rem; margin-top:0.9rem;"></div>
+        <div id="profile-tags" style="display:none; flex-wrap:wrap; justify-content:center; gap:0.35rem; margin-top:0.7rem;"></div>
       </div>
 
       <div style="margin-bottom:1.2rem;">
@@ -626,6 +627,19 @@ async function loadProfilePosts(session) {
   renderProfilePosts();
 }
 
+/** Your badges. Awarded by staff, or automatically for posting to The Wire
+ *  before it went public. Shown with full labels — the modal has the room. */
+function renderProfileTags(tags) {
+  const el = document.getElementById('profile-tags');
+  if (!el) return;
+  if (!tags || !tags.length) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = tags.map((t) =>
+    `<span title="${escNotif(t.description || '')}" style="display:inline-flex;align-items:center;gap:0.3rem;font-size:0.72rem;font-weight:600;padding:0.25rem 0.55rem;border-radius:999px;border:1px solid ${escNotif(t.color)};color:${escNotif(t.color)};background:rgba(148,163,184,0.08);">
+       <i class="${escNotif(t.icon)}"></i>${escNotif(t.label)}</span>`
+  ).join('');
+}
+
 /** Likes + views across your published work, same figures the public sees. */
 function renderProfileStats(stats) {
   const el = document.getElementById('profile-stats');
@@ -687,6 +701,7 @@ async function openProfileModal() {
       if (bioEl) { bioEl.value = (profile && profile.bio) || ''; updateBioCount(); }
       if (profile && profile.avatar_url && avPrev) avPrev.innerHTML = `<img src="${profile.avatar_url}" style="width:100%;height:100%;object-fit:cover;">`;
       renderProfileStats(pj.stats);
+      renderProfileTags(pj.tags);
     }
   } catch (e) { /* ignore */ }
   // Posts load after the form is populated so the modal isn't held on them.
