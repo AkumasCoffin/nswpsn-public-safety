@@ -3186,7 +3186,9 @@
           const layerMap = {
             beachwatch: { layer: beachwatchLayer, btn: 'btn-beachwatch', loader: loadBeachwatchData },
             hazards: { layer: hazardsLayer, btn: 'btn-hazards', loader: loadHazardsData },
-            police: { layer: policeLayer, btn: 'btn-police', loader: loadPoliceData },
+            // police removed: a deep link (?layer=police) would otherwise
+            // reach getElementById('btn-police').classList on a button that
+            // no longer exists and throw, taking the rest of init with it.
             roadwork: { layer: roadworkLayer, btn: 'btn-roadwork', loader: loadRoadworkData },
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
             cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData }
@@ -4361,7 +4363,10 @@
         rfs: rfsLayer,
         pager: pagerLayer,
         hazards: hazardsLayer,
-        police: policeLayer,
+        // police removed with the Waze retirement — leaving it here would let
+        // toggleLayer('police') past the `!layer || !btnId` guard (which only
+        // checks the map entries, not the DOM) and then dereference a
+        // btn-police element that no longer exists.
         roadwork: roadworkLayer,
         floods: floodsLayer,
         cameras: camerasLayer,
@@ -4377,7 +4382,6 @@
         rfs: 'btn-rfs',
         pager: 'btn-pager',
         hazards: 'btn-hazards',
-        police: 'btn-police',
         roadwork: 'btn-roadwork',
         floods: 'btn-floods',
         cameras: 'btn-cameras',
