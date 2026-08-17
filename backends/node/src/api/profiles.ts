@@ -14,6 +14,7 @@ import { log } from '../lib/log.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { invalidateUserRolesCache } from '../services/auth/roles.js';
 import { avatarUrl, createImageUploadUrl, r2Configured } from '../services/wire.js';
+import { tagsFor } from '../services/userTags.js';
 
 export const profilesRouter = new Hono();
 
@@ -104,11 +105,12 @@ profilesRouter.get('/api/profiles/:userId', async (c) => {
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   const userId = c.req.param('userId');
   try {
-    const [r, stats] = await Promise.all([
+    const [r, stats, tags] = await Promise.all([
       pool.query<ProfileRow>('SELECT * FROM user_profiles WHERE user_id = $1', [userId]),
       authorStats(pool, userId),
+      tagsFor(pool, userId),
     ]);
-    return c.json({ profile: shapeProfile(userId, r.rows[0]), stats });
+    return c.json({ profile: shapeProfile(userId, r.rows[0]), stats, tags });
   } catch (err) {
     log.error({ err, userId }, 'profiles: get failed');
     return c.json({ error: 'failed to load profile' }, 500);

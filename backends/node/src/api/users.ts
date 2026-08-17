@@ -32,6 +32,7 @@ import { log } from '../lib/log.js';
 import { config } from '../config.js';
 import { getCachedDiscordName, queueDiscordResolve } from '../services/discordUsers.js';
 import { findOrphanSignups, sweepOrphanSignups } from '../services/orphanCleanup.js';
+import { USER_TAGS, isKnownTag, grantTag, revokeTag, tagsFor, tagMap } from '../services/userTags.js';
 import {
   invalidateUserRolesCache,
   isPrivilegedRole,
@@ -251,6 +252,10 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
       userRolesMap.set(row.user_id, list);
     }
 
+    // Badges for everyone on the page in one query — a per-user round trip
+    // would be a query storm on a large user list.
+    const userTagsMap = await tagMap(pool, usersList.map((u) => u.id ?? null));
+
     const result = usersList.map((u) => {
       const d = discordInfo(u);
       // Prefer the handle we read straight from metadata. Only when we have a
@@ -268,6 +273,7 @@ usersRouter.get('/api/users', requireRole(canManageUsers), async (c) => {
         last_sign_in: u.last_sign_in_at,
         email_confirmed: u.email_confirmed_at !== null && u.email_confirmed_at !== undefined,
         roles: u.id ? (userRolesMap.get(u.id) ?? []) : [],
+        tags: u.id ? (userTagsMap.get(u.id) ?? []) : [],
       };
     });
 
@@ -533,6 +539,43 @@ usersRouter.delete('/api/users/:userId', requireRole(isOwner), async (c) => {
     log.error({ err, userId }, 'Error deleting user');
     return c.json({ error: 'Failed to delete user' }, 500);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Profile tags (badges)
+//
+// Decoration, not permissions — see services/userTags.ts. Gated on
+// canManageUsers like the role endpoints, because deciding who is publicly
+// labelled an "OG Contributor" is still a staff action even though it grants
+// nothing.
+// ---------------------------------------------------------------------------
+
+/** The vocabulary, so the staff UI can render a dropdown without hardcoding it. */
+usersRouter.get('/api/user-tags', requireRole(canManageUsers), (c) =>
+  c.json({ tags: USER_TAGS }));
+
+usersRouter.post('/api/users/:userId/tags', requireRole(canManageUsers), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  const userId = c.req.param('userId');
+  const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const tag = typeof d['tag'] === 'string' ? d['tag'] : '';
+  if (!isKnownTag(tag)) return c.json({ error: 'unknown tag' }, 400);
+  const res = await grantTag(pool, userId, tag, c.get('userId') as string ?? null);
+  if (!res.ok) return c.json({ error: res.reason }, 409);
+  log.info({ userId, tag, by: c.get('userId') }, 'user tag granted');
+  return c.json({ success: true, tags: await tagsFor(pool, userId) });
+});
+
+usersRouter.delete('/api/users/:userId/tags/:tag', requireRole(canManageUsers), async (c) => {
+  const pool = await getPool();
+  if (!pool) return c.json({ error: 'database unavailable' }, 503);
+  const userId = c.req.param('userId');
+  const tag = c.req.param('tag');
+  if (!isKnownTag(tag)) return c.json({ error: 'unknown tag' }, 400);
+  await revokeTag(pool, userId, tag);
+  log.info({ userId, tag, by: c.get('userId') }, 'user tag revoked');
+  return c.json({ success: true, tags: await tagsFor(pool, userId) });
 });
 
 export { isPrivilegedRole };

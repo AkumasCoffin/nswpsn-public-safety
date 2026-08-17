@@ -18,6 +18,7 @@ import { Hono } from 'hono';
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
+import { wirePublic } from '../services/wireSettings.js';
 import { config } from '../config.js';
 import { requireSupabaseJwt } from '../services/auth/supabaseJwt.js';
 import { requireRole, canModerateWire, canFeedMedia } from '../services/auth/roles.js';
@@ -55,7 +56,7 @@ function isoOrNull(v: unknown): string | null {
 
 /** Same soft-launch gate as api/wire.ts — comments follow the posts. */
 async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean> {
-  if (config.WIRE_PUBLIC === 'true') return true;
+  if (await wirePublic(await getPool())) return true;
   const uid = currentUserId(c);
   if (!uid) return false;
   return (await canFeedMedia(uid)) || (await canModerateWire(uid));

@@ -28,6 +28,8 @@ import {
 } from '../services/auth/roles.js';
 import { rememberCallsigns, normaliseCallsign } from '../services/callsigns.js';
 import { ffmpegAvailable } from '../services/videoTranscode.js';
+import { wirePublic, autoTagsEnabled, setWireSetting } from '../services/wireSettings.js';
+import { awardPostingTags, tagMap } from '../services/userTags.js';
 import { diffSnapshots, mediaKeyOf, type EditSnapshot } from '../services/wireEdits.js';
 import { avatarMap } from '../services/wireComments.js';
 import {
@@ -75,6 +77,26 @@ function clientIp(c: { req: { header: (k: string) => string | undefined } }): st
   return fwd.split(',')[0]?.trim() || 'unknown';
 }
 
+/**
+ * Award the automatic badges after something is actually published.
+ *
+ * Gated on the wire_auto_tags setting so an owner can switch it off, and on
+ * the post being visible — a draft is not a contribution, so it earns nothing
+ * until it leaves the drafts pile. 'pending' counts: the author has submitted,
+ * and whether a moderator gets to it before launch isn't their doing.
+ *
+ * Best-effort. A badge is never worth failing a publish over.
+ */
+async function maybeAwardPostingTags(pool: Pool, authorId: string, status: string): Promise<void> {
+  try {
+    if (status === 'draft' || status === 'removed' || status === 'rejected') return;
+    if (!(await autoTagsEnabled(pool))) return;
+    await awardPostingTags(pool, authorId);
+  } catch (err) {
+    log.warn({ err, authorId }, 'wire: auto tag award failed');
+  }
+}
+
 /** Whether contributor posts require approval before publishing (staff toggle).
  * Defaults true (pre-moderation). */
 async function wireApprovalRequired(pool: Pool): Promise<boolean> {
@@ -86,14 +108,17 @@ async function wireApprovalRequired(pool: Pool): Promise<boolean> {
   }
 }
 
-// Soft launch: while WIRE_PUBLIC !== 'true', The Wire is hidden behind a
+// Soft launch: while the wire_public setting is off, The Wire is hidden behind a
 // "coming soon" banner for the public. The people who BUILD it still need to
 // see it, so contributors and moderators bypass the gate — canFeedMedia covers
 // owner + wire:contributor + wire:manager, canModerateWire adds staff.
 // This is enforced server-side; the frontend banner alone is cosmetic.
-// Flip WIRE_PUBLIC=true at launch and the gate stops applying to anyone.
+// An owner flips this from the staff panel at launch and the gate stops
+// applying to anyone.
 async function wireReadable(c: { get: (k: string) => unknown }): Promise<boolean> {
-  if (config.WIRE_PUBLIC === 'true') return true;
+  // Owner-toggleable at runtime (app_settings.wire_public); falls back to the
+  // WIRE_PUBLIC env var until the row exists. See services/wireSettings.ts.
+  if (await wirePublic(await getPool())) return true;
   const uid = currentUserId(c);
   if (!uid) return false;
   return (await canFeedMedia(uid)) || (await canModerateWire(uid));
@@ -450,14 +475,23 @@ async function engagementFor(
 function withAvatars(
   shaped: Record<string, unknown>,
   avatars: Map<string, string>,
+  tags?: Map<string, Array<Record<string, unknown>>>,
 ): Record<string, unknown> {
   const a = shaped['author'] as { id?: string } | undefined;
-  if (a?.id) (a as Record<string, unknown>)['avatar_url'] = avatars.get(a.id) ?? null;
+  if (a?.id) {
+    (a as Record<string, unknown>)['avatar_url'] = avatars.get(a.id) ?? null;
+    // Badges ride along with the avatar because they render in the same place
+    // — the byline chip — and are fetched from the same id set.
+    if (tags) (a as Record<string, unknown>)['tags'] = tags.get(a.id) ?? [];
+  }
   const cos = shaped['co_authors'];
   if (Array.isArray(cos)) {
     for (const co of cos as Record<string, unknown>[]) {
       const id = typeof co?.['id'] === 'string' ? (co['id'] as string) : null;
-      if (id) co['avatar_url'] = avatars.get(id) ?? null;
+      if (id) {
+        co['avatar_url'] = avatars.get(id) ?? null;
+        if (tags) co['tags'] = tags.get(id) ?? [];
+      }
     }
   }
   return shaped;
@@ -785,9 +819,10 @@ wireRouter.get('/api/wire/media', async (c) => {
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'media_post', ids);
     const eng = await engagementFor(pool, 'media_post', ids, currentUserId(c));
-    const avatars = await avatarMap(pool, creditedIds(r.rows));
+    const creditIds = creditedIds(r.rows);
+    const [avatars, authorTags] = await Promise.all([avatarMap(pool, creditIds), tagMap(pool, creditIds)]);
     const posts = r.rows.map((row) =>
-      withAvatars(withEngagement(shapeMediaPost(row, mediaMap.get(row.id) ?? []), eng.get(row.id)), avatars));
+      withAvatars(withEngagement(shapeMediaPost(row, mediaMap.get(row.id) ?? []), eng.get(row.id)), avatars, authorTags));
     return c.json({ posts });
   } catch (err) {
     log.error({ err }, 'wire: list media failed');
@@ -817,11 +852,13 @@ wireRouter.get('/api/wire/media/:id', async (c) => {
     row.edit_count = await editCountFor(pool, 'media_post', id);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const eng = await engagementFor(pool, 'media_post', [id], uid);
-    const avatars = await avatarMap(pool, creditedIds([row]));
+    const creditIds = creditedIds([row]);
+    const [avatars, authorTags] = await Promise.all([avatarMap(pool, creditIds), tagMap(pool, creditIds)]);
     return c.json({
       post: withAvatars(
         withEngagement(shapeMediaPost(row, mediaMap.get(id) ?? [], !!(isAuthor || isAdmin)), eng.get(id)),
         avatars,
+        authorTags,
       ),
     });
   } catch (err) {
@@ -845,7 +882,7 @@ const SITE_BASE = 'https://nswpsn.forcequit.xyz';
 wireRouter.get('/api/wire/og/:type/:key', async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  if (config.WIRE_PUBLIC !== 'true') return c.json({ error: 'not found' }, 404);
+  if (!(await wirePublic(pool))) return c.json({ error: 'not found' }, 404);
   const type = c.req.param('type');
   const key = c.req.param('key');
   try {
@@ -950,6 +987,7 @@ wireRouter.post('/api/wire/media', requireRole(canFeedMedia), async (c) => {
       client.release();
     }
     await rememberCallsigns(pool, mv.units);
+    await maybeAwardPostingTags(pool, authorId, status);
     return c.json({ id: newId, success: true, status }, 201);
   } catch (err) {
     log.error({ err }, 'wire: create media failed');
@@ -1148,9 +1186,10 @@ wireRouter.get('/api/wire/articles', async (c) => {
     const ids = r.rows.map((row) => row.id);
     const mediaMap = await fetchMediaFor(pool, 'article', ids);
     const engA = await engagementFor(pool, 'article', ids, currentUserId(c));
-    const avatarsA = await avatarMap(pool, creditedIds(r.rows));
+    const creditIdsA = creditedIds(r.rows);
+    const [avatarsA, authorTagsA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA)]);
     const articles = r.rows.map((row) =>
-      withAvatars(withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)), avatarsA));
+      withAvatars(withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? []), engA.get(row.id)), avatarsA, authorTagsA));
     return c.json({ articles });
   } catch (err) {
     log.error({ err }, 'wire: list articles failed');
@@ -1181,10 +1220,12 @@ wireRouter.get('/api/wire/articles/:slug', async (c) => {
     row.edit_count = await editCountFor(pool, 'article', row.id);
     // Author/admin get storage keys + hash so the compose editor can round-trip.
     const engA = await engagementFor(pool, 'article', [row.id], uid);
-    const avatarsA = await avatarMap(pool, creditedIds([row]));
+    const creditIdsA = creditedIds([row]);
+    const [avatarsA, authorTagsA] = await Promise.all([avatarMap(pool, creditIdsA), tagMap(pool, creditIdsA)]);
     const shapedA = withAvatars(
       withEngagement(shapeArticle(row, mediaMap.get(row.id) ?? [], !!(isAuthor || isAdmin)), engA.get(row.id)),
       avatarsA,
+      authorTagsA,
     );
     // Series context: every published part (including the lead), oldest first,
     // so the page can show "Part 2 of 4" and link the rest.
@@ -1308,6 +1349,7 @@ wireRouter.post('/api/wire/articles', requireRole(canFeedMedia), async (c) => {
       client.release();
     }
     await rememberCallsigns(pool, mv.units);
+    await maybeAwardPostingTags(pool, authorId, status);
     return c.json({ id: newId, slug, success: true, status }, 201);
   } catch (err) {
     log.error({ err }, 'wire: create article failed');
@@ -1409,6 +1451,13 @@ wireRouter.put('/api/wire/articles/:id', async (c) => {
       mediaKeys: mv.items.map(mediaKeyOf).filter(Boolean),
     });
     await rememberCallsigns(pool, mv.units);
+    // Articles are the one type that can be created as a draft and published
+    // later, so the create-time award would miss them entirely. Only fires on
+    // the transition OUT of draft — re-saving a live article awards nothing
+    // new (and the grant is idempotent regardless).
+    if (prev.status === 'draft' && status !== 'draft') {
+      await maybeAwardPostingTags(pool, prev.author_id, status);
+    }
     const keptIds = new Set(mv.items.flatMap((m) => [m.cf_image_id, m.poster_cf_image_id]).filter(Boolean) as string[]);
     for (const old of oldImageIds) if (!keptIds.has(old)) await deleteCfImage(old);
     const keptKeys = new Set(mv.items.flatMap((m) => [m.r2_key, m.poster_r2_key]).filter(Boolean) as string[]);
@@ -1543,7 +1592,15 @@ wireRouter.post('/api/wire/articles/:id/reject', requireRole(canModerateWire), (
 wireRouter.get('/api/wire/settings', requireRole(canFeedMedia), async (c) => {
   const pool = await getPool();
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
-  return c.json({ approval_required: await wireApprovalRequired(pool) });
+  const uid = currentUserId(c);
+  return c.json({
+    approval_required: await wireApprovalRequired(pool),
+    wire_public: await wirePublic(pool),
+    auto_tags: await autoTagsEnabled(pool),
+    // The UI renders the two launch switches read-only for non-owners rather
+    // than hiding them, so a moderator can see the current state.
+    can_edit_launch: !!(uid && (await isOwner(uid))),
+  });
 });
 
 wireRouter.put('/api/wire/settings', requireRole(canModerateWire), async (c) => {
@@ -1551,13 +1608,38 @@ wireRouter.put('/api/wire/settings', requireRole(canModerateWire), async (c) => 
   if (!pool) return c.json(DB_UNAVAILABLE, 503);
   try {
     const d = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    const val = d['approval_required'] === false ? 'false' : 'true';
-    await pool.query(
-      `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ('wire_approval_required', $1, $2, now())
-       ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()`,
-      [val, currentUserId(c) ?? null],
-    );
-    return c.json({ success: true, approval_required: val !== 'false' });
+    const uid = currentUserId(c) ?? null;
+
+    // Taking The Wire public, and switching off the badges that reward the
+    // pre-launch window, are both one-way-feeling decisions — owner only. The
+    // route itself is moderator-gated for approval_required, so these two
+    // fields carry their own check.
+    const wantsLaunchChange = 'wire_public' in d || 'auto_tags' in d;
+    if (wantsLaunchChange && !(uid && (await isOwner(uid)))) {
+      return c.json({ error: 'only the owner can change the launch settings' }, 403);
+    }
+    if (typeof d['wire_public'] === 'boolean') {
+      await setWireSetting(pool, 'wire_public', d['wire_public'], uid);
+    }
+    if (typeof d['auto_tags'] === 'boolean') {
+      await setWireSetting(pool, 'wire_auto_tags', d['auto_tags'], uid);
+    }
+
+    if ('approval_required' in d) {
+      const val = d['approval_required'] === false ? 'false' : 'true';
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ('wire_approval_required', $1, $2, now())
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_by = $2, updated_at = now()`,
+        [val, uid],
+      );
+    }
+
+    return c.json({
+      success: true,
+      approval_required: await wireApprovalRequired(pool),
+      wire_public: await wirePublic(pool),
+      auto_tags: await autoTagsEnabled(pool),
+    });
   } catch (err) {
     log.error({ err }, 'wire: settings update failed');
     return c.json({ error: 'failed to update settings' }, 500);
