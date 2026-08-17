@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NSWPSN Waze Forwarder
 // @namespace    nswpsn.forcequit.xyz
-// @version      1.29
+// @version      1.30
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations. Set INGEST_KEY near the top to your own key.
 // @match        https://www.waze.com/*
 // @match        https://*.waze.com/*
@@ -516,81 +516,179 @@
     }
 
     // ====== FETCH HOOK ======
+    // Extract a URL string from any of fetch()'s accepted first-arg shapes.
+    function urlOfInput(input) {
+        if (typeof input === 'string') return input;
+        if (input && input.href) return input.href;
+        if (input && input.url) return input.url;
+        return '';
+    }
+
+    // Inspect a georss response without altering what the page receives.
+    function inspectGeorss(urlStr, response) {
+        try {
+            if (response.ok) {
+                response.clone().json().then(d => handleGeorss(urlStr, d)).catch(() => {});
+            } else if (response.status === 403 || response.status === 429) {
+                noteWazeBlock(response.status);
+            }
+        } catch (e) {}
+    }
+
+    // Replacing window.fetch with a plain function is a first-order bot
+    // signal: Function.prototype.toString on it returns the wrapper's source
+    // instead of "function fetch() { [native code] }". reCAPTCHA Enterprise
+    // checks native-function integrity directly, and it scores at PAGE LOAD —
+    // which is why blocks were landing before a single georss request was
+    // made, on every machine and home network alike. It was never the IP.
+    //
+    // A Proxy avoids that: Function.prototype.toString delegates to the
+    // target, so the reported source stays native. Built with the page's own
+    // Proxy constructor so the result belongs to the page realm.
+    //
+    // Falls back to the previous wrapper if anything here throws, so this can
+    // only ever be as detectable as before, never more.
     try {
-        const origFetch = pageWin.fetch.bind(pageWin);
-        pageWin.fetch = exportedOrDirect(function (input, init) {
-            return origFetch(input, init).then(function (response) {
+        const origFetch = pageWin.fetch;
+        const P = pageWin.Proxy || Proxy;
+        pageWin.fetch = new P(origFetch, {
+            apply(target, thisArg, args) {
+                // Return the ORIGINAL promise, not a .then() chain off it —
+                // the page should see exactly what fetch gave it.
+                const p = Reflect.apply(target, thisArg || pageWin, args);
                 try {
-                    let urlStr = '';
-                    if (typeof input === 'string') urlStr = input;
-                    else if (input && input.href) urlStr = input.href;
-                    else if (input && input.url) urlStr = input.url;
+                    const urlStr = urlOfInput(args[0]);
                     if (urlStr && urlStr.indexOf('/api/georss') !== -1) {
-                        if (response.ok) {
-                            response.clone().json().then(d => handleGeorss(urlStr, d)).catch(() => {});
-                        } else if (response.status === 403 || response.status === 429) {
-                            // Waze rate-limited / blocked us. Trigger cooldown.
-                            noteWazeBlock(response.status);
-                        }
+                        p.then((response) => inspectGeorss(urlStr, response)).catch(() => {});
                     }
                 } catch (e) {}
-                return response;
-            });
-        }, pageWin);
-        log('fetch hook installed');
-    } catch (e) { log('fetch hook fail:', e); }
+                return p;
+            },
+        });
+        log('fetch hook installed (proxy)');
+    } catch (e) {
+        log('fetch proxy failed, falling back to wrapper:', e);
+        try {
+            const origFetch = pageWin.fetch.bind(pageWin);
+            pageWin.fetch = exportedOrDirect(function (input, init) {
+                return origFetch(input, init).then(function (response) {
+                    try {
+                        const urlStr = urlOfInput(input);
+                        if (urlStr && urlStr.indexOf('/api/georss') !== -1) inspectGeorss(urlStr, response);
+                    } catch (e2) {}
+                    return response;
+                });
+            }, pageWin);
+            log('fetch hook installed (wrapper)');
+        } catch (e2) { log('fetch hook fail:', e2); }
+    }
 
     // ====== XHR HOOK (Waze uses Axios → XHR) ======
+    // Request URLs are held in a WeakMap keyed by the XHR object rather than
+    // stamped on it as `this._nswpsnUrl`. An own property with a distinctive
+    // name is visible to any page script that looks at the request object,
+    // and it names us while doing it. The WeakMap lives in this script's
+    // scope, is invisible from the page, and still lets entries be collected
+    // with their XHR.
+    const xhrUrls = new WeakMap();
+
+    function watchXhr(xhr, url) {
+        xhr.addEventListener('load', function () {
+            try {
+                if (xhr.readyState !== 4) return;
+                if (xhr.status === 200 && xhr.responseText) {
+                    handleGeorss(String(url), JSON.parse(xhr.responseText));
+                } else if (xhr.status === 403 || xhr.status === 429) {
+                    noteWazeBlock(xhr.status);
+                }
+            } catch (e) {}
+        });
+    }
+
+    // Proxied for the same reason as fetch above — XMLHttpRequest.prototype
+    // .open/.send are equally standard integrity checks.
     try {
         const XHR = pageWin.XMLHttpRequest;
         const origOpen = XHR.prototype.open;
         const origSend = XHR.prototype.send;
-        XHR.prototype.open = exportedOrDirect(function (method, url) {
-            try { this._nswpsnUrl = url; } catch (e) {}
-            return origOpen.apply(this, arguments);
-        }, pageWin);
-        XHR.prototype.send = exportedOrDirect(function (body) {
-            try {
-                const url = this._nswpsnUrl;
-                if (url && String(url).indexOf('/api/georss') !== -1) {
-                    const self = this;
-                    this.addEventListener('load', function () {
-                        try {
-                            if (self.readyState !== 4) return;
-                            if (self.status === 200 && self.responseText) {
-                                handleGeorss(String(url), JSON.parse(self.responseText));
-                            } else if (self.status === 403 || self.status === 429) {
-                                noteWazeBlock(self.status);
-                            }
-                        } catch (e) {}
-                    });
-                }
-            } catch (e) {}
-            return origSend.apply(this, arguments);
-        }, pageWin);
-        log('XHR hook installed');
-    } catch (e) { log('XHR hook fail:', e); }
+        const P = pageWin.Proxy || Proxy;
+        XHR.prototype.open = new P(origOpen, {
+            apply(target, thisArg, args) {
+                try { xhrUrls.set(thisArg, args[1]); } catch (e) {}
+                return Reflect.apply(target, thisArg, args);
+            },
+        });
+        XHR.prototype.send = new P(origSend, {
+            apply(target, thisArg, args) {
+                try {
+                    const url = xhrUrls.get(thisArg);
+                    if (url && String(url).indexOf('/api/georss') !== -1) watchXhr(thisArg, url);
+                } catch (e) {}
+                return Reflect.apply(target, thisArg, args);
+            },
+        });
+        log('XHR hook installed (proxy)');
+    } catch (e) {
+        log('XHR proxy failed, falling back to wrapper:', e);
+        try {
+            const XHR = pageWin.XMLHttpRequest;
+            const origOpen = XHR.prototype.open;
+            const origSend = XHR.prototype.send;
+            XHR.prototype.open = exportedOrDirect(function (method, url) {
+                try { xhrUrls.set(this, url); } catch (e2) {}
+                return origOpen.apply(this, arguments);
+            }, pageWin);
+            XHR.prototype.send = exportedOrDirect(function (body) {
+                try {
+                    const url = xhrUrls.get(this);
+                    if (url && String(url).indexOf('/api/georss') !== -1) watchXhr(this, url);
+                } catch (e2) {}
+                return origSend.apply(this, arguments);
+            }, pageWin);
+            log('XHR hook installed (wrapper)');
+        } catch (e2) { log('XHR hook fail:', e2); }
+    }
 
     // ====== CAPTURE LEAFLET MAP INSTANCE ======
     // Waze's Leaflet map isn't exposed on any DOM element or global —
     // it lives in module scope. We can't reach it directly. But we CAN
     // monkey-patch L.Map.prototype so that whenever Waze's map fires
     // any event (tile load, mouse move, resize — happens constantly),
-    // we capture `this` into pageWin.__nswpsnMap. findLeafletMap() then
+    // we capture `this` into a closure variable. findLeafletMap() then
     // returns that.
 
+    // The captured map instance lives in this script's scope, not on window.
+    // `window.__nswpsnMap` / `__nswpsnMapCaptureInstalled` showed up in
+    // Object.keys(window) for any page script that cared to look — and the
+    // names identified exactly what was running. A closure variable is
+    // invisible from the page and does the same job.
+    let capturedMap = null;
+    let mapCaptureInstalled = false;
+
     function tryInstallMapCapture() {
-        if (pageWin.__nswpsnMapCaptureInstalled) return true;
+        if (mapCaptureInstalled) return true;
         if (!pageWin.L || !pageWin.L.Map || !pageWin.L.Map.prototype) return false;
         try {
             const MapProto = pageWin.L.Map.prototype;
             const origFire = MapProto.fire;
-            const hookedFire = function (type, data, propagate) {
-                try { pageWin.__nswpsnMap = this; } catch (e) {}
-                return origFire.apply(this, arguments);
-            };
-            MapProto.fire = exportedOrDirect(hookedFire, pageWin);
-            pageWin.__nswpsnMapCaptureInstalled = true;
+            const P = pageWin.Proxy || Proxy;
+            // Proxied like the network hooks so L.Map.prototype.fire keeps
+            // reporting native-ish source rather than our wrapper's.
+            try {
+                MapProto.fire = new P(origFire, {
+                    apply(target, thisArg, args) {
+                        try { capturedMap = thisArg; } catch (e) {}
+                        return Reflect.apply(target, thisArg, args);
+                    },
+                });
+            } catch (e) {
+                const hookedFire = function (type, data, propagate) {
+                    try { capturedMap = this; } catch (e2) {}
+                    return origFire.apply(this, arguments);
+                };
+                MapProto.fire = exportedOrDirect(hookedFire, pageWin);
+            }
+            mapCaptureInstalled = true;
             log('L.Map.prototype.fire hook installed — waiting for first map event');
             return true;
         } catch (e) { log('L.Map hook failed:', e); return false; }
@@ -661,8 +759,8 @@
             // 0. Did our prototype hook capture the Map instance? (Best path —
             // works regardless of how Waze exposes it, as long as the map has
             // fired any event since the hook was installed.)
-            if (pageWin.__nswpsnMap && typeof pageWin.__nswpsnMap.setView === 'function') {
-                return wrap(pageWin.__nswpsnMap);
+            if (capturedMap && typeof capturedMap.setView === 'function') {
+                return wrap(capturedMap);
             }
 
             // 1. Leaflet — Waze uses custom class names (wz-livemap, wm-map)
