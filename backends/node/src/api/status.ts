@@ -32,7 +32,7 @@ import { archiveWriter } from '../store/archive.js';
 import { snapshot as wazeSnapshot, ingestStats as wazeIngestStats } from '../store/wazeIngestCache.js';
 import { ingestKeysConfigured } from '../services/auth/ingestKey.js';
 import { filterCacheLastRefreshAt } from '../store/filterCache.js';
-import { policeHeatmapStatus } from './waze.js';
+import { policeHeatmapStatus, _heatmapCacheSize as heatmapCacheSize } from './waze.js';
 import { allSources } from '../services/sourceRegistry.js';
 import { getSourceMetrics } from '../services/poller.js';
 import { activeViewerCount } from '../services/activityMode.js';
@@ -325,6 +325,14 @@ function checkPoliceHeatmap(): Record<string, unknown> {
     bins: s.bins,
     last_refresh_age_secs: s.last_refresh_age_secs,
     threshold_secs: STATUS_HEATMAP_STALE_SECS,
+    // How many distinct viewports the response cache is holding. This used to
+    // be unbounded — the key embeds the caller's bbox, so it grew by one entry
+    // per pan/zoom, each pinning thousands of coordinate triples. Exposed
+    // because "is that leak actually fixed?" should be a number you can read
+    // during peak traffic, not something inferred from the heap curve hours
+    // later. Expect single/low-double digits; anything in the hundreds means
+    // the bounding has regressed.
+    response_cache_entries: heatmapCacheSize(),
   };
 }
 
