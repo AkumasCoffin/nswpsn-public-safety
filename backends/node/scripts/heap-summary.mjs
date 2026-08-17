@@ -34,6 +34,29 @@ if (files.length === 0) {
   process.exit(1);
 }
 
+// An unmatched shell glob arrives as the literal pattern, so the common case
+// is not "bad path" but "no snapshot has been written yet". Say that, instead
+// of throwing ENOENT from inside a promise three frames down.
+import { existsSync } from 'node:fs';
+const missing = files.filter((f) => !existsSync(f));
+if (missing.length) {
+  for (const f of missing) {
+    if (f.includes('*')) {
+      console.error(`No file matches ${f} — nothing has been written there yet.`);
+      console.error('');
+      console.error('A snapshot is only produced once a threshold is crossed. Check it is armed:');
+      console.error('  grep MEMORY_ ../.env');
+      console.error('  pm2 logs 4 --lines 200 --nostream | grep memory');
+      console.error('');
+      console.error('The memory lines show pctOfLimit and rssMB — a snapshot lands when one');
+      console.error('of those passes MEMORY_SNAPSHOT_AT_PCT / MEMORY_SNAPSHOT_AT_RSS_MB.');
+    } else {
+      console.error(`No such file: ${f}`);
+    }
+  }
+  process.exit(1);
+}
+
 async function head(path, n) {
   const fh = await open(path, 'r');
   try {
