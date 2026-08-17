@@ -2424,6 +2424,7 @@
     </div>
   </main>
 
+  <script src="idle-guard.js"></script>
   <script>
     // ======== SUPABASE AUTH CALLBACK HANDLER ========
     // Check for Supabase auth tokens in URL and redirect to appropriate page
@@ -3228,6 +3229,24 @@
       if (topOfHourTimer) { clearTimeout(topOfHourTimer); topOfHourTimer = null; }
     }
     
+    // Idle guard: after an hour with no interaction, stop every refresh timer
+    // and deregister the viewer (action=close) so the backend's adaptive
+    // collector can drop to its idle cadence. stopDataCollection() already
+    // clears all five timers, so this reuses it rather than duplicating the
+    // teardown. Resuming refreshes immediately — the banner the guard shows
+    // means nobody mistakes the frozen page for a live one in the meantime.
+    if (window.idleGuard) {
+      idleGuard.onChange((isIdle) => {
+        if (isIdle) {
+          stopDataCollection();
+          sendHeartbeat('close');
+        } else {
+          startDataCollection();   // sends action=open itself
+          refreshAllData();
+        }
+      });
+    }
+
     // Handle page visibility changes
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
@@ -3235,6 +3254,9 @@
         stopDataCollection();
         sendHeartbeat('close');
         console.log('Page hidden - pausing data collection');
+      } else if (window.idleGuard && idleGuard.isIdle()) {
+        // Returning to an idled tab: the guard's own listener handles the
+        // resume, so don't restart collection behind its back here.
       } else {
         // Page is visible again - resume updates
         startDataCollection();

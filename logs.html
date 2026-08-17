@@ -1084,6 +1084,7 @@
     </div>
   </main>
 
+  <script src="idle-guard.js"></script>
   <script>
     // === CONFIG ===
     const API_BASE = 'https://api.forcequit.xyz';
@@ -5034,9 +5035,28 @@
       }
       
       sendHeartbeat('open');
-      setInterval(() => sendHeartbeat('ping'), 60000);
-      
+      let logsHeartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+
       startAutoRefresh();
+
+      // Idle guard: after an hour with no interaction, stop the auto-refresh
+      // and the keepalive, and tell the backend the viewer has gone so its
+      // adaptive collector can drop to the idle cadence. Any interaction
+      // resumes and refreshes immediately.
+      if (window.idleGuard) {
+        idleGuard.onChange((isIdle) => {
+          if (isIdle) {
+            if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+            if (logsHeartbeatTimer) { clearInterval(logsHeartbeatTimer); logsHeartbeatTimer = null; }
+            sendHeartbeat('close');
+          } else {
+            sendHeartbeat('open');
+            if (!logsHeartbeatTimer) logsHeartbeatTimer = setInterval(() => sendHeartbeat('ping'), 60000);
+            startAutoRefresh();
+            if (!isLoading) silentRefresh();
+          }
+        });
+      }
       
       // Handle visibility change
       document.addEventListener('visibilitychange', () => {

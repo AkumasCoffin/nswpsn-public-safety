@@ -35,6 +35,7 @@
   <script src="auth-common.js"></script>
 </head>
 <body>
+<script src="idle-guard.js"></script>
 <script>
   if ('scrollRestoration' in history) { history.scrollRestoration = 'manual'; }
 </script>
@@ -1240,8 +1241,20 @@
     }
 
     startHeartbeat();
+
+    // Idle guard: after an hour with no interaction, stop the keepalive and
+    // tell the backend this viewer has gone (action=close) so its adaptive
+    // collector can drop to the idle cadence. Resuming re-registers.
+    if (window.idleGuard) {
+      idleGuard.onChange((isIdle) => {
+        if (isIdle) { stopHeartbeat(); sendHeartbeat('close'); }
+        else { sendHeartbeat('open'); startHeartbeat(); }
+      });
+    }
+
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { stopHeartbeat(); } else { sendHeartbeat('ping'); startHeartbeat(); }
+      if (document.hidden) { stopHeartbeat(); }
+      else if (!(window.idleGuard && idleGuard.isIdle())) { sendHeartbeat('ping'); startHeartbeat(); }
     });
   </script>
 <script src="analytics.js"></script>

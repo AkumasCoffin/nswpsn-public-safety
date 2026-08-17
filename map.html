@@ -2779,6 +2779,7 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
   <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
   <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
+  <script src="idle-guard.js"></script>
   <script>
     // NSW PSN Map v2.3 - Updated for backend pre-warming cache system
     // Data is served from pre-warmed backend cache for instant loading
@@ -7378,6 +7379,57 @@ function initPagerHoursFromStorage() {
         mapHeartbeatTimer = null;
       }
       // Don't send close - session cleanup handled by backend timeout
+    }
+
+    // ---- idle guard -------------------------------------------------------
+    // A map left open overnight refreshed every layer on its own timer
+    // forever. After an hour with no interaction the guard stops all of them
+    // and deregisters the viewer, and shows a banner so an unattended screen
+    // can't be mistaken for a live one.
+    //
+    // Only what was ACTUALLY running gets restarted. Blindly calling every
+    // start*() would spin up polls for layers the user had switched off, and
+    // startLiveMode() in particular reaches into radarFrames, which is empty
+    // if radar was never opened.
+    if (window.idleGuard) {
+      let _pausedTimers = null;
+      idleGuard.onChange((isIdle) => {
+        if (isIdle) {
+          _pausedTimers = {
+            data:      !!dataRefreshTimer,
+            adsb:      !!adsbRefreshInterval,
+            transport: !!transportRefreshInterval,
+            camera:    !!cameraRefreshInterval,
+            radar:     !!radarUpdateInterval,
+            heartbeat: !!mapHeartbeatTimer,
+          };
+          stopDataRefresh();      // also clears the 1s countdown
+          stopAdsbRefresh();
+          stopTransportRefresh();
+          stopCameraRefresh();
+          stopLiveMode();         // also flips the radar button to paused
+          stopMapHeartbeat();
+          // Only alive while a camera is fullscreen; walking away from one
+          // otherwise leaves it refreshing every 15s.
+          if (cameraFullscreenRefreshInterval) {
+            clearInterval(cameraFullscreenRefreshInterval);
+            cameraFullscreenRefreshInterval = null;
+          }
+          sendMapHeartbeat('close');
+        } else {
+          const was = _pausedTimers || {};
+          _pausedTimers = null;
+          sendMapHeartbeat('open');
+          if (was.heartbeat !== false) startMapHeartbeat();
+          if (was.data)      startDataRefresh();
+          if (was.adsb)      startAdsbRefresh();
+          if (was.transport) startTransportRefresh();
+          if (was.camera)    startCameraRefresh();
+          if (was.radar)     startLiveMode();
+          // Pull fresh data now rather than waiting out the first interval.
+          if (was.data) refreshActiveLayersData();
+        }
+      });
     }
     
     // Start heartbeat when page loads

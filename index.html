@@ -34,6 +34,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 
+  <script src="idle-guard.js"></script>
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -357,10 +358,20 @@
 
     startHeartbeat();
 
+    // Idle guard: after an hour with no interaction, stop the keepalive and
+    // tell the backend this viewer has gone (action=close) so its adaptive
+    // collector can drop to the idle cadence. Resuming re-registers.
+    if (window.idleGuard) {
+      idleGuard.onChange((isIdle) => {
+        if (isIdle) { stopHeartbeat(); sendHeartbeat('close'); }
+        else { sendHeartbeat('open'); startHeartbeat(); }
+      });
+    }
+
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         stopHeartbeat();
-      } else {
+      } else if (!(window.idleGuard && idleGuard.isIdle())) {
         sendHeartbeat('ping');
         startHeartbeat();
       }
