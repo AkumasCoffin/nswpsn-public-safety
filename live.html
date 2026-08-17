@@ -1764,7 +1764,6 @@
       <div class="data-source"><span class="data-source-dot" id="dot-endeavour"></span> Endeavour</div>
       <div class="data-source"><span class="data-source-dot" id="dot-essential"></span> Essential</div>
       <div class="data-source"><span class="data-source-dot" id="dot-traffic"></span> Live Traffic</div>
-      <div class="data-source"><span class="data-source-dot" id="dot-waze"></span> Waze</div>
       <div class="data-source"><span class="data-source-dot" id="dot-rfs"></span> RFS</div>
       <div class="data-source"><span class="data-source-dot" id="dot-bom"></span> BOM</div>
       <div class="data-source"><span class="data-source-dot" id="dot-beachwatch"></span> Beachwatch</div>
@@ -4328,13 +4327,8 @@
           setDotStatus('dot-beachsafe', true);
         }).catch(() => setDotStatus('dot-beachsafe', false)),
 
-        // Waze — userscript ingest. Green dot means the backend is serving
-        // data (userscript forwarding is healthy); grey means it's cold or
-        // the scraper browser has stalled.
-        apiFetch(`${API_BASE}/api/waze/hazards`).then(r => r.json()).then(d => {
-          const haveData = (d.features && d.features.length > 0) || (d.jams && d.jams.length > 0);
-          setDotStatus('dot-waze', haveData);
-        }).catch(() => setDotStatus('dot-waze', false)),
+        // Waze status dot removed with the retired userscript ingest — it
+        // would have sat permanently grey and read as an outage.
       ];
       
       await Promise.allSettled(fetches);

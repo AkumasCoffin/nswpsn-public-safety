@@ -2468,7 +2468,6 @@
         <button id="btn-pager" class="btn-toggle active" onclick="togglePagerPanel()" title="Pager hits"><i class="fa-solid fa-pager" style="color:#22c55e;"></i><span>Pager</span></button>
         <button id="btn-outages" class="btn-toggle" onclick="toggleOutagesPanel()" title="Power outages"><i class="fa-solid fa-bolt" style="color:#f97316;"></i><span>Outages</span></button>
         <button id="btn-hazards" class="btn-toggle" onclick="toggleHazardsPanel()" title="Traffic hazards"><i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i><span>Hazards</span></button>
-        <button id="btn-police" class="btn-toggle" onclick="togglePolicePanel()" title="Police reports"><i class="fa-solid fa-shield-halved" style="color:#3b82f6;"></i><span>Police</span></button>
         <button id="btn-roadwork" class="btn-toggle" onclick="toggleMapLayer('roadwork')" title="Roadwork"><i class="fa-solid fa-person-digging" style="color:#eab308;"></i><span>Roadwork</span></button>
         <button id="btn-floods" class="btn-toggle" onclick="toggleMapLayer('floods')" title="Floods"><i class="fa-solid fa-water" style="color:#06b6d4;"></i><span>Floods</span></button>
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()" title="Cameras"><i class="fa-solid fa-video" style="color:#8b5cf6;"></i><span>Cameras</span></button>
@@ -2538,45 +2537,10 @@
       </div>
       
       <!-- Police Filter Panel -->
-      <div class="filter-panel" id="police-panel">
-        <h4><i class="fa-solid fa-shield-halved"></i> Police Reports</h4>
-        <!-- Pins on/off (default on). Independent of the panel itself so
-             users can keep the panel open with heatmap-only or hide pins
-             temporarily. -->
-        <label><input type="checkbox" id="chk-police-pins" checked onchange="togglePolicePinsMode(this.checked)"><i class="fa-solid fa-map-pin" style="color:#3b82f6;margin-right:4px;"></i> Show pins</label>
-        <div style="font-size:11px;color:#94a3b8;margin:6px 0 4px;">Filter by type:</div>
-        <label><input type="checkbox" id="chk-police-visible" checked onchange="togglePoliceFilter('visible', this.checked)"><span class="filter-dot" style="background:#3b82f6;"></span> Visible</label>
-        <label><input type="checkbox" id="chk-police-hidden" checked onchange="togglePoliceFilter('hidden', this.checked)"><span class="filter-dot" style="background:#6366f1;"></span> Hidden</label>
-        <label><input type="checkbox" id="chk-police-camera" checked onchange="togglePoliceFilter('camera', this.checked)"><span class="filter-dot" style="background:#8b5cf6;"></span> Speed Camera</label>
-        <!-- Heatmap sub-toggle: shares the type filter above with the live pins.
-             Off by default since the historical aggregation is a separate
-             backend query. -->
-        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(148,163,184,0.18);">
-          <label><input type="checkbox" id="chk-police-heatmap" onchange="togglePoliceHeatmapMode(this.checked)"><i class="fa-solid fa-fire" style="color:#dc2626;margin-right:4px;"></i> Heatmap (historical density)</label>
-          <div id="police-heatmap-controls" style="display:none;margin-top:8px;">
-            <div style="margin-top:4px;">
-              <div style="height:9px;border-radius:4px;background:linear-gradient(to right,rgb(103,232,249) 0%,rgb(37,99,235) 25%,rgb(124,58,237) 50%,rgb(236,72,153) 75%,rgb(239,68,68) 100%);box-shadow:inset 0 0 0 1px rgba(15,23,42,0.4);"></div>
-              <table style="width:100%;font-size:10px;color:#94a3b8;margin-top:3px;border-collapse:collapse;">
-                <tr>
-                  <td style="text-align:left;padding:0;"><span id="heat-legend-min">0</span></td>
-                  <td style="text-align:center;padding:0;color:#64748b;font-style:italic;"><span id="heat-legend-mid">pings</span></td>
-                  <td style="text-align:right;padding:0;"><span id="heat-legend-max">—</span></td>
-                </tr>
-              </table>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-              <span style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;width:48px;">Opacity</span>
-              <input type="range" id="heat-opacity" min="10" max="100" step="5" value="100"
-                     oninput="setHeatmapOpacity(this.value)"
-                     style="flex:1;accent-color:#22d3ee;cursor:pointer;">
-              <span id="heat-opacity-val" style="font-size:10px;color:#cbd5e1;width:32px;text-align:right;">100%</span>
-            </div>
-            <div style="margin-top:6px;">
-              <span id="heat-stats" style="font-size:10px;color:#64748b;display:block;text-align:right;">Loading…</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- Police Reports panel removed: it was fed entirely by the retired
+           Waze ingest (live pins + the historical density heatmap). The
+           loader/layer code below is dormant and unreferenced; the archived
+           data is untouched in Postgres. -->
 
       <!-- Cameras Filter Panel -->
       <div class="filter-panel" id="cameras-panel">
@@ -3363,6 +3327,12 @@
     const hazardsLayer = L.layerGroup(); // For all hazard markers and jam polylines
     const policeLayer = L.layerGroup(); // For all police markers
     const roadworkLayer = L.layerGroup(); // For all roadwork markers
+    // Waze ingest retired Aug 2026 (blocked at source; see
+    // docs/waze-userscript.user.js). The police pin layer and the density
+    // heatmap were Waze-only, so their controls are gone and their loaders
+    // return early. Hazards/roadwork/floods keep their LiveTraffic data.
+    // Set false + revert the UI commit to bring it back.
+    const WAZE_RETIRED = true;
     let policeHeatmapLayer = null;       // L.heatLayer instance — created on first toggle
     let _policeHeatmapData = null;       // last fetched payload from /api/waze/police-heatmap
     let _heatmapOpacityScale = 1.0;      // user-controlled multiplier (0.10–1.00)
@@ -7949,7 +7919,12 @@ function initPagerHoursFromStorage() {
       }
     }
 
+    // Waze retired. The UI that reached this is gone, and every call site is
+    // gated on controls that no longer exist — but a hard guard here means
+    // "the site makes no Waze requests" doesn't depend on that analysis being
+    // exhaustive. Delete this line to re-enable.
     async function loadPoliceHeatmap(forceRefresh = false) {
+      if (WAZE_RETIRED) return;
       const stats = document.getElementById('heat-stats');
       // The floating filter panel reads #heat-stats at render time; if
       // we mutate it without re-rendering, the panel keeps showing
@@ -8663,14 +8638,11 @@ function initPagerHoursFromStorage() {
           layerCache.traffic_incidents = { data: trafficData, timestamp: now };
         }
         
-        const cachedWaze = layerCache.waze_hazards;
-        if (cachedWaze.data && (now - cachedWaze.timestamp) < LAYER_CACHE_TTL) {
-          wazeData = cachedWaze.data;
-        } else {
-          const wazeRes = await apiFetch(`${PROXY_BASE}/api/waze/hazards`);
-          wazeData = await wazeRes.json();
-          layerCache.waze_hazards = { data: wazeData, timestamp: now };
-        }
+        // Waze retired — this layer keeps its LiveTraffic half, which is the
+        // majority of it. An empty collection is used rather than unpicking
+        // the merge below, so the accident/hazard/closure sub-layer logic is
+        // untouched and this is one line to reverse if Waze ever returns.
+        wazeData = { features: [] };
       } catch (e) {
         console.error('Error fetching hazards data:', e);
         return;
@@ -9099,6 +9071,7 @@ function initPagerHoursFromStorage() {
 
     // Police Layer - Waze police reports
     async function loadPoliceData(forceRefresh = false) {
+      if (WAZE_RETIRED) return;   // see loadPoliceHeatmap
       // Skip if layer already has data and not forcing refresh
       if (!forceRefresh && policeLayer.getLayers().length > 0) {
         console.log('Police layer already loaded, skipping fetch');
@@ -9262,14 +9235,10 @@ function initPagerHoursFromStorage() {
           layerCache.traffic_roadwork = { data: trafficData, timestamp: now };
         }
         
-        const cachedWaze = layerCache.waze_roadwork;
-        if (cachedWaze.data && (now - cachedWaze.timestamp) < LAYER_CACHE_TTL) {
-          wazeData = cachedWaze.data;
-        } else {
-          const wazeRes = await apiFetch(`${PROXY_BASE}/api/waze/roadwork`);
-          wazeData = await wazeRes.json();
-          layerCache.waze_roadwork = { data: wazeData, timestamp: now };
-        }
+        // Waze retired — LiveTraffic roadwork is unaffected. See the hazards
+        // loader above for why this is an empty collection rather than a
+        // rewrite of the merge.
+        wazeData = { features: [] };
       } catch (e) {
         console.error('Error fetching roadwork data:', e);
         return;
@@ -9600,18 +9569,11 @@ function initPagerHoursFromStorage() {
       }
       
       // --- Waze flood hazards (FLOOD subtype from waze_hazards) ---
+      // Waze retired; the LiveTraffic flood feed above is unaffected. Left as
+      // an empty collection so the FLOOD-subtype filter below stays intact.
       try {
-        let wazeData;
-        const cachedWaze = layerCache.waze_hazards;
-        const now = Date.now();
-        if (cachedWaze.data && (now - cachedWaze.timestamp) < LAYER_CACHE_TTL) {
-          wazeData = cachedWaze.data;
-        } else {
-          const wazeRes = await apiFetch(`${PROXY_BASE}/api/waze/hazards`);
-          wazeData = await wazeRes.json();
-          layerCache.waze_hazards = { data: wazeData, timestamp: now };
-        }
-        
+        const wazeData = { features: [] };
+
         if (wazeData && wazeData.features) {
           wazeData.features.forEach(feature => {
             if (feature.geometry && feature.geometry.coordinates) {
@@ -15775,11 +15737,10 @@ function initPagerHoursFromStorage() {
       }
       
       try {
-        // STAGE 1: Critical data - RFS + Waze/Traffic (most used toggleable layers)
+        // STAGE 1: Critical data - RFS + Traffic (most used toggleable layers)
+        // Waze prefetches removed — the ingest is retired (see docs/waze-userscript.md).
         const stage1 = [
           { key: 'rfs_incidents', url: '/api/rfs/incidents' },
-          { key: 'waze_hazards', url: '/api/waze/hazards' },
-          { key: 'waze_police', url: '/api/waze/police' },
           { key: 'traffic_incidents', url: '/api/traffic/incidents' },
         ];
         totalLoaded += await fetchBatch(stage1, 'Stage 1');
@@ -15787,7 +15748,6 @@ function initPagerHoursFromStorage() {
         
         // STAGE 2: Secondary - roadwork, floods, cameras (commonly used)
         const stage2 = [
-          { key: 'waze_roadwork', url: '/api/waze/roadwork' },
           { key: 'traffic_roadwork', url: '/api/traffic/roadwork' },
           { key: 'traffic_flood', url: '/api/traffic/flood' },
           { key: 'traffic_cameras', url: '/api/traffic/cameras' },
@@ -15884,9 +15844,8 @@ function initPagerHoursFromStorage() {
         apiFetch(`${PROXY_BASE}/api/rfs/incidents`).then(r => r.json()).then(d => { layerCache.rfs_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Traffic hazards (most used toggleable layers)
         apiFetch(`${PROXY_BASE}/api/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
-        apiFetch(`${PROXY_BASE}/api/waze/hazards`).then(r => r.json()).then(d => { if (d && d.features && d.features.length > 0) layerCache.waze_hazards = { data: d, timestamp: Date.now() }; }).catch(() => {}),
-        apiFetch(`${PROXY_BASE}/api/waze/police`).then(r => r.json()).then(d => { if (d && d.features && d.features.length > 0) layerCache.waze_police = { data: d, timestamp: Date.now() }; }).catch(() => {}),
-        apiFetch(`${PROXY_BASE}/api/waze/roadwork`).then(r => r.json()).then(d => { if (d && d.features && d.features.length > 0) layerCache.waze_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        // Waze prefetches removed with the retired ingest — the hazards and
+        // roadwork layers are fed by LiveTraffic, which is unaffected.
         apiFetch(`${PROXY_BASE}/api/traffic/roadwork`).then(r => r.json()).then(d => { layerCache.traffic_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         apiFetch(`${PROXY_BASE}/api/traffic/flood`).then(r => r.json()).then(d => { layerCache.traffic_flood = { data: d, timestamp: Date.now() }; }).catch(() => {}),
       ];

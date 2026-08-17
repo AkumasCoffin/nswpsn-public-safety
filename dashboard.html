@@ -1532,13 +1532,11 @@ const PROVIDERS = [
       { key: 'essential_planned', label: 'Planned Outages' },
       { key: 'essential_future',  label: 'Future Outages' },
     ] },
-  { key: 'waze',        name: 'Waze',                   icon: 'car',   color: '#00d4ff',
-    types: [
-      { key: 'waze_hazard',   label: 'Hazards' },
-      { key: 'waze_jam',      label: 'Traffic Jams' },
-      { key: 'waze_police',   label: 'Police' },
-      { key: 'waze_roadwork', label: 'Roadwork' },
-    ] },
+  // Waze removed as an alertable source — the userscript ingest is retired,
+  // so nothing new arrives and any alert configured against it would simply
+  // never fire. Existing saved filters referencing waze_* keys stay in the
+  // database and are inert; the archived history is untouched and still
+  // browsable on the logs page.
   { key: 'user',        name: 'User Submissions',       icon: 'user',  color: '#a855f7',
     types: [
       { key: 'user_incident', label: 'User Incidents' },

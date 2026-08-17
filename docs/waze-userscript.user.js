@@ -1,5 +1,21 @@
+// RETIRED — do not install.
+//
+// The Waze ingest was switched off in Aug 2026. Blocks were arriving within
+// one or two requests, across several machines and several unrelated home
+// networks, and persisted for over a week with this script not running at all
+// — so they were not something the script could fix. The site's hazard and
+// roadwork layers are fed by LiveTraffic and are unaffected; the police layer
+// and the police density heatmap were Waze-only and have been removed from the
+// UI. Archived Waze history is retained in Postgres and still browsable on the
+// logs page.
+//
+// Kept in the tree because it is the reference for how the ingest worked, and
+// because re-enabling is a config change (WAZE_INGEST_KEY in backends/.env)
+// plus reverting the UI commit — not a rewrite. v1.30's Proxy-based hooks fix
+// a genuine fingerprinting flaw and are worth keeping if anyone revisits this.
+//
 // ==UserScript==
-// @name         NSWPSN Waze Forwarder
+// @name         NSWPSN Waze Forwarder (RETIRED)
 // @namespace    nswpsn.forcequit.xyz
 // @version      1.30
 // @description  Intercept Waze live-map georss responses (via fetch + XHR hooks) in a real user's browser and forward them to the NSWPSN backend. Rotates through NSW regions by finding Waze's map instance and calling its pan/setView API. Does NOT use URL navigation as a fallback because Waze interprets ?ll= URLs as "drop a pin" destinations. Set INGEST_KEY near the top to your own key.
