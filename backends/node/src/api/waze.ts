@@ -212,6 +212,60 @@ interface HeatmapBucket {
 }
 const heatmapCache = new Map<string, HeatmapBucket>();
 
+/**
+ * Hard ceiling on distinct cached viewports, as a backstop for a burst of
+ * different bboxes inside one TTL window. Small on purpose: each entry can
+ * hold up to HEATMAP_MAX_BINS (60k) [lat, lng, count] triples.
+ */
+const HEATMAP_CACHE_MAX = 64;
+
+/**
+ * Store a heatmap result, dropping what can no longer be served.
+ *
+ * The cache key embeds the caller's bbox — four arbitrary floats off the query
+ * string — so the key space is effectively infinite: every pan and zoom of the
+ * map mints a key that will never be requested again. The TTL was only ever
+ * consulted on read, so those entries were never revisited and never removed,
+ * and each one pins up to 60k coordinate triples for the life of the process.
+ *
+ * Sweeping expired entries on write is the actual fix rather than the cap: past
+ * its TTL an entry can never be served again, so nothing is lost by dropping
+ * it, and it keeps the map to roughly "distinct viewports seen in the last
+ * minute". The cap only exists in case that is briefly a big number.
+ *
+ * Same bug, and the same remedy, as the per-vessel maps in api/marinetraffic.ts
+ * — see the note there.
+ */
+function rememberHeatmap(key: string, result: unknown, now: number): void {
+  for (const [k, v] of heatmapCache) {
+    if (now - v.ts >= HEATMAP_CACHE_TTL_MS) heatmapCache.delete(k);
+  }
+  heatmapCache.set(key, { result, ts: now });
+  // Map preserves insertion order, so the first key is the oldest entry.
+  while (heatmapCache.size > HEATMAP_CACHE_MAX) {
+    const oldest = heatmapCache.keys().next().value;
+    if (oldest === undefined) break;
+    heatmapCache.delete(oldest);
+  }
+}
+
+/** For tests + /api/status: how many viewports are currently held. */
+export function _heatmapCacheSize(): number {
+  return heatmapCache.size;
+}
+
+/** TEST-ONLY: drive the cache directly so the bounding can be asserted
+ *  without standing up the whole route and its database. */
+export function _rememberHeatmapForTests(key: string, result: unknown, now: number): void {
+  rememberHeatmap(key, result, now);
+}
+export function _heatmapCacheKeyForTests(
+  subtypes: string[],
+  bbox: [number, number, number, number] | null,
+): string {
+  return _heatmapCacheKey(subtypes, bbox);
+}
+
 function _heatmapCacheKey(
   subtypes: string[],
   bbox: [number, number, number, number] | null,
@@ -426,7 +480,7 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
         : null,
       cache_status: 'materialised',
     };
-    heatmapCache.set(cacheKey, { result, ts: now });
+    rememberHeatmap(cacheKey, result, now);
     if ((wanted === null || wanted.length === 0) && bbox === null) {
       heatmapLastRefreshTs = Math.floor(now / 1000);
       heatmapLastBinCount = cacheRead.points.length;
@@ -503,7 +557,7 @@ wazeRouter.get('/api/waze/police-heatmap', async (c) => {
     cache_updated_at: aggregated.cache_updated_at,
     cache_status: 'ok',
   };
-  heatmapCache.set(cacheKey, { result, ts: now });
+  rememberHeatmap(cacheKey, result, now);
   // If the user-facing request is the unfiltered shape (no subtype, no
   // bbox), also feed the tracking counters that policeHeatmapStatus
   // exposes. Without this, /api/status reports bins=0 until the
@@ -570,7 +624,7 @@ async function refreshHeatmapCache(): Promise<void> {
           : null,
       cache_status: 'materialised',
     };
-    heatmapCache.set(_heatmapCacheKey([], null), { result, ts: Date.now() });
+    rememberHeatmap(_heatmapCacheKey([], null), result, Date.now());
     heatmapLastRefreshTs = Math.floor(Date.now() / 1000);
     heatmapLastBinCount = cacheRead.points.length;
     log.info(
