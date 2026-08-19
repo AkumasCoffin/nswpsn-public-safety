@@ -1731,13 +1731,18 @@
     /* --- per-node pager drill-down --- */
     .nd2-node-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted rgba(249,115,22,0.45); }
     .nd2-node-link:hover { color: #fdba74; border-bottom-color: #fdba74; }
-    .nd2-back {
+    /* Icon-only back button (node drill-down). Kept separate from the labelled
+       .nd2-back pill below: both used to be .nd2-back, and since this rule's
+       fixed 26x26 is never reset by the later one, every labelled "< Back"
+       button was squeezed into a 26px box. Its text overflowed the border and
+       collided with the heading beside it. */
+    .nd2-back-icon {
       background: rgba(148,163,184,0.12); border: 1px solid var(--border-subtle);
       color: var(--text-soft); border-radius: 6px; cursor: pointer;
       width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
       font-size: 0.75rem; flex-shrink: 0;
     }
-    .nd2-back:hover { color: var(--accent); border-color: var(--accent); }
+    .nd2-back-icon:hover { color: var(--accent); border-color: var(--accent); }
     .nd2-node-stats {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       gap: 0.75rem; padding: 0.9rem 1rem 0;
@@ -1787,11 +1792,20 @@
       margin: 0.06rem 0.2rem 0.06rem 0;
       white-space: nowrap;
     }
-    /* Deep P25 site metadata (site-view parity). */
-    .nd2-meta-head { font-size: 1rem; margin: 0.15rem 0 0.6rem; }
+    /* Deep P25 site metadata (site-view parity).
+       .nd2-card itself has no padding — tables are meant to run edge to edge,
+       and .nd2-card-h brings its own 1rem. Anything else placed directly in a
+       card has to supply the gutter itself or it sits flush against the border,
+       visibly out of line with the header above it. */
+    .nd2-meta-head { font-size: 1rem; margin: 0.15rem 0 0.6rem; padding: 0 1rem; }
     /* Identity chip row: a touch more breathing room + roomier chips so the
        RFSS/Site/NAC/WACN/LRA/GUID/Channel set doesn't read as cramped. */
-    .nd2-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem 0.4rem; }
+    .nd2-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem 0.4rem; padding: 0 1rem 0.9rem; }
+    /* Stat tiles inside a card need the same gutter. .stats-bar is also used at
+       page level (where the main grid provides the margin), so this is scoped
+       to cards only — and its page-level margin-bottom is dropped here, since
+       inside a card that reads as a stray gap rather than separation. */
+    .nd2-card .stats-bar { padding: 0 1rem 1rem; margin-bottom: 0; }
     .nd2-chip-row .nd2-chip { margin: 0; padding: 0.14rem 0.5rem; font-size: 0.66rem; }
     /* Channel TYPE badge — makes Control / Alt-control / Traffic / Data scannable
        at a glance instead of a wall of identical text. Reuses the accent hues. */
@@ -2826,7 +2840,7 @@
           <div id="nd2-node-panel" style="display:none; margin-top:1.25rem;">
             <div class="nd2-card">
               <div class="nd2-card-h" style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
-                <button class="nd2-back" onclick="nd2CloseNodeView()" title="Back to overview"><i class="fas fa-arrow-left"></i></button>
+                <button class="nd2-back-icon" onclick="nd2CloseNodeView()" title="Back to overview"><i class="fas fa-arrow-left"></i></button>
                 <i class="fas fa-satellite-dish"></i>
                 <span id="nd2-node-title">Node</span>
                 <span class="nd-sub" id="nd2-node-sub" style="font-weight:400;text-transform:none;letter-spacing:0;"></span>
@@ -4799,7 +4813,10 @@
         nd2MetaChip('GUID', meta.guid, { truncate: 8 }),
         meta.channelName ? nd2MetaChip('Channel', meta.channelName) : '',
       ].filter(Boolean).join('');
-      const header = `<div class="nd2-card">
+      // nd2-detail-gap like every other card in this stack — without it the
+      // P25 Site card butted straight against Control Channel below, so the
+      // two read as one outer box with a card nested inside it.
+      const header = `<div class="nd2-card nd2-detail-gap">
         <div class="nd2-card-h"><i class="fas fa-tower-cell"></i> P25 Site
           <span class="nd2-note">${meta.updatedAt ? 'updated ' + escapeHtml(nd2RelTime(meta.updatedAt)) : ''}</span>
         </div>
