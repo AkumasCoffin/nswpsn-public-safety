@@ -5112,13 +5112,27 @@
       if (panel) panel.style.display = '';
       const statsEl = document.getElementById('nd2-node-stats');
       if (statsEl) statsEl.innerHTML = '<div class="nd2-empty">Loading…</div>';
+      // Fetch and render are caught SEPARATELY. They used to share one try, so
+      // a render bug reported itself as "Could not load this node" — pointing
+      // at the API when the API was fine, and costing real time to diagnose.
+      let d;
       try {
-        const d = await nd2Fetch(`/api/node-data/pager-node?nodeId=${encodeURIComponent(nodeId)}&window=${encodeURIComponent(nd2.window)}&limit=50`);
-        if (!d || _nd2NodeId !== nodeId) return; // superseded by a newer click
+        d = await nd2Fetch(`/api/node-data/pager-node?nodeId=${encodeURIComponent(nodeId)}&window=${encodeURIComponent(nd2.window)}&limit=50`);
+      } catch (e) {
+        if (statsEl) {
+          statsEl.innerHTML = `<div class="nd2-empty">Could not load this node (${escapeHtml(e && e.message ? e.message : 'request failed')}).</div>`;
+        }
+        return;
+      }
+      if (!d || _nd2NodeId !== nodeId) return; // superseded by a newer click
+      try {
         nd2RenderNodeView(d);
         if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       } catch (e) {
-        if (statsEl) statsEl.innerHTML = '<div class="nd2-empty">Could not load this node.</div>';
+        console.error('nd2RenderNodeView failed', e);
+        if (statsEl) {
+          statsEl.innerHTML = `<div class="nd2-empty">Loaded, but could not render this node (${escapeHtml(e && e.message ? e.message : 'render error')}).</div>`;
+        }
       }
     }
     function nd2RenderNodeView(d) {
@@ -5141,8 +5155,24 @@
           ['Only this node', nd2Num(t.unique)],
         ].map(([k, v]) => `<div class="nd2-node-stat"><div class="v">${v}</div><div class="k">${escapeHtml(k)}</div></div>`).join('');
       }
-      // Hourly chart, same options as the overview pager chart.
-      const series = (d.series || []).map(p => ({ x: new Date(p.hour), y: p.pages }));
+      // Hourly chart. Pre-formatted labels on a plain category axis, exactly
+      // like nd2RenderPagerChart — NOT scales.x.type='time'.
+      //
+      // Chart.js v4 needs a separate date adapter for a time scale and this
+      // page only loads chart.umd, so constructing one threw
+      // "Check that a complete date adapter is provided". That throw landed
+      // mid-render, after the stat tiles and before the capcode/recent tables,
+      // and nd2OpenNodeView's catch then relabelled it "Could not load this
+      // node" — which is why a perfectly healthy API response looked like a
+      // failed fetch. This was the only time scale in the file.
+      const series = d.series || [];
+      const labels = series.map(p => {
+        const dt = new Date(p.hour);
+        if (isNaN(dt)) return '';
+        return nd2.window === '24h'
+          ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : dt.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit' });
+      });
       const cv = document.getElementById('nd2-node-chart');
       const empty = document.getElementById('nd2-node-chart-empty');
       if (cv && empty) {
@@ -5153,15 +5183,15 @@
         if (has && window.Chart) {
           _nd2NodeChart = new Chart(cv.getContext('2d'), {
             type: 'line',
-            data: { datasets: [{ label: 'Pages', data: series, borderColor: '#f97316',
-              backgroundColor: 'rgba(249,115,22,0.15)', fill: true, tension: 0.35,
-              pointRadius: 0, borderWidth: 2 }] },
+            data: { labels, datasets: [{ label: 'Pages', data: series.map(p => p.pages || 0),
+              borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.15)', fill: true,
+              tension: 0.35, pointRadius: 0, borderWidth: 2 }] },
             options: {
               responsive: true, maintainAspectRatio: false,
               plugins: { legend: { display: false } },
               scales: {
-                x: { type: 'time', time: { unit: 'hour' }, grid: { color: 'rgba(148,163,184,0.08)' },
-                     ticks: { color: '#64748b', maxTicksLimit: 8 } },
+                x: { grid: { color: 'rgba(148,163,184,0.08)' },
+                     ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 0 } },
                 y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,0.08)' },
                      ticks: { color: '#64748b', precision: 0 } },
               },
