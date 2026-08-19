@@ -5574,7 +5574,6 @@
       const ab = checks.archive_buffer || {};
       const ig = checks.ingest || {};
       const cl = checks.cleanup || {};
-      const wi = checks.waze_ingest || {};
       const ph = checks.police_heatmap || {};
       const fc = checks.filter_cache || {};
       const rc = checks.ram_cache || {};
@@ -5635,23 +5634,6 @@
               ? { label: 'vacuum',  value: `${_fmtAge(cl.last_vacuum_age_secs)} (${cl.last_vacuum_ms}ms)` }
               : null),
             { label: 'retain',    value: cl.retention_days != null ? `${cl.retention_days}d` : null },
-          ].filter(Boolean),
-        }),
-        _renderCard({
-          name: 'Waze Ingest', icon: 'satellite-dish', statusCls: _cls(wi),
-          // Show ingests/min as the headline — the userscript hits
-          // /api/waze/ingest every ~5s so age is always near zero,
-          // making the rate the meaningful health signal.
-          primary: {
-            value: wi.ingests_per_min != null ? `${wi.ingests_per_min}/min` : '—',
-            label: 'ingest rate',
-          },
-          secondary: [
-            { label: 'regions', value: wi.regions_cached ?? null },
-            { label: 'last',    value: _fmtAge(wi.last_ingest_age_secs) },
-            { label: 'total',   value: wi.total_ingests != null ? wi.total_ingests.toLocaleString() : null },
-            { label: 'block',   value: wi.block_rate_pct != null ? `${wi.block_rate_pct}%` : null },
-            wi.gate_active ? { label: 'gated', value: 'YES' } : null,
           ].filter(Boolean),
         }),
         _renderCard({

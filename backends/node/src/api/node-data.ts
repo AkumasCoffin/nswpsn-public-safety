@@ -2623,14 +2623,18 @@ nodeDataRouter.get(
         ),
       ]);
 
-      if (nodeQ.rowCount === 0) return c.json({ error: 'node not found' }, 404);
       const aliases = await capcodeAliasLookup(pool);
       const withAlias = (capcode: string) => {
         const a = aliases.get(normalizeCapcode(capcode)) ?? null;
         return { alias: a?.alias ?? null, agency: a?.agency ?? null };
       };
       const t = totalsQ.rows[0];
-      const node = nodeQ.rows[0]!;
+      // The nodes row only supplies a display name and kind — every figure
+      // below is computed from node_pager_events. A node that is producing
+      // events but has no registry row (deleted, or never registered) is still
+      // perfectly inspectable, so this used to 404 exactly the nodes the list
+      // had just shown traffic for: the drill-down was unreachable for them.
+      const node = nodeQ.rows[0] ?? { id: nodeId, name: null, kind: null };
 
       return c.json({
         window,
