@@ -836,7 +836,12 @@
         // page's existing in-progress colour, not the amber warning one.
         const preparing = node.sdrUp && node.calibrated === false;
         if (preparing) {
-          out += chip('updating', 'Preparing node — this might take a minute');
+          // Deliberately does NOT promise "about a minute". Measured on a fresh
+          // node the CPU calibration alone ran past four minutes and was still
+          // going — each benchmark takes ~5s and there are dozens. Understating
+          // it is what made a healthy node look hung and got it restarted
+          // mid-calibration, which is the whole reason this chip exists.
+          out += chip('updating', 'Preparing node — first-time setup, this can take several minutes');
         } else {
           if (node.calibrated === false) out += chip('warn', 'Not calibrated');
           if (node.jmbeInstalled === false) out += chip('warn', 'No JMBE audio');

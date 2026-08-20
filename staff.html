@@ -5790,7 +5790,7 @@
       // is normal first-run progress.
       const calibrating = sdrUp && st.calibrated === false;
       const calChip = calibrating
-        ? `<span class="nd-ready warn" title="One-time CPU calibration is running — usually a minute or two. SDR-Trunk restarts once when it finishes."><i class="fas fa-spinner fa-spin" style="margin-right:0.3rem"></i>Calibrating…</span>`
+        ? `<span class="nd-ready warn" title="One-time CPU calibration is running. Measured at 4+ minutes on a fresh node — do NOT restart SDR-Trunk, that starts it over. It restarts itself once when done."><i class="fas fa-spinner fa-spin" style="margin-right:0.3rem"></i>Calibrating…</span>`
         : chip('Calibrated', st.calibrated);
       return `<div class="node-ready-row" title="Node must be calibrated and have the JMBE codec before it decodes voice">`
         + calChip + chip('JMBE', st.jmbeInstalled) + `</div>`;
