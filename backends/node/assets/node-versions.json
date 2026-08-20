@@ -27,14 +27,14 @@
   },
   "sdrtrunk": {
     "_comment": "0.7.x = the sdrtrunk-vce node-runtime line (feature/node-control branch of sdrtrunk-vce). The manifest version is deliberately independent of vce's own 0.6.2-alpha-N version string: the agent's 3-part numeric compare ignores pre-release suffixes, so 0.6.2-alpha-9 would LOSE to the old fork's 0.6.10 and never install. After rebuilding the node-runtime release (build-node-runtime workflow), bump this version and refresh the sha256 values from the published .sha256 assets.",
-    "version": "0.7.10",
+    "version": "0.7.11",
     "urls": {
       "windows-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-windows-amd64.zip",
       "linux-amd64": "https://github.com/AkumasCoffin/sdrtrunk-vce/releases/download/node-runtime/sdrtrunk-linux-amd64.zip"
     },
     "sha256": {
-      "windows-amd64": "b231d352ce1b03da40dfe915c6a81063652377f24c1a73119f4dfb68cfa68ce4",
-      "linux-amd64": "7ec6446fada617958051badad8b91481ad9e1db7adca538667fbc810966dc01c"
+      "windows-amd64": "9aa5af4f2c4fdba4ce6d357627f19389478b3884aa1091ffd885caaef28cd552",
+      "linux-amd64": "53f010c3c7e7d21d14414461e9e5f1021fa19d3f4e276bfaaebb47b114419af7"
     }
   },
   "rdio": {
