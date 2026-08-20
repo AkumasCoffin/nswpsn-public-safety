@@ -3007,3 +3007,80 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
     return c.json({ error: 'failed to load live state' }, 500);
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/site-decode?system=&rfss=&site=[&window=&node=]
+//
+// Decode-health trend for one site: the series behind the drill-down chart.
+//
+// Reads node_site_decode_samples (migration 069) rather than
+// node_site_snapshots, which is upserted per site and so only ever holds the
+// CURRENT reading. Samples arrive ~1/min/site/node and are pruned at 7 days.
+//
+// Buckets server-side rather than returning raw rows: a week at 1/min is ~10k
+// points per node per site, which is both a large payload and more points than
+// a chart can meaningfully draw. Averaging per bucket also merges nodes
+// watching the same site into one trend line instead of interleaving them.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get('/api/node-data/site-decode', requireRole(canViewNodeData), async (c) => {
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const url = new URL(c.req.url);
+    const system = qpInt(url, 'system');
+    const rfss = qpInt(url, 'rfss');
+    const site = qpInt(url, 'site');
+    if (system === null || rfss === null || site === null) {
+      return c.json({ error: 'system, rfss and site are required' }, 400);
+    }
+    const window = detailWindow(url);
+    const nodeId = qpNode(url);
+
+    // Bucket width tracks the window so the point count stays roughly constant
+    // (~150-300) whatever range is asked for.
+    const bucketMinutes = window === '24h' ? 5 : window === '7d' ? 30 : 120;
+
+    const params: unknown[] = [WINDOW_INTERVAL[window], system, rfss, site];
+    let where =
+      `sampled_at >= now() - $1::interval AND system_id = $2 AND rfss = $3 AND site_id = $4`;
+    if (nodeId !== null) {
+      params.push(nodeId);
+      where += ` AND node_id = $${params.length}`;
+    }
+
+    const r = await pool.query<{
+      bucket: Date;
+      decode_pct: string | null;
+      signal_dbfs: string | null;
+      invalid_frames: string | null;
+      samples: number;
+    }>(
+      `SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
+                           * ${bucketMinutes * 60}) AS bucket,
+              AVG(decode_pct) AS decode_pct,
+              AVG(signal_dbfs) AS signal_dbfs,
+              MAX(invalid_frames) AS invalid_frames,
+              COUNT(*)::int AS samples
+         FROM node_site_decode_samples
+        WHERE ${where}
+        GROUP BY bucket
+        ORDER BY bucket ASC`,
+      params,
+    );
+
+    return c.json({
+      window,
+      bucketMinutes,
+      points: r.rows.map((x) => ({
+        at: iso(x.bucket),
+        decodePct: x.decode_pct !== null ? Number(x.decode_pct) : null,
+        signalDbfs: x.signal_dbfs !== null ? Number(x.signal_dbfs) : null,
+        invalidFrames: x.invalid_frames !== null ? Number(x.invalid_frames) : null,
+        samples: num(x.samples),
+      })),
+    });
+  } catch (err) {
+    log.error({ err }, '/api/node-data/site-decode error');
+    return c.json({ error: 'failed to load decode history' }, 500);
+  }
+});

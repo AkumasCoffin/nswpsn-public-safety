@@ -472,6 +472,31 @@ export async function upsertSiteSnapshots(
             ],
           );
           written += res.rowCount ?? 0;
+
+          // Append a decode-health sample. The snapshot row above is an upsert
+          // and keeps only the CURRENT reading, so without this there is no
+          // history to chart. Skipped entirely when the node reports no
+          // quality object — a NULL-only row would draw a gap as if decode had
+          // failed, when it only means the runtime didn't report.
+          const q = (s.quality ?? null) as Record<string, unknown> | null;
+          if (q) {
+            const dbl = (v: unknown): number | null => {
+              const n = Number(v);
+              return Number.isFinite(n) ? n : null;
+            };
+            const decodePct = dbl(q['decodeHealthPct']);
+            const signalDbfs = dbl(q['signalDbfs']);
+            const invalid = dbl(q['invalidFrames']);
+            if (decodePct !== null || signalDbfs !== null) {
+              await client.query(
+                `INSERT INTO node_site_decode_samples
+                   (node_id, system_id, rfss, site_id, decode_pct, signal_dbfs, invalid_frames)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [nodeId, systemId, rfss, siteId, decodePct, signalDbfs,
+                 invalid !== null ? Math.round(invalid) : null],
+              );
+            }
+          }
         } catch (err) {
           failures += 1;
           lastErr = err;

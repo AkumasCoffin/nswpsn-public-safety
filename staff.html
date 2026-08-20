@@ -5080,7 +5080,18 @@
           ${patchTable}</div>`;
       }
 
-      host.innerHTML = header + control + statusCard + channelsCard + patchesCard + neighborsCard + bandsCard;
+      const decodeCard = `<div class="nd2-card nd2-detail-gap">
+        <div class="nd2-card-h"><i class="fas fa-chart-line"></i> Decode health
+          <span class="nd2-note" id="nd2-decode-note"></span></div>
+        <div class="nd2-chart-wrap">
+          <canvas id="nd2-decode-chart" aria-label="Site decode health over time" role="img"></canvas>
+          <div class="nd2-empty" id="nd2-decode-empty" style="display:none;">
+            No decode samples yet — these are recorded from the node's site
+            snapshots (~1/min) and kept for 7 days.</div>
+        </div></div>`;
+
+      host.innerHTML = header + control + statusCard + decodeCard + channelsCard + patchesCard + neighborsCard + bandsCard;
+      nd2LoadDecodeChart();
     }
 
     // --- Talkgroups view -------------------------------------------------
@@ -5188,6 +5199,89 @@
         }).join('');
         nd2PageBtns('rad', nd2.rad, rows.length);
       } catch (e) { nd2TableMsg('nd2-rad-body', 7, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
+    }
+
+    // --- Site decode-health trend -----------------------------------------
+    // Charts node_site_decode_samples (migration 069). Necessarily a separate
+    // series from the site's call chart: node_site_snapshots is upserted per
+    // site and holds only the CURRENT decode figure, so the history has to be
+    // sampled as it arrives or it does not exist.
+    let _nd2DecodeChart = null;
+
+    async function nd2LoadDecodeChart() {
+      const canvas = document.getElementById('nd2-decode-chart');
+      const emptyEl = document.getElementById('nd2-decode-empty');
+      const noteEl = document.getElementById('nd2-decode-note');
+      const s = nd2.sys;
+      if (!canvas || typeof Chart === 'undefined' || s.system == null) return;
+      const params = new URLSearchParams({
+        window: nd2.window, system: String(s.system), rfss: String(s.rfss), site: String(s.site),
+      });
+      if (nd2.node) params.set('node', nd2.node);
+      try {
+        const d = await nd2Fetch(`/api/node-data/site-decode?${params}`);
+        if (nd2.sys.level !== 'site') return;      // drilled away mid-fetch
+        const pts = d.points || [];
+        const hasData = pts.some(p => p.decodePct != null);
+        if (emptyEl) emptyEl.style.display = hasData ? 'none' : '';
+        if (noteEl) noteEl.textContent = hasData ? `${d.bucketMinutes}-minute average` : '';
+        if (_nd2DecodeChart) { _nd2DecodeChart.destroy(); _nd2DecodeChart = null; }
+        if (!hasData) return;
+
+        // Category axis with pre-formatted labels — Chart.js has no date
+        // adapter loaded here, and a time-scale axis throws mid-render.
+        const labels = pts.map(p => {
+          const dt = new Date(p.at);
+          if (isNaN(dt)) return '';
+          return nd2.window === '24h'
+            ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : dt.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit' });
+        });
+        _nd2DecodeChart = new Chart(canvas, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Decode %', data: pts.map(p => p.decodePct),
+                borderColor: '#22c55e', backgroundColor: '#22c55e14',
+                borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+                fill: true, tension: 0.3, yAxisID: 'y', spanGaps: false },
+              // Signal shares the chart but not the axis: dBFS is negative and
+              // on a different scale, so forcing one axis would flatten decode.
+              { label: 'Signal dBFS', data: pts.map(p => p.signalDbfs),
+                borderColor: '#f59e0b', borderWidth: 1.5, borderDash: [4, 3],
+                pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 12,
+                fill: false, tension: 0.3, yAxisID: 'y1', spanGaps: false },
+            ],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10,
+                        font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+              tooltip: {
+                backgroundColor: '#121e33', borderColor: 'rgba(148,163,184,0.25)', borderWidth: 1,
+                titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 10,
+              },
+            },
+            scales: {
+              x: { grid: { display: false }, border: { color: 'rgba(148,163,184,0.16)' },
+                   ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 0,
+                            font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+              y: { min: 0, max: 100, grid: { color: 'rgba(148,163,184,0.07)' },
+                   border: { display: false },
+                   ticks: { color: '#64748b', maxTicksLimit: 5, callback: v => v + '%',
+                            font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+              y1: { position: 'right', grid: { display: false }, border: { display: false },
+                    ticks: { color: '#64748b', maxTicksLimit: 5, callback: v => v + ' dB',
+                             font: { family: "'Space Grotesk', sans-serif", size: 10 } } },
+            },
+          },
+        });
+      } catch (e) {
+        if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = 'Failed to load decode history.'; }
+      }
     }
 
     // --- Live view ---------------------------------------------------------

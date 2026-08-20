@@ -16,6 +16,12 @@ import { log } from '../lib/log.js';
 
 const PRUNE_INTERVAL_MS = 60 * 60_000; // hourly
 const RETENTION_DAYS = 30;
+
+/** Decode-health samples are kept for a SHORTER window than call detail. They
+ *  arrive ~1/minute/site/node regardless of traffic, so they accumulate on a
+ *  quiet fleet where call rows don't; and their whole purpose is a recent
+ *  trend, not a permanent record. ~1.4k rows/site/day at this cadence. */
+const DECODE_SAMPLE_RETENTION_DAYS = 7;
 const BATCH_SIZE = 5000;
 
 let timer: NodeJS.Timeout | null = null;
@@ -24,15 +30,21 @@ let tickRunning = false;
 
 /** Batched delete of rows older than the retention window. Returns rows
  *  removed. Table name comes from the fixed list below — never user input. */
-async function pruneTable(table: 'node_radio_events' | 'node_pager_events'): Promise<number> {
+async function pruneTable(
+  table: 'node_radio_events' | 'node_pager_events' | 'node_site_decode_samples',
+): Promise<number> {
   const pool = await getWriterPool();
   if (!pool) return 0;
+  // Decode samples use their own (shorter) window and timestamp column.
+  const samples = table === 'node_site_decode_samples';
+  const tsCol = samples ? 'sampled_at' : 'received_at';
+  const days = samples ? DECODE_SAMPLE_RETENTION_DAYS : RETENTION_DAYS;
   let total = 0;
   for (;;) {
     const r = await pool.query(
       `DELETE FROM ${table} WHERE id IN (
          SELECT id FROM ${table}
-          WHERE received_at < now() - interval '${RETENTION_DAYS} days'
+          WHERE ${tsCol} < now() - interval '${days} days'
           LIMIT ${BATCH_SIZE}
        )`,
     );
@@ -48,8 +60,9 @@ export async function pruneNodeEventsOnce(): Promise<void> {
   try {
     const radio = await pruneTable('node_radio_events');
     const pager = await pruneTable('node_pager_events');
-    if (radio > 0 || pager > 0) {
-      log.info({ radio, pager }, 'node events pruner: removed expired detail rows');
+    const decode = await pruneTable('node_site_decode_samples');
+    if (radio > 0 || pager > 0 || decode > 0) {
+      log.info({ radio, pager, decode }, 'node events pruner: removed expired detail rows');
     }
   } catch (err) {
     log.warn({ err: (err as Error).message }, 'node events pruner: prune failed');
