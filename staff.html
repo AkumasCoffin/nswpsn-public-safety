@@ -3812,6 +3812,9 @@
         clearInterval(_nd2Timer);
         _nd2Timer = null;
       }
+      // Leaving the Data tab must also stop the Live view's own faster timer,
+      // or it keeps polling every 5s from a tab nobody is looking at.
+      nd2StopLiveTimer();
     }
 
     // Load whatever view is currently active (used on tab entry, view switch,
@@ -3819,7 +3822,7 @@
     async function nd2Refresh() {
       switch (nd2.view) {
         case 'overview': await nd2LoadOverview(); break;
-        case 'live': await nd2LoadLive(); break;
+        case 'live': await nd2LoadLive(); break;   // also on its own 5s timer
         case 'systems': await nd2LoadSystemsView(); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
@@ -3911,6 +3914,7 @@
       // system-detail sub-tab so a stale Talkgroups/Radios tab never lingers.
       if (view === 'systems') { nd2.sys.tab = 'sites'; nd2SysShow('list'); nd2SysCrumbs(); }
       if (view === 'capcodes') { nd2CapShow('list'); }
+      if (view === 'live') nd2StartLiveTimer(); else nd2StopLiveTimer();
       nd2Refresh();
     }
 
@@ -5208,6 +5212,22 @@
     // sampled as it arrives or it does not exist.
     let _nd2DecodeChart = null;
 
+    // Live is the one view where the Data tab's 30s cadence is too slow to be
+    // "live" — a call is often over before the next poll. Runs only while the
+    // view is open and is cleared on leave so it can't tick in the background.
+    let _nd2LiveTimer = null;
+    function nd2StartLiveTimer() {
+      nd2StopLiveTimer();
+      _nd2LiveTimer = setInterval(() => {
+        if (nd2.view !== 'live' || currentTab !== 'data') { nd2StopLiveTimer(); return; }
+        void nd2LoadLive();
+      }, 5000);
+      _nd2LiveTimer.unref?.();
+    }
+    function nd2StopLiveTimer() {
+      if (_nd2LiveTimer) { clearInterval(_nd2LiveTimer); _nd2LiveTimer = null; }
+    }
+
     async function nd2LoadDecodeChart() {
       const canvas = document.getElementById('nd2-decode-chart');
       const emptyEl = document.getElementById('nd2-decode-empty');
@@ -5343,7 +5363,7 @@
             c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
             nd2DecodePct(c.syncPercent),
             c.signalDbfs != null ? Number(c.signalDbfs).toFixed(1) + ' dBFS' : '—',
-            nd2NodeChip(c.node),
+            nd2NodeChip(c.node ? { id: c.node } : null),
           ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
 
         callHost.innerHTML = calls.length ? nd2MiniTable(
@@ -5357,7 +5377,7 @@
             escapeHtml(String(c.site || '—')),
             c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
             nd2DecodePct(c.syncPercent),
-            nd2NodeChip(c.node),
+            nd2NodeChip(c.node ? { id: c.node } : null),
           ])) : '<div class="nd2-empty">No calls in progress.</div>';
       } catch (e) {
         chHost.innerHTML = `<div class="nd2-empty">Failed to load live state: ${escapeHtml(String(e.message || e))}</div>`;

@@ -82,6 +82,31 @@ async function talkgroupAgencies(): Promise<Map<number, string>> {
  * First alias wins for each talkgroup (matching the previous behaviour) so a
  * duplicate id can't flip a label or agency between requests.
  */
+/**
+ * Alias colour -> a CSS hex string, or null if it isn't one.
+ *
+ * SDR-Trunk stores an alias colour as a Java Color RGB **integer**, and the
+ * agent reads it back with atoiOr(a.Color, 0) — so the value here is normally a
+ * numeric string like "-65536", not "#ff0000". Only accepting hex silently
+ * dropped every colour.
+ *
+ * Java's getRGB() packs alpha into the high byte and is usually negative, so
+ * the value is coerced to unsigned and masked to the low 24 bits. Output is
+ * always a literal #rrggbb: this is interpolated into a style attribute, so
+ * nothing from the config is ever passed through verbatim.
+ */
+function normaliseAliasColor(raw: string): string | null {
+  const v = raw.trim();
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) return v;
+  // 0x-prefixed or plain (possibly negative) integer.
+  const n = /^-?\d+$/.test(v) ? Number(v) : /^0x[0-9a-f]+$/i.test(v) ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return null;
+  const rgb = (n >>> 0) & 0xffffff;
+  // 0 is SDR-Trunk's "unset" default (atoiOr falls back to 0), not black.
+  if (rgb === 0) return null;
+  return '#' + rgb.toString(16).padStart(6, '0');
+}
+
 async function talkgroupColors(): Promise<Map<number, string>> {
   return (await talkgroupCatalog()).colors;
 }
@@ -108,11 +133,9 @@ async function talkgroupCatalog(): Promise<{
           if (!Number.isInteger(v)) continue;
           if (!labels.has(v)) labels.set(v, name);
           if (group && !agencies.has(v)) agencies.set(v, group);
-          // Alias colour, normalised to #rgb/#rrggbb. Anything else is dropped
-          // rather than passed through: this value is interpolated into a style
-          // attribute, so an unvalidated string would be a CSS injection.
-          if (color && !colors.has(v) && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) {
-            colors.set(v, color);
+          if (color && !colors.has(v)) {
+            const hex = normaliseAliasColor(color);
+            if (hex) colors.set(v, hex);
           }
         }
       }
@@ -2921,6 +2944,9 @@ nodeDataRouter.get(
 // agent's ship interval. Nothing is stored for this endpoint; an offline node
 // simply isn't in the hub and so doesn't appear.
 // ---------------------------------------------------------------------------
+/** States that mean "traffic in progress" — mirrors the panel's own set. */
+const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'DATA', 'ENCRYPTED']);
+
 nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c) => {
   try {
     const url = new URL(c.req.url);
@@ -2969,12 +2995,20 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
       }
 
       for (const ac of asRows(st['activeCalls'])) {
+        // vce reports every processing channel here, including the control
+        // channels, which arrive with no talkgroup and showed up as a wall of
+        // duplicate "TG 0" rows mirroring the channel table above. Only states
+        // that represent traffic count as a call.
+        const state = String(ac['state'] ?? '').toUpperCase();
+        if (!LIVE_CALL_STATES.has(state)) continue;
         const tg = Number(ac['to']);
         calls.push({
           node: a.nodeId,
           name: ac['name'] ?? null,
           system: ac['system'] ?? null,
-          site: ac['site'] ?? null,
+          // Traffic channels often carry no site of their own; fall back to
+          // the channel name, which is the site's name in this deployment.
+          site: ac['site'] ?? ac['name'] ?? null,
           state: ac['state'] ?? null,
           frequency: ac['frequency'] ?? null,
           timeslot: ac['timeslot'] ?? null,
