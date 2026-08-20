@@ -824,8 +824,23 @@
         if (node.feedEnabled === false) out += chip('off', 'Feed off');
         else if (node.uploading) out += chip('ok', 'Uploading');
         else out += chip('', 'Feed on');
-        if (node.calibrated === false) out += chip('warn', 'Not calibrated');
-        if (node.jmbeInstalled === false) out += chip('warn', 'No JMBE audio');
+        // First-run setup: SDR-Trunk calibrates the CPU and installs the JMBE
+        // codec as it starts, then restarts itself once. The control server is
+        // already answering /status throughout, so an up-but-uncalibrated
+        // receiver is mid-setup, not broken.
+        //
+        // Volunteers get ONE plain-language chip for that whole phase. Showing
+        // "Not calibrated" and "No JMBE audio" side by side reads as two faults
+        // on a brand-new node when it is simply normal first-run progress, and
+        // sends people hunting for something to fix. Purple (.updating) is the
+        // page's existing in-progress colour, not the amber warning one.
+        const preparing = node.sdrUp && node.calibrated === false;
+        if (preparing) {
+          out += chip('updating', 'Preparing node — this might take a minute');
+        } else {
+          if (node.calibrated === false) out += chip('warn', 'Not calibrated');
+          if (node.jmbeInstalled === false) out += chip('warn', 'No JMBE audio');
+        }
         chips = out;
       }
 

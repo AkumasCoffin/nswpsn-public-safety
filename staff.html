@@ -5775,15 +5775,25 @@
     // Per-node readiness chips: CPU calibration + JMBE voice codec. A node won't
     // start decoding (and produce audio) until both are ready, so surface it.
     // Returns '' when the node hasn't reported (older build / no status yet).
-    function _ndReadinessHtml(st) {
+    function _ndReadinessHtml(st, sdrUp) {
       if (!st || (st.calibrated == null && st.jmbeInstalled == null)) return '';
       const chip = (label, v) => {
         const state = v === true ? 'ok' : (v === false ? 'bad' : 'unknown');
         const mark = v === true ? '✓' : (v === false ? '✗' : '—');
         return `<span class="nd-ready ${state}">${label} ${mark}</span>`;
       };
+      // While SDR-Trunk is up but not yet calibrated it is almost certainly
+      // calibrating RIGHT NOW: headless setup runs calibration synchronously at
+      // startup, and the control server is already answering /status (it starts
+      // first), so this window reports calibrated=false for the minute or two
+      // the run takes. Labelling that "Calibrated ✗" reads as a fault when it
+      // is normal first-run progress.
+      const calibrating = sdrUp && st.calibrated === false;
+      const calChip = calibrating
+        ? `<span class="nd-ready warn" title="One-time CPU calibration is running — usually a minute or two. SDR-Trunk restarts once when it finishes."><i class="fas fa-spinner fa-spin" style="margin-right:0.3rem"></i>Calibrating…</span>`
+        : chip('Calibrated', st.calibrated);
       return `<div class="node-ready-row" title="Node must be calibrated and have the JMBE codec before it decodes voice">`
-        + chip('Calibrated', st.calibrated) + chip('JMBE', st.jmbeInstalled) + `</div>`;
+        + calChip + chip('JMBE', st.jmbeInstalled) + `</div>`;
     }
 
     // Live activity chips: is the node DECODING (radio: SDR-Trunk following the
@@ -5886,7 +5896,7 @@
             ${isPager ? '' : `${_nodeVer('sdrtrunk', node.sdrtrunkVersion)}
             ${_nodeVer('rdio', node.rdioVersion)}`}
           </div>
-          ${isPager ? '' : _ndReadinessHtml(st)}
+          ${isPager ? '' : _ndReadinessHtml(st, sdrUp)}
           ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding)}
           <div class="dev-card-secondary">
             <span>owner <span class="node-mono" title="${escapeHtml(userId)}">${owner}</span></span>
@@ -8377,7 +8387,7 @@
       }
       el.innerHTML =
         _nodeVer('agent', agent) + _nodeVer('sdrtrunk', sdrtrunk) + _nodeVer('rdio', rdio)
-        + _ndReadinessHtml(rst);
+        + _ndReadinessHtml(rst, !!(rst && rst.components && rst.components.sdrtrunk === 'running'));
     }
 
     let _ndTunerSelSig = null;
