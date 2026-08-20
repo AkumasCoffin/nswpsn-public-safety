@@ -3599,8 +3599,28 @@
     let _nodesTimer = null;
     const _nodesIntervalMs = 10_000;
     
+    // --- Tab persistence --------------------------------------------------
+    // Remember the open tab (and the Data sub-view) across reloads. Kept in
+    // localStorage rather than the URL: the staff page is a single route and
+    // most tabs are permission-gated, so a shareable URL would only ever
+    // "restore" a tab the recipient can't open. Every restore is re-checked
+    // against the CURRENT permission set below, so a revoked role can never
+    // resurrect a hidden tab. All access is try/caught because storage can be
+    // disabled outright, and a thrown SecurityError here would break page init.
+    const STAFF_TAB_KEY = 'staff_tab';
+    const STAFF_DATA_VIEW_KEY = 'staff_data_view';
+    const STAFF_DATA_MODE_KEY = 'staff_data_mode';
+
+    function staffRemember(key, value) {
+      try { window.localStorage.setItem(key, String(value)); } catch (e) { /* storage disabled */ }
+    }
+    function staffRecall(key) {
+      try { return window.localStorage.getItem(key); } catch (e) { return null; }
+    }
+
     function switchTab(tab) {
       currentTab = tab;
+      staffRemember(STAFF_TAB_KEY, tab);
 
       // Update tab buttons
       document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -3789,6 +3809,7 @@
     function openDataMode(mode) {
       if (mode !== 'radio' && mode !== 'pager') return;
       nd2LastMode = mode;
+      staffRemember(STAFF_DATA_MODE_KEY, mode);
       closeDataMenu();
       if (currentTab !== 'data') switchTab('data');
       nd2SetMode(mode);   // no-op guard if already in this mode (tab load still runs)
@@ -3807,6 +3828,7 @@
     function nd2SetMode(mode) {
       if (mode !== 'radio' && mode !== 'pager') return;
       nd2LastMode = mode;
+      staffRemember(STAFF_DATA_MODE_KEY, mode);
       if (nd2.mode === mode) { _nd2MarkDataMenu(); return; }
       nd2.mode = mode;
       _nd2MarkDataMenu();
@@ -3827,6 +3849,7 @@
     function nd2SetView(view) {
       if (nd2.view === view) return;
       nd2.view = view;
+      staffRemember(STAFF_DATA_VIEW_KEY, view);
       nd2.reqSeq++;   // invalidate any in-flight fetch from the previous view
       document.querySelectorAll('[data-nd2-view]').forEach(b =>
         b.classList.toggle('active', b.dataset.nd2View === view));
@@ -9783,8 +9806,26 @@
                          tabs.dev      ? 'dev' :
                          tabs.data     ? 'data' :
                          tabs.nodes    ? 'nodes' : null;
-      if (defaultTab && defaultTab !== currentTab) {
-        switchTab(defaultTab);
+      // Prefer the tab this browser was last on, but only if the viewer can
+      // still see it — otherwise fall back to the permitted default.
+      const rememberedTab = staffRecall(STAFF_TAB_KEY);
+      const wantedTab = (rememberedTab && tabs[rememberedTab]) ? rememberedTab : defaultTab;
+      if (wantedTab && wantedTab !== currentTab) {
+        switchTab(wantedTab);
+      }
+      if (wantedTab === 'data') {
+        // Mode first: nd2SetMode resets the view to that mode's first view, so
+        // restoring the view before the mode would immediately discard it.
+        const rememberedMode = staffRecall(STAFF_DATA_MODE_KEY);
+        if (rememberedMode === 'radio' || rememberedMode === 'pager') {
+          nd2SetMode(rememberedMode);
+        }
+        // Whitelisted against the known view list — a stored value is
+        // attacker-controllable in principle and must never reach a selector.
+        const rememberedView = staffRecall(STAFF_DATA_VIEW_KEY);
+        if (rememberedView && _nd2AllViews.indexOf(rememberedView) !== -1) {
+          nd2SetView(rememberedView);
+        }
       }
 
       // Role chip next to the wordmark — shows the viewer's own role mix,
