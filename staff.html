@@ -7193,16 +7193,47 @@
       }).join('');
     }
 
-    // Sample-rate cell for one tuner row (device-aware).
+    // Persisted sample rate for a tuner (config_override.tuners[].sampleRate),
+    // or null when the operator has never set one. This is the rate the agent
+    // APPLIES on the next config push, which is not necessarily the rate the
+    // tuner is running: SDR-Trunk refuses a rate change once channels have
+    // locked the tuner ("Cannot change sample rate while tuner is LOCKED"), so
+    // a failed apply leaves the live rate untouched while the stored one stays
+    // pending and is retried on every apply.
+    function _ndStoredSampleRate(serial) {
+      if (!serial || !_ndConfig || !Array.isArray(_ndConfig.tuners)) return null;
+      const e = _ndConfig.tuners.find(x => String(x.serial) === String(serial));
+      const v = e && e.sampleRate != null ? Number(e.sampleRate) : null;
+      return Number.isFinite(v) && v > 0 ? v : null;
+    }
+
+    // Drift marker for a tuner row: the stored rate differs from the rate the
+    // device is actually running. Without this the cell renders the LIVE rate
+    // and the mismatch is invisible — the panel reads correct while the config
+    // silently disagrees, and the operator has no reason to touch Apply.
+    function _ndSrDriftHtml(stored, live) {
+      if (stored == null || live == null || Number(live) === Number(stored)) return '';
+      const mhz = (hz) => (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+      const title = `Saved ${mhz(stored)} MS/s but the tuner is running ${mhz(live)} MS/s — `
+        + 'the saved rate could not be applied (SDR-Trunk refuses a rate change while channels hold the tuner). '
+        + 'Apply again after stopping the channels, or set the dropdown to the running rate to stop it being retried.';
+      return ` <i class="fas fa-triangle-exclamation" style="color: var(--warning);" title="${escapeHtml(title)}"></i>`;
+    }
+
+    // Sample-rate cell for one tuner row (device-aware). The selection follows
+    // the STORED override when there is one — that is what Apply/Save pushes.
     function _ndSrCellHtml(i, prof, t) {
+      const stored = _ndStoredSampleRate(_ndTunerSerial(t));
+      const live = t.sampleRate != null ? Number(t.sampleRate) : null;
       if (prof.freeform) {
-        const srMs = t.sampleRate != null ? (t.sampleRate / 1e6) : '';
-        return `<input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span>`;
+        const hz = stored != null ? stored : t.sampleRate;
+        const srMs = hz != null ? (hz / 1e6) : '';
+        return `<input class="nd-input nd-input-sm" id="nd-sr-${i}" type="number" step="0.1" value="${escapeHtml(String(srMs))}"><span class="nd-unit">MS/s</span>${_ndSrDriftHtml(stored, live)}`;
       }
       if (!prof.sr) return `<span class="nd-sub" title="This device has a fixed sample rate">fixed rate</span>`;
-      const sel = _ndClosest(prof.sr, t.sampleRate != null ? t.sampleRate : prof.srDef);
+      const sel = _ndClosest(prof.sr, stored != null ? stored : (live != null ? live : prof.srDef));
       const opts = prof.sr.map(hz => ({ v: hz, label: (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') + ' M' }));
-      return `<select class="nd-input nd-sel" id="nd-sr-${i}">${_ndOptsHtml(opts, sel)}</select>`;
+      return `<select class="nd-input nd-sel" id="nd-sr-${i}">${_ndOptsHtml(opts, sel)}</select>${_ndSrDriftHtml(stored, live)}`;
     }
 
     // Initial state for a device's Auto/AGC gain toggle. Persisted config wins
@@ -8309,26 +8340,18 @@
         _ndCfgRender();
         _ndRenderCfgSync();
       } catch (e) { showToast('Save failed: ' + e.message, 'error'); return; }
-      // Saving alone only persists the override; the running SDR-Trunk keeps its
-      // old playlist until the node re-applies. Push straight away so Save = apply
-      // (agent re-renders the playlist and reloads it — see configapply.Apply).
-      // If the node is offline the push 409s; the config is still saved and will
-      // apply on the node's next connect.
-      await _ndCfgPush(true);
-    }
-
-    // Sync the currently-saved config to the node: the agent re-renders the
-    // SDR-Trunk playlist, reloads it, and restarts channels so the change goes
-    // live. Called by "Save & sync" after the config is persisted.
-    async function _ndCfgPush(savedContext) {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/push-config`, {
-          method: 'POST', headers: { 'Authorization': await authHeader() }
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Save IS sync: the PATCH above carries config_override, and the backend
+      // pushes that straight to the live agent whenever the field is present
+      // (api/nodes.ts "pushRelevant"). This deliberately does NOT also POST
+      // /push-config — doing both fanned the SAME config version out twice per
+      // save, and every push is a full vce /config/import that stops all
+      // channels and rebuilds each one's traffic-channel pool. The agent's 15s
+      // re-push dedup window only ever caught the bursts that landed inside it.
+      // Offline just means it applies on the node's next connect.
+      if (_ndNode && _ndNode.online === false) {
+        showToast('Saved. Node is offline — it will apply on next connect.', 'warn');
+      } else {
         showToast('Saved & synced — the node is applying the new config.', 'success');
-      } catch (e) {
-        showToast('Saved, but not synced to the node (offline?): ' + e.message, 'warn');
       }
     }
 

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -370,6 +371,16 @@ func (d Deps) applySdrtrunkConfig(payload ConfigPayload, localKeys map[int]strin
 	if err != nil {
 		return stageErr("playlist", "encode vce config", err)
 	}
+
+	// Tuner settings go on BEFORE the import. The import (re)starts auto-start
+	// channels, and a channel sourcing a tuner LOCKS it — after which SDR-Trunk
+	// refuses a sample-rate change outright ("Cannot change sample rate while
+	// tuner is is LOCKED state") and the setting can never land. Applied here
+	// the tuner is still free, so a genuine rate change takes effect on the
+	// first apply instead of being retried and rejected on every one.
+	// Best-effort: failures never fail the apply.
+	d.applyTuners(payload.Tuners)
+
 	if err := d.importWithRetry(body); err != nil {
 		return stageErr("playlist", "import config", err)
 	}
@@ -379,11 +390,6 @@ func (d Deps) applySdrtrunkConfig(payload ConfigPayload, localKeys map[int]strin
 	// auto-start=off (incl. ALL channels when capture is off) is not left
 	// decoding.
 	d.enforceDisabledChannels(chans)
-
-	// Tuner gain/ppm live in the tuner config, not the imported channel config,
-	// so they are applied via the control API against the live tuners.
-	// Best-effort only: failures here never fail the apply.
-	d.applyTuners(payload.Tuners)
 
 	return nil
 }
@@ -692,7 +698,14 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 			}
 			ts = *wildcard
 		}
-		if ts.SampleRate > 0 {
+		// Sample rate: ONLY when it actually differs from what the tuner is
+		// already running. SDR-Trunk tears down and rebuilds the polyphase
+		// channelizer on any rate call — including one that sets the rate the
+		// tuner already has — and that drops every traffic channel sourced from
+		// it. Re-importing an unchanged config therefore used to churn the whole
+		// node for no reason. Tolerance is 1 Hz: these are discrete hardware
+		// rates, so anything closer than that is the same rate.
+		if ts.SampleRate > 0 && math.Abs(lt.SampleRate-ts.SampleRate) > 1 {
 			_ = d.SDR.SetSampleRate(lt.ID, ts.SampleRate)
 		}
 		// Gain: auto/AGC wins; then an explicit multi-axis params object; then a
