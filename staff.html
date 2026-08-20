@@ -7135,7 +7135,67 @@
     //              in CUSTOM mode) }. `key` is the gainParams field sent to the
     //            control server (gain/auto/gainMode/lnaGain/vgaGain/amp/lnaState/
     //            gainReduction/attenuation/lna).
+    // Overlay the device's OWN advertised capabilities (vce /tuners →
+    // capabilities{sampleRates, gain{masterGain, masterGainUnit, agc}}) onto the
+    // static profile below. The static tables remain the fallback for nodes too
+    // old to report capabilities; when the device tells us its steps we always
+    // prefer those.
+    //
+    // This is not cosmetic. SDR-Trunk's R820T/R828D master gain is an enum of
+    // RAW composite values (0, 9, 14, 26 … 495) and /gain snaps the number it is
+    // sent to the NEAREST entry. The panel used to send librtlsdr's dB table
+    // (0.0 … 49.6), so every value it could produce landed in the bottom five of
+    // thirty steps — 49.6 dB snapped to "36" — and the top of the range was
+    // unreachable. masterGainUnit is "value" here, "dB" for E4K and "index" for
+    // FC0013, which is why one hardcoded table could never be right for all of
+    // them.
+    function _ndApplyTunerCaps(prof, t) {
+      const caps = (t && t.capabilities) || null;
+      if (!caps || prof.freeform) return prof;
+      const out = Object.assign({}, prof);
+
+      const rates = Array.isArray(caps.sampleRates)
+        ? caps.sampleRates.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+      if (rates.length) out.sr = rates;
+
+      const g = caps.gain;
+      const steps = (g && Array.isArray(g.masterGain))
+        ? g.masterGain.map(Number).filter(n => Number.isFinite(n)) : [];
+      if (steps.length && Array.isArray(prof.gains)) {
+        // Fallback selection when the tuner reports no numeric gain (and isn't on
+        // AGC). Deliberately NOT the static profile's default snapped onto this
+        // list: that default is a dB figure, and snapping 28.0 dB onto the raw
+        // 0..495 scale yields 26 — near-minimum gain — which is precisely the
+        // unit confusion this overlay exists to fix. A mid-scale step is the
+        // honest neutral choice when the two scales aren't convertible.
+        const dBUnit = g.masterGainUnit === 'dB';
+        const sorted = steps.slice().sort((a, b) => a - b);
+        const mid = sorted[Math.floor(sorted.length / 2)];
+        out.gains = prof.gains.map(ax => {
+          if (ax.key !== 'gain' || ax.kind !== 'select') return ax;
+          const def = dBUnit ? _ndClosest(steps, ax.def) : mid;
+          // Only "dB" is a real unit; "value"/"index" are bare device numbers and
+          // labelling them dB is what made the panel disagree with SDR-Trunk.
+          return Object.assign({}, ax, {
+            opts: steps,
+            def: def != null ? def : mid,
+            unit: dBUnit ? 'dB' : ''
+          });
+        });
+        // Auto belongs INSIDE the master-gain dropdown — that is where SDR-Trunk
+        // keeps AUTOMATIC, as the first entry of the same MasterGain list — not
+        // beside it as a separate checkbox.
+        out.agcInSelect = g.agc === true;
+        if (out.agcInSelect) out.gains = out.gains.filter(ax => !ax.agc);
+      }
+      return out;
+    }
+
     function _ndTunerProfile(t) {
+      return _ndApplyTunerCaps(_ndTunerProfileBase(t), t);
+    }
+
+    function _ndTunerProfileBase(t) {
       const s = ((t && (t.type || t.tunerClass)) || '').toString().toLowerCase();
       const has = (x) => s.indexOf(x) !== -1;
       // Airspy + HydraSDR share one gain model (HydraSDR bias_t not wired here).
@@ -7266,7 +7326,9 @@
       // out, and whether it starts on (live/persisted state).
       const agcCtl = prof.gains.find(g => g.agc);
       const govKeys = (agcCtl && agcCtl.overrides) ? agcCtl.overrides : [];
-      const autoOn = agcCtl ? _ndTunerAutoState(t, prof) : false;
+      // With agcInSelect the AGC axis has been folded into the master-gain
+      // dropdown, so there is no separate checkbox to read the state from.
+      const autoOn = (agcCtl || prof.agcInSelect) ? _ndTunerAutoState(t, prof) : false;
       return prof.gains.map(g => {
         const id = `nd-g-${i}-${g.key}`;
         const gov = govKeys.indexOf(g.key) !== -1;   // greyed while Auto is on
@@ -7280,10 +7342,17 @@
           ctl = `<input class="nd-input nd-input-sm" id="${id}" type="number" min="${g.min}" max="${g.max}" step="${g.step}" value="${g.def}"${dis}>`;
         } else {
           let sel = g.def;
+          let opts = g.opts;
           if (g.mode) sel = modeVal;
           else if (prof.scalar && curScalar != null) sel = _ndClosest(g.opts.map(o => (o && typeof o === 'object') ? o.v : o), curScalar);
+          // Master gain on a device that advertises AGC: Auto is the first entry
+          // of the SAME dropdown, matching SDR-Trunk's MasterGain list.
+          if (prof.agcInSelect && g.key === 'gain') {
+            opts = [{ v: 'auto', label: 'Auto' }].concat(g.opts);
+            if (autoOn) sel = 'auto';
+          }
           const onCh = g.mode ? ` onchange="_ndGainMode(${i})"` : '';
-          ctl = `<select class="nd-input nd-sel" id="${id}"${onCh}${dis}>${_ndOptsHtml(g.opts, sel)}</select>`;
+          ctl = `<select class="nd-input nd-sel" id="${id}"${onCh}${dis}>${_ndOptsHtml(opts, sel)}</select>`;
         }
         const unit = g.unit ? `<span class="nd-unit">${g.unit}</span>` : '';
         return `<div class="nd-gc" data-custom="${g.custom ? 1 : 0}"${gov ? ' data-agcgov="1"' : ''}><label for="${id}">${escapeHtml(g.label)}</label>${ctl}${unit}</div>`;
@@ -7447,9 +7516,15 @@
       }
 
       // Auto-gain (AGC): if this device has an Auto toggle and it's on, send the
-      // auto flag in gainParams and skip the manual gain value entirely.
+      // auto flag in gainParams and skip the manual gain value entirely. Auto is
+      // EITHER a separate checkbox (static profiles) or the first entry of the
+      // master-gain dropdown (devices that advertise agc via capabilities) —
+      // accept both, or picking "Auto" from the list would be sent as a gain of
+      // NaN and silently dropped.
       const autoEl = document.getElementById('nd-g-' + i + '-auto');
-      const autoOn = !!(autoEl && autoEl.checked);
+      const gainSel = document.getElementById('nd-g-' + i + '-gain');
+      const autoOn = !!(autoEl && autoEl.checked)
+        || !!(gainSel && /^auto$/i.test(String(gainSel.value)));
 
       // Gain — single scalar `gain` for simple/unknown devices; a device-shaped
       // `gainParams` object for multi-axis devices. Numeric gain axes are

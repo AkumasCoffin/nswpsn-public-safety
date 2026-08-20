@@ -64,6 +64,16 @@ type Tuner struct {
 	Gain    any     `json:"gain"`
 	AutoPpm bool    `json:"autoPpm"`
 	Error   *string `json:"error"`
+	// Capabilities is the device's OWN description of what it accepts:
+	// {sampleRates:[Hz…], gain:{mode, masterGain:[…], masterGainUnit, agc}}.
+	// Forwarded verbatim so the staff panel can build each device's controls
+	// from what the device reports instead of a hardcoded per-chip table.
+	// It matters that this is authoritative: the R820T/R828D master gain is an
+	// enum of RAW composite values (0, 9, 14, 26 … 495), not dB, and /gain snaps
+	// whatever number it is sent to the nearest entry — so a dB figure silently
+	// lands near the bottom of the range. masterGainUnit disambiguates
+	// value/dB/index per chip.
+	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 
 // Channel mirrors one element of the "channels" array of GET /channels.
