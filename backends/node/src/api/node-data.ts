@@ -1524,6 +1524,15 @@ nodeDataRouter.get(
         (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
         (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
 
+      // Same scope against node_site_snapshots, whose system column is
+      // `system_id`. Snapshots are UPSERTed per (node, system, rfss, site)
+      // every ~60s, so received_at tracks "still being monitored" and the
+      // window filter carries the same meaning it does for events.
+      const snapScope = (p: string) =>
+        `${p}received_at >= now() - $1::interval AND ${p}system_id = $2` +
+        (wacnIdx !== null ? ` AND ${p}wacn = $${wacnIdx}` : '') +
+        (nodeIdx !== null ? ` AND ${p}node_id = $${nodeIdx}` : '');
+
       const [detail, sitesQ, nameQ] = await Promise.all([
         scopedRadioDetail(pool, scope, params),
         pool.query<{
@@ -1550,15 +1559,42 @@ nodeDataRouter.get(
                   meta.control_frequency_mhz,
                   meta.channel_count, meta.neighbor_count
              FROM (
-               SELECT site_rfss AS rfss, site_id AS site,
-                      MAX(site_nac) AS nac,
-                      COUNT(*)::int AS calls,
-                      COUNT(DISTINCT logical_call_id)::int AS logical,
-                      MAX(received_at) AS last_seen
-                 FROM node_radio_events
-                WHERE ${scope('')} AND ${CALL_GROUP}
-                  AND site_rfss IS NOT NULL AND site_id IS NOT NULL
-                GROUP BY site_rfss, site_id
+               -- Sites come from BOTH sources, because they answer different
+               -- questions. node_radio_events only knows a site once someone
+               -- keys up on it, so a site being decoded perfectly but carrying
+               -- no group call in the window was invisible here — a quiet site
+               -- looked identical to one that was never monitored at all.
+               -- node_site_snapshots is SDR-Trunk's own view and is refreshed
+               -- every ~60s regardless of traffic, so it is the authority on
+               -- "this node is watching this site"; the events side supplies
+               -- the call rollup. channel_name IS NOT NULL keeps this to sites
+               -- the node actually has a channel for, excluding the many
+               -- neighbour sites SDR-Trunk learns about from control broadcasts.
+               SELECT COALESCE(ev.rfss, sn.rfss)          AS rfss,
+                      COALESCE(ev.site, sn.site)          AS site,
+                      COALESCE(ev.nac, sn.nac)            AS nac,
+                      COALESCE(ev.calls, 0)               AS calls,
+                      COALESCE(ev.logical, 0)             AS logical,
+                      COALESCE(ev.last_seen, sn.last_seen) AS last_seen
+                 FROM (
+                   SELECT site_rfss AS rfss, site_id AS site,
+                          MAX(site_nac) AS nac,
+                          COUNT(*)::int AS calls,
+                          COUNT(DISTINCT logical_call_id)::int AS logical,
+                          MAX(received_at) AS last_seen
+                     FROM node_radio_events
+                    WHERE ${scope('')} AND ${CALL_GROUP}
+                      AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                    GROUP BY site_rfss, site_id
+                 ) ev
+                 FULL OUTER JOIN (
+                   SELECT rfss, site_id AS site,
+                          MAX(nac) AS nac,
+                          MAX(received_at) AS last_seen
+                     FROM node_site_snapshots
+                    WHERE ${snapScope('')} AND channel_name IS NOT NULL
+                    GROUP BY rfss, site_id
+                 ) sn ON sn.rfss = ev.rfss AND sn.site = ev.site
              ) s
              LEFT JOIN LATERAL (
                SELECT e.talkgroup, COUNT(*)::int AS calls
