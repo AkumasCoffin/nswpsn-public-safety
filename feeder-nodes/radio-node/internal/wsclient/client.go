@@ -550,6 +550,12 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: "missing component name"})
 			return
 		}
+		// Logged BEFORE the kill so the journal shows why the component died.
+		// Without this the only trace is "supervise: <name> exited: signal:
+		// killed", which is indistinguishable from a crash — diagnosing an
+		// interrupted first-run calibration meant cross-referencing the
+		// server's staff-command audit to find out the restart was commanded.
+		log.Printf("wsclient: restartComponent %q requested by staff", a.Name)
 		if err := c.sup.Restart(a.Name); err != nil {
 			c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: false, Message: err.Error()})
 			return
