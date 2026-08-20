@@ -1271,6 +1271,12 @@
     .empty-state i { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.4; display: block; }
 
     /* === Modals ======================================================== */
+    .nd2-linkbtn {
+      background: none; border: 0; cursor: pointer; padding: 0 0 0 .35rem;
+      color: var(--text-secondary); opacity: .55; font-size: .82em;
+    }
+    .nd2-linkbtn:hover { color: var(--accent); opacity: 1; }
+
     .modal {
       display: none;
       position: fixed;
@@ -3157,6 +3163,19 @@
   </div>
 
   <!-- Details Modal -->
+  <div id="nd2-rel-modal" class="modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h2><i class="fas fa-diagram-project" style="color: var(--accent);"></i>
+          <span id="nd2-rel-title">Relationships</span></h2>
+        <button class="modal-close" onclick="nd2CloseRel()">&times;</button>
+      </div>
+      <div class="gc-note"><i class="fas fa-circle-info"></i>
+        <span id="nd2-rel-note"></span></div>
+      <div id="nd2-rel-body"></div>
+    </div>
+  </div>
+
   <div id="details-modal" class="modal">
     <div class="modal-content" style="max-width: 600px;">
       <div class="modal-header">
@@ -4922,6 +4941,33 @@
           <span class="nd2-note">${bands.length ? nd2Num(bands.length) : ''}</span></div>
         ${bandTable}</div>`;
 
+      // Site services: the status flags vce reports for the site (voice/data/
+      // registration availability, TDMA, MFID). Stored since migration 047 but
+      // never rendered — they explain capability differences between sites, and
+      // a site advertising no voice service is a real finding, not a decode
+      // problem. Chips only, since these are flags rather than measurements.
+      const st = (meta.status && typeof meta.status === 'object') ? meta.status : null;
+      let statusCard = '';
+      if (st) {
+        const yn = (v, on, off) => v == null ? null : (v ? on : off);
+        const chips = [
+          yn(st.voiceService, 'Voice', 'No voice'),
+          yn(st.dataService, 'Data', 'No data'),
+          yn(st.registrationService, 'Registration', 'No registration'),
+          st.tdma === true ? 'TDMA' : (st.tdma === false ? 'FDMA' : null),
+          st.dataAccess ? `Access ${st.dataAccess}` : null,
+          st.mfid != null ? `MFID ${st.mfid}` : null,
+          st.microSlots != null ? `${st.microSlots} micro-slots` : null,
+          st.wuidLeaseMinutes != null ? `WUID lease ${st.wuidLeaseMinutes}m` : null,
+        ].filter(Boolean);
+        if (chips.length) {
+          statusCard = `<div class="nd2-card nd2-detail-gap">
+            <div class="nd2-card-h"><i class="fas fa-circle-check"></i> Site services</div>
+            <div class="nd2-chip-row">${chips.map(c =>
+              `<span class="nd2-chip">${escapeHtml(String(c))}</span>`).join('')}</div></div>`;
+        }
+      }
+
       // Patch groups: a patch temporarily merges several talkgroups so they hear
       // one another (multi-agency incidents). Rendered only when the site has
       // any — an always-empty card on the majority of sites is just noise, and
@@ -4945,7 +4991,7 @@
           ${patchTable}</div>`;
       }
 
-      host.innerHTML = header + control + channelsCard + patchesCard + neighborsCard + bandsCard;
+      host.innerHTML = header + control + statusCard + channelsCard + patchesCard + neighborsCard + bandsCard;
     }
 
     // --- Talkgroups view -------------------------------------------------
@@ -4982,7 +5028,10 @@
         if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No talkgroups match.</td></tr>'; }
         else body.innerHTML = rows.map(t => `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${t.talkgroup}})" title="View events for this talkgroup">
-            <td>${nd2TgCell(t)}</td>
+            <td>${nd2TgCell(t)}
+              <button class="nd2-linkbtn" title="Radios heard on this talkgroup"
+                onclick="event.stopPropagation();nd2ShowRel('talkgroup',${t.talkgroup},${nd2Arg(t.label || ('TG ' + t.talkgroup))})">
+                <i class="fas fa-diagram-project"></i></button></td>
             <td class="nd2-num">${nd2Num(t.logicalCalls)}<span class="nd-sub" title="receptions"> /${nd2Num(t.calls)}</span></td>
             <td class="nd2-num">${nd2Num(t.encryptedCalls)}</td>
             <td>${nd2LastSeen(t.lastSeen)}</td>
@@ -5036,7 +5085,10 @@
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
             <td>${r.alias
               ? `<span class="nd-strong">${escapeHtml(String(r.alias))}</span> <span class="nd-sub">${escapeHtml(String(r.radio))}</span>`
-              : `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`}</td>
+              : `<span class="nd-strong">${escapeHtml(String(r.radio))}</span>`}
+              <button class="nd2-linkbtn" title="Talkgroups this radio has been heard on"
+                onclick="event.stopPropagation();nd2ShowRel('radio',${r.radio},${nd2Arg(r.alias || r.radio)})">
+                <i class="fas fa-diagram-project"></i></button></td>
             <td class="nd2-num">${nd2Num(r.calls)}</td>
             <td>${nd2LastSeen(r.lastSeen)}</td>
             <td>${nd2SiteChip(r.lastSite)}</td>
@@ -5047,6 +5099,63 @@
         }).join('');
         nd2PageBtns('rad', nd2.rad, rows.length);
       } catch (e) { nd2TableMsg('nd2-rad-body', 7, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
+    }
+
+    // --- Relationships (radio <-> talkgroup association graph) ------------
+    // Pins one side and lists its counterparts: a radio's talkgroups, or a
+    // talkgroup's radios. Answers "who works with whom", which no single
+    // events row can show — the events table is chronological, so an
+    // association only emerges by reading many rows.
+    // A label can contain quotes/apostrophes, so it can't be dropped straight
+    // into an inline handler. JSON.stringify quotes+escapes it as a JS literal,
+    // then escapeHtml makes it safe as an attribute value; the parser unescapes
+    // it back to valid JS before the handler ever runs.
+    function nd2Arg(v) { return escapeHtml(JSON.stringify(String(v == null ? '' : v))); }
+
+    function nd2CloseRel() {
+      const m = document.getElementById('nd2-rel-modal');
+      if (m) m.style.display = 'none';
+    }
+
+    async function nd2ShowRel(kind, id, label) {
+      const modal = document.getElementById('nd2-rel-modal');
+      const body = document.getElementById('nd2-rel-body');
+      const title = document.getElementById('nd2-rel-title');
+      const note = document.getElementById('nd2-rel-note');
+      if (!modal || !body) return;
+      const isRadio = kind === 'radio';
+      title.textContent = (isRadio ? 'Radio ' : 'Talkgroup ') + (label || id);
+      note.textContent = isRadio
+        ? 'Talkgroups this radio has been heard on in the selected window.'
+        : 'Radios heard on this talkgroup in the selected window.';
+      body.innerHTML = '<div class="nd2-empty">Loading…</div>';
+      modal.style.display = 'flex';
+
+      const params = new URLSearchParams({ window: nd2.window });
+      params.set(isRadio ? 'radio' : 'talkgroup', String(id));
+      if (nd2.sys.system != null) params.set('system', String(nd2.sys.system));
+      if (nd2.node) params.set('node', nd2.node);
+      try {
+        const data = await nd2Fetch(`/api/node-data/relationships?${params}`);
+        const rows = data.counterparts || [];
+        if (!rows.length) {
+          body.innerHTML = '<div class="nd2-empty">No counterparts in this window.</div>';
+          return;
+        }
+        body.innerHTML = nd2MiniTable(
+          [{ label: isRadio ? 'Talkgroup' : 'Radio' }, { label: 'Calls', num: true },
+           { label: 'Group', num: true }, { label: 'Private', num: true },
+           { label: 'Enc', num: true }, { label: 'Audio', num: true }, { label: 'Last seen' }],
+          rows.map(r => [
+            r.label
+              ? `<span class="nd-strong">${escapeHtml(String(r.label))}</span> <span class="nd-sub">${escapeHtml(String(r.id))}</span>`
+              : `<span class="nd-strong">${escapeHtml(String(r.id))}</span>`,
+            nd2Num(r.calls), nd2Num(r.group), nd2Num(r.private),
+            nd2Num(r.encrypted), nd2Num(r.recorded), nd2LastSeen(r.lastSeen),
+          ]));
+      } catch (e) {
+        body.innerHTML = `<div class="nd2-empty">Failed to load: ${escapeHtml(String(e.message || e))}</div>`;
+      }
     }
 
     // Shared Prev/Next + "x–y of total" for the tg/rad paged tables.
