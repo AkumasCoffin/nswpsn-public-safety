@@ -56,6 +56,11 @@ export const DecoderConfigSchema = z
     // shared: p25p1 / p25p2 / dmr
     ignoreDataCalls: z.boolean().optional(),
     trafficPoolSize: z.number().int().min(0).max(50).optional(),
+    // p25p1 / p25p2. SDR-Trunk learns the alternate control channels a site
+    // announces on the current one, so it follows the site as it rotates
+    // without every frequency being configured by hand. The agent has always
+    // sent this (defaulting to true); it just had no way to be set from here.
+    learnControlChannels: z.boolean().optional(),
     // p25p2
     autoDetectScramble: z.boolean().optional(),
     scramble: z
@@ -92,6 +97,20 @@ export const ChannelSchema = z
   .object({
     name: z.string().min(1).max(120),
     frequency: z.number().int().positive(), // Hz, e.g. 142658000
+    /**
+     * Additional control frequencies for the same site, in Hz. `frequency`
+     * above stays the primary, so every existing channel keeps working and
+     * nothing needed migrating.
+     *
+     * With 2+ entries the agent emits SDR-Trunk's
+     * sourceConfigTunerMultipleFrequency and the decoder rotates through them;
+     * with 0 or 1 it emits the ordinary single-frequency source config.
+     *
+     * Largely belt-and-braces when learnControlChannels is on — SDR-Trunk
+     * discovers a site's alternates from the control channel itself. This is
+     * for seeding that, or for sites where learning is off or unreliable.
+     */
+    frequencies: z.array(z.number().int().positive()).max(16).optional(),
     decoder: z.enum(DECODER_TYPES).default('p25p2'),
     system: z.string().max(120).optional(),
     site: z.string().max(120).optional(),

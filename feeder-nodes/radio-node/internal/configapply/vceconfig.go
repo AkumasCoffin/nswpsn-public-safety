@@ -93,12 +93,55 @@ type vceAlias struct {
 	StreamTalkgroupAlias *vceAliasID  `json:"streamTalkgroupAlias,omitempty"`
 }
 
-// vceSourceConfig mirrors source/config/SourceConfigTuner.java.
+// vceSourceConfig mirrors source/config/SourceConfigTuner.java and, when
+// Frequencies is populated, SourceConfigTunerMultipleFrequency.java. One struct
+// covers both because they differ only by the frequency field: the Jackson
+// subtype is chosen by "type", and omitempty keeps the unused field out of the
+// emitted JSON so each instance is a valid instance of its own subtype.
 type vceSourceConfig struct {
-	Type           string `json:"type"`       // "sourceConfigTuner"
-	SourceType     string `json:"sourceType"` // "TUNER"
-	Frequency      int64  `json:"frequency"`
-	PreferredTuner string `json:"preferredTuner,omitempty"`
+	Type       string `json:"type"`       // "sourceConfigTuner" | "sourceConfigTunerMultipleFrequency"
+	SourceType string `json:"sourceType"` // "TUNER"
+	// Single-frequency form.
+	Frequency int64 `json:"frequency,omitempty"`
+	// Multiple-frequency form. SDR-Trunk rotates through these when the current
+	// control channel goes quiet.
+	Frequencies    []int64 `json:"frequencies,omitempty"`
+	PreferredTuner string  `json:"preferredTuner,omitempty"`
+}
+
+// sourceConfigFor builds the right source-config subtype for a channel.
+//
+// The primary frequency is always first and always present — SDR-Trunk needs
+// one frequency to lock onto before it can learn a site's alternates, so a
+// channel without it cannot start at all. Extras are appended in order,
+// de-duplicated (the primary is commonly repeated in the extras list by
+// operators, and a duplicate frequency makes the rotation monitor visit the
+// same channel twice).
+func sourceConfigFor(ch ChannelPlan) vceSourceConfig {
+	preferred := strings.TrimSpace(ch.SDR)
+	freqs := make([]int64, 0, len(ch.Frequencies)+1)
+	seen := map[int64]bool{}
+	for _, f := range append([]int64{ch.Frequency}, ch.Frequencies...) {
+		if f <= 0 || seen[f] {
+			continue
+		}
+		seen[f] = true
+		freqs = append(freqs, f)
+	}
+	if len(freqs) <= 1 {
+		return vceSourceConfig{
+			Type:           "sourceConfigTuner",
+			SourceType:     "TUNER",
+			Frequency:      ch.Frequency,
+			PreferredTuner: preferred,
+		}
+	}
+	return vceSourceConfig{
+		Type:           "sourceConfigTunerMultipleFrequency",
+		SourceType:     "TUNER",
+		Frequencies:    freqs,
+		PreferredTuner: preferred,
+	}
 }
 
 // vceScramble mirrors module/decode/p25/phase2/enumeration/ScrambleParameters.java.
@@ -441,16 +484,11 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 			continue
 		}
 		vch := vceChannel{
-			Name:      strings.TrimSpace(ch.Name),
-			System:    ch.System,
-			Site:      ch.Site,
-			AutoStart: ch.AutoStart,
-			SourceConfiguration: vceSourceConfig{
-				Type:           "sourceConfigTuner",
-				SourceType:     "TUNER",
-				Frequency:      ch.Frequency,
-				PreferredTuner: strings.TrimSpace(ch.SDR),
-			},
+			Name:                strings.TrimSpace(ch.Name),
+			System:              ch.System,
+			Site:                ch.Site,
+			AutoStart:           ch.AutoStart,
+			SourceConfiguration: sourceConfigFor(ch),
 			DecodeConfiguration: dc,
 		}
 		if ch.Order > 0 {

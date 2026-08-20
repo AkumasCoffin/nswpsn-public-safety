@@ -456,3 +456,61 @@ func TestBuildVceConfigFeedOff(t *testing.T) {
 		t.Errorf("feed off should disable the stream, got enabled=%v", s0["enabled"])
 	}
 }
+
+// sourceConfigFor picks between SDR-Trunk's single- and multiple-frequency
+// source configs. The rules worth pinning: the primary is always present and
+// always first (SDR-Trunk must lock onto one frequency before it can learn a
+// site's alternates), and duplicates are dropped — operators commonly repeat
+// the primary in the extras list, and a duplicate makes the rotation monitor
+// visit the same channel twice.
+func TestSourceConfigFor(t *testing.T) {
+	t.Run("single frequency uses the plain tuner config", func(t *testing.T) {
+		got := sourceConfigFor(ChannelPlan{Frequency: 419587500, SDR: " sdr-1 "})
+		if got.Type != "sourceConfigTuner" {
+			t.Fatalf("type = %q, want sourceConfigTuner", got.Type)
+		}
+		if got.Frequency != 419587500 {
+			t.Errorf("frequency = %d", got.Frequency)
+		}
+		if len(got.Frequencies) != 0 {
+			t.Errorf("frequencies should be empty, got %v", got.Frequencies)
+		}
+		if got.PreferredTuner != "sdr-1" {
+			t.Errorf("preferredTuner = %q, want trimmed", got.PreferredTuner)
+		}
+	})
+
+	t.Run("extras switch to the multiple-frequency config, primary first", func(t *testing.T) {
+		got := sourceConfigFor(ChannelPlan{Frequency: 419587500, Frequencies: []int64{420312600, 419450000}})
+		if got.Type != "sourceConfigTunerMultipleFrequency" {
+			t.Fatalf("type = %q", got.Type)
+		}
+		want := []int64{419587500, 420312600, 419450000}
+		if len(got.Frequencies) != len(want) {
+			t.Fatalf("frequencies = %v, want %v", got.Frequencies, want)
+		}
+		for i := range want {
+			if got.Frequencies[i] != want[i] {
+				t.Fatalf("frequencies = %v, want %v", got.Frequencies, want)
+			}
+		}
+		if got.Frequency != 0 {
+			t.Errorf("single frequency field must stay empty, got %d", got.Frequency)
+		}
+	})
+
+	t.Run("drops duplicates and zero values", func(t *testing.T) {
+		got := sourceConfigFor(ChannelPlan{Frequency: 419587500, Frequencies: []int64{419587500, 0, 420312600, 420312600}})
+		want := []int64{419587500, 420312600}
+		if len(got.Frequencies) != len(want) {
+			t.Fatalf("frequencies = %v, want %v", got.Frequencies, want)
+		}
+	})
+
+	t.Run("extras that are all duplicates fall back to the single form", func(t *testing.T) {
+		got := sourceConfigFor(ChannelPlan{Frequency: 419587500, Frequencies: []int64{419587500}})
+		if got.Type != "sourceConfigTuner" {
+			t.Errorf("type = %q, want the single-frequency form", got.Type)
+		}
+	})
+}

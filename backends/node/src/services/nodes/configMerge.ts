@@ -60,7 +60,11 @@ function rdioKeyForSystem(systemId: number): string {
 /** One SDR-Trunk channel the agent renders into the playlist. */
 export interface ChannelPlan {
   name: string;
-  frequency: number; // Hz (control-channel freq for trunked P25)
+  frequency: number; // Hz (control-channel freq for trunked P25) — always required
+  /** Extra control frequencies for the same site, Hz. `frequency` is the
+   *  primary and stays mandatory: SDR-Trunk needs one to lock onto before it
+   *  can learn the rest from the transmitting site. */
+  frequencies?: number[];
   decoder: DecoderType;
   system?: string;
   site?: string;

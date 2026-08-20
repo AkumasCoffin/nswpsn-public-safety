@@ -44,12 +44,17 @@ const (
 type ChannelPlan struct {
 	Name      string `json:"name"`
 	Frequency int64  `json:"frequency"` // Hz (control-channel freq for trunked P25)
-	Decoder   string `json:"decoder"`   // p25p2|p25p1|dmr|nbfm|am
-	System    string `json:"system"`
-	Site      string `json:"site"`
-	AutoStart bool   `json:"autoStart"`
-	Order     int    `json:"order"`
-	SDR       string `json:"sdr"` // device serial to pin to; "" = any tuner
+	// Extra control frequencies for the same site, Hz. Frequency above stays
+	// the primary and is always required — SDR-Trunk has to lock onto one
+	// before it can learn a site's alternates. With any extras present the
+	// renderer switches to vce's multiple-frequency source config.
+	Frequencies []int64 `json:"frequencies,omitempty"`
+	Decoder     string  `json:"decoder"` // p25p2|p25p1|dmr|nbfm|am
+	System      string  `json:"system"`
+	Site        string  `json:"site"`
+	AutoStart   bool    `json:"autoStart"`
+	Order       int     `json:"order"`
+	SDR         string  `json:"sdr"` // device serial to pin to; "" = any tuner
 	// DecoderConfig carries decoder-specific settings; nil = all defaults. The
 	// vce config builder emits the matching decodeConfiguration and fills
 	// SDR-Trunk defaults for any unset field.
