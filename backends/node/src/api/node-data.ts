@@ -1107,6 +1107,7 @@ nodeDataRouter.get(
       const radioMap = new Map((radioDetail?.rows ?? []).map((r) => [r.id, r]));
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
       const labels = await talkgroupLabels();
+      const tgColorMap = await talkgroupColors();
       const agencies = await talkgroupAgencies();
       const colors = await talkgroupColors();
       const siteMap = radioIds.length > 0 ? await siteNames(pool) : null;
@@ -1124,6 +1125,7 @@ nodeDataRouter.get(
               system: d.system,
               talkgroup: d.talkgroup,
               talkgroupLabel: d.talkgroup_label ?? (d.talkgroup !== null ? labels.get(d.talkgroup) ?? null : null),
+              talkgroupColor: d.talkgroup !== null ? tgColorMap.get(d.talkgroup) ?? null : null,
               systemLabel: d.system_label,
               sourceUnit: d.source_unit,
               sourceAlias: d.source_alias,
@@ -1358,10 +1360,11 @@ export async function feederRadioStats(
   const params: unknown[] = [WINDOW_INTERVAL[window], nodeId];
   // $2 = node id, $1 = window interval. Shared by every query below.
   const where = () => `node_id = $2 AND received_at >= now() - $1::interval`;
-  const [detail, siteMap, labels, siteQ, actQ] = await Promise.all([
+  const [detail, siteMap, labels, tgColorsFeeder, siteQ, actQ] = await Promise.all([
     scopedRadioDetail(pool, where, params),
     siteNames(pool),
     talkgroupLabels(),
+    talkgroupColors(),
     pool.query<{
       rfss: number;
       site: number;
@@ -1441,6 +1444,7 @@ export async function feederRadioStats(
       at: iso(r.at),
       talkgroup: r.talkgroup,
       talkgroupLabel: r.talkgroup != null ? labels.get(r.talkgroup) ?? null : null,
+      talkgroupColor: r.talkgroup != null ? tgColorsFeeder.get(r.talkgroup) ?? null : null,
       system: r.system,
       sourceUnit: r.source_unit,
       sourceAlias: r.source_alias,
@@ -2903,6 +2907,7 @@ nodeDataRouter.get(
       );
 
       const tgLabels = await talkgroupLabels();
+      const tgRelColors = await talkgroupColors();
       return c.json({
         window,
         of: radio !== null ? 'radio' : 'talkgroup',
@@ -2915,6 +2920,8 @@ nodeDataRouter.get(
             radio !== null
               ? (r.label ?? tgLabels.get(r.id) ?? null)
               : (r.alias ?? null),
+          // Only a talkgroup counterpart has an alias colour; a radio has none.
+          color: radio !== null ? tgRelColors.get(r.id) ?? null : null,
           calls: num(r.calls),
           group: num(r.grp),
           private: num(r.priv),

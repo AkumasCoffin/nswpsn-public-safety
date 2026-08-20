@@ -1795,16 +1795,31 @@
       line-height: 1.2;
     }
 
-    /* Talkgroup colour dot — the alias colour, shown as a marker rather than as
-       text colour so it never fights the theme's contrast. */
-    .nd2-tgdot {
-      display: inline-block;
-      width: .6rem; height: .6rem;
-      border-radius: 50%;
-      margin-right: .4rem;
+    /* Talkgroup pill. The alias colour tints background + border only; the
+       label keeps the theme's text colour so every pill stays legible whatever
+       colour the playlist assigns. */
+    .nd2-tgpill {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      padding: .12rem .45rem;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      background: rgba(148, 163, 184, 0.10);
+      color: var(--text-primary);
+      font-weight: 600;
+      font-size: .95em;
+      line-height: 1.3;
       vertical-align: middle;
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      white-space: nowrap;
     }
+    .nd2-tgpill-dot {
+      width: .5rem; height: .5rem;
+      border-radius: 50%;
+      flex: 0 0 auto;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    .nd2-pill-id { color: var(--text-soft); font-weight: 500; font-variant-numeric: tabular-nums; }
 
     .nd2-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
     .nd2-time-rel { display: block; font-size: 0.64rem; color: var(--text-soft); }
@@ -4222,8 +4237,7 @@
       const tgEl = document.getElementById('nd2-top-tg');
       if (tgEl && !isPager) {
         const rows = ((ov && ov.topTalkgroups) || []).slice(0, 10).map(t => [
-          `<span class="nd-strong">${escapeHtml(t.label || `TG ${t.talkgroup}`)}</span>` +
-            (t.label ? ` <span class="nd-sub">${escapeHtml(String(t.talkgroup))}</span>` : '') +
+          nd2TgPill(t.talkgroup, t.label, t.color) +
             (t.agency ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(t.agency))}</span>` : ''),
           `<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`,
           nd2Num(t.logicalCalls != null ? t.logicalCalls : t.calls),
@@ -4386,9 +4400,7 @@
           </tr>`;
         }
 
-        const tgLabel = ev.talkgroupLabel
-          ? `<span class="nd-strong">${escapeHtml(ev.talkgroupLabel)}</span> <span class="nd-sub">${escapeHtml(String(ev.talkgroup))}</span>`
-          : `<span class="nd-strong">TG ${escapeHtml(String(ev.talkgroup != null ? ev.talkgroup : '—'))}</span>`;
+        const tgLabel = nd2TgPill(ev.talkgroup, ev.talkgroupLabel, ev.talkgroupColor);
         // Encrypted / recorded badges — icon + title carry the meaning.
         const badges =
           (ev.encrypted ? `<span class="nd2-badge nd2-badge-enc" title="Encrypted call"><i class="fas fa-lock"></i>ENC</span>` : '') +
@@ -4458,6 +4470,25 @@
     // Render a talkgroup as its resolved alias with the raw number secondary,
     // e.g. "101 ME1" + "10101"; falls back to "TG <n>" when no alias resolved.
     // Accepts a row object {talkgroup, label} (label may be null/absent).
+    // Single renderer for a talkgroup ANYWHERE it appears, so the colour can't
+    // be present in one table and missing in the next. Colours are server-
+    // validated to a literal #rrggbb before they reach this style attribute.
+    //
+    // The colour tints the pill's background and border, not the text: an
+    // arbitrary alias colour as foreground would be unreadable against a dark
+    // surface for a large part of the palette. Uncoloured talkgroups fall back
+    // to the neutral chip so the pill shape stays consistent either way.
+    function nd2TgPill(tg, label, color) {
+      if (tg == null && !label) return '<span class="nd-sub">—</span>';
+      const body = label
+        ? `${escapeHtml(String(label))} <span class="nd2-pill-id">${escapeHtml(String(tg == null ? '' : tg))}</span>`
+        : `TG ${escapeHtml(String(tg))}`;
+      if (!color) return `<span class="nd2-tgpill">${body}</span>`;
+      const c = escapeHtml(String(color));
+      return `<span class="nd2-tgpill" style="background:${c}22;border-color:${c}88;">`
+        + `<span class="nd2-tgpill-dot" style="background:${c}"></span>${body}</span>`;
+    }
+
     function nd2TgCell(o) {
       if (!o) return '—';
       const tg = o.talkgroup;
@@ -4469,14 +4500,7 @@
       const agency = o.agency
         ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>`
         : '';
-      // Alias colour as a dot. Server-validated to #rgb/#rrggbb, so it is safe
-      // to interpolate into the style attribute here.
-      const dot = o.color
-        ? `<span class="nd2-tgdot" style="background:${escapeHtml(String(o.color))}"></span>`
-        : '';
-      return dot + (o.label
-        ? `<span class="nd-strong">${escapeHtml(String(o.label))}</span> <span class="nd-sub">${escapeHtml(tgStr)}</span>`
-        : `<span class="nd-strong">TG ${escapeHtml(tgStr)}</span>`) + agency;
+      return nd2TgPill(tg, o.label, o.color) + agency;
     }
     function nd2FillTiles(containerId, tiles) {
       const el = document.getElementById(containerId);
@@ -5180,11 +5204,9 @@
         const rows = data.radios || [];
         if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No radios match.</td></tr>'; }
         else body.innerHTML = rows.map(r => {
-          const topTgs = (r.topTalkgroups || []).map(t => {
-            const primary = t.label ? escapeHtml(String(t.label)) : `TG ${escapeHtml(String(t.talkgroup))}`;
-            const numSub = t.label ? ` <span class="nd-sub">${escapeHtml(String(t.talkgroup))}</span>` : '';
-            return `<span class="nd2-chip">${primary}${numSub} <span class="nd-sub">${nd2Num(t.calls)}</span></span>`;
-          }).join(' ') || '—';
+          const topTgs = (r.topTalkgroups || []).map(t =>
+            nd2TgPill(t.talkgroup, t.label, t.color) + ` <span class="nd-sub">${nd2Num(t.calls)}</span>`
+          ).join(' ') || '—';
           return `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({unit:${r.radio}})" title="View events for this radio">
             <td>${r.alias
@@ -5315,15 +5337,9 @@
       if (tg == null) return '<span class="nd-sub">—</span>';
       // Alias colour, server-validated to #rgb/#rrggbb before it ever reaches
       // this attribute.
-      const dot = o.color
-        ? `<span class="nd2-tgdot" style="background:${escapeHtml(String(o.color))}"></span>`
-        : '';
-      const name = o.talkgroupLabel
-        ? `<span class="nd-strong">${escapeHtml(String(o.talkgroupLabel))}</span> <span class="nd-sub">${escapeHtml(String(tg))}</span>`
-        : `<span class="nd-strong">TG ${escapeHtml(String(tg))}</span>`;
       const ag = o.agency
         ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>` : '';
-      return dot + name + ag;
+      return nd2TgPill(tg, o.talkgroupLabel, o.color) + ag;
     }
 
     // NB: distinct from nd2Pct — that one formats a plain percentage for the
@@ -5431,9 +5447,11 @@
            { label: 'Group', num: true }, { label: 'Private', num: true },
            { label: 'Enc', num: true }, { label: 'Audio', num: true }, { label: 'Last seen' }],
           rows.map(r => [
-            r.label
-              ? `<span class="nd-strong">${escapeHtml(String(r.label))}</span> <span class="nd-sub">${escapeHtml(String(r.id))}</span>`
-              : `<span class="nd-strong">${escapeHtml(String(r.id))}</span>`,
+            isRadio
+              ? nd2TgPill(r.id, r.label, r.color)
+              : (r.label
+                  ? `<span class="nd-strong">${escapeHtml(String(r.label))}</span> <span class="nd-sub">${escapeHtml(String(r.id))}</span>`
+                  : `<span class="nd-strong">${escapeHtml(String(r.id))}</span>`),
             nd2Num(r.calls), nd2Num(r.group), nd2Num(r.private),
             nd2Num(r.encrypted), nd2Num(r.recorded), nd2LastSeen(r.lastSeen),
           ]));
