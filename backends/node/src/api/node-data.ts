@@ -2952,15 +2952,29 @@ nodeDataRouter.get(
 // simply isn't in the hub and so doesn't appear.
 // ---------------------------------------------------------------------------
 /** States that mean "traffic in progress" — mirrors the panel's own set. */
-const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'DATA', 'ENCRYPTED']);
+const LIVE_CALL_STATES = new Set(['CALL', 'ACTIVE', 'ENCRYPTED']);
 
 nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c) => {
   try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
     const url = new URL(c.req.url);
     const only = qpNode(url);
     const tgLabels = await talkgroupLabels();
     const tgAgencies = await talkgroupAgencies();
     const tgColors = await talkgroupColors();
+
+    // Friendly node names — the hub only knows ids, and a raw uuid per row is
+    // unreadable. One small query, not per node.
+    const nameRows = await pool.query<{ id: string; name: string | null; kind: string | null }>(
+      'SELECT id, name, kind FROM nodes',
+    );
+    const nodeNames = new Map(nameRows.rows.map((r) => [r.id, r.name]));
+    // Live is a RADIO view — channels, control state, decode. Pager nodes have
+    // none of that and contributed nothing but an inflated "N nodes online".
+    const radioNodes = new Set(
+      nameRows.rows.filter((r) => (r.kind ?? 'radio') === 'radio').map((r) => r.id),
+    );
 
     const nodes: Array<Record<string, unknown>> = [];
     const channels: Array<Record<string, unknown>> = [];
@@ -2968,11 +2982,13 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
 
     for (const a of hub.agentList()) {
       if (only !== null && a.nodeId !== only) continue;
+      if (!radioNodes.has(a.nodeId)) continue;
       const live = hub.liveStatus(a.nodeId);
       const st = (live.status ?? null) as Record<string, unknown> | null;
       if (!st) continue;
       nodes.push({
         node: a.nodeId,
+        nodeName: nodeNames.get(a.nodeId) ?? null,
         lastStatusAt: live.lastStatusAt !== null ? new Date(live.lastStatusAt).toISOString() : null,
       });
 
@@ -2983,6 +2999,7 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
         const tg = Number(ch['to']);
         channels.push({
           node: a.nodeId,
+          nodeName: nodeNames.get(a.nodeId) ?? null,
           name: ch['name'] ?? null,
           system: ch['system'] ?? null,
           site: ch['site'] ?? null,
@@ -3008,9 +3025,15 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
         // that represent traffic count as a call.
         const state = String(ac['state'] ?? '').toUpperCase();
         if (!LIVE_CALL_STATES.has(state)) continue;
+        // vce reports a granted traffic channel as active BETWEEN calls, with
+        // no target and no source. Those are not calls — they showed as "TG 0"
+        // rows at 0% decode. Require some call identity, matching the Nodes
+        // tab's Now Playing guard.
+        if (ac['to'] == null && ac['from'] == null && !ac['toAlias'] && !ac['fromAlias']) continue;
         const tg = Number(ac['to']);
         calls.push({
           node: a.nodeId,
+          nodeName: nodeNames.get(a.nodeId) ?? null,
           name: ac['name'] ?? null,
           system: ac['system'] ?? null,
           // Traffic channels often carry no site of their own; fall back to

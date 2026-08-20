@@ -1813,6 +1813,15 @@
       vertical-align: middle;
       white-space: nowrap;
     }
+    /* Live tables: the identity columns carry the content, the rest are short
+       readouts. Without this the browser spreads 7 columns evenly and leaves
+       large gaps between a 3-character state and a dash. */
+    #nd2-live-ch table, #nd2-live-calls table { table-layout: auto; }
+    #nd2-live-ch td:not(:first-child):not(:nth-child(2)),
+    #nd2-live-ch th:not(:first-child):not(:nth-child(2)),
+    #nd2-live-calls td:not(:first-child):not(:nth-child(2)),
+    #nd2-live-calls th:not(:first-child):not(:nth-child(2)) { width: 1%; white-space: nowrap; }
+
     .nd2-tgpill-dot {
       width: .5rem; height: .5rem;
       border-radius: 50%;
@@ -2838,9 +2847,6 @@
           <div class="search-box" style="min-width: 100px;">
             <input type="text" id="nd2-ev-site" placeholder="rfss-site" oninput="nd2EvInputChanged()">
           </div>
-          <select id="nd2-ev-node" class="nd-input" style="width: auto; min-width: 120px; font-size: 0.82rem; padding: 0.45rem 0.5rem;" onchange="nd2EvFilterChanged()">
-            <option value="">All nodes</option>
-          </select>
         </div>
         <div class="nd2-table-wrap">
           <table class="nd-table">
@@ -3992,9 +3998,6 @@
       // Node scope changes every count/list — reset paging + the systems cache.
       nd2.tg.offset = 0; nd2.rad.offset = 0; nd2.evOffset = 0;
       nd2.systemsCache = null;
-      // Mirror into the Events-specific node <select> so the two never disagree.
-      const evSel = document.getElementById('nd2-ev-node');
-      if (evSel && [...evSel.options].some(o => o.value === v)) evSel.value = v;
       nd2Refresh();
     }
 
@@ -4325,7 +4328,10 @@
         const site = nd2EvVal('nd2-ev-site');
         // Events has its own node <select>; when it is "All nodes" fall back to
         // the global Data-tab node scope so the filter carries across views.
-        const node = nd2EvVal('nd2-ev-node') || nd2.node;
+        // Node scope comes from the ONE global selector. Events used to carry a
+        // second "All nodes" dropdown of its own that shadowed it, so the page
+        // showed two identical controls and the local one silently won.
+        const node = nd2.node;
         if (q) params.set('q', q);
         if (tg) params.set('talkgroup', tg);
         if (unit) params.set('unit', unit);
@@ -5332,6 +5338,13 @@
     // decoding RIGHT NOW; node_radio_events is finished-call history and has no
     // control-channel state at all, so it cannot answer this question.
     // Window/node chrome doesn't apply: "live" has no time range.
+    // A node id is a uuid; unlabelled nodes render as a 8-char prefix rather
+    // than 36 characters of noise across every row.
+    function nd2ShortNode(id) {
+      const v = String(id || '');
+      return /^[0-9a-f-]{30,}$/i.test(v) ? v.slice(0, 8) : v;
+    }
+
     function nd2LiveTgCell(o) {
       const tg = o.talkgroup;
       if (tg == null) return '<span class="nd-sub">—</span>';
@@ -5379,7 +5392,7 @@
             c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
             nd2DecodePct(c.syncPercent),
             c.signalDbfs != null ? Number(c.signalDbfs).toFixed(1) + ' dBFS' : '—',
-            nd2NodeChip(c.node ? { id: c.node } : null),
+            nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
           ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
 
         callHost.innerHTML = calls.length ? nd2MiniTable(
@@ -5393,7 +5406,7 @@
             escapeHtml(String(c.site || '—')),
             c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
             nd2DecodePct(c.syncPercent),
-            nd2NodeChip(c.node ? { id: c.node } : null),
+            nd2NodeChip(c.node ? { id: nd2ShortNode(c.node), name: c.nodeName } : null),
           ])) : '<div class="nd2-empty">No calls in progress.</div>';
       } catch (e) {
         chHost.innerHTML = `<div class="nd2-empty">Failed to load live state: ${escapeHtml(String(e.message || e))}</div>`;
