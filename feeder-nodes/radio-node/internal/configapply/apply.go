@@ -321,6 +321,23 @@ func ImportOnBoot(payload ConfigPayload, d Deps) error {
 	if err != nil {
 		return stageErr("playlist", "encode vce config", err)
 	}
+
+	// Tuner settings must be (re)applied on boot, BEFORE the import starts
+	// channels — same ordering and same reason as applySdrtrunkConfig.
+	//
+	// SDR-Trunk restores its channels from its own database at startup but does
+	// NOT restore what the operator set here: a tuner comes up reporting
+	// gain:null, i.e. AGC was never actually engaged, not "AGC is on". Boot used
+	// to import the config and return without ever touching the tuners, so the
+	// node ran on whatever gain the hardware powered up with and decoded poorly
+	// (channels IDLE, or CONTROL at 0-20%) until someone opened the panel and
+	// hit Apply — which was the ONLY thing that ever sent the gain. Hence
+	// "applying SDR settings fixes it" after every single restart.
+	//
+	// Best-effort, matching Apply: a tuner failure must not stop the playlist
+	// import, or a single bad SDR would leave the node with no channels at all.
+	d.applyTuners(payload.Tuners)
+
 	if err := d.importWithRetry(body); err != nil {
 		return stageErr("playlist", "import config", err)
 	}
