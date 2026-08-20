@@ -8063,9 +8063,46 @@
 
     // Encrypted calls carry no listenable audio and the operator hides them by
     // default; the "Show encrypted" toggle reveals them. The encryption marker is
-    // the channel/call state === 'ENCRYPTED' (vce State.ENCRYPTED), which is the
-    // only encryption signal in the status frame.
-    function _ndIsEnc(x) { return String((x && x.state) || '').toUpperCase() === 'ENCRYPTED'; }
+    // the channel/call state === 'ENCRYPTED' (vce State.ENCRYPTED), the only
+    // encryption signal in the status frame.
+    //
+    // But that state arrives LATE: a call is granted and starts decoding as
+    // CALL, and only becomes ENCRYPTED once the encryption sync is seen a beat
+    // later. Testing the current frame alone therefore let every encrypted call
+    // appear in Now Playing for its first frames, and any call whose state never
+    // flipped back stayed visible for its whole duration.
+    //
+    // So the marker is made STICKY per call: once a call has been seen
+    // encrypted, it stays hidden until it ends. Keyed on the call's identity
+    // rather than the row object, since a fresh object arrives each frame.
+    const _ndEncSeen = new Map();   // callKey -> last time seen encrypted (ms)
+    const _ND_ENC_TTL_MS = 60_000;  // forget a key once the call is long gone
+
+    function _ndCallKey(x) {
+      if (!x) return '';
+      if (x.id != null) return 'i:' + x.id;
+      // Frequency + talkgroup identifies a traffic channel for the life of one
+      // grant, which is all the stickiness needs to span.
+      return 'f:' + (x.frequency == null ? '' : x.frequency) + ':' + (x.to == null ? '' : x.to);
+    }
+
+    function _ndIsEnc(x) {
+      const live = String((x && x.state) || '').toUpperCase() === 'ENCRYPTED';
+      const key = _ndCallKey(x);
+      if (!key) return live;
+      const now = Date.now();
+      if (live) { _ndEncSeen.set(key, now); return true; }
+      const seen = _ndEncSeen.get(key);
+      if (seen != null && now - seen < _ND_ENC_TTL_MS) return true;
+      if (seen != null) _ndEncSeen.delete(key);   // expired — let it go
+      // Opportunistic sweep so the map can't grow without bound on a busy node.
+      if (_ndEncSeen.size > 512) {
+        for (const [k, t] of _ndEncSeen) {
+          if (now - t >= _ND_ENC_TTL_MS) _ndEncSeen.delete(k);
+        }
+      }
+      return false;
+    }
     function _ndSetShowEnc(on) {
       _ndShowEnc = !!on;
       _ndRenderChannels();     // repaint live-state cells + unmatched-live rows
