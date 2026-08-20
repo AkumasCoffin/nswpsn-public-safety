@@ -8086,7 +8086,33 @@
       return 'f:' + (x.frequency == null ? '' : x.frequency) + ':' + (x.to == null ? '' : x.to);
     }
 
+    // vce does NOT put encryption on the channel/call object at all — the only
+    // place it surfaces live is the event stream, as "Encrypted Group Call".
+    // So the event log is harvested for encrypted targets and those feed the
+    // same sticky map. The target is the text after the arrow in an event's
+    // `ft` ("2198844 → 065 - NSW PF (ENC)"), which is the call's toAlias.
+    function _ndHarvestEncEvents() {
+      if (!Array.isArray(_ndLog)) return;
+      const now = Date.now();
+      for (let i = _ndLog.length - 1, seen = 0; i >= 0 && seen < 40; i--, seen++) {
+        const e = _ndLog[i];
+        if (!e || !/encrypt/i.test(String(e.text || ''))) continue;
+        const ft = String(e.ft || '');
+        const arrow = ft.lastIndexOf('→');
+        const target = (arrow >= 0 ? ft.slice(arrow + 1) : ft).trim();
+        if (target) _ndEncSeen.set('a:' + target.toLowerCase(), now);
+      }
+    }
+
     function _ndIsEnc(x) {
+      _ndHarvestEncEvents();
+      // Alias match first: this is the signal that actually fires, since the
+      // call's own state stays CALL for the whole transmission.
+      const alias = String((x && (x.toAlias || x.talkgroupLabel)) || '').trim().toLowerCase();
+      if (alias) {
+        const seenA = _ndEncSeen.get('a:' + alias);
+        if (seenA != null && Date.now() - seenA < _ND_ENC_TTL_MS) return true;
+      }
       const live = String((x && x.state) || '').toUpperCase() === 'ENCRYPTED';
       const key = _ndCallKey(x);
       if (!key) return live;
