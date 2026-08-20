@@ -50,25 +50,59 @@ import { getGlobalConfig } from '../services/nodes/globalConfig.js';
  * config on every request. Only individual talkgroup matchers are mapped (ranges
  * label a span, not a single id).
  */
-let _tgLabelCache: { at: number; map: Map<number, string> } | null = null;
+let _tgLabelCache: {
+  at: number;
+  map: { labels: Map<number, string>; agencies: Map<number, string> };
+} | null = null;
 async function talkgroupLabels(): Promise<Map<number, string>> {
+  return (await talkgroupCatalog()).labels;
+}
+
+/**
+ * Talkgroup -> owning agency, taken from the SDR-Trunk alias `group`.
+ *
+ * An alias already carries the agency as its group (that is what groups are for
+ * in a playlist), so this needs no new field anywhere — the mapping has been
+ * sitting in the global config all along, just never read back out.
+ */
+async function talkgroupAgencies(): Promise<Map<number, string>> {
+  return (await talkgroupCatalog()).agencies;
+}
+
+/**
+ * Both talkgroup lookups from ONE pass over the alias list, sharing a single
+ * ~60s cache: they read the same aliases, so resolving them separately would
+ * double the config loads and let the two maps drift apart between refreshes.
+ *
+ * First alias wins for each talkgroup (matching the previous behaviour) so a
+ * duplicate id can't flip a label or agency between requests.
+ */
+async function talkgroupCatalog(): Promise<{
+  labels: Map<number, string>;
+  agencies: Map<number, string>;
+}> {
   if (_tgLabelCache && Date.now() - _tgLabelCache.at < 60_000) return _tgLabelCache.map;
-  const map = new Map<number, string>();
+  const labels = new Map<number, string>();
+  const agencies = new Map<number, string>();
   try {
     const cfg = await getGlobalConfig();
     for (const a of cfg.sdrtrunkConfig?.aliases ?? []) {
       const name = (a.name ?? '').trim();
       if (!name) continue;
+      const group = (a.group ?? '').trim();
       for (const id of a.ids ?? []) {
         if (id.type === 'talkgroup') {
           const v = Number(id.attrs?.['value']);
-          if (Number.isInteger(v) && !map.has(v)) map.set(v, name);
+          if (!Number.isInteger(v)) continue;
+          if (!labels.has(v)) labels.set(v, name);
+          if (group && !agencies.has(v)) agencies.set(v, group);
         }
       }
     }
   } catch (e) {
-    log.warn({ err: e }, 'talkgroupLabels: failed to load global config');
+    log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
+  const map = { labels, agencies };
   _tgLabelCache = { at: Date.now(), map };
   return map;
 }
@@ -722,6 +756,7 @@ nodeDataRouter.get(
         .map(([k, v]) => ({ [bucketField]: k, radio: v.radio, pager: v.pager }));
 
       const tgLabels = await talkgroupLabels();
+      const tgAgencies = await talkgroupAgencies();
       const siteMap = await siteNames(pool);
       const body: Record<string, unknown> = {
         window,
@@ -741,6 +776,7 @@ nodeDataRouter.get(
           system: r.system,
           talkgroup: r.talkgroup,
           label: r.label ?? (r.talkgroup !== null ? tgLabels.get(r.talkgroup) ?? null : null),
+          agency: r.talkgroup !== null ? tgAgencies.get(r.talkgroup) ?? null : null,
           calls: num(r.calls),
           logicalCalls: num(r.logical),
         })),
@@ -1028,6 +1064,7 @@ nodeDataRouter.get(
       const radioMap = new Map((radioDetail?.rows ?? []).map((r) => [r.id, r]));
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
       const labels = await talkgroupLabels();
+      const agencies = await talkgroupAgencies();
       const siteMap = radioIds.length > 0 ? await siteNames(pool) : null;
       const capAliases = pagerIds.length > 0 ? capcodeAliases() : null;
 
@@ -2017,6 +2054,7 @@ nodeDataRouter.get(
       }
 
       const labels = await talkgroupLabels();
+      const agencies = await talkgroupAgencies();
       const siteMap = await siteNames(pool);
       return c.json({
         window,
@@ -2030,6 +2068,8 @@ nodeDataRouter.get(
             system: r.system,
             talkgroup: r.talkgroup,
             label: labels.get(r.talkgroup) ?? null,
+            // Owning agency, from the SDR-Trunk alias group.
+            agency: agencies.get(r.talkgroup) ?? null,
             calls: num(r.calls),
             logicalCalls: num(r.logical),
             encryptedCalls: num(r.enc),
@@ -2254,6 +2294,7 @@ nodeDataRouter.get(
       }
 
       const tgLabels = await talkgroupLabels();
+      const tgAgencies = await talkgroupAgencies();
       const siteMap = await siteNames(pool);
       return c.json({
         window,

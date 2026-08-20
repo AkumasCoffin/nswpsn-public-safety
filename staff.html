@@ -1271,6 +1271,12 @@
     .empty-state i { font-size: 2.5rem; margin-bottom: 1rem; opacity: 0.4; display: block; }
 
     /* === Modals ======================================================== */
+    .nd2-agency {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.32);
+      color: #7dd3fc;
+    }
+
     .nd2-linkbtn {
       background: none; border: 0; cursor: pointer; padding: 0 0 0 .35rem;
       color: var(--text-secondary); opacity: .55; font-size: .82em;
@@ -4166,7 +4172,8 @@
       if (tgEl && !isPager) {
         const rows = ((ov && ov.topTalkgroups) || []).slice(0, 10).map(t => [
           `<span class="nd-strong">${escapeHtml(t.label || `TG ${t.talkgroup}`)}</span>` +
-            (t.label ? ` <span class="nd-sub">${escapeHtml(String(t.talkgroup))}</span>` : ''),
+            (t.label ? ` <span class="nd-sub">${escapeHtml(String(t.talkgroup))}</span>` : '') +
+            (t.agency ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(t.agency))}</span>` : ''),
           `<span class="nd-sub">${escapeHtml(String(t.system != null ? t.system : '—'))}</span>`,
           nd2Num(t.logicalCalls != null ? t.logicalCalls : t.calls),
           nd2Num(t.calls),
@@ -4404,9 +4411,16 @@
       if (!o) return '—';
       const tg = o.talkgroup;
       const tgStr = tg != null ? String(tg) : '—';
-      return o.label
+      // Agency comes from the talkgroup's SDR-Trunk alias group. Rendered as a
+      // chip after the id so it reads as ownership rather than part of the
+      // name, and omitted entirely when the alias has no group — an empty chip
+      // would imply "no agency" when it only means the playlist didn't say.
+      const agency = o.agency
+        ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>`
+        : '';
+      return (o.label
         ? `<span class="nd-strong">${escapeHtml(String(o.label))}</span> <span class="nd-sub">${escapeHtml(tgStr)}</span>`
-        : `<span class="nd-strong">TG ${escapeHtml(tgStr)}</span>`;
+        : `<span class="nd-strong">TG ${escapeHtml(tgStr)}</span>`) + agency;
     }
     function nd2FillTiles(containerId, tiles) {
       const el = document.getElementById(containerId);
