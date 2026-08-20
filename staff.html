@@ -1775,8 +1775,36 @@
       -webkit-overflow-scrolling: touch;
     }
     .nd2-table-wrap .nd-table { min-width: 760px; font-size: 0.74rem; }
-    .nd2-table-wrap .nd-table th { padding: 0.5rem 0.65rem; }
-    .nd2-table-wrap .nd-table td { padding: 0.45rem 0.65rem; }
+    .nd2-table-wrap .nd-table th { padding: 0.5rem 0.7rem; }
+    /* Row rhythm: a consistent line-height + vertical-align keeps rows the same
+       height whether or not a cell carries a chip. Without it a row with an
+       agency/CC chip sits taller than its neighbours and the table looks ragged. */
+    .nd2-table-wrap .nd-table td {
+      padding: 0.5rem 0.7rem;
+      line-height: 1.45;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    /* Numeric columns line up only with tabular figures — proportional digits
+       make 1,699 and 1,004 visibly different widths in the same column. */
+    .nd2-table-wrap .nd-table td.nd2-num,
+    .nd2-table-wrap .nd-table th.nd2-num { font-variant-numeric: tabular-nums; }
+    /* Chips inline with text rather than inflating the line box. */
+    .nd2-table-wrap .nd-table td .nd2-chip {
+      vertical-align: middle;
+      line-height: 1.2;
+    }
+
+    /* Talkgroup colour dot — the alias colour, shown as a marker rather than as
+       text colour so it never fights the theme's contrast. */
+    .nd2-tgdot {
+      display: inline-block;
+      width: .6rem; height: .6rem;
+      border-radius: 50%;
+      margin-right: .4rem;
+      vertical-align: middle;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+    }
 
     .nd2-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
     .nd2-time-rel { display: block; font-size: 0.64rem; color: var(--text-soft); }
@@ -2481,6 +2509,7 @@
           <div class="nd2-seg" role="group" aria-label="Radio data view">
             <button class="filter-btn active" data-nd2-view="overview" onclick="nd2SetView('overview')">Overview</button>
             <button class="filter-btn" data-nd2-view="systems" onclick="nd2SetView('systems')">Systems</button>
+            <button class="filter-btn" data-nd2-view="live" onclick="nd2SetView('live')">Live</button>
             <button class="filter-btn" data-nd2-view="events" onclick="nd2SetView('events')">Events</button>
           </div>
         </div>
@@ -2559,6 +2588,19 @@
         </div>
 
         <!-- ===== Systems view (list › system overview › site overview) ===== -->
+        <div id="nd2-view-live" style="display: none;">
+          <div class="nd2-card">
+            <div class="nd2-card-h"><i class="fas fa-tower-broadcast"></i> Live channels
+              <span class="nd2-note" id="nd2-live-meta"></span></div>
+            <div id="nd2-live-ch"></div>
+          </div>
+          <div class="nd2-card nd2-detail-gap">
+            <div class="nd2-card-h"><i class="fas fa-satellite-dish"></i> Active calls
+              <span class="nd2-note" id="nd2-live-calls-n"></span></div>
+            <div id="nd2-live-calls"></div>
+          </div>
+        </div>
+
         <div id="nd2-view-systems" style="display: none;">
           <!-- Sticky crumb bar: docks the breadcrumb + context strip under the
                page header so they stay visible while scrolling a site detail. -->
@@ -3736,7 +3778,7 @@
     let _nd2RadDebounce = null;
     let _nd2CapDebounce = null;
     // Which views belong to each mode (drives the panel show/hide sweep).
-    const ND2_RADIO_VIEWS = ['overview', 'systems', 'events'];
+    const ND2_RADIO_VIEWS = ['overview', 'live', 'systems', 'events'];
     const ND2_PAGER_VIEWS = ['poverview', 'capcodes'];
     const _nd2AllViews = [...ND2_RADIO_VIEWS, ...ND2_PAGER_VIEWS];
 
@@ -3777,6 +3819,7 @@
     async function nd2Refresh() {
       switch (nd2.view) {
         case 'overview': await nd2LoadOverview(); break;
+        case 'live': await nd2LoadLive(); break;
         case 'systems': await nd2LoadSystemsView(); break;
         case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
         case 'poverview': await nd2LoadPagerOverview(); break;
@@ -3875,6 +3918,10 @@
     // radio Overview + Events. Everything else (radio detail views + all pager
     // views) reads the 30-day detail tables, so hide it and coerce 'all'→30d.
     function nd2ApplyWindowChrome(view) {
+      // Live is instantaneous state, so no window applies at all.
+      const windowless = view === 'live';
+      const winRow = document.getElementById('nd2-window-row') || document.querySelector('[data-nd2-window]')?.parentElement;
+      if (winRow) winRow.style.visibility = windowless ? 'hidden' : '';
       const supportsAll = nd2.mode === 'radio' && (view === 'overview' || view === 'events');
       const allBtn = document.querySelector('[data-nd2-window="all"]');
       if (allBtn) allBtn.style.display = supportsAll ? '' : 'none';
@@ -4418,7 +4465,12 @@
       const agency = o.agency
         ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>`
         : '';
-      return (o.label
+      // Alias colour as a dot. Server-validated to #rgb/#rrggbb, so it is safe
+      // to interpolate into the style attribute here.
+      const dot = o.color
+        ? `<span class="nd2-tgdot" style="background:${escapeHtml(String(o.color))}"></span>`
+        : '';
+      return dot + (o.label
         ? `<span class="nd-strong">${escapeHtml(String(o.label))}</span> <span class="nd-sub">${escapeHtml(tgStr)}</span>`
         : `<span class="nd-strong">TG ${escapeHtml(tgStr)}</span>`) + agency;
     }
@@ -5136,6 +5188,87 @@
         }).join('');
         nd2PageBtns('rad', nd2.rad, rows.length);
       } catch (e) { nd2TableMsg('nd2-rad-body', 7, e); nd2.rad.total = 0; nd2PageBtns('rad', nd2.rad, 0); }
+    }
+
+    // --- Live view ---------------------------------------------------------
+    // Fleet-wide equivalent of vce's Live page with "All" + "Active only".
+    // Reads the backend's in-memory WS hub, so it shows what each node is
+    // decoding RIGHT NOW; node_radio_events is finished-call history and has no
+    // control-channel state at all, so it cannot answer this question.
+    // Window/node chrome doesn't apply: "live" has no time range.
+    function nd2LiveTgCell(o) {
+      const tg = o.talkgroup;
+      if (tg == null) return '<span class="nd-sub">—</span>';
+      // Alias colour, server-validated to #rgb/#rrggbb before it ever reaches
+      // this attribute.
+      const dot = o.color
+        ? `<span class="nd2-tgdot" style="background:${escapeHtml(String(o.color))}"></span>`
+        : '';
+      const name = o.talkgroupLabel
+        ? `<span class="nd-strong">${escapeHtml(String(o.talkgroupLabel))}</span> <span class="nd-sub">${escapeHtml(String(tg))}</span>`
+        : `<span class="nd-strong">TG ${escapeHtml(String(tg))}</span>`;
+      const ag = o.agency
+        ? ` <span class="nd2-chip nd2-agency">${escapeHtml(String(o.agency))}</span>` : '';
+      return dot + name + ag;
+    }
+
+    // NB: distinct from nd2Pct — that one formats a plain percentage for the
+    // site-detail tiles. This one colours a DECODE figure by health, and is
+    // only for the Live tables.
+    function nd2DecodePct(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '<span class="nd-sub">—</span>';
+      const c = n >= 90 ? 'var(--success)' : (n >= 50 ? 'var(--warning)' : 'var(--danger)');
+      return `<span style="color:${c};font-weight:600;">${n.toFixed(0)}%</span>`;
+    }
+
+    async function nd2LoadLive() {
+      const chHost = document.getElementById('nd2-live-ch');
+      const callHost = document.getElementById('nd2-live-calls');
+      if (!chHost || !callHost) return;
+      const params = new URLSearchParams();
+      if (nd2.node) params.set('node', nd2.node);
+      try {
+        const d = await nd2Fetch(`/api/node-data/live?${params}`);
+        if (nd2.view !== 'live') return;   // view changed mid-fetch
+        const chs = d.channels || [];
+        const calls = d.calls || [];
+        const meta = document.getElementById('nd2-live-meta');
+        if (meta) meta.textContent = `${chs.length} channel(s) · ${(d.nodes || []).length} node(s) online`;
+        const cn = document.getElementById('nd2-live-calls-n');
+        if (cn) cn.textContent = calls.length ? String(calls.length) : '';
+
+        chHost.innerHTML = chs.length ? nd2MiniTable(
+          [{ label: 'Channel' }, { label: 'Site' }, { label: 'State' }, { label: 'Freq', num: true },
+           { label: 'Decode', num: true }, { label: 'Signal', num: true }, { label: 'Node' }],
+          chs.map(c => [
+            `<span class="nd-strong">${escapeHtml(String(c.name || '—'))}</span>` +
+              (c.control ? ' <span class="nd2-chip">CC</span>' : ''),
+            escapeHtml(String(c.site || '—')),
+            `<span class="nd2-chip">${escapeHtml(String(c.state || '—'))}</span>`,
+            c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
+            nd2DecodePct(c.syncPercent),
+            c.signalDbfs != null ? Number(c.signalDbfs).toFixed(1) + ' dBFS' : '—',
+            nd2NodeChip(c.node),
+          ])) : '<div class="nd2-empty">No channels reporting. Nodes may be offline.</div>';
+
+        callHost.innerHTML = calls.length ? nd2MiniTable(
+          [{ label: 'Talkgroup' }, { label: 'Source' }, { label: 'Site' }, { label: 'Freq', num: true },
+           { label: 'Decode', num: true }, { label: 'Node' }],
+          calls.map(c => [
+            nd2LiveTgCell(c),
+            c.talkerAlias || c.fromAlias
+              ? `<span class="nd-strong">${escapeHtml(String(c.talkerAlias || c.fromAlias))}</span> <span class="nd-sub">${escapeHtml(String(c.from == null ? '' : c.from))}</span>`
+              : escapeHtml(String(c.from == null ? '—' : c.from)),
+            escapeHtml(String(c.site || '—')),
+            c.frequency != null ? (Number(c.frequency) / 1e6).toFixed(4) + ' MHz' : '—',
+            nd2DecodePct(c.syncPercent),
+            nd2NodeChip(c.node),
+          ])) : '<div class="nd2-empty">No calls in progress.</div>';
+      } catch (e) {
+        chHost.innerHTML = `<div class="nd2-empty">Failed to load live state: ${escapeHtml(String(e.message || e))}</div>`;
+        callHost.innerHTML = '';
+      }
     }
 
     // --- Relationships (radio <-> talkgroup association graph) ------------

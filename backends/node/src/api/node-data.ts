@@ -42,6 +42,7 @@ import { log } from '../lib/log.js';
 import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { getGlobalConfig } from '../services/nodes/globalConfig.js';
+import { hub } from '../services/nodes/hub.js';
 
 /**
  * Talkgroup id → label, resolved from the imported sdrtrunk-vce alias list (the
@@ -52,7 +53,11 @@ import { getGlobalConfig } from '../services/nodes/globalConfig.js';
  */
 let _tgLabelCache: {
   at: number;
-  map: { labels: Map<number, string>; agencies: Map<number, string> };
+  map: {
+    labels: Map<number, string>;
+    agencies: Map<number, string>;
+    colors: Map<number, string>;
+  };
 } | null = null;
 async function talkgroupLabels(): Promise<Map<number, string>> {
   return (await talkgroupCatalog()).labels;
@@ -77,32 +82,45 @@ async function talkgroupAgencies(): Promise<Map<number, string>> {
  * First alias wins for each talkgroup (matching the previous behaviour) so a
  * duplicate id can't flip a label or agency between requests.
  */
+async function talkgroupColors(): Promise<Map<number, string>> {
+  return (await talkgroupCatalog()).colors;
+}
+
 async function talkgroupCatalog(): Promise<{
   labels: Map<number, string>;
   agencies: Map<number, string>;
+  colors: Map<number, string>;
 }> {
   if (_tgLabelCache && Date.now() - _tgLabelCache.at < 60_000) return _tgLabelCache.map;
   const labels = new Map<number, string>();
   const agencies = new Map<number, string>();
+  const colors = new Map<number, string>();
   try {
     const cfg = await getGlobalConfig();
     for (const a of cfg.sdrtrunkConfig?.aliases ?? []) {
       const name = (a.name ?? '').trim();
       if (!name) continue;
       const group = (a.group ?? '').trim();
+      const color = (a.color ?? '').trim();
       for (const id of a.ids ?? []) {
         if (id.type === 'talkgroup') {
           const v = Number(id.attrs?.['value']);
           if (!Number.isInteger(v)) continue;
           if (!labels.has(v)) labels.set(v, name);
           if (group && !agencies.has(v)) agencies.set(v, group);
+          // Alias colour, normalised to #rgb/#rrggbb. Anything else is dropped
+          // rather than passed through: this value is interpolated into a style
+          // attribute, so an unvalidated string would be a CSS injection.
+          if (color && !colors.has(v) && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) {
+            colors.set(v, color);
+          }
         }
       }
     }
   } catch (e) {
     log.warn({ err: e }, 'talkgroupCatalog: failed to load global config');
   }
-  const map = { labels, agencies };
+  const map = { labels, agencies, colors };
   _tgLabelCache = { at: Date.now(), map };
   return map;
 }
@@ -757,6 +775,7 @@ nodeDataRouter.get(
 
       const tgLabels = await talkgroupLabels();
       const tgAgencies = await talkgroupAgencies();
+      const tgColors = await talkgroupColors();
       const siteMap = await siteNames(pool);
       const body: Record<string, unknown> = {
         window,
@@ -777,6 +796,7 @@ nodeDataRouter.get(
           talkgroup: r.talkgroup,
           label: r.label ?? (r.talkgroup !== null ? tgLabels.get(r.talkgroup) ?? null : null),
           agency: r.talkgroup !== null ? tgAgencies.get(r.talkgroup) ?? null : null,
+          color: r.talkgroup !== null ? tgColors.get(r.talkgroup) ?? null : null,
           calls: num(r.calls),
           logicalCalls: num(r.logical),
         })),
@@ -1065,6 +1085,7 @@ nodeDataRouter.get(
       const pagerMap = new Map((pagerDetail?.rows ?? []).map((r) => [r.id, r]));
       const labels = await talkgroupLabels();
       const agencies = await talkgroupAgencies();
+      const colors = await talkgroupColors();
       const siteMap = radioIds.length > 0 ? await siteNames(pool) : null;
       const capAliases = pagerIds.length > 0 ? capcodeAliases() : null;
 
@@ -2055,6 +2076,7 @@ nodeDataRouter.get(
 
       const labels = await talkgroupLabels();
       const agencies = await talkgroupAgencies();
+      const colors = await talkgroupColors();
       const siteMap = await siteNames(pool);
       return c.json({
         window,
@@ -2070,6 +2092,7 @@ nodeDataRouter.get(
             label: labels.get(r.talkgroup) ?? null,
             // Owning agency, from the SDR-Trunk alias group.
             agency: agencies.get(r.talkgroup) ?? null,
+            color: colors.get(r.talkgroup) ?? null,
             calls: num(r.calls),
             logicalCalls: num(r.logical),
             encryptedCalls: num(r.enc),
@@ -2295,6 +2318,7 @@ nodeDataRouter.get(
 
       const tgLabels = await talkgroupLabels();
       const tgAgencies = await talkgroupAgencies();
+      const tgColors = await talkgroupColors();
       const siteMap = await siteNames(pool);
       return c.json({
         window,
@@ -2882,3 +2906,104 @@ nodeDataRouter.get(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/live[?node=<id>]
+//
+// Fleet-wide live channel state — the equivalent of vce's Live view set to
+// "All" with "Active only" on, but across every online node rather than one
+// SDR-Trunk instance.
+//
+// Reads the WS hub's in-memory status (what each agent last reported, ~every
+// few seconds) rather than Postgres. node_radio_events is a HISTORY of calls
+// that have already ended and carries no control-channel state at all, so it
+// physically cannot answer "what is decoding right now" — and it lags by the
+// agent's ship interval. Nothing is stored for this endpoint; an offline node
+// simply isn't in the hub and so doesn't appear.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c) => {
+  try {
+    const url = new URL(c.req.url);
+    const only = qpNode(url);
+    const tgLabels = await talkgroupLabels();
+    const tgAgencies = await talkgroupAgencies();
+    const tgColors = await talkgroupColors();
+
+    const nodes: Array<Record<string, unknown>> = [];
+    const channels: Array<Record<string, unknown>> = [];
+    const calls: Array<Record<string, unknown>> = [];
+
+    for (const a of hub.agentList()) {
+      if (only !== null && a.nodeId !== only) continue;
+      const live = hub.liveStatus(a.nodeId);
+      const st = (live.status ?? null) as Record<string, unknown> | null;
+      if (!st) continue;
+      nodes.push({
+        node: a.nodeId,
+        lastStatusAt: live.lastStatusAt !== null ? new Date(live.lastStatusAt).toISOString() : null,
+      });
+
+      const asRows = (v: unknown): Array<Record<string, unknown>> =>
+        Array.isArray(v) ? (v as Array<Record<string, unknown>>) : [];
+
+      for (const ch of asRows(st['channels'])) {
+        const tg = Number(ch['to']);
+        channels.push({
+          node: a.nodeId,
+          name: ch['name'] ?? null,
+          system: ch['system'] ?? null,
+          site: ch['site'] ?? null,
+          state: ch['state'] ?? null,
+          control: ch['control'] === true,
+          processing: ch['processing'] === true,
+          frequency: ch['frequency'] ?? null,
+          // vce reports these per channel; they are the decode-health pair the
+          // Live view leads with.
+          syncPercent: ch['syncPercent'] ?? null,
+          signalDbfs: ch['signalDbfs'] ?? null,
+          timeslot: ch['timeslot'] ?? null,
+          talkgroup: Number.isInteger(tg) ? tg : null,
+          talkgroupLabel: Number.isInteger(tg) ? tgLabels.get(tg) ?? null : null,
+          agency: Number.isInteger(tg) ? tgAgencies.get(tg) ?? null : null,
+        });
+      }
+
+      for (const ac of asRows(st['activeCalls'])) {
+        const tg = Number(ac['to']);
+        calls.push({
+          node: a.nodeId,
+          name: ac['name'] ?? null,
+          system: ac['system'] ?? null,
+          site: ac['site'] ?? null,
+          state: ac['state'] ?? null,
+          frequency: ac['frequency'] ?? null,
+          timeslot: ac['timeslot'] ?? null,
+          from: ac['from'] ?? null,
+          fromAlias: ac['fromAlias'] ?? null,
+          talkerAlias: ac['talkerAlias'] ?? null,
+          to: ac['to'] ?? null,
+          toAlias: ac['toAlias'] ?? null,
+          talkgroup: Number.isInteger(tg) ? tg : null,
+          talkgroupLabel: Number.isInteger(tg) ? tgLabels.get(tg) ?? null : null,
+          agency: Number.isInteger(tg) ? tgAgencies.get(tg) ?? null : null,
+          color: Number.isInteger(tg) ? tgColors.get(tg) ?? null : null,
+          syncPercent: ac['syncPercent'] ?? null,
+          signalDbfs: ac['signalDbfs'] ?? null,
+        });
+      }
+    }
+
+    // Control channels first, then by weakest decode: a site struggling is what
+    // an operator watching this page needs to see, not the healthy majority.
+    channels.sort((x, y) => {
+      const c = Number(y['control'] === true) - Number(x['control'] === true);
+      if (c !== 0) return c;
+      return Number(x['syncPercent'] ?? 0) - Number(y['syncPercent'] ?? 0);
+    });
+
+    return c.json({ nodes, channels, calls });
+  } catch (err) {
+    log.error({ err }, '/api/node-data/live error');
+    return c.json({ error: 'failed to load live state' }, 500);
+  }
+});
