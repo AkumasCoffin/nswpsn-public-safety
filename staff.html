@@ -2723,6 +2723,7 @@
                   <thead>
                     <tr>
                       <th>Talkgroup</th>
+                      <th>Agency</th>
                       <th class="nd2-num">Calls</th>
                       <th class="nd2-num">Enc</th>
                       <th>Last seen</th>
@@ -2732,7 +2733,7 @@
                     </tr>
                   </thead>
                   <tbody id="nd2-tg-body">
-                    <tr><td colspan="7" class="nd2-empty">Loading…</td></tr>
+                    <tr><td colspan="8" class="nd2-empty">Loading…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -2854,7 +2855,7 @@
               <tr>
                 <th>Time</th>
                 <th>System</th>
-                <th>Talkgroup / Capcode</th>
+                <th id="nd2-ev-tg-th">Talkgroup</th>
                 <th>Unit / Message</th>
                 <th>Sites</th>
                 <th>Nodes</th>
@@ -5159,13 +5160,14 @@
         nd2.tg.total = data.total || 0;
         const body = document.getElementById('nd2-tg-body');
         const rows = data.talkgroups || [];
-        if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No talkgroups match.</td></tr>'; }
+        if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="nd2-empty">No talkgroups match.</td></tr>'; }
         else body.innerHTML = rows.map(t => `
           <tr class="nd2-rowlink" onclick="nd2JumpToEvents({talkgroup:${t.talkgroup}})" title="View events for this talkgroup">
-            <td>${nd2TgCell(t)}
+            <td>${nd2TgPill(t.talkgroup, t.label, t.color)}
               <button class="nd2-linkbtn" title="Radios heard on this talkgroup"
                 onclick="event.stopPropagation();nd2ShowRel('talkgroup',${t.talkgroup},${nd2Arg(t.label || ('TG ' + t.talkgroup))})">
                 <i class="fas fa-diagram-project"></i></button></td>
+            <td>${t.agency ? `<span class="nd2-chip nd2-agency">${escapeHtml(String(t.agency))}</span>` : '<span class="nd-sub">—</span>'}</td>
             <td class="nd2-num">${nd2Num(t.logicalCalls)}<span class="nd-sub" title="receptions"> /${nd2Num(t.calls)}</span></td>
             <td class="nd2-num">${nd2Num(t.encryptedCalls)}</td>
             <td>${nd2LastSeen(t.lastSeen)}</td>
@@ -5174,7 +5176,7 @@
             <td>${nd2NodeChip(t.topNode)}</td>
           </tr>`).join('');
         nd2PageBtns('tg', nd2.tg, rows.length);
-      } catch (e) { nd2TableMsg('nd2-tg-body', 7, e); nd2.tg.total = 0; nd2PageBtns('tg', nd2.tg, 0); }
+      } catch (e) { nd2TableMsg('nd2-tg-body', 8, e); nd2.tg.total = 0; nd2PageBtns('tg', nd2.tg, 0); }
     }
 
     // --- Radios view -----------------------------------------------------
