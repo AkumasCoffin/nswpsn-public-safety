@@ -383,6 +383,10 @@ nodeDataRouter.get(
 
       let radioRaw = 0;
       let radioLogical = 0;
+      // Counted over DISTINCT logical calls, so both are directly comparable
+      // to radioLogical (never to the larger per-reception radioRaw).
+      let radioEncrypted = 0;
+      let radioRecorded = 0;
       let pages = 0;
       let pagesLogical = 0;
       let perNodeRadioRows: Array<{ node_id: string; calls: unknown; bytes: unknown }> = [];
@@ -539,11 +543,25 @@ nodeDataRouter.get(
         const radioParams: unknown[] = nodeId !== null ? [iv, nodeId] : [iv];
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await Promise.all([
           wantRadio
-            ? pool.query<{ raw: unknown; logical: unknown }>(
+            ? pool.query<{ raw: unknown; logical: unknown; encrypted: unknown; recorded: unknown }>(
                 // raw = call-group receptions, logical = distinct calls. Both
                 // gated on CALL_GROUP so data/signaling isn't counted as calls.
+                // Encrypted/recorded ride along on the SAME scan rather than
+                // as extra queries: both are plain columns on the rows already
+                // being counted. Encrypted matters because an encrypted call is
+                // counted like any other yet is never listenable, so a bare
+                // call total overstates what the fleet actually captured;
+                // recorded is the audio-coverage counterpart (it drives the
+                // per-event speaker icon) and exposes traffic channels that
+                // aren't being followed. Both are DISTINCT over logical calls
+                // so they compare like-for-like against `logical`, not against
+                // the larger per-reception `raw`.
                 `SELECT COUNT(*)::int AS raw,
-                        COUNT(DISTINCT logical_call_id)::int AS logical
+                        COUNT(DISTINCT logical_call_id)::int AS logical,
+                        COUNT(DISTINCT logical_call_id)
+                          FILTER (WHERE encrypted)::int AS encrypted,
+                        COUNT(DISTINCT logical_call_id)
+                          FILTER (WHERE recorded)::int AS recorded
                    FROM node_radio_events WHERE ${radioCond} AND ${CALL_GROUP}`,
                 radioParams,
               )
@@ -637,6 +655,8 @@ nodeDataRouter.get(
         ]);
         radioRaw = num(rTot?.rows[0]?.raw);
         radioLogical = num(rTot?.rows[0]?.logical);
+        radioEncrypted = num(rTot?.rows[0]?.encrypted);
+        radioRecorded = num(rTot?.rows[0]?.recorded);
         pages = num(pTot?.rows[0]?.raw);
         pagesLogical = num(pTot?.rows[0]?.logical);
         perNodeRadioRows = pnR?.rows ?? [];
@@ -710,6 +730,8 @@ nodeDataRouter.get(
         totals: {
           radioRaw,
           radioLogical,
+          radioEncrypted,
+          radioRecorded,
           pages,
           pagesLogical,
           activeNodes: perNodeMap.size,
@@ -1738,6 +1760,7 @@ nodeDataRouter.get(
           channels: unknown;
           neighbors: unknown;
           bands: unknown;
+          patches: unknown;
           quality: unknown;
           received_at: Date;
         }>(
@@ -1747,7 +1770,7 @@ nodeDataRouter.get(
           `SELECT guid, system_name, wacn, nac, lra, channel_name,
                   control_frequency_mhz, control_lcn, affiliated_radio_count,
                   observation_count, site_first_seen_ms, site_last_seen_ms,
-                  status, channels, neighbors, bands, quality, received_at
+                  status, channels, neighbors, bands, patches, quality, received_at
              FROM node_site_snapshots
             WHERE system_id = $1 AND rfss = $2 AND site_id = $3
             ORDER BY received_at DESC
@@ -1775,6 +1798,7 @@ nodeDataRouter.get(
             channels: Array.isArray(m.channels) ? m.channels : [],
             neighbors: Array.isArray(m.neighbors) ? m.neighbors : [],
             bands: Array.isArray(m.bands) ? m.bands : [],
+            patches: Array.isArray(m.patches) ? m.patches : [],
             quality: m.quality ?? null,
             updatedAt: iso(m.received_at),
           }
@@ -2705,6 +2729,115 @@ nodeDataRouter.get(
     } catch (err) {
       log.error({ err }, '/api/node-data/pager-node error');
       return c.json({ error: 'failed to load node pager view' }, 500);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/node-data/relationships?radio=<id>|talkgroup=<id>[&system=&node=]
+//
+// The radio <-> talkgroup association graph: given a radio, every talkgroup it
+// has been heard on; given a talkgroup, every radio heard on it. Either one is
+// required (both together would be a single cell, not a graph).
+//
+// vce serves the same view from a precomputed trunked_radio_talkgroup_summary
+// table, but node_radio_events already carries source_unit + talkgroup + the
+// event type on every row, so the association is derivable here and needs no
+// extra feed from the agent — the summary table is an optimisation, not a
+// source of truth we lack.
+//
+// `group`/`private` split the counterpart's calls by event type the same way
+// vce's target_kind_code does, so a radio that mostly talks direct reads
+// differently from one that works a talkgroup.
+// ---------------------------------------------------------------------------
+nodeDataRouter.get(
+  '/api/node-data/relationships',
+  requireRole(canViewNodeData),
+  async (c) => {
+    try {
+      const pool = await getPool();
+      if (!pool) return c.json({ error: 'database unavailable' }, 503);
+      const url = new URL(c.req.url);
+      const window = detailWindow(url);
+      const radio = qpInt(url, 'radio');
+      const talkgroup = qpInt(url, 'talkgroup');
+      if ((radio === null) === (talkgroup === null)) {
+        return c.json({ error: 'exactly one of radio or talkgroup is required' }, 400);
+      }
+      const nodeId = qpNode(url);
+      const system = qpInt(url, 'system');
+
+      // The counterpart column is whichever one wasn't pinned.
+      const pinCol = radio !== null ? 'source_unit' : 'talkgroup';
+      const outCol = radio !== null ? 'talkgroup' : 'source_unit';
+
+      const params: unknown[] = [WINDOW_INTERVAL[window], radio ?? talkgroup];
+      let where =
+        `received_at >= now() - $1::interval AND ${pinCol} = $2` +
+        ` AND ${outCol} IS NOT NULL`;
+      if (system !== null) {
+        params.push(system);
+        where += ` AND system = $${params.length}`;
+      }
+      if (nodeId !== null) {
+        params.push(nodeId);
+        where += ` AND node_id = $${params.length}`;
+      }
+
+      const rows = await pool.query<{
+        id: number;
+        calls: number;
+        grp: number;
+        priv: number;
+        encrypted: number;
+        recorded: number;
+        alias: string | null;
+        label: string | null;
+        last_seen: Date;
+      }>(
+        `SELECT ${outCol} AS id,
+                COUNT(*)::int AS calls,
+                COUNT(*) FILTER (WHERE ${CALL_GROUP})::int AS grp,
+                COUNT(*) FILTER (WHERE NOT (${CALL_GROUP}))::int AS priv,
+                COUNT(*) FILTER (WHERE encrypted)::int AS encrypted,
+                COUNT(*) FILTER (WHERE recorded)::int AS recorded,
+                (array_agg(source_alias ORDER BY received_at DESC)
+                   FILTER (WHERE source_alias IS NOT NULL))[1] AS alias,
+                (array_agg(talkgroup_label ORDER BY received_at DESC)
+                   FILTER (WHERE talkgroup_label IS NOT NULL))[1] AS label,
+                MAX(received_at) AS last_seen
+           FROM node_radio_events
+          WHERE ${where}
+          GROUP BY ${outCol}
+          ORDER BY calls DESC, id ASC
+          LIMIT 200`,
+        params,
+      );
+
+      const tgLabels = await talkgroupLabels();
+      return c.json({
+        window,
+        of: radio !== null ? 'radio' : 'talkgroup',
+        id: radio ?? talkgroup,
+        counterparts: rows.rows.map((r) => ({
+          id: r.id,
+          // A radio counterpart carries the OTA talker alias; a talkgroup one
+          // takes its label, preferring the event's own over the catalogue.
+          label:
+            radio !== null
+              ? (r.label ?? tgLabels.get(r.id) ?? null)
+              : (r.alias ?? null),
+          calls: num(r.calls),
+          group: num(r.grp),
+          private: num(r.priv),
+          encrypted: num(r.encrypted),
+          recorded: num(r.recorded),
+          lastSeen: iso(r.last_seen),
+        })),
+      });
+    } catch (err) {
+      log.error({ err }, '/api/node-data/relationships error');
+      return c.json({ error: 'failed to load relationships' }, 500);
     }
   },
 );

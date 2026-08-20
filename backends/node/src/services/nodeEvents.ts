@@ -377,6 +377,7 @@ export interface SiteSnapshotInput {
   channels: unknown;
   neighbors: unknown;
   bands: unknown;
+  patches: unknown;
   quality: unknown;
 }
 
@@ -419,10 +420,10 @@ export async function upsertSiteSnapshots(
                (node_id, system_id, rfss, site_id, guid, system_name, wacn, nac, lra,
                 channel_name, control_frequency_mhz, control_lcn, affiliated_radio_count,
                 observation_count, site_first_seen_ms, site_last_seen_ms,
-                status, channels, neighbors, bands, quality, received_at)
+                status, channels, neighbors, bands, patches, quality, received_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
                      $10, $11, $12, $13, $14, $15, $16,
-                     $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, now())
+                     $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, now())
              ON CONFLICT (node_id, system_id, rfss, site_id) DO UPDATE SET
                guid = EXCLUDED.guid,
                system_name = EXCLUDED.system_name,
@@ -440,6 +441,7 @@ export async function upsertSiteSnapshots(
                channels = EXCLUDED.channels,
                neighbors = EXCLUDED.neighbors,
                bands = EXCLUDED.bands,
+               patches = EXCLUDED.patches,
                quality = EXCLUDED.quality,
                received_at = now()`,
             [
@@ -465,6 +467,7 @@ export async function upsertSiteSnapshots(
               JSON.stringify(Array.isArray(s.channels) ? s.channels : []),
               JSON.stringify(Array.isArray(s.neighbors) ? s.neighbors : []),
               JSON.stringify(Array.isArray(s.bands) ? s.bands : []),
+              JSON.stringify(Array.isArray(s.patches) ? s.patches : []),
               s.quality != null ? JSON.stringify(s.quality) : null,
             ],
           );

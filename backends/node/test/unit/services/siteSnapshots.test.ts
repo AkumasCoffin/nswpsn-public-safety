@@ -67,6 +67,7 @@ const baseSite: SiteSnapshotInput = {
   channels: [{ type: 'primary_control', lcn: '1-23', frequencyMhz: 856.2375, tags: ['CURRENT_CONTROL'] }],
   neighbors: [{ systemId: 1186, rfss: 1, siteId: 13, controlFrequencyMhz: 856.5 }],
   bands: [{ bandId: 0, baseMhz: 851.0, spacingKhz: 12.5, txOffsetMhz: -45, bandwidthKhz: 12.5 }],
+  patches: [{ patchGroup: 500, version: 1, confirmedAtMs: 1700000000000, talkgroups: [101, 102] }],
   quality: { decodeHealthPct: 99.2, signalDbfs: -58.4, validFrames: 1000, invalidFrames: 8 },
 };
 
@@ -85,7 +86,8 @@ describe('upsertSiteSnapshots', () => {
     expect(ins).toBeDefined();
     // [nodeId, systemId, rfss, siteId, guid, systemName, wacn, nac, lra,
     //  channelName, controlFreqMhz, controlLcn, affiliated, observation,
-    //  firstSeenMs, lastSeenMs, status, channels, neighbors, bands, quality]
+    //  firstSeenMs, lastSeenMs, status, channels, neighbors, bands, patches,
+    //  quality]
     expect(ins?.[0]).toBe('node-aaaa');
     expect(ins?.[1]).toBe(1186);
     expect(ins?.[2]).toBe(1);
@@ -95,12 +97,14 @@ describe('upsertSiteSnapshots', () => {
     expect(ins?.[11]).toBe('1-23');
     expect(ins?.[12]).toBe(44);
     // Nested facts are JSON strings (bound to ::jsonb). Params are 0-based:
-    // $17 status = ins[16], channels[17], neighbors[18], bands[19], quality[20].
+    // $17 status = ins[16], channels[17], neighbors[18], bands[19],
+    // patches[20], quality[21].
     expect(typeof ins?.[16]).toBe('string'); // status
     expect(JSON.parse(ins?.[17] as string)).toHaveLength(1); // channels
     expect(JSON.parse(ins?.[18] as string)[0]?.siteId).toBe(13); // neighbors
     expect(JSON.parse(ins?.[19] as string)[0]?.bandId).toBe(0); // bands
-    expect(JSON.parse(ins?.[20] as string)?.decodeHealthPct).toBe(99.2); // quality
+    expect(JSON.parse(ins?.[20] as string)[0]?.patchGroup).toBe(500); // patches
+    expect(JSON.parse(ins?.[21] as string)?.decodeHealthPct).toBe(99.2); // quality
     expect(clientRelease).toHaveBeenCalled();
   });
 
@@ -123,12 +127,13 @@ describe('upsertSiteSnapshots', () => {
   it('empty/missing channels default to [] JSON, quality/status null passthrough', async () => {
     clientQuery.mockResolvedValue({ rowCount: 1, rows: [] });
     await upsertSiteSnapshots('node-aaaa', [
-      { ...baseSite, channels: [], neighbors: [], bands: [], status: null, quality: null },
+      { ...baseSite, channels: [], neighbors: [], bands: [], patches: [], status: null, quality: null },
     ]);
     const ins = callWith('INSERT INTO node_site_snapshots');
     expect(ins?.[16]).toBeNull(); // status
     expect(ins?.[17]).toBe('[]'); // channels
-    expect(ins?.[20]).toBeNull(); // quality
+    expect(ins?.[20]).toBe('[]'); // patches — a list, so [] not null
+    expect(ins?.[21]).toBeNull(); // quality
   });
 
   it('never throws when the DB fails and returns 0', async () => {

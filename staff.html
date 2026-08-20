@@ -2489,6 +2489,16 @@
             <div class="stat-label">Radio Calls</div>
             <div class="nd2-stat-sub" id="nd2-stat-calls-sub"></div>
           </div>
+          <div class="stat-card" id="nd2-tile-enc" style="border-color: rgba(245, 158, 11, 0.3);">
+            <div class="stat-value" id="nd2-stat-enc" style="color: #fbbf24;">—</div>
+            <div class="stat-label">Encrypted</div>
+            <div class="nd2-stat-sub" id="nd2-stat-enc-sub"></div>
+          </div>
+          <div class="stat-card" id="nd2-tile-audio">
+            <div class="stat-value" id="nd2-stat-audio">—</div>
+            <div class="stat-label">With Audio</div>
+            <div class="nd2-stat-sub" id="nd2-stat-audio-sub"></div>
+          </div>
           <div class="stat-card" id="nd2-tile-pages" style="border-color: rgba(249, 115, 22, 0.3);">
             <div class="stat-value" id="nd2-stat-pages" style="color: #fb923c;">—</div>
             <div class="stat-label">Pages</div>
@@ -3935,9 +3945,22 @@
       show('nd2-tile-calls', scope !== 'pager');
       show('nd2-tile-pages', scope !== 'radio');
       show('nd2-tile-tg', scope !== 'pager');
+      show('nd2-tile-enc', scope !== 'pager');
+      show('nd2-tile-audio', scope !== 'pager');
 
       set('nd2-stat-calls', nd2Num(t.radioLogical));
       set('nd2-stat-calls-sub', t.radioRaw != null ? `${nd2Num(t.radioRaw)} receptions` : '');
+      // Encrypted / with-audio are shares of LOGICAL calls (the same base as
+      // the Radio Calls tile), never of receptions — a call with 40 receptions
+      // must not outweigh one with 2. Both read 0 rather than blank when there
+      // is no traffic, so an idle window is distinguishable from a broken feed.
+      const pct = (n) => (t.radioLogical ? Math.round((n / t.radioLogical) * 100) : 0);
+      const enc = t.radioEncrypted != null ? t.radioEncrypted : 0;
+      const rec = t.radioRecorded != null ? t.radioRecorded : 0;
+      set('nd2-stat-enc', t.radioLogical ? pct(enc) + '%' : '—');
+      set('nd2-stat-enc-sub', t.radioLogical ? `${nd2Num(enc)} of ${nd2Num(t.radioLogical)} calls` : '');
+      set('nd2-stat-audio', t.radioLogical ? pct(rec) + '%' : '—');
+      set('nd2-stat-audio-sub', t.radioLogical ? `${nd2Num(rec)} recorded in rdio` : '');
       set('nd2-stat-pages', nd2Num(t.pagesLogical));
       set('nd2-stat-pages-sub', t.pages != null ? `${nd2Num(t.pages)} receptions` : '');
       set('nd2-stat-nodes', nd2Num(t.activeNodes));
@@ -4899,7 +4922,30 @@
           <span class="nd2-note">${bands.length ? nd2Num(bands.length) : ''}</span></div>
         ${bandTable}</div>`;
 
-      host.innerHTML = header + control + channelsCard + neighborsCard + bandsCard;
+      // Patch groups: a patch temporarily merges several talkgroups so they hear
+      // one another (multi-agency incidents). Rendered only when the site has
+      // any — an always-empty card on the majority of sites is just noise, and
+      // nodes on a runtime older than 0.7.12 never report them at all.
+      const patches = Array.isArray(meta.patches) ? meta.patches : [];
+      let patchesCard = '';
+      if (patches.length) {
+        const patchTable = nd2MiniTable(
+          [{ label: 'Patch group', num: true }, { label: 'Talkgroups' }, { label: 'Members', num: true }],
+          patches.map(p => {
+            const tgs = Array.isArray(p.talkgroups) ? p.talkgroups : [];
+            return [
+              p.patchGroup != null ? escapeHtml(String(p.patchGroup)) : '—',
+              tgs.length ? tgs.map(t => escapeHtml(String(t))).join(', ') : '—',
+              nd2Num(tgs.length),
+            ];
+          }));
+        patchesCard = `<div class="nd2-card nd2-detail-gap">
+          <div class="nd2-card-h"><i class="fas fa-code-merge"></i> Patch groups
+            <span class="nd2-note">${nd2Num(patches.length)}</span></div>
+          ${patchTable}</div>`;
+      }
+
+      host.innerHTML = header + control + channelsCard + patchesCard + neighborsCard + bandsCard;
     }
 
     // --- Talkgroups view -------------------------------------------------

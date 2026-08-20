@@ -413,6 +413,11 @@ const SiteSnapshotSchema = z.object({
   channels: z.array(SiteChannelSchema).max(512).nullish(),
   neighbors: z.array(SiteChannelSchema).max(512).nullish(),
   bands: z.array(SiteChannelSchema).max(64).nullish(),
+  // Active patch groups: {patchGroup, version, confirmedAtMs, talkgroups[]}.
+  // Loose element shape (like the sibling lists) so a runtime that adds a field
+  // doesn't 400 the whole batch; capped because a patch merges a handful of
+  // talkgroups, never hundreds.
+  patches: z.array(z.record(z.string(), z.unknown())).max(256).nullish(),
   quality: z.record(z.string(), z.unknown()).nullish(),
 });
 
@@ -497,6 +502,7 @@ nodeIngestRouter.post('/api/node-ingest/site-snapshots', async (c) => {
       channels: s.channels ?? [],
       neighbors: s.neighbors ?? [],
       bands: s.bands ?? [],
+      patches: s.patches ?? [],
       quality: s.quality ?? null,
     })),
   );
