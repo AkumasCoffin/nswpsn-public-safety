@@ -682,6 +682,14 @@ func (d Deps) loadPlaylistTemplate() []byte {
 	return presets.DefaultPlaylistXML
 }
 
+// How long applyTuners waits for vce to report at least one tuner before
+// giving up. ~30s total: vce's own headless startup allows the same for USB
+// enumeration, so this must not expire first.
+const (
+	tunerWaitAttempts = 30
+	tunerWaitInterval = time.Second
+)
+
 // applyTuners pushes per-SDR gain/ppm to the live tuners via the control API.
 // Settings are keyed by device serial; a "*" entry applies to every SDR. Live
 // tuners are matched by serial when the control server reports one, else by the
@@ -692,8 +700,34 @@ func (d Deps) applyTuners(tuners []TunerSettings) {
 	if len(tuners) == 0 || d.SDR == nil {
 		return
 	}
-	live, err := d.SDR.Tuners()
+	// Wait (briefly) for vce to enumerate its USB tuners. On boot the agent
+	// races that enumeration: vce needs several seconds after start to discover
+	// tuners, and until it has, /tuners returns an EMPTY list — not an error. The
+	// loop below would then simply find nothing to do and return silently,
+	// leaving every tuner on whatever gain the hardware powered up with. That is
+	// the "I have to apply SDR settings after every restart" case: the settings
+	// were never sent, and nothing said so.
+	//
+	// Bounded and best-effort: a node genuinely running without an SDR must not
+	// stall the config apply, so give up after the deadline and carry on.
+	var live []sdrctl.Tuner
+	var err error
+	for attempt := 0; attempt < tunerWaitAttempts; attempt++ {
+		live, err = d.SDR.Tuners()
+		if err == nil && len(live) > 0 {
+			break
+		}
+		if attempt < tunerWaitAttempts-1 {
+			time.Sleep(tunerWaitInterval)
+		}
+	}
 	if err != nil {
+		log.Printf("configapply: tuner settings skipped — control server unreachable: %v", err)
+		return
+	}
+	if len(live) == 0 {
+		log.Printf("configapply: tuner settings skipped — no tuners reported after %s",
+			time.Duration(tunerWaitAttempts)*tunerWaitInterval)
 		return
 	}
 
