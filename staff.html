@@ -1735,6 +1735,18 @@
       align-items: start;
     }
     .nd2-top-grid .nd-table td { font-size: 0.74rem; }
+    /* Top Talkgroups carries five columns (pill, agency, system, calls,
+       receptions) where its neighbours carry two, but auto-fit gives every card
+       an equal share — so its right-hand column was clipped, and adding the
+       Receiving Nodes card made every share narrower still. Give it two tracks
+       where there is room. */
+    #nd2-top-tg-card { grid-column: span 2; }
+    @media (max-width: 1100px) {
+      #nd2-top-tg-card { grid-column: auto; }
+    }
+    /* Safety net: a table that still cannot fit scrolls inside its own card
+       rather than clipping, so no column is ever silently unreachable. */
+    #nd2-top-tg, #nd2-top-units, #nd2-top-sites, #nd2-top-nodes { overflow-x: auto; }
     .nd2-num { text-align: right; font-variant-numeric: tabular-nums; }
     /* num HEADER must right-align too, or it won't line up over its right-aligned
        values (.nd-table th's left-align otherwise outranks .nd2-num). */
