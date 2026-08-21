@@ -37,6 +37,11 @@ export interface StatusData {
    *  them, so this is the only signal that a node is shedding traffic.
    *  Absent on agents older than 0.2.20. */
   uploadsDropped?: number;
+  /** Calls that WERE persisted but could not be delivered within the queue's
+   *  5-minute age bound and were discarded. Distinct from uploadsDropped
+   *  (never persisted): this means the backend or link was down long enough to
+   *  lose traffic. Absent on agents older than 0.2.21. */
+  uploadsExpired?: number;
   cpuPct?: number;
   memMB?: number;
   diskFreeMB?: number;

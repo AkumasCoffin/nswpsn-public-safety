@@ -878,6 +878,12 @@
         if (dropped > 0) {
           parts.push(`<b style="color:var(--danger,#ef4444);">${dropped.toLocaleString()}</b> dropped`);
         }
+        // Calls that WERE saved but the backend was unreachable for longer than the
+        // queue holds them. Different failure to 'dropped' (disk), same outcome.
+        const expired = Number(node.uploadsExpired || 0);
+        if (expired > 0) {
+          parts.push(`<b style="color:var(--danger,#ef4444);">${expired.toLocaleString()}</b> expired`);
+        }
         statHtml = `<div class="node-stat">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
       }
 

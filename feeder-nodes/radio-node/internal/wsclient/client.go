@@ -65,6 +65,12 @@ type dropProvider interface {
 	Dropped() uint64
 }
 
+// expiryProvider reports calls discarded for exceeding the queue's age bound.
+// Satisfied by *queue.Queue; optional so a build without one still compiles.
+type expiryProvider interface {
+	Expired() uint64
+}
+
 // Client owns the WS connection lifecycle.
 type Client struct {
 	cfg *agentcfg.Config
@@ -467,6 +473,12 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 				return 0
 			}
 			return c.drops.Dropped()
+		}(),
+		UploadsExpired: func() uint64 {
+			if e, ok := c.q.(expiryProvider); ok {
+				return e.Expired()
+			}
+			return 0
 		}(),
 		CPUPct:        0, // best-effort; not computed in Phase 2
 		MemMB:         int(ms.Alloc / (1024 * 1024)),

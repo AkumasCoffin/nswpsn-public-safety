@@ -22,8 +22,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,7 +42,15 @@ const (
 )
 
 const (
-	fileExt         = ".call"
+	fileExt = ".call"
+
+	// maxItemAge bounds how long a call may sit undelivered before it is
+	// discarded. The queue exists so a backend restart, a deploy or a tunnel
+	// blip does not lose calls — all of which resolve in seconds. Retrying
+	// beyond that delivers audio nobody is waiting for and, during a long
+	// outage, turns every queued call into a retry storm against the backend
+	// the moment it returns.
+	maxItemAge      = 5 * time.Minute
 	tmpExt          = ".tmp"
 	defaultMaxBytes = 2 << 30 // 2 GiB
 	defaultMaxCount = 5000
@@ -61,6 +71,29 @@ type Queue struct {
 	// can only ever be stale by depthCacheTTL of no activity.
 	depthVal int
 	depthAt  time.Time
+
+	// expired counts calls discarded for exceeding maxItemAge — undeliverable,
+	// not undeliverable-yet. Reported in the status heartbeat so a node losing
+	// calls to a long outage is visible rather than silent.
+	expired atomic.Uint64
+}
+
+// Expired returns how many calls were discarded for age this run.
+func (q *Queue) Expired() uint64 { return q.expired.Load() }
+
+// itemNano recovers the enqueue time from a queue filename
+// ("<20-digit-unixnano>-<rand4>.call"). Returns 0 when unparseable, which the
+// caller treats as "age unknown" rather than "infinitely old".
+func itemNano(name string) int64 {
+	i := strings.IndexByte(name, '-')
+	if i <= 0 {
+		return 0
+	}
+	v, err := strconv.ParseInt(name[:i], 10, 64)
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return v
 }
 
 // Open initializes a queue rooted at dir. maxBytes<=0 and maxCount<=0 fall back
@@ -284,6 +317,17 @@ func (q *Queue) RunSender(ctx context.Context, send func(contentType string, bod
 			if !sleepCtx(ctx, 500*time.Millisecond) {
 				return
 			}
+			backoff = backoffInitial
+			continue
+		}
+
+		// Age bound: a call nobody could deliver inside maxItemAge is discarded
+		// rather than retried forever. Checked before the read so an expired item
+		// costs no I/O. Counted, not silent — see Expired().
+		if nano := itemNano(name); nano > 0 && time.Since(time.Unix(0, nano)) > maxItemAge {
+			q.remove(name)
+			total := q.expired.Add(1)
+			log.Printf("queue: discarding call older than %s (%d expired this run)", maxItemAge, total)
 			backoff = backoffInitial
 			continue
 		}

@@ -130,18 +130,28 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
-  // 6a. Recorded-flag stamp (migration 044) — Data-tab rows come from the
-  //     /activity event stream, NOT from call uploads. Here we only mark the
-  //     closest matching activity event row (same node + talkgroup, ±6s)
-  //     recorded=true with its audio size, meaning "audio exists in central
-  //     rdio for this call". Runs BEFORE the feed gate so feed-off nodes'
-  //     events still get their recorded flag. Fire-safe: markRecorded
-  //     swallows its own errors and the outer try/catch is belt-and-braces —
-  //     this must NEVER affect the relay. bumpNodeCallStat is untouched.
-  if (r.kind === 'radio') {
+  // 6a. Recorded-flag stamp (migration 044). Deferred to the DELIVERED paths
+  //     below (feed-off, and a successful forward) rather than run here.
+  //
+  //     It used to run unconditionally at this point, before we knew whether
+  //     the call reached central rdio. A failed forward returns 502, the
+  //     agent's queue re-POSTs the identical body, and this ran AGAIN — each
+  //     time flagging another event row and folding the same audio_bytes into
+  //     node_radio_hourly, a FOREVER table. Because an outage makes every
+  //     queued call retry, that was correlated mass over-counting, not noise.
+  //     bumpNodeCallStat was immune only because it already sat in those two
+  //     branches; this now follows the same rule.
+  //
+  //     It also makes the flag truthful: `recorded` means "audio exists in
+  //     central rdio", so a call whose forward permanently failed should NOT
+  //     carry it, and no longer does.
+  const stampRecorded = async (): Promise<void> => {
+    if (r.kind !== 'radio') return;
     try {
+      // The call's OWN start time, not arrival time — matching is keyed on
+      // when the call happened, so a late delivery still finds its event.
       const epoch = Number(formFirstString(form, 'dateTime') ?? '');
-      const receivedAt = Number.isFinite(epoch) ? new Date(epoch * 1000) : new Date();
+      const startedAt = Number.isFinite(epoch) ? new Date(epoch * 1000) : new Date();
       const audioField = form['audio'];
       const audioFile = Array.isArray(audioField)
         ? audioField.find((x) => x instanceof File)
@@ -149,7 +159,7 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
       await markRecorded(
         node.id,
         safeInt(formFirstString(form, 'talkgroup')),
-        receivedAt,
+        startedAt,
         audioFile instanceof File ? audioFile.size : 0,
         // vce sends the calling radio and the traffic-channel frequency with
         // every upload (RdioScannerBroadcaster: FormField.SOURCE / FREQUENCY).
@@ -161,7 +171,7 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');
     }
-  }
+  };
 
   // 6b. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
   //     its feed to the central rdio is a separate switch that starts OFF. When
@@ -178,6 +188,9 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed (feed off)');
     }
+    // Delivered as far as it will ever go: the feed is off by policy, not by
+    // failure, so the flag belongs here.
+    await stampRecorded();
     log.info(`node relay: feed off, not forwarded node=${node.id.slice(0, 8)} bytes=${bytes}`);
     return c.json({ ok: true, fed: false });
   }
@@ -225,6 +238,10 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed');
     }
+    // The audio is now in central rdio, so the flag is true. Only here —
+    // a 502 below leaves it unflagged and the agent's retry stamps it once,
+    // on the attempt that actually lands.
+    await stampRecorded();
     log.info(`node relay ok node=${node.id.slice(0, 8)} bytes=${bytes}`);
     return c.json({ ok: true });
   }

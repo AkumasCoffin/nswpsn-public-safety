@@ -66,7 +66,12 @@ type Status struct {
 	// They are gone — rdio does not retry a downstream — and QueueDepth stays 0
 	// for them, so without this a node shedding every call looks healthy.
 	// Counts since agent start; absent on older agents.
-	UploadsDropped uint64  `json:"uploadsDropped"`
+	UploadsDropped uint64 `json:"uploadsDropped"`
+	// UploadsExpired: calls that WERE persisted but could not be delivered
+	// within the queue's age bound and were discarded. Distinct from
+	// UploadsDropped (never persisted at all): this one means the backend or
+	// the link was down long enough to lose traffic, not that the disk failed.
+	UploadsExpired uint64  `json:"uploadsExpired"`
 	CPUPct         float64 `json:"cpuPct"`
 	MemMB          int     `json:"memMB"`
 	DiskFreeMB     int     `json:"diskFreeMB"`

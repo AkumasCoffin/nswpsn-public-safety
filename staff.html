@@ -7067,6 +7067,12 @@
         if (st.uploadsDropped) {
           statusBits.push({ label: 'dropped', value: st.uploadsDropped, bad: true });
         }
+        // Persisted but never delivered inside the queue's age bound — the backend
+        // or the link was down too long. Kept separate from 'dropped' so a disk
+        // fault and an outage are told apart without reading logs.
+        if (st.uploadsExpired) {
+          statusBits.push({ label: 'expired', value: st.uploadsExpired, bad: true });
+        }
         if (st.callsPerMin != null) statusBits.push({ label: 'calls/min', value: st.callsPerMin });
         if (st.uploadsPerMin != null) statusBits.push({ label: 'uploads/min', value: st.uploadsPerMin });
         if (st.errors != null) statusBits.push({ label: 'errors', value: st.errors });

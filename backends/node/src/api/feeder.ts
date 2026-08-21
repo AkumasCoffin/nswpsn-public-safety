@@ -147,6 +147,10 @@ function feederNodeView(n: NodeRow) {
     // them, so without this the owner's card shows a node shedding every call
     // as perfectly healthy. Null on agents older than 0.2.20.
     uploadsDropped: typeof st?.uploadsDropped === 'number' ? st.uploadsDropped : null,
+    // Persisted but never delivered inside the queue's age bound — the backend
+    // or the link was down too long. Separate from uploadsDropped so a disk
+    // fault and an outage are distinguishable at a glance.
+    uploadsExpired: typeof st?.uploadsExpired === 'number' ? st.uploadsExpired : null,
     calibrated: st?.calibrated ?? null,
     jmbeInstalled: st?.jmbeInstalled ?? null,
     // Self-update in progress — the feeder card shows "updating" (not offline)
