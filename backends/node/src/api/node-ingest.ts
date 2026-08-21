@@ -151,6 +151,12 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
         safeInt(formFirstString(form, 'talkgroup')),
         receivedAt,
         audioFile instanceof File ? audioFile.size : 0,
+        // vce sends the calling radio and the traffic-channel frequency with
+        // every upload (RdioScannerBroadcaster: FormField.SOURCE / FREQUENCY).
+        // They identify WHICH call this audio is, which timestamp proximity
+        // alone cannot when a talkgroup is busy.
+        safeInt(formFirstString(form, 'source')),
+        safeInt(formFirstString(form, 'frequency')),
       );
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');

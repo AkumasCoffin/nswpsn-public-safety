@@ -45,16 +45,21 @@ const GROUP_WINDOW_SECONDS = 4;
  *  The only slack needed is that whole-second truncation (≤1s) plus the gap
  *  between the recorder's first audio segment and the call-grant event.
  *
- *  Tight avoids MIS-attribution: back-to-back calls on one talkgroup are
- *  seconds apart, and a wide window lets an upload claim a NEIGHBOUR's row.
- *  It does NOT change how MANY rows get flagged — recorded=false means N
- *  uploads always claim N distinct rows — so if most calls show no recorded
- *  icon, the window is not the cause; see RECORDED_DIAG.
+ *  MEASURED, not guessed (RECORDED_DIAG over a live minute): the skew runs
+ *  from ~1.7s to ~5s with a tail past 12s. It is not clock error — it is the
+ *  real gap between the call-grant event (which stamps the row) and the
+ *  recorder's first audio sample (which stamps the upload), so it is always
+ *  positive-ish and varies with how fast the traffic channel comes up.
  *
- *  Overridable because the true skew (call-grant event → first audio segment)
- *  is a property of the deployment, not a constant: measure it with
- *  RECORDED_DIAG before changing this. */
-const RECORDED_WINDOW_SECONDS = Number(process.env['RECORDED_WINDOW_SECONDS'] ?? 2) || 2;
+ *  An earlier 2s value was set from the wrong theory and matched almost
+ *  nothing. Width alone can't cause a MISS-storm anyway — recorded=false
+ *  means N uploads claim N distinct rows — but it can certainly cause one by
+ *  being narrower than the physical skew, which is what happened.
+ *
+ *  Being generous here is now safe because time is no longer the only
+ *  discriminator: source unit and frequency (below) pin the exact call, so a
+ *  wide window no longer risks claiming a neighbour's row. */
+const RECORDED_WINDOW_SECONDS = Number(process.env['RECORDED_WINDOW_SECONDS'] ?? 10) || 10;
 
 /** Log every markRecorded outcome (HIT with its timestamp skew, MISS with how
  *  near an event actually was). Off by default — one line per call upload is a
@@ -306,12 +311,23 @@ export async function markRecorded(
   talkgroup: number | null,
   atDate: Date,
   audioBytes: number,
+  /** Calling radio id (rdio form field `source`) — vce sends it with every
+   *  upload. Two back-to-back calls on one talkgroup are almost always
+   *  DIFFERENT units, so this is what stops an upload claiming a neighbour's
+   *  row once the time window is wide enough to cover the real skew. */
+  sourceUnit: number | null = null,
+  /** Traffic-channel frequency in Hz (rdio form field `frequency`). Two calls
+   *  seconds apart are on different traffic channels, so this pins the exact
+   *  reception even when the same unit keys up twice. */
+  frequencyHz: number | null = null,
 ): Promise<void> {
   try {
     const pool = await getWriterPool();
     if (!pool) return;
     const at = clampReceivedAt(atDate);
     const tg = safeInt(talkgroup);
+    const unit = safeInt(sourceUnit);
+    const freq = safeInt(frequencyHz);
     const bytes = Math.max(0, safeInt(audioBytes) ?? 0);
 
     const client = await pool.connect();
@@ -322,6 +338,16 @@ export async function markRecorded(
         system: number | null;
         talkgroup: number | null;
       }>(
+        // Match order matters more than the window now. Both extra predicates
+        // are TOLERANT of a null on either side (same shape as the grouping
+        // query above): vce omits a field on some calls, and an older agent
+        // sends neither — in which case this degrades to the old time-only
+        // behaviour rather than matching nothing.
+        //
+        // ORDER BY prefers an exact frequency match, then an exact unit match,
+        // then proximity in time. So when the discriminators are present the
+        // right row wins even if a neighbour is closer in time, and when they
+        // are absent nearest-in-time still applies.
         `UPDATE node_radio_events SET recorded = true, audio_bytes = $4
           WHERE id = (
             SELECT id FROM node_radio_events
@@ -330,11 +356,15 @@ export async function markRecorded(
                AND recorded = false
                AND received_at BETWEEN $3::timestamptz - interval '${RECORDED_WINDOW_SECONDS} seconds'
                                   AND $3::timestamptz + interval '${RECORDED_WINDOW_SECONDS} seconds'
-             ORDER BY abs(extract(epoch FROM (received_at - $3::timestamptz)))
+               AND ($5::bigint IS NULL OR frequency IS NULL OR frequency = $5::bigint)
+               AND ($6::integer IS NULL OR source_unit IS NULL OR source_unit = $6::integer)
+             ORDER BY ($5::bigint IS NOT NULL AND frequency = $5::bigint) DESC,
+                      ($6::integer IS NOT NULL AND source_unit = $6::integer) DESC,
+                      abs(extract(epoch FROM (received_at - $3::timestamptz)))
              LIMIT 1
           )
           RETURNING received_at, system, talkgroup`,
-        [nodeId, tg, at.toISOString(), bytes],
+        [nodeId, tg, at.toISOString(), bytes, freq, unit],
       );
       const row = upd.rows[0];
 
@@ -350,7 +380,7 @@ export async function markRecorded(
             ? row.received_at.getTime() - at.getTime()
             : null;
           log.info(
-            { node: nodeId.slice(0, 8), tg, skewMs, bytes },
+            { node: nodeId.slice(0, 8), tg, unit, freq, skewMs, bytes },
             'nodeEvents: markRecorded HIT',
           );
         } else {
@@ -375,6 +405,8 @@ export async function markRecorded(
             {
               node: nodeId.slice(0, 8),
               tg,
+              unit,
+              freq,
               bytes,
               within60s: Number(n?.n ?? 0),
               unrecorded60s: Number(n?.unrecorded ?? 0),

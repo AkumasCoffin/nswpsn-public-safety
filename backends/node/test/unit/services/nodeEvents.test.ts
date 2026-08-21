@@ -276,11 +276,12 @@ describe('markRecorded', () => {
     expect(clientQuery.mock.calls.some((a) => a[0] === 'COMMIT')).toBe(true);
   });
 
-  it('matches on a tight window — an upload cannot claim a neighbouring call', async () => {
-    // The rdio upload's dateTime is the call START (vce sends
-    // getStartTime()/1E3), so the only slack needed is that truncation. A wide
-    // window let back-to-back calls on one talkgroup steal each other's rows,
-    // which is why only the first of a burst showed the recorded icon.
+  // The window has to cover the PHYSICAL gap between the call-grant event
+  // (which stamps the row) and the recorder's first audio sample (which stamps
+  // the upload) — measured at ~1.7-5s live, with a tail. A 2s window matched
+  // almost nothing. Being generous is only safe because unit/frequency now
+  // pin the call, so this guards the pair together.
+  it('uses a window wide enough for the real grant→audio skew', async () => {
     armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
     await markRecorded('node-aaaa', 12345, at, 1);
 
@@ -290,7 +291,42 @@ describe('markRecorded', () => {
     expect(sql).toBeDefined();
     const windows = [...String(sql).matchAll(/interval '(\d+) seconds'/g)].map((m) => Number(m[1]));
     expect(windows.length).toBe(2); // lower + upper bound
-    for (const w of windows) expect(w).toBeLessThanOrEqual(2);
+    for (const w of windows) expect(w).toBeGreaterThanOrEqual(6);
+  });
+
+  it('binds source unit and frequency, and prefers them over time proximity', async () => {
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 90_000, 2019985, 851_062_500);
+
+    const upd = callWith('UPDATE node_radio_events SET recorded = true');
+    // [nodeId, talkgroup, at, audioBytes, frequency, sourceUnit]
+    expect(upd?.[4]).toBe(851_062_500);
+    expect(upd?.[5]).toBe(2019985);
+    const sql = clientQuery.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes('UPDATE node_radio_events SET recorded = true'));
+    // Exact-match ranking comes BEFORE the time-distance tiebreak, or a
+    // neighbouring call that happens to be closer in time would still win.
+    const order = String(sql).indexOf('ORDER BY');
+    expect(String(sql).indexOf('frequency = $5', order)).toBeGreaterThan(-1);
+    expect(String(sql).indexOf('source_unit = $6', order)).toBeGreaterThan(-1);
+    expect(String(sql).indexOf('abs(extract(epoch', order))
+      .toBeGreaterThan(String(sql).indexOf('source_unit = $6', order));
+  });
+
+  it('degrades to time-only matching when the upload carries neither', async () => {
+    // An older agent sends no source/frequency. The predicates must be
+    // tolerant of NULL on either side or every such upload would miss.
+    armQueries({ updatedRow: { received_at: at.toISOString(), system: 0x4a2, talkgroup: 12345 } });
+    await markRecorded('node-aaaa', 12345, at, 1);
+    const upd = callWith('UPDATE node_radio_events SET recorded = true');
+    expect(upd?.[4]).toBeNull();
+    expect(upd?.[5]).toBeNull();
+    const sql = String(clientQuery.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes('UPDATE node_radio_events SET recorded = true')));
+    expect(sql).toContain('$5::bigint IS NULL');
+    expect(sql).toContain('$6::integer IS NULL');
   });
 
   it('is a clean no-op when no row matches', async () => {
