@@ -2580,7 +2580,11 @@
           </div>
           <!-- Per-node scope (Radio mode only): "All nodes" or a single feeder
                node. Hidden in Pager mode by nd2SetMode. -->
-          <label class="nd2-node-ctl" id="nd2-node-ctl">
+          <!-- Superseded by the Nodes tab drill-down, which scopes the same way
+               and shows what the node is actually hearing. Kept in the DOM
+               (hidden) because nd2.node is still read from it in places and
+               removing it outright is a wider change than this one. -->
+          <label class="nd2-node-ctl" id="nd2-node-ctl" style="display: none;">
             <i class="fas fa-server"></i>
             <select id="nd2-node" class="nd-input" onchange="nd2SetNode(this.value)" aria-label="Scope to node">
               <option value="">All nodes</option>
@@ -2612,6 +2616,25 @@
         </div>
 
         <div class="nd2-error" id="nd2-error" style="display: none;"></div>
+        <!-- Node drill-down chrome. Deliberately placed ABOVE every nd2-view-*
+             panel: the node detail reuses those panels verbatim, scoped by
+             nd2.node, so the context strip has to precede them in the DOM for the
+             content to render underneath it. Nothing is reparented. -->
+        <div id="nd2-node-ctx" style="display: none;">
+          <div class="nd2-detail-head">
+            <button type="button" class="nd2-back" onclick="nd2NodeGoList()"><i class="fas fa-arrow-left"></i> Back</button>
+            <h3 class="nd2-detail-title" id="nd2-node-title">Node</h3>
+          </div>
+          <div class="nd2-ctx node" id="nd2-node-strip"></div>
+          <div class="nd2-controls nd2-systab-bar">
+            <div class="nd2-seg" role="group" aria-label="Node detail view">
+              <button class="filter-btn active" data-nd2-nodetab="overview" onclick="nd2NodeSetTab('overview')">Overview</button>
+              <button class="filter-btn" data-nd2-nodetab="systems" onclick="nd2NodeSetTab('systems')">Systems</button>
+              <button class="filter-btn" data-nd2-nodetab="live" onclick="nd2NodeSetTab('live')">Live</button>
+              <button class="filter-btn" data-nd2-nodetab="events" onclick="nd2NodeSetTab('events')">Events</button>
+            </div>
+          </div>
+        </div>
 
         <!-- ===== Overview view ===== -->
         <div id="nd2-view-overview">
@@ -3921,6 +3944,10 @@
       // 7 days while call detail is kept for 30 — driving it from the page
       // window offered a 30d view of data that cannot exist.
       decodeRange: '24h',
+      // Nodes view: list -> one node. The detail REUSES the top-level view
+      // panels (overview/systems/live/events) scoped by nd2.node, rather than
+      // duplicating four renderers; `tab` is which of them is showing.
+      nodes: { level: 'list', tab: 'overview', nodeId: null, name: null },
       sys: { level: 'list', tab: 'sites', siteTab: 'overview', system: null, wacn: null, rfss: null, site: null, siteName: null },
       sysExpanded: {},     // system id → bool: which folder rows are open (persisted)
       // Talkgroups / Radios sub-tabs (scoped to the open system): search + paging.
@@ -4135,7 +4162,9 @@
       // The per-node scope selector is a Radio-mode control (pager stays
       // fleet-wide); hide it entirely in Pager mode.
       const nodeCtl = document.getElementById('nd2-node-ctl');
-      if (nodeCtl) nodeCtl.style.display = mode === 'radio' ? '' : 'none';
+      // Left hidden in both modes: the Nodes tab drill-down replaced it. This
+      // line used to reveal it whenever Radio mode was entered.
+      if (nodeCtl) nodeCtl.style.display = 'none';
       // Likewise hide-encrypted: pages have no encryption, so the switch would
       // be a control that does nothing in Pager mode.
       const encCtl = document.getElementById('nd2-enc-ctl');
@@ -4160,6 +4189,18 @@
       nd2ApplyWindowChrome(view);
       // Systems / Capcodes always re-enter at their list level. Reset the
       // system-detail sub-tab so a stale Talkgroups/Radios tab never lingers.
+      // A top-level pill always leaves the node drill-down: its chrome sits
+      // above the view panels, so leaving it visible would frame an unrelated
+      // view as if it were still scoped to that node.
+      if (nd2.nodes.level === 'detail') {
+        nd2.nodes.level = 'list';
+        nd2.nodes.nodeId = null;
+        nd2.node = '';
+        const nsel = document.getElementById('nd2-node');
+        if (nsel) nsel.value = '';
+      }
+      nd2ShowNodeChrome(false);
+      if (view === 'nodes') { const l = document.getElementById('nd2-view-nodes'); if (l) l.style.display = ''; }
       if (view === 'systems') { nd2.sys.tab = 'sites'; nd2.sys.siteTab = 'overview'; nd2SysShow('list'); nd2SysCrumbs(); }
       if (view === 'capcodes') { nd2CapShow('list'); }
       if (view === 'live') { nd2StartLiveTimer(); void nd2StartLiveWs(); }
@@ -4519,7 +4560,7 @@
           .sort((a, b) => Number(b.calls || 0) - Number(a.calls || 0))
           .slice(0, 10)
           .map(nd => [
-            `<span class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)})" title="Open this node">`
+            `<span class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)}, ${nd2Arg(nd.name || '')})" title="Open this node">`
               + `<span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></span>`,
             nd2Num(nd.calls),
           ]);
@@ -5125,47 +5166,96 @@
       return name ? `${name} · ${id}` : `System ${id}`;
     }
 
-    /** Open a node from anywhere in the Data tab. Everything about ONE node —
-     *  live tuners, channels, spectrum, logs, commands — already lives in the
-     *  Nodes tab's drawer, so this switches to it rather than growing a second,
-     *  poorer copy inside Data. */
-    async function nd2LoadNodes() {
-      const body = document.getElementById('nd2-nodes-body');
-      if (!body) return;
-      const view = nd2.view;
-      try {
-        const d = await nd2Fetch(`/api/node-data/nodes?window=${encodeURIComponent(nd2.window)}`);
-        if (nd2.view !== view) return;          // switched away mid-fetch
-        const rows = d.nodes || [];
-        if (!rows.length) {
-          body.innerHTML = '<tr><td colspan="7" class="nd2-empty">No radio nodes registered.</td></tr>';
-          return;
-        }
-        body.innerHTML = rows.map(nd => `
-          <tr class="nd2-rowlink" onclick="nd2OpenNodeFromData(${nd2Arg(nd.nodeId)})" title="Open this node">
-            <td><span class="nd-strong">${escapeHtml(nd.name || nd2ShortNode(nd.nodeId))}</span></td>
-            <td>${nd.online
-              ? '<span class="nd2-chip nd2-live-on">online</span>'
-              : '<span class="nd2-chip nd2-live-off">offline</span>'}</td>
-            <td class="nd2-num">${nd2Num(nd.calls)}</td>
-            <td class="nd2-num">${nd2Num(nd.receptions)}</td>
-            <td class="nd2-num">${nd2Num(nd.talkgroups)}</td>
-            <td class="nd2-num">${nd2Num(nd.sites)}</td>
-            <td>${nd.lastSeen ? nd2LastSeen(nd.lastSeen) : '<span class="nd-sub">never</span>'}</td>
-          </tr>`).join('');
-      } catch (e) {
-        nd2TableMsg('nd2-nodes-body', 7, e);
+    /** Which panel a node sub-tab maps to. The node detail is the ordinary
+     *  Data views with nd2.node set, so there is one renderer per view, not
+     *  two. This also makes the old "All nodes" dropdown redundant. */
+    const ND2_NODE_TAB_VIEW = {
+      overview: 'nd2-view-overview',
+      systems: 'nd2-view-systems',
+      live: 'nd2-view-live',
+      events: 'nd2-view-events',
+    };
+
+    /** Open one node's drill-down from anywhere in the Data tab. */
+    function nd2OpenNodeFromData(nodeId, name) {
+      if (!nodeId) return;
+      nd2.nodes.level = 'detail';
+      nd2.nodes.nodeId = nodeId;
+      nd2.nodes.name = name || null;
+      // Scoping through nd2.node is what makes every panel and every endpoint
+      // below honour the node without any of them knowing about this view.
+      nd2.node = nodeId;
+      const sel = document.getElementById('nd2-node');
+      if (sel) sel.value = nodeId;
+      const title = document.getElementById('nd2-node-title');
+      if (title) title.textContent = name || nd2ShortNode(nodeId);
+      const strip = document.getElementById('nd2-node-strip');
+      if (strip) {
+        strip.innerHTML = `<span class="nd2-ctx-kind">NODE</span>`
+          + `<span class="nd2-ctx-name">${escapeHtml(name || nd2ShortNode(nodeId))}</span>`
+          + `<span class="nd-sub">${escapeHtml(nd2ShortNode(nodeId))}</span>`;
       }
+      nd2NodeSetTab('overview', true);
     }
 
-    function nd2OpenNodeFromData(nodeId) {
-      if (!nodeId) return;
-      if (currentTab !== 'nodes') switchTab('nodes');
-      // loadNodes() populates allNodes, which openNodeDrawer reads for the
-      // node's metadata; on a cold switch that list may not be there yet.
-      const open = () => { try { openNodeDrawer(nodeId); } catch (e) { console.error(e); } };
-      if (Array.isArray(window.allNodes) && allNodes.some(n => String(n.id) === String(nodeId))) open();
-      else Promise.resolve(loadNodes()).then(open).catch(open);
+    /** Back to the node list: drop the scope so the rest of the tab is
+     *  fleet-wide again, exactly as it was before drilling in. */
+    function nd2NodeGoList() {
+      nd2.nodes.level = 'list';
+      nd2.nodes.nodeId = null;
+      nd2.node = '';
+      const sel = document.getElementById('nd2-node');
+      if (sel) sel.value = '';
+      nd2StopLiveTimer();
+      nd2StopLiveWs();
+      nd2ShowNodeChrome(false);
+      Object.values(ND2_NODE_TAB_VIEW).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      const list = document.getElementById('nd2-view-nodes');
+      if (list) list.style.display = '';
+      nd2LoadNodes();
+    }
+
+    function nd2ShowNodeChrome(on) {
+      const ctx = document.getElementById('nd2-node-ctx');
+      if (ctx) ctx.style.display = on ? '' : 'none';
+    }
+
+    /** Show one of the reused view panels under the node chrome. */
+    function nd2NodeSetTab(tab, force) {
+      if (!ND2_NODE_TAB_VIEW[tab]) return;
+      if (!force && nd2.nodes.tab === tab && nd2.nodes.level === 'detail') return;
+      nd2.nodes.tab = tab;
+      document.querySelectorAll('[data-nd2-nodetab]').forEach(b =>
+        b.classList.toggle('active', b.dataset.nd2Nodetab === tab));
+      const list = document.getElementById('nd2-view-nodes');
+      if (list) list.style.display = 'none';
+      nd2ShowNodeChrome(true);
+      Object.entries(ND2_NODE_TAB_VIEW).forEach(([k, id]) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = k === tab ? '' : 'none';
+      });
+      // Systems always re-enters at its own list level, or a stale system
+      // drill-down from the fleet view would show through here.
+      if (tab === 'systems') { nd2.sys.tab = 'sites'; nd2SysShow('list'); nd2SysCrumbs(); }
+      // Live owns a socket and a timer; start them only while it is showing.
+      if (tab === 'live') { nd2StartLiveTimer(); void nd2StartLiveWs(); }
+      else { nd2StopLiveTimer(); nd2StopLiveWs(); }
+      nd2ApplyWindowChrome(tab);
+      if (tab === 'events') nd2.evOffset = 0;
+      nd2NodeRefresh();
+    }
+
+    /** Load whichever panel the node detail is showing. */
+    async function nd2NodeRefresh() {
+      switch (nd2.nodes.tab) {
+        case 'overview': await nd2LoadOverview(); break;
+        case 'systems': await nd2LoadSystemsView(); break;
+        case 'live': await nd2LoadLive(); break;
+        case 'events': await Promise.all([nd2LoadOverview(), nd2LoadEvents()]); break;
+      }
     }
 
     function nd2ScopedTiles(prefix, tot, includeSites) {
